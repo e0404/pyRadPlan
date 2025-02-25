@@ -64,7 +64,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self.solver.bounds = (0.0, np.inf)
         self.solver.max_iter = 500
 
-    def _objective_functions(self, x: NDArray) -> NDArray:
+    def _evaluate_objective_functions(self, x: NDArray) -> NDArray:
         """Define the objective functions."""
 
         q_vectors = {}
@@ -97,11 +97,11 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
     def _objective_function(self, x: NDArray) -> np.float64:
         t = time.time()
-        f = np.sum(self._objective_functions(x))
+        f = np.sum(self._evaluate_objective_functions(x))
         self._obj_times.append(time.time() - t)
         return f
 
-    def _objective_jacobian(self, x: NDArray) -> NDArray:
+    def _evaluate_objective_jacobian(self, x: NDArray) -> NDArray:
         """Define the objective jacobian."""
 
         q_vectors = {}
@@ -177,37 +177,38 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
     def _objective_gradient(self, x: NDArray) -> NDArray:
         t = time.time()
-        jac = np.sum(self._objective_jacobian(x), axis=0)
+        jac = np.sum(self._evaluate_objective_jacobian(x), axis=0)
         self._deriv_times.append(time.time() - t)
         return jac
 
-    def _objective_hessian(self, x: NDArray) -> NDArray:
+    def _evaluate_objective_hessian(self, x: NDArray) -> NDArray:
         """Define the objective hessian."""
         return {}
 
-    def _constraint_functions(self, x: NDArray) -> NDArray:
+    def _evaluate_constraint_functions(self, x: NDArray) -> NDArray:
         """Define the constraint functions."""
         return None
 
-    def _constraint_jacobian(self, x: NDArray) -> NDArray:
+    def _evaluate_constraint_jacobian(self, x: NDArray) -> NDArray:
         """Define the constraint jacobian."""
         return None
 
-    def _constraint_jacobian_structure(self) -> NDArray:
+    def _evaluate_constraint_jacobian_structure(self) -> NDArray:
         """Define the constraint jacobian structure."""
         return None
 
-    def _variable_bounds(self, x: NDArray) -> NDArray:
+    def _get_variable_bounds(self, x: NDArray) -> NDArray:
         """Define the variable bounds."""
         return {}
 
     def _solve(self) -> tuple[NDArray, dict]:
         """Solve the problem."""
-
         self._deriv_times = []
         self._obj_times = []
 
         x0 = np.zeros((self._dij.total_num_of_bixels,), dtype=np.float64)
+        self.tradeoff_strategy.solve(x0)
+
         t = time.time()
         result = self.solver.solve(x0)
         self._solve_time = time.time() - t
