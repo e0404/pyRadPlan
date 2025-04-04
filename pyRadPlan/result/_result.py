@@ -1,0 +1,99 @@
+"""
+Module for handling the result of calc_dose_forward and calc_dose_influence.
+
+Defines a result pydantic model and factories.
+"""
+
+import os
+from abc import ABC
+from typing import Annotated, Any, Union
+from pydantic import (
+    Field,
+    model_validator,
+)
+from pyRadPlan.result._quantity_cube import Quantity_cube
+from pyRadPlan.core import PyRadPlanBaseModel
+
+
+class Result(PyRadPlanBaseModel, ABC):
+    """
+    A class representing the result of a dose calculation.
+    This class is used to store and do further sequencing/analysis of the dose cubes.
+    """
+
+    physical_dose: Annotated[Quantity_cube, Field(default=None)]
+    let_dose: Annotated[Quantity_cube, Field(default=None)]
+    alpha_dose: Annotated[Quantity_cube, Field(default=None)]
+    sqrt_beta_dose: Annotated[Quantity_cube, Field(default=None)]
+
+    info: dict[str, Any] = Field(default_factory=dict)
+    # TODO: used optimizer...
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_physical_dose(cls, value: Any) -> Any:
+        """
+        Validate the physical dose.
+        """
+        # TODO
+        return value
+
+    def sequencing(self) -> None:
+        """
+        Perform sequencing on the dose cube.
+        """
+        # TODO
+        pass
+
+    def analyse_plan(self) -> None:
+        """
+        Perform analysis on the plan.
+        """
+        # TODO
+        pass
+
+
+def create_result(
+    data: Union[dict[str, Any], Result, os.PathLike, str, None] = None, **kwargs
+) -> Result:
+    """
+    Create a Result object from various input types.
+
+    Parameters
+    ----------
+    data : Union[dict[str, Any], Result, os.PathLike, str, None], optional
+        The input data to create the Result object from. Can be a dictionary,
+        existing Result object, file path, or None.
+    **kwargs
+        Additional keyword arguments to create the Result object.
+
+    Returns
+    -------
+    Result
+        A Result object created from the input data or keyword arguments.
+    """
+    if data:
+        if isinstance(data, Result):
+            return data
+        return Result.model_validate(data)
+    return Result(**kwargs)
+
+
+def validate_result(
+    cube: Union[dict[str, Any], Result, os.PathLike, None] = None, **kwargs
+) -> Result:
+    """
+    Validate the cube input and return a Result object.
+
+    Parameters
+    ----------
+    cube : Union[dict[str, Any], Result, os.PathLike, None]
+        The input cube to validate.
+
+    Returns
+    -------
+    Result
+        A validated Result object.
+    """
+
+    return create_result(cube, **kwargs)
