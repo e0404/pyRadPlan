@@ -8,6 +8,7 @@ import os
 from abc import ABC
 from typing import Annotated, Any, Union
 import SimpleITK as sitk
+import numpy as np
 from pydantic import (
     Field,
     model_validator,
@@ -28,6 +29,7 @@ class PlanResult(PyRadPlanBaseModel, ABC):
     alpha_dose: Annotated[QuantityCube, Field(default=None)]
     sqrt_beta_dose: Annotated[QuantityCube, Field(default=None)]
 
+    fluence: Annotated[np.ndarray, Field(default=None)]
     info: dict[str, Any] = Field(default_factory=dict)
     # TODO: used optimizer...
 
