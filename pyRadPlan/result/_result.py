@@ -44,6 +44,8 @@ class PlanResult(PyRadPlanBaseModel, ABC):
                         data[field] = {"cube": data[field]}
             if not provided:
                 raise ValueError("At least one dose field is required.")
+            if "info" in data and not isinstance(data["info"], dict):
+                data["info"] = vars(data["info"])
         return data
 
     def sequencing(self) -> None:
@@ -79,6 +81,11 @@ def create_result(
     if data:
         if isinstance(data, PlanResult):
             return data
+
+        if isinstance(data, dict):
+            # Merge additional key-value pairs (like info) into the dictionary.
+            data.update(kwargs)
+            return PlanResult.model_validate(data)
         return PlanResult.model_validate(data)
     return PlanResult(**kwargs)
 
