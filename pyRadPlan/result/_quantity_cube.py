@@ -1,6 +1,4 @@
-"""
-Module for storing a given quantity cube.
-"""
+"""Module for storing a given quantity cube."""
 
 import os
 from abc import ABC
@@ -18,9 +16,10 @@ from pyRadPlan.core import resample_image
 from pyRadPlan.core import PyRadPlanBaseModel, Grid
 
 
-class Quantity_cube(PyRadPlanBaseModel, ABC):
+class QuantityCube(PyRadPlanBaseModel, ABC):
     """
     A class representing the result of a dose calculation.
+
     This class is used to store and do further sequencing/analysis of the dose cubes.
     """
 
@@ -30,7 +29,7 @@ class Quantity_cube(PyRadPlanBaseModel, ABC):
     @classmethod
     def validate_cube(cls, data: Any) -> Any:
         # Early return for cube input (assuming cube is defined/imported elsewhere)
-        if isinstance(data, Quantity_cube):
+        if isinstance(data, QuantityCube):
             return data
 
         if isinstance(data, dict):
@@ -258,7 +257,7 @@ class Quantity_cube(PyRadPlanBaseModel, ABC):
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         """
-        Convert the Quantity_cube object to a dictionary compatible with matRad format.
+        Convert the QuantityCube object to a dictionary compatible with matRad format.
 
         Returns
         -------
@@ -285,7 +284,7 @@ class Quantity_cube(PyRadPlanBaseModel, ABC):
         Returns
         -------
         Self
-            The resampled Quantity_cube object.
+            The resampled QuantityCube object.
         """
         resampler = sitk.ResampleImageFilter()
         resampler.SetInterpolator(sitk.sitkLinear)
@@ -305,64 +304,64 @@ class Quantity_cube(PyRadPlanBaseModel, ABC):
         return self.model_validate({"cube": new_cube})
 
 
-def resample_ct(cube: Quantity_cube, interpolator=sitk.sitkBSpline, **kwargs) -> Quantity_cube:
+def resample_ct(cube: QuantityCube, interpolator=sitk.sitkBSpline, **kwargs) -> QuantityCube:
     """
-    Resample Quantity_cube to a different grid.
+    Resample QuantityCube to a different grid.
 
     Returns
     -------
-    Quantity_cube
-        A resampled Quantity_cube object
+    QuantityCube
+        A resampled QuantityCube object
     """
 
-    cube = Quantity_cube.cube
+    cube = QuantityCube.cube
 
     resampled_cube = resample_image(input_image=cube, interpolator=interpolator, **kwargs)
 
-    return Quantity_cube(cube_hu=resampled_cube)
+    return QuantityCube(cube_hu=resampled_cube)
 
 
 def create_cube(
-    data: Union[dict[str, Any], Quantity_cube, os.PathLike, str, None] = None, **kwargs
-) -> Quantity_cube:
+    data: Union[dict[str, Any], QuantityCube, os.PathLike, str, None] = None, **kwargs
+) -> QuantityCube:
     """
-    Create a Quantity_cube object from various input types.
+    Create a QuantityCube object from various input types.
 
     Parameters
     ----------
-    data : Union[dict[str, Any], Quantity_cube, os.PathLike, str, None], optional
-        The input data to create the Quantity_cube object from. Can be a dictionary,
-        existing Quantity_cube object, file path, or None.
+    data : Union[dict[str, Any], QuantityCube, os.PathLike, str, None], optional
+        The input data to create the QuantityCube object from. Can be a dictionary,
+        existing QuantityCube object, file path, or None.
     **kwargs
-        Additional keyword arguments to create the Quantity_cube object.
+        Additional keyword arguments to create the QuantityCube object.
 
     Returns
     -------
-    Quantity_cube
-        A Quantity_cube object created from the input data or keyword arguments.
+    QuantityCube
+        A QuantityCube object created from the input data or keyword arguments.
     """
     if data:
-        if isinstance(data, Quantity_cube):
+        if isinstance(data, QuantityCube):
             return data
-        return Quantity_cube.model_validate(data)
-    return Quantity_cube(**kwargs)
+        return QuantityCube.model_validate(data)
+    return QuantityCube(**kwargs)
 
 
 def validate_cube(
-    cube: Union[dict[str, Any], Quantity_cube, os.PathLike, None] = None, **kwargs
-) -> Quantity_cube:
+    cube: Union[dict[str, Any], QuantityCube, os.PathLike, None] = None, **kwargs
+) -> QuantityCube:
     """
-    Validate the cube input and return a Quantity_cube object.
+    Validate the cube input and return a QuantityCube object.
 
     Parameters
     ----------
-    cube : Union[dict[str, Any], Quantity_cube, os.PathLike, None]
+    cube : Union[dict[str, Any], QuantityCube, os.PathLike, None]
         The input cube to validate.
 
     Returns
     -------
-    Quantity_cube
-        A validated Quantity_cube object.
+    QuantityCube
+        A validated QuantityCube object.
     """
 
     return create_cube(cube, **kwargs)

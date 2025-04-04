@@ -11,20 +11,21 @@ from pydantic import (
     Field,
     model_validator,
 )
-from pyRadPlan.result._quantity_cube import Quantity_cube
+from pyRadPlan.result._quantity_cube import QuantityCube
 from pyRadPlan.core import PyRadPlanBaseModel
 
 
-class Result(PyRadPlanBaseModel, ABC):
+class PlanResult(PyRadPlanBaseModel, ABC):
     """
     A class representing the result of a dose calculation.
+
     This class is used to store and do further sequencing/analysis of the dose cubes.
     """
 
-    physical_dose: Annotated[Quantity_cube, Field(default=None)]
-    let_dose: Annotated[Quantity_cube, Field(default=None)]
-    alpha_dose: Annotated[Quantity_cube, Field(default=None)]
-    sqrt_beta_dose: Annotated[Quantity_cube, Field(default=None)]
+    physical_dose: Annotated[QuantityCube, Field(default=None)]
+    let_dose: Annotated[QuantityCube, Field(default=None)]
+    alpha_dose: Annotated[QuantityCube, Field(default=None)]
+    sqrt_beta_dose: Annotated[QuantityCube, Field(default=None)]
 
     info: dict[str, Any] = Field(default_factory=dict)
     # TODO: used optimizer...
@@ -32,30 +33,24 @@ class Result(PyRadPlanBaseModel, ABC):
     @model_validator(mode="before")
     @classmethod
     def validate_physical_dose(cls, value: Any) -> Any:
-        """
-        Validate the physical dose.
-        """
+        """Validate the physical dose."""
         # TODO
         return value
 
     def sequencing(self) -> None:
-        """
-        Perform sequencing on the dose cube.
-        """
+        """Perform sequencing on the dose cube."""
         # TODO
         pass
 
     def analyse_plan(self) -> None:
-        """
-        Perform analysis on the plan.
-        """
+        """Perform analysis on the plan."""
         # TODO
         pass
 
 
 def create_result(
-    data: Union[dict[str, Any], Result, os.PathLike, str, None] = None, **kwargs
-) -> Result:
+    data: Union[dict[str, Any], PlanResult, os.PathLike, str, None] = None, **kwargs
+) -> PlanResult:
     """
     Create a Result object from various input types.
 
@@ -73,15 +68,15 @@ def create_result(
         A Result object created from the input data or keyword arguments.
     """
     if data:
-        if isinstance(data, Result):
+        if isinstance(data, PlanResult):
             return data
-        return Result.model_validate(data)
-    return Result(**kwargs)
+        return PlanResult.model_validate(data)
+    return PlanResult(**kwargs)
 
 
 def validate_result(
-    cube: Union[dict[str, Any], Result, os.PathLike, None] = None, **kwargs
-) -> Result:
+    cube: Union[dict[str, Any], PlanResult, os.PathLike, None] = None, **kwargs
+) -> PlanResult:
     """
     Validate the cube input and return a Result object.
 
