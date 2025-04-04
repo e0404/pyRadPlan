@@ -7,6 +7,7 @@ Defines a result pydantic model and factories.
 import os
 from abc import ABC
 from typing import Annotated, Any, Union
+import SimpleITK as sitk
 from pydantic import (
     Field,
     model_validator,
@@ -23,7 +24,7 @@ class PlanResult(PyRadPlanBaseModel, ABC):
     """
 
     physical_dose: Annotated[QuantityCube, Field(default=None)]
-    let_dose: Annotated[QuantityCube, Field(default=None)]
+    let: Annotated[QuantityCube, Field(default=None)]
     alpha_dose: Annotated[QuantityCube, Field(default=None)]
     sqrt_beta_dose: Annotated[QuantityCube, Field(default=None)]
 
@@ -32,10 +33,18 @@ class PlanResult(PyRadPlanBaseModel, ABC):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_physical_dose(cls, value: Any) -> Any:
-        """Validate the physical dose."""
-        # TODO
-        return value
+    def wrap_and_check_dose_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            dose_fields = ("physical_dose", "let", "alpha_dose", "sqrt_beta_dose")
+            provided = False
+            for field in dose_fields:
+                if field in data and data[field] is not None:
+                    provided = True
+                    if isinstance(data[field], sitk.Image):
+                        data[field] = {"cube": data[field]}
+            if not provided:
+                raise ValueError("At least one dose field is required.")
+        return data
 
     def sequencing(self) -> None:
         """Perform sequencing on the dose cube."""
