@@ -39,10 +39,8 @@ cst.vois[2].objectives = [
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
 
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+# Optimize -> Result
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))
@@ -51,7 +49,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result["physical_dose"],
+    overlay=result.physical_dose.cube,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",
