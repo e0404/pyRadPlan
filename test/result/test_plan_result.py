@@ -4,6 +4,7 @@ import os
 import numpy as np
 from pathlib import Path
 from pydantic import ValidationError
+from scipy.io import savemat
 
 from pyRadPlan.result import PlanResult, QuantityCube, validate_result, create_result
 
@@ -17,22 +18,12 @@ def sample_image(tmp_path):
     image.SetSpacing((1, 1, 2))
     image.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
 
-    """Save it for testing ct_from_file method"""
-    writer = sitk.ImageFileWriter()
-    writer.SetUseCompression(True)
-    writer.SetImageIO("NiftiImageIO")
-
-    file_path = os.path.join(tmp_path, "DummyCT.nii.gz")
-
-    writer.SetFileName(file_path)
-    writer.Execute(image)
-
-    return image, file_path
+    return image
 
 
 def test_result_creation(sample_image):
     """Test creation of a PlanResult object from a SimpleITK image."""
-    result = create_result(physical_dose=sample_image[0], let=sample_image[0])
+    result = create_result(physical_dose=sample_image, let=sample_image)
     assert isinstance(result, PlanResult)
     assert isinstance(result.physical_dose, QuantityCube)
     assert result.physical_dose.size == (100, 100, 50)  # reverse order of axes
@@ -44,7 +35,7 @@ def test_result_creation(sample_image):
 def test_result_from_dict(sample_image):
     """Test creation of a PlanResult object from a dictionary."""
     dose_dict = {
-        "cube": sample_image[0],
+        "cube": sample_image,
         "origin": (1, 2, 3),
         "direction": (1, 0, 0, 0, 1, 0, 0, 0, 1),
         "resolution": {"x": 2, "y": 2, "z": 4},
@@ -55,34 +46,52 @@ def test_result_from_dict(sample_image):
     assert result.physical_dose.resolution == {"x": 2, "y": 2, "z": 4}
 
 
-# def test_ct_to_matrad_dict(sample_image):
-#     """Test conversion of CT object to matRad dictionary format."""
-#     result = create_result(physical_dose=sample_image[0], let=sample_image[0])
-#     matrad_dict = result.to_matrad()
-#     assert "cubeHU" in matrad_dict
-#     assert "cubeDim" in matrad_dict
-#     assert matrad_dict["cubeDim"].tolist() == [100.0, 100.0, 50.0]  # reverse order of axes
-#     assert matrad_dict["cubeHU"].shape == (1,)
-#     assert matrad_dict["cubeHU"][0].shape == (100, 100, 50)  # reverse order of axes
+def test_saving_beam_cubes(sample_image):
+    """Test saving of beam cubes in PlanResult."""
+    result = create_result(
+        physical_dose=sample_image,
+        let=sample_image,
+        fluence=np.zeros((1, 1, 1, 1)),
+        physical_dose_beam=[sample_image, sample_image],
+        let_dose_beam=[sample_image, sample_image],
+    )
+    assert isinstance(result.physical_dose_beam[0], QuantityCube)
+    assert isinstance(result.let_dose_beam[0], QuantityCube)
+    assert result.physical_dose_beam[0].size == (100, 100, 50)  # reverse order of axes
+    assert result.physical_dose_beam[0].resolution == {"x": 1, "y": 1, "z": 2}
+    assert result.physical_dose_beam[0].origin == (0, 0, 0)
+    assert result.physical_dose_beam[0].direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
 
 
-# def test_ct_from_file(sample_image):
-#     """Test creation of a CT object from a .nii.gz file."""
-#     sample_file = Path(sample_image[1])
-#     if sample_file.exists():
-#         ct = ct_from_file(sample_file)
-#         assert isinstance(ct, CT)
-#     else:
-#         pytest.skip("Sample DICOM file not available")
+def test_to_matrad_dict(sample_image):
+    """Test conversion of CT object to matRad dictionary format."""
+    result = create_result(
+        physical_dose=sample_image,
+        let=sample_image,
+        fluence=np.zeros((1, 1, 1, 1)),
+        info={"example_1": "example_str", "example_2": 1.0},
+        physical_dose_beam=[sample_image, sample_image],
+    )
+    matrad_dict = result.to_matrad()
+    assert "physicalDose" in matrad_dict
+    assert "let" in matrad_dict
+    assert "info" in matrad_dict
+    assert matrad_dict["physicalDose"].shape == (1,)
+    assert matrad_dict["physicalDose"][0].shape == (100, 100, 50)
+    assert matrad_dict["let"].shape == (1,)
+    assert matrad_dict["let"][0].shape == (100, 100, 50)
+    assert matrad_dict["physicalDoseBeam1"].shape == (1,)
+    assert matrad_dict["physicalDoseBeam1"][0].shape == (100, 100, 50)
+    savemat("output.mat", matrad_dict)
 
 
 def test_validate_result(sample_image):
     """Test validation of PlanResult objects."""
-    result = create_result(physical_dose=sample_image[0], let=sample_image[0])
+    result = create_result(physical_dose=sample_image, let=sample_image)
     validated_result = validate_result(result)
     assert result is validated_result
 
-    validated_result = validate_result(physical_dose=sample_image[0], let=sample_image[0])
+    validated_result = validate_result(physical_dose=sample_image, let=sample_image)
     assert isinstance(validated_result, PlanResult)
 
 
@@ -95,7 +104,7 @@ def test_invalid_input(sample_image):
 def test_invalid_input_2(sample_image):
     """Test handling of invalid input."""
     with pytest.raises(ValueError):
-        create_result(physical_dose=sample_image[0], let="invalid input")
+        create_result(physical_dose=sample_image, let="invalid input")
 
 
 @pytest.mark.parametrize(
@@ -115,7 +124,7 @@ def test_various_image_sizes(size, spacing):
 
 def test_property_change(sample_image):
     """Test changing properties of an existing CT object."""
-    result = create_result(physical_dose=sample_image[0], let=sample_image[0])
+    result = create_result(physical_dose=sample_image, let=sample_image)
     new_origin = (5, 5, 1)
     result.physical_dose.cube.SetOrigin(new_origin)
     assert result.physical_dose.origin == new_origin

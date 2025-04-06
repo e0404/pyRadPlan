@@ -248,6 +248,12 @@ class Dij(PyRadPlanBaseModel):
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
             out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
+            out["physical_dose_beam"] = []
+
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
+                out["physical_dose_beam"].append(dose_matrix @ intensity[beam_mask])
 
         if self.let_dose is not None:
             if self.physical_dose is None:
@@ -291,10 +297,21 @@ class Dij(PyRadPlanBaseModel):
 
         for key, value in out.items():
             # Create a sitk image for each scenario
-            out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
-            out[key].SetOrigin(self.dose_grid.origin)
-            out[key].SetSpacing(self.dose_grid.resolution_vector)
-            out[key].SetDirection(self.dose_grid.direction.ravel())
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    out[key][i] = sitk.GetImageFromArray(
+                        value[i].reshape(self.dose_grid.dimensions[::-1])
+                    )
+                    out[key][i].SetOrigin(self.dose_grid.origin)
+                    out[key][i].SetSpacing(self.dose_grid.resolution_vector)
+                    out[key][i].SetDirection(self.dose_grid.direction.ravel())
+            else:
+                # handling collective of all beams
+                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
+                out[key].SetOrigin(self.dose_grid.origin)
+                out[key].SetSpacing(self.dose_grid.resolution_vector)
+                out[key].SetDirection(self.dose_grid.direction.ravel())
 
         return out
 
@@ -328,8 +345,14 @@ class Dij(PyRadPlanBaseModel):
             resampler.SetOutputOrigin(self.ct_grid.origin)
             resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
             resampler.SetSize(self.ct_grid.dimensions)
-            out[key] = resampler.Execute(value)
 
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    out[key][i] = resampler.Execute(value[i])
+            else:
+                # handle the collective of all beams
+                out[key] = resampler.Execute(value)
         return out
 
 

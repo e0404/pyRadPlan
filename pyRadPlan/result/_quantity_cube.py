@@ -1,13 +1,14 @@
 """Module for storing a given quantity cube."""
 
 import os
-from abc import ABC
 from typing import Annotated, Any, Union
 from typing_extensions import Self
 from pydantic import (
     Field,
     computed_field,
+    SerializationInfo,
     model_validator,
+    field_serializer,
 )
 import SimpleITK as sitk
 import numpy as np
@@ -16,7 +17,7 @@ from pyRadPlan.core import resample_image
 from pyRadPlan.core import PyRadPlanBaseModel, Grid
 
 
-class QuantityCube(PyRadPlanBaseModel, ABC):
+class QuantityCube(PyRadPlanBaseModel):
     """
     A class representing the result of a dose calculation.
 
@@ -96,6 +97,25 @@ class QuantityCube(PyRadPlanBaseModel, ABC):
                     data["cube"].SetSpacing([resolution["x"], resolution["y"], resolution["z"]])
 
         return data
+
+    @field_serializer("cube")
+    def custom_cube_serializer(self, v: sitk.Image, info: SerializationInfo) -> Any:
+        """Serialize the cube field in various contexts, particularly for matRad format."""
+        context = info.context
+        if context and context.get("matRad") == "mat-file":
+            # Convert the SimpleITK image to a NumPy array and flip axes for matRad format
+            numpy_array = np.transpose(sitk.GetArrayFromImage(v), (1, 2, 0))
+
+            # Create a dictionary for matRad format
+            cube_dict = {
+                "cube": np.ndarray(shape=(1,), dtype=object),
+                "cubeDim": np.array(v.GetSize(), dtype=float),
+            }
+            cube_dict["cube"][0] = numpy_array
+            return cube_dict
+
+        # Default serialization (e.g., return the SimpleITK image as-is)
+        return v
 
     @computed_field
     @property
@@ -254,23 +274,6 @@ class QuantityCube(PyRadPlanBaseModel, ABC):
             The converted cube indices.
         """
         return np.array(self.cube.TransformPhysicalPointToIndex(world_coords))
-
-    def to_matrad(self, context: str = "mat-file") -> Any:
-        """
-        Convert the QuantityCube object to a dictionary compatible with matRad format.
-
-        Returns
-        -------
-        Any
-            A dictionary containing the image data in matRad format.
-        """
-        out = super().to_matrad(context=context)
-        # Convert the SimpleITK image to a NumPy array and flip axes
-        numpy_array = np.transpose(sitk.GetArrayFromImage(self.cube), (1, 2, 0))
-        out["cubeHU"] = np.ndarray(shape=(1,), dtype=object)
-        out["cubeHU"][0] = numpy_array
-        out["cubeDim"] = np.array(self.size, dtype=float)
-        return out
 
     def resample_to_grid(self, grid: Grid) -> Self:
         """
