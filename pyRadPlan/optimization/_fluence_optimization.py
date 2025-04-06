@@ -41,5 +41,6 @@ def fluence_optimization(
     planning_prob = get_problem_from_pln(_pln)
 
     fluence, _result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
-
-    return validate_result(dij.compute_result_ct_grid(fluence), fluence=fluence, info=_result_info)
+    cubes = dij.compute_result_ct_grid(fluence)
+    result = validate_result(cubes, fluence=fluence, info=_result_info)
+    return result
