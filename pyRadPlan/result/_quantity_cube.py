@@ -6,9 +6,7 @@ from typing_extensions import Self
 from pydantic import (
     Field,
     computed_field,
-    SerializationInfo,
     model_validator,
-    field_serializer,
 )
 import SimpleITK as sitk
 import numpy as np
@@ -97,25 +95,6 @@ class QuantityCube(PyRadPlanBaseModel):
                     data["cube"].SetSpacing([resolution["x"], resolution["y"], resolution["z"]])
 
         return data
-
-    @field_serializer("cube")
-    def custom_cube_serializer(self, v: sitk.Image, info: SerializationInfo) -> Any:
-        """Serialize the cube field in various contexts, particularly for matRad format."""
-        context = info.context
-        if context and context.get("matRad") == "mat-file":
-            # Convert the SimpleITK image to a NumPy array and flip axes for matRad format
-            numpy_array = np.transpose(sitk.GetArrayFromImage(v), (1, 2, 0))
-
-            # Create a dictionary for matRad format
-            cube_dict = {
-                "cube": np.ndarray(shape=(1,), dtype=object),
-                "cubeDim": np.array(v.GetSize(), dtype=float),
-            }
-            cube_dict["cube"][0] = numpy_array
-            return cube_dict
-
-        # Default serialization (e.g., return the SimpleITK image as-is)
-        return v
 
     @computed_field
     @property

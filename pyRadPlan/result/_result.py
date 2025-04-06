@@ -4,7 +4,6 @@ Module for handling the result of calc_dose_forward and calc_dose_influence.
 Defines a result pydantic model and factories.
 """
 
-import os
 from typing import Annotated, Any, Union
 import SimpleITK as sitk
 import numpy as np
@@ -29,7 +28,7 @@ class PlanResult(PyRadPlanBaseModel):
     physical_dose_beam: Annotated[list[QuantityCube], Field(default=None)]
 
     let: Annotated[QuantityCube, Field(default=None)]
-    let_dose_beam: Annotated[list[QuantityCube], Field(default=None)]
+    let_beam: Annotated[list[QuantityCube], Field(default=None)]
 
     alpha_dose: Annotated[QuantityCube, Field(default=None)]
     # TODO: add alpha_dose_beams
@@ -60,15 +59,10 @@ class PlanResult(PyRadPlanBaseModel):
     @model_validator(mode="before")
     @classmethod
     def wrap_and_check_beam_fields(cls, data: Any) -> Any:
-        """
-        Validate and process beam fields (e.g., physical_dose_beam, let_dose_beam).
-
-        Ensures that each entry in the beam fields is a QuantityCube.
-        Wraps raw SimpleITK.Image objects into QuantityCube if necessary.
-        """
+        """Validate and process beam fields (e.g., physical_dose_beam, let_dose_beam)."""
         if isinstance(data, dict):
             # List of beam fields to process
-            beam_fields = ["physical_dose_beam", "let_dose_beam"]
+            beam_fields = ["physical_dose_beam", "let_beam"]
 
             for field_name in beam_fields:
                 if field_name in data and data[field_name] is not None:
@@ -100,7 +94,7 @@ class PlanResult(PyRadPlanBaseModel):
             return None
         return v.model_dump(by_alias=info.by_alias) if v else None
 
-    @field_serializer("physical_dose_beam", "let_dose_beam")
+    @field_serializer("physical_dose_beam", "let_beam")
     def custom_dose_beam_serializer(self, v: list[QuantityCube], info: SerializationInfo) -> Any:
         """Serialize the dose beam fields in various contexts."""
         context = info.context
@@ -152,23 +146,36 @@ class PlanResult(PyRadPlanBaseModel):
 
 
 def create_result(
-    data: Union[dict[str, Any], PlanResult, os.PathLike, str, None] = None, **kwargs
+    data: Union[dict[str, Any], PlanResult, str, None] = None, **kwargs
 ) -> PlanResult:
     """
     Create a Result object from various input types.
 
     Parameters
     ----------
-    data : Union[dict[str, Any], Result, os.PathLike, str, None], optional
-        The input data to create the Result object from. Can be a dictionary,
-        existing Result object, file path, or None.
+    physical_dose : Union[dict[str, Any], PlanResult, None]
+        The physical dose cube
+    physical_dose_beam : Union[dict[str, Any], PlanResult, None]
+        The physical dose beam cube
+    let : Union[dict[str, Any], PlanResult, None]
+        The LET cube
+    let_dose_beam : Union[dict[str, Any], PlanResult, None]
+        The LET dose beam cube
+    alpha_dose : Union[dict[str, Any], PlanResult, None]
+        The alpha dose cube
+    sqrt_beta_dose : Union[dict[str, Any], PlanResult, None]
+        The square root of beta dose cube
+    fluence : Union[dict[str, Any], PlanResult, None]
+        The fluence cube
+    info : dict[str, Any], optional
+        Additional information about the result. Passed on e.g. the optimier
     **kwargs
         Additional keyword arguments to create the Result object.
 
     Returns
     -------
     Result
-        A Result object created from the input data or keyword arguments.
+        A PlanResult object created from the input data or keyword arguments.
     """
     if data:
         if isinstance(data, PlanResult):
@@ -182,26 +189,41 @@ def create_result(
     return PlanResult(**kwargs)
 
 
-def validate_result(
-    cube: Union[dict[str, Any], PlanResult, os.PathLike, None] = None, **kwargs
-) -> PlanResult:
+def validate_result(cube: Union[dict[str, Any], PlanResult, None] = None, **kwargs) -> PlanResult:
     """
-    Validate the cube input and return a Result object.
+    Validate a PlanResult object or create a new one.
 
     Parameters
     ----------
-    cube : Union[dict[str, Any], Result, os.PathLike, None]
-        The input cube to validate.
+    physical_dose : Union[dict[str, Any], PlanResult, None]
+        The physical dose cube
+    physical_dose_beam : Union[dict[str, Any], PlanResult, None]
+        The physical dose beam cube
+    let : Union[dict[str, Any], PlanResult, None]
+        The LET cube
+    let_dose_beam : Union[dict[str, Any], PlanResult, None]
+        The LET dose beam cube
+    alpha_dose : Union[dict[str, Any], PlanResult, None]
+        The alpha dose cube
+    sqrt_beta_dose : Union[dict[str, Any], PlanResult, None]
+        The square root of beta dose cube
+    fluence : Union[dict[str, Any], PlanResult, None]
+        The fluence cube
+    info : dict[str, Any], optional
+        Additional information about the result. Passed on e.g. the optimier
+    **kwargs
+        Additional keyword arguments to create the Result object.
 
     Returns
     -------
     Result
-        A validated Result object.
+        A PlanResult object created from the input data or keyword arguments.
     """
 
     return create_result(cube, **kwargs)
 
 
+# TODO: might be placed somewhere else
 def to_camel_case(snake_str: str) -> str:
     """Convert a snake_case string to camelCase."""
     # necessary since iteration over every beam creates a new instance which will not be handled by pydantic.

@@ -264,6 +264,18 @@ class Dij(PyRadPlanBaseModel):
             let_dose = self.let_dose.flat[scenario_index] @ intensity
             out["let"] = np.zeros_like(let_dose)
             out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
+            # calculation of beamwise let
+            out["let_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                let_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                phy_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
+                let_beam_val = let_matrix @ intensity[beam_mask]
+                phy_beam_val = phy_matrix @ intensity[beam_mask]
+                ratio = np.zeros_like(let_beam_val)
+                valid = phy_beam_val > 0.0
+                ratio[valid] = let_beam_val[valid] / phy_beam_val[valid]
+                out["let_beam"].append(ratio)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
             out["effect"] = (
