@@ -56,7 +56,7 @@ def test_saving_beam_cubes(sample_image):
         let_dose_beam=[sample_image, sample_image],
     )
     assert isinstance(result.physical_dose_beam[0], QuantityCube)
-    assert isinstance(result.let_dose_beam[0], QuantityCube)
+    assert isinstance(result.let_beam[0], QuantityCube)
     assert result.physical_dose_beam[0].size == (100, 100, 50)  # reverse order of axes
     assert result.physical_dose_beam[0].resolution == {"x": 1, "y": 1, "z": 2}
     assert result.physical_dose_beam[0].origin == (0, 0, 0)
