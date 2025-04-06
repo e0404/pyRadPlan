@@ -82,7 +82,7 @@ def test_to_matrad_dict(sample_image):
     assert matrad_dict["let"][0].shape == (100, 100, 50)
     assert matrad_dict["physicalDoseBeam1"].shape == (1,)
     assert matrad_dict["physicalDoseBeam1"][0].shape == (100, 100, 50)
-    savemat("output.mat", matrad_dict)
+    # savemat("output.mat", matrad_dict)
 
 
 def test_validate_result(sample_image):
