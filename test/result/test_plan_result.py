@@ -53,7 +53,7 @@ def test_saving_beam_cubes(sample_image):
         let=sample_image,
         fluence=np.zeros((1, 1, 1, 1)),
         physical_dose_beam=[sample_image, sample_image],
-        let_dose_beam=[sample_image, sample_image],
+        let_beam=[sample_image, sample_image],
     )
     assert isinstance(result.physical_dose_beam[0], QuantityCube)
     assert isinstance(result.let_beam[0], QuantityCube)
