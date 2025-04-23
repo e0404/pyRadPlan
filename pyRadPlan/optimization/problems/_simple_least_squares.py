@@ -45,7 +45,7 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
             "ftol": 1e-4,
         }
 
-    def _objective_functions(self, x: np.ndarray) -> np.ndarray:
+    def _evaluate_objective_functions(self, x: np.ndarray) -> np.ndarray:
         """Define the objective functions."""
 
         if not np.array_equal(x, self._w_cache):
@@ -61,9 +61,9 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
         return np.array([target_fun, patient_fun])
 
     def _objective_function(self, x: np.ndarray) -> np.float64:
-        return np.dot(np.asarray(self.penalties), self._objective_functions(x))
+        return np.dot(np.asarray(self.penalties), self._evaluate_objective_functions(x))
 
-    def _objective_jacobian(self, x: np.ndarray) -> np.ndarray:
+    def _evaluate_objective_jacobian(self, x: np.ndarray) -> np.ndarray:
         """Define the objective jacobian."""
 
         if not np.array_equal(x, self._w_cache):
@@ -89,25 +89,25 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
         return self._grad_cache
 
     def _objective_gradient(self, x: np.ndarray) -> np.ndarray:
-        return np.sum(self._objective_jacobian(x) * self.penalties, axis=1)
+        return np.sum(self._evaluate_objective_jacobian(x) * self.penalties, axis=1)
 
-    def _objective_hessian(self, x: np.ndarray) -> np.ndarray:
+    def _evaluate_objective_hessian(self, x: np.ndarray) -> np.ndarray:
         """Define the objective hessian."""
         return {}
 
-    def _constraint_functions(self, x: np.ndarray) -> np.ndarray:
+    def _evaluate_constraint_functions(self, x: np.ndarray) -> np.ndarray:
         """Define the constraint functions."""
         return None
 
-    def _constraint_jacobian(self, x: np.ndarray) -> np.ndarray:
+    def _evaluate_constraint_jacobian(self, x: np.ndarray) -> np.ndarray:
         """Define the constraint jacobian."""
         return None
 
-    def _constraint_jacobian_structure(self) -> np.ndarray:
+    def _evaluate_constraint_jacobian_structure(self) -> np.ndarray:
         """Define the constraint jacobian structure."""
         return None
 
-    def _variable_bounds(self, x: np.ndarray) -> np.ndarray:
+    def _get_variable_bounds(self, x: np.ndarray) -> np.ndarray:
         """Define the variable bounds."""
         return {}
 
