@@ -299,7 +299,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         bixel_dose *= ((sad) / geo_depths) ** 2
 
         bixel["physical_dose"] = bixel_dose
-
+        bixel["weight"] = curr_ray["beamlets"][k]["weight"]
         bixel["ix"] = curr_ray["ix"]
 
         return bixel

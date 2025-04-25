@@ -191,6 +191,8 @@ class PlanningProblem(ABC):
                 )
 
         # TODO: manage scenarios
+
+        # Manage quantites by getting them from the objective quantities
         self._quantities = [q(self._dij) for q in quantities]
 
         # obtain cache info to match quantities with objectives

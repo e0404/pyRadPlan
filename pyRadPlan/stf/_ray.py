@@ -46,7 +46,7 @@ class Ray(PyRadPlanBaseModel):
         The beamlets in the ray.
     """
 
-    beamlets: list[Beamlet] = Field(default_factory=list)
+    beamlets: list[Beamlet]
 
     ray_pos_bev: NDArray[Shape["3"], np.float64] = Field(alias="rayPos_bev")
     ray_pos: NDArray[Shape["3"], np.float64]
@@ -135,6 +135,10 @@ class Ray(PyRadPlanBaseModel):
                 for key in to_remove:
                     data.pop(key)
 
+                # correct indexing for focus_ix:
+                if "focus_ix" in beamlet_subdict:
+                    beamlet_subdict["focus_ix"] = [ix - 1 for ix in beamlet_subdict["focus_ix"]]
+
                 try:
                     beamlets = dl2ld(beamlet_subdict, type_check=False)
                 except TypeError as exc:
@@ -142,7 +146,7 @@ class Ray(PyRadPlanBaseModel):
 
                 data["beamlets"] = beamlets
 
-            return data
+            return handler(data)
         except Exception as exc:
             raise exc
 
@@ -166,28 +170,6 @@ class Ray(PyRadPlanBaseModel):
                     )
             return beamlets_dump
         return handler(v, info)
-
-    # @field_serializer("target_point", mode="wrap")
-    # def custom_target_point_serializer(
-    #     self, v: np.ndarray, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    # ) -> Any:
-    #     context = info.context
-    #     if context and context.get("matRad") == "mat-file":
-    #         if v is None:
-    #             return np.array([])
-    #     else:
-    #         return v
-
-    # @field_serializer("target_point_bev", mode="wrap")
-    # def custom_target_point_bev_serializer(
-    #     self, v: np.ndarray, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    # ) -> Any:
-    #     context = info.context
-    #     if context and context.get("matRad") == "mat-file":
-    #         if v is None:
-    #             return np.array([])
-    #     else:
-    #         return v
 
     def to_matrad(self, context: Union[str, dict] = "mat-file") -> Any:
         """Serialize rays for matRad structure."""

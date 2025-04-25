@@ -91,6 +91,9 @@ class CT(PyRadPlanBaseModel, ABC):
             if cube_hu is None:
                 raise ValueError("HU cube not present in dictionary.")
 
+            if isinstance(cube_hu, sitk.Image) and "origin" not in data:
+                data["origin"] = cube_hu.GetOrigin()
+
             if isinstance(cube_hu, np.ndarray):
                 # Now we do check if it is matRad data
                 if data.get("cubeDim", None) is not None:
@@ -133,16 +136,6 @@ class CT(PyRadPlanBaseModel, ABC):
             is4d = cube_hu.GetDimension() == 4
             # Now we parse the rest of the data if additional data is available in the dictionary
 
-            # TODO: Either set up a Grid or check for x/y/z to do the data management
-            if "origin" in data:
-                data["cube_hu"].SetOrigin(data["origin"])
-
-            elif all(key in data for key in ("x", "y", "z")):
-                origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
-                if is4d:
-                    origin = np.append(origin, [0.0])
-                data["cube_hu"].SetOrigin(origin)
-
             if "direction" in data:
                 data["cube_hu"].SetDirection(data["direction"])
 
@@ -153,6 +146,23 @@ class CT(PyRadPlanBaseModel, ABC):
                 else:
                     cube_hu.SetSpacing([resolution["x"], resolution["y"], resolution["z"]])
 
+            # TODO: Either set up a Grid or check for x/y/z to do the data management
+            if "origin" in data:
+                data["cube_hu"].SetOrigin(data["origin"])
+
+            else:
+                data["cube_hu"].SetOrigin(
+                    -np.array(data["cube_hu"].GetSize())
+                    / 2.0
+                    * np.array(data["cube_hu"].GetSpacing())
+                )
+                if is4d:
+                    data["cube_hu"].SetOrigin(np.append(data["cube_hu"].GetOrigin(), [0.0]))
+            # elif all(key in data for key in ("x", "y", "z")):
+            #     origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
+            #     if is4d:
+            #         origin = np.append(origin, [0.0])
+            #     data["cube_hu"].SetOrigin(origin)
         return data
 
     @computed_field

@@ -5,6 +5,7 @@ from abc import abstractmethod
 from typing import cast, Literal, Any
 import logging
 import time
+from copy import deepcopy
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -735,6 +736,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 comp_fac=1.0, depths=depth_values, cut_off=np.inf * np.ones_like(depth_values)
             )
 
+            base_kernel = deepcopy(kernel)  # similar to base_data in matRad
+
             # TODO: this could probably be done for all depths with one calculation without a loop
             for j, current_depth in enumerate(depth_values):
                 # If there's no cut-off set, we do not need to find it. Set it to infinity
@@ -744,12 +747,13 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 # depth
                 bixel = {
                     "energy_ix": energy_ix,
-                    "kernel": kernel,
+                    "kernel": base_kernel,
                     "radial_dist_sq": radial_dist_sq,
                     "sigma_ini_sq": largest_sigma_sq4unique_energies[
                         cnt - 1
                     ],  # TODO: check if this result is correct (rounded but may be right)
-                    "rad_depths": (current_depth + kernel.offset) * np.ones_like(radial_dist_sq),
+                    "rad_depths": (current_depth + base_kernel.offset)
+                    * np.ones_like(radial_dist_sq),
                     "v_tissue_index": np.ones_like(radial_dist_sq),
                     "v_alpha_x": 0.5 * np.ones_like(radial_dist_sq),
                     "v_beta_x": 0.05 * np.ones_like(radial_dist_sq),

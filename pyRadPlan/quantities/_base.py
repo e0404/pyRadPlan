@@ -42,7 +42,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
     def __call__(self, fluence: ArrayLike) -> NDArray:
         """
-        Makes the quantity callable by calling the compute method.
+        Make the quantity callable by calling the compute method.
 
         Parameters
         ----------
@@ -82,9 +82,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
     def compute_chain_derivative(self, d_quantity: ArrayLike, fluence: ArrayLike) -> NDArray:
         """
-        Derivative of the quantity with respect to the fluence from the
-        derivative
-        w.r.t. the quantity.
+        Fluence Derivative of the quantity w.r.t. to the quantity derivative.
 
         Parameters
         ----------
@@ -110,8 +108,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
     def _compute_quantity_cache(self):
         """
-        Protected function to compute the quantity from the fluence and
-        write it into the cache.
+        Protected function to compute the quantity from the fluence and write it into the cache.
 
         Parameters
         ----------
@@ -126,9 +123,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
     def _compute_chain_derivative_cache(self, d_quantity: NDArray) -> NDArray:
         """
-        Protected interface for calculating the derivative of the quantity
-        with respect to the
-        fluence from the derivative w.r.t. the quantity.
+        Protected interface for calculating the fluence derivative from quantity derivative.
 
         Parameters
         ----------
@@ -169,8 +164,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         self, d_quantity: NDArray, scenario_index: int
     ) -> NDArray:
         """
-        Calculate the derivative of the quantity w.r.t. the fluence in a
-        specific scenario.
+        Calculate the derivative of the quantity w.r.t. the fluence in a specific scenario.
 
         Parameters
         ----------

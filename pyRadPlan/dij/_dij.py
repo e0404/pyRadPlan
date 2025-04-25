@@ -1,6 +1,6 @@
 """Contains the dij class as a (collection of) influence matrices."""
 
-from typing import Any, Union, Annotated, cast
+from typing import Any, Union, Annotated, Optional, cast
 from pydantic import (
     Field,
     field_validator,
@@ -41,15 +41,17 @@ class Dij(PyRadPlanBaseModel):
     ct_grid: Annotated[Grid, Field(default=None)]
 
     physical_dose: Annotated[NDArray, Field(default=None)]
-    let_dose: Annotated[NDArray, Field(default=None)]
+    let_dose: Annotated[NDArray, Field(default=None, alias="mLETDose")]
     alpha_dose: Annotated[NDArray, Field(default=None)]
     sqrt_beta_dose: Annotated[NDArray, Field(default=None)]
 
     num_of_beams: Annotated[int, Field(default=None)]
 
-    bixel_num: Annotated[np.ndarray, Field(default=None)]
-    ray_num: Annotated[np.ndarray, Field(default=None)]
-    beam_num: Annotated[np.ndarray, Field(default=None)]
+    bixel_num: Annotated[NDArray, Field(default=None)]
+    ray_num: Annotated[NDArray, Field(default=None)]
+    beam_num: Annotated[NDArray, Field(default=None)]
+
+    rad_depth_cubes: Optional[list[NDArray]] = Field(default=None)
 
     @computed_field
     @property
@@ -109,11 +111,30 @@ class Dij(PyRadPlanBaseModel):
                 if mat.shape[0] != info.data["dose_grid"].num_voxels:
                     raise ValueError(f"{info.field_name} shape inconsistent with ct grid")
 
+        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+            if v is not None:
+                for i in range(v.size):
+                    shape = (
+                        int(info.data["dose_grid"].dimensions[2]),
+                        int(info.data["dose_grid"].dimensions[0]),
+                        int(info.data["dose_grid"].dimensions[1]),
+                    )
+                    v.flat[i] = swap_orientation_sparse_matrix(
+                        v.flat[i],
+                        shape,
+                        (1, 2),  # (65, 100, 100) example
+                    )
+                    if v.flat[i] is not None and not isinstance(v.flat[i], sp.csc_matrix):
+                        v.flat[i] = sp.csc_matrix(v.flat[i])
+            else:
+                v = np.array([0])
+            return [[v]]  # TODO
+
         return v
 
     @field_validator("dose_grid", "ct_grid", mode="before")
     @classmethod
-    def validate_grid(cls, grid: Union[Grid, dict]) -> Union[Grid, dict]:
+    def validate_grid(cls, grid: Union[Grid, dict], info: ValidationInfo) -> Union[Grid, dict]:
         """
         Validate grid dictionaries.
 
@@ -123,7 +144,14 @@ class Dij(PyRadPlanBaseModel):
         """
         # Check if it is a dictionary and then try to create a Grid object
         if isinstance(grid, dict):
-            grid = Grid.model_validate(grid)
+            if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+                grid["dimensions"] = np.array(
+                    [grid["dimensions"][1], grid["dimensions"][0], grid["dimensions"][2]]
+                )
+                # TODO: might swap offset and resolution
+                grid = Grid.model_validate(grid)
+            else:
+                grid = Grid.model_validate(grid)
         return grid
 
     @field_validator("beam_num", mode="before")
@@ -184,7 +212,6 @@ class Dij(PyRadPlanBaseModel):
         context = info.context
         if context and context.get("matRad") == "mat-file":
             return value.to_matrad(context=context["matRad"])
-
         return handler(value, info)
 
     @field_serializer("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose")
@@ -204,6 +231,18 @@ class Dij(PyRadPlanBaseModel):
                 )
                 if value.flat[i] is not None and not isinstance(value.flat[i], sp.csc_matrix):
                     value.flat[i] = sp.csc_matrix(value.flat[i])
+        # return 0 if value is None. savemat() cant handle 'None'
+        elif context and context.get("matRad") == "mat-file" and value is None:
+            value = np.array([0])
+        return value
+
+    @field_serializer("rad_depth_cubes")
+    def rad_depth_cubes_serializer(self, value: np.ndarray, info: SerializationInfo) -> np.ndarray:
+        context = info.context
+        if context and context.get("matRad") == "mat-file" and value is not None:
+            # TODO: it might be necessary to rotate the cube!
+            return value
+        # return 0 if value is None. savemat() cant handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
         return value
@@ -259,7 +298,7 @@ class Dij(PyRadPlanBaseModel):
             if self.physical_dose is None:
                 raise ValueError("Physical dose must be calculated for dose-weighted let")
 
-            indices = out["physical_dose"] > 0.0
+            indices = out["physical_dose"] > 0.05 * np.max(out["physical_dose"])
 
             let_dose = self.let_dose.flat[scenario_index] @ intensity
             out["let"] = np.zeros_like(let_dose)

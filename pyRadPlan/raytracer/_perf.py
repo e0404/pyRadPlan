@@ -215,12 +215,12 @@ def _fast_compute_all_alphas(
 
     alphas = np.concatenate((alpha_limits, alpha_x, alpha_y, alpha_z), axis=1)
 
-    # Row wise Unique (could be externalized and potentially jitted if performance critical)
-    np_unique = np.unique  # Lookup function once to improve performance
-    for i in range(alphas.shape[0]):
-        v = np_unique(alphas[i, :])
-        alphas[i, : v.size] = v
-        alphas[i, v.size + 1 :] = np.nan
+    # Vectorized unique operation across rows
+    # Sort alphas row-wise and remove duplicates
+    alphas = np.sort(alphas, axis=1)  # Sort each row ascendingly
+    mask = np.diff(alphas, axis=1) == 0  # Identify duplicates
+    alphas[:, 1:][mask] = np.nan  # Replace duplicates with NaN
+    alphas = np.sort(alphas, axis=1)
 
     # Size Reduction
     max_num_columns = np.max(np.sum(~np.isnan(alphas), axis=1))

@@ -1,12 +1,13 @@
 from ._base import FluenceDependentQuantity, RTQuantity
 from ._dose import Dose
+from ._let_x_dose import LETxDose
 
-QUANTITIES = {Dose.identifier: Dose}
+QUANTITIES = {Dose.identifier: Dose, LETxDose.identifier: LETxDose}
 
 
 def get_available_quantities() -> dict[str, RTQuantity]:
     """
-    Obtains the available quantities in planning.
+    Obtain the available quantities in planning.
 
     Returns
     -------
@@ -18,7 +19,7 @@ def get_available_quantities() -> dict[str, RTQuantity]:
 
 def get_quantity(identifier: str) -> RTQuantity:
     """
-    Obtains the quantity from name.
+    Obtain the quantity from name.
 
     Parameters
     ----------
