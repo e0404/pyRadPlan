@@ -10,26 +10,33 @@ from pyRadPlan.result import PlanResult, QuantityDistribution, validate_result, 
 
 
 @pytest.fixture
-def sample_image(tmp_path):
+def sample_image():
     """Create a sample SimpleITK image for testing."""
     sample_array = np.random.rand(50, 100, 100) * 1000  # Random HU values
     image = sitk.GetImageFromArray(sample_array)
     image.SetOrigin((0, 0, 0))
     image.SetSpacing((1, 1, 2))
     image.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
-
     return image
 
 
-def test_result_creation(sample_image):
+def test_result_from_arg(sample_image):
     """Test creation of a PlanResult object from a SimpleITK image."""
-    result = create_result(physical_dose=sample_image, let=sample_image)
+    result = create_result(
+        physical_dose=sample_image, physical_dose_beam=[sample_image, sample_image]
+    )
     assert isinstance(result, PlanResult)
     assert isinstance(result.physical_dose, QuantityDistribution)
     assert result.physical_dose.size == (100, 100, 50)  # reverse order of axes
     assert result.physical_dose.resolution == {"x": 1, "y": 1, "z": 2}
     assert result.physical_dose.origin == (0, 0, 0)
     assert result.physical_dose.direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
+
+    assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
+    assert result.beam.physical_dose[0].size == (100, 100, 50)  # reverse order of axes
+    assert result.beam.physical_dose[0].resolution == {"x": 1, "y": 1, "z": 2}
+    assert result.beam.physical_dose[0].origin == (0, 0, 0)
+    assert result.beam.physical_dose[0].direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
 
 
 def test_result_from_dict(sample_image):
@@ -40,47 +47,86 @@ def test_result_from_dict(sample_image):
         "direction": (1, 0, 0, 0, 1, 0, 0, 0, 1),
         "resolution": {"x": 2, "y": 2, "z": 4},
     }
-    result = create_result({"physical_dose": dose_dict, "fluence": np.zeros((1, 1, 1, 1))})
-    assert isinstance(result.fluence, np.ndarray)
+    result = create_result(
+        {
+            "physical_dose": dose_dict,
+            "physical_dose_beam": [dose_dict, dose_dict],
+        }
+    )
     assert isinstance(result.physical_dose, QuantityDistribution)
-    result.add_quantity("let", dose_dict)
     assert result.physical_dose.origin == (1, 2, 3)
     assert result.physical_dose.resolution == {"x": 2, "y": 2, "z": 4}
+    assert result.physical_dose.direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
 
-
-def test_result_from_dict2(sample_image):
-    """Test creation of a PlanResult object from a dictionary."""
-    dose_dict = {
-        "cube": sample_image,
-        "origin": (1, 2, 3),
-        "direction": (1, 0, 0, 0, 1, 0, 0, 0, 1),
-        "resolution": {"x": 2, "y": 2, "z": 4},
-    }
-    result = create_result(
-        {"physical_dose": [dose_dict, dose_dict], "fluence": np.zeros((1, 1, 1, 1))}
-    )
-    assert isinstance(result.fluence, np.ndarray)
     assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
-    result.add_quantity("let", dose_dict)
     assert result.beam.physical_dose[0].origin == (1, 2, 3)
     assert result.beam.physical_dose[0].resolution == {"x": 2, "y": 2, "z": 4}
+    assert result.beam.physical_dose[0].direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
 
 
-def test_saving_beam_cubes(sample_image):
-    """Test saving of beam cubes in PlanResult."""
+def test_add_quantity_arg(sample_image):
+    """Test adding a quantity to a PlanResult object using keyword arg."""
+    result = create_result(physical_dose=sample_image)
+    assert isinstance(result.physical_dose, QuantityDistribution)
+
+    new_quantity = np.random.rand(50, 100, 100) * 10
+    result.add_quantity(let=new_quantity)
+    assert "let" in result.quantities
+    assert isinstance(result.let, QuantityDistribution)
+    assert result.let.size == (100, 100, 50)
+
+
+def test_add_quantity_str(sample_image):
+    """Test adding a quantity to a PlanResult object using string and array."""
+    result = create_result(physical_dose=sample_image)
+    assert isinstance(result.physical_dose, QuantityDistribution)
+
+    new_quantity = np.random.rand(50, 100, 100) * 10
+    result.add_quantity("let", new_quantity)
+    assert "let" in result.quantities
+    assert isinstance(result.let, QuantityDistribution)
+    assert result.let.size == (100, 100, 50)
+
+
+def test_add_beam_quantity_arg(sample_image):
+    """Test adding a beam quantity to a PlanResult object using keyword arg."""
+    result = create_result(physical_dose=[sample_image])
+    assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
+
+    result.add_beam_quantity(let=[sample_image])
+    assert "let" in result.beam
+    assert isinstance(result.beam.let[0], QuantityDistribution)
+    assert result.beam.let[0].size == (100, 100, 50)
+
+
+def test_add_beam_quantity_str(sample_image):
+    """Test adding a beam quantity to a PlanResult object using string and array."""
+    result = create_result(physical_dose=[sample_image])
+    assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
+
+    new_quantity = np.random.rand(50, 100, 100) * 10
+    result.add_beam_quantity("let", [new_quantity])
+    assert "let" in result.beam
+    assert isinstance(result.beam.let[0], QuantityDistribution)
+    assert result.beam.let[0].size == (100, 100, 50)
+
+
+def test_stored_quantities(sample_image):
+    """Test the stored quantities in a PlanResult object."""
+    result = create_result(physical_dose=sample_image, let=sample_image)
+    assert isinstance(result.physical_dose, QuantityDistribution)
+    assert isinstance(result.let, QuantityDistribution)
+    assert result.stored_quantities == ["physical_dose", "let"]
+
+
+def test_stored_beam_quantities(sample_image):
+    """Test the stored beam quantities in a PlanResult object."""
     result = create_result(
-        physical_dose=sample_image,
-        let=sample_image,
-        fluence=np.zeros((1, 1, 1, 1)),
-        physical_dose_beam=[sample_image, sample_image],
-        let_beam=[sample_image, sample_image],
+        physical_dose=[sample_image, sample_image], let=[sample_image, sample_image]
     )
     assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
     assert isinstance(result.beam.let[0], QuantityDistribution)
-    assert result.beam.physical_dose[0].size == (100, 100, 50)  # reverse order of axes
-    assert result.beam.physical_dose[0].resolution == {"x": 1, "y": 1, "z": 2}
-    assert result.beam.physical_dose[0].origin == (0, 0, 0)
-    assert result.beam.physical_dose[0].direction == (1, 0, 0, 0, 1, 0, 0, 0, 1)
+    assert result.stored_beam_quantities == ["physical_dose", "let"]
 
 
 # TODO:
@@ -106,13 +152,11 @@ def test_saving_beam_cubes(sample_image):
 #     # savemat("output.mat", matrad_dict)
 
 
-def test_validate_result(sample_image):
+def test_validated_result(sample_image):
     """Test validation of PlanResult objects."""
     result = create_result(physical_dose=sample_image, let=sample_image)
     validated_result = validate_result(result)
     assert result is validated_result
-
-    validated_result = validate_result(physical_dose=sample_image, let=sample_image)
     assert isinstance(validated_result, PlanResult)
 
 
