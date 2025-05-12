@@ -129,27 +129,24 @@ def test_stored_beam_quantities(sample_image):
     assert result.stored_beam_quantities == ["physical_dose", "let"]
 
 
-# TODO:
-# def test_to_matrad_dict(sample_image):
-#     """Test conversion of CT object to matRad dictionary format."""
-#     result = create_result(
-#         physical_dose=sample_image,
-#         let=sample_image,
-#         fluence=np.zeros((1, 1, 1, 1)),
-#         info={"example_1": "example_str", "example_2": 1.0},
-#         physical_dose_beam=[sample_image, sample_image],
-#     )
-#     matrad_dict = result.to_matrad()
-#     assert "physicalDose" in matrad_dict
-#     assert "let" in matrad_dict
-#     assert "info" in matrad_dict
-#     assert matrad_dict["physicalDose"].shape == (1,)
-#     assert matrad_dict["physicalDose"][0].shape == (100, 100, 50)
-#     assert matrad_dict["let"].shape == (1,)
-#     assert matrad_dict["let"][0].shape == (100, 100, 50)
-#     assert matrad_dict["physicalDoseBeam1"].shape == (1,)
-#     assert matrad_dict["physicalDoseBeam1"][0].shape == (100, 100, 50)
-#     # savemat("output.mat", matrad_dict)
+def test_to_matrad_dict(sample_image):
+    """Test conversion of CT object to matRad dictionary format."""
+    result = create_result(
+        physical_dose=sample_image,
+        let=sample_image,
+        fluence=np.zeros((1, 1, 1, 1)),
+        info={"example_1": "example_str", "example_2": 1.0},
+        physical_dose_beam=[sample_image, sample_image],
+    )
+    matrad_dict = result.to_matrad()
+    assert "physicalDose" in matrad_dict
+    assert "let" in matrad_dict
+    assert "info" in matrad_dict
+    assert matrad_dict["physicalDose"].shape == (100, 100, 50)
+    assert matrad_dict["let"].shape == (100, 100, 50)
+    assert matrad_dict["physicalDose_beam1"].shape == (100, 100, 50)
+
+    # savemat("output.mat", matrad_dict)
 
 
 def test_validated_result(sample_image):

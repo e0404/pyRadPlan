@@ -9,8 +9,12 @@ import numpy as np
 from pydantic import (
     Field,
     model_validator,
-    # field_serializer,
+    field_serializer,
+    SerializationInfo,
 )
+from pydantic.alias_generators import to_camel
+import SimpleITK as sitk
+
 from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
 
@@ -19,12 +23,16 @@ class BeamAccessor:
     """
     A class to access beam quantities in a PlanResult object.
 
-    This class allows for dynamic access to beam quantities using dot notation.
-    Dictionary methods are implemented to allow iteration and membership tests.
+    Dynamically injects type annotations for dynamic keys.
     """
 
+    # physical_dose: list[QuantityDistribution]
     def __init__(self, beam_quantities: dict):
         self.beam_quantities = beam_quantities
+        # Dynamically assign each key as an instance attribute and update annotations.
+        # for key, value in beam_quantities.items():
+        #     #setattr(self, key, value)
+        #     self.__class__.__annotations__[key] = list[QuantityDistribution]
 
     def __getattr__(self, attr):
         if attr in self.beam_quantities:
@@ -48,6 +56,10 @@ class BeamAccessor:
 
     def values(self):
         return self.beam_quantities.values()
+
+    # def __dir__(self):
+    #     default = super().__dir__()
+    #     return list(default) + list(self.beam_quantities.keys())
 
 
 class PlanResult(PyRadPlanBaseModel):
@@ -99,6 +111,10 @@ class PlanResult(PyRadPlanBaseModel):
         """Return the list of stored beam quantities."""
         return list(self.beam_quantities.keys()) if self.beam_quantities else []
 
+    @property
+    def beam(self):
+        return BeamAccessor(self.beam_quantities)
+
     @model_validator(mode="before")
     @classmethod
     def aggregate_dynamic_quantities(cls, data: Any) -> Any:
@@ -129,38 +145,16 @@ class PlanResult(PyRadPlanBaseModel):
 
         return data
 
-    # @model_validator(mode="after")
-    # def set_dynamic_quantities(self, data: Any):
-    #     # this workaround is needed because _quantities are filled AFTER the model is created.
-    #     # Without __pydantic_extra__ there would be no data to set.
-    #     # also by that, the logic in the before-validator is kept simple.
-    #     extra = self.__pydantic_extra__ if hasattr(self, "__pydantic_extra__") else {}
-    #     quantities = extra.get("_quantities", {})
-    #     beam_quantities = extra.get("_beam_quantities", {})
-
-    #     # these setters are needed to avoid infinite recursion by making the quantities an attribute.
-    #     # Otherwise its not possible to call e.g. "physical_dose"
-    #     object.__setattr__(self, "_quantities", quantities)
-    #     object.__setattr__(self, "_beam_quantities", beam_quantities)
-
-    #     # removing the extra attributes - if quantities should be visible,
-    #     # remove these lines again.
-    #     extra.pop("_quantities", None)
-    #     extra.pop("_beam_quantities", None)
-    #     object.__setattr__(self, "__pydantic_extra__", extra)
-
-    #    return self
-
-    def __dir__(self):
-        # updated __dir__ to include dynamic attributes. These won't be highlighted,
-        # but hovering in debug will give the correct information.
-        # Highlighting will not be possible since attributes are dynamic.
-        default = set(super().__dir__())
-        # add dynamic attributes in _quantities and beam if available
-        dynamic = set(self.quantities.keys())
-        if self.beam_quantities:
-            dynamic.add("beam")
-        return list(default.union(dynamic))
+    # def __dir__(self):
+    #     # updated __dir__ to include dynamic attributes. These won't be highlighted,
+    #     # but hovering in debug will give the correct information.
+    #     # Highlighting will not be possible since attributes are dynamic.
+    #     default = set(super().__dir__())
+    #     # add dynamic attributes in _quantities and beam if available
+    #     dynamic = set(self.quantities.keys())
+    #     if self.beam_quantities:
+    #         dynamic.add("beam")
+    #     return list(default.union(dynamic))
 
     def __getattr__(self, item):
         # First try standard dynamic quantities.
@@ -168,19 +162,17 @@ class PlanResult(PyRadPlanBaseModel):
         if item in quantities:
             return quantities[item]
         # If 'beam' is requested, return a BeamAccessor instance.
-        if item == "beam":
-            beam_quantities = object.__getattribute__(self, "beam_quantities")
+        # if item == "beam":
+        #     beam_quantities = object.__getattribute__(self, "beam_quantities")
 
-            return BeamAccessor(beam_quantities)
+        #     return BeamAccessor(beam_quantities)
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{item}'")
 
     def __setattr__(self, name, value):
         if name == "quantities":
-            raise Warning("Direct modification of 'quantities' is not allowed. Input ignored.")
-        if name == "beam_quantities":
-            raise Warning(
-                "Direct modification of 'beam_quantities' is not allowed. Input ignored."
-            )
+            raise Warning("Direct modification of 'quantities' is not allowed.")
+        elif name == "beam_quantities":
+            raise Warning("Direct modification of 'beam_quantities' is not allowed.")
         super().__setattr__(name, value)
 
     def add_quantity(
@@ -260,49 +252,50 @@ class PlanResult(PyRadPlanBaseModel):
         else:
             raise ValueError("No beam quantity provided to add_beam_quantity.")
 
-    # @field_serializer("physical_dose", "let", "alpha_dose", "sqrt_beta_dose")
-    # def custom_dose_serializer(self, v: QuantityDistribution, info: SerializationInfo) -> Any:
-    #     """Serialize the dose fields in various contexts."""
-    #     context = info.context
-    #     if context and context.get("matRad") == "mat-file":
-    #         if v:
-    #             numpy_array = np.transpose(sitk.GetArrayFromImage(v.cube), (1, 2, 0))
+    @field_serializer("quantities")
+    def custom_quantities_serializer(self, v: Dict, info: SerializationInfo) -> Any:
+        """Serialize the dose fields in various contexts."""
+        context = info.context
+        if context and context.get("matRad") == "mat-file":
+            if v:
+                dict_tmp = {}
+                for key, value in v.items():
+                    numpy_array = np.transpose(
+                        sitk.GetArrayFromImage(value.distribution), (1, 2, 0)
+                    )
+                    # wrapped_array = np.ndarray(shape=(1,), dtype=object)
+                    # wrapped_array[0] = numpy_array
+                    dict_tmp[to_camel(key)] = numpy_array  # wrapped_array
+                return dict_tmp
+            return None
+        return v.model_dump(by_alias=info.by_alias) if v else None
 
-    #             wrapped_array = np.ndarray(shape=(1,), dtype=object)
-    #             wrapped_array[0] = numpy_array
-    #             return wrapped_array
-    #         return None
-    #     return v.model_dump(by_alias=info.by_alias) if v else None
-
-    # @field_serializer("physical_dose_beam", "let_beam")
-    # def custom_dose_beam_serializer(self, v: list[QuantityDistribution], info: SerializationInfo) -> Any:
-    #     """Serialize the dose beam fields in various contexts."""
-    #     context = info.context
-    #     if context and context.get("matRad") == "mat-file":
-    #         if v and len(v) > 0:
-    #             # Create a flat dictionary to hold individual beam fields
-    #             flat_beam_dict = {}
-    #             camel_case_field_name = to_camel_case(
-    #                 info.field_name
-    #             )  # Convert field name to camelCase
-    #             for idx, beam in enumerate(v, start=1):
-    #                 numpy_array = np.transpose(sitk.GetArrayFromImage(beam.cube), (1, 2, 0))
-    #                 wrapped_array = np.ndarray(shape=(1,), dtype=object)
-    #                 wrapped_array[0] = numpy_array
-
-    #                 # Add the serialized beam directly to the flat dictionary with a dynamic key
-    #                 flat_beam_dict[f"{camel_case_field_name}{idx}"] = wrapped_array
-    #             return flat_beam_dict
-    #         return None
-    #     # Default serializatio
-    #     return (
-    #         {
-    #             f"{info.field_name}{idx}": dose.model_dump(by_alias=info.by_alias)
-    #             for idx, dose in enumerate(v, start=1)
-    #         }
-    #         if v
-    #         else None
-    #     )
+    @field_serializer("beam_quantities")
+    def custom_beam_quantities_serializer(self, v: Dict, info: SerializationInfo) -> Any:
+        """Serialize the dose beam fields in various contexts."""
+        context = info.context
+        if context and context.get("matRad") == "mat-file":
+            if v:
+                dict_tmp = {}
+                for key, value in v.items():
+                    for idx, beam in enumerate(value, start=1):
+                        numpy_array = np.transpose(
+                            sitk.GetArrayFromImage(beam.distribution), (1, 2, 0)
+                        )
+                        # wrapped_array = np.ndarray(shape=(1,), dtype=object)
+                        # wrapped_array[0] = numpy_array
+                        dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array  # wrapped_array
+                return dict_tmp
+            else:
+                return None
+        return (
+            {
+                f"{info.field_name}{idx}": dose.model_dump(by_alias=info.by_alias)
+                for idx, dose in enumerate(v, start=1)
+            }
+            if v
+            else None
+        )
 
     def sequencing(self) -> None:
         """Perform sequencing on the dose cube."""
@@ -314,15 +307,30 @@ class PlanResult(PyRadPlanBaseModel):
         # TODO
         pass
 
-    # def to_matrad(self, context: str = "mat-file") -> Any:
-    #     export = super().to_matrad(context=context)
-    #     if "physicalDoseBeam" in export and isinstance(export["physicalDoseBeam"], dict):
-    #         physical_dose_beam_dict = export.pop("physicalDoseBeam")
-    #         export.update(physical_dose_beam_dict)
-    #     # Remove keys with None values from the export dictionary
-    #     # (savemat cant handle "None")
-    #     export = {key: value for key, value in export.items() if value is not None}
-    #     return export  # ["resultGUI"]
+    def to_matrad(self, context: str = "mat-file") -> Any:
+        """
+        Convert the PlanResult object to a dictionary format for matRad.
+
+        Parameters
+        ----------
+        context : str
+            The context in which the object is being serialized. Default is "mat-file".
+
+        Returns
+        -------
+        Any
+            The serialized dictionary representation of the PlanResult object.
+        """
+        export = super().to_matrad(context=context)
+        # removing Quantities and beamQuantities key from dict and passing content to top layer
+        if "quantities" in export and isinstance(export["quantities"], dict):
+            export.update(export.pop("quantities"))
+        if "beamQuantities" in export and isinstance(export["beamQuantities"], dict):
+            export.update(export.pop("beamQuantities"))
+        # Remove keys with None values from the export dictionary
+        # (savemat cant handle "None")
+        export = {key: value for key, value in export.items() if value is not None}
+        return export
 
 
 def create_result(
@@ -399,12 +407,3 @@ def validate_result(data: Union[dict[str, Any], PlanResult, None] = None, **kwar
     """
 
     return create_result(data, **kwargs)
-
-
-# # TODO: might be placed somewhere else
-# def to_camel_case(snake_str: str) -> str:
-#     """Convert a snake_case string to camelCase."""
-#     # necessary since iteration over every beam creates a new instance which will not be handled by pydantic.
-#     # So custom camel_case function is needed here.
-#     components = snake_str.split("_")
-#     return components[0] + "".join(x.title() for x in components[1:])
