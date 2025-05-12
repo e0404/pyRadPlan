@@ -98,9 +98,6 @@ class PlanResult(PyRadPlanBaseModel):
     quantities: Dict[str, QuantityDistribution] = Field(default_factory=dict)
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
 
-    class Config:
-        extra = "allow"
-
     @property
     def stored_quantities(self) -> List[str]:
         """Return the list of stored quantities."""
