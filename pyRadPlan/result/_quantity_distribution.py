@@ -7,6 +7,7 @@ from pydantic import (
     Field,
     computed_field,
     model_validator,
+    ValidationInfo,
 )
 import SimpleITK as sitk
 import numpy as np
@@ -26,7 +27,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_distribution(cls, data: Any) -> Any:
+    def validate_distribution(cls, data: Any, info: ValidationInfo) -> Any:
         # Early return for distribution input (assuming distribution is defined/imported elsewhere)
         if isinstance(data, QuantityDistribution):
             return data
@@ -48,7 +49,9 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
             if isinstance(distribution, np.ndarray):
                 # Determine if a permutation is required (e.g. matRad data has 'distributionDim')
-                permute = data.get("distributionDim") is not None
+                permute = data.get("distributionDim") is not None or (
+                    info.context and "from_matRad" in info.context and info.context["from_matRad"]
+                )
                 # TODO: Remove ct_scenarios!
                 # If the numpy array holds multiple scenarios (dtype object), then form a 4D image
                 if distribution.dtype == object:

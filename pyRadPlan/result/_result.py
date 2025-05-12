@@ -6,17 +6,22 @@ Defines a result pydantic model and factories.
 
 from typing import List, Any, Union, Dict
 import numpy as np
+import logging
+
 from pydantic import (
     Field,
     model_validator,
     field_serializer,
     SerializationInfo,
+    ValidationInfo,
 )
-from pydantic.alias_generators import to_camel
+from pydantic.alias_generators import to_camel, to_snake
 import SimpleITK as sitk
 
 from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class BeamAccessor:
@@ -114,9 +119,28 @@ class PlanResult(PyRadPlanBaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def aggregate_dynamic_quantities(cls, data: Any) -> Any:
+    def aggregate_dynamic_quantities(cls, data: Any, info: ValidationInfo) -> Any:
         if data is None or data == {}:
             raise ValueError("No data provided for PlanResult creation.")
+        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+            # If the data is from matRad, we need to handle the beam quantities differently.
+            # The keys are usually named with a "_beam" suffix.
+            for key, value in list(data.items()):
+                if key == "w":
+                    data["fluence"] = value
+                    data.pop(key)
+                elif "_beam" in key:
+                    prefix, _, _ = key.partition("_beam")
+                    if to_snake(prefix) + "_beam" in data:
+                        data[to_snake(prefix) + "_beam"].append(value)
+                    else:
+                        data[to_snake(prefix) + "_beam"] = [value]
+                    # Remove the original key
+                    data.pop(key)
+                else:
+                    data[to_snake(key)] = value
+                    data.pop(key)
+
         if isinstance(data, dict):
             reserved = {"fluence", "info", "used_solver", "beams"}
             # Place dynamic values into temporary public keys.
@@ -127,11 +151,13 @@ class PlanResult(PyRadPlanBaseModel):
                     continue
                 if not isinstance(value, list):
                     # The Cubes have to be validated because validation does not work via private attributes.
-                    quantities_tmp[key] = QuantityDistribution.model_validate(value)
+                    quantities_tmp[key] = QuantityDistribution.model_validate(
+                        value, context=info.context
+                    )
                 else:
                     new_key = key.replace("_beam", "") if "_beam" in key else key
                     beam_quantities_tmp[new_key] = [
-                        QuantityDistribution.model_validate(v) for v in value
+                        QuantityDistribution.model_validate(v, context=info.context) for v in value
                     ]
                     # Remove the key
                 data.pop(key)
@@ -368,8 +394,17 @@ def create_result(
         if isinstance(data, dict):
             # Merge additional key-value pairs (like info) into the dictionary.
             data.update(kwargs)
-            return PlanResult.model_validate(data)
-        return PlanResult.model_validate(data)
+
+        context = {"from_matRad": False}
+        for key, value in data.items():
+            if "beam1" in key:
+                logger.info(
+                    "matRad typical convention detected. Assuming matRad import. "
+                    "If this is not the case, please rename variable '...beam1'"
+                )
+                context = {"from_matRad": True}
+
+        return PlanResult.model_validate(data, context=context)
     return PlanResult(**kwargs)
 
 

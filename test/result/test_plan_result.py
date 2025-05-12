@@ -1,10 +1,8 @@
 import pytest
 import SimpleITK as sitk
-import os
 import numpy as np
-from pathlib import Path
 from pydantic import ValidationError
-from scipy.io import savemat
+# from scipy.io import savemat
 
 from pyRadPlan.result import PlanResult, QuantityDistribution, validate_result, create_result
 
@@ -147,6 +145,24 @@ def test_to_matrad_dict(sample_image):
     assert matrad_dict["physicalDose_beam1"].shape == (100, 100, 50)
 
     # savemat("output.mat", matrad_dict)
+
+
+def test_matrad_import(test_data_photons_raw):
+    """Test import of matRad resultGUI dictionary."""
+    matRad_file = test_data_photons_raw["resultGUI"]
+    result = validate_result(matRad_file)
+
+    assert isinstance(result, PlanResult)
+    assert isinstance(result.physical_dose, QuantityDistribution)
+    assert isinstance(result.physical_dose.distribution, sitk.Image)
+    assert result.physical_dose.size == (10, 20, 10)
+
+    assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
+    assert isinstance(result.beam.physical_dose[1], QuantityDistribution)
+    assert isinstance(result.beam.physical_dose[0].distribution, sitk.Image)
+    assert isinstance(result.beam.physical_dose[1].distribution, sitk.Image)
+    assert result.beam.physical_dose[0].size == (10, 20, 10)
+    assert result.beam.physical_dose[1].size == (10, 20, 10)
 
 
 def test_validated_result(sample_image):
