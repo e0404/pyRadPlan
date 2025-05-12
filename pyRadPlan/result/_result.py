@@ -94,6 +94,16 @@ class PlanResult(PyRadPlanBaseModel):
         Returns the list of stored quantities.
     stored_beam_quantities : List[str]
         Returns the list of stored beam quantities.
+    add_quantity(key: str, value: Union[dict, QuantityDistribution], **kwargs) -> None
+        Adds or updates one quantity entry
+    add_beam_quantity(key: str, value: Union[list[dict], list[QuantityDistribution]], **kwargs) -> None
+        Adds or updates one or more beam quantity entries
+    sequencing() -> None
+        - not implemented yet - Performs sequencing on the dose cube.
+    analyse_plan() -> None
+        - not implemented yet - Performs analysis on the plan.
+    to_matrad(context: str = "mat-file") -> Any
+        Converts the PlanResult object to a dictionary format for matRad.
     """
 
     fluence: np.ndarray = Field(default=None)
@@ -117,29 +127,35 @@ class PlanResult(PyRadPlanBaseModel):
     def beam(self):
         return BeamAccessor(self.beam_quantities)
 
+    @classmethod
+    def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
+        """Handle data coming from matRad by grouping beam quantities."""
+        # If the data is from matRad, we need to handle the beam quantities differently.
+        # The keys are usually named with a "_beam" suffix.
+        for key, value in list(data.items()):
+            if key == "w":
+                data["fluence"] = value
+                data.pop(key)
+            elif "_beam" in key:
+                prefix, _, _ = key.partition("_beam")
+                if to_snake(prefix) + "_beam" in data:
+                    data[to_snake(prefix) + "_beam"].append(value)
+                else:
+                    data[to_snake(prefix) + "_beam"] = [value]
+                # Remove the original key
+                data.pop(key)
+            else:
+                data[to_snake(key)] = value
+                data.pop(key)
+        return data
+
     @model_validator(mode="before")
     @classmethod
     def aggregate_dynamic_quantities(cls, data: Any, info: ValidationInfo) -> Any:
         if data is None or data == {}:
             raise ValueError("No data provided for PlanResult creation.")
-        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
-            # If the data is from matRad, we need to handle the beam quantities differently.
-            # The keys are usually named with a "_beam" suffix.
-            for key, value in list(data.items()):
-                if key == "w":
-                    data["fluence"] = value
-                    data.pop(key)
-                elif "_beam" in key:
-                    prefix, _, _ = key.partition("_beam")
-                    if to_snake(prefix) + "_beam" in data:
-                        data[to_snake(prefix) + "_beam"].append(value)
-                    else:
-                        data[to_snake(prefix) + "_beam"] = [value]
-                    # Remove the original key
-                    data.pop(key)
-                else:
-                    data[to_snake(key)] = value
-                    data.pop(key)
+        if info.context and info.context.get("from_matRad"):
+            data = cls._process_matrad_data(data, info)
 
         if isinstance(data, dict):
             reserved = {"fluence", "info", "used_solver", "beams"}
@@ -168,27 +184,10 @@ class PlanResult(PyRadPlanBaseModel):
 
         return data
 
-    # def __dir__(self):
-    #     # updated __dir__ to include dynamic attributes. These won't be highlighted,
-    #     # but hovering in debug will give the correct information.
-    #     # Highlighting will not be possible since attributes are dynamic.
-    #     default = set(super().__dir__())
-    #     # add dynamic attributes in _quantities and beam if available
-    #     dynamic = set(self.quantities.keys())
-    #     if self.beam_quantities:
-    #         dynamic.add("beam")
-    #     return list(default.union(dynamic))
-
     def __getattr__(self, item):
-        # First try standard dynamic quantities.
         quantities = object.__getattribute__(self, "quantities")
         if item in quantities:
             return quantities[item]
-        # If 'beam' is requested, return a BeamAccessor instance.
-        # if item == "beam":
-        #     beam_quantities = object.__getattribute__(self, "beam_quantities")
-
-        #     return BeamAccessor(beam_quantities)
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{item}'")
 
     def __setattr__(self, name, value):
@@ -286,6 +285,7 @@ class PlanResult(PyRadPlanBaseModel):
                     numpy_array = np.transpose(
                         sitk.GetArrayFromImage(value.distribution), (1, 2, 0)
                     )
+                    # TODO: multScen support
                     # wrapped_array = np.ndarray(shape=(1,), dtype=object)
                     # wrapped_array[0] = numpy_array
                     dict_tmp[to_camel(key)] = numpy_array  # wrapped_array
@@ -305,6 +305,7 @@ class PlanResult(PyRadPlanBaseModel):
                         numpy_array = np.transpose(
                             sitk.GetArrayFromImage(beam.distribution), (1, 2, 0)
                         )
+                        # TODO: multScen support
                         # wrapped_array = np.ndarray(shape=(1,), dtype=object)
                         # wrapped_array[0] = numpy_array
                         dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array  # wrapped_array
