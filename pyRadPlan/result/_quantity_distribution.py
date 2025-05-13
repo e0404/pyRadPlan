@@ -25,90 +25,86 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
     distribution: Annotated[sitk.Image, Field(init=False)]  # ,alias="distribution")]
 
+    @classmethod
+    def _retrieve_data(cls, data: Any, info: ValidationInfo) -> dict:
+        """Search for data coming from validation."""
+        if isinstance(data, Union[sitk.Image, np.ndarray]):
+            # If the input is a SimpleITK image or numpy array, set it as the distribution
+            data = {"distribution": data}
+        if not isinstance(data, dict):
+            raise ValueError("Invalid type for dose distribution input.")
+        # Try to get the distribution using our internal key or its alias
+        if "cube" in data:
+            distribution = data.get("cube")
+        elif "distribution" in data:
+            distribution = data.get("distribution")
+        if distribution is None:
+            distribution_fieldname = cls.model_fields.get("cube").validation_alias
+            distribution = data.pop(distribution_fieldname, None)
+        if distribution is None:
+            raise ValueError("Dose distribution not present in dictionary.")
+        return distribution, data
+
     @model_validator(mode="before")
     @classmethod
     def validate_distribution(cls, data: Any, info: ValidationInfo) -> Any:
         # Early return for distribution input (assuming distribution is defined/imported elsewhere)
         if isinstance(data, QuantityDistribution):
             return data
-        if isinstance(data, Union[sitk.Image, np.ndarray]):
-            # If the input is a SimpleITK image or numpy array, set it as the distribution
-            data = {"distribution": data}
-        if isinstance(data, dict):
-            # Try to get the distribution using our internal key or its alias
-            if "cube" in data:
-                distribution = data.get("cube")
-            elif "distribution" in data:
-                distribution = data.get("distribution")
-            if distribution is None:
-                distribution_fieldname = cls.model_fields.get("cube").validation_alias
-                # TODO: implement neat way to .get("distribition") without more branching
-                distribution = data.pop(distribution_fieldname, None)
-            if distribution is None:
-                raise ValueError("Dose distribution not present in dictionary.")
 
-            if isinstance(distribution, np.ndarray):
-                # Determine if a permutation is required (e.g. matRad data has 'distributionDim')
-                permute = data.get("distributionDim") is not None or (
-                    info.context and "from_matRad" in info.context and info.context["from_matRad"]
+        distribution, data = cls._retrieve_data(data, info)
+        if isinstance(distribution, np.ndarray):
+            # Determine if a permutation is required (e.g. matRad data has 'distributionDim')
+            permute = data.get("distributionDim") or (
+                info.context and info.context.get("from_matRad", False)
+            )
+            if distribution.dtype == object:
+                distribution = sitk.JoinSeries(
+                    [
+                        sitk.GetImageFromArray(
+                            np.transpose(distribution[i], (2, 0, 1))
+                            if permute
+                            else distribution[i],
+                            False,
+                        )
+                        for i in range(len(distribution))
+                    ]
                 )
-                # TODO: Remove ct_scenarios!
-                # If the numpy array holds multiple scenarios (dtype object), then form a 4D image
-                if distribution.dtype == object:
-                    num_distributions = len(distribution)
-                    if permute:
-                        distribution_scenarios = [
-                            sitk.GetImageFromArray(np.transpose(distribution[i], (2, 0, 1)), False)
-                            for i in range(num_distributions)
-                        ]
-                    else:
-                        distribution_scenarios = [
-                            sitk.GetImageFromArray(distribution[i], False)
-                            for i in range(num_distributions)
-                        ]
-                    distribution = sitk.JoinSeries(distribution_scenarios)
-                elif permute:
-                    distribution = sitk.GetImageFromArray(
-                        np.transpose(distribution, (2, 0, 1)), False
-                    )
-                else:
-                    distribution = sitk.GetImageFromArray(distribution, False)
+            else:
+                arr = np.transpose(distribution, (2, 0, 1)) if permute else distribution
+                distribution = sitk.GetImageFromArray(arr, False)
 
-            # Save the result under the key used in this model
-            data["distribution"] = distribution
+        # Save the result under the key used in this model
+        data["distribution"] = distribution
 
-            # Validate that the distribution is indeed a SimpleITK image.
-            if not isinstance(data["distribution"], sitk.Image):
-                raise ValueError(
-                    f"Unsupported format of HU distribution: {type(data['distribution'])}"
-                )
+        # Validate that the distribution is indeed a SimpleITK image.
+        if not isinstance(data["distribution"], sitk.Image):
+            raise ValueError(
+                f"Unsupported format of HU distribution: {type(data['distribution'])}"
+            )
 
-            is4d = distribution.GetDimension() == 4
+        is4d = distribution.GetDimension() == 4
 
-            # Set image origin if available from the dictionary.
-            if "origin" in data:
-                data["distribution"].SetOrigin(data["origin"])
-            elif all(key in data for key in ("x", "y", "z")):
-                origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
-                if is4d:
-                    origin = np.append(origin, [0.0])
-                data["distribution"].SetOrigin(origin)
+        # Set image origin if available from the dictionary.
+        if "origin" in data:
+            data["distribution"].SetOrigin(data["origin"])
+        elif all(key in data for key in ("x", "y", "z")):
+            origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
+            if is4d:
+                origin = np.append(origin, [0.0])
+            data["distribution"].SetOrigin(origin)
 
-            # Set direction if provided.
-            if "direction" in data:
-                data["distribution"].SetDirection(data["direction"])
+        # Set direction if provided.
+        if "direction" in data:
+            data["distribution"].SetDirection(data["direction"])
 
-            # Set spacing (resolution) if available.
-            if "resolution" in data and all(key in data["resolution"] for key in ("x", "y", "z")):
-                resolution = data["resolution"]
-                if is4d:
-                    data["distribution"].SetSpacing(
-                        [resolution["x"], resolution["y"], resolution["z"], 1.0]
-                    )
-                else:
-                    data["distribution"].SetSpacing(
-                        [resolution["x"], resolution["y"], resolution["z"]]
-                    )
+        # Set spacing (resolution) if available.
+        if "resolution" in data and all(k in data["resolution"] for k in ("x", "y", "z")):
+            res = data["resolution"]
+            spacing = (
+                [res["x"], res["y"], res["z"], 1.0] if is4d else [res["x"], res["y"], res["z"]]
+            )
+            data["distribution"].SetSpacing(spacing)
 
         return data
 
