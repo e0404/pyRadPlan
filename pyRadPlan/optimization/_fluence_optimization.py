@@ -1,17 +1,15 @@
-import numpy as np
-
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.stf import SteeringInformation, validate_stf
-
+from pyRadPlan.result import PlanResult, validate_result
 from .problems import get_problem_from_pln
 
 
 def fluence_optimization(
     ct: CT, cst: StructureSet, stf: SteeringInformation, dij: Dij, pln: Plan
-) -> np.ndarray:
+) -> PlanResult:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
 
@@ -30,8 +28,8 @@ def fluence_optimization(
 
     Returns
     -------
-    np.ndarray
-        The optimized fluence map.
+    PlanResult
+        Result object containing the requested dose cubes and information.
     """
 
     _ct = validate_ct(ct)
@@ -42,6 +40,7 @@ def fluence_optimization(
 
     planning_prob = get_problem_from_pln(_pln)
 
-    x, _result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
-
-    return x
+    fluence, _result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
+    cubes = dij.compute_result_ct_grid(fluence)
+    result = validate_result(cubes, fluence=fluence, info=_result_info)
+    return result

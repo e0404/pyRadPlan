@@ -28,11 +28,8 @@ stf = generate_stf(ct, cst, pln)
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# Optimize
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+# Optimize -> Result
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))
@@ -41,7 +38,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result["physical_dose"],
+    overlay=result.physical_dose.distribution,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",
@@ -49,7 +46,7 @@ plot_slice(
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result["effect"],
+    overlay=result.physical_dose.distribution,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="dimensionless",
