@@ -20,6 +20,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.result._aperture_info import ApertureInfo
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,10 @@ class PlanResult(PyRadPlanBaseModel):
 
     quantities: Dict[str, QuantityDistribution] = Field(default_factory=dict)
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
+
+    fluence_sequenced: np.ndarray = Field(default=None)
+    aperture_info: ApertureInfo = Field(default=None)
+    sequencing: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def stored_quantities(self) -> List[str]:
@@ -320,11 +325,6 @@ class PlanResult(PyRadPlanBaseModel):
             if v
             else None
         )
-
-    def sequencing(self) -> None:
-        """Perform sequencing on the dose cube."""
-        # TODO
-        pass
 
     def analyse_plan(self) -> None:
         """Perform analysis on the plan."""
