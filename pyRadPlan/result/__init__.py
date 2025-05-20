@@ -1,6 +1,6 @@
 """Provides functionality for handling treatment plan results."""
 
-from ._result import PlanResult, validate_result, create_result
+from ._result import PlanResult, ApertureInfo, validate_result, create_result
 from ._quantity_distribution import (
     QuantityDistribution,
     validate_distribution,
