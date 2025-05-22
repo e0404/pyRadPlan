@@ -4,8 +4,7 @@ Module for handling the result of calc_dose_forward and calc_dose_influence.
 Defines a result pydantic model and factories.
 """
 
-from typing import Any
-import numpy as np
+from typing import Any, Union
 from numpy.typing import NDArray
 import logging
 
@@ -20,14 +19,12 @@ logger = logging.getLogger(__name__)
 class ApertureInfo(PyRadPlanBaseModel):
     """A class representing the aperture information of a beam."""
 
-    beam: dict[str, Any] = Field(default_factory=dict)
+    beam: list[dict[str, Any]] = Field(default_factory=dict)
     bixel_width: float = Field(default=0.0, gt=0.0)
     num_of_mlc_leaf_pairs: int = Field(default=0, gt=0)
     total_num_of_bixels: int = Field(default=0, gt=0)
     total_num_of_shapes: int = Field(default=0, gt=0)
     total_num_of_leaf_pairs: int = Field(default=0, gt=0)
-    aperture_vector: NDArray[np.float64] = Field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
-    mapping_mx: NDArray[np.float64] = Field(default_factory=lambda: np.array([], dtype=np.float64))
-    lim_mx: NDArray[np.float64] = Field(default_factory=lambda: np.array([], dtype=np.float64))
+    aperture_vector: Union[NDArray, None] = Field(default=None)
+    mapping_mx: Union[NDArray, None] = Field(default=None)
+    lim_mx: Union[NDArray, None] = Field(default=None)

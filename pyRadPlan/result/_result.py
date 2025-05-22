@@ -163,7 +163,15 @@ class PlanResult(PyRadPlanBaseModel):
             data = cls._process_matrad_data(data, info)
 
         if isinstance(data, dict):
-            reserved = {"fluence", "info", "used_solver", "beams"}
+            reserved = {
+                "fluence",
+                "info",
+                "used_solver",
+                "beams",
+                "sequencing",
+                "aperture_info",
+                "fluence_sequenced",
+            }
             # Place dynamic values into temporary public keys.
             quantities_tmp = {}
             beam_quantities_tmp = {}
