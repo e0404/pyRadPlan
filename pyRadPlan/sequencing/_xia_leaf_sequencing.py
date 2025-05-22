@@ -1,4 +1,4 @@
-"""Base class for sequencing."""
+"""Xia Leaf Sequencer class."""
 
 import logging
 
@@ -31,19 +31,17 @@ class XiaLeafSequencer(Sequencer):
 
         Parameters
         ----------
-        resultGUI : object
+        result : object
             The result object or dictionary to store sequencing results.
         stf : object
             The steering information structure.
         dij : object
             The dij matrix or related input.
-        numOfLevels : int
-            The number of intensity levels used for stratification.
 
         Returns
         -------
         object
-            The updated resultGUI after sequencing.
+            The updated result after sequencing.
         """
 
         num_of_beams = len(stf.beams)
@@ -57,32 +55,23 @@ class XiaLeafSequencer(Sequencer):
             num_of_rays_per_beam = len(beam.rays)
             w_of_curr_beams = result.fluence[offset : offset + num_of_rays_per_beam]
 
-            # Get ray positions
-            x_positions = np.array([ray.ray_pos_bev[0] for ray in beam.rays])
-            z_positions = np.array([ray.ray_pos_bev[2] for ray in beam.rays])
+            tmp_fluence_dict = self._inititialize_beam_fluence_matrix(
+                stf.beams[i], w_of_curr_beams
+            )
 
-            min_x, max_x = x_positions.min(), x_positions.max()
-            min_z, max_z = z_positions.min(), z_positions.max()
-
-            bixel_width = beam.bixel_width
-            dim_of_fluence_mx_x = int((max_x - min_x) / bixel_width + 1)
-            dim_of_fluence_mx_z = int((max_z - min_z) / bixel_width + 1)
-
-            # Create fluence matrix
-            fluence_mx = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
-            x_pos = ((x_positions - min_x) / bixel_width).astype(int)  # adjust for 0-indexing
-            z_pos = ((z_positions - min_z) / bixel_width).astype(int)
-
-            for xp, zp, weight in zip(x_pos, z_pos, w_of_curr_beams):
-                fluence_mx[zp, xp] = weight
-
-            cal_fac = np.max(fluence_mx)
-            d_0 = np.round(fluence_mx / cal_fac * self.num_of_levels).astype(int)
-            d_k = d_0.copy()
+            d_k = tmp_fluence_dict["d_k"]
+            d_0 = tmp_fluence_dict["d_0"]
             l_k = int(np.max(d_k))
             l_0 = l_k
 
-            shapes = np.full((dim_of_fluence_mx_z, dim_of_fluence_mx_x, 10000), np.nan)
+            shapes = np.full(
+                (
+                    tmp_fluence_dict["dim_of_fluence_mx_z"],
+                    tmp_fluence_dict["dim_of_fluence_mx_x"],
+                    10000,
+                ),
+                np.nan,
+            )
             shapes_weight = np.zeros(10000)
             k = 0
 
@@ -97,7 +86,7 @@ class XiaLeafSequencer(Sequencer):
 
                 # Apply reducing levels technique
                 if self.mode == "recucing_levels":
-                    for row in range(dim_of_fluence_mx_z):
+                    for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
                         row_vals = opening_mx[row, :] * d_k[row, :]
                         if np.any(row_vals):
                             max_ix = np.argmax(row_vals)
@@ -109,8 +98,9 @@ class XiaLeafSequencer(Sequencer):
                                 if false_before.size > 0:
                                     open_ix = false_before[-1]
                                     opening_mx[row, : open_ix + 1] = False
+
                 elif self.mode == "sliding_window":  # sliding window technique (if needed)
-                    for row in range(dim_of_fluence_mx_z):
+                    for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
                         row_open = np.where(opening_mx[row, :])[0]
                         if row_open.size > 0:
                             open_ix = row_open[0]
@@ -126,42 +116,40 @@ class XiaLeafSequencer(Sequencer):
                 d_k = d_k - shape_k
                 l_k = int(np.max(d_k))
 
-                beam_sequencing = {
-                    "num_of_shapes": k,
-                    "shapes": shapes[:, :, :k],
-                    "shapes_weight": shapes_weight[:k] / self.num_of_levels * cal_fac,
-                    "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
-                    "fluence": d_0,
-                }
-                sequencing["beam"].append(beam_sequencing)
+            beam_sequencing = {
+                "num_of_shapes": k,
+                "shapes": shapes[:, :, :k],
+                "shapes_weight": shapes_weight[:k]
+                / self.num_of_levels
+                * tmp_fluence_dict["cal_fac"],
+                "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
+                "fluence": d_0,
+            }
+            sequencing["beam"].append(beam_sequencing)
 
-                # Map fluence back to weights (using linear indices)
-                linear_indices = z_pos + x_pos * dim_of_fluence_mx_z
-                flat_d0 = d_0.flatten()
-                sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
-                    flat_d0[linear_indices] / self.num_of_levels * cal_fac
-                )
+            # Map fluence back to weights (using linear indices)
+            linear_indices = (
+                tmp_fluence_dict["z_pos"]
+                + tmp_fluence_dict["x_pos"] * tmp_fluence_dict["dim_of_fluence_mx_z"]
+            )
+            flat_d0 = d_0.flatten()
+            sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
+                flat_d0[linear_indices] / self.num_of_levels * tmp_fluence_dict["cal_fac"]
+            )
 
-                offset += num_of_rays_per_beam
+            offset += num_of_rays_per_beam
 
-        # Finalize result_gui
-        result.fluence = sequencing["w"]
-        result.fluence_sequenced = sequencing["w"]
-        result.sequencing = sequencing
-        result.aperture_info = self.sequencing_to_aperture_info(sequencing, stf)
+        # finalize sequencing result
+        result_tmp = {}
+        result_tmp["fluence"] = result.fluence
+        result_tmp["fluence_sequenced"] = sequencing["fluence"]
+        result_tmp["sequencing"] = sequencing
+        result_tmp["aperture_info"] = self.sequencing_to_aperture_info(sequencing, stf)
 
         # Interpolate dose (placeholder implementation)
-        dose_sequenced_dose_grid = (dij["physicalDose"][0] * sequencing["w"]).reshape(
-            dij["doseGrid"]["dimensions"]
-        )
-        # result_gui['physicalDose'] = self.interp3(dij['doseGrid']['x'],
-        #                       np.array(dij['doseGrid']['y']).T,
-        #                       dij['doseGrid']['z'],
-        #                       dose_sequenced_dose_grid,
-        #                       dij['ctGrid']['x'],
-        #                       np.array(dij['ctGrid']['y']).T,
-        #                       dij['ctGrid']['z'])
-        # if 'w_dao' in result_gui:
-        #     del result_gui['w_dao']
+        cubes = dij.compute_result_ct_grid(sequencing["fluence"])
 
-        return validate_result(result)
+        # if hasattr(result, 'w_dao'):
+        #     pass
+
+        return validate_result({**cubes, **result_tmp})
