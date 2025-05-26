@@ -64,23 +64,14 @@ class XiaLeafSequencer(Sequencer):
             l_k = int(np.max(d_k))
             l_0 = l_k
 
-            shapes = np.full(
-                (
-                    tmp_fluence_dict["dim_of_fluence_mx_z"],
-                    tmp_fluence_dict["dim_of_fluence_mx_x"],
-                    10000,
-                ),
-                np.nan,
-            )
-            shapes_weight = np.zeros(10000)
+            shapes_list = []
+            shapes_weight_list = []
+
             k = 0
 
             while l_k > 0:
                 k += 1
-                m = (
-                    math.floor(math.log2(l_k)) if l_k > 0 else 0
-                )  # TODO: is this necessary to check?
-                m = max(m, 1)
+                m = max(math.floor(math.log2(l_k)), 1)
                 d_k_value = math.floor(2 ** (m - 1))
 
                 # Calculate opening matrix
@@ -89,7 +80,7 @@ class XiaLeafSequencer(Sequencer):
                 # Apply reducing levels technique
                 if self.mode == "reducing_levels":
                     for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
-                        # mimic [maxVal, maxIx] = max(openingMx(j,:) .* D_k(j,:))
+                        # mimic [maxVal, maxIx] = max(openingMx(j,:) .* D_k(j,:)) - matrad code
                         row_vals = opening_mx[row, :] * d_k[row, :]
                         if row_vals.max() > 0:
                             max_ix = int(np.argmax(row_vals))
@@ -106,29 +97,34 @@ class XiaLeafSequencer(Sequencer):
                             if zeros_before.size > 0:
                                 open_ix = int(zeros_before[-1])
                                 opening_mx[row, : open_ix + 1] = False
-                elif self.mode == "sliding_window":  # sliding window technique (if needed)
+                elif self.mode == "sliding_window":
                     for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
                         row_open = np.where(opening_mx[row, :])[0]
                         if row_open.size > 0:
                             open_ix = row_open[0]
                             zeros_after = np.where(~opening_mx[row, open_ix + 1 :])[0]
                             if zeros_after.size > 0:
-                                close_ix = open_ix + zeros_after[0]
+                                close_ix = open_ix + 1 + zeros_after[0]
                                 opening_mx[row, close_ix:] = False
 
                 shape_k = opening_mx.astype(int) * d_k_value
 
-                shapes[:, :, k - 1] = shape_k
-                shapes_weight[k - 1] = d_k_value
+                shapes_list.append(shape_k)
+                shapes_weight_list.append(d_k_value)
+
                 d_k = d_k - shape_k
                 l_k = int(np.max(d_k))
 
+            shapes_arr = np.stack(shapes_list, axis=2)  # (Z, X, num_shapes)
+            shapes_weight_arr = (
+                np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
+            )
+            num_shapes = shapes_arr.shape[2]
+
             beam_sequencing = {
-                "num_of_shapes": k,
-                "shapes": shapes[:, :, :k],
-                "shapes_weight": shapes_weight[:k]
-                / self.num_of_levels
-                * tmp_fluence_dict["cal_fac"],
+                "num_of_shapes": num_shapes,
+                "shapes": shapes_arr,
+                "shapes_weight": shapes_weight_arr,
                 "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
                 "fluence": d_0,
             }
