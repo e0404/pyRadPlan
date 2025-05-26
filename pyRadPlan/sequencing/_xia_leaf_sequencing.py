@@ -77,7 +77,9 @@ class XiaLeafSequencer(Sequencer):
 
             while l_k > 0:
                 k += 1
-                m = math.floor(math.log2(l_k)) if l_k > 0 else 0
+                m = (
+                    math.floor(math.log2(l_k)) if l_k > 0 else 0
+                )  # TODO: is this necessary to check?
                 m = max(m, 1)
                 d_k_value = math.floor(2 ** (m - 1))
 
@@ -85,20 +87,25 @@ class XiaLeafSequencer(Sequencer):
                 opening_mx = d_k >= d_k_value
 
                 # Apply reducing levels technique
-                if self.mode == "recucing_levels":
+                if self.mode == "reducing_levels":
                     for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
+                        # mimic [maxVal, maxIx] = max(openingMx(j,:) .* D_k(j,:))
                         row_vals = opening_mx[row, :] * d_k[row, :]
-                        if np.any(row_vals):
-                            max_ix = np.argmax(row_vals)
-                            false_after = np.where(~opening_mx[row, max_ix + 1 :])[0]
-                            if false_after.size > 0:
-                                close_ix = max_ix + false_after[0]
-                                opening_mx[row, close_ix:] = False
-                                false_before = np.where(~opening_mx[row, :max_ix])[0]
-                                if false_before.size > 0:
-                                    open_ix = false_before[-1]
-                                    opening_mx[row, : open_ix + 1] = False
+                        if row_vals.max() > 0:
+                            max_ix = int(np.argmax(row_vals))
 
+                            # find first zero *after* max_ix
+                            zeros_after = np.where(~opening_mx[row, max_ix + 1 :])[0]
+                            if zeros_after.size > 0:
+                                # must add +1 because we sliced from max_ix+1
+                                close_ix = max_ix + 1 + int(zeros_after[0])
+                                opening_mx[row, close_ix:] = False
+
+                            # find last zero *before* max_ix
+                            zeros_before = np.where(~opening_mx[row, :max_ix])[0]
+                            if zeros_before.size > 0:
+                                open_ix = int(zeros_before[-1])
+                                opening_mx[row, : open_ix + 1] = False
                 elif self.mode == "sliding_window":  # sliding window technique (if needed)
                     for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
                         row_open = np.where(opening_mx[row, :])[0]
