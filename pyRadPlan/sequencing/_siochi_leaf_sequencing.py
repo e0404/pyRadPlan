@@ -24,6 +24,104 @@ class SiochiLeafSequencer(Sequencer):
         # self.mode = "reducing_levels"  # 'sliding_window' or 'reducing_levels'
         super().__init__(pln)
 
+    def _tongue_and_groove_correction(
+        self, tops: np.ndarray, bases: np.ndarray, dk: np.ndarray, indexing: tuple
+    ):
+        """Apply the downward + upward TnG correction loop for column i."""
+        # reducing arguments in function:
+        i, max_row, min_z, max_z = indexing
+
+        while True:
+            changed = False
+            # TODO: This implementation reduces branching but is less readable. Might change it in future again
+            # downward pass (j = max_row-1 … min_z)
+            for j in range(max_row - 1, min_z - 1, -1):
+                # shorter rod above longer rod
+                check = dk[j, i] < dk[j + 1, i]
+                if check and tops[j, i] > tops[j + 1, i]:
+                    tops[j + 1, i] = tops[j, i]
+                    bases[j + 1, i] = tops[j + 1, i] - dk[j + 1, i] + 1
+                    changed = True
+                elif check and bases[j, i] < bases[j + 1, i]:
+                    bases[j, i] = bases[j + 1, i]
+                    tops[j, i] = bases[j, i] + dk[j, i] - 1
+                    changed = True
+                # current >= next, fix opposite peeking
+                elif not check and tops[j, i] < tops[j + 1, i]:
+                    tops[j, i] = tops[j + 1, i]
+                    bases[j, i] = tops[j, i] - dk[j, i] + 1
+                    changed = True
+                elif not check and bases[j, i] > bases[j + 1, i]:
+                    bases[j + 1, i] = bases[j, i]
+                    tops[j + 1, i] = bases[j + 1, i] + dk[j + 1, i] - 1
+                    changed = True
+
+            # upward pass (j = max_row+1 … max_z)
+            for j in range(max_row + 1, max_z + 1):
+                # shorter rod below longer rod
+                check = dk[j, i] < dk[j - 1, i]
+                if check and tops[j, i] > tops[j - 1, i]:
+                    tops[j - 1, i] = tops[j, i]
+                    bases[j - 1, i] = tops[j - 1, i] - dk[j - 1, i] + 1
+                    changed = True
+                elif check and bases[j, i] < bases[j - 1, i]:
+                    bases[j, i] = bases[j - 1, i]
+                    tops[j, i] = bases[j, i] + dk[j, i] - 1
+                    changed = True
+                # current >= above, fix opposite peeking
+                elif not check and tops[j, i] < tops[j - 1, i]:
+                    tops[j, i] = tops[j - 1, i]
+                    bases[j, i] = tops[j, i] - dk[j, i] + 1
+                    changed = True
+                elif not check and bases[j, i] > bases[j - 1, i]:
+                    bases[j - 1, i] = bases[j, i]
+                    tops[j - 1, i] = bases[j - 1, i] + dk[j - 1, i] - 1
+                    changed = True
+
+            if not changed:
+                break
+
+        return tops, bases
+
+    def _decompose_port(self, dk, dim_z, dim_x):
+        """Decompose the port from the stratified intensity matrix, including collision & tongue-and-groove fixes."""
+        tops = np.zeros((dim_z, dim_x), dtype=int)
+        bases = np.zeros((dim_z, dim_x), dtype=int)
+
+        # replicate MATLAB's minZ/maxZ/minX/maxX over full range
+        min_z, max_z = 0, dim_z - 1
+        min_x, max_x = 0, dim_x - 1
+
+        for i in range(min_x, max_x + 1):
+            # first pass: set bases/tops and track the highest top
+            max_top = -1
+            max_row = min_z
+            for j in range(min_z, max_z + 1):
+                if i == min_x:
+                    bases[j, i] = 1
+                    tops[j, i] = bases[j, i] + dk[j, i] - 1
+                elif dk[j, i] >= dk[j, i - 1]:
+                    bases[j, i] = bases[j, i - 1]
+                    tops[j, i] = bases[j, i] + dk[j, i] - 1
+                elif dk[j, i] == 0:
+                    bases[j, i] = tops[j, i - 1] + 1
+                    tops[j, i] = bases[j, i] - 1
+                else:
+                    tops[j, i] = tops[j, i - 1]
+                    bases[j, i] = tops[j, i] - dk[j, i] + 1
+
+                # update maxTop, maxRow
+                if tops[j, i] > max_top:
+                    max_top = tops[j, i]
+                    max_row = j
+
+            # tongue-and-groove correction loop
+            tops, bases = self._tongue_and_groove_correction(
+                tops, bases, dk, [i, max_row, min_z, max_z]
+            )
+
+        return tops, bases
+
     def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
         """
         Execute the Siochi leaf sequencing algorithm (without visualization).
@@ -46,72 +144,7 @@ class SiochiLeafSequencer(Sequencer):
         offset = 0
         sequencing = {"fluence": np.zeros_like(result.fluence), "beam": []}
 
-        # We'll also store the combined weight vector in sequencing["w"]
         sequencing["fluence"] = np.zeros_like(result.fluence)
-
-        # --- Helper functions defined locally ---
-
-        def _decompose_port(dk, dim_z, dim_x):
-            """
-            Decompose the port from the stratified intensity matrix.
-
-            Parameters
-            ----------
-                dk : numpy.ndarray
-                    The stratified intensity matrix.
-                dim_z : int
-                    The number of rows in the matrix.
-                dim_x : int
-                    The number of columns in the matrix.
-
-            Returns
-            -------
-                tops : numpy.ndarray
-                    The top boundaries of the slabs.
-                bases : numpy.ndarray
-                    The bottom boundaries of the slabs.
-            """
-            tops = np.zeros((dim_z, dim_x))
-            bases = np.zeros((dim_z, dim_x))
-            # Loop over columns (x-direction)
-            for i in range(dim_x):
-                # maxTop = -1
-                for j in range(dim_z):
-                    if i == 0:
-                        bases[j, i] = 1
-                        tops[j, i] = bases[j, i] + dk[j, i] - 1
-                    elif dk[j, i] >= dk[j, i - 1]:
-                        bases[j, i] = bases[j, i - 1]
-                        tops[j, i] = bases[j, i] + dk[j, i] - 1
-                    elif dk[j, i] == 0:
-                        bases[j, i] = tops[j, i - 1] + 1
-                        tops[j, i] = bases[j, i] - 1
-                    else:
-                        tops[j, i] = tops[j, i - 1]
-                        bases[j, i] = tops[j, i] - dk[j, i] + 1
-                # Note: We ignore corrections for collision / tongue-and-groove errors
-            return tops, bases
-
-        def _different_slap(tops, bases, level):
-            """Return True if the slab at the current level is different from the one below."""
-            if level == 1:
-                return True
-            shape_lvl = ((bases <= level) & (level <= tops)).astype(int)
-            shape_lvl_prev = ((bases <= (level - 1)) & ((level - 1) <= tops)).astype(int)
-            return not np.array_equal(shape_lvl, shape_lvl_prev)
-
-        def _convert_to_segments(shapes, shapes_w, k, tops, bases):
-            """Convert tops and bases to shape matrices."""
-            levels = int(np.max(tops))
-            for level in range(1, levels + 1):
-                if level == 1 or _different_slap(tops, bases, level):
-                    k += 1
-                    shape_k = ((bases <= level) & (level <= tops)).astype(int)
-                    shapes[:, :, k - 1] = shape_k
-                shapes_w[k - 1] += 1
-            return shapes, shapes_w, k
-
-        # --- End of helper functions ---
 
         for i in range(num_of_beams):
             beam = stf.beams[i]
@@ -129,32 +162,37 @@ class SiochiLeafSequencer(Sequencer):
             # Here, xPos and zPos are 0-indexed integers stored in tmp_fluence_dict.
             ind_in_fluence_mx = tmp_fluence_dict["z_pos"] + tmp_fluence_dict["x_pos"] * dim_z
 
-            # Decomposition: find non_zero indices to compute boundaries
-            # non_zero = np.where(dk != 0)
-            # if non_zero[0].size > 0:
-            #     dkMinZ = int(non_zero[0].min())
-            #     dkMaxZ = int(non_zero[0].max())
-            #     dkMinX = int(non_zero[1].min())
-            #     dkMaxX = int(non_zero[1].max())
-            # else:
-            #     dkMinZ = dkMaxZ = dkMinX = dkMaxX = 0
-
             # Decompose port (rod-pushing)
-            tops, bases = _decompose_port(dk, dim_z, dim_x)
+            tops, bases = self._decompose_port(dk, dim_z, dim_x)
 
-            # Set up containers for segments
-            shapes = np.full((dim_z, dim_x, 10000), np.nan)
-            shapes_w = np.zeros(10000)
-            k = 0
+            # Build segments dynamically (no preallocation)
+            shapes_list = []
+            shapes_weight_list = []
+            max_level = int(np.max(tops))
+            for level in range(1, max_level + 1):
+                shape_k = ((bases <= level) & (level <= tops)).astype(int)
+                # decide if this slab is new or extends the last one
+                if level == 1 or not np.array_equal(
+                    ((bases <= level - 1) & ((level - 1) <= tops)).astype(int),
+                    shape_k,
+                ):
+                    shapes_list.append(shape_k)
+                    shapes_weight_list.append(1)
+                else:
+                    shapes_weight_list[-1] += 1
 
-            # Convert ports to shape segments
-            shapes, shapes_w, k = _convert_to_segments(shapes, shapes_w, k, tops, bases)
+            # stack and weight
+            shapes_arr = np.stack(shapes_list, axis=2)  # (dim_z, dim_x, num_shapes)
+            shapes_w_arr = (
+                np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
+            )
+            k = shapes_arr.shape[2]
 
             # Build beam sequencing structure
             beam_sequencing = {
                 "num_of_shapes": k,
-                "shapes": shapes[:, :, :k],
-                "shapes_weight": shapes_w[:k] / self.num_of_levels * tmp_fluence_dict["cal_fac"],
+                "shapes": shapes_arr,
+                "shapes_weight": shapes_w_arr,
                 "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
                 "fluence": d0,
             }
