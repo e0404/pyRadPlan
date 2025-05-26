@@ -9,19 +9,18 @@ from pyRadPlan.result import PlanResult, validate_result
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from ._base import Sequencer
+from ._base_photon import PhotonSequencer
 
 logger = logging.getLogger(__name__)
 
 
-class SiochiLeafSequencer(Sequencer):
+class SiochiLeafSequencer(PhotonSequencer):
     name = "siochi_leaf_sequencing"
     short_name = "siochi"
 
     def __init__(self, pln: Union[Plan, dict] = None):
         """Initialize the Sequencer class."""
 
-        # self.mode = "reducing_levels"  # 'sliding_window' or 'reducing_levels'
         super().__init__(pln)
 
     def _tongue_and_groove_correction(

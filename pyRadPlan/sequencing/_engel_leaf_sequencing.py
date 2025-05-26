@@ -1,5 +1,5 @@
-from ._base import Sequencer
+from ._base_photon import PhotonSequencer
 
 
-class EngelLeafSequencer(Sequencer):
+class EngelLeafSequencer(PhotonSequencer):
     pass

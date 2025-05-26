@@ -10,12 +10,12 @@ from pyRadPlan.result import PlanResult, validate_result
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from ._base import Sequencer
+from ._base_photon import PhotonSequencer
 
 logger = logging.getLogger(__name__)
 
 
-class XiaLeafSequencer(Sequencer):
+class XiaLeafSequencer(PhotonSequencer):
     name = "xia_leaf_sequencing"
     short_name = "xia"
 
