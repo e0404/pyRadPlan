@@ -34,11 +34,11 @@ def get_sequencer_from_pln(pln: Plan) -> Sequencer:
                 "pln.prop_seq.sequencer not specified. Using siochi leaf sequencing (default)."
             )
         # Check for sequencingLevel setting, otherwise default to 5.
-        if "sequencing_level" not in pln.prop_seq:
-            pln.prop_seq["sequencing_level"] = 5
-            logger.warning(
-                "pln.prop_seq.sequencing_level not specified. Using 5 sequencing levels (default)."
-            )
+        # if "sequencing_level" not in pln.prop_seq:
+        #     pln.prop_seq["sequencing_level"] = 5
+        #     logger.warning(
+        #         "pln.prop_seq.sequencing_level not specified. Using 5 sequencing levels (default)."
+        #     )
 
         sequencer = pln.prop_seq["sequencer"]
 
@@ -58,10 +58,11 @@ def get_sequencer_from_pln(pln: Plan) -> Sequencer:
     # If sequencing or DAO is requested but radiation mode is not photons.
     elif (
         pln.prop_seq.get("run_sequencing", False) or pln.prop_opt.get("runDAO", False)
-    ) and pln.radiationMode != "photons":
+    ) and pln.radiation_mode != "photons":
         logger.warning(
-            'Sequencing is only specified for pln.radiationMode = "photons". Continuing without sequencing ...'
+            'Sequencing is only specified for pln.radiation_mode = "photons". Continuing without sequencing ...'
         )
+        sequencer = None
     return sequencer
 
 
@@ -96,6 +97,9 @@ def run_sequencing(
         _dij = validate_dij(dij)
 
     sequencing_prob = get_sequencer_from_pln(_pln)
+
+    if sequencing_prob is None:
+        return result
 
     result = sequencing_prob.sequence(result, _stf, _dij)
 

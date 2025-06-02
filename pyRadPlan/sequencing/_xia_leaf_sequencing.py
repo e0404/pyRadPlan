@@ -145,9 +145,9 @@ class XiaLeafSequencer(PhotonSequencer):
         # finalize sequencing result
         result_tmp = {}
         result_tmp["fluence"] = result.fluence
-        result_tmp["fluence_sequenced"] = sequencing["fluence"]
-        result_tmp["sequencing"] = sequencing
-        result_tmp["aperture_info"] = self.sequencing_to_aperture_info(sequencing, stf)
+        result_tmp["sequence"] = sequencing
+        result_tmp["sequence"]["aperture_info"] = self.sequencing_to_aperture_info(sequencing, stf)
+        result_tmp["sequence"]["fluence"] = sequencing["fluence"]
 
         # Interpolate dose (placeholder implementation)
         cubes = dij.compute_result_ct_grid(sequencing["fluence"])
