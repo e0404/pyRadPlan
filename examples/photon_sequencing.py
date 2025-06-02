@@ -14,7 +14,7 @@ from pyRadPlan import (
     run_sequencing,
 )
 
-from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
+from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,11 +24,16 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = PhotonPlan(
     machine="Generic",
-    prop_seq={"run_sequencing": True, "algorithm": "", "num_of_levels": 5, "sequencer": "xia"},
+    prop_seq={
+        "run_sequencing": True,
+        "num_of_levels": 5,
+        "sequencer": "xia",
+        "mode": "reducing_levels",
+    },
 )
-num_of_beams = 5
+num_of_beams = 2
 pln.prop_stf = {
-    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
+    "gantry_angles": np.linspace(0, 180, num_of_beams, endpoint=False),
     "couch_angles": np.zeros((num_of_beams,)),
 }
 # Generate Steering Geometry ("stf")
@@ -38,11 +43,13 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # Optimize
-cst.vois[1].objectives = [SquaredDeviation(priority=1000.0, d_ref=3.0)]  # Target
-cst.vois[0].objectives = [SquaredOverdosing(priority=100.0, d_max=1.0)]  # OAR
+cst.vois[1].objectives = [
+    SquaredDeviation(penalty=1000.0, priority=1000.0, d_ref=50.0 / 30)
+]  # Target
+cst.vois[0].objectives = [SquaredOverdosing(penalty=300.0, priority=300.0, d_max=25.0 / 30)]  # OAR
 cst.vois[2].objectives = [
-    MeanDose(priority=1.0, d_ref=0.0),
-    SquaredOverdosing(priority=10.0, d_max=2.0),
+    # MeanDose(priority=1.0, d_ref=0.0),
+    SquaredOverdosing(penalty=100.0, priority=100.0, d_max=30.0 / 30),
 ]  # BODY
 
 # Optimize -> Result
