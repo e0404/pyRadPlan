@@ -103,7 +103,9 @@ class Plan(PyRadPlanBaseModel, ABC):
                 "mult_scen must be a ScenarioModel object or respective dictionary"
             ) from exc
 
-    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_opt", mode="after")
+    @field_validator(
+        "prop_stf", "prop_opt", "prop_dose_calc", "prop_opt", "prop_seq", mode="after"
+    )
     @classmethod
     def validate_prop(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """
