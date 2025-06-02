@@ -20,7 +20,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.result._aperture_info import ApertureInfo
+from pyRadPlan.result._sequence import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +107,16 @@ class PlanResult(PyRadPlanBaseModel):
         Converts the PlanResult object to a dictionary format for matRad.
     """
 
-    fluence: np.ndarray = Field(default=None)
-    info: dict[str, Any] = Field(default_factory=dict)
-    used_solver: str = Field(default="")
-
     quantities: Dict[str, QuantityDistribution] = Field(default_factory=dict)
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
 
-    fluence_sequenced: np.ndarray = Field(default=None)
-    aperture_info: ApertureInfo = Field(default=None)
-    sequencing: dict[str, Any] = Field(default_factory=dict)
+    fluence: np.ndarray = Field(default=None)
+    mu: np.ndarray = Field(default=None, alias="MU")
+
+    info: dict[str, Any] = Field(default_factory=dict)
+    used_optimizer: Union[str, dict[str, any]] = Field(default="")
+
+    sequence: Sequence = Field(default=None, alias="sequencing")
 
     @property
     def stored_quantities(self) -> List[str]:
@@ -133,12 +133,20 @@ class PlanResult(PyRadPlanBaseModel):
         return BeamAccessor(self.beam_quantities)
 
     @classmethod
+    def _process_sequencing_data(cls, data: Any, info: ValidationInfo) -> Any:
+        pass
+
+    @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
         """Handle data coming from matRad by grouping beam quantities."""
         # If the data is from matRad, we need to handle the beam quantities differently.
         # The keys are usually named with a "_beam" suffix.
+        if "sequencing" in data:
+            data["sequence"] = data.pop("sequencing")
+        else:
+            data["sequence"] = {}
         for key, value in list(data.items()):
-            if key == "w":
+            if key in ["w", "wUnsequenced"]:
                 data["fluence"] = value
                 data.pop(key)
             elif "_beam" in key:
@@ -149,7 +157,12 @@ class PlanResult(PyRadPlanBaseModel):
                     data[to_snake(prefix) + "_beam"] = [value]
                 # Remove the original key
                 data.pop(key)
-            else:
+            elif key in ["w_sequenced", "wSequenced"]:
+                data["sequence"]["fluence"] = value
+                data.pop(key)
+            elif key in ["apertureInfo", "aperture_info"]:
+                data["sequence"]["aperture_info"] = data.pop(key)
+            elif not to_snake(key) == key:
                 data[to_snake(key)] = value
                 data.pop(key)
         return data
@@ -163,20 +176,21 @@ class PlanResult(PyRadPlanBaseModel):
             data = cls._process_matrad_data(data, info)
 
         if isinstance(data, dict):
-            reserved = {
-                "fluence",
-                "info",
-                "used_solver",
-                "beams",
-                "sequencing",
-                "aperture_info",
-                "fluence_sequenced",
+            # This here is necessary because of dynamic keys
+            fields = cls.model_fields
+            static_field_names = {n for n in fields if n not in {"quantities", "beam_quantities"}}
+            static_aliases = {
+                f.alias
+                for f in fields.values()
+                if f.alias and f.alias not in {"quantities", "beam_quantities"}
             }
+            static_keys = static_field_names.union(static_aliases)
+
             # Place dynamic values into temporary public keys.
             quantities_tmp = {}
             beam_quantities_tmp = {}
             for key, value in list(data.items()):
-                if key in reserved:
+                if key in static_keys:
                     continue
                 if not isinstance(value, list):
                     # The Cubes have to be validated because validation does not work via private attributes.
