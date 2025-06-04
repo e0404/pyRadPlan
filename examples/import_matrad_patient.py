@@ -73,6 +73,7 @@ stf = stfgen.generate(ct, cst)
 # For that, we use a default HU->rSP table to convert our CT to water-equivalent thickness and then
 # call a voxel-wise RayTracing algorithm (proposed by Siddon) to calculate the radiological depth.
 rt = RayTracerSiddon([ct.compute_wet(default_hlut())])
+rt.debug_core_performance = True
 rad_depth_cubes = rt.trace_cubes(stf[0])
 
 # We could write the image if we want, but we don't do this by default.

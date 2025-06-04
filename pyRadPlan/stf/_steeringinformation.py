@@ -9,6 +9,7 @@ from pydantic import (
     ValidationInfo,
     ValidationError,
 )
+from numpydantic import NDArray, Shape
 from pyRadPlan.stf._beam import Beam
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.util.helpers import models2recarray
@@ -130,6 +131,38 @@ class SteeringInformation(PyRadPlanBaseModel):
     @property
     def total_number_of_bixels(self) -> int:
         return sum([beam.total_number_of_bixels for beam in self.beams])
+
+    @property
+    def bixel_beam_index_map(self) -> NDArray[Shape["1-*"], np.int64]:
+        """Mapping of bixels to their respective beam index."""
+        tmp_map = np.zeros(self.total_number_of_bixels, dtype=np.int64)
+        start = 0
+        for b, beam in enumerate(self.beams):
+            tmp_map[start : start + beam.total_number_of_bixels] = b
+            start += beam.total_number_of_bixels
+        return tmp_map
+
+    @property
+    def bixel_ray_index_per_beam_map(self) -> NDArray[Shape["1-*"], np.int64]:
+        """Mapping of bixels to the ray index in the individual beams."""
+        tmp_map = np.zeros(self.total_number_of_bixels, dtype=np.int64)
+        start = 0
+        for beam in self.beams:
+            tmp_map[start : start + beam.total_number_of_bixels] = beam.bixel_ray_map
+            start += beam.total_number_of_bixels
+        return tmp_map
+
+    @property
+    def bixel_index_per_beam_map(self) -> NDArray[Shape["1-*"], np.int64]:
+        """Mapping of bixels to their bixel index in the respective beam."""
+        tmp_map = np.zeros(self.total_number_of_bixels, dtype=np.int64)
+        start = 0
+        for beam in self.beams:
+            tmp_map[start : start + beam.total_number_of_bixels] = np.arange(
+                beam.total_number_of_bixels
+            )
+            start += beam.total_number_of_bixels
+        return tmp_map
 
 
 def create_stf(

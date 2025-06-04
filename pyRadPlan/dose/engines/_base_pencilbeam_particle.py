@@ -55,7 +55,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self.calc_let = True
         self.calc_bio_dose = False
         self.air_offset_correction = True
-        self.lateral_model = "auto"
+        self.lateral_model = "fastest"
         self.cut_off_method = "integral"
 
         # Protected properties with public get access

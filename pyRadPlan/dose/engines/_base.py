@@ -470,12 +470,7 @@ class DoseEngineBase(ABC):
         dij["ct_grid"] = ct.grid
 
         if self.dose_grid is None:
-            logger.info(
-                "Dose grid not set. Using default resolution: x=%f, y=%f, z=%f",
-                ct.grid.resolution["x"],
-                ct.grid.resolution["y"],
-                ct.grid.resolution["z"],
-            )
+            logger.info("Dose Grid not set. Using default resolution.")
             self.dose_grid = ct.grid.resample({"x": 5.0, "y": 5.0, "z": 5.0})
 
         if not isinstance(self.dose_grid, Grid):
@@ -483,6 +478,16 @@ class DoseEngineBase(ABC):
                 self.dose_grid = Grid.model_validate(self.dose_grid)
             except ValidationError:
                 self.dose_grid = ct.grid.resample(self.dose_grid["resolution"])
+
+        logger.info(
+            "Dose Grid has Dimensions (%d,%d,%d) with resolution x=%f, y=%f, z=%f.",
+            self.dose_grid.dimensions[0],
+            self.dose_grid.dimensions[1],
+            self.dose_grid.dimensions[2],
+            self.dose_grid.resolution["x"],
+            self.dose_grid.resolution["y"],
+            self.dose_grid.resolution["z"],
+        )
 
         dij["dose_grid"] = self.dose_grid
 
