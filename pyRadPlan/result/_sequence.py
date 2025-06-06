@@ -15,6 +15,7 @@ from pydantic import (
 )
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.result._aperture_info import ApertureInfo
+from pyRadPlan.result._beam_sequence import BeamSequence
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class Sequence(PyRadPlanBaseModel):
 
     fluence: np.ndarray = Field(default=None, alias="w")
     aperture_info: ApertureInfo = Field(default=None)
-    beam: list[dict[str, Any]] = Field(default=None)
+    beam: list[BeamSequence] = Field(default=None)
 
     @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
