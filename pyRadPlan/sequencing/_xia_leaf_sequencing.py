@@ -135,7 +135,7 @@ class XiaLeafSequencer(PhotonSequencer):
                 tmp_fluence_dict["z_pos"]
                 + tmp_fluence_dict["x_pos"] * tmp_fluence_dict["dim_of_fluence_mx_z"]
             )
-            flat_d0 = d_0.flatten()
+            flat_d0 = d_0.flatten(order="F")
             sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
                 flat_d0[linear_indices] / self.num_of_levels * tmp_fluence_dict["cal_fac"]
             )
