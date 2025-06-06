@@ -23,6 +23,20 @@ def test_data_photons_raw():
 
 
 @pytest.fixture
+def test_data_xia_seq_raw():
+    path = "test/data/xia_seq_testData.mat"
+    tmp = pymatreader.read_mat(path)
+    return tmp
+
+
+@pytest.fixture
+def test_data_siochi_seq_raw():
+    path = "test/data/siochi_seq_testData.mat"
+    tmp = pymatreader.read_mat(path)
+    return tmp
+
+
+@pytest.fixture
 def test_data_protons_raw():
     path = "test/data/protons_testData.mat"
     tmp = pymatreader.read_mat(path)
