@@ -2,6 +2,7 @@
 
 from ._result import PlanResult, validate_result, create_result
 from ._aperture_info import ApertureInfo
+from ._sequence import Sequence
 from ._quantity_distribution import (
     QuantityDistribution,
     validate_distribution,
