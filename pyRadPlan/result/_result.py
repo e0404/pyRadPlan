@@ -192,7 +192,17 @@ class PlanResult(PyRadPlanBaseModel):
             for key, value in list(data.items()):
                 if key in static_keys:
                     continue
+
                 if not isinstance(value, list):
+                    if isinstance(value, dict) and (
+                        all(isinstance(value[v], QuantityDistribution) for v in value.keys())
+                        or all(
+                            isinstance(value[v], list)
+                            and all(isinstance(w, QuantityDistribution) for w in value[v])
+                            for v in value.keys()
+                        )
+                    ):
+                        continue
                     # The Cubes have to be validated because validation does not work via private attributes.
                     quantities_tmp[key] = QuantityDistribution.model_validate(
                         value, context=info.context
