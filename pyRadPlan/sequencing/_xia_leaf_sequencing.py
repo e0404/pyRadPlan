@@ -116,7 +116,7 @@ class XiaLeafSequencer(PhotonSequencer):
                 l_k = int(np.max(d_k))
 
             shapes_arr = np.stack(shapes_list, axis=2)  # (Z, X, num_shapes)
-            shapes_weight_arr = (
+            shapes_w_arr = (
                 np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
             )
             num_shapes = shapes_arr.shape[2]
@@ -124,7 +124,7 @@ class XiaLeafSequencer(PhotonSequencer):
             beam_sequencing = {
                 "num_of_shapes": num_shapes,
                 "shapes": shapes_arr,
-                "shapes_weight": shapes_weight_arr,
+                "shapes_weight": shapes_w_arr,
                 "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
                 "fluence": d_0,
             }
