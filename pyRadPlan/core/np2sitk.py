@@ -80,7 +80,10 @@ def linear_indices_to_sitk_mask(
 
 
 def linear_indices_to_grid_coordinates(
-    indices: np.ndarray, grid: Grid, index_type: Literal["numpy", "sitk"] = "numpy"
+    indices: np.ndarray,
+    grid: Grid,
+    index_type: Literal["numpy", "sitk"] = "numpy",
+    dtype: np.dtype = np.float64,
 ) -> np.ndarray:
     """
     Convert linear indices to gridcoordinates.
@@ -94,6 +97,8 @@ def linear_indices_to_grid_coordinates(
     index_type : Literal["numpy", "sitk"], optional
         The ordering of the indices. Can be 'sitk' for Fortran-like index
         ordering or 'numpy' for C-like index ordering. Default is 'numpy'.
+    dtype : np.dtype, optional
+        The data type of the output coordinates. Default is np.float64.
 
     Returns
     -------
@@ -101,17 +106,25 @@ def linear_indices_to_grid_coordinates(
         A 2D numpy array of image coordinates.
     """
 
+    # this is a manual reimplementation of np.unravel_index
+    # to avoid the overhead of creating a tuple of arrays
     if index_type == "numpy":
-        z, y, x = np.unravel_index(indices, grid.dimensions[::-1])
+        _, d1, d2 = grid.dimensions[::-1]
+        order = [0, 1, 2]
     elif index_type == "sitk":
-        x, y, z = np.unravel_index(indices, grid.dimensions)
+        _, d1, d2 = grid.dimensions
+        order = [2, 1, 0]
     else:
         raise ValueError("Invalid index type. Must be 'numpy' or 'sitk'.")
 
-    v = np.array([x, y, z])
+    v = np.empty((3, np.asarray(indices).size), dtype=dtype)
+    tmp, v[order[0]] = np.divmod(indices, d2)
+    v[order[2]], v[order[1]] = np.divmod(tmp, d1)
 
-    spacing_diag = np.diag([grid.resolution["x"], grid.resolution["y"], grid.resolution["z"]])
-    origin = grid.origin
+    spacing_diag = np.diag(
+        [grid.resolution["x"], grid.resolution["y"], grid.resolution["z"]]
+    ).astype(dtype)
+    origin = grid.origin.astype(dtype)
 
     physical_point = origin + np.matmul(np.matmul(grid.direction, spacing_diag), v).T
 
@@ -119,7 +132,10 @@ def linear_indices_to_grid_coordinates(
 
 
 def linear_indices_to_image_coordinates(
-    indices: np.ndarray, image: sitk.Image, index_type: Literal["numpy", "sitk"] = "numpy"
+    indices: np.ndarray,
+    image: sitk.Image,
+    index_type: Literal["numpy", "sitk"] = "numpy",
+    dtype: np.dtype = np.float64,
 ) -> np.ndarray:
     """
     Convert linear indices to image coordinates.
@@ -133,6 +149,8 @@ def linear_indices_to_image_coordinates(
     index_type : Literal["numpy", "sitk"], optional
         The ordering of the indices. Can be 'sitk' for Fortran-like index
         ordering or 'numpy' for C-like index ordering. Default is 'numpy'.
+    dtype : np.dtype, optional
+        The data type of the output coordinates. Default is np.float64.
 
     Returns
     -------
@@ -141,4 +159,4 @@ def linear_indices_to_image_coordinates(
     """
 
     grid = Grid.from_sitk_image(image)
-    return linear_indices_to_grid_coordinates(indices, grid, index_type)
+    return linear_indices_to_grid_coordinates(indices, grid, index_type, dtype=dtype)

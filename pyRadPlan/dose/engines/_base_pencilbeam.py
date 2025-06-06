@@ -1,7 +1,7 @@
 """Base class for pencil beam dose calculation algorithms."""
 
 from abc import abstractmethod
-from typing import cast, Any, Literal
+from typing import Any, Literal
 import warnings
 import logging
 import time
@@ -97,6 +97,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     ssd_density_threshold: float
     use_given_eq_density_cube: bool
     ignore_outside_densities: bool
+    trace_on_dose_grid: bool
     cube_wed: sitk.Image
     hlut: np.ndarray
 
@@ -107,6 +108,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self.ssd_density_threshold: float = 0.0500
         self.use_given_eq_density_cube: bool = False
         self.ignore_outside_densities: bool = True
+        self.trace_on_dose_grid: bool = True
         self.cube_wed = None
         self.hlut = None
 
@@ -114,6 +116,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._effective_lateral_cutoff = None
         self._num_of_bixels_container = None
         self._rad_depth_cubes = []
+        self._raytracer = None
 
         super().__init__(pln)
 
@@ -275,6 +278,18 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Allocate memory for quantity containers
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
 
+        # Initialize ray-tracer
+        if self.trace_on_dose_grid:
+            wed_cube_trace = resample_image(
+                input_image=self.cube_wed,
+                interpolator=sitk.sitkLinear,
+                target_grid=self.dose_grid,
+            )
+        else:
+            wed_cube_trace = self.cube_wed
+
+        self._raytracer = RayTracerSiddon([wed_cube_trace])
+
         return dij
 
     def _allocate_quantity_matrices(self, dij: dict[str, Any], names: list[str]):
@@ -293,14 +308,18 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                             (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
                         )
                     else:
-                        # This could probably be optimized by using direct access to the
-                        # lil_matrix's data structures
-                        # TODO: we could store a single sparse pattern matrix and then only store
-                        # the values for all quantities for better memory management
-                        dij[q_name].flat[i] = sparse.lil_matrix(
-                            (self._num_of_columns_dij, self.dose_grid.num_voxels),
-                            dtype=np.float32,
-                        )
+                        # We allocate raw csc sparse matrix structures using
+                        # a rough estimat ebased on number of voxels and
+                        # beamlets
+                        est_nnz = np.fix(
+                            5e-4 * self.dose_grid.num_voxels * self._num_of_columns_dij
+                        ).astype(np.int64)
+                        dij[q_name].flat[i] = {
+                            "data": np.empty((est_nnz,), dtype=np.float32),
+                            "indices": np.empty((est_nnz,), dtype=np.int64),
+                            "indptr": np.zeros((self._num_of_columns_dij + 1,), dtype=np.int64),
+                            "nnz": 0,
+                        }
 
             self._computed_quantities.append(q_name)
 
@@ -360,12 +379,11 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Calculate radiological depth cube
         logger.info("Calculating radiological depth cube...")
 
-        ct_cube = self.cube_wed
-        raytracer = RayTracerSiddon([ct_cube])
-
         start_time = time.time()
 
-        rad_depth_cubes = raytracer.trace_cubes(beam_info["beam"])
+        self._raytracer.debug_core_performance = True
+        rad_depth_cubes = self._raytracer.trace_cubes(beam_info["beam"])
+        self._raytracer.debug_core_performance = False
 
         # TODO: add universal time-debugging method
         end_time = time.time()
@@ -376,15 +394,18 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         beam_info["rad_depths"] = [None] * len(rad_depth_cubes)
 
         for c, rad_depth_cube in enumerate(rad_depth_cubes):
-            resampled_rad_depth_cube = resample_image(
-                input_image=rad_depth_cube,
-                interpolator=sitk.sitkLinear,
-                target_grid=self.dose_grid,
-            )
+            if self.trace_on_dose_grid:
+                rad_depth_cube_dose_grid = rad_depth_cube
+            else:
+                rad_depth_cube_dose_grid = resample_image(
+                    input_image=rad_depth_cube,
+                    interpolator=sitk.sitkLinear,
+                    target_grid=self.dose_grid,
+                )
             if self.keep_rad_depth_cubes:
-                self._rad_depth_cubes.append(resampled_rad_depth_cube)
+                self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
 
-            rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(resampled_rad_depth_cube)
+            rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
             rad_depth_vdose_grid = rad_depth_cube_dosegrid.ravel()[self._vdose_grid]
 
             # Find valid coordinates
@@ -484,8 +505,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             ray_pos_bev = np.array([ray["ray_pos_bev"] for ray in beam["rays"]])
             target_points = np.array([ray["target_point"] for ray in beam["rays"]])
 
-            raytracer = RayTracerSiddon([self.cube_wed])
-            alpha, _, rho, d12, _ = raytracer.trace_rays(
+            alpha, _, rho, d12, _ = self._raytracer.trace_rays(
                 beam["iso_center"],
                 beam["source_point"].reshape((1, 3)),
                 target_points,
@@ -708,10 +728,44 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         bixel["weight"] * bixel[q_name]
                     )
                 else:
-                    # We insert into the lil sparse matrix
-                    # This could probably be optimized by using direct access to the lil_matrix's
-                    #  data structures
-                    dij[q_name][sub_scen_idx][bixel_counter, bixel["ix"]] = bixel[q_name]
+                    # first we fill the index pointer array
+                    dij[q_name][sub_scen_idx]["indptr"][bixel_counter + 1] = (
+                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] + bixel["ix"].size
+                    )
+
+                    # If we haven't preallocated enough, we need to expand the arrays
+                    if (
+                        dij[q_name][sub_scen_idx]["data"].size
+                        < dij[q_name][sub_scen_idx]["nnz"] + bixel["ix"].size
+                    ):
+                        logger.debug("Resizing data and indices arrays for %s...", q_name)
+
+                        # We estimate the required size by the remaining
+                        # number of beamlets / columns in the sparse matrix
+                        # 1 additional beamlet is added
+                        shape_resize = (self._num_of_columns_dij - bixel_counter) * (
+                            bixel["ix"].size + 1
+                        )
+                        shape_resize += dij[q_name][sub_scen_idx]["data"].size
+                        dij[q_name][sub_scen_idx]["data"].resize((shape_resize,), refcheck=False)
+                        dij[q_name][sub_scen_idx]["indices"].resize(
+                            (shape_resize,), refcheck=False
+                        )
+
+                    # Fill the corresponding values and indices using indptr
+                    dij[q_name][sub_scen_idx]["data"][
+                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] : dij[q_name][
+                            sub_scen_idx
+                        ]["indptr"][bixel_counter + 1]
+                    ] = bixel[q_name]
+                    dij[q_name][sub_scen_idx]["indices"][
+                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] : dij[q_name][
+                            sub_scen_idx
+                        ]["indptr"][bixel_counter + 1]
+                    ] = bixel["ix"]
+
+                    # Store how many nnzs we actually have in the matrix
+                    dij[q_name][sub_scen_idx]["nnz"] += bixel["ix"].size
 
         # Bookkeeping of bixel numbers
         # remember beam and bixel number
@@ -749,9 +803,34 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 # Loop over all used quantities
                 for q_name in self._computed_quantities:
                     if not self._calc_dose_direct:
-                        tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
-                        tmp_matrix = tmp_matrix.tocsr().T
+                        # tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
+                        # tmp_matrix = tmp_matrix.tocsr().T
+                        data_dict = dij[q_name].flat[i]
+
+                        # Resize to the actual number of non-zero elements
+                        data_dict["data"].resize((data_dict["nnz"],), refcheck=False)
+                        data_dict["indices"].resize((data_dict["nnz"],), refcheck=False)
+
+                        # Create the matrix, avoid copies
+                        tmp_matrix = sparse.csc_array(
+                            (data_dict["data"], data_dict["indices"], data_dict["indptr"]),
+                            shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
+                            dtype=np.float32,
+                            copy=False,
+                        )
+
+                        # Do we need this?
                         tmp_matrix.eliminate_zeros()
+
+                        # make sure indices are sorted and matrix is canonical
+                        if not tmp_matrix.has_sorted_indices:
+                            logger.debug("Sorting indices for %s...", q_name)
+                            tmp_matrix.sort_indices()
+
+                        if not tmp_matrix.has_canonical_format:
+                            logger.debug("Matrix is not in canonical format for %s...", q_name)
+                            tmp_matrix.sum_duplicates()
+
                         dij[q_name].flat[i] = tmp_matrix
 
         if self.keep_rad_depth_cubes and self._rad_depth_cubes:

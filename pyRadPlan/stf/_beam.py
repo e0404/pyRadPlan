@@ -165,6 +165,11 @@ class Beam(PyRadPlanBaseModel):
     def total_number_of_bixels(self) -> int:
         return int(sum(self.num_of_bixels_per_ray))
 
+    @property
+    def bixel_ray_map(self) -> NDArray[Shape["1-*"], np.int64]:
+        """Map providing ray index in the beam for each bixel."""
+        return np.repeat(np.arange(len(self.rays)), self.num_of_bixels_per_ray)
+
     # serialization
     @field_serializer("rays")
     def custom_rays_serializer(self, v: list[Ray], info: SerializationInfo) -> Any:

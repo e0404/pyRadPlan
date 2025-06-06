@@ -34,11 +34,13 @@ class RayTracerBase(ABC):
             cubes = [cubes]
         self._cubes = cubes
         self._initialize_geometry()
+        self._coords = None
 
     def __init__(self, cubes: Union[sitk.Image, list[sitk.Image]]):
         self.lateral_cut_off = 50.0
         self.precision = np.float32
         self.cubes = cubes
+        self._coords = None
 
     def trace_rays(
         self,
@@ -144,19 +146,20 @@ class RayTracerBase(ABC):
         if not isinstance(beam, Beam):
             beam = Beam.model_validate(beam)
 
-        logger.debug("Initializing geometry...")
         t_trace_start = time.perf_counter()
-        self._initialize_geometry()
-
-        # Obtain coordinates
-        cube_ix = np.arange(self.cubes[0].GetNumberOfPixels(), dtype=np.int64)
-        coords = linear_indices_to_image_coordinates(cube_ix, self.cubes[0], index_type="sitk")
+        logger.debug("Computing coordinates...")
+        if self._coords is None:
+            # Obtain coordinates
+            cube_ix = np.arange(self.cubes[0].GetNumberOfPixels(), dtype=np.int64)
+            self._coords = linear_indices_to_image_coordinates(
+                cube_ix, self.cubes[0], index_type="sitk", dtype=self.precision
+            )
 
         # obtain rotation matrix
         rot_mat = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle)
 
         # rotate coordinates
-        coords = (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
+        coords = (self._coords - beam.iso_center) @ rot_mat - beam.source_point_bev
         t_trace_end = time.perf_counter()
         logger.debug("took %s seconds!", t_trace_end - t_trace_start)
 
@@ -228,8 +231,8 @@ class RayTracerBase(ABC):
         scale_factor = np.zeros_like(ix, dtype=self.precision)
         scale_factor[valid_ix] = (ray_matrix_bev_y + beam.sad) / coords[ix[valid_ix], 1]
 
-        x_dist = np.ones_like(ix, dtype=self.precision) * np.nan
-        z_dist = np.ones_like(ix, dtype=self.precision) * np.nan
+        x_dist = np.full_like(ix, np.nan, dtype=self.precision)
+        z_dist = np.full_like(ix, np.nan, dtype=self.precision)
 
         x_dist[valid_ix] = coords[ix[valid_ix], 0] * scale_factor[valid_ix]
         x_dist = x_dist - ray_matrix_bev[:, 0, np.newaxis]
@@ -245,10 +248,12 @@ class RayTracerBase(ABC):
             & (z_dist > -ray_selection)
             & (z_dist <= ray_selection)
         )
+        t_remember_end = time.perf_counter()
 
         logger.debug(
-            "Found %d ray indices for radiological depth calculation",
+            "Found %d ray indices for radiological depth calculation (took %s seconds)",
             np.count_nonzero(ix_remember_from_tracing),
+            t_remember_end - t_trace_end,
         )
         rad_depth_cubes = [
             np.nan * np.ones_like(sitk.GetArrayViewFromImage(cube), dtype=self.precision)
@@ -256,12 +261,19 @@ class RayTracerBase(ABC):
         ]
 
         for i, cube in enumerate(rad_depth_cubes):
-            rel_eq_distances = lengths * rho[i]
-            rel_depths = np.cumsum(rel_eq_distances, axis=1) - rel_eq_distances / 2.0
+            rel_depths = lengths * rho[i]
+            rel_depths = np.cumsum(rel_depths, axis=1) - rel_depths / 2.0
             ix_assign = np.unravel_index(ix[ix_remember_from_tracing], cube.shape, order="F")
             cube[ix_assign] = rel_depths[ix_remember_from_tracing]
             rad_depth_cubes[i] = sitk.GetImageFromArray(cube)
             rad_depth_cubes[i].CopyInformation(self.cubes[i])
+
+        t_createcubes_end = time.perf_counter()
+
+        logger.debug(
+            "Radiological depth cube filling took %s seconds",
+            t_createcubes_end - t_remember_end,
+        )
 
         return rad_depth_cubes
         # scale_factor[valid_ix] = lengths[valid_ix] / d12[valid_ix]

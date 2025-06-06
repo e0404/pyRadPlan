@@ -66,12 +66,26 @@ def test_create_stf_from_snake_case(sample_stf_snake):
     # Testing for list[Dict]
     stf1 = create_stf(input1)
     assert isinstance(stf1, SteeringInformation)
+    assert stf1.bixel_beam_index_map.size == stf1.total_number_of_bixels
+    assert stf1.bixel_ray_index_per_beam_map.size == stf1.total_number_of_bixels
+    assert stf1.bixel_index_per_beam_map.size == stf1.total_number_of_bixels
+
+    tot_num_bixels = 0
     for i in range(len(input1)):
         assert hasattr(stf1.beams[i], "couch_angle")
         assert hasattr(stf1.beams[i].rays[0], "ray_pos_bev")
         assert all(hasattr(ray, "ray_pos_bev") for ray in stf1.beams[i].rays)
         assert all(hasattr(ray, "beamlets") for ray in stf1.beams[i].rays)
         assert all(isinstance(ray.beamlets, list) for ray in stf1.beams[i].rays)
+
+        assert stf1.beams[i].bixel_ray_map.size == stf1.beams[i].total_number_of_bixels
+        assert np.array_equal(
+            stf1.beams[i].bixel_ray_map,
+            stf1.bixel_ray_index_per_beam_map[
+                tot_num_bixels : tot_num_bixels + stf1.beams[i].total_number_of_bixels
+            ],
+        )
+        tot_num_bixels += stf1.beams[i].total_number_of_bixels
 
     # Testing for Dict[list[Dict]]
     stf2 = create_stf(input2)
@@ -192,6 +206,12 @@ def test_from_matlab_one_beam():
     assert stf_from_matRad.beams[0].gantry_angle == 0
     assert stf_from_matRad is not None
 
+    assert stf_from_matRad.bixel_beam_index_map.size == stf_from_matRad.total_number_of_bixels
+    assert (
+        stf_from_matRad.bixel_ray_index_per_beam_map.size == stf_from_matRad.total_number_of_bixels
+    )
+    assert stf_from_matRad.bixel_index_per_beam_map.size == stf_from_matRad.total_number_of_bixels
+
 
 def test_from_matlab_multi_beam():
     files = resources.files("pyRadPlan.data.stf")
@@ -200,6 +220,45 @@ def test_from_matlab_multi_beam():
     stf_from_matRad = create_stf(matRad_file)
     assert stf_from_matRad.beams[0].gantry_angle == 0
     assert stf_from_matRad is not None
+
+    assert stf_from_matRad.bixel_beam_index_map.size == stf_from_matRad.total_number_of_bixels
+    assert (
+        stf_from_matRad.bixel_ray_index_per_beam_map.size == stf_from_matRad.total_number_of_bixels
+    )
+    assert stf_from_matRad.bixel_index_per_beam_map.size == stf_from_matRad.total_number_of_bixels
+
+    tot_num_bixels = 0
+    for i in range(stf_from_matRad.num_of_beams):
+        assert (
+            stf_from_matRad.beams[i].bixel_ray_map.size
+            == stf_from_matRad.beams[i].total_number_of_bixels
+        )
+        assert np.array_equal(
+            stf_from_matRad.beams[i].bixel_ray_map,
+            stf_from_matRad.bixel_ray_index_per_beam_map[
+                tot_num_bixels : tot_num_bixels + stf_from_matRad.beams[i].total_number_of_bixels
+            ],
+        )
+        assert np.all(
+            stf_from_matRad.bixel_beam_index_map[
+                tot_num_bixels : tot_num_bixels + stf_from_matRad.beams[i].total_number_of_bixels
+            ]
+            == i
+        )
+        assert np.all(
+            stf_from_matRad.bixel_index_per_beam_map[
+                tot_num_bixels : tot_num_bixels + stf_from_matRad.beams[i].total_number_of_bixels
+            ]
+            == np.arange(stf_from_matRad.beams[i].total_number_of_bixels)
+        )
+        assert np.all(
+            stf_from_matRad.beams[i].bixel_ray_map
+            == stf_from_matRad.bixel_ray_index_per_beam_map[
+                tot_num_bixels : tot_num_bixels + stf_from_matRad.beams[i].total_number_of_bixels
+            ]
+        )
+
+        tot_num_bixels += stf_from_matRad.beams[i].total_number_of_bixels
 
 
 # def test_create_stf_kwargs_snake():
