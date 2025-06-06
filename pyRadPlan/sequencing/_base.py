@@ -7,9 +7,12 @@ from typing import ClassVar, Union
 import warnings
 
 from pydantic.alias_generators import to_snake
+from abc import abstractmethod
 
 from pyRadPlan.result import PlanResult
 from pyRadPlan.plan import Plan, validate_pln
+from pyRadPlan.stf import SteeringInformation
+from pyRadPlan.dij import Dij
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,27 @@ class Sequencer(ABC):
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
+
+    @abstractmethod
+    def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
+        """
+        Abstract method to be implemented by subclasses for sequencing.
+
+        Parameters
+        ----------
+        result : PlanResult
+            The result object to store the sequencing results.
+        stf : SteeringInformation
+            The steering information structure.
+        dij : Dij, optional
+            The dij matrix or related input.
+
+        Returns
+        -------
+        PlanResult
+            The updated result after sequencing.
+        """
+        raise NotImplementedError("Sequencing method must be implemented in subclasses.")
 
     def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
         """

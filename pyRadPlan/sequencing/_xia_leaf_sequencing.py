@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 class XiaLeafSequencer(PhotonSequencer):
     name = "xia_leaf_sequencing"
     short_name = "xia"
+    possible_radiation_modes = ["photons"]
 
     def __init__(self, pln: Union[Plan, dict] = None):
         """Initialize the Sequencer class."""
