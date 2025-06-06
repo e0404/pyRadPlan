@@ -4,6 +4,7 @@ from pydantic import (
     Field,
     field_validator,
     computed_field,
+    model_validator,
 )
 from numpydantic import NDArray, Shape
 import numpy as np
@@ -124,7 +125,25 @@ class Grid(PyRadPlanBaseModel):
             raise ValueError("direction must be convertible to a 3x3 numpy matrix") from exc
         return value
 
-    # TODO: validate for additional fields if, e.g., loaded from matRad
+    # This here is necessary for dij matrad import. Origin is not natively saved in dij (but CubeCoordOffset).
+    # matrad takes x[0], y[0], z[0] as origin and pyRadPlan (0,0,0) as origin.
+    @model_validator(mode="before")
+    @classmethod
+    def _set_origin_from_xyz(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """
+        If the user passed x, y, z but no origin.
+
+        Set origin = (x[0], y[0], z[0]).
+        """
+        if "origin" not in values and all(k in values for k in ("x", "y", "z")):
+            if "cubeCoordOffset" in values:
+                values.pop("cubeCoordOffset")
+            x_arr, y_arr, z_arr = values["x"], values["y"], values["z"]
+            try:
+                values["origin"] = np.array([x_arr[0], y_arr[0], z_arr[0]])
+            except Exception as exc:
+                raise ValueError("Cannot derive origin from provided x, y, z") from exc
+        return values
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         grid_dict4matrad = super().to_matrad(context=context)
