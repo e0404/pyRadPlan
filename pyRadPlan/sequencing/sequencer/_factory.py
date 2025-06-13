@@ -5,9 +5,7 @@ import logging
 from typing import Union, Type
 
 from pyRadPlan.plan import Plan, validate_pln
-from pyRadPlan.sequencing import (
-    Sequencer,
-)
+from ._base import Sequencer
 
 SEQUENCER = {}
 

@@ -1,16 +1,15 @@
 """Base class for photon sequencing."""
 
 import logging
-
+import math
 from abc import abstractmethod
 from typing import Union
-import numpy as np
-import math
 
-from pyRadPlan.result import PlanResult, ApertureInfo
-from pyRadPlan.stf import SteeringInformation
+import numpy as np
+
 from pyRadPlan.plan import Plan
-from pyRadPlan.stf import Beam
+from pyRadPlan.result import PlanResult, ApertureInfo
+from pyRadPlan.stf import SteeringInformation, Beam
 from ._base import Sequencer
 
 logger = logging.getLogger(__name__)
@@ -113,8 +112,8 @@ class PhotonSequencer(Sequencer):
 
         # MLC parameters
         bixel_width = stf.beams[0].bixel_width  # [mm]
-        num_of_MLC_leaf_pairs = 80
-        central_leaf_pair = int(math.ceil(num_of_MLC_leaf_pairs / 2.0))
+        num_of_mlc_leaf_pairs = 80
+        central_leaf_pair = int(math.ceil(num_of_mlc_leaf_pairs / 2.0))
 
         bixel_ind_offset = 0
         total_num_of_bixels = sum(beam.total_number_of_bixels for beam in stf.beams)
@@ -155,14 +154,14 @@ class PhotonSequencer(Sequencer):
             # Compute leaf limits
             lim_l = np.full(dim_z, np.nan)
             lim_r = np.full(dim_z, np.nan)
-            for l in range(dim_z):
-                cols = np.where(ray_map[l, :] != 0)[0]
+            for n in range(dim_z):
+                cols = np.where(ray_map[n, :] != 0)[0]
                 if cols.size > 0:
-                    lim_l[l] = (cols[0]) * bixel_width + min_x - 0.5 * bixel_width
-                    lim_r[l] = (cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
+                    lim_l[n] = (cols[0]) * bixel_width + min_x - 0.5 * bixel_width
+                    lim_r[n] = (cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
                 else:
-                    lim_l[l] = min_x
-                    lim_r[l] = min_x
+                    lim_l[n] = min_x
+                    lim_r[n] = min_x
 
             beam_aperture = {}
             beam_aperture["num_of_shapes"] = sequencing["beam"][i]["num_of_shapes"]
@@ -176,15 +175,15 @@ class PhotonSequencer(Sequencer):
                 shape_map = sequencing["beam"][i]["shapes"][:, :, m]
                 left_leaf_pos = np.empty(dim_z)
                 right_leaf_pos = np.empty(dim_z)
-                for l in range(dim_z):
-                    open_cols = np.where(shape_map[l, :] > 0)[0]
+                for n in range(dim_z):
+                    open_cols = np.where(shape_map[n, :] > 0)[0]
                     if open_cols.size == 0:
                         # If no bixel is open, use the midpoint of limits
-                        left_leaf_pos[l] = (lim_l[l] + lim_r[l]) / 2
-                        right_leaf_pos[l] = (lim_l[l] + lim_r[l]) / 2
+                        left_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
+                        right_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
                     else:
-                        left_leaf_pos[l] = (open_cols[0]) * bixel_width + min_x - 0.5 * bixel_width
-                        right_leaf_pos[l] = (
+                        left_leaf_pos[n] = (open_cols[0]) * bixel_width + min_x - 0.5 * bixel_width
+                        right_leaf_pos[n] = (
                             (open_cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
                         )
                 shape_info = {
@@ -204,7 +203,7 @@ class PhotonSequencer(Sequencer):
             bottom_leaf_pair_pos = min_z
             top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / bixel_width
             bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / bixel_width
-            is_active_leaf_pair = np.zeros(num_of_MLC_leaf_pairs)
+            is_active_leaf_pair = np.zeros(num_of_mlc_leaf_pairs)
             # Activate indices between top and bottom leaf pairs (casting to int)
             start_ix = int(math.floor(top_leaf_pair))
             end_ix = int(math.ceil(bottom_leaf_pair))
@@ -229,7 +228,7 @@ class PhotonSequencer(Sequencer):
 
         # Global aperture information
         aperture_info["bixel_width"] = bixel_width
-        aperture_info["num_of_MLC_leaf_pairs"] = num_of_MLC_leaf_pairs
+        aperture_info["num_of_MLC_leaf_pairs"] = num_of_mlc_leaf_pairs
         aperture_info["total_num_of_bixels"] = total_num_of_bixels
         aperture_info["total_num_of_shapes"] = total_num_of_shapes
         total_leaf_pairs = sum(

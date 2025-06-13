@@ -1,4 +1,4 @@
-"""Siochi Leaf Sequencer class."""
+"""Class for Siochi-Leaf-Sequencing."""
 
 import logging
 

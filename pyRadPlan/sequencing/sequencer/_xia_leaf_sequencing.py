@@ -1,4 +1,4 @@
-"""Xia Leaf Sequencer class."""
+"""Class for Xia-Leaf-Sequencing."""
 
 import logging
 
@@ -25,6 +25,40 @@ class XiaLeafSequencer(PhotonSequencer):
 
         self.mode = "reducing_levels"  # 'sliding_window' or 'reducing_levels'
         super().__init__(pln)
+
+    def _apply_reducing_levels(self, opening_mx, d_k, dim_of_fluence_mx_z):
+        """Apply the reducing levels technique."""
+        for row in range(dim_of_fluence_mx_z):
+            row_vals = opening_mx[row, :] * d_k[row, :]
+            if row_vals.max() > 0:
+                max_ix = int(np.argmax(row_vals))
+
+                # Find first zero *after* max_ix
+                zeros_after = np.where(~opening_mx[row, max_ix + 1 :])[0]
+                if zeros_after.size > 0:
+                    close_ix = max_ix + 1 + int(zeros_after[0])
+                    opening_mx[row, close_ix:] = False
+
+                # Find last zero *before* max_ix
+                zeros_before = np.where(~opening_mx[row, :max_ix])[0]
+                if zeros_before.size > 0:
+                    open_ix = int(zeros_before[-1])
+                    opening_mx[row, : open_ix + 1] = False
+        return opening_mx
+
+    def _apply_sliding_window(self, opening_mx, dim_of_fluence_mx_z):
+        """Apply the sliding window technique."""
+        for row in range(dim_of_fluence_mx_z):
+            row_open = np.where(opening_mx[row, :])[0]
+            if row_open.size > 0:
+                open_ix = row_open[0]
+
+                # Find first zero *after* open_ix
+                zeros_after = np.where(~opening_mx[row, open_ix + 1 :])[0]
+                if zeros_after.size > 0:
+                    close_ix = open_ix + 1 + zeros_after[0]
+                    opening_mx[row, close_ix:] = False
+        return opening_mx
 
     def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
         """
@@ -63,7 +97,7 @@ class XiaLeafSequencer(PhotonSequencer):
             d_k = tmp_fluence_dict["d_k"]
             d_0 = tmp_fluence_dict["d_0"]
             l_k = int(np.max(d_k))
-            l_0 = l_k
+            # l_0 = l_k
 
             shapes_list = []
             shapes_weight_list = []
@@ -78,35 +112,15 @@ class XiaLeafSequencer(PhotonSequencer):
                 # Calculate opening matrix
                 opening_mx = d_k >= d_k_value
 
-                # Apply reducing levels technique
+                # Apply the appropriate technique
                 if self.mode == "reducing_levels":
-                    for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
-                        # mimic [maxVal, maxIx] = max(openingMx(j,:) .* D_k(j,:)) - matrad code
-                        row_vals = opening_mx[row, :] * d_k[row, :]
-                        if row_vals.max() > 0:
-                            max_ix = int(np.argmax(row_vals))
-
-                            # find first zero *after* max_ix
-                            zeros_after = np.where(~opening_mx[row, max_ix + 1 :])[0]
-                            if zeros_after.size > 0:
-                                # must add +1 because we sliced from max_ix+1
-                                close_ix = max_ix + 1 + int(zeros_after[0])
-                                opening_mx[row, close_ix:] = False
-
-                            # find last zero *before* max_ix
-                            zeros_before = np.where(~opening_mx[row, :max_ix])[0]
-                            if zeros_before.size > 0:
-                                open_ix = int(zeros_before[-1])
-                                opening_mx[row, : open_ix + 1] = False
+                    opening_mx = self._apply_reducing_levels(
+                        opening_mx, d_k, tmp_fluence_dict["dim_of_fluence_mx_z"]
+                    )
                 elif self.mode == "sliding_window":
-                    for row in range(tmp_fluence_dict["dim_of_fluence_mx_z"]):
-                        row_open = np.where(opening_mx[row, :])[0]
-                        if row_open.size > 0:
-                            open_ix = row_open[0]
-                            zeros_after = np.where(~opening_mx[row, open_ix + 1 :])[0]
-                            if zeros_after.size > 0:
-                                close_ix = open_ix + 1 + zeros_after[0]
-                                opening_mx[row, close_ix:] = False
+                    opening_mx = self._apply_sliding_window(
+                        opening_mx, tmp_fluence_dict["dim_of_fluence_mx_z"]
+                    )
 
                 shape_k = opening_mx.astype(int) * d_k_value
 

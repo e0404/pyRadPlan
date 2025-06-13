@@ -1,10 +1,12 @@
+"""Run sequencing based on the plan and steering information."""
+
 import logging
 
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.result import PlanResult
-from ._factory import get_sequencer_from_pln
+from .sequencer import get_sequencer_from_pln
 
 logger = logging.getLogger(__name__)
 

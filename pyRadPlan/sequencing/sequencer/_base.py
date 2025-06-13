@@ -73,10 +73,6 @@ class Sequencer(ABC):
         if hasattr(pln, "mult_scen"):
             self.mult_scen = pln.mult_scen
 
-        # Assign Biologival Model
-        if hasattr(pln, "bio_param"):
-            self.bio_param = pln.bio_param  # TODO: No bio_param yet
-
         if not isinstance(warn_when_property_changed, bool):
             warn_when_property_changed = False
 

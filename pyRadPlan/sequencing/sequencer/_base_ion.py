@@ -1,14 +1,13 @@
 """Base class for ion sequencing."""
 
 import logging
-
 from abc import abstractmethod
 from typing import Union
 
+from ._base import Sequencer
+from pyRadPlan.plan import Plan
 from pyRadPlan.result import PlanResult
 from pyRadPlan.stf import SteeringInformation
-from pyRadPlan.plan import Plan
-from ._base import Sequencer
 
 logger = logging.getLogger(__name__)
 
