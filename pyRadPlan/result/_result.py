@@ -77,17 +77,21 @@ class PlanResult(PyRadPlanBaseModel):
     Attributes
     ----------
     fluence : np.ndarray
-        The fluence array.
+        The fluence array (weights).
     info : dict[str, Any]
-        Additional information passed by the solver used.
+        The information given by the solver.
     used_solver : str
         The solver used for the calculation.
+    MU : np.ndarray
+        The monitor units array.
     quantities : Dict[str, QuantityDistribution]
         A dictionary of quantities, where the key is the quantity name and the value is a QuantityDistribution object.
         Quantities are called by their name, e.g. physical_dose, let, etc.
     beam_quantities : Dict[str, List[QuantityDistribution]]
         A dictionary of beam quantities, where the key is the quantity name and the value is a list of QuantityDistribution objects.
         Beam quantities are called by e.g. beam.physical_dose[i]
+    sequence : Sequence
+        The sequencing information.
 
     Methods
     -------
@@ -99,10 +103,6 @@ class PlanResult(PyRadPlanBaseModel):
         Adds or updates one quantity entry
     add_beam_quantity(key: str, value: Union[list[dict], list[QuantityDistribution]], **kwargs) -> None
         Adds or updates one or more beam quantity entries
-    sequencing() -> None
-        - not implemented yet - Performs sequencing on the dose cube.
-    analyse_plan() -> None
-        - not implemented yet - Performs analysis on the plan.
     to_matrad(context: str = "mat-file") -> Any
         Converts the PlanResult object to a dictionary format for matRad.
     """
@@ -111,7 +111,7 @@ class PlanResult(PyRadPlanBaseModel):
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
 
     fluence: np.ndarray = Field(default=None)
-    mu: np.ndarray = Field(default=None, alias="MU")
+    mu: np.ndarray | None = Field(default=None, alias="MU")
 
     info: dict[str, Any] = Field(default_factory=dict)
     used_optimizer: Union[str, dict[str, any]] = Field(default="")
@@ -191,6 +191,14 @@ class PlanResult(PyRadPlanBaseModel):
             beam_quantities_tmp = {}
             for key, value in list(data.items()):
                 if key in static_keys:
+                    continue
+                if key == "quantities":
+                    quantities_tmp.update(value)
+                    data.pop(key)
+                    continue
+                elif key == "beam_quantities":
+                    beam_quantities_tmp.update(value)
+                    data.pop(key)
                     continue
 
                 if not isinstance(value, list):
@@ -328,7 +336,7 @@ class PlanResult(PyRadPlanBaseModel):
                     dict_tmp[to_camel(key)] = numpy_array  # wrapped_array
                 return dict_tmp
             return None
-        return v.model_dump(by_alias=info.by_alias) if v else None
+        return v
 
     @field_serializer("beam_quantities")
     def custom_beam_quantities_serializer(self, v: Dict, info: SerializationInfo) -> Any:
@@ -342,21 +350,10 @@ class PlanResult(PyRadPlanBaseModel):
                         numpy_array = np.transpose(
                             sitk.GetArrayFromImage(beam.distribution), (1, 2, 0)
                         )
-                        # TODO: multScen support
-                        # wrapped_array = np.ndarray(shape=(1,), dtype=object)
-                        # wrapped_array[0] = numpy_array
-                        dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array  # wrapped_array
+                        dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array
                 return dict_tmp
-            else:
-                return None
-        return (
-            {
-                f"{info.field_name}{idx}": dose.model_dump(by_alias=info.by_alias)
-                for idx, dose in enumerate(v, start=1)
-            }
-            if v
-            else None
-        )
+            return None
+        return v
 
     def analyse_plan(self) -> None:
         """Perform analysis on the plan."""
