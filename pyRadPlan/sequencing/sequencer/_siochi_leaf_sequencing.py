@@ -158,8 +158,6 @@ class SiochiLeafSequencer(PhotonSequencer):
             dim_x = tmp_fluence_dict["dim_of_fluence_mx_x"]
 
             # Compute index mapping for fluence matrix
-            # MATLAB: ind_in_fluence_mx = zPos + (xPos-1)*dim_z
-            # Here, xPos and zPos are 0-indexed integers stored in tmp_fluence_dict.
             ind_in_fluence_mx = tmp_fluence_dict["z_pos"] + tmp_fluence_dict["x_pos"] * dim_z
 
             # Decompose port (rod-pushing)
@@ -213,16 +211,23 @@ class SiochiLeafSequencer(PhotonSequencer):
             offset += num_of_rays_per_beam
 
         # Finalize sequencing result
-        result_tmp = {}
-        result_tmp["fluence"] = result.fluence
+        result_tmp = result.model_dump()
+        # we do this so that "beam" in aperture_info does not overwrite the beam in sequencing
         result_tmp["sequence"] = sequencing
-        result_tmp["sequence"]["aperture_info"] = self.sequencing_to_aperture_info(sequencing, stf)
-        result_tmp["sequence"]["fluence"] = sequencing["fluence"]
+        ap_info = self.sequencing_to_aperture_info(sequencing, stf)
+        # merge per‐beam aperture info into each beam entry
+        for idx, beam_info in enumerate(ap_info.get("beam", [])):
+            result_tmp["sequence"]["beam"][idx].update(beam_info)
+        # merge any other (global) aperture_info key
+        for key, val in ap_info.items():
+            if key != "beam":
+                result_tmp["sequence"][key] = val
 
-        # Interpolate dose (placeholder implementation)
-        cubes = dij.compute_result_ct_grid(sequencing["fluence"])
+        # Interpolate dose.
+        if dij is not None:
+            cubes = dij.compute_result_ct_grid(sequencing["fluence"])
 
         # if hasattr(result, 'w_dao'):
         #     pass
-
+        # TODO: Currently overwriting quantities in main result. In the future might need to update sequence
         return validate_result({**cubes, **result_tmp})

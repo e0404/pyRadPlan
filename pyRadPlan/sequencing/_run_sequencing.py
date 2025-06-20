@@ -19,21 +19,19 @@ def run_sequencing(
 
     Parameters
     ----------
-    ct : CT
-        CT object.
-    cst : StructureSet
-        StructureSet object.
-    stf : SteeringInformation
-        SteeringInformation object.
-    dij : Dij
-        Dij object.
+    result : PlanResult
+        Result object to store the sequencing output.
     pln : Plan
-        Plan object.
+        Plan object containing the sequencing configuration.
+    stf : SteeringInformation
+        SteeringInformation object for sequencing.
+    dij : Dij, optional
+        Dij object, if available.
 
     Returns
     -------
     PlanResult
-        Result object containing the requested dose cubes and information.
+        Updated result object containing the sequencing output.
     """
 
     _stf = validate_stf(stf)

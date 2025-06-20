@@ -158,11 +158,17 @@ class XiaLeafSequencer(PhotonSequencer):
             offset += num_of_rays_per_beam
 
         # finalize sequencing result
-        result_tmp = {}
-        result_tmp["fluence"] = result.fluence
+        result_tmp = result.model_dump()
+        # assign sequencing and merge aperture info without overwriting 'beam'
         result_tmp["sequence"] = sequencing
-        result_tmp["sequence"]["aperture_info"] = self.sequencing_to_aperture_info(sequencing, stf)
-        result_tmp["sequence"]["fluence"] = sequencing["fluence"]
+        ap_info = self.sequencing_to_aperture_info(sequencing, stf)
+        # merge per‐beam aperture info into each beam entry
+        for idx, beam_info in enumerate(ap_info.get("beam", [])):
+            result_tmp["sequence"]["beam"][idx].update(beam_info)
+        # merge any other (global) aperture_info key
+        for key, val in ap_info.items():
+            if key != "beam":
+                result_tmp["sequence"][key] = val
 
         # Interpolate dose (placeholder implementation)
         cubes = dij.compute_result_ct_grid(sequencing["fluence"])

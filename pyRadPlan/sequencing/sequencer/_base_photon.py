@@ -146,7 +146,7 @@ class PhotonSequencer(Sequencer):
             # Create bixelIndMap
             bixel_ind_map = np.full((dim_z, dim_x), np.nan)
             num_rays = len(rays)
-            bixel_ind_map.flat[indices] = np.arange(1, num_rays + 1) + bixel_ind_offset
+            bixel_ind_map.flat[indices] = np.arange(0, num_rays) + bixel_ind_offset
             bixel_ind_offset += num_rays
 
             pos_of_corner_bixel = [min_x, 0, min_z]
@@ -155,7 +155,7 @@ class PhotonSequencer(Sequencer):
             lim_l = np.full(dim_z, np.nan)
             lim_r = np.full(dim_z, np.nan)
             for n in range(dim_z):
-                cols = np.where(ray_map[n, :] != 0)[0]
+                cols = np.where(ray_map.T[n, :] != 0)[0]
                 if cols.size > 0:
                     lim_l[n] = (cols[0]) * bixel_width + min_x - 0.5 * bixel_width
                     lim_r[n] = (cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
@@ -165,11 +165,17 @@ class PhotonSequencer(Sequencer):
 
             beam_aperture = {}
             beam_aperture["num_of_shapes"] = sequencing["beam"][i]["num_of_shapes"]
-            beam_aperture["bixel_ind_map"] = bixel_ind_map
+            # TODO: This should in general be correct. If not, change .T
+            beam_aperture["bixel_ind_map"] = bixel_ind_map.T
             beam_aperture["pos_of_corner_bixel"] = pos_of_corner_bixel
 
             # Process shapes for the current beam
-            shapes_list = []
+            # initialize per‐shape lists in beam_aperture
+            beam_aperture["left_leaf_pos"] = []
+            beam_aperture["right_leaf_pos"] = []
+            beam_aperture["weight"] = []
+            beam_aperture["shape_map"] = []
+            beam_aperture["vector_offset"] = []
             for m in range(sequencing["beam"][i]["num_of_shapes"]):
                 # Each shape is a 2D numpy array (dim_z x dim_x)
                 shape_map = sequencing["beam"][i]["shapes"][:, :, m]
@@ -186,16 +192,13 @@ class PhotonSequencer(Sequencer):
                         right_leaf_pos[n] = (
                             (open_cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
                         )
-                shape_info = {
-                    "left_leaf_pos": left_leaf_pos,
-                    "right_leaf_pos": right_leaf_pos,
-                    "weight": sequencing["beam"][i]["shapes_weight"][m],
-                    "shape_map": shape_map,
-                    "vector_offset": vector_offset,
-                }
+                # append to each list
+                beam_aperture["left_leaf_pos"].append(left_leaf_pos)
+                beam_aperture["right_leaf_pos"].append(right_leaf_pos)
+                beam_aperture["weight"].append(sequencing["beam"][i]["shapes_weight"][m])
+                beam_aperture["shape_map"].append(shape_map)
+                beam_aperture["vector_offset"].append(vector_offset)
                 vector_offset += dim_z
-                shapes_list.append(shape_info)
-            beam_aperture["shapes"] = shapes_list
 
             # Leaf pair positions and active leaf pairs
             leaf_pair_pos = np.unique(z_positions)
@@ -207,7 +210,7 @@ class PhotonSequencer(Sequencer):
             # Activate indices between top and bottom leaf pairs (casting to int)
             start_ix = int(math.floor(top_leaf_pair))
             end_ix = int(math.ceil(bottom_leaf_pair))
-            is_active_leaf_pair[start_ix : end_ix + 1] = 1
+            is_active_leaf_pair[start_ix - 1 : end_ix] = 1  # TODO: Maybe [start_ix : end_ix +1]
 
             beam_aperture["num_of_active_leaf_pairs"] = dim_z
             beam_aperture["leaf_pair_pos"] = leaf_pair_pos
@@ -236,9 +239,80 @@ class PhotonSequencer(Sequencer):
         )
         aperture_info["total_num_of_leaf_pairs"] = total_leaf_pairs
 
-        # Optimization vectors (placeholders – implement as needed)
-        aperture_info["aperture_vector"] = None
-        aperture_info["mapping_mx"] = None
-        aperture_info["lim_mx"] = None
+        # Optimization vectors
+        ap_vec, map_mx, lim_mx = self._dao_aperture_info_to_vec(aperture_info)
+        aperture_info["aperture_vector"] = ap_vec
+        aperture_info["mapping_mx"] = map_mx
+        aperture_info["lim_mx"] = lim_mx
 
         return aperture_info
+
+    def _dao_aperture_info_to_vec(self, aperture_info: dict):
+        """Convert aperture information to a vector and mapping matrix."""
+        total_shapes = aperture_info["total_num_of_shapes"]
+        total_leaf_pairs = aperture_info["total_num_of_leaf_pairs"]
+        vec_length = total_shapes + 2 * total_leaf_pairs
+
+        # 1. initialize output vector
+        aperture_vec = np.full(vec_length, np.nan, dtype=float)
+
+        # 2. aperture weights
+        offset = 0
+        for beam in aperture_info["beam"]:
+            for weight in beam["weight"]:
+                aperture_vec[offset] = weight
+                offset += 1
+
+        # 3. left & right leaf positions
+        offset = total_shapes
+        for beam in aperture_info["beam"]:
+            n_active = beam["num_of_active_leaf_pairs"]
+            for left_pos, right_pos in zip(beam["left_leaf_pos"], beam["right_leaf_pos"]):
+                aperture_vec[offset : offset + n_active] = left_pos
+                aperture_vec[offset + total_leaf_pairs : offset + total_leaf_pairs + n_active] = (
+                    right_pos
+                )
+                offset += n_active
+
+        # 4. mapping and limits
+        mapping_mx = np.full((vec_length, 4), np.nan)
+        lim_mx = np.full((vec_length, 2), np.nan)
+
+        # weights bounds = [0, inf]
+        lim_mx[:total_shapes, 0] = 0
+        lim_mx[:total_shapes, 1] = np.inf
+
+        # mapping for weights (store beam index)
+        counter = 0
+        for i, beam in enumerate(aperture_info["beam"], start=1):
+            for _ in range(beam["num_of_shapes"]):
+                mapping_mx[counter, 0] = i
+                counter += 1
+
+        # mapping and bounds for leaves
+        shape_offset = 0
+        counter = total_shapes
+        for i, beam in enumerate(aperture_info["beam"], start=1):
+            num_shapes = beam["num_of_shapes"]
+            n_active = beam["num_of_active_leaf_pairs"]
+            lim_l = beam["lim_l"]
+            lim_r = beam["lim_r"]
+
+            for j in range(num_shapes):
+                for k in range(n_active):
+                    mapping_mx[counter, 0] = i
+                    mapping_mx[counter, 1] = j + 1 + shape_offset
+                    mapping_mx[counter, 2] = j + 1
+                    mapping_mx[counter, 3] = k + 1
+                    lim_mx[counter, 0] = lim_l[k]
+                    lim_mx[counter, 1] = lim_r[k]
+                    counter += 1
+
+            shape_offset += num_shapes
+
+        # replicate tail if any unused slots remain
+        if counter < vec_length:
+            mapping_mx[counter:] = mapping_mx[total_shapes:counter]
+            lim_mx[counter:] = lim_mx[total_shapes:counter]
+
+        return aperture_vec, mapping_mx, lim_mx
