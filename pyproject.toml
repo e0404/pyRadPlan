@@ -10,7 +10,7 @@ pyRadPlan = ["data/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.2.4"
+version = "0.2.5"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
