@@ -26,7 +26,7 @@ class SiochiLeafSequencer(PhotonSequencer):
 
     def _tongue_and_groove_correction(
         self, tops: np.ndarray, bases: np.ndarray, dk: np.ndarray, indexing: tuple
-    ):
+    ) -> tuple:
         """Apply the downward + upward TnG correction loop for column i."""
         # reducing arguments in function:
         i, max_row, min_z, max_z = indexing
@@ -83,7 +83,7 @@ class SiochiLeafSequencer(PhotonSequencer):
 
         return tops, bases
 
-    def _decompose_port(self, dk, dim_z, dim_x):
+    def _decompose_port(self, dk: np.ndarray, dim_z: np.ndarray, dim_x: np.ndarray) -> tuple:
         """Decompose the port from the stratified intensity matrix, including collision & tongue-and-groove fixes."""
         tops = np.zeros((dim_z, dim_x), dtype=int)
         bases = np.zeros((dim_z, dim_x), dtype=int)
@@ -122,7 +122,9 @@ class SiochiLeafSequencer(PhotonSequencer):
 
         return tops, bases
 
-    def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
+    def sequence(
+        self, result: PlanResult, stf: SteeringInformation, dij: Dij = None
+    ) -> PlanResult:
         """
         Execute the Siochi leaf sequencing algorithm (without visualization).
 

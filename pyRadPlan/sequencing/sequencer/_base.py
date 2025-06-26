@@ -29,7 +29,9 @@ class Sequencer(ABC):
             self.assign_properties_from_pln(pln, True)
 
     @abstractmethod
-    def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
+    def sequence(
+        self, result: PlanResult, stf: SteeringInformation, dij: Dij = None
+    ) -> PlanResult:
         """
         Abstract method to be implemented by subclasses for sequencing.
 
@@ -49,7 +51,9 @@ class Sequencer(ABC):
         """
         raise NotImplementedError("Sequencing method must be implemented in subclasses.")
 
-    def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
+    def assign_properties_from_pln(
+        self, pln: Plan, warn_when_property_changed: bool = False
+    ) -> None:
         """
         Assign properties from a Plan object to the Sequencer.
 

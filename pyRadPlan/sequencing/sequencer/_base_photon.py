@@ -42,7 +42,9 @@ class PhotonSequencer(Sequencer):
         """
         pass
 
-    def _inititialize_beam_fluence_matrix(self, beam: Beam, w_of_curr_beams=None):
+    def _inititialize_beam_fluence_matrix(
+        self, beam: Beam, w_of_curr_beams: np.ndarray = None
+    ) -> dict:
         """
         Initialize the fluence matrix for a given beam.
 
@@ -115,7 +117,7 @@ class PhotonSequencer(Sequencer):
 
         return init_param
 
-    def _compute_leaf_limits(self, init_param: dict):
+    def _compute_leaf_limits(self, init_param: dict) -> tuple:
         """
         Compute the limits of the leaves based on the ray map.
 
@@ -147,7 +149,9 @@ class PhotonSequencer(Sequencer):
 
         return lim_l, lim_r
 
-    def _compute_leaf_positions(self, shape_map, init_param: dict, lim_l, lim_r):
+    def _compute_leaf_positions(
+        self, shape_map: np.ndarray, init_param: dict, lim_l: np.ndarray, lim_r: np.ndarray
+    ) -> tuple:
         """
         Compute the positions of the leaves based on the shape map.
 
@@ -190,7 +194,7 @@ class PhotonSequencer(Sequencer):
         central_leaf_pair,
         bixel_ind_offset,
         vector_offset,
-    ):
+    ) -> list:
         """
         Compute the beam aperture information.
 
@@ -205,8 +209,8 @@ class PhotonSequencer(Sequencer):
 
         Returns
         -------
-        dict
-            A dictionary containing the beam aperture information.
+        list
+            A list containing the beam aperture information.
         """
         info_beam = []
         bixel_width = stf.beams[0].bixel_width
@@ -291,7 +295,7 @@ class PhotonSequencer(Sequencer):
 
         return info_beam
 
-    def _dao_aperture_info_to_vec(self, aperture_info: dict):
+    def _dao_aperture_info_to_vec(self, aperture_info: dict) -> tuple:
         """
         Convert aperture information to a vector and mapping matrix.
 

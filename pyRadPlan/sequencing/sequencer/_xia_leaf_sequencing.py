@@ -26,8 +26,26 @@ class XiaLeafSequencer(PhotonSequencer):
         self.mode = "reducing_levels"  # 'sliding_window' or 'reducing_levels'
         super().__init__(pln)
 
-    def _apply_reducing_levels(self, opening_mx, d_k, dim_of_fluence_mx_z):
-        """Apply the reducing levels technique."""
+    def _apply_reducing_levels(
+        self, opening_mx: np.ndarray, d_k: np.ndarray, dim_of_fluence_mx_z: np.ndarray
+    ) -> np.ndarray:
+        """
+        Apply the reducing levels technique.
+
+        Parameters
+        ----------
+        opening_mx : np.ndarray
+            The opening matrix.
+        d_k : np.ndarray
+            The current fluence values for each bixel.
+        dim_of_fluence_mx_z : np.ndarray
+            The dimensions of the fluence matrix in the z-direction.
+
+        Returns
+        -------
+        np.ndarray
+            The modified opening matrix.
+        """
         for row in range(dim_of_fluence_mx_z):
             row_vals = opening_mx[row, :] * d_k[row, :]
             if row_vals.max() > 0:
@@ -46,8 +64,24 @@ class XiaLeafSequencer(PhotonSequencer):
                     opening_mx[row, : open_ix + 1] = False
         return opening_mx
 
-    def _apply_sliding_window(self, opening_mx, dim_of_fluence_mx_z):
-        """Apply the sliding window technique."""
+    def _apply_sliding_window(
+        self, opening_mx: np.ndarray, dim_of_fluence_mx_z: np.ndarray
+    ) -> np.ndarray:
+        """
+        Apply the sliding window technique.
+
+        Parameters
+        ----------
+        opening_mx : np.ndarray
+            The opening matrix.
+        dim_of_fluence_mx_z : int
+            The number of rows in the fluence matrix.
+
+        Returns
+        -------
+        np.ndarray
+            The modified opening matrix.
+        """
         for row in range(dim_of_fluence_mx_z):
             row_open = np.where(opening_mx[row, :])[0]
             if row_open.size > 0:
@@ -60,7 +94,9 @@ class XiaLeafSequencer(PhotonSequencer):
                     opening_mx[row, close_ix:] = False
         return opening_mx
 
-    def sequence(self, result: PlanResult, stf: SteeringInformation, dij: Dij = None):
+    def sequence(
+        self, result: PlanResult, stf: SteeringInformation, dij: Dij = None
+    ) -> PlanResult:
         """
         Execute the sequencing algorithm.
 
@@ -75,8 +111,8 @@ class XiaLeafSequencer(PhotonSequencer):
 
         Returns
         -------
-        object
-            The updated result after sequencing.
+        PlanResult
+            The updated result object after sequencing.
         """
 
         num_of_beams = len(stf.beams)
