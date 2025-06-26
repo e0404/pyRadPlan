@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class PhotonSequencer(Sequencer):
     def __init__(self, pln: Union[Plan, dict] = None):
+        self.num_of_mlc_leaf_pairs = 80
         self.num_of_levels = 5
         super().__init__(pln)
 
@@ -41,7 +42,7 @@ class PhotonSequencer(Sequencer):
         """
         pass
 
-    def _inititialize_beam_fluence_matrix(self, beam: Beam, w_of_curr_beams):
+    def _inititialize_beam_fluence_matrix(self, beam: Beam, w_of_curr_beams=None):
         """
         Initialize the fluence matrix for a given beam.
 
@@ -54,8 +55,8 @@ class PhotonSequencer(Sequencer):
 
         Returns
         -------
-        numpy.ndarray
-            The initialized fluence matrix for the beam.
+        dict
+            A dictionary containing the initialized fluence matrix and related parameters.
         """
         # Get ray positions
         x_positions = np.array([ray.ray_pos_bev[0] for ray in beam.rays])
@@ -70,98 +71,165 @@ class PhotonSequencer(Sequencer):
 
         # Create fluence matrix
         fluence_mx = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
-        x_pos = ((x_positions - min_x) / bixel_width).astype(int)  # adjust for 0-indexing
+        x_pos = ((x_positions - min_x) / bixel_width).astype(int)
         z_pos = ((z_positions - min_z) / bixel_width).astype(int)
 
-        for xp, zp, weight in zip(x_pos, z_pos, w_of_curr_beams):
-            fluence_mx[zp, xp] = weight
+        # Create fluence_mx if w is given and called in sequener
+        if w_of_curr_beams is not None:
+            for xp, zp, weight in zip(x_pos, z_pos, w_of_curr_beams):
+                fluence_mx[zp, xp] = weight
+            cal_fac = np.max(fluence_mx)
+            d_0 = np.round(fluence_mx / cal_fac * self.num_of_levels).astype(int)
+            d_k = d_0.copy()
 
-        cal_fac = np.max(fluence_mx)
-        d_0 = np.round(fluence_mx / cal_fac * self.num_of_levels).astype(int)
-        d_k = d_0.copy()
+            init_param = {
+                "fluence_mx": fluence_mx,
+                "cal_fac": cal_fac,
+                "d_0": d_0,
+                "d_k": d_k,
+                "dim_of_fluence_mx_x": dim_of_fluence_mx_x,
+                "dim_of_fluence_mx_z": dim_of_fluence_mx_z,
+                "x_pos": x_pos,
+                "z_pos": z_pos,
+            }
+        # else return ray_map
+        else:
+            indices = z_pos + x_pos * dim_of_fluence_mx_z
+            # Build ray map on the fluence grid
+            ray_map = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
+            # fill
+            ray_map.flat[indices] = 1
+            init_param = {
+                "ray_map": ray_map,
+                "indices": indices,
+                "dim_x": dim_of_fluence_mx_x,
+                "dim_z": dim_of_fluence_mx_z,
+                "x_positions": x_positions,
+                "z_positions": z_positions,
+                "min_x": min_x,
+                "max_x": max_x,
+                "min_z": min_z,
+                "max_z": max_z,
+                "bixel_width": bixel_width,
+            }
 
-        init_param = {
-            "fluence_mx": fluence_mx,
-            "cal_fac": cal_fac,
-            "d_0": d_0,
-            "d_k": d_k,
-            "dim_of_fluence_mx_x": dim_of_fluence_mx_x,
-            "dim_of_fluence_mx_z": dim_of_fluence_mx_z,
-            "x_pos": x_pos,
-            "z_pos": z_pos,
-        }
         return init_param
 
-    def sequencing_to_aperture_info(self, sequencing, stf: SteeringInformation) -> ApertureInfo:
+    def _compute_leaf_limits(self, init_param: dict):
         """
-        Convert the sequencing result to an ApertureInfo object.
+        Compute the limits of the leaves based on the ray map.
 
         Parameters
         ----------
-        sequencing : dict
-            The sequencing result containing per-beam details.
-        stf : object
-            The steering information.
+        init_param : dict
+            A dictionary containing initialization parameters including the ray map,
 
         Returns
         -------
-        ApertureInfo : object
-            A data structure representing the aperture information of the beams.
+        tuple
+            A tuple containing the left and right limits of the leaves for each layer.
         """
-        aperture_info = {}
+        ray_map = init_param["ray_map"]
+        dim_z = init_param["dim_z"]
+        min_x = init_param["min_x"]
+        bw = init_param["bixel_width"]
 
-        # MLC parameters
-        bixel_width = stf.beams[0].bixel_width  # [mm]
-        num_of_mlc_leaf_pairs = 80
-        central_leaf_pair = int(math.ceil(num_of_mlc_leaf_pairs / 2.0))
+        lim_l = np.full(dim_z, np.nan)
+        lim_r = np.full(dim_z, np.nan)
+        for n in range(dim_z):
+            cols = np.where(ray_map.T[n, :] != 0)[0]
+            if cols.size > 0:
+                lim_l[n] = (cols[0]) * bw + min_x - 0.5 * bw
+                lim_r[n] = (cols[-1]) * bw + min_x + 0.5 * bw
+            else:
+                lim_l[n] = min_x
+                lim_r[n] = min_x
 
-        bixel_ind_offset = 0
-        total_num_of_bixels = sum(beam.total_number_of_bixels for beam in stf.beams)
-        total_num_of_shapes = sum(beam_seq["num_of_shapes"] for beam_seq in sequencing["beam"])
-        vector_offset = total_num_of_shapes + 1
+        return lim_l, lim_r
 
-        aperture_info["beam"] = []
+    def _compute_leaf_positions(self, shape_map, init_param: dict, lim_l, lim_r):
+        """
+        Compute the positions of the leaves based on the shape map.
 
+        Parameters
+        ----------
+        shape_map : numpy.ndarray
+            The shape map indicating the open bixels for each layer.
+        init_param : dict
+            A dictionary containing initialization parameters.
+        lim_l, lim_r : numpy.ndarray
+            The left and right limits of the leaves for each layer.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the left and right positions of the leaves for each layer.
+        """
+
+        dim_z = init_param["dim_z"]
+        min_x = init_param["min_x"]
+        bw = init_param["bixel_width"]
+
+        left_leaf_pos = np.empty(dim_z)
+        right_leaf_pos = np.empty(dim_z)
+        for n in range(dim_z):
+            open_cols = np.where(shape_map[n, :] > 0)[0]
+            if open_cols.size == 0:
+                # If no bixel is open, use the midpoint of limits
+                left_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
+                right_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
+            else:
+                left_leaf_pos[n] = (open_cols[0]) * bw + min_x - 0.5 * bw
+                right_leaf_pos[n] = (open_cols[-1]) * bw + min_x + 0.5 * bw
+        return left_leaf_pos, right_leaf_pos
+
+    def _compute_beam_aperture_info(
+        self,
+        stf: SteeringInformation,
+        sequencing,
+        central_leaf_pair,
+        bixel_ind_offset,
+        vector_offset,
+    ):
+        """
+        Compute the beam aperture information.
+
+        Parameters
+        ----------
+        stf : SteeringInformation
+            The steering information containing the beams.
+        central_leaf_pair : int
+            The index of the central leaf pair.
+        bixel_ind_offset : int
+            The offset for bixel indices.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the beam aperture information.
+        """
+        info_beam = []
+        bixel_width = stf.beams[0].bixel_width
         for i, beam in enumerate(stf.beams):
             # Get x and z positions from each ray of current beam.
-            rays = beam.rays  # each ray is expected to have attribute ray_pos_bev: [x, y, z]
-            x_positions = np.array([ray.ray_pos_bev[0] for ray in rays])
-            z_positions = np.array([ray.ray_pos_bev[2] for ray in rays])
-            min_x, max_x = x_positions.min(), x_positions.max()
-            min_z, max_z = z_positions.min(), z_positions.max()
+            init = self._inititialize_beam_fluence_matrix(beam)
+            dim_x = init["dim_x"]
+            dim_z = init["dim_z"]
+            min_x = init["min_x"]
+            max_x = init["max_x"]
+            min_z = init["min_z"]
+            max_z = init["max_z"]
 
-            # Compute grid dimensions
-            dim_x = int((max_x - min_x) / bixel_width + 1)
-            dim_z = int((max_z - min_z) / bixel_width + 1)
-
-            # Build ray map on the fluence grid
-            ray_map = np.zeros((dim_z, dim_x))
-            # Adjust positions to grid indices (0-indexed)
-            ix = ((x_positions - min_x) / bixel_width).astype(int)
-            iz = ((z_positions - min_z) / bixel_width).astype(int)
-            indices = iz + ix * dim_z
-            # Fill ray map
-            ray_map.flat[indices] = 1
+            # Initialize limits and dimensions
+            lim_l, lim_r = self._compute_leaf_limits(init)
 
             # Create bixelIndMap
             bixel_ind_map = np.full((dim_z, dim_x), np.nan)
-            num_rays = len(rays)
-            bixel_ind_map.flat[indices] = np.arange(0, num_rays) + bixel_ind_offset
+            num_rays = len(beam.rays)
+            bixel_ind_map.flat[init["indices"]] = np.arange(0, num_rays) + bixel_ind_offset
             bixel_ind_offset += num_rays
 
             pos_of_corner_bixel = [min_x, 0, min_z]
-
-            # Compute leaf limits
-            lim_l = np.full(dim_z, np.nan)
-            lim_r = np.full(dim_z, np.nan)
-            for n in range(dim_z):
-                cols = np.where(ray_map.T[n, :] != 0)[0]
-                if cols.size > 0:
-                    lim_l[n] = (cols[0]) * bixel_width + min_x - 0.5 * bixel_width
-                    lim_r[n] = (cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
-                else:
-                    lim_l[n] = min_x
-                    lim_r[n] = min_x
 
             beam_aperture = {}
             beam_aperture["num_of_shapes"] = sequencing["beam"][i]["num_of_shapes"]
@@ -171,42 +239,34 @@ class PhotonSequencer(Sequencer):
 
             # Process shapes for the current beam
             # initialize per‐shape lists in beam_aperture
-            beam_aperture["left_leaf_pos"] = []
-            beam_aperture["right_leaf_pos"] = []
-            beam_aperture["weight"] = []
-            beam_aperture["shape_map"] = []
-            beam_aperture["vector_offset"] = []
-            for m in range(sequencing["beam"][i]["num_of_shapes"]):
-                # Each shape is a 2D numpy array (dim_z x dim_x)
-                shape_map = sequencing["beam"][i]["shapes"][:, :, m]
-                left_leaf_pos = np.empty(dim_z)
-                right_leaf_pos = np.empty(dim_z)
-                for n in range(dim_z):
-                    open_cols = np.where(shape_map[n, :] > 0)[0]
-                    if open_cols.size == 0:
-                        # If no bixel is open, use the midpoint of limits
-                        left_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
-                        right_leaf_pos[n] = (lim_l[n] + lim_r[n]) / 2
-                    else:
-                        left_leaf_pos[n] = (open_cols[0]) * bixel_width + min_x - 0.5 * bixel_width
-                        right_leaf_pos[n] = (
-                            (open_cols[-1]) * bixel_width + min_x + 0.5 * bixel_width
-                        )
-                # append to each list
-                beam_aperture["left_leaf_pos"].append(left_leaf_pos)
-                beam_aperture["right_leaf_pos"].append(right_leaf_pos)
-                beam_aperture["weight"].append(sequencing["beam"][i]["shapes_weight"][m])
-                beam_aperture["shape_map"].append(shape_map)
-                beam_aperture["vector_offset"].append(vector_offset)
-                vector_offset += dim_z
+            shapes_arr = sequencing["beam"][i]["shapes"]
+            weights_arr = sequencing["beam"][i]["shapes_weight"]
+            num_shapes = beam_aperture["num_of_shapes"]
+
+            # compute all leaf‐positions in one go
+            pairs = (
+                self._compute_leaf_positions(shapes_arr[:, :, m], init, lim_l, lim_r)
+                for m in range(num_shapes)
+            )
+            left_list, right_list = zip(*pairs)
+
+            # build each list from a comprehension
+            beam_aperture["left_leaf_pos"] = list(left_list)
+            beam_aperture["right_leaf_pos"] = list(right_list)
+            beam_aperture["weight"] = list(weights_arr)
+            beam_aperture["shape_map"] = [shapes_arr[:, :, m] for m in range(num_shapes)]
+            beam_aperture["vector_offset"] = [vector_offset + m * dim_z for m in range(num_shapes)]
+
+            # advance the global counter once
+            vector_offset += num_shapes * dim_z
 
             # Leaf pair positions and active leaf pairs
-            leaf_pair_pos = np.unique(z_positions)
+            leaf_pair_pos = np.unique(init["z_positions"])
             top_leaf_pair_pos = max_z
             bottom_leaf_pair_pos = min_z
             top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / bixel_width
             bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / bixel_width
-            is_active_leaf_pair = np.zeros(num_of_mlc_leaf_pairs)
+            is_active_leaf_pair = np.zeros(self.num_of_mlc_leaf_pairs)
             # Activate indices between top and bottom leaf pairs (casting to int)
             start_ix = int(math.floor(top_leaf_pair))
             end_ix = int(math.ceil(bottom_leaf_pair))
@@ -227,28 +287,24 @@ class PhotonSequencer(Sequencer):
                 max_z + 0.5 * bixel_width,
             ]
 
-            aperture_info["beam"].append(beam_aperture)
+            info_beam.append(beam_aperture)
 
-        # Global aperture information
-        aperture_info["bixel_width"] = bixel_width
-        aperture_info["num_of_MLC_leaf_pairs"] = num_of_mlc_leaf_pairs
-        aperture_info["total_num_of_bixels"] = total_num_of_bixels
-        aperture_info["total_num_of_shapes"] = total_num_of_shapes
-        total_leaf_pairs = sum(
-            b["num_of_active_leaf_pairs"] * b["num_of_shapes"] for b in aperture_info["beam"]
-        )
-        aperture_info["total_num_of_leaf_pairs"] = total_leaf_pairs
-
-        # Optimization vectors
-        ap_vec, map_mx, lim_mx = self._dao_aperture_info_to_vec(aperture_info)
-        aperture_info["aperture_vector"] = ap_vec
-        aperture_info["mapping_mx"] = map_mx
-        aperture_info["lim_mx"] = lim_mx
-
-        return aperture_info
+        return info_beam
 
     def _dao_aperture_info_to_vec(self, aperture_info: dict):
-        """Convert aperture information to a vector and mapping matrix."""
+        """
+        Convert aperture information to a vector and mapping matrix.
+
+        Parameters
+        ----------
+        aperture_info : dict
+            A dictionary containing the aperture information of the beams.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the aperture vector, mapping matrix, and limits matrix.
+        """
         total_shapes = aperture_info["total_num_of_shapes"]
         total_leaf_pairs = aperture_info["total_num_of_leaf_pairs"]
         vec_length = total_shapes + 2 * total_leaf_pairs
@@ -316,3 +372,51 @@ class PhotonSequencer(Sequencer):
             lim_mx[counter:] = lim_mx[total_shapes:counter]
 
         return aperture_vec, mapping_mx, lim_mx
+
+    def sequencing_to_aperture_info(self, sequencing, stf: SteeringInformation) -> ApertureInfo:
+        """
+        Convert the sequencing result to an ApertureInfo object.
+
+        Parameters
+        ----------
+        sequencing : dict
+            The sequencing result containing per-beam details.
+        stf : object
+            The steering information.
+
+        Returns
+        -------
+        ApertureInfo : object
+            A data structure representing the aperture information of the beams.
+        """
+        aperture_info = {}
+
+        # MLC parameters
+        bixel_width = stf.beams[0].bixel_width  # [mm]
+        central_leaf_pair = int(math.ceil(self.num_of_mlc_leaf_pairs / 2.0))
+
+        bixel_ind_offset = 0
+        total_num_of_bixels = sum(beam.total_number_of_bixels for beam in stf.beams)
+        total_num_of_shapes = sum(beam_seq["num_of_shapes"] for beam_seq in sequencing["beam"])
+        vector_offset = total_num_of_shapes + 1
+        aperture_info["beam"] = self._compute_beam_aperture_info(
+            stf, sequencing, central_leaf_pair, bixel_ind_offset, vector_offset
+        )
+
+        # Global aperture information
+        aperture_info["bixel_width"] = bixel_width
+        aperture_info["num_of_MLC_leaf_pairs"] = self.num_of_mlc_leaf_pairs
+        aperture_info["total_num_of_bixels"] = total_num_of_bixels
+        aperture_info["total_num_of_shapes"] = total_num_of_shapes
+        total_leaf_pairs = sum(
+            b["num_of_active_leaf_pairs"] * b["num_of_shapes"] for b in aperture_info["beam"]
+        )
+        aperture_info["total_num_of_leaf_pairs"] = total_leaf_pairs
+
+        # Optimization vectors
+        ap_vec, map_mx, lim_mx = self._dao_aperture_info_to_vec(aperture_info)
+        aperture_info["aperture_vector"] = ap_vec
+        aperture_info["mapping_mx"] = map_mx
+        aperture_info["lim_mx"] = lim_mx
+
+        return aperture_info
