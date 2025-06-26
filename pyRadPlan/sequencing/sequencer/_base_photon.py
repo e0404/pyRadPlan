@@ -2,10 +2,9 @@
 
 import logging
 import math
+import numpy as np
 from abc import abstractmethod
 from typing import Union
-
-import numpy as np
 
 from pyRadPlan.plan import Plan
 from pyRadPlan.result import PlanResult, ApertureInfo
