@@ -149,7 +149,12 @@ class CT(PyRadPlanBaseModel, ABC):
             # TODO: Either set up a Grid or check for x/y/z to do the data management
             if "origin" in data:
                 data["cube_hu"].SetOrigin(data["origin"])
-
+            elif all(key in data for key in ("x", "y", "z")):
+                # If x, y, z are present, we set the origin to the first voxel
+                origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
+                if is4d:
+                    origin = np.append(origin, [0.0])
+                data["cube_hu"].SetOrigin(origin)
             else:
                 data["cube_hu"].SetOrigin(
                     -np.array(data["cube_hu"].GetSize())
@@ -158,11 +163,6 @@ class CT(PyRadPlanBaseModel, ABC):
                 )
                 if is4d:
                     data["cube_hu"].SetOrigin(np.append(data["cube_hu"].GetOrigin(), [0.0]))
-            # elif all(key in data for key in ("x", "y", "z")):
-            #     origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
-            #     if is4d:
-            #         origin = np.append(origin, [0.0])
-            #     data["cube_hu"].SetOrigin(origin)
         return data
 
     @computed_field
