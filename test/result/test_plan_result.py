@@ -154,13 +154,13 @@ def test_matrad_import(test_data_photons_raw):
 
     assert isinstance(result, PlanResult)
     assert isinstance(result.physical_dose, QuantityDistribution)
-    assert isinstance(result.physical_dose.distribution, sitk.Image)
+    assert isinstance(result.physical_dose.values, sitk.Image)
     assert result.physical_dose.size == (10, 20, 10)
 
     assert isinstance(result.beam.physical_dose[0], QuantityDistribution)
     assert isinstance(result.beam.physical_dose[1], QuantityDistribution)
-    assert isinstance(result.beam.physical_dose[0].distribution, sitk.Image)
-    assert isinstance(result.beam.physical_dose[1].distribution, sitk.Image)
+    assert isinstance(result.beam.physical_dose[0].values, sitk.Image)
+    assert isinstance(result.beam.physical_dose[1].values, sitk.Image)
     assert result.beam.physical_dose[0].size == (10, 20, 10)
     assert result.beam.physical_dose[1].size == (10, 20, 10)
 
@@ -204,7 +204,7 @@ def test_property_change(sample_image):
     """Test changing properties of an existing CT object."""
     result = create_result(physical_dose=sample_image, let=sample_image)
     new_origin = (5, 5, 1)
-    result.physical_dose.distribution.SetOrigin(new_origin)
+    result.physical_dose.values.SetOrigin(new_origin)
     assert result.physical_dose.origin == new_origin
 
 
@@ -218,7 +218,7 @@ def test_check_dict_convert_sitk_image():
         "resolution": {"x": 2, "y": 2, "z": 4},
     }
     result = create_result(physical_dose=dose_dict)
-    assert isinstance(result.physical_dose.distribution, sitk.Image)
+    assert isinstance(result.physical_dose.values, sitk.Image)
     assert result.physical_dose.origin == (1, 2, 3)
     assert result.physical_dose.resolution == {"x": 2, "y": 2, "z": 4}
 
@@ -238,7 +238,7 @@ def test_check_multiple_scenarios_from_numpy():
     }
 
     result = PlanResult.model_validate(dose_dict)
-    assert isinstance(result.physical_dose.distribution, sitk.Image)
+    assert isinstance(result.physical_dose.values, sitk.Image)
     assert result.physical_dose.origin == (1, 2, 3)
     assert result.physical_dose.resolution == {"x": 2, "y": 2, "z": 4}
 

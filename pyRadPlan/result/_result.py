@@ -327,9 +327,7 @@ class PlanResult(PyRadPlanBaseModel):
             if v:
                 dict_tmp = {}
                 for key, value in v.items():
-                    numpy_array = np.transpose(
-                        sitk.GetArrayFromImage(value.distribution), (1, 2, 0)
-                    )
+                    numpy_array = np.transpose(sitk.GetArrayFromImage(value.values), (1, 2, 0))
                     # TODO: multScen support
                     # wrapped_array = np.ndarray(shape=(1,), dtype=object)
                     # wrapped_array[0] = numpy_array
@@ -347,9 +345,7 @@ class PlanResult(PyRadPlanBaseModel):
                 dict_tmp = {}
                 for key, value in v.items():
                     for idx, beam in enumerate(value, start=1):
-                        numpy_array = np.transpose(
-                            sitk.GetArrayFromImage(beam.distribution), (1, 2, 0)
-                        )
+                        numpy_array = np.transpose(sitk.GetArrayFromImage(beam.values), (1, 2, 0))
                         dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array
                 return dict_tmp
             return None

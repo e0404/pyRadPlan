@@ -38,7 +38,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result.physical_dose.distribution,
+    overlay=result.physical_dose.values,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",
@@ -46,7 +46,7 @@ plot_slice(
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result.physical_dose.distribution,
+    overlay=result.physical_dose.values,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="dimensionless",
