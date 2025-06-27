@@ -1,4 +1,4 @@
-"""Module for storing a given quantity distribution."""
+"""Module for storing a given quantity values."""
 
 import os
 from typing import Annotated, Any, Union
@@ -20,83 +20,79 @@ class QuantityDistribution(PyRadPlanBaseModel):
     """
     A class representing the result of a dose calculation.
 
-    This class is used to store and do further sequencing/analysis of the dose distributions.
+    This class is used to store and do further sequencing/analysis of the dose valuess.
     """
 
-    distribution: Annotated[sitk.Image, Field(init=False)]  # ,alias="distribution")]
+    values: Annotated[sitk.Image, Field(init=False)]  # ,alias="values")]
 
     @classmethod
     def _retrieve_data(cls, data: Any, info: ValidationInfo) -> dict:
         """Search for data coming from validation."""
         if isinstance(data, Union[sitk.Image, np.ndarray]):
-            # If the input is a SimpleITK image or numpy array, set it as the distribution
-            data = {"distribution": data}
+            # If the input is a SimpleITK image or numpy array, set it as the values
+            data = {"values": data}
         if not isinstance(data, dict):
-            raise ValueError("Invalid type for dose distribution input.")
-        # Try to get the distribution using our internal key or its alias
+            raise ValueError("Invalid type for dose values input.")
+        # Try to get the values using our internal key or its alias
         if "cube" in data:
-            distribution = data.get("cube")
-        elif "distribution" in data:
-            distribution = data.get("distribution")
-        if distribution is None:
-            distribution_fieldname = cls.model_fields.get("cube").validation_alias
-            distribution = data.pop(distribution_fieldname, None)
-        if distribution is None:
-            raise ValueError("Dose distribution not present in dictionary.")
-        return distribution, data
+            values = data.get("cube")
+        elif "values" in data:
+            values = data.get("values")
+        if values is None:
+            values_fieldname = cls.model_fields.get("cube").validation_alias
+            values = data.pop(values_fieldname, None)
+        if values is None:
+            raise ValueError("Dose values not present in dictionary.")
+        return values, data
 
     @model_validator(mode="before")
     @classmethod
-    def validate_distribution(cls, data: Any, info: ValidationInfo) -> Any:
-        # Early return for distribution input (assuming distribution is defined/imported elsewhere)
+    def validate_values(cls, data: Any, info: ValidationInfo) -> Any:
+        # Early return for values input (assuming values is defined/imported elsewhere)
         if isinstance(data, QuantityDistribution):
             return data
 
-        distribution, data = cls._retrieve_data(data, info)
-        if isinstance(distribution, np.ndarray):
-            # Determine if a permutation is required (e.g. matRad data has 'distributionDim')
-            permute = data.get("distributionDim") or (
+        values, data = cls._retrieve_data(data, info)
+        if isinstance(values, np.ndarray):
+            # Determine if a permutation is required (e.g. matRad data has 'valuesDim')
+            permute = data.get("valuesDim") or (
                 info.context and info.context.get("from_matRad", False)
             )
-            if distribution.dtype == object:
-                distribution = sitk.JoinSeries(
+            if values.dtype == object:
+                values = sitk.JoinSeries(
                     [
                         sitk.GetImageFromArray(
-                            np.transpose(distribution[i], (2, 0, 1))
-                            if permute
-                            else distribution[i],
+                            np.transpose(values[i], (2, 0, 1)) if permute else values[i],
                             False,
                         )
-                        for i in range(len(distribution))
+                        for i in range(len(values))
                     ]
                 )
             else:
-                arr = np.transpose(distribution, (2, 0, 1)) if permute else distribution
-                distribution = sitk.GetImageFromArray(arr, False)
+                arr = np.transpose(values, (2, 0, 1)) if permute else values
+                values = sitk.GetImageFromArray(arr, False)
 
         # Save the result under the key used in this model
-        data["distribution"] = distribution
+        data["values"] = values
 
-        # Validate that the distribution is indeed a SimpleITK image.
-        if not isinstance(data["distribution"], sitk.Image):
-            raise ValueError(
-                f"Unsupported format of HU distribution: {type(data['distribution'])}"
-            )
+        # Validate that the values is indeed a SimpleITK image.
+        if not isinstance(data["values"], sitk.Image):
+            raise ValueError(f"Unsupported format of HU values: {type(data['values'])}")
 
-        is4d = distribution.GetDimension() == 4
+        is4d = values.GetDimension() == 4
 
         # Set image origin if available from the dictionary.
         if "origin" in data:
-            data["distribution"].SetOrigin(data["origin"])
+            data["values"].SetOrigin(data["origin"])
         elif all(key in data for key in ("x", "y", "z")):
             origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
             if is4d:
                 origin = np.append(origin, [0.0])
-            data["distribution"].SetOrigin(origin)
+            data["values"].SetOrigin(origin)
 
         # Set direction if provided.
         if "direction" in data:
-            data["distribution"].SetDirection(data["direction"])
+            data["values"].SetDirection(data["direction"])
 
         # Set spacing (resolution) if available.
         if "resolution" in data and all(k in data["resolution"] for k in ("x", "y", "z")):
@@ -104,7 +100,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
             spacing = (
                 [res["x"], res["y"], res["z"], 1.0] if is4d else [res["x"], res["y"], res["z"]]
             )
-            data["distribution"].SetSpacing(spacing)
+            data["values"].SetSpacing(spacing)
 
         return data
 
@@ -119,7 +115,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         dict
             A dictionary containing the resolution in x, y, and z directions.
         """
-        spacing = self.distribution.GetSpacing()
+        spacing = self.values.GetSpacing()
         return {"x": spacing[0], "y": spacing[1], "z": spacing[2]}
 
     @computed_field
@@ -133,18 +129,18 @@ class QuantityDistribution(PyRadPlanBaseModel):
         tuple
             A tuple containing the size in x, y, and z directions.
         """
-        return self.distribution.GetSize()[0:3]
+        return self.values.GetSize()[0:3]
 
     @computed_field
     @property
-    def distribution_dim(self) -> tuple:
+    def values_dim(self) -> tuple:
         """
-        Get the distribution dimensions in x, y, and z.
+        Get the values dimensions in x, y, and z.
 
         Returns
         -------
         tuple
-            A tuple containing the distribution dimensions.
+            A tuple containing the values dimensions.
         """
         return self.size[0:3]
 
@@ -159,7 +155,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         tuple
             A tuple containing the origin coordinates.
         """
-        orig = self.distribution.GetOrigin()
+        orig = self.values.GetOrigin()
         return orig[0:3]
 
     @computed_field
@@ -173,7 +169,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         tuple
             A tuple containing the direction cosines.
         """
-        return self.distribution.GetDirection()
+        return self.values.GetDirection()
 
     # @computed_field
     # @property
@@ -186,8 +182,8 @@ class QuantityDistribution(PyRadPlanBaseModel):
     #     int
     #         The number of scenarios.
     #     """
-    #     if self.distribution.GetDimension() == 4:
-    #         return self.distribution.GetSize()[3]
+    #     if self.values.GetDimension() == 4:
+    #         return self.values.GetSize()[3]
     #     return 1
 
     @computed_field
@@ -201,8 +197,8 @@ class QuantityDistribution(PyRadPlanBaseModel):
         np.ndarray
             The corresponding x-vector.
         """
-        x_spacing = self.distribution.GetSpacing()[0]
-        x_origin = self.distribution.GetOrigin()[0]
+        x_spacing = self.values.GetSpacing()[0]
+        x_origin = self.values.GetOrigin()[0]
         n_x = self.size[0]
         return np.arange(x_origin, x_origin + n_x * x_spacing, x_spacing)
 
@@ -217,8 +213,8 @@ class QuantityDistribution(PyRadPlanBaseModel):
         np.ndarray
             The corresponding y-vector.
         """
-        y_spacing = self.distribution.GetSpacing()[1]
-        y_origin = self.distribution.GetOrigin()[1]
+        y_spacing = self.values.GetSpacing()[1]
+        y_origin = self.values.GetOrigin()[1]
         n_y = self.size[1]
         return np.arange(y_origin, y_origin + n_y * y_spacing, y_spacing)
 
@@ -233,8 +229,8 @@ class QuantityDistribution(PyRadPlanBaseModel):
         np.ndarray
             The corresponding z-vector.
         """
-        z_spacing = self.distribution.GetSpacing()[2]
-        z_origin = self.distribution.GetOrigin()[2]
+        z_spacing = self.values.GetSpacing()[2]
+        z_origin = self.values.GetOrigin()[2]
         n_z = self.size[2]
         return np.arange(z_origin, z_origin + n_z * z_spacing, z_spacing)
 
@@ -248,11 +244,11 @@ class QuantityDistribution(PyRadPlanBaseModel):
         Grid
             The grid constructed from the SimpleITK image.
         """
-        return Grid.from_sitk_image(self.distribution)
+        return Grid.from_sitk_image(self.values)
 
-    def world_to_distribution_coords(self, world_coords: np.ndarray) -> np.ndarray:
+    def world_to_values_coords(self, world_coords: np.ndarray) -> np.ndarray:
         """
-        Convert world coordinates to distribution indices.
+        Convert world coordinates to values indices.
 
         Parameters
         ----------
@@ -262,9 +258,9 @@ class QuantityDistribution(PyRadPlanBaseModel):
         Returns
         -------
         np.ndarray
-            The converted distribution indices.
+            The converted values indices.
         """
-        return np.array(self.distribution.TransformPhysicalPointToIndex(world_coords))
+        return np.array(self.values.TransformPhysicalPointToIndex(world_coords))
 
     def resample_to_grid(self, grid: Grid) -> Self:
         """
@@ -278,7 +274,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         Returns
         -------
         Self
-            The resampled QuantityDistribution object.
+            The resampled Quantityvalues object.
         """
         resampler = sitk.ResampleImageFilter()
         resampler.SetInterpolator(sitk.sitkLinear)
@@ -289,17 +285,17 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
         # if self.num_of_ct_scen > 1:
         #     new_images = []
-        #     for i in range(self.distribution.GetSize()[-1]):
-        #         new_images.append(resampler.Execute(self.distribution[:, :, :, i]))
-        #     new_distribution = sitk.JoinSeries(new_images)
+        #     for i in range(self.values.GetSize()[-1]):
+        #         new_images.append(resampler.Execute(self.values[:, :, :, i]))
+        #     new_values = sitk.JoinSeries(new_images)
         # else:
-        new_distribution = resampler.Execute(self.distribution)
+        new_values = resampler.Execute(self.values)
 
-        return self.model_validate({"distribution": new_distribution})
+        return self.model_validate({"values": new_values})
 
 
 def resample_ct(
-    distribution: QuantityDistribution, interpolator=sitk.sitkBSpline, **kwargs
+    values: QuantityDistribution, interpolator=sitk.sitkBSpline, **kwargs
 ) -> QuantityDistribution:
     """
     Resample QuantityDistribution to a different grid.
@@ -310,13 +306,11 @@ def resample_ct(
         A resampled QuantityDistribution object
     """
 
-    distribution = QuantityDistribution.distribution
+    values = QuantityDistribution.values
 
-    resampled_distribution = resample_image(
-        input_image=distribution, interpolator=interpolator, **kwargs
-    )
+    resampled_values = resample_image(input_image=values, interpolator=interpolator, **kwargs)
 
-    return QuantityDistribution(distribution_hu=resampled_distribution)
+    return QuantityDistribution(values_hu=resampled_values)
 
 
 def create_distribution(
@@ -346,15 +340,15 @@ def create_distribution(
 
 
 def validate_distribution(
-    distribution: Union[dict[str, Any], QuantityDistribution, os.PathLike, None] = None, **kwargs
+    values: Union[dict[str, Any], QuantityDistribution, os.PathLike, None] = None, **kwargs
 ) -> QuantityDistribution:
     """
-    Validate the distribution input and return a QuantityDistribution object.
+    Validate the values input and return a QuantityDistribution object.
 
     Parameters
     ----------
-    distribution : Union[dict[str, Any], QuantityDistribution, os.PathLike, None]
-        The input distribution to validate.
+    values : Union[dict[str, Any], QuantityDistribution, os.PathLike, None]
+        The input values to validate.
 
     Returns
     -------
@@ -362,4 +356,4 @@ def validate_distribution(
         A validated QuantityDistribution object.
     """
 
-    return create_distribution(distribution, **kwargs)
+    return create_distribution(values, **kwargs)
