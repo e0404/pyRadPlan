@@ -27,7 +27,7 @@ class PhotonSequencer(Sequencer):
 
         Parameters
         ----------
-        resultGUI : object
+        result : object
             The result object or dictionary to store sequencing results.
         stf : object
             The steering information structure.
@@ -37,7 +37,7 @@ class PhotonSequencer(Sequencer):
         Returns
         -------
         object
-            The updated resultGUI after sequencing.
+            The updated PlanResult after sequencing.
         """
         pass
 
@@ -95,7 +95,7 @@ class PhotonSequencer(Sequencer):
             }
         # else return ray_map
         else:
-            indices = z_pos + x_pos * dim_of_fluence_mx_z
+            indices = z_pos * dim_of_fluence_mx_x + x_pos
             # Build ray map on the fluence grid
             ray_map = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
             # fill
@@ -138,7 +138,7 @@ class PhotonSequencer(Sequencer):
         lim_l = np.full(dim_z, np.nan)
         lim_r = np.full(dim_z, np.nan)
         for n in range(dim_z):
-            cols = np.where(ray_map.T[n, :] != 0)[0]
+            cols = np.where(ray_map[n, :] != 0)[0]
             if cols.size > 0:
                 lim_l[n] = (cols[0]) * bw + min_x - 0.5 * bw
                 lim_r[n] = (cols[-1]) * bw + min_x + 0.5 * bw
