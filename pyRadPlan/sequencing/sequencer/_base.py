@@ -24,6 +24,7 @@ class Sequencer(ABC):
     def __init__(self, pln: Union[Plan, dict] = None):
         self.resultGUI: PlanResult
         self.aperture_info = None
+        self.run_sequencing = True
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
