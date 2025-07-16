@@ -18,6 +18,8 @@
 import logging
 
 import numpy as np
+import SimpleITK as sitk
+from copy import deepcopy
 
 from pyRadPlan import (
     PhotonPlan,
@@ -44,9 +46,9 @@ ct, cst = load_tg119()
 pln = PhotonPlan(machine="Generic")
 
 # 2) Define the parameters for the steering information
-num_of_beams = 2
+num_of_beams = 5
 pln.prop_stf = {
-    "gantry_angles": np.linspace(0, 180, num_of_beams, endpoint=False),
+    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
     "couch_angles": np.zeros((num_of_beams,)),
 }
 
@@ -57,14 +59,13 @@ pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
 pln.prop_opt = {"solver": "scipy"}
 
 # 5) Configure sequencing
-pln.prop_seq = (
-    {
-        "run_sequencing": True,  # False if you want to skip the sequencing step
-        "num_of_levels": 5,
-        "sequencer": "xia",  # currently implemented: "xia" and "siochi"
-        "mode": "reducing_levels",  # parameter for "xia" sequencer.
-    },
-)
+# Nondefined parameters in the regarding class will be ignored.
+pln.prop_seq = {
+    "run_sequencing": True,  # False if you want to skip the sequencing step
+    "num_of_levels": 5,
+    "sequencer": "xia",  # currently implemented: "xia" and "siochi"
+    "mode": "reducing_levels",  # parameter for "xia" sequencer.
+}
 
 
 # %% [markdown]
@@ -96,7 +97,7 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 # You can call the resulting information via "result.sequence".
 # %%
 
-result = run_sequencing(result, pln, stf, dij=dij)
+result_sequenced = run_sequencing(deepcopy(result), pln, stf, dij=dij)
 
 # %% [markdown]
 # Visualize the results. (There is no plotting module for the sequenced data yet) <br>
@@ -106,11 +107,23 @@ result = run_sequencing(result, pln, stf, dij=dij)
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))
 
+a = sitk.GetArrayFromImage(result.physical_dose.values)
+b = sitk.GetArrayFromImage(result_sequenced.physical_dose.values)
+diff = a - b
 # Visualize
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result.physical_dose.distribution,
+    overlay=diff,
+    view_slice=view_slice,
+    plane="axial",
+    overlay_unit="Gy",
+)
+
+plot_slice(
+    ct=ct,
+    cst=cst,
+    overlay=result_sequenced.physical_dose.values,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",
