@@ -195,6 +195,11 @@ class XiaLeafSequencer(PhotonSequencer):
 
         # finalize sequencing result
         result_tmp = result.model_dump()
+        # Pop old quantities because they are no longer correct after sequencing.
+        # TODO: might change this in the future. Keeping old quantities and passing new ones
+        # to result.sequence
+        result_tmp.pop("quantities", None)
+        result_tmp.pop("beam_quantities", None)
         # assign sequencing and merge aperture info without overwriting 'beam'
         result_tmp["sequence"] = sequencing
         ap_info = self.sequencing_to_aperture_info(sequencing, stf)
@@ -207,7 +212,8 @@ class XiaLeafSequencer(PhotonSequencer):
                 result_tmp["sequence"][key] = val
 
         # Interpolate dose (placeholder implementation)
-        cubes = dij.compute_result_ct_grid(sequencing["fluence"])
+        if dij is not None:
+            cubes = dij.compute_result_ct_grid(sequencing["fluence"])
 
         # if hasattr(result, 'w_dao'):
         #     pass

@@ -214,6 +214,11 @@ class SiochiLeafSequencer(PhotonSequencer):
 
         # Finalize sequencing result
         result_tmp = result.model_dump()
+        # Pop old quantities because they are no longer correct after sequencing.
+        # TODO: might change this in the future. Keeping old quantities and passing new ones
+        # to result.sequence
+        result_tmp.pop("quantities", None)
+        result_tmp.pop("beam_quantities", None)
         # we do this so that "beam" in aperture_info does not overwrite the beam in sequencing
         result_tmp["sequence"] = sequencing
         ap_info = self.sequencing_to_aperture_info(sequencing, stf)
