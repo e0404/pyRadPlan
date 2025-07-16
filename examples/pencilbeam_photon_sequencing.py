@@ -110,20 +110,24 @@ view_slice = int(np.round(ct.size[2] / 2))
 a = sitk.GetArrayFromImage(result.physical_dose.values)
 b = sitk.GetArrayFromImage(result_sequenced.physical_dose.values)
 diff = a - b
-# Visualize
-plot_slice(
-    ct=ct,
-    cst=cst,
-    overlay=diff,
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
-
+# Lets first visualize the original dose
 plot_slice(
     ct=ct,
     cst=cst,
     overlay=result_sequenced.physical_dose.values,
+    view_slice=view_slice,
+    plane="axial",
+    overlay_unit="Gy",
+)
+# %%
+# And just out of curiosity, the difference between the original and sequenced dose
+a = sitk.GetArrayFromImage(result.physical_dose.values)
+b = sitk.GetArrayFromImage(result_sequenced.physical_dose.values)
+diff = a - b
+plot_slice(
+    ct=ct,
+    cst=cst,
+    overlay=diff,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",
