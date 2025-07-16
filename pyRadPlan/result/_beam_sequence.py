@@ -74,7 +74,7 @@ class BeamSequence(PyRadPlanBaseModel):
                 for j in range(len(arr[i])):
                     if not np.isnan(arr[i][j]):
                         arr[i][j] = int(arr[i][j]) - 1  # Convert to 0-based indexing
-            return arr  # TODO: might have to .T here (when changing in to_aperture_info())
+            return arr.T  # TODO: might have to undo .T here (when changing in to_aperture_info())
 
         return v
 
