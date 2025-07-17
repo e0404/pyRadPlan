@@ -27,8 +27,8 @@ def test_data_photons(test_data_photons_raw):
 
 
 @pytest.fixture
-def test_data_xia_seq(test_data_xia_seq_raw):
-    tmp = test_data_xia_seq_raw
+def test_data_engel_seq(test_data_engel_seq_raw):
+    tmp = test_data_engel_seq_raw
 
     pln = validate_pln(tmp["pln"])
     pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
@@ -40,6 +40,7 @@ def test_data_xia_seq(test_data_xia_seq_raw):
     stf = validate_stf(tmp["stf"])
     result = validate_result(tmp["resultGUI"])
     result_before_seq = validate_result(tmp["resultGUI_before_seq"])
+
     return pln, ct, cst, stf, dij_matRad, result, result_before_seq
 
 
@@ -57,6 +58,25 @@ def test_data_siochi_seq(test_data_siochi_seq_raw):
     stf = validate_stf(tmp["stf"])
     result = validate_result(tmp["resultGUI"])
     result_before_seq = validate_result(tmp["resultGUI_before_seq"])
+
+    return pln, ct, cst, stf, dij_matRad, result, result_before_seq
+
+
+@pytest.fixture
+def test_data_xia_seq(test_data_xia_seq_raw):
+    tmp = test_data_xia_seq_raw
+
+    pln = validate_pln(tmp["pln"])
+    pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
+    pln.prop_dose_calc["lateral_model"] = "single"
+
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    dij_matRad = validate_dij(tmp["dij"])
+    stf = validate_stf(tmp["stf"])
+    result = validate_result(tmp["resultGUI"])
+    result_before_seq = validate_result(tmp["resultGUI_before_seq"])
+
     return pln, ct, cst, stf, dij_matRad, result, result_before_seq
 
 

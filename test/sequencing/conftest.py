@@ -10,6 +10,19 @@ from pyRadPlan.result import validate_result
 
 
 @pytest.fixture
+def test_data_engel(test_data_engel_seq_raw):
+    pln_mat = validate_pln(test_data_engel_seq_raw["pln"])
+    stf_mat = validate_stf(test_data_engel_seq_raw["stf"])
+    dij_mat = validate_dij(test_data_engel_seq_raw["dij"])
+    ct_mat = validate_ct(test_data_engel_seq_raw["ct"])
+    cst_mat = validate_cst(test_data_engel_seq_raw["cst"], ct=ct_mat)
+    result_mat = validate_result(test_data_engel_seq_raw["resultGUI_before_seq"])
+    result_seq_mat = validate_result(test_data_engel_seq_raw["resultGUI"])
+
+    return pln_mat, stf_mat, dij_mat, ct_mat, cst_mat, result_mat, result_seq_mat
+
+
+@pytest.fixture
 def test_data_siochi(test_data_siochi_seq_raw):
     pln_mat = validate_pln(test_data_siochi_seq_raw["pln"])
     stf_mat = validate_stf(test_data_siochi_seq_raw["stf"])
