@@ -60,11 +60,11 @@ class PhotonSequencer(Sequencer):
             A dictionary containing the initialized fluence matrix and related parameters.
         """
         # Get ray positions
-        x_positions = np.array([ray.ray_pos_bev[0] for ray in beam.rays])
-        z_positions = np.array([ray.ray_pos_bev[2] for ray in beam.rays])
+        x_ray_pos = np.array([ray.ray_pos_bev[0] for ray in beam.rays])
+        z_ray_pos = np.array([ray.ray_pos_bev[2] for ray in beam.rays])
 
-        min_x, max_x = x_positions.min(), x_positions.max()
-        min_z, max_z = z_positions.min(), z_positions.max()
+        min_x, max_x = x_ray_pos.min(), x_ray_pos.max()
+        min_z, max_z = z_ray_pos.min(), z_ray_pos.max()
 
         bixel_width = beam.bixel_width
         dim_of_fluence_mx_x = int((max_x - min_x) / bixel_width + 1)
@@ -72,12 +72,14 @@ class PhotonSequencer(Sequencer):
 
         # Create fluence matrix
         fluence_mx = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
-        x_pos = ((x_positions - min_x) / bixel_width).astype(int)
-        z_pos = ((z_positions - min_z) / bixel_width).astype(int)
+        x_ind_pos = ((x_ray_pos - min_x) / bixel_width).astype(int)
+        z_ind_pos = ((z_ray_pos - min_z) / bixel_width).astype(int)
 
+        # Compute indices:
+        indices = z_ind_pos * dim_of_fluence_mx_x + x_ind_pos
         # Create fluence_mx if w is given and called in sequener
         if w_of_curr_beams is not None:
-            for xp, zp, weight in zip(x_pos, z_pos, w_of_curr_beams):
+            for xp, zp, weight in zip(x_ind_pos, z_ind_pos, w_of_curr_beams):
                 fluence_mx[zp, xp] = weight
             cal_fac = np.max(fluence_mx)
             d_0 = np.round(fluence_mx / cal_fac * self.num_of_levels).astype(int)
@@ -88,31 +90,30 @@ class PhotonSequencer(Sequencer):
                 "cal_fac": cal_fac,
                 "d_0": d_0,
                 "d_k": d_k,
-                "dim_of_fluence_mx_x": dim_of_fluence_mx_x,
-                "dim_of_fluence_mx_z": dim_of_fluence_mx_z,
-                "x_pos": x_pos,
-                "z_pos": z_pos,
             }
         # else return ray_map
         else:
-            indices = z_pos * dim_of_fluence_mx_x + x_pos
             # Build ray map on the fluence grid
             ray_map = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
             # fill
             ray_map.flat[indices] = 1
             init_param = {
                 "ray_map": ray_map,
-                "indices": indices,
-                "dim_x": dim_of_fluence_mx_x,
-                "dim_z": dim_of_fluence_mx_z,
-                "x_positions": x_positions,
-                "z_positions": z_positions,
                 "min_x": min_x,
                 "max_x": max_x,
                 "min_z": min_z,
                 "max_z": max_z,
                 "bixel_width": bixel_width,
+                "x_ray_pos": x_ray_pos,
+                "z_ray_pos": z_ray_pos,
             }
+        init_param.update(
+            {
+                "indices": indices,
+                "dim_x": dim_of_fluence_mx_x,
+                "dim_z": dim_of_fluence_mx_z,
+            }
+        )
 
         return init_param
 
@@ -264,7 +265,7 @@ class PhotonSequencer(Sequencer):
             vector_offset += num_shapes * dim_z
 
             # Leaf pair positions and active leaf pairs
-            leaf_pair_pos = np.unique(init["z_positions"])
+            leaf_pair_pos = np.unique(init["z_ray_pos"])
             top_leaf_pair_pos = max_z
             bottom_leaf_pair_pos = min_z
             top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / bixel_width

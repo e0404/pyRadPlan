@@ -98,16 +98,16 @@ class XiaLeafSequencer(PhotonSequencer):
         self, result: PlanResult, stf: SteeringInformation, dij: Dij = None
     ) -> PlanResult:
         """
-        Execute the sequencing algorithm.
+        Execute the xia sequencing algorithm.
 
         Parameters
         ----------
-        result : object
-            The result object or dictionary to store sequencing results.
-        stf : object
-            The steering information structure.
-        dij : object
-            The dij matrix or related input.
+        result : PlanResult
+            The result object that contains fluence.
+        stf : SteeringInformation
+            The steering information containing the beams.
+        dij : Dij, optional
+            The dij structure with dose grid information.
 
         Returns
         -------
@@ -151,12 +151,10 @@ class XiaLeafSequencer(PhotonSequencer):
                 # Apply the appropriate technique
                 if self.mode == "reducing_levels":
                     opening_mx = self._apply_reducing_levels(
-                        opening_mx, d_k, tmp_fluence_dict["dim_of_fluence_mx_z"]
+                        opening_mx, d_k, tmp_fluence_dict["dim_z"]
                     )
                 elif self.mode == "sliding_window":
-                    opening_mx = self._apply_sliding_window(
-                        opening_mx, tmp_fluence_dict["dim_of_fluence_mx_z"]
-                    )
+                    opening_mx = self._apply_sliding_window(opening_mx, tmp_fluence_dict["dim_z"])
 
                 shape_k = opening_mx.astype(int) * d_k_value
 
@@ -166,12 +164,13 @@ class XiaLeafSequencer(PhotonSequencer):
                 d_k = d_k - shape_k
                 l_k = int(np.max(d_k))
 
-            shapes_arr = np.stack(shapes_list, axis=2)  # (Z, X, num_shapes)
+            shapes_arr = np.stack(shapes_list, axis=2)  # (dim_z, dim_x, num_shapes)
             shapes_w_arr = (
                 np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
             )
             num_shapes = shapes_arr.shape[2]
 
+            # Build beam sequencing structure
             beam_sequencing = {
                 "num_of_shapes": num_shapes,
                 "shapes": shapes_arr,
@@ -179,28 +178,34 @@ class XiaLeafSequencer(PhotonSequencer):
                 "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
                 "fluence": d_0,
             }
-            sequencing["beam"].append(beam_sequencing)
+
+            # Compute the summed weighted shape for the beam.
+            beam_sum = np.zeros((tmp_fluence_dict["dim_z"], tmp_fluence_dict["dim_x"]))
+            for j in range(num_shapes):
+                beam_sum += (
+                    beam_sequencing["shapes"][:, :, j] * beam_sequencing["shapes_weight"][j]
+                )
+            beam_sequencing["sum_shapes"] = beam_sum
 
             # Map fluence back to weights (using linear indices)
-            linear_indices = (
-                tmp_fluence_dict["z_pos"]
-                + tmp_fluence_dict["x_pos"] * tmp_fluence_dict["dim_of_fluence_mx_z"]
-            )
-            flat_d0 = d_0.flatten(order="F")
+            flat_d0 = d_0.flatten(order="C")
             sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
-                flat_d0[linear_indices] / self.num_of_levels * tmp_fluence_dict["cal_fac"]
+                flat_d0[tmp_fluence_dict["indices"]]
+                / self.num_of_levels
+                * tmp_fluence_dict["cal_fac"]
             )
 
+            sequencing["beam"].append(beam_sequencing)
             offset += num_of_rays_per_beam
 
-        # finalize sequencing result
+        # Finalize sequencing result
         result_tmp = result.model_dump()
         # Pop old quantities because they are no longer correct after sequencing.
         # TODO: might change this in the future. Keeping old quantities and passing new ones
         # to result.sequence
         result_tmp.pop("quantities", None)
         result_tmp.pop("beam_quantities", None)
-        # assign sequencing and merge aperture info without overwriting 'beam'
+        # we do this so that "beam" in aperture_info does not overwrite the beam in sequencing
         result_tmp["sequence"] = sequencing
         ap_info = self.sequencing_to_aperture_info(sequencing, stf)
         # merge per‐beam aperture info into each beam entry
@@ -211,11 +216,11 @@ class XiaLeafSequencer(PhotonSequencer):
             if key != "beam":
                 result_tmp["sequence"][key] = val
 
-        # Interpolate dose (placeholder implementation)
+        # Interpolate dose.
         if dij is not None:
             cubes = dij.compute_result_ct_grid(sequencing["fluence"])
 
         # if hasattr(result, 'w_dao'):
         #     pass
-
+        # TODO: Currently overwriting quantities in main result. In the future might need to update sequence
         return validate_result({**cubes, **result_tmp})

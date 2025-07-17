@@ -126,7 +126,7 @@ class SiochiLeafSequencer(PhotonSequencer):
         self, result: PlanResult, stf: SteeringInformation, dij: Dij = None
     ) -> PlanResult:
         """
-        Execute the Siochi leaf sequencing algorithm (without visualization).
+        Execute the Siochi leaf sequencing algorithm.
 
         Parameters
         ----------
@@ -156,11 +156,8 @@ class SiochiLeafSequencer(PhotonSequencer):
             tmp_fluence_dict = self._inititialize_beam_fluence_matrix(beam, w_of_curr_beam)
             dk = tmp_fluence_dict["d_k"]
             d0 = tmp_fluence_dict["d_0"]
-            dim_z = tmp_fluence_dict["dim_of_fluence_mx_z"]
-            dim_x = tmp_fluence_dict["dim_of_fluence_mx_x"]
-
-            # Compute index mapping for fluence matrix
-            ind_in_fluence_mx = tmp_fluence_dict["z_pos"] + tmp_fluence_dict["x_pos"] * dim_z
+            dim_z = tmp_fluence_dict["dim_z"]
+            dim_x = tmp_fluence_dict["dim_x"]
 
             # Decompose port (rod-pushing)
             tops, bases = self._decompose_port(dk, dim_z, dim_x)
@@ -204,10 +201,11 @@ class SiochiLeafSequencer(PhotonSequencer):
                     beam_sequencing["shapes"][:, :, j] * beam_sequencing["shapes_weight"][j]
                 )
             beam_sequencing["sum_shapes"] = beam_sum
+
             # Map summed shapes back into a fluence vector using the computed indices.
             sequencing["fluence"][offset : offset + num_of_rays_per_beam] = beam_sum.ravel(
-                order="F"
-            )[ind_in_fluence_mx]
+                order="C"
+            )[tmp_fluence_dict["indices"]]
 
             sequencing["beam"].append(beam_sequencing)
             offset += num_of_rays_per_beam
