@@ -7,11 +7,10 @@ from ._siochi_leaf_sequencing import SiochiLeafSequencer
 from ._xia_leaf_sequencing import XiaLeafSequencer
 from ._factory import get_available_sequencers, get_sequencer_from_pln, register_sequencer
 
-# Register sequencers in alphabetical order
+# Register sequencers
+register_sequencer(EngelLeafSequencer)
 register_sequencer(SiochiLeafSequencer)
 register_sequencer(XiaLeafSequencer)
-# TODO: register EngelLeafSequencer once implemented
-# register_sequencer(EngelLeafSequencer)
 
 __all__ = [
     "EngelLeafSequencer",
