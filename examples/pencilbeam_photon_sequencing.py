@@ -107,9 +107,6 @@ result_sequenced = run_sequencing(deepcopy(result), pln, stf, dij=dij)
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))
 
-a = sitk.GetArrayFromImage(result.physical_dose.values)
-b = sitk.GetArrayFromImage(result_sequenced.physical_dose.values)
-diff = a - b
 # Lets first visualize the original dose
 plot_slice(
     ct=ct,
