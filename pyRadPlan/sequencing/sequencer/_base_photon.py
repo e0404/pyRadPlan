@@ -377,6 +377,58 @@ class PhotonSequencer(Sequencer):
 
         return aperture_vec, mapping_mx, lim_mx
 
+    def _build_beam_sequencing(
+        self,
+        shapes_list: list,
+        shapes_weight_list: list,
+        tmp_fluence_dict: dict,
+        offset: int,
+        num_of_rays_per_beam: int,
+    ) -> dict:
+        """
+        Build the sequencing structure for a single beam.
+
+        Parameters
+        ----------
+        shapes_list : list
+            List of shape matrices.
+        shapes_weight_list : list
+            List of shape weights.
+        tmp_fluence_dict : dict
+            Dictionary containing fluence matrix information.
+        offset : int
+            Current bixel offset.
+        num_of_rays_per_beam : int
+            Number of rays in the current beam.
+
+        Returns
+        -------
+        dict
+            Beam sequencing dictionary.
+        """
+        shapes_arr = np.stack(shapes_list, axis=2)  # (dim_z, dim_x, num_shapes)
+        shapes_w_arr = (
+            np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
+        )
+        num_shapes = shapes_arr.shape[2]
+
+        # Beam sequencing structure
+        beam_sequencing = {
+            "num_of_shapes": num_shapes,
+            "shapes": shapes_arr,
+            "shapes_weight": shapes_w_arr,
+            "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
+            "fluence": tmp_fluence_dict["d_0"],
+        }
+
+        # Compute the summed weighted shape for the beam
+        beam_sum = np.zeros((tmp_fluence_dict["dim_z"], tmp_fluence_dict["dim_x"]))
+        for j in range(num_shapes):
+            beam_sum += beam_sequencing["shapes"][:, :, j] * beam_sequencing["shapes_weight"][j]
+        beam_sequencing["sum_shapes"] = beam_sum
+
+        return beam_sequencing
+
     def sequencing_to_aperture_info(self, sequencing, stf: SteeringInformation) -> ApertureInfo:
         """
         Convert the sequencing result to an ApertureInfo object.

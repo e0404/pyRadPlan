@@ -178,34 +178,15 @@ class SiochiLeafSequencer(PhotonSequencer):
                 else:
                     shapes_weight_list[-1] += 1
 
-            # stack and weight
-            shapes_arr = np.stack(shapes_list, axis=2)  # (dim_z, dim_x, num_shapes)
-            shapes_w_arr = (
-                np.array(shapes_weight_list) / self.num_of_levels * tmp_fluence_dict["cal_fac"]
-            )
-            num_shapes = shapes_arr.shape[2]
-
             # Build beam sequencing structure
-            beam_sequencing = {
-                "num_of_shapes": num_shapes,
-                "shapes": shapes_arr,
-                "shapes_weight": shapes_w_arr,
-                "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
-                "fluence": d0,
-            }
-
-            # Compute the summed weighted shape for the beam.
-            beam_sum = np.zeros((dim_z, dim_x))
-            for j in range(num_shapes):
-                beam_sum += (
-                    beam_sequencing["shapes"][:, :, j] * beam_sequencing["shapes_weight"][j]
-                )
-            beam_sequencing["sum_shapes"] = beam_sum
+            beam_sequencing = self._build_beam_sequencing(
+                shapes_list, shapes_weight_list, tmp_fluence_dict, offset, num_of_rays_per_beam
+            )
 
             # Map summed shapes back into a fluence vector using the computed indices.
-            sequencing["fluence"][offset : offset + num_of_rays_per_beam] = beam_sum.ravel(
-                order="C"
-            )[tmp_fluence_dict["indices"]]
+            sequencing["fluence"][offset : offset + num_of_rays_per_beam] = beam_sequencing[
+                "sum_shapes"
+            ].ravel(order="C")[tmp_fluence_dict["indices"]]
 
             sequencing["beam"].append(beam_sequencing)
             offset += num_of_rays_per_beam
