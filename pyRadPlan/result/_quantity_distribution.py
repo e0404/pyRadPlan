@@ -48,61 +48,155 @@ class QuantityDistribution(PyRadPlanBaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_values(cls, data: Any, info: ValidationInfo) -> Any:
-        # Early return for values input (assuming values is defined/imported elsewhere)
+        """
+        Validate and convert input data to SimpleITK image format.
+
+        This method checks if the input data is in the correct format and
+        converts numpy arrays to SimpleITK images if necessary. It also applies
+        any specified image properties (origin, direction, spacing) to the
+        SimpleITK image.
+
+        Parameters
+        ----------
+        data : Any
+            The input data to be validated and converted.
+        info : ValidationInfo
+            Validation context information.
+
+        Returns
+        -------
+        Any
+            The validated and converted data.
+
+        Raises
+        ------
+        ValueError
+            If the values are not present or in unsupported format.
+        """
+        # Return QuantityDistribution objects unchanged
         if isinstance(data, QuantityDistribution):
             return data
 
-        values, data = cls._retrieve_data(data, info)
+        # Extract and process values from input data
+        values, processed_data = cls._extract_and_process_values(data, info)
+
+        # Update processed_data with converted values
+        processed_data["values"] = values
+
+        # Validate final format
+        cls._validate_sitk_format(processed_data)
+
+        # Apply image properties
+        cls._apply_image_properties(processed_data, values)
+
+        return processed_data
+
+    @classmethod
+    def _extract_and_process_values(
+        cls, data: Any, info: ValidationInfo
+    ) -> tuple[sitk.Image, dict]:
+        """Extract values from data and convert numpy arrays to SimpleITK images."""
+        values, processed_data = cls._retrieve_data(data, info)
+
         if isinstance(values, np.ndarray):
-            # Determine if a permutation is required (e.g. matRad data has 'valuesDim')
-            permute = data.get("valuesDim") or (
-                info.context and info.context.get("from_matRad", False)
-            )
-            if values.dtype == object:
-                values = sitk.JoinSeries(
-                    [
-                        sitk.GetImageFromArray(
-                            np.transpose(values[i], (2, 0, 1)) if permute else values[i],
-                            False,
-                        )
-                        for i in range(len(values))
-                    ]
+            values = cls._convert_numpy_to_sitk(processed_data, values, info)
+
+        return values, processed_data
+
+    @classmethod
+    def _convert_numpy_to_sitk(
+        cls, data: dict, values: np.ndarray, info: ValidationInfo
+    ) -> sitk.Image:
+        """Convert numpy array(s) to SimpleITK image(s)."""
+        # Determine if data needs axis permutation (matRad format)
+        should_permute = cls._should_permute_axes(data, info)
+
+        # Handle multiple scenarios (object array)
+        if values.dtype == object:
+            return cls._convert_multiple_scenarios(values, should_permute)
+
+        # Handle single scenario
+        return cls._convert_single_scenario(values, should_permute)
+
+    @classmethod
+    def _should_permute_axes(cls, data: dict, info: ValidationInfo) -> bool:
+        """Determine if axis permutation is required for matRad data."""
+        return data.get("valuesDim") or (info.context and info.context.get("from_matRad", False))
+
+    @classmethod
+    def _convert_multiple_scenarios(cls, values: np.ndarray, should_permute: bool) -> sitk.Image:
+        """Convert multiple scenarios to joined SimpleITK image."""
+        return sitk.JoinSeries(
+            [
+                sitk.GetImageFromArray(
+                    np.transpose(values[i], (2, 0, 1)) if should_permute else values[i],
+                    False,
                 )
-            else:
-                arr = np.transpose(values, (2, 0, 1)) if permute else values
-                values = sitk.GetImageFromArray(arr, False)
+                for i in range(len(values))
+            ]
+        )
 
-        # Save the result under the key used in this model
-        data["values"] = values
+    @classmethod
+    def _convert_single_scenario(cls, values: np.ndarray, should_permute: bool) -> sitk.Image:
+        """Convert single scenario to SimpleITK image."""
+        arr = np.transpose(values, (2, 0, 1)) if should_permute else values
+        return sitk.GetImageFromArray(arr, False)
 
-        # Validate that the values is indeed a SimpleITK image.
+    @classmethod
+    def _validate_sitk_format(cls, data: dict) -> None:
+        """Validate that values is a SimpleITK image."""
         if not isinstance(data["values"], sitk.Image):
             raise ValueError(f"Unsupported format of HU values: {type(data['values'])}")
 
+    @classmethod
+    def _apply_image_properties(cls, data: dict, values: sitk.Image) -> None:
+        """Apply origin, direction, and spacing properties to the SimpleITK image."""
         is4d = values.GetDimension() == 4
 
-        # Set image origin if available from the dictionary.
-        if "origin" in data:
-            data["values"].SetOrigin(data["origin"])
-        elif all(key in data for key in ("x", "y", "z")):
-            origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
-            if is4d:
-                origin = np.append(origin, [0.0])
-            data["values"].SetOrigin(origin)
+        # Apply origin (with two different strategies)
+        cls._apply_origin(data, is4d)
 
-        # Set direction if provided.
+        # Apply direction
         if "direction" in data:
             data["values"].SetDirection(data["direction"])
 
-        # Set spacing (resolution) if available.
-        if "resolution" in data and all(k in data["resolution"] for k in ("x", "y", "z")):
-            res = data["resolution"]
-            spacing = (
-                [res["x"], res["y"], res["z"], 1.0] if is4d else [res["x"], res["y"], res["z"]]
-            )
-            data["values"].SetSpacing(spacing)
+        # Apply spacing from resolution
+        cls._apply_spacing(data, is4d)
 
-        return data
+    @classmethod
+    def _apply_origin(cls, data: dict, is4d: bool) -> None:
+        """Apply origin to the SimpleITK image using two different strategies."""
+        if "origin" in data:
+            # Strategy 1: Use explicitly provided origin
+            data["values"].SetOrigin(data["origin"])
+        elif all(key in data for key in ("x", "y", "z")):
+            # Strategy 2: Calculate origin from x, y, z coordinate vectors
+            cls._apply_origin_from_coordinate_vectors(data, is4d)
+
+    @classmethod
+    def _apply_origin_from_coordinate_vectors(cls, data: dict, is4d: bool) -> None:
+        """Calculate and apply origin from x, y, z coordinate vectors."""
+        origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
+        if is4d:
+            origin = np.append(origin, [0.0])
+        data["values"].SetOrigin(origin)
+
+    @classmethod
+    def _apply_spacing(cls, data: dict, is4d: bool) -> None:
+        """Apply spacing from resolution data."""
+        if "resolution" not in data:
+            return
+
+        resolution = data["resolution"]
+        if not all(k in resolution for k in ("x", "y", "z")):
+            return
+
+        spacing = (
+            [resolution["x"], resolution["y"], resolution["z"], 1.0]
+            if is4d
+            else [resolution["x"], resolution["y"], resolution["z"]]
+        )
+        data["values"].SetSpacing(spacing)
 
     @computed_field
     @property
