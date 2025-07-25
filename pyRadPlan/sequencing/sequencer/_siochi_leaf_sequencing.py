@@ -1,4 +1,25 @@
-"""Class for Siochi-Leaf-Sequencing."""
+"""Multi-leaf collimator leaf sequencing using the Siochi algorithm.
+
+Implements the Siochi (1999) leaf sequencing optimization algorithm that minimizes
+delivery time for static intensity-modulated radiation therapy (IMRT) fields.
+The algorithm uses an "intensity solid paradigm" with rod-pushing techniques
+and includes corrections for leaf collision constraints and tongue-and-groove effects.
+
+References
+----------
+.. [1] Siochi, R. A. C. (1999). Minimizing static intensity modulation delivery
+       time using an intensity solid paradigm. International Journal of Radiation
+       Oncology*Biology*Physics, 43(3), 671-680.
+       https://doi.org/10.1016/S0360-3016(98)00430-1
+.. [2] matRad development team. matRad - An open source multi-modality
+       radiation treatment planning system. https://github.com/e0404/matRad
+
+Notes
+-----
+The algorithm creates segment sets through intensity map operations subject to
+physical constraints, evaluates delivery times, and selects the optimal configuration.
+Includes tongue-and-groove underdosage removal and minimal leakage.
+"""
 
 import logging
 
@@ -155,7 +176,7 @@ class SiochiLeafSequencer(PhotonSequencer):
 
             tmp_fluence_dict = self._inititialize_beam_fluence_matrix(beam, w_of_curr_beam)
             dk = tmp_fluence_dict["d_k"]
-            d0 = tmp_fluence_dict["d_0"]
+            # d0 = tmp_fluence_dict["d_0"]
             dim_z = tmp_fluence_dict["dim_z"]
             dim_x = tmp_fluence_dict["dim_x"]
 

@@ -1,4 +1,24 @@
-"""Class for Xia-Leaf-Sequencing."""
+"""Multi-leaf collimator leaf sequencing using the Xia algorithm.
+
+Implements the Xia & Verhey (1998) leaf sequencing algorithm for intensity-modulated
+radiation therapy (IMRT) using the "stop and shoot" method with static multileaf
+collimator (MLC) segments. The algorithm minimizes the number of required segments
+by using a power-of-2 intensity sequence and optimizing leaf positions to irradiate
+the largest possible area in each segment.
+
+References
+----------
+.. [1] Xia, P., & Verhey, L. J. (1998). Multileaf collimator leaf sequencing
+       algorithm for intensity modulated beams with multiple static segments.
+       Medical Physics, 25(8), 1424-1434. https://doi.org/10.1118/1.598315
+.. [2] matRad development team. matRad - An open source multi-modality
+       radiation treatment planning system. https://github.com/e0404/matRad
+
+Notes
+-----
+Supports both "reducing levels" and "sliding window" techniques for MLC
+systems with different motion constraints.
+"""
 
 import logging
 

@@ -1,4 +1,22 @@
-"""Class for Engel-Leaf-Sequencing."""
+"""Multi-leaf collimator leaf sequencing using the Engel algorithm.
+
+Multileaf collimator leaf sequencing algorithm
+for intensity modulated beams with multiple static segments according
+to Engel et al. 2005 Discrete Applied Mathematics.
+
+References
+----------
+.. [1] Engel, K. (2005). A new algorithm for optimal multileaf collimator
+       field segmentation. Discrete Applied Mathematics, 152(1-3), 35-51.
+       https://doi.org/10.1016/j.dam.2004.10.007
+.. [2] matRad development team. matRad - An open source multi-modality
+       radiation treatment planning system. https://github.com/e0404/matRad
+
+Notes
+-----
+The algorithm processes each beam individually, calculating intervals
+and their potentials to determine optimal leaf positions for each segment.
+"""
 
 import logging
 
