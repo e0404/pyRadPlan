@@ -50,10 +50,7 @@ class CT(PyRadPlanBaseModel, ABC):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_cube_hu(
-        cls,
-        data: Any,
-    ) -> Any:
+    def validate_cube_hu(cls, data: Any) -> Any:
         """
         Validate and convert input data to SimpleITK image format.
 
@@ -77,93 +74,160 @@ class CT(PyRadPlanBaseModel, ABC):
         ValueError
             If the HU cube is not present in the input dictionary.
         """
-
+        # Return CT objects unchanged
         if isinstance(data, CT):
             return data
 
-        if isinstance(data, dict):  # check if data is dict
-            # Check if the cube is contained in the data (either as field name or its alias)
-            cube_hu = data.get("cube_hu", None)
-            if cube_hu is None:
-                cube_fieldname = cls.model_fields.get("cube_hu").validation_alias
-                cube_hu = data.pop(cube_fieldname, None)
+        # Process dictionary input
+        if not isinstance(data, dict):
+            return data
 
-            if cube_hu is None:
-                raise ValueError("HU cube not present in dictionary.")
+        # Extract cube_hu from data using field name or alias
+        cube_hu = cls._extract_cube_hu(data)
 
-            if isinstance(cube_hu, sitk.Image) and "origin" not in data:
-                data["origin"] = cube_hu.GetOrigin()
+        # Auto-extract origin from SimpleITK images if not provided
+        cls._extract_origin_from_sitk_image(data, cube_hu)
 
-            if isinstance(cube_hu, np.ndarray):
-                # Now we do check if it is matRad data
-                if data.get("cubeDim", None) is not None:
-                    permute = True
-                else:
-                    permute = False
+        # Make sure that we have a SimpleITK image
+        if isinstance(cube_hu, np.ndarray):
+            cube_hu = cls._convert_numpy_to_sitk(data, cube_hu)
 
-                # We have an array of multiple CT scenarios as numpy arrays
-                if cube_hu.dtype == object:
-                    num_cubes = len(cube_hu)
+        # Update data with processed cube_hu
+        data["cube_hu"] = cube_hu
 
-                    # If there are multiple cubes, we need to store them in a list
-                    # for later use
+        # Validate final format (if some other type than numpy/sitk is provided)
+        cls._validate_sitk_format(data)
 
-                    if permute:
-                        ct_scenarios = [
-                            sitk.GetImageFromArray(np.transpose(cube_hu[i], (2, 0, 1)), False)
-                            for i in range(num_cubes)
-                        ]
-                    else:
-                        ct_scenarios = [
-                            sitk.GetImageFromArray(cube_hu[i], False) for i in range(num_cubes)
-                        ]
+        # Apply image properties
+        cls._apply_image_properties(data, cube_hu)
 
-                    cube_hu = sitk.JoinSeries(ct_scenarios)
-                else:
-                    if permute:
-                        cube_hu = sitk.GetImageFromArray(np.transpose(cube_hu, (2, 0, 1)), False)
-                    else:
-                        cube_hu = sitk.GetImageFromArray(cube_hu, False)
-                    num_cubes = 1
-
-            # Reassign the updated cube_hu to the data dictionary
-            data["cube_hu"] = cube_hu
-
-            # From here on we want an sitk.Image
-            if not isinstance(data["cube_hu"], sitk.Image):
-                raise ValueError(f"Unsupported format of HU cube: {type(data['cube_hu'])}")
-
-            is4d = cube_hu.GetDimension() == 4
-            # Now we parse the rest of the data if additional data is available in the dictionary
-
-            if "direction" in data:
-                data["cube_hu"].SetDirection(data["direction"])
-
-            if "resolution" in data and all(key in data["resolution"] for key in ("x", "y", "z")):
-                resolution = data["resolution"]
-                if cube_hu.GetDimension() == 4:
-                    cube_hu.SetSpacing([resolution["x"], resolution["y"], resolution["z"], 1.0])
-                else:
-                    cube_hu.SetSpacing([resolution["x"], resolution["y"], resolution["z"]])
-
-            # TODO: Either set up a Grid or check for x/y/z to do the data management
-            if "origin" in data:
-                data["cube_hu"].SetOrigin(data["origin"])
-            elif all(key in data for key in ("x", "y", "z")):
-                # If x, y, z are present, we set the origin to the first voxel
-                origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
-                if is4d:
-                    origin = np.append(origin, [0.0])
-                data["cube_hu"].SetOrigin(origin)
-            else:
-                data["cube_hu"].SetOrigin(
-                    -np.array(data["cube_hu"].GetSize())
-                    / 2.0
-                    * np.array(data["cube_hu"].GetSpacing())
-                )
-                if is4d:
-                    data["cube_hu"].SetOrigin(np.append(data["cube_hu"].GetOrigin(), [0.0]))
         return data
+
+    @classmethod
+    def _extract_cube_hu(cls, data: dict) -> Any:
+        """Extract cube_hu from data dictionary using field name or alias."""
+        cube_hu = data.get("cube_hu", None)
+        if cube_hu is None:
+            cube_fieldname = cls.model_fields.get("cube_hu").validation_alias
+            cube_hu = data.pop(cube_fieldname, None)
+
+        if cube_hu is None:
+            raise ValueError("HU cube not present in dictionary.")
+
+        return cube_hu
+
+    @classmethod
+    def _extract_origin_from_sitk_image(cls, data: dict, cube_hu: Any) -> None:
+        """Extract origin from SimpleITK image if not already provided."""
+        if isinstance(cube_hu, sitk.Image) and "origin" not in data:
+            data["origin"] = cube_hu.GetOrigin()
+
+    @classmethod
+    def _convert_numpy_to_sitk(cls, data: dict, cube_hu: np.ndarray) -> sitk.Image:
+        """Convert numpy array(s) to SimpleITK image(s)."""
+        # Determine if data needs axis permutation (matRad format)
+        should_permute = data.get("cubeDim", None) is not None
+
+        # Handle multiple CT scenarios (object array)
+        if cube_hu.dtype == object:
+            return cls._convert_multiple_scenarios(cube_hu, should_permute)
+
+        # Handle single CT scenario
+        return cls._convert_single_scenario(cube_hu, should_permute)
+
+    @classmethod
+    def _convert_multiple_scenarios(cls, cube_hu: np.ndarray, should_permute: bool) -> sitk.Image:
+        """Convert multiple CT scenarios to joined SimpleITK image."""
+        num_cubes = len(cube_hu)
+
+        if should_permute:
+            ct_scenarios = [
+                sitk.GetImageFromArray(np.transpose(cube_hu[i], (2, 0, 1)), False)
+                for i in range(num_cubes)
+            ]
+        else:
+            ct_scenarios = [sitk.GetImageFromArray(cube_hu[i], False) for i in range(num_cubes)]
+
+        return sitk.JoinSeries(ct_scenarios)
+
+    @classmethod
+    def _convert_single_scenario(cls, cube_hu: np.ndarray, should_permute: bool) -> sitk.Image:
+        """Convert single CT scenario to SimpleITK image."""
+        if should_permute:
+            return sitk.GetImageFromArray(np.transpose(cube_hu, (2, 0, 1)), False)
+        else:
+            return sitk.GetImageFromArray(cube_hu, False)
+
+    @classmethod
+    def _validate_sitk_format(cls, data: dict) -> None:
+        """Validate that cube_hu is a SimpleITK image."""
+        if not isinstance(data["cube_hu"], sitk.Image):
+            raise ValueError(f"Unsupported format of HU cube: {type(data['cube_hu'])}")
+
+    @classmethod
+    def _apply_image_properties(cls, data: dict, cube_hu: sitk.Image) -> None:
+        """Apply direction, spacing, and origin properties to the SimpleITK image."""
+        is4d = cube_hu.GetDimension() == 4
+
+        # Apply direction
+        if "direction" in data:
+            data["cube_hu"].SetDirection(data["direction"])
+
+        # Apply spacing from resolution
+        cls._apply_spacing(data, cube_hu, is4d)
+
+        # Apply origin (with three different strategies)
+        cls._apply_origin(data, cube_hu, is4d)
+
+    @classmethod
+    def _apply_spacing(cls, data: dict, cube_hu: sitk.Image, is4d: bool) -> None:
+        """Apply spacing from resolution data."""
+        if "resolution" not in data:
+            return
+
+        resolution = data["resolution"]
+        if not all(key in resolution for key in ("x", "y", "z")):
+            return
+
+        if is4d:
+            spacing = [resolution["x"], resolution["y"], resolution["z"], 1.0]
+        else:
+            spacing = [resolution["x"], resolution["y"], resolution["z"]]
+
+        cube_hu.SetSpacing(spacing)
+
+    @classmethod
+    def _apply_origin(cls, data: dict, cube_hu: sitk.Image, is4d: bool) -> None:
+        """Apply origin to the SimpleITK image using three different strategies."""
+        if "origin" in data:
+            # Strategy 1: Use explicitly provided origin
+            data["cube_hu"].SetOrigin(data["origin"])
+        elif all(key in data for key in ("x", "y", "z")):
+            # Strategy 2: Calculate origin from x, y, z coordinate vectors
+            cls._apply_origin_from_coordinate_vectors(data, is4d)
+        else:
+            # Strategy 3: Calculate centered origin based on image geometry
+            cls._apply_centered_origin(data, is4d)
+
+    @classmethod
+    def _apply_origin_from_coordinate_vectors(cls, data: dict, is4d: bool) -> None:
+        """Calculate and apply origin from x, y, z coordinate vectors."""
+        origin = np.array([data["x"][0], data["y"][0], data["z"][0]], dtype=float)
+        if is4d:
+            origin = np.append(origin, [0.0])
+        data["cube_hu"].SetOrigin(origin)
+
+    @classmethod
+    def _apply_centered_origin(cls, data: dict, is4d: bool) -> None:
+        """Calculate and apply centered origin based on image geometry."""
+        centered_origin = (
+            -np.array(data["cube_hu"].GetSize()) / 2.0 * np.array(data["cube_hu"].GetSpacing())
+        )
+
+        if is4d:
+            centered_origin = np.append(centered_origin, [0.0])
+
+        data["cube_hu"].SetOrigin(centered_origin)
 
     @computed_field
     @property

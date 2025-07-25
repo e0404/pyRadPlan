@@ -92,6 +92,7 @@ class PlanningProblem(ABC):
     def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
         """
         Assign properties from a Plan object to the Planning Problem.
+
         This function will check if a property exists for the PlanningProblem
         and, if yes, set it.
 

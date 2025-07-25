@@ -61,7 +61,7 @@ def get_available_engines(pln: Union[Plan, dict[str]]) -> dict[str, Type[DoseEng
 
 def get_engine(pln: Union[Plan, dict]) -> DoseEngineBase:
     """
-    Factory function to get the appropriate engine based on the plan.
+    Get the appropriate engine based on the plan.
 
     Parameters
     ----------

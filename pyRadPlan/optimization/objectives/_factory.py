@@ -56,7 +56,7 @@ def get_available_objectives() -> dict[str, Type[Objective]]:
 
 def get_objective(objective_desc: Union[str, dict, Objective]):
     """
-    Returns a objective instance based on a descriptive parameter.
+    Return a objective instance based on a descriptive parameter.
 
     Parameters
     ----------

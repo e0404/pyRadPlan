@@ -1,12 +1,5 @@
 import pytest
-import sys
 
-if sys.version_info < (3, 10):
-    import importlib_resources as resources  # Backport for older versions
-else:
-    from importlib import resources  # Standard from Python 3.9+
-
-import pymatreader
 import numpy as np
 
 from pyRadPlan.ct import validate_ct
@@ -156,13 +149,11 @@ def test_create_stf_from_stf(sample_stf_snake):
         assert all(isinstance(ray.beamlets, list) for ray in beam.rays)
 
 
-def test_stfgen_to_stf():
-    files = resources.files("pyRadPlan.data.phantoms")
-    path = files.joinpath("TG119.mat")
-    tmp = pymatreader.read_mat(path)
+def test_stfgen_to_stf(tg119_raw):
+    ct_raw, cst_raw = tg119_raw
 
-    ct = validate_ct(tmp["ct"])
-    cst = validate_cst(tmp["cst"], ct=ct)
+    ct = validate_ct(ct_raw)
+    cst = validate_cst(cst_raw, ct=ct)
     pln = IonPlan(radiation_mode="protons", machine="Generic")
 
     stfgen = StfGeneratorIMPT(pln)
@@ -183,26 +174,16 @@ def test_stfgen_to_stf():
         assert all(isinstance(ray.beamlets, list) for ray in beam.rays)
 
 
-def test_from_and_to_matrad():
-    # from scipy.io import savemat
-
-    files = resources.files("pyRadPlan.data.stf")
-    path = files.joinpath("matRad_stf.mat")
-    path_export = files.joinpath("export_stf.mat")
-    matRad_file = pymatreader.read_mat(path)
-    stf_from_matRad = create_stf(matRad_file)
+def test_from_and_to_matrad(test_data_stf_n_beams_raw):
+    stf_from_matRad = create_stf(test_data_stf_n_beams_raw)
     stf_to_matrad = stf_from_matRad.to_matrad()
 
     assert isinstance(stf_to_matrad, np.recarray)
-    # savemat(path_export, stf_to_matrad, format='5', oned_as='column')
 
 
-def test_from_matlab_one_beam():
-    # Special case of one beam since pymatreader handles 1D arrays differently
-    files = resources.files("pyRadPlan.data.stf")
-    path = files.joinpath("matRad_stf_onebeam.mat")
-    matRad_file = pymatreader.read_mat(path)
-    stf_from_matRad = create_stf(matRad_file)
+def test_from_matlab_one_beam(test_data_stf_one_beam_raw):
+    """Special case of one beam since pymatreader handles 1D arrays differently"""
+    stf_from_matRad = create_stf(test_data_stf_one_beam_raw)
     assert stf_from_matRad.beams[0].gantry_angle == 0
     assert stf_from_matRad is not None
 
@@ -213,11 +194,8 @@ def test_from_matlab_one_beam():
     assert stf_from_matRad.bixel_index_per_beam_map.size == stf_from_matRad.total_number_of_bixels
 
 
-def test_from_matlab_multi_beam():
-    files = resources.files("pyRadPlan.data.stf")
-    path = files.joinpath("matRad_stf.mat")
-    matRad_file = pymatreader.read_mat(path)
-    stf_from_matRad = create_stf(matRad_file)
+def test_from_matlab_multi_beam(test_data_stf_n_beams_raw):
+    stf_from_matRad = create_stf(test_data_stf_n_beams_raw)
     assert stf_from_matRad.beams[0].gantry_angle == 0
     assert stf_from_matRad is not None
 

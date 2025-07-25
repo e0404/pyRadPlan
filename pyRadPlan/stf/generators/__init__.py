@@ -1,4 +1,4 @@
-"""Module providing the geometry / stf generators."""
+"""Beam geometry and steering information generators."""
 
 from ._base import StfGeneratorBase
 from ._externalbeam import StfGeneratorExternalBeamRayBixel, StfGeneratorExternalBeam

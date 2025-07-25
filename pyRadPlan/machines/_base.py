@@ -14,8 +14,10 @@ from pyRadPlan.core import PyRadPlanBaseModel
 
 
 class Machine(PyRadPlanBaseModel):
-    """Base class for Machine objects
-    Defines minimum meta-data a machine must hold:
+    """
+    Base class for Machine objects.
+
+    Defines minimum meta-data a machine must hold.
 
     Attributes
     ----------
@@ -77,9 +79,7 @@ class ExternalBeamMachine(Machine):
     @model_validator(mode="before")
     @classmethod
     def validate_machine_input(cls, data: Any) -> Any:
-        """Validate the input data for the machine model before passing to
-        pydantic.
-        """
+        """Validate the input data for the machine model before passing to pydantic."""
         if isinstance(data, dict):
             if "meta" in data and "data" in data:
                 # looks like we loaded a matRad machine from a mat file

@@ -1,3 +1,5 @@
+"""Treatment machines and beam models."""
+
 from ._base import Machine, ExternalBeamMachine
 from ._photons import PhotonLINAC, PhotonSVDKernel
 from ._ions import IonAccelerator, IonPencilBeamKernel, LateralCutOff

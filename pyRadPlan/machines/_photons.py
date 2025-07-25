@@ -105,7 +105,9 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
 
 
 class PhotonLINAC(ExternalBeamMachine):
-    """Base class for Machine objects
+    """
+    Base Class for Photon LINAC-like Machines.
+
     Defines minimum meta-data a photon LINAC machine must hold
     Provides multiple data storage formats, currently supported
     - SVD Kernel Data (Bortfeld 1993, 10.1118/1.597070).

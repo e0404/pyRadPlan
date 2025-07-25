@@ -2,7 +2,12 @@
 
 from typing import Any, Union
 from typing_extensions import Self
-from pydantic import Field, model_validator
+from pydantic import (
+    Field,
+    model_validator,
+    ValidationInfo,
+)
+
 
 import numpy as np
 from scipy import ndimage
@@ -18,6 +23,108 @@ class StructureSet(PyRadPlanBaseModel):
 
     vois: list[VOI] = Field(init=False, description="List of VOIs in the Structure Set")
     ct_image: CT = Field(init=False, description="Reference to the CT Image")
+
+    @classmethod
+    def _process_matrad_data(cls, data: list, info: ValidationInfo) -> dict:
+        """Handle data coming from matRad."""
+        # If the data is from matRad, we need to handle the beam quantities differently.
+        # The keys are usually named with a "_beam" suffix.
+        voi_list = []
+        cst_data = data["vois"]
+        ct = data["ct_image"]
+
+        def get_idx_list(vdata_item):
+            # Wrap a single array into a list if needed
+            arr = vdata_item[3]
+            # return only one scenario (3D) else: Multi-Scenario (4D)
+            return (
+                [arr.astype(int).tolist()]
+                if not isinstance(arr, list)
+                else [a.astype(int).tolist() for a in arr]
+            )
+
+        def create_mask(idx):
+            # Create the ITK mask for a given index list.
+            tmp_mask = np.zeros((ct.size[2], ct.size[0], ct.size[1]), dtype=np.uint8)
+            tmp_mask.flat[np.asarray(idx) - 1] = 1
+            tmp_mask = np.swapaxes(tmp_mask, 1, 2)
+            mask_image = sitk.GetImageFromArray(tmp_mask)
+            mask_image.CopyInformation(ct.cube_hu)
+            return mask_image
+
+        for vdata in cst_data:
+            idx_list = get_idx_list(vdata)
+            masks = [create_mask(idx) for idx in idx_list]
+
+            # For 4D, we need to join the masks. We also check here if the number of masks we could
+            # extract matches the number of dimensions in the CT image
+            dim = ct.cube_hu.GetDimension()
+            if dim == 4:
+                # First check if the mask is the same for all 4D scenarios
+                if len(masks) == 1:
+                    masks = [masks[0]] * dim
+                # Now do a sanity check that we don't have an incompatible number of masks
+                if len(masks) != ct.cube_hu.GetSize()[3]:
+                    raise ValueError("Incompatible number of masks for 4D CT")
+                masks = sitk.JoinSeries(*masks)
+            # If it is a 3D CT, we just drop the list
+            elif dim == 3:
+                masks = masks[0]
+            else:
+                raise ValueError("Sanity Check failed -- unsupported CT dimensionality")
+
+            # Check Objectives
+            objectives = vdata[5] if len(vdata) > 5 else []
+            if not isinstance(objectives, list):
+                objectives = [objectives]
+
+            voi = validate_voi(
+                name=str(vdata[1]),
+                voi_type=str(vdata[2]),
+                mask=masks,
+                ct_image=ct,
+                objectives=objectives,
+            )
+            voi_list.append(voi)
+
+        return {"vois": voi_list, "ct_image": ct}
+
+    @model_validator(mode="before")
+    @classmethod
+    def aggregate_dynamic_quantities(cls, data: Any, info: ValidationInfo) -> Any:
+        # Validate required keys.
+        # Not needed since pydantic validation will take care of this.
+        # But error prompt is in more detail.
+        if data.get("vois") is None:
+            raise ValueError("No cst provided. Please provide a cst.")
+        if data.get("ct_image") is None:
+            raise ValueError("No reference CT provided. Please provide a CT.")
+
+        data["ct_image"] = validate_ct(data["ct_image"])
+
+        # Handle the case where vois is supplied as a dict.
+        if isinstance(data["vois"], dict):
+            ct_from_vois = data["vois"].pop("ct_image", data["vois"].pop("ctImage", None))
+            if ct_from_vois is not None and ct_from_vois != data["ct_image"]:
+                raise ValueError("CT image mismatch between StructureSet and provided CT")
+            return data
+
+        # Convert ndarray to list if needed.
+        # needed for matRad cell array
+        if isinstance(data["vois"], np.ndarray):
+            data["vois"] = data["vois"].tolist()
+
+        # If vois is a list and not already a list of VOI dicts, process it
+        # -> assume matrad data
+        if (
+            isinstance(data["vois"], list)
+            and data["vois"]
+            and not isinstance(data["vois"][0], dict)
+            and not all(isinstance(i, VOI) for i in data["vois"])
+        ):
+            data = cls._process_matrad_data(data, info)
+
+        return data
 
     @model_validator(mode="after")
     def check_cst(self) -> Self:
@@ -106,9 +213,7 @@ class StructureSet(PyRadPlanBaseModel):
         return np.unique(np.concatenate(patient_indices))
 
     def patient_mask(self) -> sitk.Image:
-        """Return the union mask of all patient contours (or the EXTERNAL
-        contour if provided).
-        """
+        """Return the union mask of all patient contours (or the EXTERNAL contour if provided)."""
 
         patient_indices = self.patient_voxels(order="numpy")
 
@@ -226,109 +331,16 @@ def create_cst(
         A StructureSet object created from the input data or keyword arguments.
     """
 
-    # Check if already a valid model
     if isinstance(cst_data, StructureSet):
-        if ct is not None and cst_data.ct_image != ct:
+        if ct and cst_data.ct_image != validate_ct(ct):
             raise ValueError("CT image mismatch between StructureSet and provided CT")
         return cst_data
-
-    # validate ct if present
-    if ct is not None:
-        ct = validate_ct(ct)
-
-    # If already a model dictionary check the ct setup
-    if isinstance(cst_data, dict):
-        ct_image = cst_data.pop("ct_image", cst_data.pop("ctImage", None))
-        if ct_image is not None:
-            cst_data["ct_image"] = ct_image
-            if ct is not None and ct != ct_image:
-                raise ValueError("CT image mismatch between StructureSet and provided CT")
-        elif ct is not None:
-            cst_data["ct_image"] = ct
-        else:
-            raise ValueError("No CT image reference provided!")
-        return StructureSet.model_validate(cst_data)
-
-    if cst_data is None and ct is not None:  # If data is None
-        return StructureSet(ct_image=ct, **kwargs)
-    if cst_data is None and ct is None:
-        return StructureSet(**kwargs)
-
-    # Other methods need the CT
-    if ct is None:
-        raise ValueError("No CT image reference provided!")
-
-    # Creation from an nd array (cell array matRad format)
-    if isinstance(cst_data, np.ndarray) and cst_data.dtype == object:
-        cst_data = cst_data.to_list()
-
-    # a list of volume information (e.g. imported from pymatreader from matRad mat file)
-    if isinstance(cst_data, list):
-        voi_list = []
-        for vdata in cst_data:
-            # First try to read the index lists
-            idx_list = []
-            # Only one scenario (3D CT)
-            if not isinstance(vdata[3], list):
-                idx_list.append(vdata[3].astype(int).tolist())
-            # Multiple scenarios (4D CT)
-            else:
-                for vdata_scen in vdata[3]:
-                    idx_list.append(vdata_scen.astype(int).tolist())
-
-            # Now we create isimple ITK masks
-            masks = []
-            for idx in idx_list:
-                # TODO: Check index ordering
-                tmp_mask = np.zeros((ct.size[2], ct.size[0], ct.size[1]), dtype=np.uint8)
-                tmp_mask.flat[np.asarray(idx) - 1] = 1
-                tmp_mask = np.swapaxes(tmp_mask, 1, 2)
-                mask_image = sitk.GetImageFromArray(tmp_mask)
-                mask_image.CopyInformation(ct.cube_hu)
-
-                masks.append(mask_image)
-
-            # For 4D, we need to join the masks. We also check here if the number of masks we could
-            # extract matches the number of dimensions in the CT image
-            if ct.cube_hu.GetDimension() == 4:
-                # First check if the mask is the same for all 4D scenarios
-                if len(masks) == 1:
-                    masks = [masks[0] for _ in range(ct.cube_hu.GetDimension())]
-
-                # Now do a sanity check that we don't have an incompatible number of masks
-                if len(masks) != ct.cube_hu.GetSize()[3]:
-                    raise ValueError("Incompatible number of masks for 4D CT")
-
-                masks = sitk.JoinSeries(*masks)
-
-            # If it is a 3D CT, we just drop the list
-            elif ct.cube_hu.GetDimension() == 3:
-                masks = masks[0]
-            else:
-                raise ValueError("Sanity Check failed -- unsupported CT dimensionality")
-
-            # Check Objectives
-            if len(vdata) > 5:
-                objectives = vdata[5]
-                if not isinstance(objectives, list):
-                    objectives = [objectives]
-            else:
-                objectives = []
-
-            voi = validate_voi(
-                name=str(vdata[1]),
-                voi_type=str(vdata[2]),
-                mask=masks,
-                ct_image=ct,
-                objectives=objectives,
-            )
-
-            voi_list.append(voi)
-
-        cst_dict = {"vois": voi_list, "ct_image": ct}
-        return StructureSet.model_validate(cst_dict)
-
-    raise ValueError("Invalid input data for creating a StructureSet.")
+    elif isinstance(cst_data, dict):
+        cst_data.update(kwargs)
+        cst_data["ct_image"] = ct
+    else:
+        cst_data = {"vois": cst_data, "ct_image": ct, **kwargs}
+    return StructureSet(**cst_data)
 
 
 def validate_cst(

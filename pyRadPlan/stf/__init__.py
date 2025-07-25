@@ -1,4 +1,4 @@
-"""Provides classes and methods for creating irradiation geometries (stf)."""
+"""Beam configurations and irradiation geometries."""
 
 from .generators import get_available_generators, get_generator, register_generator
 from ._steeringinformation import SteeringInformation, create_stf, validate_stf

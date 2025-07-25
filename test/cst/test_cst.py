@@ -19,21 +19,51 @@ from pyRadPlan.cst import (
     Target,
     OAR,
 )
+# @pytest.fixture
+# def sample_ct():
+#     image = sitk.GetImageFromArray(np.random.rand(5, 15, 25) * 1000)  # Random HU values
+#     image.SetOrigin((0, 0, 0))
+#     image.SetSpacing((2, 3, 4))  # Irregular spacing for test
+#     image.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
+
+#     ct = CT(cube_hu=image)
+
+#     return ct
 
 
 def test_cst_from_matrad_mat_file(matrad_import):
     ct = create_ct(matrad_import["ct"])
     cst = create_cst(matrad_import["cst"], ct=ct)
-    assert isinstance(cst, StructureSet)
 
+    assert isinstance(cst, StructureSet)
+    assert isinstance(cst.ct_image, CT)
+    assert cst.ct_image.cube_hu.GetSize() == (167, 167, 129)
+    assert all(isinstance(voi, (Target, OAR, ExternalVOI, HelperVOI)) for voi in cst.vois)
+    assert cst.vois[0].name == "Core"
+    assert cst.vois[1].name == "OuterTarget"
+    assert cst.vois[2].name == "BODY"
     cst = validate_cst(matrad_import["cst"], ct=ct)
     assert isinstance(cst, StructureSet)
+    assert isinstance(cst.ct_image, CT)
+    assert cst.ct_image.cube_hu.GetSize() == (167, 167, 129)
+    assert all(isinstance(voi, (Target, OAR, ExternalVOI, HelperVOI)) for voi in cst.vois)
+    assert cst.vois[0].name == "Core"
+    assert cst.vois[1].name == "OuterTarget"
+    assert cst.vois[2].name == "BODY"
 
     with pytest.raises(ValueError):
         cst = create_cst(matrad_import["cst"])
 
     with pytest.raises(ValueError):
         cst = validate_cst(matrad_import["cst"])
+
+
+# TODO: Operator to return "False" for different CTs is not implemented correctly yet
+# def test_different_ct(matrad_import, sample_ct):
+#     ct = create_ct(matrad_import["ct"])
+#     cst = validate_cst(matrad_import["cst"], ct=ct)
+#     with pytest.raises(ValueError):
+#         cst_fail = create_cst(cst, ct=sample_ct)
 
 
 def test_cst_to_matrad(matrad_import, tmpdir):

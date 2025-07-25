@@ -66,7 +66,7 @@ def get_available_problems(
 
 def get_problem(problem_desc: Union[str, dict, PlanningProblem]) -> Type[PlanningProblem]:
     """
-    Returns a problem instance based on a descriptive parameter.
+    Return a problem instance based on a descriptive parameter.
 
     Parameters
     ----------
@@ -95,7 +95,7 @@ def get_problem(problem_desc: Union[str, dict, PlanningProblem]) -> Type[Plannin
 
 def get_problem_from_pln(pln: Union[Plan, dict]) -> Type[PlanningProblem]:
     """
-    Factory function to get the appropriate problem based on the plan.
+    Get the appropriate problem based on the plan.
 
     Parameters
     ----------

@@ -49,7 +49,7 @@ def get_available_solvers() -> dict[str, Type[SolverBase]]:
 
 def get_solver(solver_desc: Union[str, dict, SolverBase]):
     """
-    Returns a solver instance based on a descriptive parameter.
+    Return a solver instance based on a descriptive parameter.
 
     Parameters
     ----------
