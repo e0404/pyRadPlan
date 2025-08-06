@@ -10,7 +10,7 @@ import scipy.sparse as sp
 
 
 def dl2ld(dict_of_lists: dict[str, list], type_check: bool = True) -> list[dict]:
-    """Converts a dictionary of lists to a list of dictionaries.
+    """Convert a dictionary of lists to a list of dictionaries.
 
     Parameters
     ----------
@@ -47,7 +47,7 @@ def dl2ld(dict_of_lists: dict[str, list], type_check: bool = True) -> list[dict]
 
 
 def ld2dl(list_of_dicts: list[dict], type_check: bool = True) -> dict[str, list]:
-    """Converts a list of dictionaries to a dictionary of lists.
+    """Convert a list of dictionaries to a dictionary of lists.
 
     Parameters
     ----------
@@ -86,7 +86,7 @@ def models2recarray(
     override_types: dict = None,
     by_alias: bool = False,
 ) -> np.recarray:
-    """Converts a list of PyRadPlanBaseModel instances to a numpy recarray.
+    """Convert a list of PyRadPlanBaseModel instances to a numpy recarray.
 
     Parameters
     ----------
@@ -215,7 +215,7 @@ def swap_orientation_sparse_matrix(
     sparse_matrix: sp.csc_matrix, original_shape, axes
 ) -> sp.csc_matrix:
     """
-    Swaps the specified axes of a sparse matrix.
+    Swap the specified axes of a sparse matrix.
 
     Parameters
     ----------

@@ -1,3 +1,5 @@
+"""MatRad engine interfaces for MATLAB and Octave."""
+
 from ._matlab import MatRadEngineMatlab
 from ._octave import MatRadEngineOctave
 from ._engine import MatRadEngine

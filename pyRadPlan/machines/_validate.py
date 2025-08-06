@@ -5,7 +5,7 @@ from pyRadPlan.machines import Machine, PhotonLINAC, IonAccelerator
 
 def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs) -> Machine:
     """
-    Factory function to create a Machine object.
+    Create a Machine object.
 
     Parameters
     ----------

@@ -41,3 +41,17 @@ def test_data_carbon_raw():
     path = "test/data/carbon_testData.mat"
     tmp = pymatreader.read_mat(path)
     return tmp
+
+
+@pytest.fixture
+def test_data_stf_one_beam_raw():
+    path = "test/data/stf/stf_test_data_one_beam.mat"
+    tmp = pymatreader.read_mat(path)
+    return tmp
+
+
+@pytest.fixture
+def test_data_stf_n_beams_raw():
+    path = "test/data/stf/stf_test_data_n_beams.mat"
+    tmp = pymatreader.read_mat(path)
+    return tmp

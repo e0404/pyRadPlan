@@ -1,3 +1,5 @@
+"""Dose calculation engines and algorithms."""
+
 from ._base import DoseEngineBase
 from ._svdpb import PhotonPencilBeamSVDEngine
 from ._hongpb import ParticleHongPencilBeamEngine

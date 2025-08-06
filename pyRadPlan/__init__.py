@@ -1,4 +1,28 @@
-"""pyRadPlan is a Python package for radiation therapy treatment planning."""  # noqa: N999
+"""
+Python package for radiation therapy treatment planning.
+
+We recommend reading the documentation on `GitHub <https://github.com/e0404/pyRadPlan>`_.
+
+This package provides
+- Core classes and functions for treatment planning.
+- Dose influence matrix calculations and data structures.
+- Physical and biological quantities for treatment planning.
+- Optimization and analysis tools for radiation therapy plans.
+- Sequencing and visualization tools for radiation therapy plans.
+
+Import packages as follows:
+
+    from pyRadPlan import (
+        load_tg119,
+        PhotonPlan,
+        generate_stf,
+        calc_dose_influence,
+        fluence_optimization,
+        plot_slice,
+    )
+
+Use the documentation, docstrings or examples for a detailed overview.
+"""
 
 from importlib.metadata import version, PackageNotFoundError
 import logging

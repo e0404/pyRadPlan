@@ -1,4 +1,4 @@
-"""Core module with fundamental classes and functions for pyRadPlan."""
+"""Core classes and functions for pyRadPlan."""
 
 from ._exceptions import PyRadPlanError
 from .datamodel import PyRadPlanBaseModel
