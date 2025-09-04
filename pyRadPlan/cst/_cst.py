@@ -38,7 +38,7 @@ class StructureSet(PyRadPlanBaseModel):
             arr = vdata_item[3]
             # return only one scenario (3D) else: Multi-Scenario (4D)
             return (
-                [arr.astype(int).tolist()]
+                [np.asarray(arr.astype(int).tolist())]
                 if not isinstance(arr, list)
                 else [a.astype(int).tolist() for a in arr]
             )
