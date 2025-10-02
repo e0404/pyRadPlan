@@ -70,10 +70,18 @@ class Objective(PyRadPlanBaseModel):
         Weight/Priority assigned to the objective function.
     quantity : str
         The quantity this objective is connected to (e.g. 'physical_dose', 'RBExDose').
+    is_linear : bool
+        bool to indicate if the objective is linear.
+    is_convex : bool
+        bool to indicate if the objective is convex.
     """
 
     name: ClassVar[str]
     has_hessian: ClassVar[bool] = False
+
+    is_linear: ClassVar[bool] = False
+    is_convex: ClassVar[bool] = True
+
     priority: float = Field(default=1.0, ge=0.0, alias="penalty")
     quantity: str = Field(default="physical_dose")
 

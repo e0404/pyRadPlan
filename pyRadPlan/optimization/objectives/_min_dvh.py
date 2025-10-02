@@ -22,7 +22,8 @@ class MinDVH(Objective):
     """
 
     name = "Min DVH"
-
+    is_convex = False
+    is_linear = True
     d: Annotated[float, Field(default=30.0, ge=0.0), ParameterMetadata(kind="reference")]
     v_min: Annotated[
         float, Field(default=95.0, ge=0.0, le=100.0), ParameterMetadata(kind="relative_volume")
