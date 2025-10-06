@@ -1,6 +1,5 @@
 """
-Example of importing a patient from a MatRad file and visualizing the CT,
-VOIs with matplotlib.
+Example of importing a patient from a MatRad file and visualizing the CT, VOIs with matplotlib.
 
 Also produces a simple beam configuration and visualizes the resulting radiological depth cubes by
 calling the RayTracer.
