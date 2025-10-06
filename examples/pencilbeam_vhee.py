@@ -11,7 +11,7 @@
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/pencilbeam_proton.py
+# jupytext --to notebook path/to/this/file/pencilbeam_vhee.py
 
 # %%
 # Import necessary libraries
