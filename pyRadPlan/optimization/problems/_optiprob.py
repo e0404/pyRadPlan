@@ -46,7 +46,14 @@ class PlanningProblem(ABC):
     # Constant, Abstract properties are realized as ClassVars
     short_name: ClassVar[str]
     name: ClassVar[str]
-    possible_radiation_modes: list[str] = ["photons", "protons", "helium", "carbon", "oxygen"]
+    possible_radiation_modes: list[str] = [
+        "photons",
+        "protons",
+        "helium",
+        "carbon",
+        "oxygen",
+        "VHEE",
+    ]
 
     apply_overlap: bool
     solver: Union[str, dict, SolverBase]

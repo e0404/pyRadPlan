@@ -30,10 +30,10 @@ class Grid(PyRadPlanBaseModel):
 
     resolution: dict[str, float]
     dimensions: tuple[int, int, int]
-    origin: NDArray[Shape["3"], np.floating] = Field(
+    origin: NDArray[Shape["3"], np.float64] = Field(
         default=np.array([0.0, 0.0, 0.0], dtype=np.float64), alias="cubeCoordOffset"
     )
-    direction: NDArray[Shape["3,3"], np.floating] = Field(default=np.eye(3, dtype=np.float64))
+    direction: NDArray[Shape["3, 3"], np.float64] = Field(default=np.eye(3, dtype=np.float64))
 
     @computed_field(alias="numOfVoxels")
     @property

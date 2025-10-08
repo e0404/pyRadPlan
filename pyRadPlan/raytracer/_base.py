@@ -263,8 +263,31 @@ class RayTracerBase(ABC):
         for i, cube in enumerate(rad_depth_cubes):
             rel_depths = lengths * rho[i]
             rel_depths = np.cumsum(rel_depths, axis=1) - rel_depths / 2.0
-            ix_assign = np.unravel_index(ix[ix_remember_from_tracing], cube.shape, order="F")
-            cube[ix_assign] = rel_depths[ix_remember_from_tracing]
+
+            try:
+                ix_assign = np.unravel_index(ix[ix_remember_from_tracing], cube.shape, order="F")
+            except (ValueError, IndexError):
+                logger.error(
+                    "Error in unraveling indices from raytracing. Trying to recover...",
+                    exc_info=True,
+                )
+                tmp_ix = ix[ix_remember_from_tracing]
+                rel_depths = rel_depths[ix_remember_from_tracing]
+
+                wrong_values = np.logical_or(tmp_ix < 0, tmp_ix >= cube.size)
+                tmp_ix = tmp_ix[~wrong_values]
+                rel_depths = rel_depths[~wrong_values]
+
+                # Remove the wrong values
+                ix_assign = np.unravel_index(tmp_ix, cube.shape, order="F")
+                logger.info(
+                    "Recovered %d indices for radiological depth cube",
+                    np.count_nonzero(wrong_values),
+                )
+                cube[ix_assign] = rel_depths
+            else:
+                cube[ix_assign] = rel_depths[ix_remember_from_tracing]
+
             rad_depth_cubes[i] = sitk.GetImageFromArray(cube)
             rad_depth_cubes[i].CopyInformation(self.cubes[i])
 

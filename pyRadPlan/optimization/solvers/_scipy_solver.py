@@ -29,8 +29,9 @@ class OptimizerSciPy(NonLinearOptimizer):
 
     def __init__(self):
         self.options = {
-            "disp": False,
-            "ftol": 1e-4,
+            "disp": True,
+            "ftol": 1e-5,
+            "gtol": 1e-5,
         }
 
         self.method = "L-BFGS-B"

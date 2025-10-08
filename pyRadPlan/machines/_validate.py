@@ -1,61 +1,42 @@
 from typing import Any, Union
 
-from pyRadPlan.machines import Machine, PhotonLINAC, IonAccelerator
+from pyRadPlan.machines import Machine
+from pyRadPlan.machines.base import get_machine
 
 
-def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs) -> Machine:
-    """
-    Create a Machine object.
+def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs: Any) -> Machine:
+    """Create and validate a ``Machine`` instance.
 
     Parameters
     ----------
-    data : Union[Dict[str, Any], None]
-        Dictionary containing the data to create the Machine object.
+    data
+        A pre-existing ``Machine`` instance or a dictionary payload.
     **kwargs
-        Arbitrary keyword arguments.
-
-    Returns
-    -------
-    Machine
-        A Machine object.
-
-    Raises
-    ------
-    ValueError
-        If the machine can not be constructed.
+        Fallback keyword arguments (used only when ``data`` is not a dict) and to
+        supply ``radiation_mode`` when no dictionary is provided.
     """
 
-    if data:
-        # If data is already a Machine object, return it directly
-        if isinstance(data, Machine):
-            return data
+    # Fast path: already a Machine
+    if isinstance(data, Machine):
+        return data
 
-        # Now we check for a dictionary
-        if isinstance(data, dict):
-            metadata = data.get("meta")
+    radiation_mode = ""
 
-            if isinstance(metadata, dict):
-                # obtain the radiation mode if we have a dictionary at our hands
-                radiation_mode = metadata.get("radiation_mode")
+    if isinstance(data, dict):
+        meta = data.get("meta")
+        if not isinstance(meta, dict):
+            raise ValueError("Dictionary Structure of provided machine not valid!")
+        # Prefer snake_case if both present, fall back to camelCase.
+        radiation_mode = meta.get("radiation_mode") or meta.get("radiationMode") or ""
+    else:
+        # If something non-dict (but not None) was passed, it's invalid
+        if data is not None:
+            raise ValueError("Dictionary Structure of provided machine not valid!")
+        radiation_mode = kwargs.get("radiation_mode") or kwargs.get("radiationMode") or ""
 
-                # Since we also allow camelCase, try to get radiationMode
-                # if radiation_mode is not set
-                if radiation_mode is None:
-                    radiation_mode = metadata.get("radiationMode")
+    machine_cls = get_machine(radiation_mode)
+    if machine_cls is None:
+        raise ValueError(f"Could not resolve machine class for radiation_mode='{radiation_mode}'.")
 
-                if radiation_mode == "photons":
-                    return PhotonLINAC.model_validate(data)
-
-                if radiation_mode in ["protons", "helium", "carbon"]:
-                    return IonAccelerator.model_validate(data)
-
-        raise ValueError("Dictionary Structure of provided machine not valid!")
-
-    radiation_mode = kwargs.get("radiation_mode", "")
-    if radiation_mode == "photons":
-        return PhotonLINAC(**kwargs)
-
-    if radiation_mode in ["protons", "helium", "carbon"]:
-        return IonAccelerator(**kwargs)
-
-    raise ValueError(f"Unknown radiation mode: {radiation_mode}")
+    # Mirrors original behavior: pass through ``data`` (may be None) to model_validate
+    return machine_cls.model_validate(data)
