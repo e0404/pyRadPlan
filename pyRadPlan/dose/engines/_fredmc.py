@@ -881,7 +881,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         if self._calc_dose_direct:
             # Direct dose calculation
-            dij["physical_dose"] = np.expand_dims(self.dose_cube.flatten(), axis=1)
+            dij["physical_dose"].flat[0] = coo_matrix(self.dose_cube.reshape(-1, 1))
 
             if self.calc_let and self.let_cube is not None:
                 dij["mLETd"].flat[0] = coo_matrix(
