@@ -281,17 +281,22 @@ class StructureSet(PyRadPlanBaseModel):
         # sort by overlap priority
         ix_sorted = np.argsort(overlaps)
 
-        overlap_mask = self.vois[ix_sorted[0]].mask
+        overlap_mask = self.vois[ix_sorted[0]].mask  # Will aggregate the overlap masks using OR
+        last_priority_mask = sitk.Image(overlap_mask.GetSize(), overlap_mask.GetPixelID())
+        last_priority_mask.CopyInformation(overlap_mask)
+
         new_vois = [None] * len(self.vois)
-        new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].copy()
+        new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].model_copy()
 
         for i, ix_voi in enumerate(ix_sorted[1:], 1):
-            curr_voi = self.vois[ix_voi].copy()
+            curr_voi = self.vois[ix_voi].model_copy()
             curr_mask = curr_voi.mask
 
             # if the overlap prirority is higher than we need to apply overlap
-            if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
-                curr_mask = sitk.MaskNegated(curr_mask, overlap_mask)
+            if curr_voi.overlap_priority >= new_vois[ix_sorted[i - 1]].overlap_priority:
+                if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
+                    last_priority_mask = overlap_mask
+                curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
 
             curr_voi.mask = curr_mask
 

@@ -1,6 +1,9 @@
 """Provides basic classes for generating STF for ion beams."""
 
 import warnings
+import logging
+from typing import cast
+
 import numpy as np
 
 from pyRadPlan.raytracer import RayTracerSiddon
@@ -11,6 +14,8 @@ from .._rangeshifter import RangeShifter
 from .._beamlet import IonSpot
 from .._ray import Ray
 from ._externalbeam import StfGeneratorExternalBeamRayBixel
+
+logger = logging.getLogger(__name__)
 
 
 class StfGeneratorIonRayBixel(StfGeneratorExternalBeamRayBixel):
@@ -84,6 +89,12 @@ class StfGeneratorIonSingleSpot(StfGeneratorIonRayBixel):
     short_name = "ionSingleSpot"
     possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
 
+    fix_energy: float
+
+    def __init__(self, pln=None):
+        self.fix_energy = None
+        super().__init__(pln)
+
     def _generate_ray_positions_in_isocenter_plane(self, beam):
         """Generate the ray positions in the isocenter plane.
 
@@ -108,6 +119,37 @@ class StfGeneratorIonSingleSpot(StfGeneratorIonRayBixel):
         stf = super()._generate_source_geometry()
 
         return stf
+
+    def _create_rays(self, beam: dict) -> list[dict]:
+        ray = super()._create_rays(beam)
+
+        beamlets = []
+        tmp_machine = cast(IonAccelerator, self.machine)
+        closest_energy_ix = tmp_machine.get_closest_energy_index(self.fix_energy)
+        closest_energy = tmp_machine.energies[closest_energy_ix]
+        if closest_energy != self.fix_energy:
+            logger.info(
+                "No exact energy match for requested energy %f.Chose closest energy of %f.",
+                self.fix_energy,
+                closest_energy,
+            )
+        beamlet = IonSpot(
+            energy=closest_energy,
+        )
+
+        beamlets.append(beamlet)
+
+        target_point = 2 * (ray[0]["ray_pos"] - beam["source_point"]) + beam["source_point"]
+        target_points_bev = (
+            2 * (ray[0]["ray_pos_bev"] - beam["source_point_bev"]) + beam["source_point_bev"]
+        )
+        ray[0]["target_point"] = target_point
+        ray[0]["target_point_bev"] = target_points_bev
+
+        ray[0]["beamlets"] = beamlets
+        ray[0] = Ray.model_validate(ray[0])
+
+        return ray
 
 
 class StfGeneratorIMPT(StfGeneratorIonRayBixel):

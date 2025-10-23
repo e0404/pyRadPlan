@@ -173,9 +173,9 @@ class Dij(PyRadPlanBaseModel):
             )
         return v
 
-    @field_validator("beam_num", "ray_num", "bixel_num", mode="after")
+    @field_validator("beam_num", "ray_num", "bixel_num", mode="before")
     @classmethod
-    def validate_numbering_arrays(cls, v: np.ndarray, info: ValidationInfo) -> np.ndarray:
+    def validate_numbering_arrays(cls, v: Any, info: ValidationInfo) -> np.ndarray:
         """
         Validate the numbering arrays.
 
@@ -183,6 +183,8 @@ class Dij(PyRadPlanBaseModel):
         ------
             ValueError: inconsistent numbering arrays.
         """
+        if not isinstance(v, np.ndarray) and isinstance(v, int):
+            v = np.array([v])
         # Check if the numbering arrays have the correct shape
         if info.data.get("physical_dose") is not None:
             dij_matrices = cast(np.ndarray, info.data["physical_dose"])

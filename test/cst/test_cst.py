@@ -224,15 +224,16 @@ def generic_vois(generic_ct):
 
     voi1 = Target(name="CTV", mask=mask_image1, ct_image=generic_ct, overlap_priority=1)
     voi2 = Target(name="PTV", mask=mask_image2, ct_image=generic_ct, overlap_priority=2)
-    voi3 = OAR(name="OAR", mask=mask_image3, ct_image=generic_ct)
-    voi4 = ExternalVOI(name="BODY", mask=mask_image4, ct_image=generic_ct)
-    voi5 = HelperVOI(name="HELPER", mask=mask_image5, ct_image=generic_ct)
+    voi3 = OAR(name="OAR", mask=mask_image3, ct_image=generic_ct, overlap_priority=5)
+    voi4 = ExternalVOI(name="BODY", mask=mask_image4, ct_image=generic_ct, overlap_priority=10)
+    voi5 = HelperVOI(name="HELPER", mask=mask_image5, ct_image=generic_ct, overlap_priority=5)
 
     return [voi1, voi2, voi3, voi4, voi5]
 
 
 def test_apply_overlap_priorities(generic_ct, generic_vois):
     # Create a StructureSet with the VOIs
+
     structure_set = StructureSet(ct_image=generic_ct, vois=generic_vois)
 
     # Apply overlap priorities
@@ -250,19 +251,24 @@ def test_apply_overlap_priorities(generic_ct, generic_vois):
     expected_overlap_list = np.argsort(p)
 
     ol_mask = np.zeros(voi_mask[0].shape, dtype=bool)
+    or_mask = np.zeros(voi_mask[0].shape, dtype=bool)
+    last_priority = -1
 
     for expected in expected_overlap_list:
+        if p[expected] > last_priority:
+            ol_mask = or_mask.copy()
+            last_priority = p[expected]
+
         # the mask that the current voi should have
         assert (
             voi_mask_overlapped[expected][np.logical_and(voi_mask[expected] > 0, ~ol_mask)]
         ).all()
 
         # Accumulate the ol mask
-        ol_mask = ol_mask | voi_mask[expected] > 0
+        or_mask = or_mask | voi_mask[expected] > 0
 
         # we currently should be zero where overlapped
-        assert not (voi_mask_overlapped[expected][ol_mask] == 0).all()
-        # the accumulated ol mask
+        assert (voi_mask_overlapped[expected][ol_mask] == 0).all()
 
 
 def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):

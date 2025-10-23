@@ -201,10 +201,16 @@ class IonPlan(Plan):
         Returns the radiation mode as the ion type.
     """
 
-    available_radiation_modes: ClassVar[List[str]] = ["protons", "helium", "carbon", "oxygen"]
+    available_radiation_modes: ClassVar[List[str]] = [
+        "protons",
+        "helium",
+        "carbon",
+        "oxygen",
+        "VHEE",
+    ]
 
     radiation_mode: str = Field(
-        default="protons", pattern="^(protons|helium|carbon|oxygen)$", validate_default=True
+        default="protons", pattern="^(protons|helium|carbon|oxygen|VHEE)$", validate_default=True
     )
 
     @field_validator("radiation_mode", mode="after")
