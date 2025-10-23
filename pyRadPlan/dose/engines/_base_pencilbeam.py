@@ -183,9 +183,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         # Initialize Ray Geometry
                         curr_ray = self._init_ray(curr_beam, j)
 
+                        # Even if the ray hits nothing, we still emit empty bixel columns
+                        # so that CSC structures and bookkeeping stay consistent.
+                        # The following block might be re-enabled in future to skip empty rays.
+
                         # check if ray hit anything. If so, skip the computation
-                        if all(not arr.size for arr in curr_ray["rad_depths"]):
-                            continue
+                        # if all(not arr.size for arr in curr_ray["rad_depths"]):
+                        #     continue #continue
 
                         # TODO: incorporate scenarios correctly
                         for ct_scen in range(self.mult_scen.num_of_ct_scen):
@@ -458,10 +462,12 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         ray["ray_index"] = j
         ray["iso_center"] = beam_info["beam"]["iso_center"]
 
-        if "num_of_bixels_per_ray" not in beam_info["beam"]:
-            ray["num_of_bixels"] = 1
-        else:
+        if "num_of_bixels_per_ray" in beam_info["beam"]:
             ray["num_of_bixels"] = beam_info["beam"]["num_of_bixels_per_ray"][j]
+        else:
+            # Fallback: use the actual number of beamlets on this ray
+            # This is needed for machines like "Focused" that don't precompute counts.
+            ray["num_of_bixels"] = len(ray.get("beamlets", [])) or 0
 
         ray["source_point_bev"] = beam_info["beam"]["source_point_bev"]
         ray["sad"] = beam_info["beam"]["sad"]
@@ -713,59 +719,45 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         dict
             The updated dose influence matrix.
         """
-        # Only fill if we actually had bixel (indices) to compute
-        if bixel and "ix" in bixel and bixel["ix"].any():
-            sub_scen_idx = [
-                np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape)[i]
-                for i in range(self.mult_scen.scen_mask.ndim)
-            ]
-            sub_scen_idx = tuple(sub_scen_idx)
+        # Determine if we have entries to store for this bixel
+        ix_size = 0
+        if bixel and "ix" in bixel:
+            ix_val = bixel["ix"]
+            try:
+                ix_size = ix_val.size
+            except AttributeError:
+                ix_size = len(ix_val)
 
-            for q_name in self._computed_quantities:
-                if self._calc_dose_direct:
-                    # We accumulate the current bixel to the container
+        sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
+
+        for q_name in self._computed_quantities:
+            if self._calc_dose_direct:
+                if ix_size > 0:
                     dij[q_name][sub_scen_idx][bixel["ix"], curr_beam_idx] += (
                         bixel["weight"] * bixel[q_name]
                     )
-                else:
-                    # first we fill the index pointer array
-                    dij[q_name][sub_scen_idx]["indptr"][bixel_counter + 1] = (
-                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] + bixel["ix"].size
-                    )
+            else:
+                data_dict = dij[q_name][sub_scen_idx]
+                # Advance column pointer even when ix_size == 0 to keep CSC valid
+                start = data_dict["indptr"][bixel_counter]
+                end = start + ix_size
+                data_dict["indptr"][bixel_counter + 1] = end
 
-                    # If we haven't preallocated enough, we need to expand the arrays
-                    if (
-                        dij[q_name][sub_scen_idx]["data"].size
-                        < dij[q_name][sub_scen_idx]["nnz"] + bixel["ix"].size
-                    ):
+                if ix_size > 0:
+                    need_nnz = data_dict["nnz"] + ix_size
+                    if data_dict["data"].size < need_nnz:
                         logger.debug("Resizing data and indices arrays for %s...", q_name)
-
-                        # We estimate the required size by the remaining
-                        # number of beamlets / columns in the sparse matrix
-                        # 1 additional beamlet is added
-                        shape_resize = (self._num_of_columns_dij - bixel_counter) * (
-                            bixel["ix"].size + 1
+                        grow = max(
+                            ix_size, (self._num_of_columns_dij - bixel_counter) * (ix_size + 1)
                         )
-                        shape_resize += dij[q_name][sub_scen_idx]["data"].size
-                        dij[q_name][sub_scen_idx]["data"].resize((shape_resize,), refcheck=False)
-                        dij[q_name][sub_scen_idx]["indices"].resize(
-                            (shape_resize,), refcheck=False
-                        )
+                        new_size = data_dict["data"].size + grow
+                        data_dict["data"].resize((new_size,), refcheck=False)
+                        data_dict["indices"].resize((new_size,), refcheck=False)
 
-                    # Fill the corresponding values and indices using indptr
-                    dij[q_name][sub_scen_idx]["data"][
-                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] : dij[q_name][
-                            sub_scen_idx
-                        ]["indptr"][bixel_counter + 1]
-                    ] = bixel[q_name]
-                    dij[q_name][sub_scen_idx]["indices"][
-                        dij[q_name][sub_scen_idx]["indptr"][bixel_counter] : dij[q_name][
-                            sub_scen_idx
-                        ]["indptr"][bixel_counter + 1]
-                    ] = bixel["ix"]
-
-                    # Store how many nnzs we actually have in the matrix
-                    dij[q_name][sub_scen_idx]["nnz"] += bixel["ix"].size
+                    # Fill values and indices into the allocated slice
+                    data_dict["data"][start:end] = bixel[q_name]
+                    data_dict["indices"][start:end] = bixel["ix"]
+                    data_dict["nnz"] += ix_size
 
         # Bookkeeping of bixel numbers
         # remember beam and bixel number
@@ -886,6 +878,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Normalize the vector
         b = b / np.linalg.norm(b)
 
+        # Cross product
+        cross_ab = np.cross(a, b)
         # Define rotation matrix
         if np.all(a == b):
             rot_coords_temp = rot_coords_bev[rad_depth_ix, :]
@@ -897,10 +891,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
             derived_rot_mat = (
                 np.eye(3)
-                + ssc(np.cross(a, b))
-                + np.dot(ssc(np.cross(a, b)), ssc(np.cross(a, b)))
+                + ssc(cross_ab)
+                + np.dot(ssc(cross_ab), ssc(cross_ab))
                 * (1 - np.dot(a, b))
-                / (np.linalg.norm(np.cross(a, b)) ** 2)
+                / (np.linalg.norm(cross_ab) ** 2)
             )
             rot_coords_temp = np.dot(rot_coords_bev[rad_depth_ix, :], derived_rot_mat)
 

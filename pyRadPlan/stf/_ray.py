@@ -199,3 +199,12 @@ class Ray(PyRadPlanBaseModel):
             )
 
         return create_model("RayMatRadHelper", __base__=Ray, **prop_lambdas)
+
+    @property
+    def energies(self):
+        energies = []
+
+        for beamlet in enumerate(self.beamlets):
+            energies.append(beamlet[1].energy)
+
+        return np.unique(np.array(energies))
