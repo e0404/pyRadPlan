@@ -1,8 +1,8 @@
 """Dose uniformity."""
 
-from math import sqrt
-from numba import njit
-from numpy.typing import NDArray
+import array_api_compat
+
+from ...core.xp_utils.typing import Array
 
 from ._objective import Objective
 
@@ -12,25 +12,17 @@ class DoseUniformity(Objective):
 
     name = "Dose Uniformity"
 
-    def compute_objective(self, values):
-        return _compute_objective(values)
+    def compute_objective(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        return xp.std(values, correction=1)
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values)
-
-
-@njit
-def _compute_objective(dose: NDArray):
-    return sqrt(len(dose) / (len(dose) - 1)) * dose.std()
-
-
-@njit
-def _compute_gradient(dose: NDArray):
-    grad = dose - dose.mean()
-    std_val = dose.std()
-    if std_val > 0.0:
-        grad /= sqrt((len(dose) - 1) * len(dose)) * std_val
-    else:
-        grad.fill(0.0)
-
-    return grad
+    def compute_gradient(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        std_val = xp.std(values, correction=1)
+        if std_val > 0.0:
+            n = array_api_compat.size(values)
+            grad = values - xp.mean(values)
+            grad /= std_val * (n - 1)
+        else:
+            grad = xp.zeros_like(values)
+        return grad

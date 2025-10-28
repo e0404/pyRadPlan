@@ -1,5 +1,8 @@
 import pytest
-import numpy as np
+import array_api_strict as xp
+import array_api_compat
+import array_api_extra as xpx
+
 
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
 
@@ -19,21 +22,21 @@ def test_simple_problem_ipopt():
 
     # Define the problem
     def objective(x):
-        return float(x[0] ** 2 + x[1] ** 2)
+        return xp.sum(x**2)
 
     def gradient(x):
-        return np.asarray([2 * x[0], 2 * x[1]], dtype=np.float64)
+        return 2 * x
 
     solver.objective = objective
     solver.gradient = gradient
 
     # Initial guess
-    x0 = np.asarray([1.0, 1.0], dtype=np.float64)
+    x0 = xp.asarray([1.0, 1.0], dtype=xp.float64)
 
     # Solve
     result, status = solver.solve(x0)
 
-    assert isinstance(result, np.ndarray)
+    assert array_api_compat.array_namespace(result) is xp
     assert isinstance(status, int)
 
-    assert np.all(np.isclose(result, 0.0, atol=1e-4))
+    assert xp.all(xpx.isclose(result, 0.0, atol=1e-4))
