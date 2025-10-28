@@ -1,10 +1,12 @@
 """Squared Overdosing Objective."""
 
 from typing import Annotated
+
 from pydantic import Field
 
-from numba import njit
-from numpy import clip
+import array_api_compat
+
+from ...core.xp_utils.typing import Array
 
 from ._objective import Objective, ParameterMetadata
 
@@ -18,28 +20,20 @@ class SquaredOverdosing(Objective):
     Attributes
     ----------
     d_max : float
-        maximum dose value (above which we penalize)
+        maximum values value (above which we penalize)
     """
 
     name = "Squared Overdosing"
 
     d_max: Annotated[float, Field(default=30.0, ge=0.0), ParameterMetadata(kind="reference")]
 
-    def compute_objective(self, values):
-        return _compute_objective(values, self.d_max)
+    def compute_objective(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values, self.d_max)
+        return (overvalues @ overvalues) / array_api_compat.size(values)
 
-
-@njit
-def _compute_objective(dose, d_max):
-    overdose = clip(dose - d_max, a_min=0, a_max=None)
-
-    return (overdose @ overdose) / len(dose)
-
-
-@njit
-def _compute_gradient(dose, d_max):
-    overdose = clip(dose - d_max, a_min=0, a_max=None)
-    return 2.0 * overdose / len(overdose)
+    def compute_gradient(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
+        return 2.0 * overvalues / array_api_compat.size(overvalues)

@@ -23,6 +23,7 @@ def plot_slice(  # noqa: PLR0913
     save_filename: Optional[str] = None,
     show_plot: bool = True,
     use_global_max: bool = False,
+    ct_window: Optional[tuple[float, float]] = None,
 ):
     """Plot one or multiple slices of the CT with a given overlay.
 
@@ -65,6 +66,10 @@ def plot_slice(  # noqa: PLR0913
 
     if ct is None and cst is None:
         raise ValueError("Nothing to visualize!")
+
+    vmin, vmax = None, None
+    if ct_window is not None:
+        vmin, vmax = ct_window
 
     plane = {"axial": 0, "coronal": 1, "sagittal": 2}.get(plane, plane)
     if not isinstance(plane, int) or not 0 <= plane <= 2:
@@ -109,7 +114,7 @@ def plot_slice(  # noqa: PLR0913
 
         # Visualize the CT slice.
         if ct is not None:
-            ax.imshow(cube_hu[slice_indexing], cmap="gray")
+            ax.imshow(cube_hu[slice_indexing], cmap="gray", vmin=vmin, vmax=vmax)
 
         # Visualize the VOIs from the StructureSet.
         if cst is not None:

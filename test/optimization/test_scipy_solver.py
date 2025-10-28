@@ -1,4 +1,6 @@
-import numpy as np
+import array_api_strict as xp
+import array_api_compat
+import array_api_extra as xpx
 
 from pyRadPlan.optimization.solvers import get_solver, OptimizerSciPy, SolverBase
 
@@ -16,18 +18,18 @@ def test_simple_problem_scipy():
 
     # Define the problem
     def objective(x):
-        return x[0] ** 2 + x[1] ** 2
+        return xp.sum(x**2)
 
     def gradient(x):
-        return [2 * x[0], 2 * x[1]]
+        return 2 * x
 
     solver.objective = objective
     solver.gradient = gradient
 
     # Initial guess
-    x0 = [1.0, 1.0]
+    x0 = xp.asarray([1.0, 1.0], dtype=xp.float64)
 
     # Solve
     result = solver.solve(x0)
 
-    assert np.all(np.isclose(result[0], 0.0))
+    assert xp.all(xpx.isclose(result[0], 0.0))

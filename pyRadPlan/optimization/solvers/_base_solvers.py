@@ -3,8 +3,10 @@
 from typing import ClassVar, Callable
 from abc import ABC, abstractmethod
 
+from ...core.xp_utils.typing import Array
+
 import numpy as np
-from numpy.typing import ArrayLike
+# from numpy.typing import ArrayLike
 
 
 class SolverBase(ABC):
@@ -19,16 +21,17 @@ class SolverBase(ABC):
         Short name of the solver
     max_time : float, default=3600
         Maximum time for the solver to run in seconds
-    bounds : ArrayLike, default=[0.0, np.inf]
+    bounds : Array, default=[0.0, np.inf]
         Bounds for the variables
     """
 
     name = ClassVar[str]
     short_name = ClassVar[str]
+    gpu_compatible = ClassVar[bool]
 
     # properties
     max_time: float
-    bounds: ArrayLike
+    bounds: Array
 
     def __init__(self):
         self.max_time = 3600
@@ -38,18 +41,18 @@ class SolverBase(ABC):
         return f"Solver {self.name} ({self.short_name})"
 
     @abstractmethod
-    def solve(self, x0: ArrayLike) -> tuple[np.ndarray, dict]:
+    def solve(self, x0: Array) -> tuple[Array, dict]:
         """
         Interface method to solve the problem.
 
         Parameters
         ----------
-        x0 : ArrayLike
+        x0 : Array
             Initial guess for the solution
 
         Returns
         -------
-        tuple[np.ndarray, dict]
+        tuple[Array, dict]
             Solution vector and additional information as dictionary
         """
 

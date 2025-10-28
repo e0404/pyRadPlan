@@ -1,13 +1,29 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, Union
+
+import logging
 
 import numpy as np
-from numpy.typing import NDArray, ArrayLike
+import array_api_compat
+
+try:
+    import cupy as cp
+    import cupyx.scipy.sparse as cusparse
+except ImportError:
+    cp = None
+    cusparse = None
+
+from ..core.xp_utils.typing import Array, ArrayNamespace
+
+
 import pint
 
-from pyRadPlan.dij import Dij, validate_dij
+from pyRadPlan.dij import Dij
+from pyRadPlan.core import xp_utils as compute_backend
 
 ureg = pint.UnitRegistry()
+
+logger = logging.getLogger(__name__)
 
 
 class RTQuantity(ABC):
@@ -16,7 +32,7 @@ class RTQuantity(ABC):
     unit: ClassVar[pint.Unit]
     dim: ClassVar[int]  # To differentiate between scalar and vector quantities
 
-    scenarios: NDArray[np.int64]  # Scenarios the quantity is calculated / defined for
+    precision: str
 
     def __init__(self, scenarios=None):
         if scenarios is None:
@@ -27,26 +43,44 @@ class RTQuantity(ABC):
 class FluenceDependentQuantity(RTQuantity, ABC):
     """Base class for quantities that depend on fluence distributions."""
 
+    array_backend: ArrayNamespace
+
     def __init__(self, dij: Dij, **kwargs):
         super().__init__(**kwargs)
-        self._dij = validate_dij(dij)
 
-        # Initialize Caches
-        # Fluence cache for forward calculation
-        self._w_cache = np.nan * np.ones((self._dij.total_num_of_bixels), dtype=np.float64)
+        # TODO: This backend check and conversion should be a part of the dij
+        xp = compute_backend.choose_array_api_namespace()
+
+        influence_matrix = getattr(dij, self.identifier, None)
+        if influence_matrix is None:
+            raise ValueError(f"Influence matrix {self.identifier} not available in Dij object.")
+
+        self._dij = dij.to_namespace(xp)
+
+        try:
+            typename = getattr(self._dij, self.identifier).flat[0].dtype.name
+            self._dtype = getattr(xp, typename)
+        except AttributeError:
+            self._dtype = getattr(self._dij, self.identifier).flat[0].dtype
+
+        logger.info("Optimization uses array backend: %s", xp.__name__)
+
+        self.array_backend: ArrayNamespace = xp
+
         # Fluence cache for derivative calculation
-        self._w_grad_cache = self._w_cache.copy()
+        self._w_cache: Union[Array, None] = None
+        self._w_grad_cache: Union[Array, None] = None
         # Quantity vector cache
         self._q_cache = np.empty_like(getattr(self._dij, self.identifier), dtype=object)
         self._qgrad_cache = np.empty_like(self._q_cache)
 
-    def __call__(self, fluence: ArrayLike) -> NDArray:
+    def __call__(self, fluence: Array) -> Array:
         """
         Make the quantity callable by calling the compute method.
 
         Parameters
         ----------
-        fluence : ArrayLike
+        fluence : Array
             Fluence vector.
 
         Returns
@@ -57,7 +91,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self.compute(fluence)
 
-    def compute(self, fluence: ArrayLike) -> NDArray:
+    def compute(self, fluence: Array) -> Array:
         """
         Forward calculation of the quantity from the fluence.
 
@@ -72,15 +106,22 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             Quantity vector.
         """
 
-        _fluence = np.asarray(fluence)
+        xp = array_api_compat.array_namespace(fluence)
 
-        if not np.array_equal(self._w_cache, _fluence):
-            self._w_cache = _fluence.copy()
+        if not xp.isdtype(fluence.dtype, self._dtype):
+            fluence = xp.asarray(fluence, dtype=self._dtype)
+
+        # check if we need to update the cache
+        if self._w_cache is None or not xp.all(self._w_cache == fluence):
+            if self._w_cache is None:
+                self._w_cache = xp.asarray(fluence, copy=True)
+            else:
+                self._w_cache[:] = fluence
             self._compute_quantity_cache()
 
         return self._q_cache
 
-    def compute_chain_derivative(self, d_quantity: ArrayLike, fluence: ArrayLike) -> NDArray:
+    def compute_chain_derivative(self, d_quantity: Array, fluence: Array) -> Array:
         """
         Fluence Derivative of the quantity w.r.t. to the quantity derivative.
 
@@ -97,12 +138,17 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             Derivative of the quantity w.r.t. the fluence.
         """
 
-        _d_quantity = np.asarray(d_quantity)
-        _fluence = np.asarray(fluence)
+        xp = array_api_compat.array_namespace(d_quantity, fluence)
 
-        if not np.array_equal(self._w_grad_cache, _d_quantity):
-            self._w_grad_cache = _fluence.copy()
-            self._compute_chain_derivative_cache(_d_quantity)
+        if not xp.isdtype(fluence.dtype, self._dtype):
+            fluence = xp.asarray(fluence, dtype=self._dtype)
+
+        if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
+            if self._w_grad_cache is None:
+                self._w_grad_cache = xp.asarray(fluence, copy=True)
+            else:
+                self._w_grad_cache[:] = fluence
+            self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache
 
@@ -112,7 +158,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         Parameters
         ----------
-        fluence : NDArray
+        fluence : Array
             Fluence distribution.
         """
 
@@ -121,18 +167,18 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 scenario_index
             )
 
-    def _compute_chain_derivative_cache(self, d_quantity: NDArray) -> NDArray:
+    def _compute_chain_derivative_cache(self, d_quantity: Array) -> Array:
         """
         Protected interface for calculating the fluence derivative from quantity derivative.
 
         Parameters
         ----------
-        d_quantity : NDArray
+        d_quantity : Array
             Derivative w.r.t. to the quantity.
 
         Returns
         -------
-        NDArray
+        Array
             Derivative of the quantity w.r.t. the fluence.
         """
 
@@ -144,7 +190,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             )
 
     @abstractmethod
-    def _compute_quantity_single_scenario_from_cache(self, scenario_index: int) -> NDArray:
+    def _compute_quantity_single_scenario_from_cache(self, scenario_index: int) -> Array:
         """
         Calculate the quantity in a specific scenario.
 
@@ -155,26 +201,26 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         Returns
         -------
-        NDArray
+        Array
             Quantity in the scenario.
         """
 
     @abstractmethod
     def _compute_chained_fluence_gradient_single_scenario_from_cache(
-        self, d_quantity: NDArray, scenario_index: int
-    ) -> NDArray:
+        self, d_quantity: Array, scenario_index: int
+    ) -> Array:
         """
         Calculate the derivative of the quantity w.r.t. the fluence in a specific scenario.
 
         Parameters
         ----------
-        d_quantity : NDArray
+        d_quantity : Array
             Derivative w.r.t. to the quantity.
         scenario_index : int
             Scenario index.
 
         Returns
         -------
-        NDArray
+        Array
             Derivative of the quantity w.r.t. the fluence in the scenario.
         """

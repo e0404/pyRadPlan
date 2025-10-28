@@ -23,10 +23,14 @@ from pyRadPlan import (
     fluence_optimization,
     plot_slice,
     load_tg119,
+    xp_utils,
 )
 
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
+
+xp_utils.PREFER_GPU = True
+xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -39,6 +43,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
+pln.prop_dose_calc = {"dose_grid": ct.grid}
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
