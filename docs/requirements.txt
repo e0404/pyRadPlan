@@ -1,0 +1,6 @@
+numpydoc
+pydata-sphinx-theme
+sphinx-autodoc-typehints
+sphinx-design
+autodoc_pydantic
+sphinx-autodoc-typehints
