@@ -1,6 +1,7 @@
 """Contains the dij class as a (collection of) influence matrices."""
 
-from typing import Any, Union, Annotated, Optional, cast, Self
+from typing import Any, Union, Annotated, Optional, cast
+from typing_extensions import Self
 import logging
 
 from pydantic import (
