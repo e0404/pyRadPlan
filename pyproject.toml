@@ -31,20 +31,24 @@ maintainers = [
 
 description = "A python interface and reimplementation to matRad"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "scipy>=1.13.0",
-    "numpy>=1.26.0",
+    "scipy>=1.13.0,<1.16",
+    "numpy>=2.0,<2.3",
+    "array_api_compat",
+    "array_api_strict",
+    "array_api_extra",
+    "types-array-api",
     "pymatreader>=1.0.0",
     "h5py>=3.11.0",
     "regex>=2024.5.15",
     "pydicom>=2.4.4",
-    "numba>=0.60.0",
+    "numba>=0.61.0",
     "matplotlib>=3.9.2",
     "pydantic>=2.10,<2.11",
     "numpydantic>=1.6.0",

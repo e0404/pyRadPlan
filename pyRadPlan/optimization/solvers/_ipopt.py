@@ -6,12 +6,17 @@ Notes
 Not installed by default. Uses ipyopt because it provides linux wheels
 """
 
+from numpy.typing import NDArray
+
 from ipyopt import Problem
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+import array_api_compat
+
+from pyRadPlan.array_api.typing import Array
 
 from ._base_solvers import NonLinearOptimizer
+from ...core import xp_utils
 
 
 class OptimizerIpopt(NonLinearOptimizer):
@@ -26,6 +31,7 @@ class OptimizerIpopt(NonLinearOptimizer):
 
     name = "Interior Point Optimizer"
     short_name = "ipopt"
+    gpu_compatible = False
 
     options: dict[str]
 
@@ -58,7 +64,7 @@ class OptimizerIpopt(NonLinearOptimizer):
             "print_timing_statistics": "yes",
         }
 
-    def solve(self, x0: ArrayLike) -> tuple[np.ndarray, dict]:
+    def solve(self, x0: Array) -> tuple[Array, dict]:
         """
         Solve the problem.
 
@@ -80,13 +86,22 @@ class OptimizerIpopt(NonLinearOptimizer):
             }
         )
 
+        xp = array_api_compat.array_namespace(x0)
+
+        x0 = xp_utils.to_numpy(x0)
+
         x0 = np.asarray(x0)
 
         eval_jac_g_sparsity_indices = (np.array([]), np.array([]))
         eval_h_sparsity_indices = (np.array([]), np.array([]))
 
-        def ipopt_derivative(x: NDArray[np.float64], out: NDArray[np.float64]):
-            out[()] = self.gradient(x).astype(np.float64)
+        def ipopt_objective(x: Array):
+            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x)))
+
+        def ipopt_derivative(x: NDArray, out: Array) -> NDArray[np.float64]:
+            out[()] = xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x))).astype(
+                np.float64
+            )
             return out
 
         # Set the optimization function
@@ -99,7 +114,7 @@ class OptimizerIpopt(NonLinearOptimizer):
             g_u=np.empty((0,)),
             sparsity_indices_jac_g=eval_jac_g_sparsity_indices,
             sparsity_indices_h=eval_h_sparsity_indices,
-            eval_f=self.objective,
+            eval_f=ipopt_objective,
             eval_grad_f=ipopt_derivative,
             eval_g=lambda _x, _out: None,
             eval_jac_g=lambda _x, _out: None,
@@ -109,4 +124,4 @@ class OptimizerIpopt(NonLinearOptimizer):
 
         x, _, status = nlp.solve(x0=x0)
 
-        return x, status
+        return xp_utils.from_numpy(xp, x), status

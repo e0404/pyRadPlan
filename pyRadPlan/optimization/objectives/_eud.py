@@ -1,11 +1,12 @@
 """Equivalent uniform dose objective."""
 
 from typing import Annotated
+
 from pydantic import Field
 
-from numba import njit
-from numpy import sum as npsum
+import array_api_compat
 
+from ...core.xp_utils.typing import Array
 from ._objective import Objective, ParameterMetadata
 
 
@@ -25,26 +26,29 @@ class EUD(Objective):
 
     eud_ref: Annotated[float, Field(default=0.0, ge=0.0), ParameterMetadata(kind="reference")]
     k: Annotated[float, Field(default=1.0), ParameterMetadata()]
+    f_diff: Annotated[
+        str,
+        Field(default="quadratic", alias="f_\{diff\}"),
+        ParameterMetadata(kind=["linear", "quadratic"]),
+    ]
 
-    def compute_objective(self, values):
-        return _compute_objective(values, self.eud_ref, self.k)
+    def compute_objective(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        eud = (xp.sum(values ** (1 / self.k)) / array_api_compat.size(values)) ** self.k
+        if self.f_diff == "linear":
+            return xp.abs(eud - self.eud_ref)
+        else:
+            return (eud - self.eud_ref) ** 2
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values, self.eud_ref, self.k)
-
-
-@njit
-def _compute_objective(dose, eud_ref, eud_k):
-    eud = (npsum(dose ** (1 / eud_k)) / len(dose)) ** eud_k
-
-    return (eud - eud_ref) ** 2
-
-
-@njit
-def _compute_gradient(dose, eud_ref, eud_k):
-    eud = (npsum(dose ** (1 / eud_k)) / len(dose)) ** eud_k
-    eud_gradient = (
-        npsum(dose ** (1 / eud_k)) ** (eud_k - 1) * dose ** (1 / eud_k - 1) / (len(dose) ** eud_k)
-    )
-
-    return 2.0 * (eud - eud_ref) * eud_gradient
+    def compute_gradient(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        eud = (xp.sum(values ** (1 / self.k)) / array_api_compat.size(values)) ** self.k
+        eud_gradient = (
+            xp.sum(values ** (1 / self.k)) ** (self.k - 1)
+            * values ** (1 / self.k - 1)
+            / (array_api_compat.size(values) ** self.k)
+        )
+        if self.f_diff == "linear":
+            return xp.sign(eud - self.eud_ref) * eud_gradient
+        else:
+            return 2.0 * (eud - self.eud_ref) * eud_gradient

@@ -2,11 +2,15 @@
 
 from typing import Callable, Union
 
+import array_api_compat
 import numpy as np
-from numpy.typing import ArrayLike
+
+from ...core.xp_utils.typing import Array
+
 from scipy.optimize import minimize, Bounds
 
 from ._base_solvers import NonLinearOptimizer
+from ...core import xp_utils
 
 
 class OptimizerSciPy(NonLinearOptimizer):
@@ -23,6 +27,7 @@ class OptimizerSciPy(NonLinearOptimizer):
 
     name = "SciPy minimize"
     short_name = "scipy"
+    gpu_compatible = False
 
     options: dict[str]
     method: Union[str, Callable]
@@ -38,7 +43,7 @@ class OptimizerSciPy(NonLinearOptimizer):
 
         super().__init__()
 
-    def solve(self, x0: ArrayLike) -> tuple[np.ndarray, dict]:
+    def solve(self, x0: Array) -> tuple[Array, dict]:
         """
         Solve the problem.
 
@@ -54,16 +59,27 @@ class OptimizerSciPy(NonLinearOptimizer):
 
         self.options.update({"maxiter": self.max_iter})
 
-        x0 = np.asarray(x0)
+        if isinstance(x0, list):
+            x0 = np.asarray(x0)
 
-        bounds = Bounds(lb=self.bounds[0], ub=self.bounds[1])
+        xp = array_api_compat.array_namespace(x0)
+
+        x0 = xp_utils.to_numpy(x0)
+        bounds = [xp_utils.to_numpy(xp.asarray(b)) for b in self.bounds]
+        bounds = Bounds(lb=bounds[0], ub=bounds[1])
+
+        def scipy_objective(x: Array):
+            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x)))
+
+        def scipy_gradient(x: Array):
+            return xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x)))
 
         # Initialize the SciPy solution function and its arguments
         result = minimize(
             x0=x0,
-            fun=self.objective,
+            fun=scipy_objective,
             method=self.method,
-            jac=self.gradient,
+            jac=scipy_gradient,
             # constraints=self.constraints,
             # hess=self.hessian,
             tol=self.abs_obj_tol,
@@ -71,4 +87,4 @@ class OptimizerSciPy(NonLinearOptimizer):
             options=self.options,
         )
 
-        return result["x"], result
+        return xp_utils.from_numpy(xp, result["x"]), result

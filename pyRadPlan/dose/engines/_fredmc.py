@@ -94,6 +94,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.HU_table_file = "hLut.inp"
         self.scaling_factor = 1e6
         self.fred_version = "3.70.0"
+        self.print_output = False
 
         self.fred_cmd = "fred"
         self.fred_dir = Path(os.environ.get("FREDDIR", ""))
@@ -881,7 +882,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         if self._calc_dose_direct:
             # Direct dose calculation
-            dij["physical_dose"] = np.expand_dims(self.dose_cube.flatten(), axis=1)
+            dij["physical_dose"].flat[0] = coo_matrix(self.dose_cube.reshape(-1, 1))
 
             if self.calc_let and self.let_cube is not None:
                 dij["mLETd"].flat[0] = coo_matrix(
