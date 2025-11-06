@@ -361,6 +361,8 @@ class RayTracerSiddon(RayTracerBase):
         # alpha_min_values = cp.where(zero_mask, 0.0, alpha_min_values)
         # alpha_max_values = cp.where(zero_mask, 1.0, alpha_max_values)
 
+        xp_utils.synchronize(xp, s)
+
         s1 = xp_utils.create_stream(xp)
         with s1:
             alpha_axis_min = xp.min(xp.where(alpha_nans, -xp.inf, alpha_planes), axis=-1)  # (N, 3)
@@ -376,6 +378,8 @@ class RayTracerSiddon(RayTracerBase):
             alpha_max_values = xp.minimum(alpha_max_values, alpha_axis_max[:, 2])
             alpha_max_values = xp.clip(alpha_max_values, None, 1.0)
             alpha_max_values = xp.where(zero_mask, 1.0, alpha_max_values)
+
+        xp_utils.synchronize(xp)
 
         # pytorch does not support maximum/minimum with scalar and array
         # alpha_min_values = xp.maximum(alpha_min_values, 0.0)
