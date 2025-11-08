@@ -31,15 +31,15 @@ maintainers = [
 
 description = "A python interface and reimplementation to matRad"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "scipy>=1.13.0,<1.16",
-    "numpy>=2.0,<2.3",
+    "scipy>=1.13.0",
+    "numpy>=2.0,<=2.3",
     "array_api_compat",
     "array_api_strict",
     "array_api_extra",
