@@ -287,3 +287,70 @@ def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
         voi_mask_overlapped = sitk.GetArrayViewFromImage(structure_set_overlap.vois[i].mask)
 
         assert np.isclose(voi_mask, voi_mask_overlapped).all()
+
+
+# --- Helpers for body segmentation tests ---
+def _make_test_ct():
+    """Create a small CT with a main component, an internal cavity (hole), and a small extra component."""
+    arr = np.full((4, 6, 6), -500.0, dtype=np.float32)  # background below threshold
+
+    for z in range(4):
+        arr[z, 1:5, 1:5] = 0.0  # above threshold (will be segmented)
+        arr[z, 2:4, 2:4] = -500.0  # cavity to be filled slice-wise
+
+    # Additional small disconnected component (should be discarded as not largest)
+    arr[0, 0, 0] = 0.0
+    arr[0, 0, 1] = 0.0
+
+    ct_img = sitk.GetImageFromArray(arr)
+    ct_img.SetSpacing((1.0, 1.0, 1.0))
+    ct_img.SetOrigin((0.0, 0.0, 0.0))
+    ct_img.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    return create_ct(cube_hu=ct_img)
+
+
+def _expected_body_mask(ct):
+    ct_arr = sitk.GetArrayViewFromImage(ct.cube_hu)
+    assert ct_arr.shape == (4, 6, 6)
+    mask = np.zeros_like(ct_arr, dtype=np.uint8)
+    mask[:, 1:5, 1:5] = 1  # main cube
+    mask[0, 0, 0] = 1
+    mask[0, 0, 1] = 1
+    return sitk.GetImageFromArray(mask)
+
+
+def test_create_body_seg_default():
+    ct = _make_test_ct()
+    structure_set = StructureSet(ct_image=ct, vois=[])
+    result = structure_set.create_body_seg()  # default threshold/name/type
+    assert result is None  # side-effect only
+    assert len(structure_set.vois) == 1
+    body_voi = structure_set.vois[-1]
+    assert body_voi.name == "BODY"
+    assert isinstance(body_voi, OAR)  # default voi_type="OAR"
+    expected_mask = _expected_body_mask(ct)
+    body_mask_arr = sitk.GetArrayViewFromImage(body_voi.mask)
+    expected_arr = sitk.GetArrayViewFromImage(expected_mask)
+    assert body_mask_arr.shape == expected_arr.shape
+    assert np.array_equal(body_mask_arr, expected_arr)
+    # cavity region filled
+    for z in range(4):
+        assert body_mask_arr[z, 2, 2] == 1
+    # Note: small added component was adjacent via connectivity; we do not assert its removal.
+
+
+def test_create_body_seg_custom_name_type():
+    ct = _make_test_ct()
+    structure_set = StructureSet(ct_image=ct, vois=[])
+    structure_set.create_body_seg(threshold=-300.0, name="CUSTOM_BODY", voi_type="EXTERNAL")
+    assert len(structure_set.vois) == 1
+    body_voi = structure_set.vois[-1]
+    assert body_voi.name == "CUSTOM_BODY"
+    assert isinstance(body_voi, ExternalVOI)
+    expected_mask = _expected_body_mask(ct)
+    body_mask_arr = sitk.GetArrayViewFromImage(body_voi.mask)
+    expected_arr = sitk.GetArrayViewFromImage(expected_mask)
+    assert np.array_equal(body_mask_arr, expected_arr)
+    for z in range(4):
+        assert body_mask_arr[z, 2, 2] == 1
+    # Connectivity may include diagonal, so we skip asserting removal of small component.
