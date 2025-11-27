@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
         - uses: actions/checkout@v4
@@ -35,14 +35,14 @@ jobs:
 
         - name: Run tests with pytest
           run: pytest test --junitxml=.testreports/report.xml -o junit_family=legacy --cov=pyRadPlan --cov-report term --cov-report xml:.testreports/coverage.xml --cov-report html:.testreports/html
-        
+
         - name: Upload test reports to Codecov
           uses: codecov/test-results-action@v1
           with:
             token: ${{ secrets.CODECOV_TOKEN }}
             flags: 'py${{ matrix.python-version }}'
             files: .testreports/report.xml
-        
+
         - name: Upload coverage reports to Codecov
           if: matrix.python-version == '3.11'
           uses: codecov/codecov-action@v5

@@ -94,6 +94,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.HU_table_file = "hLut.inp"
         self.scaling_factor = 1e6
         self.fred_version = "3.70.0"
+        self.print_output = False
 
         self.fred_cmd = "fred"
         self.fred_dir = Path(os.environ.get("FREDDIR", ""))

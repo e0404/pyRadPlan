@@ -308,6 +308,86 @@ class StructureSet(PyRadPlanBaseModel):
 
         return self.model_copy(deep=True, update={"vois": new_vois})
 
+    def create_body_seg(
+        self, threshold: float = -200.0, name: str = "BODY", voi_type="OAR"
+    ) -> Self:
+        """
+        Create a body segmentation from CT data based on a HU threshold.
+
+        This method generates a body contour by thresholding the CT image,
+        identifying the largest connected component (main body), and filling
+        internal air cavities (like lungs) slice by slice to handle cases
+        where the scan is cut off.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            HU threshold value for body segmentation. Voxels with HU values above
+            this threshold are considered part of the body. Default is -200.0 HU
+            (approximately air/tissue boundary).
+        name : str, optional
+            Name for the body VOI. Default is "BODY".
+        voi_type : str, optional
+            Type of the VOI to create. Default is "OAR".
+
+        Returns
+        -------
+        Self
+            Updated StructureSet with the body segmentation added.
+        """
+        # Segment the Body Contour using the provided threshold
+        max_value = sitk.GetArrayViewFromImage(self.ct_image.cube_hu).max()
+        binary_segmentation = sitk.BinaryThreshold(
+            self.ct_image.cube_hu, threshold, float(max_value * 1.1)
+        )
+
+        # Step 1: Label connected components
+        labeled = sitk.ConnectedComponent(binary_segmentation)
+
+        # Step 2: Compute statistics
+        stats = sitk.LabelShapeStatisticsImageFilter()
+        stats.Execute(labeled)
+
+        # Step 3: Identify label with largest number of pixels
+        largest_label = max(stats.GetLabels(), key=lambda label: stats.GetNumberOfPixels(label))
+
+        # Step 4: Create binary mask of largest component
+        body_segmentation = sitk.Equal(labeled, largest_label)
+
+        # Step 5: Fill holes slice by slice to handle cases where scan is cut off
+        # (e.g. cutting of lungs results in not enclosing the entire lung volume)
+        size = body_segmentation.GetSize()
+        filled_slices = []
+
+        for slice_idx in range(size[2]):  # Iterate through z-direction
+            # Extract 2D slice
+            slice_2d = sitk.Extract(
+                body_segmentation,
+                size=[size[0], size[1], 0],  # 2D slice
+                index=[0, 0, slice_idx],
+            )
+
+            # Fill holes in this 2D slice
+            filled_slice = sitk.BinaryFillhole(slice_2d)
+            filled_slices.append(filled_slice)
+
+        # Join all slices back into 3D volume
+        body_segmentation = sitk.JoinSeries(filled_slices)
+
+        body_voi_data = {
+            "name": name,
+            "ct_image": self.ct_image,
+            "mask": body_segmentation,
+            "voi_type": voi_type,
+            "alpha_x": 0.1,
+            "beta_x": 0.05,
+        }
+
+        body_voi = validate_voi(body_voi_data)
+
+        # Add to existing VOIs
+        self.vois = self.vois + [body_voi]
+
 
 def create_cst(
     cst_data: Union[dict[str, Any], StructureSet, None] = None,

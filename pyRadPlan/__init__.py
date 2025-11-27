@@ -38,6 +38,7 @@ from .optimization._fluence_optimization import fluence_optimization
 from .analysis._dvh import DVH, DVHCollection
 from .visualization import plot_slice
 from .io import load_patient, load_tg119
+from .core import xp_utils
 
 try:
     __version__ = version(__name__)
@@ -50,6 +51,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "__version__",
+    "xp_utils",
     "Plan",
     "IonPlan",
     "PhotonPlan",

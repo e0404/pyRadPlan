@@ -1,4 +1,4 @@
-import numpy as np
+# import numpy as np
 from pyRadPlan.optimization.objectives import (
     DoseUniformity,
     SquaredDeviation,
@@ -11,6 +11,8 @@ from pyRadPlan.optimization.objectives import (
     get_available_objectives,
     get_objective,
 )
+
+import array_api_strict as np
 
 
 def test_objective_availability():
@@ -69,15 +71,15 @@ def test_DoseUniformity_constructor():
 def test_DoseUniformity_compute_objective():
     doseUni = DoseUniformity()
 
-    dose = np.array([1, 2, 3])
-    assert np.abs(doseUni.compute_objective(dose) - 1) < 1e-10
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    assert np.abs(doseUni.compute_objective(dose) - 1) <= np.finfo(np.float32).eps
 
 
 def test_DoseUniformity_compute_gradient():
     doseUni = DoseUniformity()
-    dose = np.array([1, 2, 3])
-    grad_expected = 1 / 2 * np.array([-1, 0, 1])
-    assert np.all((doseUni.compute_gradient(dose) - grad_expected) < 1e-10)
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    grad_expected = 1 / 2 * np.asarray([-1, 0, 1], dtype=np.float32)
+    assert np.all((doseUni.compute_gradient(dose) - grad_expected) <= np.finfo(np.float32).eps)
 
 
 def test_SquaredDeviation_constructor():
@@ -89,15 +91,15 @@ def test_SquaredDeviation_constructor():
 
 
 def test_SquaredDeviation_compute_objective():
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     sq_dev = SquaredDeviation(d_ref=2.0)
     assert sq_dev.compute_objective(dose) == 2 / 3
 
 
 def test_SquaredDeviation_compute_gradient():
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     sq_dev = SquaredDeviation(d_ref=2.0)
-    grad_expected = 2 / 3 * np.array([-1, 0, 1])
+    grad_expected = 2 / 3 * np.asarray([-1, 0, 1], dtype=np.float32)
     assert np.all(sq_dev.compute_gradient(dose) == grad_expected)
 
 
@@ -112,14 +114,14 @@ def test_SquaredOverdosing_constructor():
 
 def test_SquaredOverdosing_compute_objective():
     sq_over = SquaredOverdosing(d_max=2.0)
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     assert sq_over.compute_objective(dose) == 1 / 3
 
 
 def test_SquaredOverdosing_compute_gradient():
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     sq_over = SquaredOverdosing(d_max=2)
-    grad_expected = 2 / 3 * np.array([0, 0, 1])
+    grad_expected = 2 / 3 * np.asarray([0, 0, 1], dtype=np.float32)
     assert np.all(sq_over.compute_gradient(dose) == grad_expected)
 
 
@@ -135,61 +137,82 @@ def test_SquaredUnderdosing_constructor():
 
 def test_SquaredUnderdosing_compute_objective():
     sq_under = SquaredUnderdosing(d_min=2.0)
-    dose = np.array([1, 2, 3])
-    assert sq_under.compute_objective(dose) == 1 / 3
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    assert sq_under.compute_objective(dose) == 1.0 / 3.0
 
 
 def test_SquaredUnderdosing_compute_gradient():
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     sq_under = SquaredUnderdosing(d_min=2.0)
-    grad_expected = 2 / 3 * np.array([-1, 0, 0])
+    grad_expected = 2 / 3 * np.asarray([-1, 0, 0], dtype=np.float32)
     assert np.all(sq_under.compute_gradient(dose) == grad_expected)
 
 
 def test_EUD_constructor():
     eud = EUD(k=3, eud_ref=0.0, priority=100)
     assert eud.name == "EUD"
-    assert eud.parameter_names == ["eud_ref", "k"]
-    assert eud.parameter_types == ["reference", "numeric"]
-    assert eud.parameters == [0.0, 3.0]
+    assert eud.parameter_names == ["eud_ref", "k", "f_diff"]
+    assert eud.parameter_types == ["reference", "numeric", ["linear", "quadratic"]]
+    assert eud.parameters == [0.0, 3.0, "quadratic"]
     assert eud.priority == 100.0
 
 
 def test_EUD_compute_objective():
     eud = EUD(k=3, EUD_ref=0.0)
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     assert (eud.compute_objective(dose) - (1 / 3 * (1 + 2 ** (1 / 3) + 3 ** (1 / 3))) ** 6) < 1e-10
+
+    eud.f_diff = "linear"
+    assert (eud.compute_objective(dose) - (1 / 3 * (1 + 2 ** (1 / 3) + 3 ** (1 / 3))) ** 3) < 1e-10
 
 
 def test_EUD_compute_gradient():
     eud_obj = EUD(k=3, EUD_ref=0.0)
-    dose = np.array([1, 2, 3])
-    d_eud = (1 + 2 ** (1 / 3) + 3 ** (1 / 3)) ** 2 * np.array([1, 2, 3]) ** (-2 / 3) * 1 / 3**3
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    d_eud = (
+        (1 + 2 ** (1 / 3) + 3 ** (1 / 3)) ** 2
+        * np.asarray([1, 2, 3], dtype=np.float32) ** (-2 / 3)
+        * 1
+        / 3**3
+    )
     eud = (1 / 3 * (1 + 2 ** (1 / 3) + 3 ** (1 / 3))) ** 3
     grad_expected = 2 * (eud - 0) * d_eud
+    assert np.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
+
+    eud_obj.f_diff = "linear"
+    grad_expected = np.sign(np.asarray(eud - 0.0, dtype=np.float32)) * d_eud
     assert np.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
 
 
 def test_MeanDose_constructor():
     mean_dose = MeanDose(d_ref=2, priority=100)
     assert mean_dose.name == "Mean Dose"
-    assert mean_dose.parameter_names == ["d_ref"]
-    assert mean_dose.parameter_types == ["reference"]
-    assert mean_dose.parameters == [2.0]
+    assert mean_dose.parameter_names == ["d_ref", "f_diff"]
+    assert mean_dose.parameter_types == ["reference", ["linear", "quadratic"]]
+    assert mean_dose.parameters == [2.0, "quadratic"]
     assert mean_dose.d_ref == 2.0
+    assert mean_dose.f_diff == "quadratic"
     assert mean_dose.priority == 100.0
 
 
 def test_MeanDose_compute_objective():
     mean_dose = MeanDose(d_ref=2.0)
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     assert mean_dose.compute_objective(dose) == 0
+    mean_dose.f_diff = "linear"
+    mean_dose.d_ref = 1.0
+    assert mean_dose.compute_objective(dose) == 1
 
 
 def test_MeanDose_compute_gradient():
     mean_dose = MeanDose(d_ref=2.0)
-    dose = np.array([1, 2, 3])
+    dose = np.asarray([1, 2, 3], dtype=np.float32)
     grad_expected = np.zeros(3)
+    assert np.all(mean_dose.compute_gradient(dose) == grad_expected)
+
+    mean_dose.f_diff = "linear"
+    mean_dose.d_ref = 1.0
+    grad_expected = np.full(3, 1 / 3, dtype=np.float32)
     assert np.all(mean_dose.compute_gradient(dose) == grad_expected)
 
 

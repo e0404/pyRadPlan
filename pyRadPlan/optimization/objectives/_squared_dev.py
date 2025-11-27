@@ -1,9 +1,12 @@
 """Squared Deviation Objective."""
 
 from typing import Annotated
+
 from pydantic import Field
 
-from numba import njit
+import array_api_compat
+
+from ...core.xp_utils.typing import Array
 
 from ._objective import Objective, ParameterMetadata
 
@@ -24,20 +27,9 @@ class SquaredDeviation(Objective):
 
     d_ref: Annotated[float, Field(default=60.0, ge=0.0), ParameterMetadata(kind="reference")]
 
-    def compute_objective(self, values):
-        return _compute_objective(values, self.d_ref)
+    def compute_objective(self, values: Array) -> Array:
+        deviation = values - self.d_ref
+        return (deviation @ deviation) / array_api_compat.size(values)
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values, self.d_ref)
-
-
-@njit
-def _compute_objective(dose, d_ref):
-    deviation = dose - d_ref
-
-    return (deviation @ deviation) / len(dose)
-
-
-@njit
-def _compute_gradient(dose, d_ref):
-    return 2.0 * (dose - d_ref) / len(dose)
+    def compute_gradient(self, values: Array) -> Array:
+        return 2.0 * (values - self.d_ref) / array_api_compat.size(values)

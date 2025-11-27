@@ -11,6 +11,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 import SimpleITK as sitk
 import numpy as np
 from scipy import sparse
+import array_api_compat
 
 from pyRadPlan.core import resample_image, np2sitk
 from pyRadPlan.ct import CT, default_hlut
@@ -20,6 +21,7 @@ from pyRadPlan.geometry import get_beam_rotation_matrix
 from pyRadPlan.raytracer import RayTracerSiddon
 
 from ._base import DoseEngineBase
+from ...core.xp_utils.typing import Array
 
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._num_of_bixels_container = None
         self._rad_depth_cubes = []
         self._raytracer = None
+        self._eps_ijk: Array = None
 
         super().__init__(pln)
 
@@ -831,91 +834,140 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Call the finalizeDose method from the base class
         return super()._finalize_dose(dij)
 
-    @staticmethod
     def calc_geo_dists(
-        rot_coords_bev, source_point_bev, target_point_bev, sad, rad_depth_ix, lateral_cutoff
+        self,
+        rot_coords_bev: Array,
+        source_point_bev: Array,
+        target_point_bev: Array,
+        sad: float,
+        rad_depth_mask: Array,
+        lateral_cutoff: float,
     ):
         """
         Calculate geometric distances for dose calculation.
 
         Parameters
         ----------
-        rot_coords_bev : ndarray
+        rot_coords_bev : Array
             Coordinates in beam's eye view (BEV) of the voxels where ray tracing results are
             available.
-        source_point_bev : ndarray
+        source_point_bev : Array
             Source point in voxel coordinates in BEV.
-        target_point_bev : ndarray
+        target_point_bev : Array
             Target point in voxel coordinates in BEV.
         sad : float
             Source-to-axis distance.
-        rad_depth_ix : ndarray
-            Subset of voxels for which radiological depth calculations are available.
+        rad_depth_mask : Array
+            Masks the voxels for which radiological depth calculations are available.
         lateral_cutoff : float
             Lateral cutoff specifying the neighborhood for dose calculations.
 
         Returns
         -------
-        ix : ndarray
+        ix : Array
             Indices of voxels where dose influence is computed.
-        rad_distances_sq : ndarray
+        rad_distances_sq : Array
             Squared radial distances to the central ray.
-        lat_dists : ndarray
+        lat_dists : Array
             Lateral distances to the central ray (in X & Z).
-        iso_lat_dists : ndarray
+        iso_lat_dists : Array
             Lateral distances to the central ray projected onto the isocenter plane.
-        rot_coords_bev, source_point_bev, target_point_bev, sad, rad_depth_ix, lateral_cutoff
         """
-        # Put [0 0 0] position in the source point for beamlet who passes through isocenter
-        a = -source_point_bev.T
 
-        # Normalize the vector
-        a = a / np.linalg.norm(a)
+        xp = array_api_compat.array_namespace(
+            rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
+        )
 
-        # Put [0 0 0] position in the source point for a single beamlet
-        b = (target_point_bev - source_point_bev).T
-
-        # Normalize the vector
-        b = b / np.linalg.norm(b)
-
-        # Cross product
-        cross_ab = np.cross(a, b)
-        # Define rotation matrix
-        if np.all(a == b):
-            rot_coords_temp = rot_coords_bev[rad_depth_ix, :]
+        if hasattr(xp, "linalg"):
+            norm = xp.linalg.vector_norm
+            cross = xp.linalg.cross
         else:
 
-            def ssc(v: np.ndarray) -> np.ndarray:
-                """Skew-symmetric cross product matrix."""
-                return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+            def norm(arr: Array) -> Array:
+                return xp.sqrt(xp.sum(arr**2, axis=-1))
+
+            def cross(x: Array, y: Array) -> Array:
+                return xp.stack(
+                    [
+                        x[..., 1] * y[..., 2] - x[..., 2] * y[..., 1],
+                        x[..., 2] * y[..., 0] - x[..., 0] * y[..., 2],
+                        x[..., 0] * y[..., 1] - x[..., 1] * y[..., 0],
+                    ],
+                    axis=-1,
+                )
+
+        # We later need a copy of the index, and we do it here to do some
+        # compatibility management with the array API standard
+        ix = xp.asarray(rad_depth_mask, copy=True)
+        rad_depth_ix = xp.nonzero(rad_depth_mask)[0]
+
+        # Make sure that the source-point is a 2D array
+        source_point_bev = xp.reshape(source_point_bev, (3,))
+        target_point_bev = xp.reshape(target_point_bev, (3,))
+
+        # Put [0 0 0] position in the source point for beamlet who passes through isocenter
+        a = -source_point_bev
+
+        # Normalize the vector
+        a /= norm(a)
+
+        # Put [0 0 0] position in the source point for a single beamlet
+        b = target_point_bev - source_point_bev
+
+        # Normalize the vector
+        b /= norm(b)
+
+        # Define rotation matrix
+        rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
+        if not xp.all(a == b):
+            # Cross product
+            cross_ab = cross(a, b)
+
+            if self._eps_ijk is None:
+                self._eps_ijk = xp.asarray(
+                    [
+                        [[0, 0, 0], [0, 0, -1], [0, 1, 0]],
+                        [[0, 0, 1], [0, 0, 0], [-1, 0, 0]],
+                        [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
+                    ],
+                    dtype=cross_ab.dtype,
+                )
+
+            ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
 
             derived_rot_mat = (
-                np.eye(3)
-                + ssc(cross_ab)
-                + np.dot(ssc(cross_ab), ssc(cross_ab))
-                * (1 - np.dot(a, b))
-                / (np.linalg.norm(cross_ab) ** 2)
+                xp.eye(3, dtype=a.dtype)
+                + ssc_matrix
+                + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )
-            rot_coords_temp = np.dot(rot_coords_bev[rad_depth_ix, :], derived_rot_mat)
+            # rot_coords_temp = np.dot(rot_coords_bev[rad_depth_ix, :], derived_rot_mat)
+            rot_coords_temp @= xp.astype(derived_rot_mat, rot_coords_temp.dtype)
 
         # Put [0 0 0] position CT in center of the beamlet
-        lat_dists = rot_coords_temp[:, [0, 2]] + source_point_bev[[0, 2]]
+        xy_index = xp.asarray((0, 2), dtype=xp.int64)
+        lat_dists = xp.take(rot_coords_temp, xy_index, axis=1)
+        lat_dists += source_point_bev[xy_index]
 
         # Check if radial distance exceeds lateral cutoff (projected to iso center)
-        rad_distances_sq = np.sum(lat_dists**2, axis=1)
+        rad_distances_sq = xp.sum(lat_dists**2, axis=1)
         subset_mask = rad_distances_sq <= (lateral_cutoff / sad) ** 2 * rot_coords_temp[:, 1] ** 2
 
-        ix = rad_depth_ix.copy()
         # Apply mask for return quantities
-        ix[rad_depth_ix] = subset_mask
+        ix[rad_depth_mask] = subset_mask
 
         # Return radial distances squared
         rad_distances_sq = rad_distances_sq[subset_mask]
 
-        # Lateral distances in X & Z
-        lat_dists = lat_dists[subset_mask, :]
+        # for array API compatible indexing
+        sub_ix = xp.nonzero(subset_mask)[0]
 
-        # Lateral distances projected onto isocenter
-        iso_lat_dists = lat_dists / rot_coords_temp[subset_mask, 1][:, np.newaxis] * sad
+        # Lateral distances in X & Z
+        lat_dists = xp.take(lat_dists, sub_ix, axis=0)
+
+        if array_api_compat.size(sub_ix) > 0:
+            # Lateral distances projected onto isocenter
+            iso_lat_dists = lat_dists / rot_coords_temp[sub_ix, 1][:, None] * sad
+        else:
+            iso_lat_dists = xp.empty_like(lat_dists)
 
         return ix, rad_distances_sq, lat_dists, iso_lat_dists

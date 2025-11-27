@@ -3,10 +3,16 @@
 from typing import Literal
 import SimpleITK as sitk
 import numpy as np
+import array_api_compat
+from array_api_compat import numpy as xnp
 from ._grids import Grid
 
+from numpy.typing import NDArray
+from ..core.xp_utils.typing import Array
+from ..core.xp_utils import to_numpy, from_numpy
 
-def sitk_mask_to_linear_indices(mask: sitk.Image, order="sitk") -> np.ndarray:
+
+def sitk_mask_to_linear_indices(mask: sitk.Image, order="sitk") -> NDArray:
     """
     Convert a SimpleITK mask to linear indices.
 
@@ -20,7 +26,7 @@ def sitk_mask_to_linear_indices(mask: sitk.Image, order="sitk") -> np.ndarray:
 
     Returns
     -------
-    np.ndarray
+    NDArray
         A 1D numpy array of linear indices where the mask is non-zero.
 
     Raises
@@ -37,16 +43,14 @@ def sitk_mask_to_linear_indices(mask: sitk.Image, order="sitk") -> np.ndarray:
     raise ValueError("Invalid ordering. Must be 'sitk' or 'numpy'.")
 
 
-def linear_indices_to_sitk_mask(
-    indices: np.ndarray, ref_image: sitk.Image, order="sitk"
-) -> sitk.Image:
+def linear_indices_to_sitk_mask(indices: Array, ref_image: sitk.Image, order="sitk") -> sitk.Image:
     """
     Convert linear indices to a SimpleITK mask.
 
     Parameters
     ----------
-    indices : np.ndarray
-        A 1D numpy array of linear indices where the mask is non-zero.
+    indices : Array
+        A 1D Array API conform array of linear indices where the mask is non-zero.
     ref_image : sitk.Image
         The reference image on which the mask is defined.
     order : str, optional
@@ -64,7 +68,9 @@ def linear_indices_to_sitk_mask(
         If the ordering is not 'sitk' or 'numpy'.
     """
 
-    arr = np.zeros_like(sitk.GetArrayViewFromImage(ref_image), dtype=np.uint8)
+    indices = to_numpy(indices)
+
+    arr: NDArray = xnp.zeros_like(sitk.GetArrayViewFromImage(ref_image), dtype=xnp.uint8)
 
     if order == "sitk":
         arr.T.flat[indices] = 1
@@ -80,18 +86,18 @@ def linear_indices_to_sitk_mask(
 
 
 def linear_indices_to_grid_coordinates(
-    indices: np.ndarray,
+    indices: Array,
     grid: Grid,
     index_type: Literal["numpy", "sitk"] = "numpy",
     dtype: np.dtype = np.float64,
-) -> np.ndarray:
+) -> Array:
     """
     Convert linear indices to gridcoordinates.
 
     Parameters
     ----------
-    indices : np.ndarray
-        A 1D numpy array of linear indices where the mask is non-zero.
+    indices : Array
+        A 1D Array API conform array of linear indices where the mask is non-zero.
     grid : Grid
         The image grid on which the indices lie.
     index_type : Literal["numpy", "sitk"], optional
@@ -102,9 +108,11 @@ def linear_indices_to_grid_coordinates(
 
     Returns
     -------
-    np.ndarray
-        A 2D numpy array of image coordinates.
+    Array
+        A 2D Array API conform array array of image coordinates.
     """
+
+    xp = array_api_compat.array_namespace(indices)
 
     # this is a manual reimplementation of np.unravel_index
     # to avoid the overhead of creating a tuple of arrays
@@ -117,6 +125,8 @@ def linear_indices_to_grid_coordinates(
     else:
         raise ValueError("Invalid index type. Must be 'numpy' or 'sitk'.")
 
+    indices = to_numpy(indices)
+
     v = np.empty((3, np.asarray(indices).size), dtype=dtype)
     tmp, v[order[0]] = np.divmod(indices, d2)
     v[order[2]], v[order[1]] = np.divmod(tmp, d1)
@@ -128,22 +138,22 @@ def linear_indices_to_grid_coordinates(
 
     physical_point = origin + np.matmul(np.matmul(grid.direction, spacing_diag), v).T
 
-    return physical_point
+    return from_numpy(xp, physical_point)
 
 
 def linear_indices_to_image_coordinates(
-    indices: np.ndarray,
+    indices: Array,
     image: sitk.Image,
     index_type: Literal["numpy", "sitk"] = "numpy",
     dtype: np.dtype = np.float64,
-) -> np.ndarray:
+) -> Array:
     """
     Convert linear indices to image coordinates.
 
     Parameters
     ----------
-    indices : np.ndarray
-        A 1D numpy array of linear indices where the mask is non-zero.
+    indices : Array
+        A 1D Array API conform array of linear indices where the mask is non-zero.
     image : sitk.Image
         The reference image on which the mask is defined.
     index_type : Literal["numpy", "sitk"], optional
@@ -154,8 +164,8 @@ def linear_indices_to_image_coordinates(
 
     Returns
     -------
-    np.ndarray
-        A 2D numpy array of image coordinates.
+    Array
+        A 2D Array API conform array of image coordinates.
     """
 
     grid = Grid.from_sitk_image(image)

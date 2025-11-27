@@ -180,6 +180,17 @@ def test_from_and_to_matrad(test_data_stf_n_beams_raw):
 
     assert isinstance(stf_to_matrad, np.recarray)
 
+    for beam_idx in range(stf_from_matRad.num_of_beams):
+        beam_from = stf_from_matRad.beams[beam_idx]
+        rays_from = beam_from.rays
+        rays_to = stf_to_matrad.ray[beam_idx]
+        for ray_idx in range(beam_from.num_of_rays):
+            ray_from = rays_from[ray_idx]
+            energies_from = np.asarray([b.energy for b in ray_from.beamlets])
+            ray_to = rays_to[ray_idx]
+            energies_to = ray_to.energy
+            assert np.allclose(energies_from, energies_to)
+
 
 def test_from_matlab_one_beam(test_data_stf_one_beam_raw):
     """Special case of one beam since pymatreader handles 1D arrays differently"""

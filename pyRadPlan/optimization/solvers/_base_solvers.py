@@ -1,10 +1,16 @@
 """Solver Base Classes for Planning Problems."""
 
-from typing import ClassVar, Callable
+from typing import ClassVar, Callable, Any
 from abc import ABC, abstractmethod
+
+from ...core.xp_utils.typing import Array
+from ...util.keyboard_listener import KeyboardListener
 
 import numpy as np
 from numpy.typing import ArrayLike
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SolverBase(ABC):
@@ -19,38 +25,90 @@ class SolverBase(ABC):
         Short name of the solver
     max_time : float, default=3600
         Maximum time for the solver to run in seconds
-    bounds : ArrayLike, default=[0.0, np.inf]
+    bounds : Array, default=[0.0, np.inf]
         Bounds for the variables
     """
 
     name = ClassVar[str]
     short_name = ClassVar[str]
+    gpu_compatible = ClassVar[bool]
 
+    allow_keyboard_cancel: bool = False
+    cancel_key: str = "q"
+    allow_esc_cancel: bool = True  # Also allow ESC (\x1b) to cancel
     # properties
     max_time: float
-    bounds: ArrayLike
+    bounds: Array
 
     def __init__(self):
         self.max_time = 3600
         self.bounds = [0.0, np.inf]
+        # Keyboard listener utility (manages platform specifics internally)
+        self._keyboard_listener = KeyboardListener(
+            allow_keyboard_cancel=self.allow_keyboard_cancel,
+            cancel_key=self.cancel_key,
+            allow_esc_cancel=self.allow_esc_cancel,
+            component_name=lambda: getattr(self, "name", "Solver"),
+        )
+        # Reflect effective capability (may be disabled by platform checks)
+        self.allow_keyboard_cancel = self._keyboard_listener.allow_keyboard_cancel
 
     def __repr__(self) -> str:
         return f"Solver {self.name} ({self.short_name})"
 
-    @abstractmethod
-    def solve(self, x0: ArrayLike) -> tuple[np.ndarray, dict]:
+    def solve(self, x0: Array) -> tuple[Array, dict]:
         """
         Interface method to solve the problem.
 
         Parameters
         ----------
-        x0 : ArrayLike
+        x0 : Array
             Initial guess for the solution
 
         Returns
         -------
-        tuple[np.ndarray, dict]
+        tuple[Array, dict]
             Solution vector and additional information as dictionary
+        """
+
+        self._keyboard_listener.initialize()
+
+        # Important!: Everything between start and end kb_thread must be
+        # inside try/finally to ensure thread is stopped on error!.
+        # Or terminal stays in weird state.
+        try:
+            logger.info(f"Starting optimization using {self.name}")
+            x, status = self._solve_problem(x0)
+
+        # Ensure thread is stopped.
+        finally:
+            self._keyboard_listener.finalize()
+
+        return x, status
+
+    @abstractmethod
+    def _solve_problem(self, x0: ArrayLike) -> tuple[np.ndarray, dict[str, Any]]:
+        """
+        Solve the problem.
+
+        Parameters
+        ----------
+        x0 : Array
+            Initial guess for the solution
+
+        Returns
+        -------
+        tuple[Array, dict]
+            Solution vector and additional information as dictionary
+        """
+
+    @abstractmethod
+    def _callback(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Check for early stopping during solver callback.
+
+        This method should handle both early stopping checks and
+        user-provided callback functions if the optimizer supports them.
         """
 
 

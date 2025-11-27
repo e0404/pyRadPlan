@@ -21,6 +21,7 @@ from pyRadPlan.machines.particles import (
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
+from ...core.xp_utils.compat import interp1d as array_interp
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
         depths = kernel.depths
 
+        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
+
         # Add potential offset
         depths = depths + kernel.offset - bixel["rad_depth_offset"]
 
@@ -264,16 +267,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels["beta"] = kernel.beta
 
         # Interpolate all fields in X
-        kernel_interp = {}
-        for key, kernel_data in used_kernels.items():
-            if kernel_data.ndim > 1:
-                tmp_kernel_data = np.apply_along_axis(
-                    lambda x: np.interp(bixel["rad_depths"], depths, x), axis=1, arr=kernel_data
-                )
-            else:
-                tmp_kernel_data = np.interp(bixel["rad_depths"], depths, kernel_data)
-
-            kernel_interp[key] = tmp_kernel_data
+        kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
 
         return kernel_interp
 
