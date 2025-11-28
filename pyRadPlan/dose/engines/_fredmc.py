@@ -25,14 +25,14 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Union, cast
+from typing import Any, Union
 import time
 import textwrap
 from pathlib import Path
 
 import numpy as np
 import SimpleITK as sitk
-from scipy.sparse import coo_matrix, lil_matrix
+from scipy import sparse
 
 from pyRadPlan.ct import CT, resample_ct
 from pyRadPlan.cst import StructureSet
@@ -669,7 +669,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         if self._use_output is not None:
             self.fred_order = self._generate_fred_order(dij, stf)
         if self.dose_cube is None:
-            dij["physical_dose"] = coo_matrix(
+            dij["physical_dose"] = sparse.csc_array(
                 (dij["dose_grid"].num_voxels, stf.total_number_of_bixels), dtype=np.int8
             )
 
@@ -882,10 +882,10 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         if self._calc_dose_direct:
             # Direct dose calculation
-            dij["physical_dose"].flat[0] = coo_matrix(self.dose_cube.reshape(-1, 1))
+            dij["physical_dose"].flat[0] = sparse.csc_array(self.dose_cube.reshape(-1, 1))
 
             if self.calc_let and self.let_cube is not None:
-                dij["mLETd"].flat[0] = coo_matrix(
+                dij["mLETd"].flat[0] = sparse.csc_array(
                     (
                         self.let_cube[self._vdose_grid] / 10,
                         (self._vdose_grid, np.ones(len(self._vdose_grid))),
@@ -894,7 +894,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 )
 
                 # LETd * dose
-                dij["mLETDose"].flat[0] = coo_matrix(
+                dij["mLETDose"].flat[0] = sparse.csc_array(
                     (
                         (self.let_cube[self._vdose_grid] / 10) * self.dose_cube[self._vdose_grid],
                         (self._vdose_grid, np.ones(len(self._vdose_grid))),
@@ -903,43 +903,32 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 )
             dij_fields_to_override = [
                 "num_of_beams",
-                "beam_num",
-                "bixel_num",
-                "ray_num",
                 "total_number_of_bixels",
                 "total_number_of_rays",
                 "num_of_rays_per_beam",
             ]
             for field_name in dij_fields_to_override:
                 dij[field_name] = 1
+
+            dij["beam_num"] = 0
+            dij["bixel_num"] = 0
+            dij["ray_num"] = 0
         else:
             # Scorer-ij mode
-            self.dose_cube.col = self.fred_order[self.dose_cube.col]
-
-            self.dose_cube = self.dose_cube.tocsr()
-
+            self.dose_cube = sparse.csc_array(self.dose_cube)
             self.dose_cube = self.dose_cube[:, self.fred_order]
-
-            self.dose_cube = self.dose_cube.tocoo()
 
             dij["physical_dose"].flat[0] = self._conversion_factor * self.dose_cube
 
             if self.calc_let and self.let_cube is not None:
-                self.let_cube.col = self.fred_order[self.let_cube.col]
-
-                self.let_cube = self.let_cube.tocsr()
-
+                self.let_cube = sparse.csc_array(self.let_cube)
                 self.let_cube = self.let_cube[:, self.fred_order]
-
-                self.let_cube = self.let_cube.tocoo()
 
                 # Divide by 10, FRED scores in MeV * cm^2 / g
                 dij["mLETd"].flat[0] = self.let_cube / 10
 
                 # LETd * dose
-                dij["mLETDose"].flat[0] = coo_matrix(
-                    dij["physical_dose"].flat[0].multiply(dij["mLETd"].flat[0])
-                )
+                dij["mLETDose"].flat[0] = dij["physical_dose"].flat[0] * dij["mLETd"].flat[0]
 
         if self.calc_bio_dose:
             logger.warning("Biological dose calculation is not implemented yet.")
@@ -1044,7 +1033,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.dose_cube = dose_cube
         self.let_cube = let_cube
 
-    def read_sparse_dij_bin(self, f_name: str) -> coo_matrix:
+    def read_sparse_dij_bin(self, f_name: str) -> sparse.csc_array:
         """
         Dispatch method to read a sparse dij binary file based on the dij format version.
 
@@ -1054,7 +1043,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         Returns
         -------
-            coo_matrix: Sparse matrix containing the dij data.
+            sparse.csc_array: Sparse matrix containing the dij data.
         """
         with open(f_name, "rb") as f:
             file_format_version = str(np.frombuffer(f.read(4), dtype=np.int32)[0])
@@ -1084,15 +1073,15 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                         dij[q_name].flat[i] = np.zeros(
                             (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
                         )
-                    else:
-                        # This could probably be optimized by using direct access to the
-                        # lil_matrix's data structures
-                        # TODO: we could store a single sparse pattern matrix and then only store
-                        # the values for all quantities for better memory management
-                        dij[q_name].flat[i] = lil_matrix(
-                            (self._num_of_columns_dij, self.dose_grid.num_voxels),
-                            dtype=np.float32,
-                        )
+                    # else:
+                    #     # This could probably be optimized by using direct access to the
+                    #     # lil_matrix's data structures
+                    #     # TODO: we could store a single sparse pattern matrix and then only store
+                    #     # the values for all quantities for better memory management
+                    #     dij[q_name].flat[i] = lil_matrix(
+                    #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
+                    #         dtype=np.float32,
+                    #     )
 
             self._computed_quantities.append(q_name)
 
@@ -1204,16 +1193,22 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                     # Loop over all used quantities
                     for q_name in self._computed_quantities:
                         if not self._calc_dose_direct:
-                            tmp_matrix = cast(lil_matrix, dij[q_name].flat[i])
-                            tmp_matrix = tmp_matrix.tocsr()
-                            tmp_matrix.eliminate_zeros()
+                            tmp_matrix = dij[q_name].flat[i]
 
                             if self._dij_format_version in {"21", "31"}:
+                                if not isinstance(tmp_matrix, sparse.csc_array):
+                                    tmp_matrix = sparse.csc_array(tmp_matrix)
+
+                                tmp_matrix.eliminate_zeros()
+
                                 shape = dij["dose_grid"].dimensions
-                                dij[q_name].flat[i] = swap_orientation_sparse_matrix(
-                                    tmp_matrix, shape, (0, 1)
-                                )
+                                swapped = swap_orientation_sparse_matrix(tmp_matrix, shape, (0, 1))
+                                dij[q_name].flat[i] = swapped
                             else:
+                                if not isinstance(tmp_matrix, sparse.csc_array):
+                                    tmp_matrix = sparse.csc_array(tmp_matrix)
+
+                                tmp_matrix.eliminate_zeros()
                                 dij[q_name].flat[i] = tmp_matrix
                             # dij[q_name].flat[i].data *= self.scaling_factor
 
@@ -1229,7 +1224,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         return available, msg
 
 
-def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v20(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in a Matlab-like format.
 
@@ -1239,7 +1234,7 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1253,7 +1248,7 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
         # Preallocate lists to collect arrays
         all_values_list = []
         all_voxel_inds_list = []
-        all_col_inds_list = []
+        indptr = [0]
         beamlet_counter = 0
 
         for _ in range(number_of_beamlets):
@@ -1262,8 +1257,8 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
             num_vox = np.frombuffer(f.read(4), dtype=np.int32)[0]
             beamlet_counter += 1
 
-            # Set column indices vector for this beamlet
-            all_col_inds_list.append(np.full(num_vox, beamlet_counter - 1, dtype=np.int32))
+            # Update indptr
+            indptr.append(indptr[-1] + num_vox)
 
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
@@ -1280,17 +1275,16 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
         # Concatenate the lists into single NumPy arrays
         all_values = np.concatenate(all_values_list)
         all_voxel_inds = np.concatenate(all_voxel_inds_list)
-        all_col_inds = np.concatenate(all_col_inds_list)
+        indptr = np.array(indptr, dtype=np.int32)
 
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (all_values, (all_voxel_inds, all_col_inds)), shape=(total_voxels, beamlet_counter)
+    dij_matrix = sparse.csc_array(
+        (all_values, all_voxel_inds, indptr), shape=(total_voxels, beamlet_counter)
     )
-    # dij_matrix = dij_matrix.tocsc()
     return dij_matrix
 
 
-def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v21(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in version 2.1 format.
 
@@ -1300,7 +1294,7 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1315,7 +1309,7 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
         # Preallocate lists to collect arrays
         all_values_list = []
         all_voxel_inds_list = []
-        all_col_inds_list = []
+        indptr = [0]
         beamlet_counter = 0
 
         for _ in range(number_of_beamlets):
@@ -1325,8 +1319,8 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
 
             beamlet_counter += 1
 
-            # Set column indices vector for this beamlet
-            all_col_inds_list.append(np.full(num_vox, beamlet_counter - 1, dtype=np.int32))
+            # Update indptr
+            indptr.append(indptr[-1] + num_vox)
 
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
@@ -1353,16 +1347,16 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
     # Concatenate the lists into single NumPy arrays
     all_values = np.concatenate(all_values_list)
     all_voxel_inds = np.concatenate(all_voxel_inds_list)
-    all_col_inds = np.concatenate(all_col_inds_list)
+    indptr = np.array(indptr, dtype=np.int32)
 
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (all_values, (all_voxel_inds, all_col_inds)), shape=(total_voxels, beamlet_counter)
+    dij_matrix = sparse.csc_array(
+        (all_values, all_voxel_inds, indptr), shape=(total_voxels, beamlet_counter)
     )
     return dij_matrix
 
 
-def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v31(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in version 3.1 format.
 
@@ -1372,7 +1366,7 @@ def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1424,8 +1418,15 @@ def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
 
     # Create sparse matrix
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (values, (permuted_voxel_indices, pb_idxs[0])),
+
+    # Optimization: Construct CSC directly using indptr
+    # We assume the data in the file is sorted by beamlet index (pb_idxs), which is standard.
+    # This avoids the overhead of coo_array -> csc_array conversion.
+    counts = np.bincount(pb_idxs[0], minlength=number_of_beamlets)
+    indptr = np.concatenate(([0], np.cumsum(counts))).astype(np.int32)
+
+    dij_matrix = sparse.csc_array(
+        (values, permuted_voxel_indices, indptr),
         shape=(total_voxels, number_of_beamlets),
     )
 
