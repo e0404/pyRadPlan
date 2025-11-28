@@ -312,6 +312,15 @@ class Dij(PyRadPlanBaseModel):
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
             out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
+            out["physical_dose_beam"] = []
+
+            # !Note: This implementaion is faster than the intuitive:
+            # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
+            # Since slicing over the intensity vector reduces the matrix operation size.
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
+                out["physical_dose_beam"].append(dose_matrix @ intensity[beam_mask])
 
         if self.let_dose is not None:
             if self.physical_dose is None:
@@ -323,11 +332,37 @@ class Dij(PyRadPlanBaseModel):
             out["let"] = np.zeros_like(let_dose)
             out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
 
+            out["let_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
+
+                phys_dose_beam = out["physical_dose_beam"][i]
+
+                let_beam = np.zeros_like(let_dose_beam)
+                if np.max(phys_dose_beam) > 0:
+                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                    let_beam[indices_beam] = (
+                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
+                    )
+
+                out["let_beam"].append(let_beam)
+
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
             out["effect"] = (
                 self.alpha_dose.flat[scenario_index] @ intensity
                 + (self.sqrt_beta_dose.flat[scenario_index] @ intensity) ** 2
             )
+
+            out["effect_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                alpha_matrix = self.alpha_dose.flat[scenario_index][:, beam_mask]
+                sqrt_beta_matrix = self.sqrt_beta_dose.flat[scenario_index][:, beam_mask]
+
+                w_beam = intensity[beam_mask]
+                out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
 
         return out
 
@@ -355,10 +390,21 @@ class Dij(PyRadPlanBaseModel):
 
         for key, value in out.items():
             # Create a sitk image for each scenario
-            out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
-            out[key].SetOrigin(self.dose_grid.origin)
-            out[key].SetSpacing(self.dose_grid.resolution_vector)
-            out[key].SetDirection(self.dose_grid.direction.ravel())
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    value[i] = sitk.GetImageFromArray(
+                        value[i].reshape(self.dose_grid.dimensions[::-1])
+                    )
+                    value[i].SetOrigin(self.dose_grid.origin)
+                    value[i].SetSpacing(self.dose_grid.resolution_vector)
+                    value[i].SetDirection(self.dose_grid.direction.ravel())
+            else:
+                # handling collective of all beams
+                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
+                out[key].SetOrigin(self.dose_grid.origin)
+                out[key].SetSpacing(self.dose_grid.resolution_vector)
+                out[key].SetDirection(self.dose_grid.direction.ravel())
 
         return out
 
@@ -392,8 +438,14 @@ class Dij(PyRadPlanBaseModel):
             resampler.SetOutputOrigin(self.ct_grid.origin)
             resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
             resampler.SetSize(self.ct_grid.dimensions)
-            out[key] = resampler.Execute(value)
 
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    out[key][i] = resampler.Execute(value[i])
+            else:
+                # handle the collective of all beams
+                out[key] = resampler.Execute(value)
         return out
 
     def to_namespace(
