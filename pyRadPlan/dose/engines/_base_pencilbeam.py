@@ -460,7 +460,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         dict
             The initialized ray.
         """
-        ray = beam_info["beam"]["rays"][j]
+        # NOTE!: we copy the ray here
+        # This ensures that data is not accumulated for every ray
+        ray = beam_info["beam"]["rays"][j].copy()
         ray["beam_index"] = beam_info["beam_index"]
         ray["ray_index"] = j
         ray["iso_center"] = beam_info["beam"]["iso_center"]
