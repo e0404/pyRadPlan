@@ -157,8 +157,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             The initialized bixel.
         """
-
-        bixel = curr_ray["beamlets"][k]
+        # NOTE!: we copy the bixel here
+        # This ensures that data is not accumulated for every bixel
+        bixel = curr_ray["beamlets"][k].copy()
         bixel["beam_index"] = curr_ray["beam_index"]
         bixel["ray_index"] = curr_ray["ray_index"]
         bixel["bixel_index"] = k
