@@ -172,11 +172,11 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray) -> Array:
 
 def to_namespace(
     xp_new: Union[ArrayNamespace, str],
-    arr: Array,
+    arr: Union[Array, list, tuple],
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,
-) -> Array:
+) -> Union[Array, list, tuple]:
     """
     Convert an array to the specified array namespace.
 
@@ -199,6 +199,11 @@ def to_namespace(
     Array
         The converted array.
     """
+
+    if isinstance(arr, (list, tuple)):
+        return type(arr)(
+            to_namespace(xp_new, x, copy=copy, keep_sparse_compat=keep_sparse_compat) for x in arr
+        )
 
     if isinstance(xp_new, str):
         try:
