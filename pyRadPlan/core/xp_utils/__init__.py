@@ -1,7 +1,7 @@
 """Provide information about the available compute backends."""
 
 import importlib
-
+from numba import cuda as numba_cuda
 from typing import Optional
 
 try:
@@ -42,6 +42,14 @@ def pytorch_available() -> bool:
 def pytorch_gpu_available() -> bool:
     """Check if PyTorch is available and a compatible GPU is present."""
     return torch is not None and torch.cuda.is_available()
+
+
+def numba_cuda_available() -> bool:
+    """Check if Numba CUDA is available."""
+    try:
+        return numba_cuda.is_available()
+    except ImportError:
+        return False
 
 
 PREFERRED_CPU_ARRAY_BACKEND: str = "numpy"
