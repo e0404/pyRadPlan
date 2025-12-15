@@ -166,3 +166,54 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if self.alpha is None or self.beta is None:
             return None
         return self.alpha_x / self.beta_x
+
+    def to_namespace(self, xp):
+        """
+        Convert kernel data to the specified array namespace.
+
+        Parameters
+        ----------
+        xp : module
+            The array namespace module (e.g., numpy, cupy).
+
+        Returns
+        -------
+        dict
+            A dictionary containing the kernel data as arrays in the specified namespace.
+        """
+        data = {
+            "energy": self.energy,
+            "range": self.range,
+            "offset": self.offset,
+            "depths": xp.asarray(self.depths),
+            "idd": xp.asarray(self.idd),
+        }
+
+        # Optional fields
+        for field in [
+            "sigma",
+            "sigma_1",
+            "sigma_2",
+            "sigma_x",
+            "sigma_y",
+            "weight",
+            "sigma_multi",
+            "weight_multi",
+            "let",
+            "alpha_x",
+            "beta_x",
+            "alpha",
+            "beta",
+        ]:
+            val = getattr(self, field)
+            if val is not None:
+                data[field] = xp.asarray(val)
+
+        if self.lateral_cut_off is not None:
+            data["lateral_cut_off"] = {
+                "comp_fac": self.lateral_cut_off.comp_fac,
+                "cut_off": xp.asarray(self.lateral_cut_off.cut_off),
+                "depths": xp.asarray(self.lateral_cut_off.depths),
+            }
+
+        return data
