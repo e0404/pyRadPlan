@@ -8,6 +8,8 @@ import time
 from copy import deepcopy
 
 import numpy as np
+import array_api_compat
+
 from scipy.interpolate import interp1d
 from scipy.integrate import cumulative_trapezoid
 
@@ -15,13 +17,13 @@ from pyRadPlan.ct import CT
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.machines.particles import (
     ParticleAccelerator,
-    ParticlePencilBeamKernel,
     LateralCutOff,
 )
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
+from ...core.xp_utils import to_namespace, PREFERRED_GPU_ARRAY_BACKEND
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +193,13 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Get the kernel for the current energy
         tmp_machine = cast(ParticleAccelerator, self._machine)
-        bixel["kernel"] = tmp_machine.get_kernel_by_index(energy_ix)
+
+        # Determine namespace from ray data
+        xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
+
+        # Get kernel and convert to namespace
+        kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
+        bixel["kernel"] = kernel_obj.to_namespace(xp)
 
         bixel["range_shifter"] = curr_ray["beamlets"][k]["range_shifter"]
         bixel["SSD"] = curr_ray["SSD"]
@@ -226,46 +234,48 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         return bixel
 
     def _interpolate_kernels_in_depth(self, bixel):
-        kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
-        depths = kernel.depths
+        kernel = bixel["kernel"]
+        depths = kernel["depths"]
 
         # xp = array_api_compat.array_namespace(bixel["rad_depths"])
 
         # Add potential offset
-        depths = depths + kernel.offset - bixel["rad_depth_offset"]
+        # Ensure depths is on the correct device
+        # depths = xp.asarray(depths, dtype=bixel["rad_depths"].dtype)
+        depths = depths + kernel["offset"] - bixel["rad_depth_offset"]
 
         # Conversion factor from MeV cm^2/g per primary to Gy mm^2 per 1e6 primaries
         conversion_factor = 1.6021766208e-02
 
         # Find all values we need to interpolate
         used_kernels = {}
-        used_kernels["idd"] = conversion_factor * kernel.idd
+        used_kernels["idd"] = conversion_factor * kernel["idd"]
 
         # Lateral Kernel Model
         if self.lateral_model == "single":
-            used_kernels["sigma"] = kernel.sigma
+            used_kernels["sigma"] = kernel["sigma"]
         elif self.lateral_model == "singleXY":
-            used_kernels["sigma_x"] = kernel.sigma_x
-            used_kernels["sigma_y"] = kernel.sigma_y
+            used_kernels["sigma_x"] = kernel["sigma_x"]
+            used_kernels["sigma_y"] = kernel["sigma_y"]
         elif self.lateral_model == "double":
-            used_kernels["sigma_1"] = kernel.sigma_1
-            used_kernels["sigma_2"] = kernel.sigma_2
-            used_kernels["weight"] = kernel.weight
+            used_kernels["sigma_1"] = kernel["sigma_1"]
+            used_kernels["sigma_2"] = kernel["sigma_2"]
+            used_kernels["weight"] = kernel["weight"]
         elif self.lateral_model == "multi":
-            used_kernels["weight_multi"] = kernel.weight_multi
-            used_kernels["sigma_multi"] = kernel.sigma_multi
+            used_kernels["weight_multi"] = kernel["weight_multi"]
+            used_kernels["sigma_multi"] = kernel["sigma_multi"]
         else:
             raise ValueError("Invalid Lateral Model")
 
         # LET
         if self.calc_let:
-            used_kernels["let"] = kernel.let
+            used_kernels["let"] = kernel["let"]
 
         # bioDose
         # TODO:
         if self.calc_bio_dose:
-            used_kernels["alpha"] = kernel.alpha
-            used_kernels["beta"] = kernel.beta
+            used_kernels["alpha"] = kernel["alpha"]
+            used_kernels["beta"] = kernel["beta"]
 
         # Interpolate all fields in X
         kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
@@ -274,6 +284,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
         lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
+
+        # xp = array_api_compat.array_namespace(beam_info["bev_coords"])
 
         # Ray tracing for beam i and ray j
         ix, radial_dist_sq, lat_dists, _ = self.calc_geo_dists(
@@ -285,9 +297,17 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             lateral_ray_cutoff,
         )
 
+        target_backend = (
+            PREFERRED_GPU_ARRAY_BACKEND if PREFERRED_GPU_ARRAY_BACKEND is not None else "numpy"
+        )
+        # TODO: THere is a better place for this here
+        _vdose_grid = to_namespace(target_backend, self._vdose_grid)
+        beam_info["valid_coords"] = to_namespace(target_backend, beam_info["valid_coords"])
+        beam_info["geo_depths"] = to_namespace(target_backend, beam_info["geo_depths"])
+        beam_info["rad_depths"] = to_namespace(target_backend, beam_info["rad_depths"])
         # Subindex given the relevant indices from the geometric distance calculation
         ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
+        ray["ix"] = [_vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
 
         ray["radial_dist_sq"] = [
             radial_dist_sq[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]
@@ -305,32 +325,47 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ]
 
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
-        kernel = cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
+        kernel = curr_bixel["kernel"]
+
+        xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
 
         # Create offset vector to account for additional offsets modeled in the base data
         # and a potential range shifter
-        tmp_offset = kernel.offset - curr_bixel["rad_depth_offset"]
+        tmp_offset = kernel["offset"] - curr_bixel["rad_depth_offset"]
 
         # Find depth-dependent lateral cutoff
         if self.dosimetric_lateral_cutoff == 1:
-            curr_ix = curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset
+            curr_ix = curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
         elif 0 < self.dosimetric_lateral_cutoff < 1:
-            cutoff_info = kernel.lateral_cut_off
+            cutoff_info = kernel.get("lateral_cut_off")
 
-            if cutoff_info.cut_off.size > 1:
+            if cutoff_info is not None and cutoff_info["cut_off"].size > 1:
+                # Move lookup tables to the correct device/namespace
+                cutoff_depths = cutoff_info["depths"]
+                cutoff_vals_sq = cutoff_info["cut_off"] ** 2
+
+                interp_vals = array_interp(
+                    curr_ray["rad_depths"], cutoff_depths + tmp_offset, cutoff_vals_sq
+                )
+
+                # Check bounds (mimic left=nan, right=nan behavior for comparison)
+                min_depth = cutoff_depths[0] + tmp_offset
+                max_depth = cutoff_depths[-1] + tmp_offset
+                in_bounds = (curr_ray["rad_depths"] >= min_depth) & (
+                    curr_ray["rad_depths"] <= max_depth
+                )
+
                 curr_ix = (
-                    np.interp(
-                        curr_ray["rad_depths"],
-                        cutoff_info.depths + tmp_offset,
-                        cutoff_info.cut_off**2,
-                        left=np.nan,
-                        right=np.nan,
-                    )
-                    >= curr_ray["radial_dist_sq"]
-                ) & (curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset)
+                    (interp_vals >= curr_ray["radial_dist_sq"])
+                    & in_bounds
+                    & (curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset)
+                )
             else:
-                curr_ix = (cutoff_info.cut_off[0] ** 2 >= curr_ray["radial_dist_sq"]) & (
-                    curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset
+                cutoff_val_sq = xp.asarray(
+                    cutoff_info["cut_off"][0] ** 2, dtype=curr_ray["radial_dist_sq"].dtype
+                )
+                curr_ix = (cutoff_val_sq >= curr_ray["radial_dist_sq"]) & (
+                    curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
                 )
         else:
             raise ValueError("dosimetric_lateral_cutoff must be a value > 0 and <= 1!")
@@ -352,7 +387,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
             # Compute!
             sigma_rashi = self._calc_sigma_rashi(
-                curr_bixel["kernel"]["energy"], curr_bixel["range_shifter"], curr_bixel["SSD"]
+                curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
             )
 
             # Add to initial sigma in quadrature
@@ -440,6 +475,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             Updated Beam Information dictionary.
         """
+
+        # xp = array_api_compat.array_namespace
+
         beam_info = super()._init_beam(dij, ct, cst, stf, i)
 
         # Sanity Check
@@ -472,14 +510,11 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ]
 
         for scen in range(len(beam_info["valid_coords"])):
-            beam_info["valid_coords"][scen] = np.array(
-                [
-                    True if ss & vc else False
-                    for ss, vc in zip(sub_select_ix[scen], beam_info["valid_coords"][scen])
-                ]
-            )
+            beam_info["valid_coords"][scen] = sub_select_ix[scen] & beam_info["valid_coords"][scen]
 
-        beam_info["valid_coords_all"] = np.any(np.column_stack(beam_info["valid_coords"]), axis=1)
+        xp = array_api_compat.array_namespace(self._vox_world_coords)
+        beam_info["valid_coords"] = to_namespace(xp, beam_info["valid_coords"])
+        beam_info["valid_coords_all"] = xp.any(xp.stack(beam_info["valid_coords"], axis=1), axis=1)
 
         # Precompute CutOff
         logger.info("Calculating lateral cutoffs for beam %d...", i)
@@ -786,7 +821,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 # depth
                 bixel = {
                     "energy_ix": energy_ix,
-                    "kernel": base_kernel,
+                    "kernel": base_kernel.to_namespace(np),
                     "radial_dist_sq": radial_dist_sq,
                     "lat_dists": lat_dists,
                     "sigma_ini_sq": largest_sigma_sq4unique_energies[
@@ -975,10 +1010,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         p = 1.77  # [1]
 
         # Determine range
-        if "range" in bd_entry:
+        range_in_water = None
+        if isinstance(bd_entry, dict) and "range" in bd_entry:
             range_in_water = bd_entry["range"]
-        else:
-            energy = bd_entry["energy"]
+
+        if range_in_water is None:
+            if isinstance(bd_entry, dict) and "energy" in bd_entry:
+                energy = bd_entry["energy"]
+            else:
+                energy = bd_entry
             range_in_water = alpha * (energy**p)
 
         # Check if valid computation possible or range shifter too thick

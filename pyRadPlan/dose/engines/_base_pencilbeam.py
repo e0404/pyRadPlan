@@ -168,6 +168,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._rad_depth_cubes = []
         self._raytracer = None
         self._eps_ijk: Array = None
+        self._cuda_kernel_used = False
 
         super().__init__(pln)
 
@@ -410,25 +411,34 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # ... the ray_tracing to handle this as the model
         beam_info = {"beam": stf.beams[i].model_dump(), "beam_index": i}
 
+        xp = array_api_compat.array_namespace(self._vox_world_coords)
+
         # Convert voxel indices to real coordinates using iso center of beam i
-        coords_v = self._vox_world_coords - beam_info["beam"]["iso_center"]
-        coords_vdose_grid = self._vox_world_coords_dose_grid - beam_info["beam"]["iso_center"]
+        iso_center = xp.asarray(
+            beam_info["beam"]["iso_center"], dtype=self._vox_world_coords.dtype
+        )
+        coords_v = self._vox_world_coords - iso_center
+        coords_vdose_grid = self._vox_world_coords_dose_grid - iso_center
 
         # Get Rotation Matrix
-        beam_info["rot_mat_system_T"] = get_beam_rotation_matrix(
+        rot_mat = get_beam_rotation_matrix(
             beam_info["beam"]["gantry_angle"], beam_info["beam"]["couch_angle"]
         )
+        beam_info["rot_mat_system_T"] = xp.asarray(rot_mat, dtype=self._vox_world_coords.dtype)
 
         # Rotate coordinates (1st couch around Y axis, 2nd gantry movement)
-        rot_coords_v = np.dot(coords_v, beam_info["rot_mat_system_T"])
-        rot_coords_vdose_grid = np.dot(coords_vdose_grid, beam_info["rot_mat_system_T"])
+        rot_coords_v = coords_v @ beam_info["rot_mat_system_T"]
+        rot_coords_vdose_grid = coords_vdose_grid @ beam_info["rot_mat_system_T"]
 
-        rot_coords_v -= beam_info["beam"]["source_point_bev"]
-        rot_coords_vdose_grid -= beam_info["beam"]["source_point_bev"]
+        source_point_bev = xp.asarray(
+            beam_info["beam"]["source_point_bev"], dtype=self._vox_world_coords.dtype
+        )
+        rot_coords_v -= source_point_bev
+        rot_coords_vdose_grid -= source_point_bev
 
         # Calculate geometric distances
         geo_dist_vdose_grid = [
-            np.sqrt(np.sum(rot_coords_vdose_grid**2, axis=1)) for _ in range(ct.num_of_ct_scen)
+            xp.sqrt(xp.sum(rot_coords_vdose_grid**2, axis=1)) for _ in range(ct.num_of_ct_scen)
         ]
 
         # Calculate radiological depth cube
@@ -461,10 +471,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
 
             rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
-            rad_depth_vdose_grid = rad_depth_cube_dosegrid.ravel()[self._vdose_grid]
+            rad_depth_vdose_grid = xp.asarray(rad_depth_cube_dosegrid).ravel()[self._vdose_grid]
 
             # Find valid coordinates
-            coord_is_valid = np.isfinite(rad_depth_vdose_grid)
+            coord_is_valid = xp.isfinite(rad_depth_vdose_grid)
 
             beam_info["valid_coords"][c] = coord_is_valid
 
@@ -474,7 +484,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         beam_info["geo_depths"] = geo_dist_vdose_grid
         beam_info["bev_coords"] = rot_coords_vdose_grid
 
-        beam_info["valid_coords_all"] = np.any(np.vstack(beam_info["valid_coords"]), axis=0)
+        beam_info["valid_coords_all"] = xp.any(xp.stack(beam_info["valid_coords"]), axis=0)
 
         # Check existence of target_points
         if any(r["target_point"] is None for r in beam_info["beam"]["rays"]):
@@ -691,7 +701,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             beam_info["valid_coords_all"],
             lateral_ray_cutoff,
         )
-
+        beam_info["valid_coords"] = to_namespace("cupy", beam_info["valid_coords"])
+        ray["valid_coords"] = to_namespace("cupy", ix)
         # Subindex given the relevant indices from the geometric distance calculation
         ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
         ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
@@ -924,10 +935,18 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             Lateral distances to the central ray projected onto the isocenter plane.
         """
 
+        # xp = array_api_compat.array_namespace(
+        #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
+        # )
+
+        rot_coords_bev = to_namespace("cupy", rot_coords_bev)
+        source_point_bev = to_namespace("cupy", source_point_bev)
+        target_point_bev = to_namespace("cupy", target_point_bev)
+        rad_depth_mask = to_namespace("cupy", rad_depth_mask)
+
         xp = array_api_compat.array_namespace(
             rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         )
-
         if hasattr(xp, "linalg"):
             norm = xp.linalg.vector_norm
             cross = xp.linalg.cross
@@ -967,8 +986,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Normalize the vector
         b /= norm(b)
 
-        # Define rotation matrix
-        rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
+        # Calculate Rotation Matrix
+        derived_rot_mat = None
         if not xp.all(a == b):
             # Cross product
             cross_ab = cross(a, b)

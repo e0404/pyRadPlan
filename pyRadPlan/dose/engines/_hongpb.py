@@ -1,7 +1,5 @@
-from typing import cast
 import array_api_compat
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
-from ...machines import ParticlePencilBeamKernel
 
 
 class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
@@ -14,7 +12,7 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
     def _calc_particle_bixel(self, bixel):
         kernels = self._interpolate_kernels_in_depth(bixel)
 
-        pb_kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
+        pb_kernel = bixel["kernel"]
 
         xp = array_api_compat.array_namespace(bixel["radial_dist_sq"])
 
@@ -66,7 +64,9 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         else:
             raise ValueError("Invalid Lateral Model")
 
-        bixel["physical_dose"] = pb_kernel.lateral_cut_off.comp_fac * lateral * kernels["idd"]
+        bixel["physical_dose"] = (
+            pb_kernel["lateral_cut_off"]["comp_fac"] * lateral * kernels["idd"]
+        )
 
         # Check if we have valid dose values
         if xp.any(xp.isnan(bixel["physical_dose"])) or xp.any(bixel["physical_dose"] < 0):
