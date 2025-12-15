@@ -22,6 +22,54 @@ from pyRadPlan.raytracer import RayTracerSiddon
 
 from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
+from ...core.xp_utils import numba_cuda_available
+
+if numba_cuda_available():
+    from numba import cuda
+
+    @cuda.jit
+    def _calc_geo_dists_kernel(
+        coords,
+        rot_mat,
+        source_point,
+        lateral_cutoff_sq_over_sad_sq,
+        out_coords_temp,
+        out_lat_dists,
+        out_rad_dist_sq,
+        out_mask,
+    ):
+        i = cuda.grid(1)
+        if i < coords.shape[0]:
+            # Matrix multiplication: coords[i] @ rot_mat
+            # Unroll for 3x3
+            x = coords[i, 0]
+            y = coords[i, 1]
+            z = coords[i, 2]
+
+            rx = x * rot_mat[0, 0] + y * rot_mat[1, 0] + z * rot_mat[2, 0]
+            ry = x * rot_mat[0, 1] + y * rot_mat[1, 1] + z * rot_mat[2, 1]
+            rz = x * rot_mat[0, 2] + y * rot_mat[1, 2] + z * rot_mat[2, 2]
+
+            out_coords_temp[i, 0] = rx
+            out_coords_temp[i, 1] = ry
+            out_coords_temp[i, 2] = rz
+
+            # lat_dists
+            lx = rx + source_point[0]
+            lz = rz + source_point[2]
+
+            out_lat_dists[i, 0] = lx
+            out_lat_dists[i, 1] = lz
+
+            # rad_dist_sq
+            r_sq = lx * lx + lz * lz
+            out_rad_dist_sq[i] = r_sq
+
+            # mask
+            # (lateral_cutoff / sad) ** 2 * ry ** 2
+            limit = lateral_cutoff_sq_over_sad_sq * ry * ry
+
+            out_mask[i] = r_sq <= limit
 
 
 logger = logging.getLogger(__name__)
@@ -942,7 +990,64 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 + ssc_matrix
                 + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )
-            # rot_coords_temp = np.dot(rot_coords_bev[rad_depth_ix, :], derived_rot_mat)
+
+        # GPU Path
+        if numba_cuda_available() and hasattr(xp, "cuda") and xp.cuda.is_available():
+            if not self._cuda_kernel_used:
+                logger.info("Using CUDA kernel for geometric distance calculation.")
+                self._cuda_kernel_used = True
+
+            rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
+            num_elements = rot_coords_subset.shape[0]
+
+            if num_elements > 0:
+                if derived_rot_mat is None:
+                    derived_rot_mat = xp.eye(3, dtype=a.dtype)
+
+                # Ensure derived_rot_mat is correct type
+                derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
+
+                out_coords_temp = xp.empty_like(rot_coords_subset)
+                out_lat_dists = xp.empty((num_elements, 2), dtype=rot_coords_subset.dtype)
+                out_rad_dist_sq = xp.empty((num_elements,), dtype=rot_coords_subset.dtype)
+                out_mask = xp.empty((num_elements,), dtype=bool)
+
+                lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
+
+                threadsperblock = 256
+                blockspergrid = (num_elements + (threadsperblock - 1)) // threadsperblock
+
+                _calc_geo_dists_kernel[blockspergrid, threadsperblock](
+                    rot_coords_subset,
+                    derived_rot_mat,
+                    source_point_bev,
+                    lateral_cutoff_sq_over_sad_sq,
+                    out_coords_temp,
+                    out_lat_dists,
+                    out_rad_dist_sq,
+                    out_mask,
+                )
+
+                # Update ix
+                ix[rad_depth_mask] = out_mask
+
+                # Filter results
+                subset_mask = out_mask
+                rad_distances_sq = out_rad_dist_sq[subset_mask]
+
+                sub_ix = xp.nonzero(subset_mask)[0]
+                lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
+
+                if array_api_compat.size(sub_ix) > 0:
+                    iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
+                else:
+                    iso_lat_dists = xp.empty_like(lat_dists)
+
+                return ix, rad_distances_sq, lat_dists, iso_lat_dists
+
+        # Define rotation matrix
+        rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
+        if derived_rot_mat is not None:
             rot_coords_temp @= xp.astype(derived_rot_mat, rot_coords_temp.dtype)
 
         # Put [0 0 0] position CT in center of the beamlet
