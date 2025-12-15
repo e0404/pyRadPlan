@@ -30,6 +30,7 @@ from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosin
 
 
 xp_utils.PREFER_GPU = True
+# xp_utils.DOSE_CALC_CUDA = True
 xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
 logging.basicConfig(level=logging.INFO)
 
@@ -43,7 +44,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
-pln.prop_dose_calc = {"dose_grid": ct.grid}
+pln.prop_dose_calc = {"dose_grid": {"resolution": (2.0, 2.0, 2.0)}}
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
