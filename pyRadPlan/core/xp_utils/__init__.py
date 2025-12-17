@@ -1,8 +1,9 @@
 """Provide information about the available compute backends."""
 
 import importlib
+import array_api_compat
 from numba import cuda as numba_cuda
-from typing import Optional
+from typing import Optional, Union
 
 try:
     import cupy as cp
@@ -78,6 +79,27 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
         return importlib.import_module(f"array_api_compat.{namespace}")
     except ModuleNotFoundError:
         return importlib.import_module(namespace)
+
+
+def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int]:
+    """
+    Choose the default device for the given array namespace.
+
+    Parameters
+    ----------
+    xp : Optional[ArrayNamespace], optional
+        The array namespace. If None, the preferred backend is used.
+    """
+    if xp is None:
+        xp = choose_array_api_namespace()
+
+    if PREFER_GPU:
+        if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
+            return "cuda"
+        if array_api_compat.is_cupy_namespace(xp) and cupy_available():
+            return 0
+
+    return "cpu"
 
 
 __all__ = [
