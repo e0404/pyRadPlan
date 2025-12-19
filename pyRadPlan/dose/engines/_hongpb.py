@@ -12,9 +12,10 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
     def _calc_particle_bixel(self, bixel):
         kernels = self._interpolate_kernels_in_depth(bixel)
 
-        pb_kernel = bixel["kernel"]
-
         xp = array_api_compat.array_namespace(bixel["radial_dist_sq"])
+        pb_kernel = bixel[
+            "kernel"
+        ]  # {"lateral_cut_off":{"comp_fac": xp.asarray(bixel["kernel"]["lateral_cut_off"]["comp_fac"])}}
 
         # Lateral Component
         if self.lateral_model == "single":

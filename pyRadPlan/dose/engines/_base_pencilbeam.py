@@ -23,7 +23,12 @@ from pyRadPlan.raytracer import RayTracerSiddon
 from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import numba_cuda_available
+from ...core.xp_utils import to_namespace, to_numpy
 
+try:
+    profile
+except NameError:
+    profile = lambda x: x
 if numba_cuda_available():
     from numba import cuda
 
@@ -161,6 +166,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self.trace_on_dose_grid: bool = True
         self.cube_wed = None
         self.hlut = None
+        self.assumed_sparsity = 5e-4
 
         self._computed_quantities = []
         self._effective_lateral_cutoff = None
@@ -176,6 +182,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     def _compute_bixel(self, curr_ray, k):
         raise NotImplementedError("Method _compute_bixel must be implemented in derived class.")
 
+    @profile
     def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation):
         """
         Calculate the dose using the pencil beam method.
@@ -228,6 +235,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     # Keep tabs on bixels computed in this beam
                     bixel_beam_counter = 0
 
+                    xp = self.xp
+                    curr_beam["valid_coords_all"] = xp.asarray(curr_beam["valid_coords_all"])
+                    curr_beam["rad_depths"] = xp.asarray(curr_beam["rad_depths"])
+                    curr_beam["geo_depths"] = xp.asarray(curr_beam["geo_depths"])
+                    curr_beam["bev_coords"] = xp.asarray(curr_beam["bev_coords"])
+                    curr_beam["valid_coords"] = xp.asarray(curr_beam["valid_coords"])
+                    curr_beam["rot_mat_system_T"] = xp.asarray(curr_beam["rot_mat_system_T"])
+                    self._vdose_grid = to_namespace(self.xp, self._vdose_grid)
+
                     # Ray calculation
                     for j in tqdm(
                         range(curr_beam["beam"]["num_of_rays"]), desc="Ray", unit="r", leave=False
@@ -260,7 +276,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                                     for k in range(curr_ray["num_of_bixels"]):
                                         # Bixel Computation
                                         curr_bixel = self._compute_bixel(scen_ray, k)
-
                                         # fill the current bixel in the sparse dose influence
                                         # matrix
                                         self._fill_dij(
@@ -273,7 +288,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                                             k,
                                             bixel_counter + k,
                                         )
-
                         # Progress Update & Bookkeeping
                         bixel_counter += curr_ray["num_of_bixels"]
                         bixel_beam_counter += curr_ray["num_of_bixels"]
@@ -349,6 +363,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         return dij
 
     def _allocate_quantity_matrices(self, dij: dict[str, Any], names: list[str]):
+        device = "cpu"
+        xp = np  # self.xp
         # Loop over all requested quantities
         for q_name in names:
             # Create dij list for each quantity
@@ -360,20 +376,27 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 # Only if there is a scenario we will allocate
                 if self.mult_scen.scen_mask.flat[i]:
                     if self._calc_dose_direct:
-                        dij[q_name].flat[i] = np.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                        dij[q_name].flat[i] = xp.zeros(
+                            (self.dose_grid.num_voxels, dij["num_of_beams"]),
+                            dtype=xp.float32,
+                            device=device,
                         )
                     else:
                         # We allocate raw csc sparse matrix structures using
                         # a rough estimat ebased on number of voxels and
                         # beamlets
                         est_nnz = np.fix(
-                            5e-4 * self.dose_grid.num_voxels * self._num_of_columns_dij
+                            self.assumed_sparsity
+                            * self.dose_grid.num_voxels
+                            * self._num_of_columns_dij
                         ).astype(np.int64)
+
                         dij[q_name].flat[i] = {
-                            "data": np.empty((est_nnz,), dtype=np.float32),
-                            "indices": np.empty((est_nnz,), dtype=np.int64),
-                            "indptr": np.zeros((self._num_of_columns_dij + 1,), dtype=np.int64),
+                            "data": xp.empty((est_nnz,), dtype=xp.float32, device=device),
+                            "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
+                            "indptr": xp.zeros(
+                                (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
+                            ),
                             "nnz": 0,
                         }
 
@@ -686,39 +709,44 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         return scen_ray
 
-    def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
-        ray["effective_lateral_cut_off"] = beam_info.get(
-            "effective_lateral_cut_off", self._effective_lateral_cutoff
+    def _get_ray_geometry_from_beam(self, ray: dict, beam_info: dict):
+        raise NotImplementedError(
+            "Method _get_ray_geometry_from_beam must be implemented in derived class."
         )
-        lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
 
-        # Ray tracing for beam i and ray j
-        ix, radial_dist_sq, lat_dists, iso_lat_dists = self.calc_geo_dists(
-            beam_info["bev_coords"],
-            ray["source_point_bev"],
-            ray["target_point_bev"],
-            ray["sad"],
-            beam_info["valid_coords_all"],
-            lateral_ray_cutoff,
-        )
-        beam_info["valid_coords"] = to_namespace("cupy", beam_info["valid_coords"])
-        ray["valid_coords"] = to_namespace("cupy", ix)
-        # Subindex given the relevant indices from the geometric distance calculation
-        ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
+    # def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
+    #     ray["effective_lateral_cut_off"] = beam_info.get(
+    #         "effective_lateral_cut_off", self._effective_lateral_cutoff
+    #     )
+    #     lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
 
-        ray["radial_dist_sq"] = [radial_dist_sq[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-        ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-        ray["iso_lat_dists"] = [iso_lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
+    #     # Ray tracing for beam i and ray j
+    #     ix, radial_dist_sq, lat_dists, iso_lat_dists = self.calc_geo_dists(
+    #         beam_info["bev_coords"],
+    #         ray["source_point_bev"],
+    #         ray["target_point_bev"],
+    #         ray["sad"],
+    #         beam_info["valid_coords_all"],
+    #         lateral_ray_cutoff,
+    #     )
+    #     beam_info["valid_coords"] = to_namespace(self.xp, beam_info["valid_coords"])
+    #     ray["valid_coords"] = to_namespace(self.xp, ix)
+    #     # Subindex given the relevant indices from the geometric distance calculation
+    #     ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
+    #     ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
 
-        ray["valid_coords_all"] = np.any(np.vstack(ray["valid_coords"]), axis=0)
+    #     ray["radial_dist_sq"] = [radial_dist_sq[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
+    #     ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
+    #     ray["iso_lat_dists"] = [iso_lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
 
-        ray["geo_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
-        ]  # usually not needed for particle beams
-        ray["rad_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
-        ]
+    #     ray["valid_coords_all"] = np.any(np.vstack(ray["valid_coords"]), axis=0)
+
+    #     ray["geo_depths"] = [
+    #         rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
+    #     ]  # usually not needed for particle beams
+    #     ray["rad_depths"] = [
+    #         rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
+    #     ]
 
     def _get_lateral_distance_from_dose_cutoff_on_ray(self, ray: dict) -> float:
         """
@@ -739,7 +767,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         return ray.get("effective_lateral_cut_off", self._effective_lateral_cutoff)
 
-    def _fill_dij(
+    def _fill_dij_gpu(
         self,
         bixel: dict,
         dij: dict,
@@ -783,7 +811,80 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         dict
             The updated dose influence matrix.
         """
+        xp = array_api_compat.array_namespace(bixel["physical_dose"])
+
         # Determine if we have entries to store for this bixel
+        ix_size = 0
+        if bixel and "ix" in bixel:
+            ix_val = bixel["ix"]
+            try:
+                ix_size = ix_val.shape[0]
+            except AttributeError:
+                ix_size = len(ix_val)
+
+        sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
+
+        for q_name in self._computed_quantities:
+            if self._calc_dose_direct:
+                if ix_size > 0:
+                    dij[q_name][sub_scen_idx][bixel["ix"], curr_beam_idx] += (
+                        bixel["weight"] * bixel[q_name]
+                    )
+            else:
+                data_dict = dij[q_name][sub_scen_idx]
+                # Advance column pointer even when ix_size == 0 to keep CSC valid
+                start = data_dict["indptr"][bixel_counter]
+                end = start + ix_size
+                data_dict["indptr"][bixel_counter + 1] = end
+
+                if ix_size > 0:
+                    need_nnz = data_dict["nnz"] + ix_size
+                    if data_dict["data"].shape[0] < need_nnz:
+                        logger.debug("Resizing data and indices arrays for %s...", q_name)
+                        grow = max(
+                            ix_size, (self._num_of_columns_dij - bixel_counter) * (ix_size + 1)
+                        )
+                        new_size = data_dict["data"].shape[0] + grow
+                        old = data_dict["data"]
+                        new = xp.zeros((int(new_size),), dtype=old.dtype, device=self.device)
+                        new[: old.shape[0]] = old
+                        data_dict["data"] = new
+                        old = data_dict["indices"]
+                        new = xp.zeros((int(new_size),), dtype=old.dtype, device=self.device)
+                        new[: old.shape[0]] = old
+                        data_dict["indices"] = new
+
+                    # Fill values and indices into the allocated slice
+                    data_dict["data"][start:end] = bixel[q_name]
+                    data_dict["indices"][start:end] = bixel["ix"]
+                    data_dict["nnz"] += ix_size
+
+        # Bookkeeping of bixel numbers
+        # remember beam and bixel number
+        if self._calc_dose_direct:
+            dij["beam_num"][int(curr_beam_idx)] = curr_beam_idx
+            dij["ray_num"][int(curr_beam_idx)] = curr_beam_idx
+            dij["bixel_num"][int(curr_beam_idx)] = curr_beam_idx
+        else:
+            dij["beam_num"][int(bixel_counter)] = curr_beam_idx
+            dij["ray_num"][int(bixel_counter)] = curr_ray_idx
+            dij["bixel_num"][int(bixel_counter)] = curr_bixel_idx
+
+    def _fill_dij(
+        self,
+        bixel: dict,
+        dij: dict,
+        _stf: SteeringInformation,
+        scen_idx: int,
+        curr_beam_idx: int,
+        curr_ray_idx: int,
+        curr_bixel_idx: int,
+        bixel_counter: int,
+    ):
+        # Debugging timing
+
+        bixel["physical_dose"] = to_numpy(bixel["physical_dose"])
+
         ix_size = 0
         if bixel and "ix" in bixel:
             ix_val = bixel["ix"]
@@ -791,9 +892,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 ix_size = ix_val.size
             except AttributeError:
                 ix_size = len(ix_val)
-
         sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
-
         for q_name in self._computed_quantities:
             if self._calc_dose_direct:
                 if ix_size > 0:
@@ -819,6 +918,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         data_dict["indices"].resize((new_size,), refcheck=False)
 
                     # Fill values and indices into the allocated slice
+                    bixel[q_name] = to_numpy(bixel[q_name])
+                    bixel["ix"] = to_numpy(bixel["ix"])
                     data_dict["data"][start:end] = bixel[q_name]
                     data_dict["indices"][start:end] = bixel["ix"]
                     data_dict["nnz"] += ix_size
@@ -895,6 +996,84 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Call the finalizeDose method from the base class
         return super()._finalize_dose(dij)
 
+    def _finalize_dose_new(self, dij: dict):
+        """
+        Finalize the dose influence matrix.
+
+        Pruning the matrix and concatenating the containers to a compressed
+        sparse matrix.
+
+        Parameters
+        ----------
+        dij : dict
+            The dose influence matrix.
+
+        Returns
+        -------
+        Dij
+            The finalized dose influence matrix.
+        """
+
+        # Loop over all scenarios and remove dose influence for voxels outside of segmentations
+        for i in range(self.mult_scen.scen_mask.size):
+            # Only if there is a scenario we will allocate
+            if self.mult_scen.scen_mask.flat[i]:
+                # Loop over all used quantities
+                for q_name in self._computed_quantities:
+                    if not self._calc_dose_direct:
+                        # tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
+                        # tmp_matrix = tmp_matrix.tocsr().T
+                        data_dict = dij[q_name].flat[i]
+                        # TODO: dont move to numpy and make array api compatible
+                        data_dict["data"] = to_numpy(data_dict["data"])
+                        data_dict["indices"] = to_numpy(data_dict["indices"])
+                        data_dict["indptr"] = to_numpy(data_dict["indptr"])
+                        # Resize to the actual number of non-zero elements
+                        # data_dict["data"].resize((data_dict["nnz"],), refcheck=False)
+                        # data_dict["indices"].resize((data_dict["nnz"],), refcheck=False)
+                        nnz = int(data_dict["nnz"])
+                        old_data = data_dict["data"]
+                        new_data = np.zeros((nnz,), dtype=old_data.dtype)
+                        new_data[:nnz] = old_data[:nnz]
+                        data_dict["data"] = new_data
+                        old_idx = data_dict["indices"]
+                        new_idx = np.zeros((nnz,), dtype=old_idx.dtype)
+                        new_idx[:nnz] = old_idx[:nnz]
+                        data_dict["indices"] = new_idx
+
+                        # Create the matrix; allow SciPy to copy if necessary to guarantee mutability
+                        tmp_matrix = sparse.csc_array(
+                            (data_dict["data"], data_dict["indices"], data_dict["indptr"]),
+                            shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
+                            dtype=np.float32,
+                            copy=False,
+                        )
+
+                        # Eliminate explicit zeros only if any exist to avoid WRITEBACKIFCOPY issues
+                        try:
+                            tmp_matrix.eliminate_zeros()
+                        except ValueError:
+                            # Fallback: force a copy then eliminate
+                            tmp_matrix = sparse.csc_array(tmp_matrix, copy=True)
+                            tmp_matrix.eliminate_zeros()
+
+                        # make sure indices are sorted and matrix is canonical
+                        if not tmp_matrix.has_sorted_indices:
+                            logger.debug("Sorting indices for %s...", q_name)
+                            tmp_matrix.sort_indices()
+
+                        if not tmp_matrix.has_canonical_format:
+                            logger.debug("Matrix is not in canonical format for %s...", q_name)
+                            tmp_matrix.sum_duplicates()
+
+                        dij[q_name].flat[i] = tmp_matrix
+
+        if self.keep_rad_depth_cubes and self._rad_depth_cubes:
+            dij["rad_depth_cubes"] = self._rad_depth_cubes
+
+        # Call the finalizeDose method from the base class
+        return super()._finalize_dose(dij)
+
     def calc_geo_dists(
         self,
         rot_coords_bev: Array,
@@ -939,10 +1118,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         # )
 
-        rot_coords_bev = to_namespace("cupy", rot_coords_bev)
-        source_point_bev = to_namespace("cupy", source_point_bev)
-        target_point_bev = to_namespace("cupy", target_point_bev)
-        rad_depth_mask = to_namespace("cupy", rad_depth_mask)
+        rot_coords_bev = to_namespace(self.xp, rot_coords_bev)
+        source_point_bev = to_namespace(self.xp, source_point_bev)
+        target_point_bev = to_namespace(self.xp, target_point_bev)
+        rad_depth_mask = to_namespace(self.xp, rad_depth_mask)
 
         xp = array_api_compat.array_namespace(
             rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
@@ -988,7 +1167,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         # Calculate Rotation Matrix
         derived_rot_mat = None
-        if not xp.all(a == b):
+        # Check for alignment with tolerance (avoid numerical instability/noise)
+        if not xp.all(xp.abs(a - b) < 1e-7):
             # Cross product
             cross_ab = cross(a, b)
 
