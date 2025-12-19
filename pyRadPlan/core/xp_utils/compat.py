@@ -127,6 +127,29 @@ def interp1d(
 
     xp = array_api_compat.array_namespace(x, xq)
 
+    # Optimization: Use xp.interp if available (e.g. numpy, cupy) for list/dict inputs
+    # This avoids stacking inputs and using the slower manual implementation
+    interp_func = None
+    if array_api_compat.is_numpy_namespace(xp):
+        interp_func = np.interp
+    elif array_api_compat.is_cupy_namespace(xp):
+        interp_func = cp.interp
+    elif hasattr(xp, "interp"):
+        interp_func = xp.interp
+
+    if interp_func is not None:
+        if isinstance(y, dict) and all(v.ndim == 1 for v in y.values()):
+            res = {k: interp_func(xq, x, v) for k, v in y.items()}
+            if stack:
+                return xp.stack(list(res.values()), axis=0)
+            return res
+
+        if isinstance(y, (list, tuple)) and all(v.ndim == 1 for v in y):
+            res = [interp_func(xq, x, v) for v in y]
+            if stack:
+                return xp.stack(res, axis=0)
+            return res
+
     if isinstance(y, (list, tuple)) and stack:
         y = xp.stack(y, axis=0)
 
