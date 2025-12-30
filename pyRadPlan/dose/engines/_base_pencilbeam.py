@@ -22,7 +22,7 @@ from pyRadPlan.raytracer import RayTracerSiddon
 
 from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
-from ...core.xp_utils import numba_cuda_available
+from ...core.xp_utils import numba_cuda_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy
 
 try:
@@ -75,6 +75,37 @@ if numba_cuda_available():
             limit = lateral_cutoff_sq_over_sad_sq * ry * ry
 
             out_mask[i] = r_sq <= limit
+
+
+if pytorch_gpu_available():
+    import torch
+
+    @torch.jit.script
+    def _calc_geo_dists_torch_kernel(
+        coords: torch.Tensor,
+        rot_mat: torch.Tensor,
+        source_point: torch.Tensor,
+        lateral_cutoff_sq_over_sad_sq: float,
+    ):
+        # Matrix multiplication: coords @ rot_mat
+        out_coords_temp = torch.mm(coords, rot_mat)
+
+        # lat_dists
+        lx = out_coords_temp[:, 0] + source_point[0]
+        lz = out_coords_temp[:, 2] + source_point[2]
+
+        out_lat_dists = torch.stack((lx, lz), dim=1)
+
+        # rad_dist_sq
+        r_sq = lx * lx + lz * lz
+
+        # mask
+        ry = out_coords_temp[:, 1]
+        limit = lateral_cutoff_sq_over_sad_sq * ry * ry
+
+        out_mask = r_sq <= limit
+
+        return out_coords_temp, out_lat_dists, r_sq, out_mask
 
 
 logger = logging.getLogger(__name__)
@@ -235,14 +266,28 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     # Keep tabs on bixels computed in this beam
                     bixel_beam_counter = 0
 
+                    # TODO: Since init_beam is not yet array api compatible, we convert here
                     xp = self.xp
-                    curr_beam["valid_coords_all"] = xp.asarray(curr_beam["valid_coords_all"])
-                    curr_beam["rad_depths"] = xp.asarray(curr_beam["rad_depths"])
-                    curr_beam["geo_depths"] = xp.asarray(curr_beam["geo_depths"])
-                    curr_beam["bev_coords"] = xp.asarray(curr_beam["bev_coords"])
-                    curr_beam["valid_coords"] = xp.asarray(curr_beam["valid_coords"])
-                    curr_beam["rot_mat_system_T"] = xp.asarray(curr_beam["rot_mat_system_T"])
-                    self._vdose_grid = to_namespace(self.xp, self._vdose_grid)
+                    device = self.device
+                    curr_beam["valid_coords_all"] = to_namespace(
+                        xp, curr_beam["valid_coords_all"], device=device
+                    )
+                    curr_beam["rad_depths"] = to_namespace(
+                        xp, curr_beam["rad_depths"], device=device
+                    )
+                    curr_beam["geo_depths"] = to_namespace(
+                        xp, curr_beam["geo_depths"], device=device
+                    )
+                    curr_beam["bev_coords"] = to_namespace(
+                        xp, curr_beam["bev_coords"], device=device
+                    )
+                    curr_beam["valid_coords"] = to_namespace(
+                        xp, curr_beam["valid_coords"], device=device
+                    )
+                    curr_beam["rot_mat_system_T"] = to_namespace(
+                        xp, curr_beam["rot_mat_system_T"], device=device
+                    )
+                    self._vdose_grid = to_namespace(xp, self._vdose_grid, device=device)
 
                     # Ray calculation
                     for j in tqdm(
@@ -682,15 +727,19 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             The scenario ray with adapted radiological depths.
         """
         # Gets number of scenario
+        xp = array_api_compat.array_namespace(ray["rad_depths"][0])
         scen_num = self.mult_scen.scen_num(scen_idx)
         ct_scen = self.mult_scen.linear_mask[0][scen_num]
 
         # First, create a ray of the specific scenario to adapt rad depths
         scen_ray = ray.copy()
         scen_ray["rad_depths"] = scen_ray["rad_depths"][ct_scen]
-        scen_ray["rad_depths"] = (1 + self.mult_scen.rel_range_shift[scen_num]) * scen_ray[
-            "rad_depths"
-        ] + self.mult_scen.abs_range_shift[scen_num]
+        # TODO: operation below should be done in mult_scen class
+        scen_ray["rad_depths"] = (
+            1 + xp.asarray(self.mult_scen.rel_range_shift[scen_num], device=self.device)
+        ) * scen_ray["rad_depths"] + xp.asarray(
+            self.mult_scen.abs_range_shift[scen_num], device=self.device
+        )
         scen_ray["radial_dist_sq"] = scen_ray["radial_dist_sq"][ct_scen]
         scen_ray["ix"] = scen_ray["ix"][ct_scen]
 
@@ -888,10 +937,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         ix_size = 0
         if bixel and "ix" in bixel:
             ix_val = bixel["ix"]
-            try:
-                ix_size = ix_val.size
-            except AttributeError:
-                ix_size = len(ix_val)
+            ix_size = ix_val.shape[0]
+
         sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
         for q_name in self._computed_quantities:
             if self._calc_dose_direct:
@@ -1118,10 +1165,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         # )
 
-        rot_coords_bev = to_namespace(self.xp, rot_coords_bev)
-        source_point_bev = to_namespace(self.xp, source_point_bev)
-        target_point_bev = to_namespace(self.xp, target_point_bev)
-        rad_depth_mask = to_namespace(self.xp, rad_depth_mask)
+        rot_coords_bev = to_namespace(self.xp, rot_coords_bev, device=self.device)
+        source_point_bev = to_namespace(self.xp, source_point_bev, device=self.device)
+        target_point_bev = to_namespace(self.xp, target_point_bev, device=self.device)
+        rad_depth_mask = to_namespace(self.xp, rad_depth_mask, device=self.device)
 
         xp = array_api_compat.array_namespace(
             rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
@@ -1180,18 +1227,24 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
                     ],
                     dtype=cross_ab.dtype,
+                    device=self.device,
                 )
 
             ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
 
             derived_rot_mat = (
-                xp.eye(3, dtype=a.dtype)
+                xp.eye(3, dtype=a.dtype, device=self.device)
                 + ssc_matrix
                 + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )
 
-        # GPU Path
-        if numba_cuda_available() and hasattr(xp, "cuda") and xp.cuda.is_available():
+        # GPU Path (Numba/CuPy)
+        if (
+            numba_cuda_available()
+            and hasattr(xp, "cuda")
+            and xp.cuda.is_available()
+            and "cupy" in xp.__name__
+        ):
             if not self._cuda_kernel_used:
                 logger.info("Using CUDA kernel for geometric distance calculation.")
                 self._cuda_kernel_used = True
@@ -1201,7 +1254,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
             if num_elements > 0:
                 if derived_rot_mat is None:
-                    derived_rot_mat = xp.eye(3, dtype=a.dtype)
+                    derived_rot_mat = xp.eye(3, dtype=a.dtype, device=self.device)
 
                 # Ensure derived_rot_mat is correct type
                 derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
@@ -1244,13 +1297,57 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                 return ix, rad_distances_sq, lat_dists, iso_lat_dists
 
+        # GPU Path (PyTorch)
+        if pytorch_gpu_available() and "torch" in xp.__name__:
+            if not self._cuda_kernel_used:
+                logger.info("Using PyTorch kernel for geometric distance calculation.")
+                self._cuda_kernel_used = True
+
+            rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
+            num_elements = rot_coords_subset.shape[0]
+
+            if num_elements > 0:
+                if derived_rot_mat is None:
+                    derived_rot_mat = xp.eye(3, dtype=a.dtype, device=self.device)
+
+                # Ensure derived_rot_mat is correct type
+                derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
+
+                lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
+
+                out_coords_temp, out_lat_dists, out_rad_dist_sq, out_mask = (
+                    _calc_geo_dists_torch_kernel(
+                        rot_coords_subset,
+                        derived_rot_mat,
+                        source_point_bev,
+                        float(lateral_cutoff_sq_over_sad_sq),
+                    )
+                )
+
+                # Update ix
+                ix[rad_depth_mask] = out_mask
+
+                # Filter results
+                subset_mask = out_mask
+                rad_distances_sq = out_rad_dist_sq[subset_mask]
+
+                sub_ix = xp.nonzero(subset_mask)[0]
+                lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
+
+                if array_api_compat.size(sub_ix) > 0:
+                    iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
+                else:
+                    iso_lat_dists = xp.empty_like(lat_dists)
+
+                return ix, rad_distances_sq, lat_dists, iso_lat_dists
+
         # Define rotation matrix
         rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
         if derived_rot_mat is not None:
             rot_coords_temp @= xp.astype(derived_rot_mat, rot_coords_temp.dtype)
 
         # Put [0 0 0] position CT in center of the beamlet
-        xy_index = xp.asarray((0, 2), dtype=xp.int64)
+        xy_index = xp.asarray((0, 2), dtype=xp.int64, device=self.device)
         lat_dists = xp.take(rot_coords_temp, xy_index, axis=1)
         lat_dists += source_point_bev[xy_index]
 

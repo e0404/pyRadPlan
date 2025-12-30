@@ -234,7 +234,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if cache_key in self._kernel_cache:
             bixel["kernel"] = self._kernel_cache[cache_key]
         else:
-            bixel["kernel"] = bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
+            bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
             # kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
 
             self._kernel_cache[cache_key] = bixel["kernel"]
@@ -330,7 +330,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
         lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
 
-        # xp = array_api_compat.array_namespace(beam_info["bev_coords"])
+        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
 
         # Ray tracing for beam i and ray j
         ix, radial_dist_sq, lat_dists, _ = self.calc_geo_dists(
@@ -339,7 +339,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             ray["target_point_bev"],
             ray["sad"],
             beam_info["valid_coords_all"],
-            lateral_ray_cutoff,
+            float(lateral_ray_cutoff),
         )
 
         # Subindex given the relevant indices from the geometric distance calculation
@@ -352,7 +352,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if lat_dists is not None:
             ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
 
-        xp = array_api_compat.array_namespace(ray["valid_coords"][0])
         ray["valid_coords_all"] = xp.any(xp.stack(ray["valid_coords"], axis=0), axis=1)
 
         ray["geo_depths"] = [
@@ -381,7 +380,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         elif 0 < self.dosimetric_lateral_cutoff < 1:
             # cutoff_info = kernel.get("lateral_cut_off")
 
-            if cut_off_info is not None and len(cut_off_info["cut_off"]) > 1:
+            if cut_off_info is not None and cut_off_info["cut_off"].shape[0] > 1:
                 # Move lookup tables to the correct device/namespace
                 # cutoff_depths = cutoff_info["depths"]
                 # Optimization: Cache squared cutoff values
@@ -951,12 +950,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
         ray = super()._init_ray(beam_info, j)
-
+        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
         self._machine = cast(ParticleAccelerator, self._machine)
 
         # Calculate initial sigma for all bixels on the current ray
         # TODO: here [ray] since calc_sigma_ini takes multiple rays (why?)
-        ray["sigma_ini"] = self._calc_sigma_ini_on_ray(ray)
+        # TODO: use to_namespace here. Issues with api_strict due to float64!
+        ray["sigma_ini"] = xp.asarray(
+            self._calc_sigma_ini_on_ray(ray), dtype=xp.float64, device=self.device
+        )
 
         # Since pyRadPlan's ray cast starts at the skin and base data
         # is generated at some source to phantom distance
