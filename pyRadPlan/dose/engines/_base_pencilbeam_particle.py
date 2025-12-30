@@ -234,7 +234,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if cache_key in self._kernel_cache:
             bixel["kernel"] = self._kernel_cache[cache_key]
         else:
-            bixel["kernel"] = bixel["kernel"] = kernel_obj.to_namespace(xp)
+            bixel["kernel"] = bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
             # kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
 
             self._kernel_cache[cache_key] = bixel["kernel"]
@@ -352,7 +352,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if lat_dists is not None:
             ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
 
-        ray["valid_coords_all"] = np.any(np.vstack(ray["valid_coords"]), axis=1)
+        xp = array_api_compat.array_namespace(ray["valid_coords"][0])
+        ray["valid_coords_all"] = xp.any(xp.stack(ray["valid_coords"], axis=0), axis=1)
 
         ray["geo_depths"] = [
             rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
@@ -380,7 +381,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         elif 0 < self.dosimetric_lateral_cutoff < 1:
             # cutoff_info = kernel.get("lateral_cut_off")
 
-            if cut_off_info is not None and cut_off_info["cut_off"].size > 1:
+            if cut_off_info is not None and len(cut_off_info["cut_off"]) > 1:
                 # Move lookup tables to the correct device/namespace
                 # cutoff_depths = cutoff_info["depths"]
                 # Optimization: Cache squared cutoff values
