@@ -13,6 +13,7 @@ from pydantic import (
 )
 from numpydantic import NDArray, Shape
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core.xp_utils import to_namespace as xp_to_namespace
 from .._beam_cutoff import LateralCutOff
 
 
@@ -167,7 +168,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
             return None
         return self.alpha_x / self.beta_x
 
-    def to_namespace(self, xp):
+    def to_namespace(self, xp, device=None):
         """
         Convert kernel data to the specified array namespace.
 
@@ -175,6 +176,8 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         ----------
         xp : module
             The array namespace module (e.g., numpy, cupy).
+        device : str, optional
+            The device to move the data to.
 
         Returns
         -------
@@ -184,9 +187,9 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         data = {
             "energy": self.energy,
             "range": self.range,
-            "offset": self.offset,
-            "depths": xp.asarray(self.depths),
-            "idd": xp.asarray(self.idd),
+            "offset": float(self.offset),
+            "depths": xp_to_namespace(xp, self.depths, device=device),
+            "idd": xp_to_namespace(xp, self.idd, device=device),
         }
 
         # Optional fields
@@ -207,13 +210,13 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         ]:
             val = getattr(self, field)
             if val is not None:
-                data[field] = xp.asarray(val)
+                data[field] = xp_to_namespace(xp, val, device=device)
 
         if self.lateral_cut_off is not None:
             data["lateral_cut_off"] = {
-                "comp_fac": self.lateral_cut_off.comp_fac,
-                "cut_off": xp.asarray(self.lateral_cut_off.cut_off),
-                "depths": xp.asarray(self.lateral_cut_off.depths),
+                "comp_fac": float(self.lateral_cut_off.comp_fac),
+                "cut_off": xp_to_namespace(xp, self.lateral_cut_off.cut_off, device=device),
+                "depths": xp_to_namespace(xp, self.lateral_cut_off.depths, device=device),
             }
 
         return data
