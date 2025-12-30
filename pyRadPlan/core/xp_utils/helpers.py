@@ -11,7 +11,7 @@ try:
     import cupy as cp
     import cupyx.scipy.sparse as csp
 
-    CupySpmatrix = type(csp.spmatrix)
+    CupySpmatrix = csp.spmatrix
 except ImportError:
     cp = None
     CupySpmatrix = Any
@@ -144,14 +144,25 @@ def to_numpy(arr: Array, detach: bool = True) -> NDArray:
         return arr.cpu().numpy()
     elif array_api_compat.is_numpy_array(arr):
         return arr
-    else:
+
+    # Try DLPack (e.g. array_api_strict)
+    if hasattr(arr, "__dlpack__") and hasattr(np, "from_dlpack"):
         try:
-            xnp: ArrayNamespace = array_api_compat.numpy
-            return to_namespace(xnp, arr)
-        except Exception as e:
-            raise TypeError(
-                "Conversion helper to NumPy not implemented for type '{}'.".format(type(arr))
-            ) from e
+            return np.from_dlpack(arr)
+        except Exception:
+            pass
+
+    # Try __array__ interface (standard numpy interoperability)
+    if hasattr(arr, "__array__"):
+        return np.asarray(arr)
+
+    # Fallback: try direct numpy conversion (handles scalars, lists)
+    try:
+        return np.asarray(arr)
+    except Exception as e:
+        raise TypeError(
+            "Conversion helper to NumPy not implemented for type '{}'.".format(type(arr))
+        ) from e
 
 
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray) -> Array:
@@ -176,6 +187,7 @@ def to_namespace(
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,
+    device: Optional[str] = None,
 ) -> Union[Array, list, tuple]:
     """
     Convert an array to the specified array namespace.
@@ -193,6 +205,9 @@ def to_namespace(
         Whether to keep sparse array compatible, by default True.
         For example, when converting to numpy, scipy sparse matrices will not be converted to dense
         arrays because they are compatible with numpy.
+    device : Optional[str], optional
+        The target device for the array. Can be "cpu" or "gpu".
+        If None, the device is inferred from the source array or the target namespace default.
 
     Returns
     -------
@@ -202,7 +217,10 @@ def to_namespace(
 
     if isinstance(arr, (list, tuple)):
         return type(arr)(
-            to_namespace(xp_new, x, copy=copy, keep_sparse_compat=keep_sparse_compat) for x in arr
+            to_namespace(
+                xp_new, x, copy=copy, keep_sparse_compat=keep_sparse_compat, device=device
+            )
+            for x in arr
         )
 
     if isinstance(xp_new, str):
@@ -212,46 +230,131 @@ def to_namespace(
             # Try to import the module directly
             xp_new = importlib.import_module(xp_new)
 
+    # Normalize device
+    if device is not None:
+        device = device.lower()
+        if device.startswith("cuda"):
+            device = "gpu"
+
     if is_sparse_array(arr):
-        return _convert_sparse_for_namespace(xp_new, arr, keep_sparse_compat=keep_sparse_compat)
+        return _convert_sparse_for_namespace(
+            xp_new, arr, keep_sparse_compat=keep_sparse_compat, device=device
+        )
 
-    # Compatibility wrapper for cupy to facilitate copy to GPU
-    if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
-        # Check if cupy version is < 14.0
-        if cp.__version__ < "14.0" and arr.__dlpack_device__()[0] != 2:
-            return cp.asarray(to_numpy(arr))  # Direct conversion for older versions
-
-    if array_api_compat.is_numpy_namespace(xp_new):
-        if xp_new.__version__ < "2.1":
-            return xp_new.from_dlpack(arr)
-
+    # Optimization: Same namespace and compatible device
     xp_old = array_api_compat.array_namespace(arr)
-
     if xp_new == xp_old:
-        return arr  # No conversion needed
+        # Check if device movement is needed
+        if device is None:
+            if copy:
+                # If copy is requested, we can't just return arr.
+                # But we can let the specific handlers below handle it, or do it here.
+                # For simplicity, let's fall through if copy is True.
+                pass
+            else:
+                return arr
+        else:
+            # Device is specified. Check if we are already on that device.
+            current_dev = None
+            if array_api_compat.is_torch_array(arr):
+                current_dev = "gpu" if arr.is_cuda else "cpu"
+            elif array_api_compat.is_cupy_array(arr):
+                current_dev = "gpu"
+            elif array_api_compat.is_numpy_array(arr):
+                current_dev = "cpu"
 
+            if current_dev == device:
+                if not copy:
+                    return arr
+
+    # --- Target: NumPy ---
+    if array_api_compat.is_numpy_namespace(xp_new):
+        if device == "gpu":
+            raise ValueError("NumPy does not support GPU.")
+
+        np_arr = to_numpy(arr)
+        if copy is True:
+            return xp_new.array(np_arr, copy=True)
+        return xp_new.asarray(np_arr)
+
+    # --- Target: CuPy ---
+    if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
+        if device == "cpu":
+            raise ValueError("CuPy does not support CPU.")
+
+        # CuPy < 14.0 workaround for CPU->GPU via DLPack
+        if (
+            cp.__version__ < "14.0"
+            and hasattr(arr, "__dlpack_device__")
+            and arr.__dlpack_device__()[0] != 2
+        ):
+            return cp.asarray(to_numpy(arr))
+
+        try:
+            return xp_new.from_dlpack(arr, copy=copy)
+        except Exception:
+            return cp.asarray(to_numpy(arr))
+
+    # --- Target: PyTorch ---
+    if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
+        # 1. Convert to Torch (preserving device if possible)
+        try:
+            if hasattr(xp_new, "from_dlpack"):
+                new_arr = xp_new.from_dlpack(arr)
+            else:
+                new_arr = torch.utils.dlpack.from_dlpack(arr)
+        except Exception:
+            new_arr = torch.from_numpy(to_numpy(arr))
+
+        # 2. Handle Device
+        if device == "gpu":
+            if not new_arr.is_cuda:
+                if not torch.cuda.is_available():
+                    raise RuntimeError("GPU requested but not available for PyTorch.")
+                new_arr = new_arr.cuda()
+        elif device == "cpu":
+            if new_arr.is_cuda:
+                new_arr = new_arr.cpu()
+
+        # 3. Handle Copy
+        if copy:
+            new_arr = new_arr.clone()
+
+        return new_arr
+
+    # --- Generic Fallback ---
     return xp_new.from_dlpack(arr, copy=copy)
 
 
 def _convert_sparse_for_namespace(
-    xp_new: ArrayNamespace, sparray: Array, keep_sparse_compat: bool
+    xp_new: ArrayNamespace,
+    sparray: Array,
+    keep_sparse_compat: bool,
+    device: Optional[str] = None,
 ) -> Array:
     """Convert a sparse matrix to be compatible with a new array namespace."""
 
     if isinstance(sparray, (scp.spmatrix, scp.sparray)):
-        return _convert_scipy_sparse_for_namespace(xp_new, sparray, keep_sparse_compat)
+        return _convert_scipy_sparse_for_namespace(
+            xp_new, sparray, keep_sparse_compat, device=device
+        )
 
     if cp is not None and isinstance(sparray, CupySpmatrix):
-        return _convert_cupy_sparse_for_namespace(xp_new, sparray, keep_sparse_compat)
+        return _convert_cupy_sparse_for_namespace(
+            xp_new, sparray, keep_sparse_compat, device=device
+        )
 
 
 def _convert_scipy_sparse_for_namespace(
-    xp_new: ArrayNamespace, sparray: Union[scp.spmatrix, scp.sparray], keep_sparse_compat: bool
+    xp_new: ArrayNamespace,
+    sparray: Union[scp.spmatrix, scp.sparray],
+    keep_sparse_compat: bool,
+    device: Optional[str] = None,
 ) -> Array:
     """Convert a scipy sparse matrix to be compatible with a new array namespace."""
 
     if not keep_sparse_compat:
-        return from_numpy(xp_new, sparray.todense())
+        return to_namespace(xp_new, sparray.todense(), device=device)
 
     fmt = sparray.format
     # For now, we always go the coo route
@@ -259,6 +362,8 @@ def _convert_scipy_sparse_for_namespace(
     if array_api_compat.is_numpy_namespace(
         xp_new
     ) or array_api_compat.is_array_api_strict_namespace(xp_new):
+        if device == "gpu":
+            raise ValueError("NumPy does not support GPU.")
         return sparray  # No conversion needed, scipy sparse is compatible with numpy
 
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
@@ -278,9 +383,17 @@ def _convert_scipy_sparse_for_namespace(
                 f"Conversion of sparse matrix to format '{fmt}' "
                 "is not directly supported in PyTorch. Keeping 'coo' format."
             )
+
+        if device == "gpu":
+            if not torch.cuda.is_available():
+                raise RuntimeError("GPU requested but not available for PyTorch.")
+            sparray = sparray.cuda()
+
         return sparray
 
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
+        if device == "cpu":
+            raise ValueError("CuPy does not support CPU.")
         try:
             # Access the copy constructur from the fmt string
             f_create = getattr(csp, fmt + "_matrix")
@@ -301,17 +414,24 @@ def _convert_scipy_sparse_for_namespace(
 
 
 def _convert_cupy_sparse_for_namespace(
-    xp_new: ArrayNamespace, sparray: CupySpmatrix, keep_sparse_compat: bool
+    xp_new: ArrayNamespace,
+    sparray: CupySpmatrix,
+    keep_sparse_compat: bool,
+    device: Optional[str] = None,
 ) -> Array:
     if array_api_compat.is_cupy_namespace(xp_new):
+        if device == "cpu":
+            raise ValueError("CuPy does not support CPU.")
         return sparray  # No conversion needed
 
     if not keep_sparse_compat:
-        return to_namespace(xp_new, sparray.todense())
+        return to_namespace(xp_new, sparray.todense(), device=device)
 
     if array_api_compat.is_numpy_namespace(
         xp_new
     ) or array_api_compat.is_array_api_strict_namespace(xp_new):
+        if device == "gpu":
+            raise ValueError("NumPy does not support GPU.")
         return sparray.get()
 
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
@@ -327,9 +447,9 @@ def _convert_cupy_sparse_for_namespace(
             idx_t = torch.utils.dlpack.from_dlpack(idx_cp.toDlpack())
             data_t = torch.utils.dlpack.from_dlpack(cp.asarray(data).toDlpack())
 
-            return torch.sparse_coo_tensor(idx_t, data_t, size=sparray.shape, device="cuda")
+            t_sp = torch.sparse_coo_tensor(idx_t, data_t, size=sparray.shape, device="cuda")
 
-        if fmt in ("csr", "csc"):
+        elif fmt in ("csr", "csc"):
             if fmt == "csr":
                 sparray = cast(csp.csr_matrix, sparray)
                 f_create = torch.sparse_csr_tensor
@@ -345,13 +465,18 @@ def _convert_cupy_sparse_for_namespace(
             indices_t = torch.utils.dlpack.from_dlpack(indices.toDlpack())
             data_t = torch.utils.dlpack.from_dlpack(data.toDlpack())
 
-            return f_create(indptr_t, indices_t, data_t, size=sparray.shape, device="cuda")
-
-        raise TypeError(
-            "Conversion of sparse matrix to format '{}' is not yet supported in PyTorch.".format(
-                fmt
+            t_sp = f_create(indptr_t, indices_t, data_t, size=sparray.shape, device="cuda")
+        else:
+            raise TypeError(
+                "Conversion of sparse matrix to format '{}' is not yet supported in PyTorch.".format(
+                    fmt
+                )
             )
-        )
+
+        if device == "cpu":
+            return t_sp.cpu()
+
+        return t_sp
 
 
 def is_sparse_array(arr: Any) -> bool:
@@ -376,7 +501,7 @@ def is_sparse_array(arr: Any) -> bool:
 
     if array_api_compat.is_array_api_obj(arr):
         if array_api_compat.is_torch_array(arr):
-            return arr.is_sparse()
+            return arr.is_sparse
         if array_api_compat.is_cupy_array(arr):
             return csp.issparse(arr)
         if array_api_compat.is_pydata_sparse_array(arr):
@@ -385,6 +510,9 @@ def is_sparse_array(arr: Any) -> bool:
         return False
 
     if isinstance(arr, (scp.spmatrix, scp.sparray)):
+        return True
+
+    if cp is not None and csp.issparse(arr):
         return True
 
     raise TypeError("Sparse check helper not implemented for type '{}'.".format(type(arr)))
