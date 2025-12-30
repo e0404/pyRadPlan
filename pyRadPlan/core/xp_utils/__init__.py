@@ -97,7 +97,7 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int]:
         if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
             return "cuda"
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
-            return 0
+            return "0"
 
     return "cpu"
 
