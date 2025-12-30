@@ -54,7 +54,9 @@ def numba_cuda_available() -> bool:
 
 
 PREFERRED_CPU_ARRAY_BACKEND: str = "numpy"
-PREFERRED_GPU_ARRAY_BACKEND: str = "cupy" if cupy_available() else None
+PREFERRED_GPU_ARRAY_BACKEND: str = (
+    "cupy" if cupy_available() else ("torch" if pytorch_gpu_available() else None)
+)
 PREFER_GPU = True
 
 
@@ -81,7 +83,7 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
         return importlib.import_module(namespace)
 
 
-def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int]:
+def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
     """
     Choose the default device for the given array namespace.
 
@@ -98,6 +100,10 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int]:
             return "cuda"
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
             return "0"
+
+    # We need to handle apray_api_strict separately, as it does not provide device info!
+    if array_api_compat.is_array_api_strict_namespace(xp):
+        return None
 
     return "cpu"
 
