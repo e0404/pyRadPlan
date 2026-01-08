@@ -28,10 +28,12 @@ from pyRadPlan import (
 
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
-
-xp_utils.PREFER_GPU = True
-# xp_utils.DOSE_CALC_CUDA = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+# Choose GPU if grid dimensions are ~ 250,250,150 or larger
+# Fallback to CPU for simple debugging runs
+# This value is experimental and may depend on your hardware
+xp_utils.PREFER_GPU = True  # or False for CPU-only
+xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"  # torch
+xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "torch"  # cupy (standard)
 logging.basicConfig(level=logging.INFO)
 
 # %%
