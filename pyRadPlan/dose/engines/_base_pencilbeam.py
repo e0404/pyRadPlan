@@ -25,10 +25,7 @@ from ...core.xp_utils.typing import Array
 from ...core.xp_utils import numba_cuda_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy
 
-try:
-    profile
-except NameError:
-    profile = lambda x: x
+
 if numba_cuda_available():
     from numba import cuda
 
@@ -213,7 +210,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     def _compute_bixel(self, curr_ray, k):
         raise NotImplementedError("Method _compute_bixel must be implemented in derived class.")
 
-    @profile
     def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation):
         """
         Calculate the dose using the pencil beam method.
@@ -1246,7 +1242,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             and "cupy" in xp.__name__
         ):
             if not self._cuda_kernel_used:
-                logger.info("Using CUDA kernel for geometric distance calculation.")
+                logger.info("Using Cupy kernel for geometric distance calculation.")
                 self._cuda_kernel_used = True
 
             rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
@@ -1280,14 +1276,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     out_mask,
                 )
 
-                # Update ix
-                ix[rad_depth_mask] = out_mask
+                # Update ix using indices (avoids sync)
+                ix[rad_depth_ix] = out_mask
 
                 # Filter results
-                subset_mask = out_mask
-                rad_distances_sq = out_rad_dist_sq[subset_mask]
-
-                sub_ix = xp.nonzero(subset_mask)[0]
+                # Optimization: sync once for sub_ix
+                sub_ix = xp.nonzero(out_mask)[0]
+                rad_distances_sq = xp.take(out_rad_dist_sq, sub_ix, axis=0)
                 lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
 
                 if array_api_compat.size(sub_ix) > 0:
@@ -1323,15 +1318,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         float(lateral_cutoff_sq_over_sad_sq),
                     )
                 )
-
-                # Update ix
-                ix[rad_depth_mask] = out_mask
+                # TODO: GPU synch happens here. Maybe this can be avoided?
+                ix[rad_depth_ix] = out_mask
 
                 # Filter results
-                subset_mask = out_mask
-                rad_distances_sq = out_rad_dist_sq[subset_mask]
-
-                sub_ix = xp.nonzero(subset_mask)[0]
+                # Optimization: sync once for sub_ix
+                sub_ix = xp.nonzero(out_mask)[0]
+                rad_distances_sq = xp.take(out_rad_dist_sq, sub_ix, axis=0)
                 lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
 
                 if array_api_compat.size(sub_ix) > 0:
@@ -1341,35 +1334,54 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                 return ix, rad_distances_sq, lat_dists, iso_lat_dists
 
-        # Define rotation matrix
-        rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
-        if derived_rot_mat is not None:
-            rot_coords_temp @= xp.astype(derived_rot_mat, rot_coords_temp.dtype)
+        # Vectorized CPU/NumPy path (Fallback)
+        if not self._cuda_kernel_used:
+            if not getattr(self, "_fallback_logged", False):
+                logger.info("Using vectorized path for geometric distance calculation.")
+                self._fallback_logged = True
 
-        # Put [0 0 0] position CT in center of the beamlet
-        xy_index = xp.asarray((0, 2), dtype=xp.int64, device=self.device)
-        lat_dists = xp.take(rot_coords_temp, xy_index, axis=1)
-        lat_dists += source_point_bev[xy_index]
+        rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
 
-        # Check if radial distance exceeds lateral cutoff (projected to iso center)
-        rad_distances_sq = xp.sum(lat_dists**2, axis=1)
-        subset_mask = rad_distances_sq <= (lateral_cutoff / sad) ** 2 * rot_coords_temp[:, 1] ** 2
+        # 1. Matrix Multiplication (N,3) @ (3,3) -> (N,3)
+        if derived_rot_mat is None:
+            out_coords_temp = rot_coords_subset
+        else:
+            derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
+            if hasattr(xp, "matmul"):
+                out_coords_temp = xp.matmul(rot_coords_subset, derived_rot_mat)
+            else:
+                out_coords_temp = rot_coords_subset @ derived_rot_mat
 
-        # Apply mask for return quantities
-        ix[rad_depth_mask] = subset_mask
+        # 2. Calculate Lateral Distances
+        lx = out_coords_temp[:, 0] + source_point_bev[0]
+        lz = out_coords_temp[:, 2] + source_point_bev[2]
 
-        # Return radial distances squared
-        rad_distances_sq = rad_distances_sq[subset_mask]
+        out_lat_dists = xp.stack((lx, lz), axis=1)
+
+        # 3. Radial Distance Squared
+        out_rad_dist_sq = lx * lx + lz * lz
+
+        # 4. Mask
+        lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
+        ry = out_coords_temp[:, 1]
+        limit = lateral_cutoff_sq_over_sad_sq * ry * ry
+        out_mask = out_rad_dist_sq <= limit
+
+        # Update ix using indices
+        ix[rad_depth_ix] = out_mask
 
         # for array API compatible indexing
-        sub_ix = xp.nonzero(subset_mask)[0]
+        sub_ix = xp.nonzero(out_mask)[0]
+
+        # Return radial distances squared
+        rad_distances_sq = xp.take(out_rad_dist_sq, sub_ix, axis=0)
 
         # Lateral distances in X & Z
-        lat_dists = xp.take(lat_dists, sub_ix, axis=0)
+        lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
 
         if array_api_compat.size(sub_ix) > 0:
             # Lateral distances projected onto isocenter
-            iso_lat_dists = lat_dists / rot_coords_temp[sub_ix, 1][:, None] * sad
+            iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
         else:
             iso_lat_dists = xp.empty_like(lat_dists)
 
