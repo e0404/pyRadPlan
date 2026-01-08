@@ -27,11 +27,6 @@ from ...core.xp_utils import to_namespace
 
 logger = logging.getLogger(__name__)
 
-try:
-    profile
-except NameError:
-    profile = lambda x: x
-
 
 class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     """
