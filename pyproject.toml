@@ -10,7 +10,7 @@ pyRadPlan = ["data/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.2.8"
+version = "0.3.0"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
@@ -19,19 +19,20 @@ authors = [
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
-  { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" }
+  { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
+  { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" }
 ]
 
 maintainers = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
-  { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
-  { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
-  { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" }
+  { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
+  { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" }
 ]
 
 description = "A python interface and reimplementation to matRad"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.14"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
@@ -39,15 +40,19 @@ classifiers = [
 ]
 dependencies = [
     "scipy>=1.13.0",
-    "numpy>=1.26.0",
+    "numpy>=2.0,<=2.3",
+    "array_api_compat",
+    "array_api_strict",
+    "array_api_extra",
+    "types-array-api",
     "pymatreader>=1.0.0",
     "h5py>=3.11.0",
     "regex>=2024.5.15",
     "pydicom>=2.4.4",
-    "numba>=0.60.0",
+    "numba>=0.61.0",
     "matplotlib>=3.9.2",
-    "pydantic>=2.10,<2.11",
-    "numpydantic>=1.6.0",
+    "pydantic>=2.10,<2.13",
+    "numpydantic>=1.6.9",
     "SimpleITK>=2.4.0",
     "tqdm>=4.0.0",
     "pint>=0.24.0",

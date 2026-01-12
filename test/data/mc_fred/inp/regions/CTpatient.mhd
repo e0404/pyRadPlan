@@ -1,0 +1,13 @@
+ObjectType = Image
+NDims = 3
+BinaryData = True
+BinaryDataByteOrderMSB = False
+CompressedData = False
+TransformMatrix = 1 0 0 0 1 0 0 0 1
+Offset = -50 -100 -50
+CenterOfRotation = 0 0 0
+AnatomicalOrientation = RAI
+ElementSpacing = 10 10 10
+DimSize = 10 20 10
+ElementType = MET_SHORT
+ElementDataFile = CTpatient.raw

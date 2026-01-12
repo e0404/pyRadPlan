@@ -1,9 +1,3 @@
-"""
-Implementation of a pencil beam dose calculation engine for photon beams
-based on the Singular-value
-decomposition (SVD) method by Bortfeld.
-"""
-
 from typing import TypedDict, Literal, Any, cast, Callable
 import logging
 import random

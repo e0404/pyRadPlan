@@ -1,8 +1,4 @@
-"""
-The :mod: 'pyanno4rt.optimization' module implements all classes related to
-dose optimization, including objective and constraint functions, solvers and
-backprojection classes.
-"""
+"""Treatment plan optimization algorithms and objectives."""
 
 # Author: Tim Ortkamp <tim.ortkamp@kit.edu>, 2023
 

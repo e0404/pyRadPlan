@@ -8,7 +8,7 @@ from pyRadPlan.machines import (
     PhotonLINAC,
     IonAccelerator,
     load_from_name,
-    IonPencilBeamKernel,
+    ParticlePencilBeamKernel,
     PhotonSVDKernel,
 )
 
@@ -18,6 +18,7 @@ def test_basic_machine_model():
         radiation_mode="photons",
         description="A dummy machine",
         name="Generic",
+        key="generic_key",
         created_on="2021-01-01T00:00:00",
         last_modified="2021-01-01T00:00:00",
         created_by="Jay Doe",
@@ -41,7 +42,7 @@ def test_basic_machine_model():
 
 
 def test_machine_model_only_required():
-    machine = Machine(radiation_mode="photons", name="Generic")
+    machine = Machine(radiation_mode="photons", name="Generic", key="generic_key")
     assert machine.radiation_mode == "photons"
     assert machine.name == "Generic"
     assert machine.description == ""
@@ -55,7 +56,7 @@ def test_machine_model_only_required():
 
 def test_machine_model_invalid_version():
     with pytest.raises(ValueError):
-        machine = Machine(radiation_mode="photons", name="Generic", version="1.0")
+        machine = Machine(radiation_mode="photons", name="Generic_name", version="1.0")
 
 
 def test_machine_model_invalid_machine():
@@ -126,7 +127,7 @@ def test_proton_machine_model_get_kernel():
     machine = load_from_name(radiation_mode="protons", machine_name="Generic")
     assert isinstance(machine, IonAccelerator)
     kernel = machine.get_kernel_by_index(0)
-    assert isinstance(kernel, IonPencilBeamKernel)
+    assert isinstance(kernel, ParticlePencilBeamKernel)
 
 
 def test_proton_machine_model_phase_space():
@@ -165,7 +166,7 @@ def test_carbon_machine_model_get_kernel():
     machine = load_from_name(radiation_mode="carbon", machine_name="Generic")
     assert isinstance(machine, IonAccelerator)
     kernel = machine.get_kernel_by_index(0)
-    assert isinstance(kernel, IonPencilBeamKernel)
+    assert isinstance(kernel, ParticlePencilBeamKernel)
 
     abratio = kernel.alpha_beta_ratio
     assert np.isclose(abratio, kernel.alpha_x / kernel.beta_x).all()

@@ -1,4 +1,4 @@
-"""Solvers module providing different solvers for pyRadPlan."""
+"""Optimization solvers for treatment planning problems."""
 
 from ._factory import register_solver, get_available_solvers, get_solver
 

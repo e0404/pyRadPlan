@@ -1,4 +1,4 @@
-"""Analysis module for pyRadPlan."""
+"""Treatment plan analysis tools and metrics."""
 
 from ._dvh import DVH, DVHCollection
 

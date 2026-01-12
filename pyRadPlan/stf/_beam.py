@@ -166,6 +166,36 @@ class Beam(PyRadPlanBaseModel):
         return int(sum(self.num_of_bixels_per_ray))
 
     @property
+    def energies(self):
+        energies = []
+
+        for ray in self.rays:
+            ray_energies = ray.energies.tolist()
+            energies.append(ray_energies)
+
+        return np.unique(np.concatenate(energies))
+
+    @property
+    def energy_layers(self):
+        energy_dictionary = {}
+
+        for r, ray in enumerate(self.rays):
+            for b, beamlet in enumerate(ray.beamlets):
+                if round(beamlet.energy, 2) not in energy_dictionary:
+                    energy_dictionary[round(beamlet.energy, 2)] = {
+                        "full_energy": beamlet.energy,
+                        "rays_idx": [r],
+                        "beamlet_idx": [b],
+                    }
+                else:
+                    energy_dictionary[round(beamlet.energy, 2)]["rays_idx"].append(r)
+                    energy_dictionary[round(beamlet.energy, 2)]["beamlet_idx"].append(b)
+
+        energy_dictionary = {key: energy_dictionary[key] for key in sorted(energy_dictionary)}
+
+        return energy_dictionary
+
+    @property
     def bixel_ray_map(self) -> NDArray[Shape["1-*"], np.int64]:
         """Map providing ray index in the beam for each bixel."""
         return np.repeat(np.arange(len(self.rays)), self.num_of_bixels_per_ray)

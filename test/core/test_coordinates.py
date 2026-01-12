@@ -41,7 +41,7 @@ def test_linear_index_to_world(tg119):
     sitk_point = np.array(ct.cube_hu.TransformIndexToPhysicalPoint(sitk_index))
 
     np_coord = np2sitk.linear_indices_to_image_coordinates(
-        indices=np_index[0], image=ct.cube_hu, index_type="numpy"
+        indices=np.asarray(np_index[0]), image=ct.cube_hu, index_type="numpy"
     )
 
     assert np.isclose(sitk_point, np_coord).all()

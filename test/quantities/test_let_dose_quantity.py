@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+import array_api_strict as xp
 from scipy.sparse import csc_array
 
 from pyRadPlan.dij import Dij
@@ -23,6 +24,7 @@ def sample_base_dij_dict():
         "num_of_beams": 1,
         "total_num_of_bixels": 10,
         "let_dose": np.empty((1, 1, 1), dtype=object),
+        "physical_dose": np.empty((1, 1, 1), dtype=object),
         "bixel_num": np.arange(10),
         "ray_num": np.arange(10),
         "beam_num": np.zeros((10,), dtype=np.int64),
@@ -33,6 +35,7 @@ def sample_base_dij_dict():
 @pytest.fixture
 def sample_dij_dense(sample_base_dij_dict):
     sample_base_dij_dict["let_dose"].flat[0] = np.ones((125, 10), dtype=np.float32)
+    # sample_base_dij_dict["physical_dose"].flat[0] = np.ones((125, 10), dtype=np.float32)
     dij = Dij.model_validate(sample_base_dij_dict)
     return dij
 
@@ -43,6 +46,7 @@ def sample_dij_sparse(sample_base_dij_dict):
     dense_mat[:100] = 0
     np.random.shuffle(dense_mat)
     sample_base_dij_dict["let_dose"].flat[0] = csc_array(dense_mat)
+    # sample_base_dij_dict["physical_dose"].flat[0] = csc_array(dense_mat)
     dij = Dij.model_validate(sample_base_dij_dict)
     return dij
 
@@ -51,7 +55,7 @@ def test_LETxDose_constructor(sample_dij_dense):
     let_dose = LETxDose(sample_dij_dense)
     assert isinstance(let_dose, RTQuantity)
     assert let_dose.scenarios == [0]
-    assert let_dose._dij == sample_dij_dense
+    assert let_dose._dij == sample_dij_dense.to_namespace(xp)
     assert let_dose.dim == 1
     assert format(let_dose.unit, "~") == "Gy * µm / keV"
     assert let_dose.identifier == "let_dose"
@@ -61,7 +65,7 @@ def test_LETxDose_constructor(sample_dij_dense):
 def test_let_dose_dense(sample_dij_dense):
     let_dose = LETxDose(sample_dij_dense)
 
-    fluence = range(10)
+    fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = let_dose(fluence)
     assert np.array_equal(let_dose._w_cache, fluence)
     ret_compute = let_dose.compute(fluence)
@@ -74,7 +78,7 @@ def test_let_dose_dense(sample_dij_dense):
     assert np.allclose(ret_callable.flat[0], dij_mat @ fluence)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
-    ret_deriv = let_dose.compute_chain_derivative(np.ones(125, dtype=np.float32), fluence)
+    ret_deriv = let_dose.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
     assert np.array_equal(let_dose._w_grad_cache, fluence)
     assert np.array_equal(let_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
@@ -86,7 +90,7 @@ def test_let_dose_dense(sample_dij_dense):
 def test_let_dose_sparse(sample_dij_sparse):
     let_dose = LETxDose(sample_dij_sparse)
 
-    fluence = range(10)
+    fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = let_dose(fluence)
     assert np.array_equal(let_dose._w_cache, fluence)
     ret_compute = let_dose.compute(fluence)
@@ -99,7 +103,7 @@ def test_let_dose_sparse(sample_dij_sparse):
     assert np.allclose(ret_callable.flat[0], dij_mat @ fluence)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
-    ret_deriv = let_dose.compute_chain_derivative(np.ones(125, dtype=np.float32), fluence)
+    ret_deriv = let_dose.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
     assert np.array_equal(let_dose._w_grad_cache, fluence)
     assert np.array_equal(let_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)

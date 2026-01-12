@@ -1,6 +1,5 @@
 """
-Example of importing a patient from a MatRad file and visualizing the CT,
-VOIs with matplotlib.
+Example of importing a patient from a MatRad file and visualizing the CT, VOIs with matplotlib.
 
 Also produces a simple beam configuration and visualizes the resulting radiological depth cubes by
 calling the RayTracer.
@@ -28,6 +27,11 @@ from pyRadPlan.stf.generators import StfGeneratorIMPT
 from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.visualization import plot_slice
 from pyRadPlan.io import load_patient
+
+from pyRadPlan import xp_utils
+
+xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
+xp_utils.PREFER_GPU = True
 
 # Configure the Logger to show you debug information
 logging.basicConfig(level=logging.INFO)
@@ -64,7 +68,7 @@ pln = IonPlan(radiation_mode="protons", machine="Generic")
 # with a single beam at 0 degrees
 stfgen = StfGeneratorIMPT(pln)
 stfgen.bixel_width = 5.0
-stfgen.gantry_angles = [90.0]
+stfgen.gantry_angles = [0.0]
 
 # We generate the beam geometry on the CT and CST
 stf = stfgen.generate(ct, cst)
@@ -73,6 +77,8 @@ stf = stfgen.generate(ct, cst)
 # For that, we use a default HU->rSP table to convert our CT to water-equivalent thickness and then
 # call a voxel-wise RayTracing algorithm (proposed by Siddon) to calculate the radiological depth.
 rt = RayTracerSiddon([ct.compute_wet(default_hlut())])
+rt.lateral_cut_off = 150.0
+rt.precision = np.float32
 rt.debug_core_performance = True
 rad_depth_cubes = rt.trace_cubes(stf[0])
 

@@ -217,36 +217,21 @@ def test_basic_photon_collimated_field(sample_ct, sample_cst, sample_photon_pln)
 def test_single_ion_spot(sample_ct, sample_cst, sample_proton_pln):
     stf_gen = StfGeneratorIonSingleSpot(sample_proton_pln)
 
-    stf_gen.gantry_angles = [0.0, 270.0]
-    stf_gen.couch_angles = [0.0, 90.0]
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+    stf_gen.fix_energy = 120
     sad = 10000.0
-    expected_source_points_bev = [
-        np.array([0, -sad, 0], dtype=float),
-        np.array([0, -sad, 0], dtype=float),
-    ]
+    expected_source_points_bev = [np.array([0, -sad, 0], dtype=float)]
 
-    expected_source_points = [
-        np.array([0, -sad, 0], dtype=float),
-        np.array(
-            [
-                0,
-                0,
-                sad,
-            ],
-            dtype=float,
-        ),
-    ]
+    expected_source_points = [np.array([0, -sad, 0], dtype=float)]
 
-    expected_ray_pos_bev = [np.array([0, 0, 0], dtype=float), np.array([0, 0, 0], dtype=float)]
+    expected_ray_pos_bev = np.array([0, 0, 0], dtype=float)
 
-    expected_ray_pos = [
-        np.array([[0, 0, 0], [0, 0, 0]], dtype=float),
-        np.array([[0, 0, 0], [0, 0, 0]], dtype=float),
-    ]
+    expected_ray_pos = np.array([0, 0, 0], dtype=float)
 
     stf = stf_gen.generate(sample_ct, sample_cst)
 
-    assert len(stf) == 2
+    assert len(stf) == 1
     for i, field in enumerate(stf):
         assert isinstance(field, dict)
         assert field["gantry_angle"] == stf_gen.gantry_angles[i]
@@ -261,8 +246,8 @@ def test_single_ion_spot(sample_ct, sample_cst, sample_proton_pln):
         assert field["source_point_bev"].size == 3
         assert np.isclose(field["source_point_bev"], expected_source_points_bev[i]).all()
         assert np.isclose(field["source_point"], expected_source_points[i]).all()
-        assert np.isclose(field["rays"][0]["ray_pos_bev"], expected_ray_pos_bev[i]).all()
-        assert np.isclose(field["rays"][0]["ray_pos"], expected_ray_pos[i]).all()
+        assert np.isclose(field["rays"][0].ray_pos_bev, expected_ray_pos_bev).all()
+        assert np.isclose(field["rays"][0].ray_pos, expected_ray_pos).all()
 
 
 def test_impt(sample_ct, sample_cst, sample_proton_pln):

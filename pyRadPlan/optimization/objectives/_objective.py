@@ -16,9 +16,7 @@ logger = logging.getLogger(__name__)
 
 class ParameterMetadata:
     """
-    Parameter Metadata to attach to objective function parameters to
-    designate configurability and
-    type.
+    Parameter Metadata to attach to objective function parameters to designate configurability and type.
 
     Parameters
     ----------
@@ -81,14 +79,14 @@ class Objective(PyRadPlanBaseModel):
 
     @abstractmethod
     def compute_objective(self, values):
-        """Computes the objective function."""
+        """Compute the objective function."""
 
     @abstractmethod
     def compute_gradient(self, values):
-        """Computes the objective gradient."""
+        """Compute the objective gradient."""
 
     def compute_hessian(self, values):
-        """Computes the objective Hessian."""
+        """Compute the objective Hessian."""
         return
 
     @computed_field
@@ -131,7 +129,7 @@ class Objective(PyRadPlanBaseModel):
     @field_validator("quantity")
     @classmethod
     def _validate_quantity(cls, v):
-        """Validates the quantity attribute."""
+        """Validate the quantity attribute."""
         if v not in get_available_quantities():
             raise ValueError(
                 f"Quantity {v} not available. Choose from {get_available_quantities()}"

@@ -61,7 +61,7 @@ class VOI(PyRadPlanBaseModel, ABC):
     @classmethod
     def validate_mask_type(cls, v: Any) -> Any:
         """
-        Validates the mask type.
+        Validate the mask type.
 
         Parameters
         ----------
@@ -141,8 +141,7 @@ class VOI(PyRadPlanBaseModel, ABC):
     @property
     def indices(self) -> np.ndarray:
         """
-        Returns the indices of the voxels in the mask using Fortran/SITK
-        convention.
+        Return the indices of the voxels in the mask using Fortran/SITK convention.
 
         Returns
         -------
@@ -155,8 +154,7 @@ class VOI(PyRadPlanBaseModel, ABC):
     @property
     def indices_numpy(self) -> np.ndarray:
         """
-        Returns the indices of the voxels in the mask using C/numpy
-        convention.
+        Return the indices of the voxels in the mask using C/numpy convention.
 
         Returns
         -------
@@ -197,7 +195,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
     def get_indices(self, order="sitk") -> np.ndarray:
         """
-        Returns the indices of the voxels in the mask.
+        Return the indices of the voxels in the mask.
 
         Parameters
         ----------
@@ -217,7 +215,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
     def scenario_indices(self, order_type="numpy") -> Union[np.ndarray, list[np.ndarray]]:
         """
-        Returns the flattened indices of the individual scenarios.
+        Return the flattened indices of the individual scenarios.
 
         Parameters
         ----------
@@ -249,8 +247,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
     def masked_ct(self, order_type="numpy") -> Union[sitk.Image, np.ndarray]:
         """
-        Returns the masked CT image, either as a numpy array or a SimpleITK
-        image.
+        Return the masked CT image, either as a numpy array or a SimpleITK image.
 
         Parameters
         ----------
@@ -309,8 +306,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         """
-        Creates an object that can be interpreted by matRad in the given
-        context.
+        Create an object that can be interpreted by matRad in the given context.
 
         Returns
         -------
@@ -407,7 +403,7 @@ class OAR(VOI):
     @classmethod
     def validate_voi_type(cls, v: str) -> str:
         """
-        Validates the voi type for an OAR.
+        Validate the voi type for an OAR.
 
         Parameters
         ----------
@@ -450,7 +446,7 @@ class Target(VOI):
     @classmethod
     def validate_voi_type(cls, v: str) -> str:
         """
-        Validates the voi type for a Target.
+        Validate the voi type for a Target.
 
         Parameters
         ----------
@@ -493,7 +489,7 @@ class HelperVOI(VOI):
     @classmethod
     def validate_voi_type(cls, v: str) -> str:
         """
-        Validates the voi type for a HelperVOI.
+        Validate the voi type for a HelperVOI.
 
         Parameters
         ----------
@@ -517,8 +513,7 @@ class HelperVOI(VOI):
 
 class ExternalVOI(VOI):
     """
-    Represents an external contour limiting voxels to be considered for
-    planning (EXTERNAL).
+    Represents an external contour limiting voxels to be considered for planning (EXTERNAL).
 
     Attributes
     ----------
@@ -536,7 +531,7 @@ class ExternalVOI(VOI):
     @classmethod
     def validate_voi_type(cls, v: str) -> str:
         """
-        Validates the voi type for an EXTERNAL contour.
+        Validate the voi type for an EXTERNAL contour.
 
         Parameters
         ----------
@@ -564,7 +559,7 @@ __VOITYPES__ = {"OAR": OAR, "TARGET": Target, "HELPER": HelperVOI, "EXTERNAL": E
 
 def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
     """
-    Factory function to create a VOI object.
+    Create a VOI object.
 
     Parameters
     ----------
@@ -602,7 +597,8 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
 
 def validate_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
     """
-    Validates and creates a VOI object.
+    Validate and create a VOI object.
+
     Synonym to create_voi but should be used in validation context.
 
     Parameters

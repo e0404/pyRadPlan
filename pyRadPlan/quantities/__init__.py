@@ -1,3 +1,5 @@
+"""Physical and biological quantities for treatment planning."""
+
 from ._base import FluenceDependentQuantity, RTQuantity
 from ._dose import Dose
 from ._let_x_dose import LETxDose

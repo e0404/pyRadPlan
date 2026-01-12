@@ -44,6 +44,7 @@ def test_raytracer_trace_single_ray(sample_cube):
     rho_expected = cube_np.ravel(order="F")[ix]
     assert np.allclose(rho[0], rho_expected)
     assert np.isclose(d12, np.sqrt(np.sum((target_points - source_points) ** 2)))
+    assert d12.ndim != 0
     assert np.allclose(l, sample_cube.GetSpacing()[1] * np.ones_like(l))  # Spacing is one
 
 
@@ -62,7 +63,7 @@ def test_raytracer_trace_multiple_rays(sample_cube):
     cube_np = sitk.GetArrayViewFromImage(sample_cube)
     rho_expected = cube_np.ravel(order="F")[ix].reshape(rho[0].shape)
     rho_expected[ix < 0] = 0.0
-    rho[0][np.isnan(rho[0])] = 0.0
+    # rho[0][np.isnan(rho[0])] = 0.0
     assert np.allclose(rho[0], rho_expected)
 
 
@@ -81,8 +82,8 @@ def test_raytracer_trace_multiple_cubes(sample_cube):
     cube_np = sitk.GetArrayViewFromImage(sample_cube)
     rho_expected = cube_np.ravel(order="F")[ix].reshape(rho[0].shape)
     rho_expected[ix < 0] = 0.0
-    rho[0][np.isnan(rho[0])] = 0.0
-    rho[1][np.isnan(rho[1])] = 0.0
+    # rho[0][np.isnan(rho[0])] = 0.0
+    # rho[1][np.isnan(rho[1])] = 0.0
     assert np.allclose(rho[0], rho_expected)
     assert np.allclose(rho[1], rho_expected)
 

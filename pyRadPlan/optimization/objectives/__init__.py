@@ -1,4 +1,4 @@
-"""Module defining various objective functions for optimization."""
+"""Objective functions for treatment plan optimization."""
 
 from ._objective import Objective
 from ._std import DoseUniformity

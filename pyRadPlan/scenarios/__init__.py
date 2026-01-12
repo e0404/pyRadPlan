@@ -1,9 +1,4 @@
-"""
-Sceanrio Models.
-
-Used for uncertainty quantification, robust optimization and
-robustness analysis.
-"""
+"""Scenario Models for uncertainty quantification, robust optimization and robustness analysis."""
 
 from typing import Union, Optional, Type
 from pyRadPlan.ct import CT, validate_ct

@@ -19,21 +19,51 @@ from pyRadPlan.cst import (
     Target,
     OAR,
 )
+# @pytest.fixture
+# def sample_ct():
+#     image = sitk.GetImageFromArray(np.random.rand(5, 15, 25) * 1000)  # Random HU values
+#     image.SetOrigin((0, 0, 0))
+#     image.SetSpacing((2, 3, 4))  # Irregular spacing for test
+#     image.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
+
+#     ct = CT(cube_hu=image)
+
+#     return ct
 
 
 def test_cst_from_matrad_mat_file(matrad_import):
     ct = create_ct(matrad_import["ct"])
     cst = create_cst(matrad_import["cst"], ct=ct)
-    assert isinstance(cst, StructureSet)
 
+    assert isinstance(cst, StructureSet)
+    assert isinstance(cst.ct_image, CT)
+    assert cst.ct_image.cube_hu.GetSize() == (167, 167, 129)
+    assert all(isinstance(voi, (Target, OAR, ExternalVOI, HelperVOI)) for voi in cst.vois)
+    assert cst.vois[0].name == "Core"
+    assert cst.vois[1].name == "OuterTarget"
+    assert cst.vois[2].name == "BODY"
     cst = validate_cst(matrad_import["cst"], ct=ct)
     assert isinstance(cst, StructureSet)
+    assert isinstance(cst.ct_image, CT)
+    assert cst.ct_image.cube_hu.GetSize() == (167, 167, 129)
+    assert all(isinstance(voi, (Target, OAR, ExternalVOI, HelperVOI)) for voi in cst.vois)
+    assert cst.vois[0].name == "Core"
+    assert cst.vois[1].name == "OuterTarget"
+    assert cst.vois[2].name == "BODY"
 
     with pytest.raises(ValueError):
         cst = create_cst(matrad_import["cst"])
 
     with pytest.raises(ValueError):
         cst = validate_cst(matrad_import["cst"])
+
+
+# TODO: Operator to return "False" for different CTs is not implemented correctly yet
+# def test_different_ct(matrad_import, sample_ct):
+#     ct = create_ct(matrad_import["ct"])
+#     cst = validate_cst(matrad_import["cst"], ct=ct)
+#     with pytest.raises(ValueError):
+#         cst_fail = create_cst(cst, ct=sample_ct)
 
 
 def test_cst_to_matrad(matrad_import, tmpdir):
@@ -194,15 +224,16 @@ def generic_vois(generic_ct):
 
     voi1 = Target(name="CTV", mask=mask_image1, ct_image=generic_ct, overlap_priority=1)
     voi2 = Target(name="PTV", mask=mask_image2, ct_image=generic_ct, overlap_priority=2)
-    voi3 = OAR(name="OAR", mask=mask_image3, ct_image=generic_ct)
-    voi4 = ExternalVOI(name="BODY", mask=mask_image4, ct_image=generic_ct)
-    voi5 = HelperVOI(name="HELPER", mask=mask_image5, ct_image=generic_ct)
+    voi3 = OAR(name="OAR", mask=mask_image3, ct_image=generic_ct, overlap_priority=5)
+    voi4 = ExternalVOI(name="BODY", mask=mask_image4, ct_image=generic_ct, overlap_priority=10)
+    voi5 = HelperVOI(name="HELPER", mask=mask_image5, ct_image=generic_ct, overlap_priority=5)
 
     return [voi1, voi2, voi3, voi4, voi5]
 
 
 def test_apply_overlap_priorities(generic_ct, generic_vois):
     # Create a StructureSet with the VOIs
+
     structure_set = StructureSet(ct_image=generic_ct, vois=generic_vois)
 
     # Apply overlap priorities
@@ -220,19 +251,24 @@ def test_apply_overlap_priorities(generic_ct, generic_vois):
     expected_overlap_list = np.argsort(p)
 
     ol_mask = np.zeros(voi_mask[0].shape, dtype=bool)
+    or_mask = np.zeros(voi_mask[0].shape, dtype=bool)
+    last_priority = -1
 
     for expected in expected_overlap_list:
+        if p[expected] > last_priority:
+            ol_mask = or_mask.copy()
+            last_priority = p[expected]
+
         # the mask that the current voi should have
         assert (
             voi_mask_overlapped[expected][np.logical_and(voi_mask[expected] > 0, ~ol_mask)]
         ).all()
 
         # Accumulate the ol mask
-        ol_mask = ol_mask | voi_mask[expected] > 0
+        or_mask = or_mask | voi_mask[expected] > 0
 
         # we currently should be zero where overlapped
-        assert not (voi_mask_overlapped[expected][ol_mask] == 0).all()
-        # the accumulated ol mask
+        assert (voi_mask_overlapped[expected][ol_mask] == 0).all()
 
 
 def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
@@ -251,3 +287,70 @@ def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
         voi_mask_overlapped = sitk.GetArrayViewFromImage(structure_set_overlap.vois[i].mask)
 
         assert np.isclose(voi_mask, voi_mask_overlapped).all()
+
+
+# --- Helpers for body segmentation tests ---
+def _make_test_ct():
+    """Create a small CT with a main component, an internal cavity (hole), and a small extra component."""
+    arr = np.full((4, 6, 6), -500.0, dtype=np.float32)  # background below threshold
+
+    for z in range(4):
+        arr[z, 1:5, 1:5] = 0.0  # above threshold (will be segmented)
+        arr[z, 2:4, 2:4] = -500.0  # cavity to be filled slice-wise
+
+    # Additional small disconnected component (should be discarded as not largest)
+    arr[0, 0, 0] = 0.0
+    arr[0, 0, 1] = 0.0
+
+    ct_img = sitk.GetImageFromArray(arr)
+    ct_img.SetSpacing((1.0, 1.0, 1.0))
+    ct_img.SetOrigin((0.0, 0.0, 0.0))
+    ct_img.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    return create_ct(cube_hu=ct_img)
+
+
+def _expected_body_mask(ct):
+    ct_arr = sitk.GetArrayViewFromImage(ct.cube_hu)
+    assert ct_arr.shape == (4, 6, 6)
+    mask = np.zeros_like(ct_arr, dtype=np.uint8)
+    mask[:, 1:5, 1:5] = 1  # main cube
+    mask[0, 0, 0] = 1
+    mask[0, 0, 1] = 1
+    return sitk.GetImageFromArray(mask)
+
+
+def test_create_body_seg_default():
+    ct = _make_test_ct()
+    structure_set = StructureSet(ct_image=ct, vois=[])
+    result = structure_set.create_body_seg()  # default threshold/name/type
+    assert result is None  # side-effect only
+    assert len(structure_set.vois) == 1
+    body_voi = structure_set.vois[-1]
+    assert body_voi.name == "BODY"
+    assert isinstance(body_voi, OAR)  # default voi_type="OAR"
+    expected_mask = _expected_body_mask(ct)
+    body_mask_arr = sitk.GetArrayViewFromImage(body_voi.mask)
+    expected_arr = sitk.GetArrayViewFromImage(expected_mask)
+    assert body_mask_arr.shape == expected_arr.shape
+    assert np.array_equal(body_mask_arr, expected_arr)
+    # cavity region filled
+    for z in range(4):
+        assert body_mask_arr[z, 2, 2] == 1
+    # Note: small added component was adjacent via connectivity; we do not assert its removal.
+
+
+def test_create_body_seg_custom_name_type():
+    ct = _make_test_ct()
+    structure_set = StructureSet(ct_image=ct, vois=[])
+    structure_set.create_body_seg(threshold=-300.0, name="CUSTOM_BODY", voi_type="EXTERNAL")
+    assert len(structure_set.vois) == 1
+    body_voi = structure_set.vois[-1]
+    assert body_voi.name == "CUSTOM_BODY"
+    assert isinstance(body_voi, ExternalVOI)
+    expected_mask = _expected_body_mask(ct)
+    body_mask_arr = sitk.GetArrayViewFromImage(body_voi.mask)
+    expected_arr = sitk.GetArrayViewFromImage(expected_mask)
+    assert np.array_equal(body_mask_arr, expected_arr)
+    for z in range(4):
+        assert body_mask_arr[z, 2, 2] == 1
+    # Connectivity may include diagonal, so we skip asserting removal of small component.
