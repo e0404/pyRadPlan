@@ -44,6 +44,7 @@ def test_raytracer_trace_single_ray(sample_cube):
     rho_expected = cube_np.ravel(order="F")[ix]
     assert np.allclose(rho[0], rho_expected)
     assert np.isclose(d12, np.sqrt(np.sum((target_points - source_points) ** 2)))
+    assert d12.ndim != 0
     assert np.allclose(l, sample_cube.GetSpacing()[1] * np.ones_like(l))  # Spacing is one
 
 
