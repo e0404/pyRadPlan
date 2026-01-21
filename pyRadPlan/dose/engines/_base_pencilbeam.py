@@ -1183,14 +1183,21 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 # CuPy ElementwiseKernel: call as function, returns values
                 # Inputs must be flattened for raw indexing
                 # size= is required since all inputs are 'raw'
-                out_coords_x, out_coords_y, out_coords_z, out_lat_x, out_lat_z, out_rad_dist_sq, out_mask = \
-                    _calc_geo_dists_cupy_kernel(
-                        rot_coords_subset.ravel(),
-                        derived_rot_mat.ravel(),
-                        source_point_bev,
-                        lateral_cutoff_sq_over_sad_sq,
-                        size=num_elements,
-                    )
+                (
+                    out_coords_x,
+                    out_coords_y,
+                    out_coords_z,
+                    out_lat_x,
+                    out_lat_z,
+                    out_rad_dist_sq,
+                    out_mask,
+                ) = _calc_geo_dists_cupy_kernel(
+                    rot_coords_subset.ravel(),
+                    derived_rot_mat.ravel(),
+                    source_point_bev,
+                    lateral_cutoff_sq_over_sad_sq,
+                    size=num_elements,
+                )
 
                 # Stack outputs to match expected format
                 out_coords_temp = xp.stack((out_coords_x, out_coords_y, out_coords_z), axis=1)

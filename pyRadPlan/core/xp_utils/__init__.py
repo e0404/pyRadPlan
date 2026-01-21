@@ -44,6 +44,7 @@ def pytorch_gpu_available() -> bool:
     """Check if PyTorch is available and a compatible GPU is present."""
     return torch is not None and torch.cuda.is_available()
 
+
 # Currently not needed. Maybe in future?
 def numba_cuda_available() -> bool:
     """Check if Numba CUDA is available."""
