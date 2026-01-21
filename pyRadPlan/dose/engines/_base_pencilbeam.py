@@ -22,7 +22,7 @@ from pyRadPlan.raytracer import RayTracerSiddon
 
 from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
-from ...core.xp_utils import numba_cuda_available, pytorch_gpu_available
+from ...core.xp_utils import cupy_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy
 from .kernels import _calc_geo_dists_cupy_kernel, _calc_geo_dists_torch_kernel
 
@@ -1156,14 +1156,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )
 
-        # GPU Path (Numba/CuPy)
+        # GPU Path (CuPy)
         if (
-            numba_cuda_available()
+            cupy_available()
             and hasattr(xp, "cuda")
             and xp.cuda.is_available()
             and "cupy" in xp.__name__
         ):
             if not self._cuda_kernel_used:
+                # necessary to avoid multiple logging
                 logger.info("Using Cupy kernel for geometric distance calculation.")
                 self._cuda_kernel_used = True
 
@@ -1177,26 +1178,23 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 # Ensure derived_rot_mat is correct type
                 derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
 
-                out_coords_temp = xp.empty_like(rot_coords_subset)
-                out_lat_dists = xp.empty((num_elements, 2), dtype=rot_coords_subset.dtype)
-                out_rad_dist_sq = xp.empty((num_elements,), dtype=rot_coords_subset.dtype)
-                out_mask = xp.empty((num_elements,), dtype=bool)
-
                 lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
 
-                threadsperblock = 256
-                blockspergrid = (num_elements + (threadsperblock - 1)) // threadsperblock
+                # CuPy ElementwiseKernel: call as function, returns values
+                # Inputs must be flattened for raw indexing
+                # size= is required since all inputs are 'raw'
+                out_coords_x, out_coords_y, out_coords_z, out_lat_x, out_lat_z, out_rad_dist_sq, out_mask = \
+                    _calc_geo_dists_cupy_kernel(
+                        rot_coords_subset.ravel(),
+                        derived_rot_mat.ravel(),
+                        source_point_bev,
+                        lateral_cutoff_sq_over_sad_sq,
+                        size=num_elements,
+                    )
 
-                _calc_geo_dists_cupy_kernel[blockspergrid, threadsperblock](
-                    rot_coords_subset,
-                    derived_rot_mat,
-                    source_point_bev,
-                    lateral_cutoff_sq_over_sad_sq,
-                    out_coords_temp,
-                    out_lat_dists,
-                    out_rad_dist_sq,
-                    out_mask,
-                )
+                # Stack outputs to match expected format
+                out_coords_temp = xp.stack((out_coords_x, out_coords_y, out_coords_z), axis=1)
+                out_lat_dists = xp.stack((out_lat_x, out_lat_z), axis=1)
 
                 # Update ix using indices (avoids sync)
                 ix[rad_depth_ix] = out_mask

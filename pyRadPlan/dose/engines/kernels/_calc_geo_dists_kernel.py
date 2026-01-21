@@ -1,51 +1,61 @@
-from ....core.xp_utils import numba_cuda_available, pytorch_gpu_available
+from ....core.xp_utils import cupy_available, pytorch_gpu_available
 
-if numba_cuda_available():
-    from numba import cuda
 
-    @cuda.jit
-    def _calc_geo_dists_cupy_kernel(
-        coords,
-        rot_mat,
-        source_point,
-        lateral_cutoff_sq_over_sad_sq,
-        out_coords_temp,
-        out_lat_dists,
-        out_rad_dist_sq,
-        out_mask,
-    ):
-        i = cuda.grid(1)
-        if i < coords.shape[0]:
-            # Matrix multiplication: coords[i] @ rot_mat
-            # Unroll for 3x3
-            x = coords[i, 0]
-            y = coords[i, 1]
-            z = coords[i, 2]
+class _NotAvailableKernel:
+    """Placeholder for kernels that are not available."""
 
-            rx = x * rot_mat[0, 0] + y * rot_mat[1, 0] + z * rot_mat[2, 0]
-            ry = x * rot_mat[0, 1] + y * rot_mat[1, 1] + z * rot_mat[2, 1]
-            rz = x * rot_mat[0, 2] + y * rot_mat[1, 2] + z * rot_mat[2, 2]
+    def __init__(self, name: str):
+        self._name = name
 
-            out_coords_temp[i, 0] = rx
-            out_coords_temp[i, 1] = ry
-            out_coords_temp[i, 2] = rz
+    def __call__(self, *args, **kwargs):
+        raise ImportError(f"{self._name}-kernel for calc_geo_dists is not available.")
 
-            # lat_dists
-            lx = rx + source_point[0]
-            lz = rz + source_point[2]
 
-            out_lat_dists[i, 0] = lx
-            out_lat_dists[i, 1] = lz
+if cupy_available():
+    import cupy as cp
 
-            # rad_dist_sq
-            r_sq = lx * lx + lz * lz
-            out_rad_dist_sq[i] = r_sq
+    _calc_geo_dists_cupy_kernel = cp.ElementwiseKernel(
+        # Input params
+        in_params=(
+            "raw T coords, raw T rot_mat, raw T source_point, "
+            "float64 lateral_cutoff_sq_over_sad_sq"
+        ),
+        # Output params
+        out_params="T out_coords_x, T out_coords_y, T out_coords_z, T out_lat_x, T out_lat_z, T out_rad_dist_sq, bool out_mask",
+        # Kernel operation
+        operation="""
+            // Matrix multiplication: coords[i] @ rot_mat (unrolled for 3x3)
+            T x = coords[i * 3 + 0];
+            T y = coords[i * 3 + 1];
+            T z = coords[i * 3 + 2];
 
-            # mask
-            # (lateral_cutoff / sad) ** 2 * ry ** 2
-            limit = lateral_cutoff_sq_over_sad_sq * ry * ry
+            T rx = x * rot_mat[0] + y * rot_mat[3] + z * rot_mat[6];
+            T ry = x * rot_mat[1] + y * rot_mat[4] + z * rot_mat[7];
+            T rz = x * rot_mat[2] + y * rot_mat[5] + z * rot_mat[8];
 
-            out_mask[i] = r_sq <= limit
+            out_coords_x = rx;
+            out_coords_y = ry;
+            out_coords_z = rz;
+
+            // lat_dists
+            T lx = rx + source_point[0];
+            T lz = rz + source_point[2];
+
+            out_lat_x = lx;
+            out_lat_z = lz;
+
+            // rad_dist_sq
+            T r_sq = lx * lx + lz * lz;
+            out_rad_dist_sq = r_sq;
+
+            // mask: (lateral_cutoff / sad) ** 2 * ry ** 2
+            T limit = lateral_cutoff_sq_over_sad_sq * ry * ry;
+            out_mask = r_sq <= limit;
+        """,
+        name="calc_geo_dists_kernel",
+    )
+else:
+    _calc_geo_dists_cupy_kernel = _NotAvailableKernel("CuPy")
 
 
 if pytorch_gpu_available():
@@ -77,3 +87,5 @@ if pytorch_gpu_available():
         out_mask = r_sq <= limit
 
         return out_coords_temp, out_lat_dists, r_sq, out_mask
+else:
+    _calc_geo_dists_torch_kernel = _NotAvailableKernel("PyTorch with GPU support")
