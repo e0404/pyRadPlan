@@ -54,8 +54,59 @@ if cupy_available():
         """,
         name="calc_geo_dists_kernel",
     )
+
+    # RawKernel version - Numba-like calling convention with pre-allocated outputs
+    _calc_geo_dists_cupy_raw_kernel = cp.RawKernel(
+        r"""
+    extern "C" __global__
+    void calc_geo_dists_raw_kernel(
+        const double* coords,
+        const double* rot_mat,
+        const double* source_point,
+        double lateral_cutoff_sq_over_sad_sq,
+        double* out_coords_temp,
+        double* out_lat_dists,
+        double* out_rad_dist_sq,
+        bool* out_mask,
+        int n
+    ) {
+        int i = blockDim.x * blockIdx.x + threadIdx.x;
+        if (i >= n) return;
+
+        // Matrix multiplication: coords[i] @ rot_mat (unrolled for 3x3)
+        double x = coords[i * 3 + 0];
+        double y = coords[i * 3 + 1];
+        double z = coords[i * 3 + 2];
+
+        double rx = x * rot_mat[0] + y * rot_mat[3] + z * rot_mat[6];
+        double ry = x * rot_mat[1] + y * rot_mat[4] + z * rot_mat[7];
+        double rz = x * rot_mat[2] + y * rot_mat[5] + z * rot_mat[8];
+
+        out_coords_temp[i * 3 + 0] = rx;
+        out_coords_temp[i * 3 + 1] = ry;
+        out_coords_temp[i * 3 + 2] = rz;
+
+        // lat_dists
+        double lx = rx + source_point[0];
+        double lz = rz + source_point[2];
+
+        out_lat_dists[i * 2 + 0] = lx;
+        out_lat_dists[i * 2 + 1] = lz;
+
+        // rad_dist_sq
+        double r_sq = lx * lx + lz * lz;
+        out_rad_dist_sq[i] = r_sq;
+
+        // mask
+        double limit = lateral_cutoff_sq_over_sad_sq * ry * ry;
+        out_mask[i] = r_sq <= limit;
+    }
+    """,
+        "calc_geo_dists_raw_kernel",
+    )
 else:
     _calc_geo_dists_cupy_kernel = _NotAvailableKernel("CuPy")
+    _calc_geo_dists_cupy_raw_kernel = _NotAvailableKernel("CuPy")
 
 
 if pytorch_gpu_available():
