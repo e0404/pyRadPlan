@@ -308,61 +308,50 @@ class Dij(PyRadPlanBaseModel):
         """
 
         out = {}
+        xp = array_api_compat.array_namespace(intensity)
 
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
-            out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
-            out["physical_dose_beam"] = []
+            dose_mat = self.physical_dose.flat[scenario_index]
+            out["physical_dose"] = dose_mat @ intensity
 
-            # !Note: This implementaion is faster than the intuitive:
-            # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
-            # Since slicing over the intensity vector reduces the matrix operation size.
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
-                out["physical_dose_beam"].append(dose_matrix @ intensity[beam_mask])
+            beam_num = xp.asarray(self.beam_num)
+            beam_indices = [xp.nonzero(beam_num == i)[0] for i in range(self.num_of_beams)]
+            out["physical_dose_beam"] = [dose_mat[:, idx] @ intensity[idx] for idx in beam_indices]
 
         if self.let_dose is not None:
             if self.physical_dose is None:
                 raise ValueError("Physical dose must be calculated for dose-weighted let")
 
-            indices = out["physical_dose"] > 0.05 * np.max(out["physical_dose"])
+            indices = out["physical_dose"] > 0.05 * xp.max(out["physical_dose"])
 
-            let_dose = self.let_dose.flat[scenario_index] @ intensity
-            out["let"] = np.zeros_like(let_dose)
+            let_mat = self.let_dose.flat[scenario_index]
+            let_dose = let_mat @ intensity
+            out["let"] = xp.zeros_like(let_dose)
             out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
 
+            let_dose_beams = [let_mat[:, idx] @ intensity[idx] for idx in beam_indices]
             out["let_beam"] = []
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
-                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
-
+            for i, let_dose_beam in enumerate(let_dose_beams):
                 phys_dose_beam = out["physical_dose_beam"][i]
-
-                let_beam = np.zeros_like(let_dose_beam)
-                if np.max(phys_dose_beam) > 0:
-                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                let_beam = xp.zeros_like(let_dose_beam)
+                max_phys = xp.max(phys_dose_beam)
+                if max_phys > 0:
+                    indices_beam = phys_dose_beam > 0.05 * max_phys
                     let_beam[indices_beam] = (
                         let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
                     )
-
                 out["let_beam"].append(let_beam)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
-            out["effect"] = (
-                self.alpha_dose.flat[scenario_index] @ intensity
-                + (self.sqrt_beta_dose.flat[scenario_index] @ intensity) ** 2
-            )
+            alpha_mat = self.alpha_dose.flat[scenario_index]
+            sqrt_beta_mat = self.sqrt_beta_dose.flat[scenario_index]
+            out["effect"] = alpha_mat @ intensity + (sqrt_beta_mat @ intensity) ** 2
 
-            out["effect_beam"] = []
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                alpha_matrix = self.alpha_dose.flat[scenario_index][:, beam_mask]
-                sqrt_beta_matrix = self.sqrt_beta_dose.flat[scenario_index][:, beam_mask]
-
-                w_beam = intensity[beam_mask]
-                out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
+            out["effect_beam"] = [
+                alpha_mat[:, idx] @ intensity[idx] + (sqrt_beta_mat[:, idx] @ intensity[idx]) ** 2
+                for idx in beam_indices
+            ]
 
         return out
 
