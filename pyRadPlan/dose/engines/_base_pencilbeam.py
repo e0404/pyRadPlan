@@ -1230,10 +1230,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 out_coords_temp = xp.stack((out_coords_x, out_coords_y, out_coords_z), axis=1)
                 out_lat_dists = xp.stack((out_lat_x, out_lat_z), axis=1)
 
-                # Array-API-compatible scatter using cumsum mapping
-                mask_int = xp.astype(rad_depth_mask, xp.int64)
-                compressed_idx = xp.clip(xp.cumsum(mask_int) - 1, 0, num_elements - 1)
-                ix = rad_depth_mask & xp.take(out_mask, compressed_idx)
+                ix[rad_depth_ix] = out_mask
 
                 # Filter results
                 # Optimization: sync once for sub_ix
