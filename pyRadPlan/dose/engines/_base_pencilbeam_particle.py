@@ -322,40 +322,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         return kernel_interp
 
-    def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
-        lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
-
-        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
-
-        # Ray tracing for beam i and ray j
-        ix, radial_dist_sq, lat_dists, _ = self.calc_geo_dists(
-            beam_info["bev_coords"],
-            ray["source_point_bev"],
-            ray["target_point_bev"],
-            ray["sad"],
-            beam_info["valid_coords_all"],
-            float(lateral_ray_cutoff),
-        )
-
-        # Subindex given the relevant indices from the geometric distance calculation
-        ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
-
-        ray["radial_dist_sq"] = [
-            radial_dist_sq[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]
-        ]
-        if lat_dists is not None:
-            ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
-
-        ray["valid_coords_all"] = xp.any(xp.stack(ray["valid_coords"], axis=0), axis=1)
-
-        ray["geo_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
-        ]  # usually not needed for particle beams
-        ray["rad_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
-        ]
-
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
         kernel = curr_bixel["kernel"]  # cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
         xp = array_api_compat.array_namespace(curr_ray["rad_depths"])

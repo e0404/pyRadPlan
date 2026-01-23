@@ -697,39 +697,39 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "Method _get_ray_geometry_from_beam must be implemented in derived class."
         )
 
-    # def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
-    #     ray["effective_lateral_cut_off"] = beam_info.get(
-    #         "effective_lateral_cut_off", self._effective_lateral_cutoff
-    #     )
-    #     lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
+    def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
+        lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
 
-    #     # Ray tracing for beam i and ray j
-    #     ix, radial_dist_sq, lat_dists, iso_lat_dists = self.calc_geo_dists(
-    #         beam_info["bev_coords"],
-    #         ray["source_point_bev"],
-    #         ray["target_point_bev"],
-    #         ray["sad"],
-    #         beam_info["valid_coords_all"],
-    #         lateral_ray_cutoff,
-    #     )
-    #     beam_info["valid_coords"] = to_namespace(self.xp, beam_info["valid_coords"])
-    #     ray["valid_coords"] = to_namespace(self.xp, ix)
-    #     # Subindex given the relevant indices from the geometric distance calculation
-    #     ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-    #     ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
+        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
 
-    #     ray["radial_dist_sq"] = [radial_dist_sq[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-    #     ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-    #     ray["iso_lat_dists"] = [iso_lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
+        # Ray tracing for beam i and ray j
+        ix, radial_dist_sq, lat_dists, iso_lat_dists = self.calc_geo_dists(
+            beam_info["bev_coords"],
+            ray["source_point_bev"],
+            ray["target_point_bev"],
+            ray["sad"],
+            beam_info["valid_coords_all"],
+            float(lateral_ray_cutoff),
+        )
+        # Subindex given the relevant indices from the geometric distance calculation
+        ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
+        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
 
-    #     ray["valid_coords_all"] = np.any(np.vstack(ray["valid_coords"]), axis=0)
+        ray["radial_dist_sq"] = [radial_dist_sq[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
 
-    #     ray["geo_depths"] = [
-    #         rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
-    #     ]  # usually not needed for particle beams
-    #     ray["rad_depths"] = [
-    #         rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
-    #     ]
+        if lat_dists is not None:
+            ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
+
+        ray["iso_lat_dists"] = [iso_lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
+
+        ray["valid_coords_all"] = xp.any(xp.stack(ray["valid_coords"], axis=0), axis=1)
+
+        ray["geo_depths"] = [
+            rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
+        ]  # usually not needed for particle beams
+        ray["rad_depths"] = [
+            rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
+        ]
 
     def _get_lateral_distance_from_dose_cutoff_on_ray(self, ray: dict) -> float:
         """
