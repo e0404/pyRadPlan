@@ -281,6 +281,228 @@ class TestCalcGeoDIstsCuPyKernel:
 
 
 # =============================================================================
+# CuPy RawKernel Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not cupy_available(), reason="CuPy is not available")
+class TestCalcGeoDIstsCuPyRawKernel:
+    """Tests for the CuPy RawKernel implementation (Numba-like calling convention)."""
+
+    def test_cupy_raw_kernel_basic(self, sample_data):
+        """Test CuPy RawKernel produces correct results."""
+        import cupy as cp
+
+        from pyRadPlan.dose.engines.kernels import _calc_geo_dists_cupy_raw_kernel
+
+        # Convert to CuPy arrays
+        coords = cp.asarray(sample_data["coords"], dtype=cp.float64)
+        rot_mat = cp.asarray(sample_data["rot_mat"], dtype=cp.float64)
+        source_point = cp.asarray(sample_data["source_point"], dtype=cp.float64)
+        lateral_cutoff_sq_over_sad_sq = sample_data["lateral_cutoff_sq_over_sad_sq"]
+
+        num_elements = coords.shape[0]
+
+        # Pre-allocate output arrays (Numba-style)
+        out_coords_temp = cp.empty_like(coords)
+        out_lat_dists = cp.empty((num_elements, 2), dtype=cp.float64)
+        out_rad_dist_sq = cp.empty((num_elements,), dtype=cp.float64)
+        out_mask = cp.empty((num_elements,), dtype=bool)
+
+        # Launch kernel (Numba-like calling convention)
+        threadsperblock = 256
+        blockspergrid = (num_elements + threadsperblock - 1) // threadsperblock
+
+        _calc_geo_dists_cupy_raw_kernel(
+            (blockspergrid,),
+            (threadsperblock,),
+            (
+                coords,
+                rot_mat,
+                source_point,
+                lateral_cutoff_sq_over_sad_sq,
+                out_coords_temp,
+                out_lat_dists,
+                out_rad_dist_sq,
+                out_mask,
+                num_elements,
+            ),
+        )
+
+        # Get reference results
+        ref_coords, ref_lat_dists, ref_rad_dist_sq, ref_mask = _reference_calc_geo_dists(
+            sample_data["coords"],
+            sample_data["rot_mat"],
+            sample_data["source_point"],
+            lateral_cutoff_sq_over_sad_sq,
+        )
+
+        # Compare results
+        np.testing.assert_allclose(cp.asnumpy(out_coords_temp), ref_coords, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(
+            cp.asnumpy(out_lat_dists), ref_lat_dists, rtol=1e-10, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(out_rad_dist_sq), ref_rad_dist_sq, rtol=1e-10, atol=1e-10
+        )
+        np.testing.assert_array_equal(cp.asnumpy(out_mask), ref_mask)
+
+    def test_cupy_raw_kernel_identity_rotation(self, identity_rotation_data):
+        """Test CuPy RawKernel with identity rotation matrix."""
+        import cupy as cp
+
+        from pyRadPlan.dose.engines.kernels import _calc_geo_dists_cupy_raw_kernel
+
+        coords = cp.asarray(identity_rotation_data["coords"], dtype=cp.float64)
+        rot_mat = cp.asarray(identity_rotation_data["rot_mat"], dtype=cp.float64)
+        source_point = cp.asarray(identity_rotation_data["source_point"], dtype=cp.float64)
+        lateral_cutoff_sq_over_sad_sq = identity_rotation_data["lateral_cutoff_sq_over_sad_sq"]
+
+        num_elements = coords.shape[0]
+
+        out_coords_temp = cp.empty_like(coords)
+        out_lat_dists = cp.empty((num_elements, 2), dtype=cp.float64)
+        out_rad_dist_sq = cp.empty((num_elements,), dtype=cp.float64)
+        out_mask = cp.empty((num_elements,), dtype=bool)
+
+        threadsperblock = 256
+        blockspergrid = (num_elements + threadsperblock - 1) // threadsperblock
+
+        _calc_geo_dists_cupy_raw_kernel(
+            (blockspergrid,),
+            (threadsperblock,),
+            (
+                coords,
+                rot_mat,
+                source_point,
+                lateral_cutoff_sq_over_sad_sq,
+                out_coords_temp,
+                out_lat_dists,
+                out_rad_dist_sq,
+                out_mask,
+                num_elements,
+            ),
+        )
+
+        # With identity rotation, output coords should equal input coords
+        np.testing.assert_allclose(
+            cp.asnumpy(out_coords_temp),
+            identity_rotation_data["coords"],
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
+    def test_cupy_raw_kernel_single_point(self):
+        """Test CuPy RawKernel with a single point."""
+        import cupy as cp
+
+        from pyRadPlan.dose.engines.kernels import _calc_geo_dists_cupy_raw_kernel
+
+        coords = cp.array([[10.0, 20.0, 30.0]], dtype=cp.float64)
+        rot_mat = cp.eye(3, dtype=cp.float64)
+        source_point = cp.array([0.0, -100.0, 0.0], dtype=cp.float64)
+        lateral_cutoff_sq_over_sad_sq = (50.0 / 100.0) ** 2
+
+        num_elements = 1
+        out_coords_temp = cp.empty_like(coords)
+        out_lat_dists = cp.empty((num_elements, 2), dtype=cp.float64)
+        out_rad_dist_sq = cp.empty((num_elements,), dtype=cp.float64)
+        out_mask = cp.empty((num_elements,), dtype=bool)
+
+        _calc_geo_dists_cupy_raw_kernel(
+            (1,),
+            (1,),
+            (
+                coords,
+                rot_mat,
+                source_point,
+                lateral_cutoff_sq_over_sad_sq,
+                out_coords_temp,
+                out_lat_dists,
+                out_rad_dist_sq,
+                out_mask,
+                num_elements,
+            ),
+        )
+
+        # With identity rotation: out_coords = coords
+        np.testing.assert_allclose(cp.asnumpy(out_coords_temp), [[10.0, 20.0, 30.0]], rtol=1e-10)
+
+        # lat_dists = [10, 30]
+        np.testing.assert_allclose(cp.asnumpy(out_lat_dists), [[10.0, 30.0]], rtol=1e-10)
+
+        # rad_dist_sq = 10^2 + 30^2 = 1000
+        assert float(out_rad_dist_sq[0]) == pytest.approx(1000.0)
+
+    def test_elementwise_vs_raw_kernel_consistency(self, sample_data):
+        """Test that ElementwiseKernel and RawKernel produce the same results."""
+        import cupy as cp
+
+        from pyRadPlan.dose.engines.kernels import (
+            _calc_geo_dists_cupy_kernel,
+            _calc_geo_dists_cupy_raw_kernel,
+        )
+
+        coords = cp.asarray(sample_data["coords"], dtype=cp.float64)
+        rot_mat = cp.asarray(sample_data["rot_mat"], dtype=cp.float64)
+        source_point = cp.asarray(sample_data["source_point"], dtype=cp.float64)
+        lateral_cutoff_sq_over_sad_sq = sample_data["lateral_cutoff_sq_over_sad_sq"]
+        num_elements = coords.shape[0]
+
+        # ElementwiseKernel
+        (
+            ew_coords_x,
+            ew_coords_y,
+            ew_coords_z,
+            ew_lat_x,
+            ew_lat_z,
+            ew_rad_dist_sq,
+            ew_mask,
+        ) = _calc_geo_dists_cupy_kernel(
+            coords.ravel(),
+            rot_mat.ravel(),
+            source_point,
+            lateral_cutoff_sq_over_sad_sq,
+            size=num_elements,
+        )
+        ew_coords = cp.stack((ew_coords_x, ew_coords_y, ew_coords_z), axis=1)
+        ew_lat_dists = cp.stack((ew_lat_x, ew_lat_z), axis=1)
+
+        # RawKernel
+        raw_coords = cp.empty_like(coords)
+        raw_lat_dists = cp.empty((num_elements, 2), dtype=cp.float64)
+        raw_rad_dist_sq = cp.empty((num_elements,), dtype=cp.float64)
+        raw_mask = cp.empty((num_elements,), dtype=bool)
+
+        threadsperblock = 256
+        blockspergrid = (num_elements + threadsperblock - 1) // threadsperblock
+
+        _calc_geo_dists_cupy_raw_kernel(
+            (blockspergrid,),
+            (threadsperblock,),
+            (
+                coords,
+                rot_mat,
+                source_point,
+                lateral_cutoff_sq_over_sad_sq,
+                raw_coords,
+                raw_lat_dists,
+                raw_rad_dist_sq,
+                raw_mask,
+                num_elements,
+            ),
+        )
+
+        # Compare both implementations
+        np.testing.assert_allclose(cp.asnumpy(ew_coords), cp.asnumpy(raw_coords), rtol=1e-14)
+        np.testing.assert_allclose(cp.asnumpy(ew_lat_dists), cp.asnumpy(raw_lat_dists), rtol=1e-14)
+        np.testing.assert_allclose(
+            cp.asnumpy(ew_rad_dist_sq), cp.asnumpy(raw_rad_dist_sq), rtol=1e-14
+        )
+        np.testing.assert_array_equal(cp.asnumpy(ew_mask), cp.asnumpy(raw_mask))
+
+
+# =============================================================================
 # PyTorch Kernel Tests
 # =============================================================================
 
