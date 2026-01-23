@@ -87,6 +87,31 @@ def synchronize(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> 
         )
 
 
+def free_gpu_memory(xp: ArrayNamespace) -> None:
+    """
+    Free unused GPU memory for the given array namespace.
+
+    This function releases cached GPU memory back to the system. For CuPy,
+    it frees all blocks in the default memory pool. For PyTorch, it empties
+    the CUDA cache.
+
+    Parameters
+    ----------
+    xp : ArrayNamespace
+        The array namespace (e.g., cupy, torch, numpy).
+
+    Notes
+    -----
+    This is useful to manage GPU memory usage in long-running applications.
+    Will ignore cpu arrays.
+    """
+    if array_api_compat.is_cupy_namespace(xp) and cp is not None:
+        cp.get_default_memory_pool().free_all_blocks()
+    elif array_api_compat.is_torch_namespace(xp) and torch is not None:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def record_event(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> Optional[object]:
     """Record an event in the current stream if using CuPy or PyTorch."""
     if not isinstance(stream, nullcontext):
