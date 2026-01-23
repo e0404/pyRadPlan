@@ -23,7 +23,7 @@ from pyRadPlan.raytracer import RayTracerSiddon
 from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import cupy_available, pytorch_gpu_available
-from ...core.xp_utils import to_namespace, to_numpy
+from ...core.xp_utils import to_namespace, to_numpy, free_gpu_memory
 from .kernels import _calc_geo_dists_cupy_kernel, _calc_geo_dists_torch_kernel
 
 
@@ -172,6 +172,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 )
 
             bixel_counter = 0
+            # We store this here extra so init_beam does not rebel
+            self._vdose_grid_np = self._vdose_grid
+
+            self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
 
             # Loop over all beams
             with logging_redirect_tqdm():
@@ -205,7 +209,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     curr_beam["rot_mat_system_T"] = to_namespace(
                         xp, curr_beam["rot_mat_system_T"], device=device
                     )
-                    self._vdose_grid = to_namespace(xp, self._vdose_grid, device=device)
 
                     # Ray calculation
                     for j in tqdm(
@@ -254,6 +257,18 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         # Progress Update & Bookkeeping
                         bixel_counter += curr_ray["num_of_bixels"]
                         bixel_beam_counter += curr_ray["num_of_bixels"]
+
+                    # Free GPU memory from curr_beam
+                    del curr_beam["bev_coords"]
+                    del curr_beam["rad_depths"]
+                    del curr_beam["geo_depths"]
+                    del curr_beam["valid_coords"]
+                    del curr_beam["valid_coords_all"]
+                    del curr_beam["rot_mat_system_T"]
+                    curr_beam = None
+
+                    # Force GPU memory cleanup
+                    free_gpu_memory(self.xp)
 
         # Finalize dose calculation
         logger.info("Finalizing dose calculation...")
@@ -457,7 +472,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
 
             rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
-            rad_depth_vdose_grid = xp.asarray(rad_depth_cube_dosegrid).ravel()[self._vdose_grid]
+            # TODO: We use vdose_grid_np which is np explicitly! change if this function becomes array api conform
+            rad_depth_vdose_grid = xp.asarray(rad_depth_cube_dosegrid).ravel()[self._vdose_grid_np]
 
             # Find valid coordinates
             coord_is_valid = xp.isfinite(rad_depth_vdose_grid)
@@ -1051,6 +1067,14 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
         Calculate geometric distances for dose calculation.
 
+        This function relys on FOUR different ways to compute distances:
+        1) GPU with cupy kernel
+        2) GPU with torch kernel
+        3) Base path (CPU/GPU) - backend supports fancy indexing regarding __setitem__
+            -> numpy/cupy/torch
+        4) Fallback path - backend does not support fancy indexing regarding __setitem__
+            -> jax/strict
+
         Parameters
         ----------
         rot_coords_bev : Array
@@ -1082,7 +1106,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # xp = array_api_compat.array_namespace(
         #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         # )
-
+        # TODO: These here can be removed once init_beam is array api compatible! :)
         rot_coords_bev = to_namespace(self.xp, rot_coords_bev, device=self.device)
         source_point_bev = to_namespace(self.xp, source_point_bev, device=self.device)
         target_point_bev = to_namespace(self.xp, target_point_bev, device=self.device)
@@ -1180,6 +1204,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                 lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
 
+                # NOTE!: I tried using the RawKernel. However saw no increase in performance.
+                # Thus, we stick to ElementwiseKernel for now (easier to maintain)
+
                 # CuPy ElementwiseKernel: call as function, returns values
                 # Inputs must be flattened for raw indexing
                 # size= is required since all inputs are 'raw'
@@ -1203,8 +1230,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 out_coords_temp = xp.stack((out_coords_x, out_coords_y, out_coords_z), axis=1)
                 out_lat_dists = xp.stack((out_lat_x, out_lat_z), axis=1)
 
-                # Update ix using indices (avoids sync)
-                ix[rad_depth_ix] = out_mask
+                # Array-API-compatible scatter using cumsum mapping
+                mask_int = xp.astype(rad_depth_mask, xp.int64)
+                compressed_idx = xp.clip(xp.cumsum(mask_int) - 1, 0, num_elements - 1)
+                ix = rad_depth_mask & xp.take(out_mask, compressed_idx)
 
                 # Filter results
                 # Optimization: sync once for sub_ix
@@ -1294,8 +1323,33 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         limit = lateral_cutoff_sq_over_sad_sq * ry * ry
         out_mask = out_rad_dist_sq <= limit
 
-        # Update ix using indices
-        ix[rad_depth_ix] = out_mask
+        # Check if backend supports fancy indexing (JAX and array_api_strict don't)
+        xp_name = getattr(xp, "__name__", "")
+        supports_fancy_setitem = "jax" not in xp_name and "strict" not in xp_name
+
+        # Fancy indexing is supported for cupy/numpy/torch!
+        # in some cases the kernels above are not compiled
+        # So cupy and torch might rely on this path too.
+        if supports_fancy_setitem:
+            # Fast path: use fancy indexing scatter
+            ix[rad_depth_ix] = out_mask
+        else:
+            # NOTE! This fallback is necessary for jax/strict. Above can be called for numpy/torch/cupy.
+            # -> Above is approx 20~30% faster (proton dose calc)
+            # Slow path for immutable arrays: compute mask on full array
+            if derived_rot_mat is None:
+                out_coords_full = rot_coords_bev
+            elif hasattr(xp, "matmul"):
+                out_coords_full = xp.matmul(rot_coords_bev, derived_rot_mat)
+            else:
+                out_coords_full = rot_coords_bev @ derived_rot_mat
+            lx_full = out_coords_full[:, 0] + source_point_bev[0]
+            lz_full = out_coords_full[:, 2] + source_point_bev[2]
+            rad_dist_sq_full = lx_full * lx_full + lz_full * lz_full
+            ry_full = out_coords_full[:, 1]
+            limit_full = lateral_cutoff_sq_over_sad_sq * ry_full * ry_full
+            cutoff_mask_full = rad_dist_sq_full <= limit_full
+            ix = rad_depth_mask & cutoff_mask_full
 
         # for array API compatible indexing
         sub_ix = xp.nonzero(out_mask)[0]
