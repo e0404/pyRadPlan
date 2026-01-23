@@ -113,6 +113,8 @@ def test_choose_device_defaults():
         assert dev == "cuda"
     elif array_api_compat.is_cupy_namespace(xp) and cupy_available():
         assert dev == 0
+    elif array_api_compat.is_array_api_strict_namespace(xp):
+        assert dev is None
     else:
         assert dev == "cpu"
 
@@ -132,7 +134,7 @@ def test_choose_device_cupy():
     import array_api_compat.cupy as xp
 
     dev = choose_device(xp)
-    assert dev == 0
+    assert dev == "0"
 
 
 def test_choose_device_numpy():
