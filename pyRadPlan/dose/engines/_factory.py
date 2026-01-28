@@ -48,8 +48,8 @@ def get_available_engines(pln: Union[Plan, dict[str]]) -> dict[str, Type[DoseEng
 
     Returns
     -------
-    list
-        A list of available engines.
+    dict[str, Type[DoseEngineBase]]
+        A dictionary containing the available engines.
     """
     pln = validate_pln(pln)
     return {
