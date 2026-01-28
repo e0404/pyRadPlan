@@ -16,6 +16,8 @@ Development is lead by the [Radiotherapy Optimization group](https://www.dkfz.de
 ## Concept and Goals
 pyRadPlan is a multi-modality treatment planning toolkit in python born from the established Matlab-based toolkit [matRad](http://www.matRad.org). As such, pyRadPlan aims to provide a framework as well as tools for combining dose calculation with optimization with focus on ion planning.
 
+One of pyRadPlan's main goals is for its algorithms to be [Python Array API](https://data-apis.org/array-api/) conform as much as possible, to allow free choice of compute backends and devices (i.e., [`numpy`](https://numpy.org/), [`cupy`](https://cupy.dev/), [`pytorch`](https://pytorch.org/)). Further, its data structures (more precisely, their metadata) should be easily serializable for exchange with novel LLMs. This facilitate performant treatment planning research while enabling the integration of AI - such as deep neural networks implemented in [`pytorch`](https://pytorch.org/) or interaction with an LLM Agent via [`pydantic-ai`](https://ai.pydantic.dev/) -  at every step of the treatment planning workflow.
+
 ### Data Structures
 pyRadPlan uses a similar datastructure and workflow concept as in matRad, while trying to ensure that the corresponding datastructures can be easily imported and exported from/to matRad. This facilitates the application of either algortihms from matRad or native pyRadPlan at any stage of the treatment planning workflow.
 
