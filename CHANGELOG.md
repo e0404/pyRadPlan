@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 0.3.1
+Small update to drop `numba` as a mandatory dependency. `numba` accelerations can still be provided but should only compliment Array API conform base implementations and be appropriately checked.
+- Performant and Array API compatible candidate ray matrix setup alternative for cube raytracing
+- Fix readthedocs-YAML to fix Python version
+- Add convenience plotting function to display multiple slices `plot_distributions`
+- Small code quality fixes
+
 ## Version 0.3.0 - Pre-Release
 This update features Array API compatibility, a FRED interface, VHEE model, documentation, examples in jupytext style, some refactoring and bugfixes.
 We further are removing python 3.9 support due to array api compatibility.

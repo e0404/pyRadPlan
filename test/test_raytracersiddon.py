@@ -3,6 +3,9 @@ import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
+from pyRadPlan.core.xp_utils import from_numpy
+
+import array_api_strict as xps
 
 
 @pytest.fixture
@@ -65,6 +68,24 @@ def test_raytracer_trace_multiple_rays(sample_cube):
     rho_expected[ix < 0] = 0.0
     # rho[0][np.isnan(rho[0])] = 0.0
     assert np.allclose(rho[0], rho_expected)
+
+
+def test_raytracer_candidate_mx_array_api(sample_cube):
+    raytracer = RayTracerSiddon(sample_cube)
+
+    ray_spacing = xps.min(from_numpy(xps, raytracer._resolution)) / xps.sqrt(
+        xps.asarray(2.0, dtype=xps.float32)
+    )
+
+    spacing_range = ray_spacing * xps.arange(
+        xps.floor(-500.0 / ray_spacing), xps.ceil(500.0 / ray_spacing) + 1, dtype=xps.float32
+    )
+
+    lookup_pos = xps.zeros((100, 3), dtype=xps.float32)
+    lookup_pos[:, 0] = xps.asarray(np.random.uniform(-500.0, 500.0, 100), dtype=xps.float32)
+    lookup_pos[:, 2] = xps.asarray(np.random.uniform(-500.0, 500.0, 100), dtype=xps.float32)
+
+    candidate_mx = raytracer._get_candidate_ray_matrix(spacing_range, lookup_pos)
 
 
 def test_raytracer_trace_multiple_cubes(sample_cube):
