@@ -348,7 +348,18 @@ def to_namespace(
         return new_arr
 
     # --- Generic Fallback ---
-    return xp_new.from_dlpack(arr, copy=copy)
+    try:
+        return xp_new.from_dlpack(arr, copy=copy)
+    except (RuntimeError, ValueError) as e:
+        # Check for device mismatch (e.g. GPU tensor to NumPy/array_api_strict)
+        msg = str(e).lower()
+        if "device" in msg or "dlpack" in msg:
+            # Try moving to CPU
+            if hasattr(arr, "cpu"):
+                return xp_new.from_dlpack(arr.cpu(), copy=copy)
+            if hasattr(arr, "get"):  # cupy
+                return xp_new.from_dlpack(arr.get(), copy=copy)
+        raise e
 
 
 def _convert_sparse_for_namespace(

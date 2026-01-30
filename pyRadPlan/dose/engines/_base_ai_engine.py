@@ -470,7 +470,7 @@ class AIEngine(PencilBeamEngineAbstract):
         )
 
         candidate_indices = xp.nonzero(bbox_mask)[0]
-        candidate_points = self.coords_all[candidate_indices]
+        candidate_points = xp.take(self.coords_all, candidate_indices, axis=0)
 
         # Use candidate points for precise transformation and check
         local_points_subset = (
@@ -489,8 +489,8 @@ class AIEngine(PencilBeamEngineAbstract):
 
         valid_subset_indices = xp.nonzero(mask_subset)[0]
 
-        ix_mask = candidate_indices[valid_subset_indices]
-        local_points_masked = local_points_subset[valid_subset_indices]
+        ix_mask = xp.take(candidate_indices, valid_subset_indices, axis=0)
+        local_points_masked = xp.take(local_points_subset, valid_subset_indices, axis=0)
 
         grid_information = {
             "lateral_range": lateral_range,
@@ -538,14 +538,19 @@ class AIEngine(PencilBeamEngineAbstract):
         grid_rotated = grid_information["grid_rotated"]
 
         values = self.ct_interpolator(grid_rotated)
+        values = xp.asarray(values, device=self.device)
         # Meshgrid now built with shape (depth, lateral, lateral); direct reshape yields desired ordering
         values_reshaped = xp.reshape(
-            values, (len(depth_range), len(lateral_range), len(lateral_range))
+            values, (depth_range.shape[0], lateral_range.shape[0], lateral_range.shape[0])
         )
 
         if ct_interpolation is True:
-            ix_zeros = xp.nonzero(values_reshaped == 0)
-            values_reshaped[ix_zeros] = -1000  # hu for air
+            # array_api_strict does not support fancy indexing for setitem
+            values_reshaped = xp.where(
+                values_reshaped == 0,
+                xp.asarray(-1000, dtype=values_reshaped.dtype),
+                values_reshaped,
+            )
 
         # debug: visualize ct cuboid (network input)
         # import matplotlib.pyplot as plt
@@ -638,7 +643,7 @@ class AIEngine(PencilBeamEngineAbstract):
             else:
                 vals_batch = []
                 for i in range(B):
-                    cuboid_i = cuboid_batch[i]
+                    cuboid_i = cuboid_batch[i, ...]
                     interpolator = interp3d(
                         (depth, lateral, lateral),
                         cuboid_i,

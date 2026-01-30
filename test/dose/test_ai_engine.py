@@ -7,10 +7,6 @@ from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import AIEngine, DoseEngineBase
 from pyRadPlan.stf import validate_stf
 
-# Set backends
-xp_utils.PREFER_GPU = False
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "torch"
 
 torch = pytest.importorskip("torch", reason="torch is required for AI engine tests.")
 
