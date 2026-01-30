@@ -6,9 +6,13 @@ from ._base_ai_models import (
     get_available_models,
     register_model,
 )
-from ._ConvLSTM import predict_ConvLSTM
 
-register_model(predict_ConvLSTM)
+try:
+    from ._ConvLSTM import predict_ConvLSTM
+
+    register_model(predict_ConvLSTM)
+except ImportError:
+    predict_ConvLSTM = None
 
 
 __all__ = [
