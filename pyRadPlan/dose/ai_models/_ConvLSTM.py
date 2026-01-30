@@ -1,6 +1,9 @@
 """ConvLSTM-based dose prediction model (torch)."""
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import json
 from pathlib import Path
 from ._base_ai_models import AIDoseModelBase

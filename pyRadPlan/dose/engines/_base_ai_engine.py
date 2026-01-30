@@ -80,7 +80,17 @@ class AIEngine(PencilBeamEngineAbstract):
         -------
         None
         """
-        super().__init__(pln=None)
+        if pln is not None:
+            # We dynamically adopt the requested model name so that DoseEngineBase validation passes.
+            # Try to get prop_dose_calc from object or dict
+            pdc = getattr(pln, "prop_dose_calc", None)
+            if pdc is None and isinstance(pln, dict):
+                pdc = pln.get("prop_dose_calc")
+
+            if pdc is not None and "model" in pdc:
+                self.model_name = pdc["model"]
+
+        super().__init__(pln)
         self.pln = pln
 
     def _compute_bixel(self, ray: dict, k: int) -> dict:

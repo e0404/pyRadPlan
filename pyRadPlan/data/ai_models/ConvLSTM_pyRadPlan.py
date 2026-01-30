@@ -1,5 +1,9 @@
-import torch
-from torch import nn
+try:
+    import torch
+    from torch import nn
+except ImportError:
+    torch = None
+
 import numpy as np
 
 
