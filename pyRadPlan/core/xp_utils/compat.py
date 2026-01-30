@@ -354,7 +354,8 @@ if torch is not None:
             # Store limits
             self.limits = []
             for p in points:
-                self.limits.append((float(p[0]), float(p[-1])))
+                # Store limits as tensors/arrays to avoid host-device synchronization
+                self.limits.append((p[0], p[-1]))
 
         def __call__(self, xi):
             # some preprocessing is needed to use grid_sample

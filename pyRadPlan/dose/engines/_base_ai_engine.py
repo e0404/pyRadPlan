@@ -1,4 +1,4 @@
-"""dummy engine for ai models"""
+"""dummy engine for ai models."""
 
 import logging
 from typing import ClassVar
@@ -387,7 +387,6 @@ class AIEngine(PencilBeamEngineAbstract):
         b /= norm(b)
 
         # Define rotation matrix
-        rot_coords_temp = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
         if not xp.all(a == b):
             # Cross product
             cross_ab = cross(a, b)
@@ -561,6 +560,7 @@ class AIEngine(PencilBeamEngineAbstract):
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
         """Initialize per-ray geometry and CT sampling for the AI engine.
+
         Performs forward pass for all bixel of current ray and stores the outputs
 
         Parameters
@@ -662,12 +662,10 @@ class AIEngine(PencilBeamEngineAbstract):
                 vals_in = xp.where(vdose_sub, vals_in, 0.0)
 
                 nz_mask = vals_in > 0
-                if xp.any(nz_mask):
-                    ix_nz = xp.asarray(ix_mask[nz_mask], dtype=xp.int64, device=self.device)
-                    vals_nz = xp.asarray(vals_in[nz_mask], dtype=xp.float32, device=self.device)
-                else:
-                    ix_nz = xp.asarray([], dtype=xp.int64, device=self.device)
-                    vals_nz = xp.asarray([], dtype=xp.float32, device=self.device)
+                # Directly extract values to avoid CPU-GPU synchronization (if xp.any(nz_mask))
+                # Empty masks will result in empty arrays, which is handled correctly downstream
+                ix_nz = xp.asarray(ix_mask[nz_mask], dtype=xp.int64, device=self.device)
+                vals_nz = xp.asarray(vals_in[nz_mask], dtype=xp.float32, device=self.device)
 
                 precomputed.append({"ix": ix_nz, "physical_dose": vals_nz})
 
@@ -693,7 +691,6 @@ class AIEngine(PencilBeamEngineAbstract):
         """
         # Gets number of scenario
         scen_num = self.mult_scen.scen_num(scen_idx)
-        ct_scen = self.mult_scen.linear_mask[0][scen_num]
 
         scen_ray = ray.copy()
         # scen_ray["ix"] = scen_ray["ix"][ct_scen]
