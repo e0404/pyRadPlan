@@ -11,7 +11,7 @@ try:
     from ._ConvLSTM import predict_ConvLSTM
 
     register_model(predict_ConvLSTM)
-except ImportError:
+except:
     predict_ConvLSTM = None
 
 
