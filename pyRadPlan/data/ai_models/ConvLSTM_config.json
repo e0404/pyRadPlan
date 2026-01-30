@@ -1,0 +1,22 @@
+{
+  "model_name": "ConvLSTM",
+  "model_architecture": {
+    "batch_size": 32,
+    "n_steps": 160,
+    "imsize": 26,
+    "projection_dim": [12, 6, 6],
+    "energy_encoding": true,
+    "reduced_model": true
+  },
+  "grid_parameters": {
+    "spacing": 2,
+    "lateral_range": 52,
+    "depth_offset_start": -220,
+    "depth_range": 320
+  },
+  "normalization": {
+    "max_dose": 0.001831,
+    "max_energy": 160
+  },
+  "model_path": "pyRadPlan/data/ai_models/p_2_reduced.pt"
+}

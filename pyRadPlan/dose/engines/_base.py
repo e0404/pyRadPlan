@@ -69,6 +69,7 @@ class DoseEngineBase(ABC):
 
     # Constant, Abstract properties
     short_name: ClassVar[str]
+    model_name: ClassVar[str]
     name: ClassVar[str]
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
@@ -162,6 +163,16 @@ class DoseEngineBase(ABC):
                     f"but you are using '{self.short_name}'!"
                 )
             prop_dict.pop("engine", None)
+            if (
+                "model" in prop_dict
+                and prop_dict["model"]
+                and prop_dict["model"] != self.model_name
+            ):
+                raise ValueError(
+                    f"Inconsistent model given! pln asks for '{prop_dict['model']}', "
+                    f"but you are using '{self.model_name}'!"
+                )
+            prop_dict.pop("model", None)
         else:
             prop_dict = {}
 

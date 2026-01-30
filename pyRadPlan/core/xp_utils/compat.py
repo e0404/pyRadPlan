@@ -4,7 +4,7 @@ from typing import Literal, Union, Sequence, Any
 
 from .typing import Array
 from . import pytorch_gpu_available
-
+from . import to_numpy
 import array_api_compat
 import numpy as np
 
@@ -17,6 +17,13 @@ try:
     import torch
 except ImportError:
     torch = None
+try:
+    from cupyx.scipy.interpolate import RegularGridInterpolator as CupyRegularGridInterpolator
+except ModuleNotFoundError:
+    CupyRegularGridInterpolator = None
+
+from scipy.interpolate import RegularGridInterpolator as NumpyRegularGridInterpolator
+
 
 if pytorch_gpu_available():
 
@@ -301,3 +308,169 @@ def interp1d(
     else:
         result = _final_y_interp(y, i0, i1, xq)
     return result
+
+
+if torch is not None:
+
+    class TorchRegularGridInterpolator:
+        """
+        Torch-based RegularGridInterpolator implementation.
+        supports batched interpolation
+        """
+
+        def __init__(
+            self,
+            points,
+            values,
+            method="linear",
+            bounds_error=True,
+            fill_value=float("nan"),
+        ):
+            self.points = points
+            # grid_sample requires float input (float32 or float64)
+            if not values.is_floating_point():
+                values = values.to(dtype=torch.float32)
+            self.values = values
+            self.method = method
+            self.bounds_error = bounds_error
+            self.fill_value = fill_value
+
+            self.dims = [len(p) for p in points]
+
+            # Check for batch dimension
+            if list(values.shape) == self.dims:
+                # Single volume (D, H, W)
+                self.vol = values[None, None, ...]  # (1, 1, D, H, W)
+                self.is_batched = False
+            elif list(values.shape)[1:] == self.dims:
+                # Batched volume (B, D, H, W)
+                self.vol = values.unsqueeze(0)  # (1, B, D, H, W) -> channels=B
+                self.is_batched = True
+            else:
+                raise ValueError(
+                    f"Incompatible shapes: values {values.shape} vs points {self.dims}"
+                )
+
+            # Store limits
+            self.limits = []
+            for p in points:
+                self.limits.append((float(p[0]), float(p[-1])))
+
+        def __call__(self, xi):
+            # some preprocessing is needed to use grid_sample
+            if self.values.device != xi.device or self.values.dtype != xi.dtype:
+                xi = xi.to(device=self.values.device, dtype=self.values.dtype)
+
+            N = xi.shape[0]
+            grid_norm = torch.zeros_like(xi)
+            mapping = [(2, 0), (1, 1), (0, 2)]
+
+            for src_i, dst_i in mapping:
+                vmin, vmax = self.limits[src_i]
+                grid_norm[:, dst_i] = 2 * (xi[:, src_i] - vmin) / (vmax - vmin) - 1
+
+            grid = grid_norm.view(1, 1, 1, N, 3)
+
+            mode = "bilinear" if self.method == "linear" else "nearest"
+
+            # Handle align_corners=True to match scipy behavior with points definition
+            res = torch.nn.functional.grid_sample(
+                self.vol, grid, mode=mode, padding_mode="zeros", align_corners=True
+            )
+
+            # res: (1, C, 1, 1, N)
+            res = res.view(self.vol.shape[1], N)  # (C, N)
+
+            if not self.is_batched:
+                res = res.squeeze(0)  # (N,)
+
+            # Bounds check
+            if self.bounds_error or self.fill_value != 0.0:
+                # Check normalized coords
+                oob_mask = (grid_norm < -1) | (grid_norm > 1)
+                oob_mask = oob_mask.any(dim=-1)  # (N,)
+
+                if self.bounds_error and oob_mask.any():
+                    raise ValueError("Out of bounds")
+
+                if self.fill_value != 0.0:
+                    if self.is_batched:
+                        res[:, oob_mask] = self.fill_value
+                    else:
+                        res[oob_mask] = self.fill_value
+
+            return res
+
+
+def interp3d(
+    points, values, method="linear", bounds_error=True, fill_value=np.nan
+) -> Union[Array, Sequence[Array], dict[Any, Array]]:
+    """
+    Array API Conform 3D interpolation.
+
+    """
+    # points is a tuple/list of grid vectors; expand it so array_namespace
+    # sees actual array objects instead of the container itself.
+    xp = array_api_compat.array_namespace(values, *points)
+
+    if array_api_compat.is_numpy_namespace(xp):
+        return NumpyRegularGridInterpolator(
+            points,
+            values,
+            method=method,
+            bounds_error=bounds_error,
+            fill_value=float(fill_value),
+        )
+
+    if array_api_compat.is_array_api_strict_namespace(xp):
+        # Treat strict Array API tensors by converting to numpy underneath
+        points_np = tuple(to_numpy(p) for p in points)
+        values_np = to_numpy(values)
+        return NumpyRegularGridInterpolator(
+            points_np,
+            values_np,
+            method=method,
+            bounds_error=bounds_error,
+            fill_value=float(fill_value),
+        )
+
+    if array_api_compat.is_cupy_namespace(xp):
+        return CupyRegularGridInterpolator(
+            points, values, method=method, bounds_error=bounds_error, fill_value=float(fill_value)
+        )
+
+    if array_api_compat.is_torch_namespace(xp):
+        return TorchRegularGridInterpolator(
+            points,
+            values,
+            method=method,
+            bounds_error=bounds_error,
+            fill_value=float(fill_value),
+        )
+
+    raise NotImplementedError("3D interpolation is not implemented for this backend.")
+
+
+def array_meshgrid(
+    *arrays: Array, indexing: Literal["xy", "ij"] = "xy"
+) -> Union[Array, Sequence[Array], dict[Any, Array]]:
+    """
+    Meshgrid indexing isn't the same for cupy/numpy and torch when using Array API, use this wrapper as workaround
+
+    """
+    xp = array_api_compat.array_namespace(*arrays)
+
+    if array_api_compat.is_torch_namespace(xp):
+        output = torch.meshgrid(*arrays, indexing=indexing)
+
+    elif array_api_compat.is_cupy_namespace(xp):
+        output = cp.meshgrid(*arrays, indexing=indexing)
+
+    elif array_api_compat.is_numpy_namespace(xp):
+        output = np.meshgrid(*arrays, indexing=indexing)
+    elif array_api_compat.is_array_api_strict_namespace(xp):
+        output = xp.meshgrid(*arrays, indexing=indexing)
+    else:
+        raise NotImplementedError("array_meshgrid not supported for this Backend")
+
+    return output
