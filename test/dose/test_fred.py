@@ -223,8 +223,7 @@ class Test_file_correctness:
 
         assert (tmp_path / "out/score/Phantom.Dose.mhd").exists()
         dose_cube = sitk.GetArrayFromImage(sitk.ReadImage(tmp_path / "out/score/Phantom.Dose.mhd"))
-        # TODO: 1e-3 should be possible!
-        assert np.allclose(phantom_dose, dose_cube, atol=1e-2)
+        assert np.allclose(phantom_dose, dose_cube, atol=1e-3)
 
 
 @pytest.mark.skipif(
