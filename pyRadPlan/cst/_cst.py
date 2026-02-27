@@ -349,7 +349,7 @@ class StructureSet(PyRadPlanBaseModel):
         stats.Execute(labeled)
 
         # Step 3: Identify label with largest number of pixels
-        largest_label = max(stats.GetLabels(), key=lambda label: stats.GetNumberOfPixels(label))
+        largest_label = max(stats.GetLabels(), key=stats.GetNumberOfPixels)
 
         # Step 4: Create binary mask of largest component
         body_segmentation = sitk.Equal(labeled, largest_label)
