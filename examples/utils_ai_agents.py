@@ -27,6 +27,11 @@ from pyRadPlan import (
     IonPlan,
     load_tg119,
     ai_agents,
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+    plot_slice,
+    DVHCollection,
 )
 
 # Load environment variables from .env file
@@ -73,7 +78,7 @@ for a prostate case.
 """
 
 # %%
-pln = IonPlan(radiation_mode="protons", machine="Generic")
+pln = IonPlan(radiation_mode="protons", machine="Generic", num_of_fractions=30, prescribed_dose=60)
 pln.prop_opt = {"solver": "scipy"}
 pln.prop_dose_calc = {"dose_grid": ct.grid}
 
@@ -91,33 +96,27 @@ Ask the AI agent to suggest optimization objectives for the VOIs.
 
 # %%
 print("Generating VOI objectives...")
-cst = ai_agents.generate_voi_objectives(cst, treatment_site="prostate")
+cst = ai_agents.generate_voi_objectives(pln, cst, treatment_site="prostate")
 
 for voi in cst.vois:
     if voi.objectives:
         print(f"\nVOI: {voi.name}")
         for obj in voi.objectives:
-            print(f"  - {obj}")
+            print(obj)
 
 # %% [markdown]
-"""
-## Advanced Usage: Additional Context & Model Switching
+"""## Run plan with AI-generated settings"""
 
-Pass `additional_context` to guide the agent, or override the model per call.
-"""
+stf = generate_stf(ct, cst, pln)
+dij = calc_dose_influence(ct, cst, stf, pln)
+fluence = fluence_optimization(ct, cst, stf, dij, pln)
+
+result = dij.compute_result_ct_grid(fluence)
+dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
 
 # %%
-print("\nRegenerating objectives with additional context (Hip Prosthesis)...")
+# TODO: agentic adaptation loop with information from DVH Collection
 
-cst = ai_agents.generate_voi_objectives(
-    cst,
-    treatment_site="prostate",
-    additional_context="The patient has a hip prosthesis on the left side. Avoid beams entering through the prosthesis if possible.",
-    model="gemini-1.5-pro",
-)
-
-for voi in cst.vois:
-    if voi.objectives:
-        print(f"\nVOI: {voi.name}")
-        for obj in voi.objectives:
-            print(f"  - {obj}")
+# %% [markdown]
+"""## Visualize Result"""
+plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.optimization import objectives as opt_obj
+from pyRadPlan.plan._plans import Plan
 from ._settings import AiSettings
 
 
@@ -38,16 +39,20 @@ class OptimizationObjectives(BaseModel):
 
 
 def generate_voi_objectives(
+    pln: Plan,
     cst: StructureSet,
     treatment_site: str,
     additional_context: Optional[str] = None,
     model: Optional[str] = None,
+    clear_existing: bool = True,
 ) -> StructureSet:
     """
     Generate VOI objectives for a given treatment site using an AI agent.
 
     Parameters
     ----------
+    pln : Plan
+        The plan object.
     cst : StructureSet
         The structure set object.
     treatment_site : str
@@ -64,16 +69,36 @@ def generate_voi_objectives(
     StructureSet
         The updated structure set with generated objectives.
     """
+
+    if clear_existing:
+        for voi in cst.vois:
+            voi.objectives = []
+
     effective_model = model or AiSettings().model
 
     voi_list_str = "\n".join(f"- {voi.name} (Type: {voi.voi_type})" for voi in cst.vois)
 
+    # TODO: this prompt can be further refined
+    # - Obtain the objective types as well as their structure programmatically
+    # - We need to provide a prescribed dose?
+    # - The Plan could probably be provided as full model using pydantic_ai's abilities
+    # - Some Parameters that currently are left out
+    #   - MeanDose: d_ref (reference mean dose)
+    #   - EUD: eud_ref (reference EUD), k (exponent)
+    #   - MinDVH: d (dose), v_min (min volume %)
+    #   - MaxDVH: d (dose), v_max (max volume %)
+    #   - DoseUniformity: (no parameters besides priority)
     prompt = f"""
         You are a radiotherapy treatment planning assistant.
         Given a treatment site and a list of Volumes of Interest (VOIs),
         suggest typical optimization objectives.
 
         Treatment Site: {treatment_site}
+        Prescribed Dose: {pln.prescribed_dose} Gy (if available)
+        Number of fractions: {pln.num_of_fractions}
+
+        The dosimetric parameters should prescribe dose per fraction. If no prescribed
+        dose is given, the target should be presribed to 2 Gy/fraction.
 
         Available VOIs:
         {voi_list_str}
@@ -85,11 +110,6 @@ def generate_voi_objectives(
         - SquaredDeviation: d_ref (reference dose)
         - SquaredOverdosing: d_max (maximum dose)
         - SquaredUnderdosing: d_min (minimum dose)
-        - MeanDose: d_ref (reference mean dose)
-        - EUD: eud_ref (reference EUD), k (exponent)
-        - MinDVH: d (dose), v_min (min volume %)
-        - MaxDVH: d (dose), v_max (max volume %)
-        - DoseUniformity: (no parameters besides priority)
 
         All objectives must have a 'priority' (weight).
         """
