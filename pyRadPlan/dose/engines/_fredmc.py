@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Union
+from typing import Any, Union, cast
 import time
 import textwrap
 from pathlib import Path
@@ -34,13 +34,16 @@ import numpy as np
 import SimpleITK as sitk
 from scipy import sparse
 
-from pyRadPlan.ct import CT, resample_ct
-from pyRadPlan.cst import StructureSet
-from pyRadPlan.dij import Dij
-from pyRadPlan.plan import Plan
-from pyRadPlan.stf import SteeringInformation
+from ...core import Grid
+from ...ct import CT, resample_ct
+from ...cst import StructureSet
+from ...dij import Dij
+from ...plan import Plan
+from ...stf import SteeringInformation, Beam
+from ...util import swap_orientation_sparse_matrix
+from ...machines.particles import IonAccelerator
+
 from ._base_montecarlo import MonteCarloEngineAbstract
-from pyRadPlan.util import swap_orientation_sparse_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +324,10 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         resampled_ct.cube_hu = sitk.Cast(resampled_ct.cube_hu, sitk.sitkInt16)
 
+        # Force Origin to (0,0,0) and Direction to Identity to match matRad behavior
+        resampled_ct.cube_hu.SetOrigin((0.0, 0.0, 0.0))
+        resampled_ct.cube_hu.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+
         sitk.WriteImage(resampled_ct.cube_hu, file_path)
 
         max_ct_hu_value = sitk.GetArrayFromImage(resampled_ct.cube_hu).max()
@@ -566,7 +573,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 else:
                     fields = [("F" + str(n)) for n in list(range(field_counter))]
                 file.write(
-                    "def: plan = {{ 'SAD': {}, 'Fields': [{}] }}".format(
+                    "def: plan = {{ 'SAD': {}, 'Fields': [{}] }}\n".format(
                         field["BAMS_to_iso"], ", ".join(fields)
                     )
                 )
@@ -603,7 +610,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             The transformed isocenter coordinates in FRED's coordinate system.
         """
 
-        dose_grid = dij["dose_grid"]
+        dose_grid: Grid = dij["dose_grid"]
         dose_grid_resolution = np.array(
             [
                 dose_grid.resolution["x"],
@@ -787,7 +794,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 "CA": beam.couch_angle,
                 "field_extent": [],
                 "ISO": (str(n / 10) for n in fred_iso),
-                "BAMS_to_iso": self._machine.bams_to_iso_dist / 10,
+                "BAMS_to_iso": cast(IonAccelerator, self._machine).bams_to_iso_dist / 10,
                 "layers": self._generate_layers_fred(beam, b),
             }
             fwhm_max = max(
@@ -806,7 +813,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         return beams_fred
 
-    def _generate_layers_fred(self, beam, beam_index) -> list[dict]:
+    def _generate_layers_fred(self, beam: Beam, beam_index: int) -> list[dict]:
         """
         Generate the FRED-compatible layers for a beam.
 
@@ -823,24 +830,37 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             A list of dictionaries containing the layer data for FRED.
         """
         layers_fred = []
+        bams_to_iso = cast(IonAccelerator, self._machine).bams_to_iso_dist / 10
+
+        # Linear projection of BEV source (x,y) points to plane at BAMStoISO distance
+        def get_point_at_bams(target, source, distance, bams_to_iso):
+            return (target - source) * (-bams_to_iso) / distance + source
 
         for key, value in beam.energy_layers.items():
             pb_fred = []
             for i in range(len(value["beamlet_idx"])):
                 target_point = beam.rays[value["rays_idx"][i]].target_point_bev / 10
-                source_point = beam.source_point_bev / 10
+                # source_point = beam.source_point_bev / 10 #seems to not be needed in FRED
                 ray_position = beam.rays[value["rays_idx"][i]].ray_pos_bev / 10
                 distance = target_point[1] - ray_position[1]
+
+                # Project the spot to the entrance plane (BAMStoISO distance)
+                ray_pos_z_proj = get_point_at_bams(
+                    target_point[2], ray_position[2], distance, bams_to_iso
+                )
+                ray_pos_x_proj = get_point_at_bams(
+                    target_point[0], ray_position[0], distance, bams_to_iso
+                )
 
                 pb_dict = {
                     "ID": i,
                     "fieldID": beam_index,
                     "particle": beam.radiation_mode,
                     "T": value["full_energy"],
-                    "position_bev": [str(ray_position[2]), str(ray_position[0]), str(0)],
+                    "position_bev": [str(ray_pos_z_proj), str(ray_pos_x_proj), str(0)],
                     "divergence": [
-                        str((target_point[2] - source_point[2]) / distance),
-                        str((target_point[0] - target_point[0]) / distance),
+                        str((target_point[2] - ray_position[2]) / distance),
+                        str((target_point[0] - ray_position[0]) / distance),
                         str(1),
                     ],
                     "weight": beam.rays[value["rays_idx"][i]]
@@ -854,10 +874,11 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
                 pb_fred.append(pb_dict)
 
-            emittance = self._machine.foci[value["full_energy"]][0].emittance
+            emittance = cast(IonAccelerator, self._machine).foci[value["full_energy"]][0].emittance
             layer_dict = {
                 "energy": value["full_energy"],
-                "ESpread": self._machine.spectra[value["full_energy"]].fwhm / 2.355,
+                "ESpread": cast(IonAccelerator, self._machine).spectra[value["full_energy"]].fwhm
+                / 2.355,
                 "FWHM": (
                     2.355
                     * (2 * emittance.sigma_x * emittance.sigma_y)
@@ -1117,13 +1138,21 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 capture_output=not self.print_output,
             )
         except subprocess.CalledProcessError as e:
-            stderr_msg = e.stderr.decode() if e.stderr else "No error details available"
+            stdout_msg = e.stdout.decode(errors="ignore") if e.stdout else ""
+            stderr_msg = e.stderr.decode(errors="ignore") if e.stderr else ""
             logger.error(
-                "FRED execution failed with return code %s. Reason: %s",
+                "FRED execution failed with return code %s. stdout:\n%s\nstderr:\n%s",
                 e.returncode,
-                stderr_msg,
+                stdout_msg,
+                stderr_msg or "No error details available",
             )
             raise SystemExit("Aborting...")
+        except FileNotFoundError as e:
+            logger.error(
+                "FRED executable not found: %s. Ensure 'fred' is in PATH.",
+                e,
+            )
+            raise SystemExit("Aborting... FRED not found")
         else:
             t_end = time.time()
             logger.info("Done in %f seconds.", t_end - t_start)
@@ -1254,12 +1283,11 @@ def read_sparse_dij_bin_v20(f_name: str) -> sparse.csc_array:
         for _ in range(number_of_beamlets):
             # Read beamlet header
             _ = np.frombuffer(f.read(4), dtype=np.int32)[0]  # bix_num (unused)
-            num_vox = np.frombuffer(f.read(4), dtype=np.int32)[0]
+            num_vox = int(np.frombuffer(f.read(4), dtype=np.int32)[0])
             beamlet_counter += 1
 
             # Update indptr
-            indptr.append(indptr[-1] + num_vox)
-
+            indptr.append(int(indptr[-1]) + num_vox)
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
             all_voxel_inds_list.append(curr_voxel_indices)
@@ -1275,7 +1303,7 @@ def read_sparse_dij_bin_v20(f_name: str) -> sparse.csc_array:
         # Concatenate the lists into single NumPy arrays
         all_values = np.concatenate(all_values_list)
         all_voxel_inds = np.concatenate(all_voxel_inds_list)
-        indptr = np.array(indptr, dtype=np.int32)
+        indptr = np.array(indptr, dtype=np.int64)
 
     total_voxels = int(np.prod(dims))
     dij_matrix = sparse.csc_array(
@@ -1315,12 +1343,12 @@ def read_sparse_dij_bin_v21(f_name: str) -> sparse.csc_array:
         for _ in range(number_of_beamlets):
             # Read beamlet header
             _ = np.frombuffer(f.read(4), dtype=np.uint32)[0]  # bix_num
-            num_vox = np.frombuffer(f.read(4), dtype=np.int32)[0]
+            num_vox = int(np.frombuffer(f.read(4), dtype=np.int32)[0])
 
             beamlet_counter += 1
 
             # Update indptr
-            indptr.append(indptr[-1] + num_vox)
+            indptr.append(int(indptr[-1]) + num_vox)
 
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
@@ -1347,7 +1375,7 @@ def read_sparse_dij_bin_v21(f_name: str) -> sparse.csc_array:
     # Concatenate the lists into single NumPy arrays
     all_values = np.concatenate(all_values_list)
     all_voxel_inds = np.concatenate(all_voxel_inds_list)
-    indptr = np.array(indptr, dtype=np.int32)
+    indptr = np.array(indptr, dtype=np.int64)
 
     total_voxels = int(np.prod(dims))
     dij_matrix = sparse.csc_array(

@@ -4,12 +4,20 @@ from abc import abstractmethod
 from typing import ClassVar, Any, Literal, Union, Optional
 import logging
 
-from pydantic import computed_field, Field, field_validator, model_validator
+from pydantic import computed_field, Field, field_validator, model_validator, PrivateAttr
+import SimpleITK as sitk
+import array_api_compat
 
-from pyRadPlan.core.datamodel import PyRadPlanBaseModel
-from pyRadPlan.quantities import get_available_quantities
+from ...core.xp_utils.typing import Array
+from ...core.xp_utils import to_numpy, from_numpy
+from ...core.datamodel import PyRadPlanBaseModel
+from ...quantities import get_available_quantities
+from ...core import Grid
+from ...core.resample import resample_numpy_array
 
-ParameterType = Union[Literal["reference", "numeric", "relative_volume"], list[str]]
+ParameterType = Union[
+    Literal["reference", "numeric", "relative_volume", "image_reference"], list[str]
+]
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +84,60 @@ class Objective(PyRadPlanBaseModel):
     has_hessian: ClassVar[bool] = False
     priority: float = Field(default=1.0, ge=0.0, alias="penalty")
     quantity: str = Field(default="physical_dose")
+
+    _resampled_image_reference_cache: dict[str, Array] = PrivateAttr(default_factory=dict)
+
+    def preprocess_image_reference_parameters(
+        self, target_grid: Grid, index_list: Optional[Array] = None
+    ):
+        """
+        Preprocess image reference parameters if existing in the objective definition.
+
+        Preprocessing of reference image parameters is necessary to align with the corresponding
+        target dose/optimization grid. The function will resample the reference image to the
+        target grid and cache it.
+
+        Parameters
+        ----------
+        target_grid : Grid
+            The target grid that the parameter should match.
+        index_list : Optional[Array], optional
+                    Array containing indices for which the objective needs to be cached
+        """
+
+        for param_name, param_type in zip(self.parameter_names, self.parameter_types):
+            if param_type == "image_reference":
+                # Check cache first
+                cache_key = param_name
+
+                param_value = getattr(self, param_name)
+
+                # Get Array and Grid from parameter value
+                if isinstance(param_value, sitk.Image):
+                    ref_grid = Grid.from_sitk_image(param_value)
+                    param_value = sitk.GetArrayViewFromImage(param_value)
+                elif isinstance(param_value, tuple):
+                    param_value, ref_grid = param_value
+
+                # Get array namespace from parameter value
+                xp = array_api_compat.array_namespace(param_value, index_list)
+
+                # Resample the parameter to target grid
+                resampled_array = resample_numpy_array(
+                    input_array=to_numpy(param_value),
+                    reference_grid=ref_grid,
+                    target_grid=target_grid,
+                )
+                resampled_array = xp.reshape(
+                    from_numpy(xp, resampled_array),
+                    (array_api_compat.size(resampled_array),),
+                    copy=False,
+                )
+                if index_list is not None:
+                    resampled_array = resampled_array[index_list]
+
+                # Cache the resampled value
+                self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
 
     @abstractmethod
     def compute_objective(self, values):
