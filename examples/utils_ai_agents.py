@@ -1,27 +1,36 @@
 # %% [markdown]
 """
-# AI Agents for Radiotherapy Planning
+# AI Agents for Radiotherapy Planning.
 
-This example demonstrates the usage of pydantics `ai_agents` in `pyRadPlan` to assist in treatment planning.
-The module uses a user defined LLM to suggest beam angles and optimization objectives based on the treatment site and patient geometry.
+This example demonstrates the usage of pydantic-ai based `ai_agents` in `pyRadPlan`
+to assist in treatment planning. The module uses a user-defined LLM to suggest
+beam angles and optimization objectives based on the treatment site.
 
 ## Prerequisites
 
-To use this module, you need:
-1.  `pydantic-ai` installed (`pip install pydantic-ai`).
-2.  An API key for your chosen AI provider (e.g., OpenAI, Google Gemini, Anthropic).
-3.  The API key set as an environment variable (e.g., `GOOGLE_API_KEY`, `OPENAI_API_KEY`) OR set via `ai_agents.API_KEY`.
+1. `pydantic-ai` and `pydantic-settings` installed.
+2. An API key for your chosen AI provider set as an environment variable:
+   - OpenAI:     `OPENAI_API_KEY`
+   - Anthropic:  `ANTHROPIC_API_KEY`
+   - Google:     `GOOGLE_API_KEY`
+   - Mistral:    `MISTRAL_API_KEY`
+   If a .env file is present, the environment will be populated with python-dotenv
+3. Optionally, set the model via `PYRADPLAN_AI_MODEL` (default: `claude-sonnet-4-5`).
 
 ## Setup
 """
 
 # %%
 import logging
+from dotenv import load_dotenv
 from pyRadPlan import (
     IonPlan,
     load_tg119,
     ai_agents,
 )
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,31 +39,24 @@ logging.basicConfig(level=logging.INFO)
 """
 ## Configuration
 
-You must configure the `ai_agents` module with a model name.
-The provider is inferred from the model name (e.g., "gemini-..." -> google, "gpt-..." -> openai).
-You can also explicitly set the provider if needed.
-
-Ensure your API key is available. You can set it in the environment variables or directly in the code (not recommended for shared scripts).
+Set the model via the environment variable `PYRADPLAN_AI_MODEL`, or pass `model=`
+explicitly to each call. Your provider API key must be set in the environment
+(e.g. `OPENAI_API_KEY`). pydantic-ai picks it up automatically.
 """
 
 # %%
-# Example configuration for Google Gemini
-# os.environ["GOOGLE_API_KEY"] = "YOUR_API_KEY_HERE"
+# Set the model to use (can also be set via PYRADPLAN_AI_MODEL env var)
+# os.environ["PYRADPLAN_AI_MODEL"] = "openai:gpt-5-mini"
 
-# You can also set the API key directly if not in environment variables:
-# ai_agents.API_KEY = "YOUR_API_KEY_HERE"
-
-# Set the default model to use
-ai_agents.MODEL_NAME = "gemini-2.5-pro"
-# ai_agents.PROVIDER = "google" # Optional: inferred from model name
-
-print(f"Using model: {ai_agents.MODEL_NAME}")
+# Inspect effective settings
+settings = ai_agents.AiSettings()
+print(f"Using model: {settings.model}")
 
 # %% [markdown]
 """
 ## Load Data
 
-We will use the TG119.mat provided with `pyRadPlan`.
+We will use the TG119 phantom provided with `pyRadPlan`.
 """
 
 # %%
@@ -66,16 +68,15 @@ print("VOIs:", [v.name for v in cst.vois])
 """
 ## Generate Beam Angles
 
-We create a generic proton plan and ask the AI agent to suggest beam angles for a prostate case.
+We create a generic proton plan and ask the AI agent to suggest beam angles
+for a prostate case.
 """
 
 # %%
-# Create a base plan
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
 pln.prop_dose_calc = {"dose_grid": ct.grid}
 
-# Generate beam angles
 print("Generating beam angles for prostate...")
 pln = ai_agents.generate_beam_angles(pln, treatment_site="prostate")
 
@@ -85,15 +86,13 @@ print(f"Suggested Gantry Angles: {pln.prop_stf['gantry_angles']}")
 """
 ## Generate Optimization Objectives
 
-Now we ask the AI agent to suggest optimization objectives for our VOIs.
-The agent analyzes the VOI names and types and suggests standard constraints.
+Ask the AI agent to suggest optimization objectives for the VOIs.
 """
 
 # %%
 print("Generating VOI objectives...")
 cst = ai_agents.generate_voi_objectives(cst, treatment_site="prostate")
 
-# Display the generated objectives
 for voi in cst.vois:
     if voi.objectives:
         print(f"\nVOI: {voi.name}")
@@ -104,14 +103,12 @@ for voi in cst.vois:
 """
 ## Advanced Usage: Additional Context & Model Switching
 
-You can provide `additional_context` to guide the agent (e.g., specific clinical scenarios, sparing requirements).
-You can also override the default model for a specific call.
+Pass `additional_context` to guide the agent, or override the model per call.
 """
 
 # %%
 print("\nRegenerating objectives with additional context (Hip Prosthesis)...")
 
-# We can pass a different model if needed, e.g., a more capable one for complex reasoning
 cst = ai_agents.generate_voi_objectives(
     cst,
     treatment_site="prostate",

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.optimization import objectives as opt_obj
+from ._settings import AiSettings
 
 
 class ObjectiveParams(BaseModel):
@@ -39,7 +40,7 @@ class OptimizationObjectives(BaseModel):
 def generate_voi_objectives(
     cst: StructureSet,
     treatment_site: str,
-    additional_context: Optional[str] = "None given",
+    additional_context: Optional[str] = None,
     model: Optional[str] = None,
 ) -> StructureSet:
     """
@@ -54,26 +55,18 @@ def generate_voi_objectives(
     additional_context : str, optional
         Additional clinical context or considerations to guide objective generation.
     model : str, optional
-        The name of the AI model to use (e.g., "gpt-4", "gemini-1.5-pro").
-        If None, uses the default model defined in ai_agents.MODEL_NAME.
+        The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
+        If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
+        the default defined in :class:`AiSettings`.
 
     Returns
     -------
     StructureSet
         The updated structure set with generated objectives.
     """
-    from pyRadPlan import ai_agents
+    effective_model = model or AiSettings().model
 
-    # Validate backend configuration
-    ai_agents.validate_ai_backend()
-
-    model_name = model or ai_agents.MODEL_NAME
-
-    voi_info = []
-    for voi in cst.vois:
-        voi_info.append(f"- {voi.name} (Type: {voi.voi_type})")
-
-    voi_list_str = "\n".join(voi_info)
+    voi_list_str = "\n".join(f"- {voi.name} (Type: {voi.voi_type})" for voi in cst.vois)
 
     prompt = f"""
         You are a radiotherapy treatment planning assistant.
@@ -101,24 +94,21 @@ def generate_voi_objectives(
         All objectives must have a 'priority' (weight).
         """
 
-    agent = Agent(model_name, output_type=OptimizationObjectives, system_prompt=prompt)
+    agent = Agent(effective_model, output_type=OptimizationObjectives, system_prompt=prompt)
 
     result = agent.run_sync(
-        user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context}"
+        user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context or 'None given'}"
     )
 
     suggestions = result.output.objectives
 
     # Map suggestions to cst
     for suggestion in suggestions:
-        # Find VOI
         voi = next((v for v in cst.vois if v.name == suggestion.voi_name), None)
         if voi:
-            # Create objective instance
             obj_class = getattr(opt_obj, suggestion.objective_type, None)
             if obj_class:
                 params = suggestion.parameters.model_dump(exclude_none=True)
-
                 try:
                     objective_instance = obj_class(**params)
                     if voi.objectives is None:

@@ -1,12 +1,13 @@
 from typing import List, Optional
 from pydantic_ai import Agent
 from pyRadPlan.plan import Plan, validate_pln
+from ._settings import AiSettings
 
 
 def generate_beam_angles(
     pln: Plan,
     treatment_site: str,
-    additional_context: Optional[str] = "None given",
+    additional_context: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Plan:
     """
@@ -21,20 +22,16 @@ def generate_beam_angles(
     additional_context : str, optional
         Additional clinical context or considerations to guide angle generation.
     model : str, optional
-        The name of the AI model to use (e.g., "gpt-4", "gemini-1.5-pro").
-        If None, uses the default model defined in ai_agents.MODEL_NAME.
+        The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
+        If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
+        the default defined in :class:`AiSettings`.
 
     Returns
     -------
     Plan
         The updated treatment plan with generated beam angles.
     """
-    from pyRadPlan import ai_agents
-
-    # Validate backend configuration
-    ai_agents.validate_ai_backend()
-
-    model_name = model or ai_agents.MODEL_NAME
+    effective_model = model or AiSettings().model
 
     prompt = f"""
         You are a radiotherapy treatment planning assistant.
@@ -45,18 +42,16 @@ def generate_beam_angles(
         In any case: Return only a Python list of floats.
         """
 
-    agent = Agent(model_name, output_type=List[float], system_prompt=prompt)
+    agent = Agent(effective_model, output_type=List[float], system_prompt=prompt)
 
     gantry_angles = agent.run_sync(
-        user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context}"
+        user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context or 'None given'}"
     ).output
 
-    # Update plan
     if pln.prop_stf is None:
         pln.prop_stf = {}
 
     pln.prop_stf["gantry_angles"] = gantry_angles
-    # Assume couch angles are 0 for now
     pln.prop_stf["couch_angles"] = [0.0] * len(gantry_angles)
 
     return validate_pln(pln)
