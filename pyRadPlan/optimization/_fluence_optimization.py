@@ -10,12 +10,7 @@ from .problems import get_problem_from_pln
 
 
 def fluence_optimization(
-    ct: CT,
-    cst: StructureSet,
-    stf: SteeringInformation,
-    dij: Dij,
-    pln: Plan,
-    obj_history: list = None,
+    ct: CT, cst: StructureSet, stf: SteeringInformation, dij: Dij, pln: Plan, **kwargs
 ) -> np.ndarray:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
@@ -32,6 +27,9 @@ def fluence_optimization(
         Dij object.
     pln : Plan
         Plan object.
+
+    Additional keyword arguments can be passed via `kwargs`:
+
     obj_history : list, optional
         If provided, the list will be filled with the objective function value
         at each evaluation during optimization.
@@ -50,6 +48,7 @@ def fluence_optimization(
 
     planning_prob = get_problem_from_pln(_pln)
 
+    obj_history = kwargs.get("obj_history", None)
     if obj_history is not None:
         planning_prob.obj_history = obj_history
 
