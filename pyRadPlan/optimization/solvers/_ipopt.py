@@ -21,6 +21,7 @@ from ...core.xp_utils.typing import Array
 
 from ._base_solvers import NonLinearOptimizer
 from ...core import xp_utils
+from ...core._jupyter import detect_jupyter
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,15 @@ class OptimizerIpopt(NonLinearOptimizer):
     allow_keyboard_cancel = True
 
     options: dict[str]
+    display: bool
 
     def __init__(self):
         self.result = None
+        self.display = True
 
         super().__init__()
+
+        self._in_jupyter = detect_jupyter()
 
         self.options = {
             "print_level": 5,
@@ -114,10 +119,13 @@ class OptimizerIpopt(NonLinearOptimizer):
 
         return xp_utils.from_numpy(xp, x), status
 
-    def _callback(self, *cb_args):  # Ipopt provides many args; we only need cancel flag
-        # Optional: could inspect cb_args[1] for iter_count, cb_args[2] for obj_value, etc.
+    def _callback(self, *cb_args):
+        # cb_args: alg_mod, iter_count, obj_value, inf_pr, inf_du, mu, ...
         if self._keyboard_listener.stop_event.is_set():
             return False  # abort
+        # IPOPT's C-level output doesn't show in Jupyter; use Python logging there
+        if self.display and self._in_jupyter and len(cb_args) >= 3:
+            logger.info("Iteration %d: f = %g", cb_args[1], cb_args[2])
         return True  # continue
 
     def _validate_ipopt_problem(self, cfg: dict) -> Problem:

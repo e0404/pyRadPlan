@@ -71,8 +71,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         if hasattr(self.solver, "display"):
             self.solver.display = self.display
         if hasattr(self.solver, "options"):
-            if self.solver.short_name == "ipopt":
-                self.solver.options["print_level"] = 5 if self.display else 0
+            if self.solver.short_name == "ipopt" and not self.display:
+                self.solver.options["print_level"] = 0
+
+            # Merge user-provided solver options (overrides defaults)
+            if self.solver_options:
+                self.solver.options.update(self.solver_options)
 
     def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions."""
