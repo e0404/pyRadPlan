@@ -65,7 +65,14 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
-        self.solver.max_iter = 500
+        self.solver.max_iter = self.max_iter
+
+        # Propagate display setting to solver
+        if hasattr(self.solver, "display"):
+            self.solver.display = self.display
+        if hasattr(self.solver, "options"):
+            if self.solver.short_name == "ipopt":
+                self.solver.options["print_level"] = 5 if self.display else 0
 
     def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions."""
@@ -105,6 +112,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         evt = xp_utils.record_event(xp)
         xp_utils.synchronize(xp)
         self._obj_times.append(xp_utils.elapsed_time(xp, t, evt))
+        if self.obj_history is not None:
+            self.obj_history.append(float(f))
         return f
 
     def _set_quantity_imtermediate_gradient_cache(self):
