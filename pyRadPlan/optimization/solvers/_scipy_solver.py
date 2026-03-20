@@ -50,11 +50,13 @@ class OptimizerSciPy(NonLinearOptimizer):
 
         super().__init__()
 
-    def _callback(self, xk: np.ndarray):
+    def _callback(self, xk: np.ndarray, xp=None):
         if self._keyboard_listener.stop_event.is_set():
             raise StopIteration("Optimization cancelled by user")
         if self.display:
             self._iter_count += 1
+            if xp is not None:
+                xk = xp_utils.from_numpy(xp, xk)
             f_val = float(self.objective(xk))
             logger.info("Iteration %d: f = %g", self._iter_count, f_val)
 
@@ -100,7 +102,7 @@ class OptimizerSciPy(NonLinearOptimizer):
             # hess=self.hessian,
             tol=self.abs_obj_tol,
             bounds=bounds,
-            callback=self._callback,
+            callback=lambda xk: self._callback(xk, xp=xp),
             options=self.options,
         )
 

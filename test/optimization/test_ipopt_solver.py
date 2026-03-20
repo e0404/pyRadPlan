@@ -2,7 +2,7 @@ import pytest
 import array_api_strict as xp
 import array_api_compat
 import array_api_extra as xpx
-
+import numpy as np
 
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
 
@@ -12,7 +12,7 @@ if OptimizerIpopt is None:
 
 def build_quadratic_problem(solver):
     def objective(x):
-        return float(x[0] ** 2 + x[1] ** 2)
+        return x[0] ** 2 + x[1] ** 2
 
     def gradient(x):
         return np.asarray([2 * x[0], 2 * x[1]], dtype=np.float64)
