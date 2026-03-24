@@ -551,7 +551,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             beam_info["valid_coords"][scen] = sub_select_ix[scen] & beam_info["valid_coords"][scen]
 
         xp = array_api_compat.array_namespace(self._vox_world_coords)
-        beam_info["valid_coords"] = to_namespace(xp, beam_info["valid_coords"])
+        # TODO: We should definetly enforce arrays in the future not lists.
+        beam_info["valid_coords"] = [to_namespace(xp, v) for v in beam_info["valid_coords"]]
         beam_info["valid_coords_all"] = xp.any(xp.stack(beam_info["valid_coords"], axis=1), axis=1)
 
         # Precompute CutOff

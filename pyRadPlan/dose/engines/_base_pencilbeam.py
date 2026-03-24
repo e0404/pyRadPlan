@@ -409,11 +409,20 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "gantry_angle",
             "couch_angle",
         ]:
-            beam_info["beam"][key] = to_namespace(xp, beam_info["beam"][key], device=self.device)
-
+            if array_api_compat.is_array_api_obj(beam_info["beam"][key]):
+                beam_info["beam"][key] = to_namespace(
+                    xp, beam_info["beam"][key], device=self.device
+                )
+            else:
+                beam_info["beam"][key] = xp.asarray(
+                    beam_info["beam"][key], dtype=xp.float32, device=self.device
+                )
         for ray in beam_info["beam"]["rays"]:
             for key in ["ray_pos", "ray_pos_bev", "target_point", "target_point_bev"]:
-                ray[key] = to_namespace(xp, ray[key], device=self.device)
+                if array_api_compat.is_array_api_obj(ray[key]):
+                    ray[key] = to_namespace(xp, ray[key], device=self.device)
+                else:
+                    ray[key] = xp.asarray(ray[key], dtype=xp.float32, device=self.device)
 
         # Convert voxel indices to real coordinates using iso center of beam i
         iso_center = xp.asarray(
