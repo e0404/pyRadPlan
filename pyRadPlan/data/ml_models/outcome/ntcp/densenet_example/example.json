@@ -1,0 +1,50 @@
+{
+    "model_name": "DenseNet3DSmooth",
+    "description": "DenseNet3DSmooth for NTCP optimization",
+    "model_preprocessing": {
+        "modality":{
+            "dose": {
+                "extract": false,
+                "normalization_value": 70.0,
+                "description": ""
+            },
+            "ct": {
+                "window": [-1000, 1000],
+                "description": ""
+            },
+            "mask": {
+                "collaps": true,
+                "description": ""
+
+            }
+        },
+        "input_dimensions": [100, 100, 50],
+        "input_spacing": [3.0, 3.0, 6.0],
+        "input_physical_extent": [300.0, 300.0, 300.0],
+        "center": "target"
+    },
+    "model_input": {
+        "type_order": ["dose", "ct", "mask"],
+        "tensor_shapes": {
+            "dose": [1, 100, 100, 50],
+            "ct": [1, 100, 100, 50],
+            "mask": [1, 100, 100, 50]
+        }
+    },
+
+    "model_params": {
+        "in_channels_ct": 1,
+        "in_channels_dose": 1,
+        "in_channels_mask": 1,
+        "drop_rate": 0.3,
+        "use_skip_connections": true,
+        "arch": [
+        4,
+        4,
+        4
+        ],
+        "stem_out_channels_total": 96,
+        "growth_rate": 32,
+        "batch_norm_dose": true
+        }
+}
