@@ -59,10 +59,21 @@ def numba_cuda_available() -> bool:
         return False
 
 
+def _get_preferred_gpu_backend() -> Optional[str]:
+    """Traverse recommended backends list"""
+    wish_list = [
+        ("cupy", cupy_available),
+        ("torch", pytorch_gpu_available),
+        # TODO: ("jax", jax_gpu_available),
+    ]
+    for backend, is_available_fn in wish_list:
+        if is_available_fn():
+            return backend
+    return None
+
+
 PREFERRED_CPU_ARRAY_BACKEND: str = "numpy"
-PREFERRED_GPU_ARRAY_BACKEND: str = (
-    "cupy" if cupy_available() else ("torch" if pytorch_gpu_available() else None)
-)
+PREFERRED_GPU_ARRAY_BACKEND: Optional[str] = _get_preferred_gpu_backend()
 PREFER_GPU = True
 
 
