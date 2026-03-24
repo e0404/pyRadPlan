@@ -1,11 +1,13 @@
 import math
 
 import array_api_strict as xp
+import pytest
 from pyRadPlan.geometry.lps import (
     get_beam_rotation_matrix,
     get_gantry_rotation_matrix,
     get_couch_rotation_matrix,
 )
+from pyRadPlan.core.xp_utils import cupy_available
 
 ATOL = 1e-6
 
@@ -98,3 +100,25 @@ def test_get_beam_rotation_matrix_360_360():
     expected = xp.eye(3)
     result = get_beam_rotation_matrix(gantry_angle, couch_angle)
     assert xp.all(xp.abs(result - expected) < ATOL)
+
+
+# Before changes, lps.py might encountered cp.asarray([0, cupy_array])
+# which won't work. These tests make sure that it won't be changed back in the future.
+@pytest.mark.skipif(not cupy_available(), reason="CuPy is not available")
+def test_get_gantry_rotation_matrix_cupy():
+    import cupy as cp
+
+    gantry_angle = cp.asarray(90.0)
+    result = get_gantry_rotation_matrix(gantry_angle)
+    expected = cp.asarray([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=cp.float64)
+    assert cp.all(cp.abs(result - expected) < ATOL)
+
+
+@pytest.mark.skipif(not cupy_available(), reason="CuPy is not available")
+def test_get_couch_rotation_matrix_cupy():
+    import cupy as cp
+
+    couch_angle = cp.asarray(90.0)
+    result = get_couch_rotation_matrix(couch_angle)
+    expected = cp.asarray([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], dtype=cp.float64)
+    assert cp.all(cp.abs(result - expected) < ATOL)

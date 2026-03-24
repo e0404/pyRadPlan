@@ -38,11 +38,18 @@ def get_gantry_rotation_matrix(gantry_angle: Array) -> Array:
 
     gantry_angle = gantry_angle / 180 * xp.pi
 
-    r_gantry = xp.asarray(
+    # This here looks unnecessarily complex,
+    # but makes sure, that its cupy compatible!
+    c = xp.cos(gantry_angle)
+    s = xp.sin(gantry_angle)
+    zero = xp.zeros((), dtype=c.dtype)
+    one = xp.ones((), dtype=c.dtype)
+
+    r_gantry = xp.stack(
         [
-            [xp.cos(gantry_angle), -xp.sin(gantry_angle), 0],
-            [xp.sin(gantry_angle), xp.cos(gantry_angle), 0],
-            [0, 0, 1],
+            xp.stack([c, -s, zero]),
+            xp.stack([s, c, zero]),
+            xp.stack([zero, zero, one]),
         ]
     )
 
@@ -74,11 +81,18 @@ def get_couch_rotation_matrix(couch_angle: Array) -> Array:
     xp = array_api_compat.array_namespace(couch_angle)
     couch_angle = couch_angle / 180 * xp.pi
 
-    r_gantry = xp.asarray(
+    # This here looks unnecessarily complex,
+    # but makes sure, that its cupy compatible!
+    c = xp.cos(couch_angle)
+    s = xp.sin(couch_angle)
+    zero = xp.zeros((), dtype=c.dtype)
+    one = xp.ones((), dtype=c.dtype)
+
+    r_gantry = xp.stack(
         [
-            [xp.cos(couch_angle), 0.0, xp.sin(couch_angle)],
-            [0.0, 1.0, 0.0],
-            [-xp.sin(couch_angle), 0.0, xp.cos(couch_angle)],
+            xp.stack([c, zero, s]),
+            xp.stack([zero, one, zero]),
+            xp.stack([-s, zero, c]),
         ]
     )
 
