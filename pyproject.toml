@@ -14,13 +14,15 @@ version = "0.3.1"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
-  { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
-  { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
-  { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
-  { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" }
+  { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
+  { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
+  { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },
+  { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
+  { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" },
 ]
 
 maintainers = [

@@ -173,9 +173,9 @@ class PlanningProblem(ABC):
 
         # apply overlap priorities
         if self.apply_overlap:
-            self._cst = self._cst.apply_overlap_priorities().resample_on_new_ct(self._ct)
-        else:
-            self._cst = self._cst.resample_on_new_ct(self._ct)
+            self._cst = self._cst.apply_overlap_priorities()
+
+        self._cst = self._cst.resample_on_new_ct(self._ct)
 
         # sanitize objectives and constraints and manage required quantities
         objectives: list[tuple] = []
@@ -188,6 +188,12 @@ class PlanningProblem(ABC):
                 linear_mask[cube_ix] = True
                 objs = [get_objective(obj) for obj in voi.objectives]
 
+                # Set grids and preprocess reference images
+                for obj in objs:
+                    obj.preprocess_image_reference_parameters(
+                        target_grid=self._dij.dose_grid, index_list=cube_ix
+                    )
+
                 objectives.append((linear_mask, objs))
 
                 quantity_ids.extend([obj.quantity for obj in objs])
@@ -199,12 +205,14 @@ class PlanningProblem(ABC):
         # get the quantities and check if they are fluence dependent
         quantities = [get_quantity(qid) for qid in quantity_ids]
 
-        for q in quantities:
-            if not issubclass(q, FluenceDependentQuantity):
-                raise ValueError(
-                    f"Quantity {q} is not fluence dependent! Currently only fluence dependent "
-                    "quantities can be used in inverse planning!"
-                )
+        non_fluence_dependent = [
+            q for q in quantities if not issubclass(q, FluenceDependentQuantity)
+        ]
+        if non_fluence_dependent:
+            raise ValueError(
+                f"Quantities {non_fluence_dependent} are not fluence dependent! "
+                "Currently only fluence dependent quantities can be used in inverse planning!"
+            )
 
         # TODO: manage scenarios
 
@@ -222,6 +230,7 @@ class PlanningProblem(ABC):
         self._q_cache_index = []
         self._objectives_per_quantity = {q.identifier: [] for q in self._quantities}
         obj_ix = 0
+
         for obj_info in self._objective_list:
             for obj in obj_info[1]:
                 for q in self._quantities:
