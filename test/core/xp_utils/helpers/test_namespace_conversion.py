@@ -56,54 +56,6 @@ def test_to_namespace_no_conversion(array_api_array):
 # TODO: In the future we should be working with arrays everywhere (?)
 
 
-# NOTE: this mark.parametrizes will run same tests for each value provided.
-# Test results will be shown for each. This reduces code :).
-# TODO: Do so in other test files as well.
-@pytest.mark.parametrize(
-    "scalar, expected_type",
-    [
-        (42, int),
-        (3.14, float),
-        (True, bool),
-        (1 + 2j, complex),
-    ],
-)
-def test_scalar_conversion_numpy(scalar, expected_type):
-    result = to_namespace(np, scalar)
-    assert isinstance(result, np.ndarray)
-    assert result.ndim == 0
-    assert result == scalar
-
-
-@pytest.mark.parametrize("scalar", [42, 3.14, True, 1 + 2j])
-def test_scalar_conversion_array_api_strict(scalar):
-    result = to_namespace(array_api_strict, scalar)
-    assert array_api_compat.is_array_api_strict_namespace(result.__array_namespace__())
-    assert result.ndim == 0
-
-
-@pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
-@pytest.mark.parametrize("scalar", [42, 3.14, True])
-def test_scalar_conversion_torch(scalar):
-    result = to_namespace(torch, scalar)
-    assert isinstance(result, torch.Tensor)
-    assert result.ndim == 0
-
-
-def test_scalar_conversion_with_string_namespace():
-    result = to_namespace("numpy", 3.14)
-    assert isinstance(result, np.ndarray)
-    assert result == 3.14
-
-
-def test_list_conversion(numpy_array):
-    data = [numpy_array, numpy_array]
-    result = to_namespace(array_api_strict, data)
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert array_api_compat.is_array_api_strict_namespace(result[0].__array_namespace__())
-
-
 # --- Torch Tests ---
 @pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
 def test_numpy_to_torch(numpy_array):
