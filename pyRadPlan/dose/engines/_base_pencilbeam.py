@@ -543,7 +543,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         ray["iso_center"] = beam_info["beam"]["iso_center"]
 
         if "num_of_bixels_per_ray" in beam_info["beam"]:
-            ray["num_of_bixels"] = beam_info["beam"]["num_of_bixels_per_ray"][j]
+            ray["num_of_bixels"] = int(beam_info["beam"]["num_of_bixels_per_ray"][j])
         else:
             # Fallback: use the actual number of beamlets on this ray
             # This is needed for machines like "Focused" that don't precompute counts.
@@ -1172,9 +1172,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         ix = xp.asarray(rad_depth_mask, copy=True)
         rad_depth_ix = xp.nonzero(rad_depth_mask)[0]
 
-        # Make sure that the source-point is a 2D array
-        source_point_bev = xp.reshape(source_point_bev, (3,))
-        target_point_bev = xp.reshape(target_point_bev, (3,))
+        # Make sure that the source-point is a 1D array with matching dtype
+        source_point_bev = xp.astype(xp.reshape(source_point_bev, (3,)), rot_coords_bev.dtype)
+        target_point_bev = xp.astype(xp.reshape(target_point_bev, (3,)), rot_coords_bev.dtype)
 
         # Put [0 0 0] position in the source point for beamlet who passes through isocenter
         a = -source_point_bev
