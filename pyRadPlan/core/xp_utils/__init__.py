@@ -60,7 +60,7 @@ def numba_cuda_available() -> bool:
 
 
 def _get_preferred_gpu_backend() -> Optional[str]:
-    """Traverse recommended backends list"""
+    """Traverse recommended backends list."""
     wish_list = [
         ("cupy", cupy_available),
         ("torch", pytorch_gpu_available),
