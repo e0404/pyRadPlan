@@ -208,12 +208,12 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray) -> Array:
 
 def to_namespace(
     xp_new: Union[ArrayNamespace, str],
-    arr: Union[Array, list, tuple, int, float, bool, complex],
+    arr: Union[Array],
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,
     device: Optional[str] = None,
-) -> Union[Array, list, tuple, int, float, bool, complex]:
+) -> Union[Array]:
     """
     Convert an array to the specified array namespace.
 
@@ -221,8 +221,8 @@ def to_namespace(
     ----------
     xp_new : Union[ArrayNamespace,str]
         The target array namespace or its name as a string.
-    arr : Array, list, tuple, int, float, bool, or complex
-        The array or scalar to convert.
+    arr : Array
+        The Array to convert.
     copy : Optional[bool], optional
         Whether to force a copy during conversion, by default None.
         If None, the default behavior of the target namespace is used.
@@ -239,25 +239,18 @@ def to_namespace(
     Array
         The converted array.
     """
-
-    if isinstance(arr, (list, tuple)):
-        return type(arr)(
-            to_namespace(
-                xp_new, x, copy=copy, keep_sparse_compat=keep_sparse_compat, device=device
-            )
-            for x in arr
-        )
-
-    # Handle Python scalars (int, float, bool, complex)
+    # We need these checks, to ensure that the error makes sense.
+    # Otherwise this function will complain about a sparse array error :)
     if isinstance(arr, (int, float, bool, complex)):
-        if isinstance(xp_new, str):
-            try:
-                xp_new = importlib.import_module(xp_new, "array_api_compat")
-            except ModuleNotFoundError:
-                xp_new = importlib.import_module(xp_new)
-        if device is not None:
-            return xp_new.asarray(arr, device=device)
-        return xp_new.asarray(arr)
+        raise TypeError(
+            "Conversion of scalar values to array namespaces is not supported. "
+            "Create an array first or use it as is in calculations as int/float/bool/complex do not need conversion."
+        )
+    if isinstance(arr, (list, tuple)):
+        raise TypeError(
+            "Conversion of lists or tuples to array namespaces is not supported. "
+            "Create an array first!"
+        )
 
     if isinstance(xp_new, str):
         try:
