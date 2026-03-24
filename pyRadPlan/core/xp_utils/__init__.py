@@ -19,6 +19,11 @@ try:
 except ImportError:
     torch = None
 
+try:
+    import jax
+except ImportError:
+    jax = None
+
 from .helpers import (
     get_current_stream,
     create_stream,
@@ -50,6 +55,22 @@ def pytorch_gpu_available() -> bool:
     return torch is not None and torch.cuda.is_available()
 
 
+def jax_available() -> bool:
+    """Check if JAX is available."""
+    return jax is not None
+
+
+# TODO: Check if this here is working as intended.
+def jax_gpu_available() -> bool:
+    """Check if JAX is available and a compatible GPU is present."""
+    if jax is None:
+        return False
+    try:
+        return any(d.platform == "gpu" for d in jax.devices())
+    except RuntimeError:
+        return False
+
+
 # Currently not needed. Maybe in future?
 def numba_cuda_available() -> bool:
     """Check if Numba CUDA is available."""
@@ -64,7 +85,7 @@ def _get_preferred_gpu_backend() -> Optional[str]:
     wish_list = [
         ("cupy", cupy_available),
         ("torch", pytorch_gpu_available),
-        # TODO: ("jax", jax_gpu_available),
+        ("jax", jax_gpu_available),
     ]
     for backend, is_available_fn in wish_list:
         if is_available_fn():
@@ -128,8 +149,12 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
 __all__ = [
     "cp",
     "torch",
+    "jax",
     "cupy_available",
-    "torch_gpu_available",
+    "pytorch_available",
+    "pytorch_gpu_available",
+    "jax_available",
+    "jax_gpu_available",
     "get_current_stream",
     "create_stream",
     "record_event",
