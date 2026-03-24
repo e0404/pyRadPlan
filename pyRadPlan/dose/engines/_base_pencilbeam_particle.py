@@ -544,10 +544,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         rad_depth_offset = max_energy_kernel.offset + min_ra_shi
 
         # Apply limit in depth
-        sub_select_ix = [
-            rD < (max_energy_kernel.depths[-1] - rad_depth_offset)
-            for rD in beam_info["rad_depths"]
-        ]
+        depth_limit = float(max_energy_kernel.depths[-1] - rad_depth_offset)
+        sub_select_ix = [rD < depth_limit for rD in beam_info["rad_depths"]]
 
         for scen in range(len(beam_info["valid_coords"])):
             beam_info["valid_coords"][scen] = sub_select_ix[scen] & beam_info["valid_coords"][scen]

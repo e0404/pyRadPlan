@@ -208,12 +208,12 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray) -> Array:
 
 def to_namespace(
     xp_new: Union[ArrayNamespace, str],
-    arr: Union[Array, list, tuple],
+    arr: Union[Array, list, tuple, int, float, bool, complex],
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,
     device: Optional[str] = None,
-) -> Union[Array, list, tuple]:
+) -> Union[Array, list, tuple, int, float, bool, complex]:
     """
     Convert an array to the specified array namespace.
 
@@ -221,8 +221,8 @@ def to_namespace(
     ----------
     xp_new : Union[ArrayNamespace,str]
         The target array namespace or its name as a string.
-    arr : Array
-        The array to convert.
+    arr : Array, list, tuple, int, float, bool, or complex
+        The array or scalar to convert.
     copy : Optional[bool], optional
         Whether to force a copy during conversion, by default None.
         If None, the default behavior of the target namespace is used.
@@ -247,6 +247,17 @@ def to_namespace(
             )
             for x in arr
         )
+
+    # Handle Python scalars (int, float, bool, complex)
+    if isinstance(arr, (int, float, bool, complex)):
+        if isinstance(xp_new, str):
+            try:
+                xp_new = importlib.import_module(xp_new, "array_api_compat")
+            except ModuleNotFoundError:
+                xp_new = importlib.import_module(xp_new)
+        if device is not None:
+            return xp_new.asarray(arr, device=device)
+        return xp_new.asarray(arr)
 
     if isinstance(xp_new, str):
         try:

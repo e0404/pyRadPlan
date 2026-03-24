@@ -23,6 +23,7 @@ from numpydantic import NDArray, Shape
 from pyRadPlan.util.helpers import dl2ld, ld2dl
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.stf._beamlet import Beamlet
+from pyRadPlan.core.xp_utils import to_numpy
 
 
 class Ray(PyRadPlanBaseModel):
@@ -64,8 +65,7 @@ class Ray(PyRadPlanBaseModel):
         """Validate / convert arrays to have floating point values."""
 
         if v is not None:
-            if not isinstance(v, np.ndarray):
-                v = np.array(v, dtype=float)
+            v = to_numpy(v)
             if not np.issubdtype(v.dtype, np.floating):
                 v = v.astype(float)
             v = v.reshape((3,))

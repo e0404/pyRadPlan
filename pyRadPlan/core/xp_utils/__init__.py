@@ -2,7 +2,11 @@
 
 import importlib
 import array_api_compat
-from numba import cuda as numba_cuda
+
+try:
+    from numba import cuda as numba_cuda
+except ImportError:
+    numba_cuda = None
 from typing import Optional, Union
 
 try:
@@ -51,7 +55,7 @@ def numba_cuda_available() -> bool:
     """Check if Numba CUDA is available."""
     try:
         return numba_cuda.is_available()
-    except ImportError:
+    except (ImportError, AttributeError):
         return False
 
 

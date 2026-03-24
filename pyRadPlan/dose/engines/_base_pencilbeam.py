@@ -154,6 +154,20 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # Initialize
         dij = self._init_dose_calc(ct, cst, stf)
 
+        xp = self.xp
+        device = self.device
+        self._vox_world_coords = xp.asarray(
+            self._vox_world_coords,
+            dtype=xp.float32,
+            device=device,
+        )
+        self._vox_world_coords_dose_grid = xp.asarray(
+            self._vox_world_coords_dose_grid,
+            dtype=xp.float32,
+            device=device,
+        )
+        self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
+
         # We loop over scenario in the scenario model
         # TODO: we need to correctly work out scenarios
         for shift_scen in range(self.mult_scen.tot_num_shift_scen):
@@ -172,10 +186,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 )
 
             bixel_counter = 0
-            # We store this here extra so init_beam does not rebel
-            self._vdose_grid_np = self._vdose_grid
-
-            self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
 
             # Loop over all beams
             with logging_redirect_tqdm():
@@ -187,29 +197,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                     # Keep tabs on bixels computed in this beam
                     bixel_beam_counter = 0
-
-                    # TODO: Since init_beam is not yet array api compatible, we convert here
-                    xp = self.xp
-                    device = self.device
-                    curr_beam["valid_coords_all"] = to_namespace(
-                        xp, curr_beam["valid_coords_all"], device=device
-                    )
-                    curr_beam["rad_depths"] = to_namespace(
-                        xp, curr_beam["rad_depths"], device=device
-                    )
-                    curr_beam["geo_depths"] = to_namespace(
-                        xp, curr_beam["geo_depths"], device=device
-                    )
-                    curr_beam["bev_coords"] = to_namespace(
-                        xp, curr_beam["bev_coords"], device=device
-                    )
-                    curr_beam["valid_coords"] = to_namespace(
-                        xp, curr_beam["valid_coords"], device=device
-                    )
-                    curr_beam["rot_mat_system_T"] = to_namespace(
-                        xp, curr_beam["rot_mat_system_T"], device=device
-                    )
-
                     # Ray calculation
                     for j in tqdm(
                         range(curr_beam["beam"]["num_of_rays"]), desc="Ray", unit="r", leave=False
@@ -414,10 +401,25 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         xp = array_api_compat.array_namespace(self._vox_world_coords)
 
+        for key in [
+            "iso_center",
+            "source_point_bev",
+            "source_point",
+            "num_of_bixels_per_ray",
+            "gantry_angle",
+            "couch_angle",
+        ]:
+            beam_info["beam"][key] = to_namespace(xp, beam_info["beam"][key], device=self.device)
+
+        for ray in beam_info["beam"]["rays"]:
+            for key in ["ray_pos", "ray_pos_bev", "target_point", "target_point_bev"]:
+                ray[key] = to_namespace(xp, ray[key], device=self.device)
+
         # Convert voxel indices to real coordinates using iso center of beam i
         iso_center = xp.asarray(
-            beam_info["beam"]["iso_center"], dtype=self._vox_world_coords.dtype
+            beam_info["beam"]["iso_center"], dtype=xp.float32, device=self.device
         )
+
         coords_v = self._vox_world_coords - iso_center
         coords_vdose_grid = self._vox_world_coords_dose_grid - iso_center
 
@@ -425,14 +427,14 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         rot_mat = get_beam_rotation_matrix(
             beam_info["beam"]["gantry_angle"], beam_info["beam"]["couch_angle"]
         )
-        beam_info["rot_mat_system_T"] = xp.asarray(rot_mat, dtype=self._vox_world_coords.dtype)
+        beam_info["rot_mat_system_T"] = xp.asarray(rot_mat, dtype=xp.float32, device=self.device)
 
         # Rotate coordinates (1st couch around Y axis, 2nd gantry movement)
-        rot_coords_v = coords_v @ beam_info["rot_mat_system_T"]
-        rot_coords_vdose_grid = coords_vdose_grid @ beam_info["rot_mat_system_T"]
+        rot_coords_v = xp.matmul(coords_v, beam_info["rot_mat_system_T"])
+        rot_coords_vdose_grid = xp.matmul(coords_vdose_grid, beam_info["rot_mat_system_T"])
 
         source_point_bev = xp.asarray(
-            beam_info["beam"]["source_point_bev"], dtype=self._vox_world_coords.dtype
+            beam_info["beam"]["source_point_bev"], dtype=xp.float32, device=self.device
         )
         rot_coords_v -= source_point_bev
         rot_coords_vdose_grid -= source_point_bev
@@ -472,8 +474,12 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
 
             rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
-            # TODO: We use vdose_grid_np which is np explicitly! change if this function becomes array api conform
-            rad_depth_vdose_grid = xp.asarray(rad_depth_cube_dosegrid).ravel()[self._vdose_grid_np]
+            rad_depth_arr = xp.asarray(
+                rad_depth_cube_dosegrid, dtype=self._vox_world_coords.dtype, device=self.device
+            )
+            rad_depth_vdose_grid = xp.take(
+                xp.reshape(rad_depth_arr, (-1,)), self._vdose_grid, axis=0
+            )
 
             # Find valid coordinates
             coord_is_valid = xp.isfinite(rad_depth_vdose_grid)
@@ -573,30 +579,54 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         if mode == "first":
             ssd = [None] * beam["num_of_rays"]
 
-            ray_pos_bev = np.array([ray["ray_pos_bev"] for ray in beam["rays"]])
-            target_points = np.array([ray["target_point"] for ray in beam["rays"]])
+            xp = array_api_compat.array_namespace(beam["iso_center"], beam["source_point"])
+
+            # Build stacked arrays using the backend's stack (works for numpy, cupy, torch)
+            ray_pos_bev = xp.stack([xp.asarray(ray["ray_pos_bev"]) for ray in beam["rays"]])
+            target_points = xp.stack([xp.asarray(ray["target_point"]) for ray in beam["rays"]])
 
             alpha, _, rho, d12, _ = self._raytracer.trace_rays(
                 beam["iso_center"],
-                beam["source_point"].reshape((1, 3)),
+                xp.reshape(beam["source_point"], (1, 3)),
                 target_points,
             )
 
+            alpha = to_namespace(xp, alpha, device=self.device)
+            rho = [to_namespace(xp, r, device=self.device) for r in rho]
+            d12 = to_namespace(xp, d12.squeeze(), device=self.device)
+            # prevent d12 from being 0d array which causes issues with indexing later on
+            if d12.ndim == 0:
+                d12 = xp.reshape(d12, (1,))
             # find rays that do not hit patients
-            ix_nan = np.all(np.isnan(rho[0]), axis=1)
-            if np.any(ix_nan):
-                msg = f"{ix_nan.sum()} rays do not hit patient. Trying to fix afterwards..."
+            ix_nan = xp.all(xp.isnan(rho[0]), axis=1)
+            if xp.any(ix_nan):
+                msg = f"{xp.count_nonzero(ix_nan)} rays do not hit patient. Trying to fix afterwards..."
                 if show_warning:
                     warnings.warn(msg)
                 else:
                     logger.warning(msg)
 
-            ix_ssd = -1 * np.ones_like(ix_nan, dtype=np.int64)
-            ix_ssd[~ix_nan] = np.argmax(rho[0][~ix_nan] > density_threshold, axis=1)
+            ix_ssd = -1 * xp.ones_like(ix_nan, dtype=xp.int64)
 
-            ssd = beam["sad"] * np.ones_like(ix_ssd, dtype=np.float32)
+            # Work with explicit row indices to avoid unsupported boolean argmax on some backends
+            row_idx = xp.nonzero(~ix_nan)[0]
 
-            ssd[~ix_nan] = d12[~ix_nan].squeeze() * alpha[~ix_nan, ix_ssd[~ix_nan]]
+            # Compute boolean condition, convert to integers for argmax
+            cond = xp.take(rho[0], row_idx, axis=0) > density_threshold
+            cond_int = xp.where(cond, xp.asarray(1, dtype=xp.int64), xp.asarray(0, dtype=xp.int64))
+            arg = xp.argmax(cond_int, axis=1)
+
+            ix_ssd = xp.where(~ix_nan, xp.astype(arg, xp.int64), ix_ssd)
+
+            ssd = beam["sad"] * xp.ones_like(ix_ssd, dtype=xp.float32)
+
+            d12_sel = xp.reshape(xp.take(d12, row_idx, axis=0), (-1,))
+            alpha_rows = xp.take(alpha, row_idx, axis=0)
+            idx = xp.reshape(xp.astype(arg, xp.int64), (-1, 1))
+            alpha_sel = xp.reshape(xp.take_along_axis(alpha_rows, idx, axis=1), (-1,))
+
+            ssd_vals = xp.astype(d12_sel, xp.float32) * xp.astype(alpha_sel, xp.float32)
+            ssd = xp.where(~ix_nan, ssd_vals, ssd)
 
             # Now assign the ssd to all rays
             for j, ray in enumerate(beam["rays"]):
@@ -610,9 +640,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         beam_info["beam"] = beam
 
-    def _closest_neighbor_ssd(
-        self, ray_pos_bev: np.ndarray, ssd: np.ndarray, curr_pos: np.ndarray
-    ) -> float:
+    def _closest_neighbor_ssd(self, ray_pos_bev: Array, ssd: Array, curr_pos: Array) -> float:
         """
         Find the closest neighboring ray's SSD.
 
@@ -628,8 +656,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         float
             SSD value of the closest neighboring ray.
         """
-        distances = np.sum((ray_pos_bev - curr_pos) ** 2, axis=1)
-        sorted_indices = np.argsort(distances)
+        xp = array_api_compat.array_namespace(ray_pos_bev, ssd, curr_pos)
+        distances = xp.sum((ray_pos_bev - curr_pos) ** 2, axis=1)
+        sorted_indices = xp.argsort(distances)
         for ix in sorted_indices:
             if ssd[ix] is not None:
                 return float(ssd[ix])
@@ -877,6 +906,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         for q_name in self._computed_quantities:
             if self._calc_dose_direct:
                 if ix_size > 0:
+                    bixel["ix"] = to_numpy(bixel["ix"])
+                    bixel[q_name] = to_numpy(bixel[q_name])
                     dij[q_name][sub_scen_idx][bixel["ix"], curr_beam_idx] += (
                         bixel["weight"] * bixel[q_name]
                     )
@@ -1106,12 +1137,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # xp = array_api_compat.array_namespace(
         #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         # )
-        # TODO: These here can be removed once init_beam is array api compatible! :)
-        rot_coords_bev = to_namespace(self.xp, rot_coords_bev, device=self.device)
-        source_point_bev = to_namespace(self.xp, source_point_bev, device=self.device)
-        target_point_bev = to_namespace(self.xp, target_point_bev, device=self.device)
-        rad_depth_mask = to_namespace(self.xp, rad_depth_mask, device=self.device)
-
         xp = array_api_compat.array_namespace(
             rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         )
