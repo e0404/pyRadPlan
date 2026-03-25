@@ -39,6 +39,68 @@ from .typing import Array, ArrayNamespace
 
 logger = logging.getLogger(__name__)
 
+# DLPack device type constants (from DLPack spec)
+DLPACK_CPU = 1
+DLPACK_CUDA = 2
+DLPACK_CUDA_HOST = 3
+DLPACK_ROCM = 8
+
+# Device types considered "GPU"
+# Intel GPUs are not supported. Feel free to contribute and reach out to us.
+_GPU_DEVICE_TYPES = {DLPACK_CUDA, DLPACK_ROCM}
+
+
+try:
+    # NumPy >= 2.1 supports device/copy kwargs on from_dlpack
+    np.from_dlpack(np.empty(0), device="cpu")
+    _NP_DLPACK_HAS_DEVICE = True
+except TypeError:
+    _NP_DLPACK_HAS_DEVICE = False
+
+
+def get_device_info(arr: Any) -> tuple:
+    """
+    Return the DLPack device type and device id for an array.
+
+    Uses ``__dlpack_device__()`` as the primary method, with fallbacks
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(device_type, device_id)`` following the DLPack spec.
+        Device type constants: DLPACK_CPU=1, DLPACK_CUDA=2, etc.
+    """
+    # Primary: DLPack protocol
+    if hasattr(arr, "__dlpack_device__"):
+        try:
+            return arr.__dlpack_device__()
+        except Exception:
+            pass
+
+    # Fallback: library-specific checks
+    # TODO: Not sure that these fallbacks are needed. Can't hurt right?
+    if array_api_compat.is_numpy_array(arr):
+        return (DLPACK_CPU, 0)
+
+    if array_api_compat.is_cupy_array(arr):
+        device_id = arr.device.id if hasattr(arr, "device") else 0
+        return (DLPACK_CUDA, device_id)
+
+    if array_api_compat.is_torch_array(arr):
+        if arr.is_cuda:
+            device_id = arr.device.index if arr.device.index is not None else 0
+            return (DLPACK_CUDA, device_id)
+        return (DLPACK_CPU, 0)
+
+    # Unknown -- assume CPU
+    return (DLPACK_CPU, 0)
+
+
+def is_on_gpu(arr: Any) -> bool:
+    """Return True if the array resides on a GPU device."""
+    device_type, _ = get_device_info(arr)
+    return device_type in _GPU_DEVICE_TYPES
+
 
 def get_current_stream(xp: ArrayNamespace) -> ContextManager:
     """Get the current stream based on the array namespace."""
@@ -176,10 +238,13 @@ def to_numpy(arr: Array, detach: bool = True) -> NDArray:
     elif array_api_compat.is_numpy_array(arr):
         return arr
 
-    # Try DLPack (e.g. array_api_strict)
-    if hasattr(arr, "__dlpack__") and hasattr(np, "from_dlpack"):
+    # Try DLPack (e.g. array_api_strict or other compliant arrays)
+    if hasattr(arr, "__dlpack__"):
         try:
-            return np.from_dlpack(arr)
+            if _NP_DLPACK_HAS_DEVICE and is_on_gpu(arr):
+                return np.from_dlpack(arr, device="cpu", copy=False)
+            else:
+                return np.from_dlpack(arr)
         except Exception:
             pass
 
@@ -280,13 +345,7 @@ def to_namespace(
                 return arr
         else:
             # Device is specified. Check if we are already on that device.
-            current_dev = None
-            if array_api_compat.is_torch_array(arr):
-                current_dev = "gpu" if arr.is_cuda else "cpu"
-            elif array_api_compat.is_cupy_array(arr):
-                current_dev = "gpu"
-            elif array_api_compat.is_numpy_array(arr):
-                current_dev = "cpu"
+            current_dev = "gpu" if is_on_gpu(arr) else "cpu"
 
             if current_dev == device:
                 if not copy:
@@ -308,11 +367,7 @@ def to_namespace(
             raise ValueError("CuPy does not support CPU.")
 
         # CuPy < 14.0 workaround for CPU->GPU via DLPack
-        if (
-            cp.__version__ < "14.0"
-            and hasattr(arr, "__dlpack_device__")
-            and arr.__dlpack_device__()[0] != 2
-        ):
+        if cp.__version__ < "14.0" and not is_on_gpu(arr):
             return cp.asarray(to_numpy(arr))
 
         try:

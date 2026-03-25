@@ -25,6 +25,10 @@ except ImportError:
     jax = None
 
 from .helpers import (
+    DLPACK_CPU,
+    DLPACK_CUDA,
+    get_device_info,
+    is_on_gpu,
     get_current_stream,
     create_stream,
     synchronize,
@@ -147,6 +151,10 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
 
 
 __all__ = [
+    "DLPACK_CPU",
+    "DLPACK_CUDA",
+    "get_device_info",
+    "is_on_gpu",
     "cp",
     "torch",
     "jax",
