@@ -218,11 +218,8 @@ def interp1d(
     # Optimization: Use xp.interp if available (e.g. numpy, cupy) for list/dict inputs
     # This avoids stacking inputs and using the slower manual implementation
     interp_func = None
-    if array_api_compat.is_numpy_namespace(xp):
-        interp_func = np.interp
-    elif array_api_compat.is_cupy_namespace(xp):
-        interp_func = cp.interp
-    elif hasattr(xp, "interp"):
+
+    if hasattr(xp, "interp"):
         interp_func = xp.interp
 
     if interp_func is not None:
