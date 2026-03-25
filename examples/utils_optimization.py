@@ -76,19 +76,21 @@ cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=3.0)]  # Target
 cst.vois[2].objectives = [MeanDose(priority=1.0, d_ref=0.0)]  # Body
 
 # %% [markdown]
-# ## Tracking the objective history
+# ## Tracking optimization info
 #
-# Additionally you can pass obj_history to the fluence_optimization
-# It will be populated with the objective values during optimization.
+# Pass an empty dict as ``opt_info`` to ``fluence_optimization``.
+# After the solve it will contain ``obj_history`` (objective values per
+# evaluation), ``num_iter`` (number of iterations), and ``result_info``
+# (solver-specific result details like convergence status).
 
 # %%
-obj_history = []
-fluence = fluence_optimization(ct, cst, stf, dij, pln, obj_history=obj_history)
+opt_info = {}
+fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 # %%
 # Plot convergence
 plt.figure()
-plt.semilogy(obj_history)
+plt.semilogy(opt_info["obj_history"])
 plt.xlabel("Function evaluation")
 plt.ylabel("Objective value")
 plt.title("Optimization convergence")
@@ -98,6 +100,9 @@ plt.show()
 # %% [markdown]
 # Note that the number of iterations may differ to the number set above.
 # This is due to solver specific internal evaluations (e.g. line search ...)
+#
+# You can also inspect ``opt_info["num_iter"]`` and ``opt_info["result_info"]``
+# for additional solver details.
 
 # %% [markdown]
 # ## Solver-specific options via `solver_options`
