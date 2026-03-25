@@ -110,6 +110,12 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     elif array_api_compat.is_torch_namespace(xp) and torch is not None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+    else:
+        warnings.warn(
+            "Free GPU memory helper for namespace '{}' is not implemented or supported.".format(
+                xp.__name__
+            )
+        )
 
 
 def record_event(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> Optional[object]:
@@ -177,17 +183,7 @@ def to_numpy(arr: Array, detach: bool = True) -> NDArray:
         except Exception:
             pass
 
-    # Try __array__ interface (standard numpy interoperability)
-    if hasattr(arr, "__array__"):
-        return np.asarray(arr)
-
-    # Fallback: try direct numpy conversion (handles scalars, lists)
-    try:
-        return np.asarray(arr)
-    except Exception as e:
-        raise TypeError(
-            "Conversion helper to NumPy not implemented for type '{}'.".format(type(arr))
-        ) from e
+    raise TypeError("Conversion helper to NumPy not implemented for type '{}'.".format(type(arr)))
 
 
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray) -> Array:
