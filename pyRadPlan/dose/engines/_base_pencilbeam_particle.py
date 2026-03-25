@@ -217,13 +217,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Get the kernel for the current energy
         tmp_machine = cast(ParticleAccelerator, self._machine)
-        ##############################################
+
         # Determine namespace from ray data
         xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
 
         kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
-        # bixel["kernel"] = kernel_obj.to_namespace(xp)
 
+        # NOTE: This here makes dosecalc way faster.
+        # TODO: Maybe think of a better way then kernel_obj.to_namespace()
         # Get kernel and convert to namespace
         cache_key = (energy_ix, xp)
         if cache_key in self._kernel_cache:
