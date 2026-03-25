@@ -706,7 +706,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # First, create a ray of the specific scenario to adapt rad depths
         scen_ray = ray.copy()
         scen_ray["rad_depths"] = scen_ray["rad_depths"][ct_scen]
-        # TODO: operation below should be done in mult_scen class
         scen_ray["rad_depths"] = (
             1 + xp.asarray(self.mult_scen.rel_range_shift[scen_num], device=self.device)
         ) * scen_ray["rad_depths"] + xp.asarray(
