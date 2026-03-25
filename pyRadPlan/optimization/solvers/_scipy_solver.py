@@ -106,4 +106,6 @@ class OptimizerSciPy(NonLinearOptimizer):
             options=self.options,
         )
 
+        logger.info("SciPy finished: %s", result.get("message", ""))
+
         return xp_utils.from_numpy(xp, result["x"]), result
