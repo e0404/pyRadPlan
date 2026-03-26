@@ -145,7 +145,7 @@ class RayTracerSiddon(RayTracerBase):
         alphas = xp_utils.to_numpy(alphas)
         lengths = xp_utils.to_numpy(lengths)
         rho = [xp_utils.to_numpy(r) for r in rho]
-        d12 = xp_utils.to_numpy(d12).squeeze()
+        d12 = np.atleast_1d(xp_utils.to_numpy(d12).squeeze())
         ix = xp_utils.to_numpy(ix)
 
         t_finalization_end = xp_utils.record_event(xp, s)

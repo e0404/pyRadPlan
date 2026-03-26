@@ -7,12 +7,17 @@ import time
 
 import numpy as np
 import SimpleITK as sitk
+import array_api_compat
 
-from pyRadPlan.core.np2sitk import linear_indices_to_image_coordinates
-from pyRadPlan.geometry import lps
-from pyRadPlan.stf._beam import Beam
+from ..core.xp_utils.typing import Array
+from ..core.np2sitk import linear_indices_to_image_coordinates
+from ..geometry import lps
+from ..stf._beam import Beam
 
-from ._perf import fast_spatial_circle_lookup
+try:
+    from ._numba_perf import fast_spatial_circle_lookup
+except ImportError:
+    fast_spatial_circle_lookup = None
 
 logger = logging.getLogger(__name__)
 
@@ -173,40 +178,24 @@ class RayTracerBase(ABC):
         )
         ray_matrix_scale = 1 + ray_matrix_bev_y / beam.sad
 
-        # num_candidate_rays = 2 * np.ceil(500.0 / ray_spacing).astype(np.int64) + 1
-
-        spacing_range = ray_spacing * np.arange(
-            np.floor(-500.0 / ray_spacing), np.ceil(500.0 / ray_spacing) + 1, dtype=self.precision
-        )
-        candidate_ray_coords_x, candidate_ray_coords_z = np.meshgrid(spacing_range, spacing_range)
-
         # If we have reference positions, we use them to restrict the raytracing region
         reference_positions_bev = ray_matrix_scale * np.array(
             [ray.ray_pos_bev for ray in beam.rays]
         )
 
-        # use a precompiled numba function to speed up the spatial lookup
-        candidate_ray_mx = fast_spatial_circle_lookup(
-            candidate_ray_coords_x,
-            candidate_ray_coords_z,
-            reference_positions_bev,
-            self.lateral_cut_off,
+        spacing_range = ray_spacing * np.arange(
+            np.floor(-500.0 / ray_spacing), np.ceil(500.0 / ray_spacing) + 1, dtype=self.precision
         )
 
-        # candidate_ray_mx = np.full(candidate_ray_coords_x.shape, False, dtype=np.bool)
+        candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
 
-        # for i in range(reference_positions_bev.shape[0]):
-        #     notix = (candidate_ray_coords_x - reference_positions_bev[i, 0]) ** 2 + (
-        #         candidate_ray_coords_z - reference_positions_bev[i, 2]
-        #     ) ** 2 <= self.lateral_cut_off**2
-        #     candidate_ray_mx[notix] = True
+        ray_idx_z, ray_idx_x = np.nonzero(candidate_ray_mx)
 
-        ray_matrix_bev = np.hstack(
+        ray_matrix_bev = np.column_stack(
             (
-                candidate_ray_coords_x[candidate_ray_mx].reshape(-1, 1),
-                ray_matrix_bev_y
-                * np.ones(np.sum(candidate_ray_mx), dtype=self.precision).reshape(-1, 1),
-                candidate_ray_coords_z[candidate_ray_mx].reshape(-1, 1),
+                spacing_range[ray_idx_x],
+                np.full(ray_idx_x.shape[0], ray_matrix_bev_y, dtype=self.precision),
+                spacing_range[ray_idx_z],
             )
         )
 
@@ -300,6 +289,57 @@ class RayTracerBase(ABC):
 
         return rad_depth_cubes
         # scale_factor[valid_ix] = lengths[valid_ix] / d12[valid_ix]
+
+    def _get_candidate_ray_matrix(self, spacing_range: Array, ref_pos_bev: Array) -> Array:
+        """Get candidate ray matrix for given ray spacing and reference positions."""
+
+        xp = array_api_compat.array_namespace(spacing_range, ref_pos_bev)
+
+        # Use numba accelerated code if possible
+        if array_api_compat.is_numpy_namespace(xp) and fast_spatial_circle_lookup is not None:
+            candidate_ray_coords_x, candidate_ray_coords_z = np.meshgrid(
+                spacing_range, spacing_range
+            )
+            return fast_spatial_circle_lookup(
+                candidate_ray_coords_x, candidate_ray_coords_z, ref_pos_bev, self.lateral_cut_off
+            )
+
+        # Array API compliant code
+        n_candidates = array_api_compat.size(spacing_range)
+
+        candidate_ray_mx = xp.zeros((n_candidates, n_candidates), dtype=xp.bool)
+
+        r2 = self.lateral_cut_off**2
+
+        # use buffers to avoid repeated allocations in the loop
+        buffer_x = xp.empty_like(spacing_range)
+        buffer_z = xp.empty_like(spacing_range)
+
+        for i in range(ref_pos_bev.shape[0]):
+            # Use in-place operations as much as possible
+            buffer_x[:] = spacing_range
+            buffer_z[:] = spacing_range
+
+            buffer_x -= ref_pos_bev[i, 0]
+            buffer_z -= ref_pos_bev[i, 2]
+
+            buffer_x *= buffer_x
+            buffer_z *= buffer_z
+
+            # simple full boolean or
+            # candidate_ray_mx |= (buffer_x[:, None] + buffer_z[None, :) <= r2
+
+            # reduce update region by finding z ranges that are valid
+            z_ok = xp.astype(buffer_z <= r2, xp.uint8)  # argmax later only works on numeric types
+            if not xp.any(z_ok):
+                continue
+
+            z0 = xp.argmax(z_ok)
+            z1 = array_api_compat.size(z_ok) - xp.argmax(z_ok[::-1])
+
+            candidate_ray_mx[z0:z1, :] |= (buffer_z[z0:z1, None] + buffer_x[None, :]) <= r2
+
+        return candidate_ray_mx
 
     @abstractmethod
     def _initialize_geometry(self):

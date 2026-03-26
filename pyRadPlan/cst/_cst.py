@@ -38,15 +38,15 @@ class StructureSet(PyRadPlanBaseModel):
             arr = vdata_item[3]
             # return only one scenario (3D) else: Multi-Scenario (4D)
             return (
-                [np.asarray(arr.astype(int).tolist())]
+                [np.asarray(arr, dtype=int).ravel()]
                 if not isinstance(arr, list)
-                else [a.astype(int).tolist() for a in arr]
+                else [np.asarray(a, dtype=int).ravel() for a in arr]
             )
 
         def create_mask(idx):
             # Create the ITK mask for a given index list.
             tmp_mask = np.zeros((ct.size[2], ct.size[0], ct.size[1]), dtype=np.uint8)
-            tmp_mask.flat[np.asarray(idx) - 1] = 1
+            tmp_mask.flat[idx - 1] = 1
             tmp_mask = np.swapaxes(tmp_mask, 1, 2)
             mask_image = sitk.GetImageFromArray(tmp_mask)
             mask_image.CopyInformation(ct.cube_hu)
@@ -349,7 +349,7 @@ class StructureSet(PyRadPlanBaseModel):
         stats.Execute(labeled)
 
         # Step 3: Identify label with largest number of pixels
-        largest_label = max(stats.GetLabels(), key=lambda label: stats.GetNumberOfPixels(label))
+        largest_label = max(stats.GetLabels(), key=stats.GetNumberOfPixels)
 
         # Step 4: Create binary mask of largest component
         body_segmentation = sitk.Equal(labeled, largest_label)

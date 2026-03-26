@@ -286,6 +286,11 @@ class Dij(PyRadPlanBaseModel):
 
         dij_dict = super().to_matrad(context=context)
 
+        # Replace None values with np.array([0]) for savemat compatibility
+        for key, value in dij_dict.items():
+            if value is None:
+                dij_dict[key] = np.array([0])
+
         return dij_dict
 
     def get_result_arrays_from_intensity(
@@ -314,6 +319,9 @@ class Dij(PyRadPlanBaseModel):
             out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
             out["physical_dose_beam"] = []
 
+            # !Note: This implementaion is faster than the intuitive:
+            # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
+            # Since slicing over the intensity vector reduces the matrix operation size.
             for i in range(self.num_of_beams):
                 beam_mask = (self.beam_num == i).astype(bool)
                 dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
@@ -332,20 +340,51 @@ class Dij(PyRadPlanBaseModel):
             out["let_beam"] = []
             for i in range(self.num_of_beams):
                 beam_mask = (self.beam_num == i).astype(bool)
-                let_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
-                phy_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
-                let_beam_val = let_matrix @ intensity[beam_mask]
-                phy_beam_val = phy_matrix @ intensity[beam_mask]
-                ratio = np.zeros_like(let_beam_val)
-                valid = phy_beam_val > 0.0
-                ratio[valid] = let_beam_val[valid] / phy_beam_val[valid]
-                out["let_beam"].append(ratio)
+                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
+
+                phys_dose_beam = out["physical_dose_beam"][i]
+
+                let_beam = np.zeros_like(let_dose_beam)
+                if np.max(phys_dose_beam) > 0:
+                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                    let_beam[indices_beam] = (
+                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
+                    )
+
+                out["let_beam"].append(let_beam)
+
+            out["let_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
+
+                phys_dose_beam = out["physical_dose_beam"][i]
+
+                let_beam = np.zeros_like(let_dose_beam)
+                if np.max(phys_dose_beam) > 0:
+                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                    let_beam[indices_beam] = (
+                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
+                    )
+
+                out["let_beam"].append(let_beam)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
             out["effect"] = (
                 self.alpha_dose.flat[scenario_index] @ intensity
                 + (self.sqrt_beta_dose.flat[scenario_index] @ intensity) ** 2
             )
+
+            out["effect_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                alpha_matrix = self.alpha_dose.flat[scenario_index][:, beam_mask]
+                sqrt_beta_matrix = self.sqrt_beta_dose.flat[scenario_index][:, beam_mask]
+
+                w_beam = intensity[beam_mask]
+                out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
 
         return out
 
@@ -373,6 +412,21 @@ class Dij(PyRadPlanBaseModel):
 
         for key, value in out.items():
             # Create a sitk image for each scenario
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    value[i] = sitk.GetImageFromArray(
+                        value[i].reshape(self.dose_grid.dimensions[::-1])
+                    )
+                    value[i].SetOrigin(self.dose_grid.origin)
+                    value[i].SetSpacing(self.dose_grid.resolution_vector)
+                    value[i].SetDirection(self.dose_grid.direction.ravel())
+            else:
+                # handling collective of all beams
+                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
+                out[key].SetOrigin(self.dose_grid.origin)
+                out[key].SetSpacing(self.dose_grid.resolution_vector)
+                out[key].SetDirection(self.dose_grid.direction.ravel())
             if isinstance(value, list):
                 #  handle every single beam information
                 for i in range(len(value)):
@@ -421,6 +475,14 @@ class Dij(PyRadPlanBaseModel):
             resampler.SetOutputOrigin(self.ct_grid.origin)
             resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
             resampler.SetSize(self.ct_grid.dimensions)
+
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    out[key][i] = resampler.Execute(value[i])
+            else:
+                # handle the collective of all beams
+                out[key] = resampler.Execute(value)
 
             if isinstance(value, list):
                 #  handle every single beam information

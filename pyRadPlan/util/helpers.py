@@ -231,7 +231,7 @@ def swap_orientation_sparse_matrix(
     sp.csc_matrix
         The sparse matrix with swapped axes.
     """
-    row_indices, _ = sparse_matrix.nonzero()
+    row_indices = sparse_matrix.indices
 
     if axes in ((0, 1), (1, 0)):
         j, i, k = np.unravel_index(row_indices, original_shape)
@@ -246,12 +246,13 @@ def swap_orientation_sparse_matrix(
         raise ValueError("Invalid axes for swapping")
 
     new_indices = np.ravel_multi_index((i, j, k), new_shape)
-    num_rows = np.prod(original_shape)
-    permutation = sp.csc_matrix(
-        (np.ones_like(row_indices), (new_indices, row_indices)),
-        shape=(num_rows, num_rows),
-        dtype=bool,
-    )
 
-    reordered_sparse_matrix = permutation @ sparse_matrix
+    # Create a new matrix with the new indices
+    # We copy the data and indptr, but replace indices.
+    # Then we must sort indices because the permutation might have disordered them within columns.
+    reordered_sparse_matrix = sparse_matrix.__class__(
+        (sparse_matrix.data, new_indices, sparse_matrix.indptr), shape=sparse_matrix.shape
+    )
+    reordered_sparse_matrix.sort_indices()
+
     return reordered_sparse_matrix
