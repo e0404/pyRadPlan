@@ -1,10 +1,11 @@
 """Squared Underdosing Objective."""
 
 from typing import Annotated
-from pydantic import Field
 
-from numba import njit
-from numpy import clip
+from pydantic import Field
+import array_api_compat
+
+from ...core.xp_utils.typing import Array
 
 from ._objective import Objective, ParameterMetadata
 
@@ -18,28 +19,20 @@ class SquaredUnderdosing(Objective):
     Attributes
     ----------
     d_min : float
-        minimum dose value (below which we penalize)
+        minimum values value (below which we penalize)
     """
 
     name = "Squared Underdosing"
 
     d_min: Annotated[float, Field(default=60.0, ge=0.0), ParameterMetadata(kind="reference")]
 
-    def compute_objective(self, values):
-        return _compute_objective(values, self.d_min)
+    def compute_objective(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values, self.d_min)
+        return (undervalues @ undervalues) / array_api_compat.size(values)
 
-
-@njit
-def _compute_objective(dose, d_min):
-    underdose = clip(dose - d_min, a_min=None, a_max=0)
-
-    return (underdose @ underdose) / len(dose)
-
-
-@njit
-def _compute_gradient(dose, d_min):
-    underdose = clip(dose - d_min, a_min=None, a_max=0)
-    return 2.0 * underdose / len(underdose)
+    def compute_gradient(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
+        undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
+        return 2.0 * undervalues / array_api_compat.size(undervalues)

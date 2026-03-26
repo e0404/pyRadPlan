@@ -3,9 +3,10 @@ from typing import Union, ClassVar
 import warnings
 import logging
 
-import numpy as np
+from ...core.xp_utils.typing import Array, ArrayNamespace
 
-# from numpy.typing import ArrayLike
+import numpy as np
+import array_api_compat
 
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.ct import CT, validate_ct
@@ -17,6 +18,7 @@ from pyRadPlan.quantities import FluenceDependentQuantity, get_quantity
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
+from ...core import xp_utils
 
 
 logger = logging.getLogger(__name__)
@@ -65,12 +67,15 @@ class PlanningProblem(ABC):
     _dij: Dij
     _mult_scen: ScenarioModel
 
-    _objective_list: list
+    _objective_list: list[tuple]
     _constraint_list: list
 
     _quantities: list[FluenceDependentQuantity]
     _q_cache_index: list[int]
     _objectives_per_quantity: dict[str, int]
+    _num_objectives: int
+
+    _array_backend: ArrayNamespace
 
     def __init__(self, pln: Union[Plan, dict] = None):
         self._scenario_model = None
@@ -157,7 +162,7 @@ class PlanningProblem(ABC):
             setattr(self, field, prop_dict[field])
 
     @abstractmethod
-    def _solve(self) -> tuple[np.ndarray, dict]:
+    def _solve(self) -> tuple[Array, dict]:
         """Solve the planning problem."""
 
     def _initialize(self):
@@ -168,20 +173,38 @@ class PlanningProblem(ABC):
 
         # apply overlap priorities
         if self.apply_overlap:
-            self._cst = self._cst.apply_overlap_priorities().resample_on_new_ct(self._ct)
-        else:
-            self._cst = self._cst.resample_on_new_ct(self._ct)
+            self._cst = self._cst.apply_overlap_priorities()
+
+        self._cst = self._cst.resample_on_new_ct(self._ct)
 
         # sanitize objectives and constraints and manage required quantities
-        objectives = []
+        objectives: list[tuple] = []
         quantity_ids = []
         for voi in self._cst.vois:
-            if len(voi.objectives) > 0:
+            # Filter out empty/invalid objective entries (e.g. [] from matRad import)
+            valid_objectives = [
+                obj
+                for obj in voi.objectives
+                if not (
+                    obj is None
+                    or (isinstance(obj, (list, tuple)) and len(obj) == 0)
+                    or (isinstance(obj, np.ndarray) and obj.size == 0)
+                )
+            ]
+            if len(valid_objectives) > 0:
                 # get the index list
                 cube_ix = voi.indices_numpy
-                objs = [get_objective(obj) for obj in voi.objectives]
+                linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
+                linear_mask[cube_ix] = True
+                objs = [get_objective(obj) for obj in valid_objectives]
 
-                objectives.append((cube_ix, objs))
+                # Set grids and preprocess reference images
+                for obj in objs:
+                    obj.preprocess_image_reference_parameters(
+                        target_grid=self._dij.dose_grid, index_list=cube_ix
+                    )
+
+                objectives.append((linear_mask, objs))
 
                 quantity_ids.extend([obj.quantity for obj in objs])
 
@@ -191,22 +214,33 @@ class PlanningProblem(ABC):
         quantity_ids = list(set(quantity_ids))
         # get the quantities and check if they are fluence dependent
         quantities = [get_quantity(qid) for qid in quantity_ids]
-        for q in quantities:
-            if not issubclass(q, FluenceDependentQuantity):
-                raise ValueError(
-                    f"Quantity {q} is not fluence dependent! Currently only fluence dependent "
-                    "quantities can be used in inverse planning!"
-                )
+
+        non_fluence_dependent = [
+            q for q in quantities if not issubclass(q, FluenceDependentQuantity)
+        ]
+        if non_fluence_dependent:
+            raise ValueError(
+                f"Quantities {non_fluence_dependent} are not fluence dependent! "
+                "Currently only fluence dependent quantities can be used in inverse planning!"
+            )
 
         # TODO: manage scenarios
 
         # Manage quantites by getting them from the objective quantities
         self._quantities = [q(self._dij) for q in quantities]
 
+        if len(set([q.array_backend for q in self._quantities])) == 1:
+            self._array_backend = self._quantities[0].array_backend
+        else:
+            raise TypeError(
+                "Inconsistent array backends used in quantities. Decide on one (e.g. numpy)"
+            )
+
         # obtain cache info to match quantities with objectives
         self._q_cache_index = []
         self._objectives_per_quantity = {q.identifier: [] for q in self._quantities}
         obj_ix = 0
+
         for obj_info in self._objective_list:
             for obj in obj_info[1]:
                 for q in self._quantities:
@@ -217,18 +251,7 @@ class PlanningProblem(ABC):
                         self._objectives_per_quantity[q.identifier].append(obj_ix)
                     obj_ix += 1
 
-        # Alternative code idea when storing tuples
-        # quantity_obj_info = []
-        # for q in quantities:
-        #     q_instance = q(self._dij)
-
-        #     # find objective indices with quantity]
-        #     obj_ixs = []
-        #     for ix, obj in enumerate(self._objective_list):
-        #         if q_instance.identifier == obj.quantity:
-        #             obj_ixs.append(ix)
-        #     quantity_obj_info.append((q_instance, obj_ixs))
-        # self._quantities = quantity_obj_info
+        self._num_objectives = obj_ix
 
         # set solver options
         self.solver = get_solver(self.solver)
@@ -270,36 +293,39 @@ class PlanningProblem(ABC):
         self._dij = validate_dij(dij)
 
         self._initialize()
-        return self._solve()
+        x, info = self._solve()
+        x = xp_utils.to_numpy(x)
+        return x, info
 
 
 class NonLinearPlanningProblem(PlanningProblem):
     """Abstract Class for all Treatment Planning Problems."""
 
     @abstractmethod
-    def _objective_functions(self, x: np.ndarray) -> np.ndarray:
+    def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions."""
 
     @abstractmethod
-    def _objective_jacobian(self, x: np.ndarray) -> np.ndarray:
+    def _objective_jacobian(self, x: Array) -> Array:
         """Define the objective jacobian."""
 
-    def _objective_hessian(self, x: np.ndarray) -> np.ndarray:
+    def _objective_hessian(self, x: Array) -> Array:
         """Define the objective hessian."""
         return {}
 
-    def _constraint_functions(self, x: np.ndarray) -> np.ndarray:
+    def _constraint_functions(self, x: Array) -> Array:
         """Define the constraint functions."""
         return None
 
-    def _constraint_jacobian(self, x: np.ndarray) -> np.ndarray:
+    def _constraint_jacobian(self, x: Array) -> Array:
         """Define the constraint jacobian."""
         return None
 
-    def _constraint_jacobian_structure(self) -> np.ndarray:
+    def _constraint_jacobian_structure(self) -> Array:
         """Define the constraint jacobian structure."""
         return None
 
-    def _variable_bounds(self, x: np.ndarray) -> np.ndarray:
+    def _variable_bounds(self, x: Array) -> Array:
         """Define the variable bounds."""
-        return np.array([0.0, np.inf], dtype=np.float64)
+        xp = array_api_compat.array_namespace(x)
+        return xp.asarray([0.0, xp.inf], dtype=xp.float64)

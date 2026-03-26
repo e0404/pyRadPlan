@@ -1,12 +1,15 @@
 """Minimum DVH objective."""
 
 from typing import Annotated
+
 from pydantic import Field
 
-from numba import njit
-from numpy import logical_or, quantile, sort
+import array_api_compat
+
+from ...core.xp_utils.typing import Array
 
 from ._objective import Objective, ParameterMetadata
+from ...core.xp_utils.compat import quantile
 
 
 class MinDVH(Objective):
@@ -28,27 +31,28 @@ class MinDVH(Objective):
         float, Field(default=95.0, ge=0.0, le=100.0), ParameterMetadata(kind="relative_volume")
     ]
 
-    def compute_objective(self, values):
-        return _compute_objective(values, self.d, self.v_min)
+    def compute_objective(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
 
-    def compute_gradient(self, values):
-        return _compute_gradient(values, self.d, self.v_min)
+        deviation = values - self.d
+        values_quantile = quantile(
+            values, 1.0 - self.v_min / 100.0, method="linear", is_sorted=False
+        )
+        deviation = xp.where(
+            xp.logical_or(values > self.d, values < values_quantile), 0, deviation
+        )
 
+        return (deviation @ deviation) / array_api_compat.size(values)
 
-@njit
-def _compute_objective(dose, d, v_min):
-    deviation = dose - d
-    dose_quantile = quantile(sort(dose)[::-1], v_min / 100.0)
-    mask = logical_or(dose > d, dose < dose_quantile)
-    deviation[mask] = 0
+    def compute_gradient(self, values: Array) -> Array:
+        xp = array_api_compat.array_namespace(values)
 
-    return (deviation @ deviation) / len(dose)
+        deviation = values - self.d
+        values_quantile = quantile(
+            values, 1.0 - self.v_min / 100.0, method="linear", is_sorted=False
+        )
+        deviation = xp.where(
+            xp.logical_or(values > self.d, values < values_quantile), 0, deviation
+        )
 
-
-@njit
-def _compute_gradient(dose, d, v_min):
-    deviation = dose - d
-    dose_quantile = quantile(sort(dose)[::-1], v_min / 100.0)
-    mask = logical_or(dose > d, dose < dose_quantile)
-    deviation[mask] = 0
-    return 2.0 * deviation / len(dose)
+        return 2.0 * deviation / array_api_compat.size(values)

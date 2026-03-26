@@ -1,6 +1,9 @@
 """Contains the dij class as a (collection of) influence matrices."""
 
 from typing import Any, Union, Annotated, Optional, cast
+from typing_extensions import Self
+import logging
+
 from pydantic import (
     Field,
     field_validator,
@@ -9,16 +12,45 @@ from pydantic import (
     field_serializer,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    ValidatorFunctionWrapHandler,
 )
 
+from numpydantic import NDArray, Shape
+from ..core.xp_utils.typing import Array, ArrayNamespace
+
+import array_api_compat
+
 import numpy as np
-from numpydantic import NDArray
 import SimpleITK as sitk
 import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.util import swap_orientation_sparse_matrix
+
+from ..core.xp_utils import to_namespace
+
+InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
+InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
+
+logger = logging.getLogger(__name__)
+
+
+def _check_influence_matrix(mat: Any, info: ValidationInfo):
+    """Validate/coerce the input as influence matrix."""
+
+    if not (
+        isinstance(mat, (sp.spmatrix, sp.sparray, np.ndarray))
+        or not np.issubdtype(mat.dtype, np.number)
+    ) and not array_api_compat.is_array_api_obj(mat):
+        raise ValueError(f"{info.field_name} must be a numeric array.")
+    if not mat.ndim == 2:
+        raise ValueError(f"{info.field_name} must be a 2D array.")
+    if not mat.shape == mat.shape:
+        raise ValueError(f"{info.field_name} must have consistent number of voxels.")
+
+    if mat.shape[0] != info.data["dose_grid"].num_voxels:
+        raise ValueError(f"{info.field_name} shape inconsistent with ct grid")
 
 
 class Dij(PyRadPlanBaseModel):
@@ -40,10 +72,10 @@ class Dij(PyRadPlanBaseModel):
     dose_grid: Annotated[Grid, Field(default=None)]
     ct_grid: Annotated[Grid, Field(default=None)]
 
-    physical_dose: Annotated[NDArray, Field(default=None)]
-    let_dose: Annotated[NDArray, Field(default=None, alias="mLETDose")]
-    alpha_dose: Annotated[NDArray, Field(default=None)]
-    sqrt_beta_dose: Annotated[NDArray, Field(default=None)]
+    physical_dose: Annotated[InfluenceMatrixContainer, Field(default=None)]
+    let_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None, alias="mLETDose")]
+    alpha_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
+    sqrt_beta_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
 
     num_of_beams: Annotated[int, Field(default=None)]
 
@@ -51,7 +83,7 @@ class Dij(PyRadPlanBaseModel):
     ray_num: Annotated[NDArray, Field(default=None)]
     beam_num: Annotated[NDArray, Field(default=None)]
 
-    rad_depth_cubes: Optional[list[NDArray]] = Field(default=None)
+    rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
     @computed_field
     @property
@@ -72,9 +104,11 @@ class Dij(PyRadPlanBaseModel):
         potential_quantities = ["physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose"]
         return [q for q in potential_quantities if getattr(self, q) is not None]
 
-    @field_validator("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose", mode="before")
+    @field_validator("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose", mode="wrap")
     @classmethod
-    def validate_matrices(cls, v: Any, info: ValidationInfo) -> np.ndarray:
+    def validate_influenc_matrix_conatiner(
+        cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+    ) -> InfluenceMatrixContainer:
         """
         Validate the physical dose matrix.
 
@@ -86,30 +120,20 @@ class Dij(PyRadPlanBaseModel):
         if v is None:
             return v
 
-        if isinstance(v, (sp.spmatrix, sp.sparray)) or (
-            isinstance(v, np.ndarray) and v.dtype != np.dtype(object)
+        if not (isinstance(v, np.ndarray) and v.dtype == np.dtype(object)) and (
+            isinstance(v, (sp.spmatrix, sp.sparray, np.ndarray))
+            or array_api_compat.is_array_api_obj(v)
         ):
-            tmp = np.empty((1,), dtype=object)
-            tmp[0] = v
-            v = tmp
-
-        if isinstance(v, list):
+            # is a numeric matrix, not a container
+            # make it a container of one element
+            v = np.array([v], dtype=object)
+        elif isinstance(v, list):
             v = np.asarray(v, dtype=object)
 
-        for i in range(v.size):
-            if v.flat[i] is not None:
-                mat = v.flat[i]
-                if not isinstance(mat, (sp.spmatrix, sp.sparray, np.ndarray)) or not np.issubdtype(
-                    mat.dtype, np.number
-                ):
-                    raise ValueError(f"{info.field_name} must be a numeric array.")
-                if not mat.ndim == 2:
-                    raise ValueError(f"{info.field_name} must be a 2D array.")
-                if not mat.shape == mat.shape:
-                    raise ValueError(f"{info.field_name} must have consistent number of voxels.")
+        # Starting here, it should be a NDArray of objects
+        v: InfluenceMatrixContainer = handler(v, info)  # run any other validators
 
-                if mat.shape[0] != info.data["dose_grid"].num_voxels:
-                    raise ValueError(f"{info.field_name} shape inconsistent with ct grid")
+        [_check_influence_matrix(v.flat[i], info) for i in range(v.size) if v.flat[i] is not None]
 
         if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
             if v is not None:
@@ -128,7 +152,6 @@ class Dij(PyRadPlanBaseModel):
                         v.flat[i] = sp.csc_matrix(v.flat[i])
             else:
                 v = np.array([0])
-            return [[v]]  # TODO
 
         return v
 
@@ -263,6 +286,11 @@ class Dij(PyRadPlanBaseModel):
 
         dij_dict = super().to_matrad(context=context)
 
+        # Replace None values with np.array([0]) for savemat compatibility
+        for key, value in dij_dict.items():
+            if value is None:
+                dij_dict[key] = np.array([0])
+
         return dij_dict
 
     def get_result_arrays_from_intensity(
@@ -291,6 +319,9 @@ class Dij(PyRadPlanBaseModel):
             out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
             out["physical_dose_beam"] = []
 
+            # !Note: This implementaion is faster than the intuitive:
+            # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
+            # Since slicing over the intensity vector reduces the matrix operation size.
             for i in range(self.num_of_beams):
                 beam_mask = (self.beam_num == i).astype(bool)
                 dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
@@ -309,20 +340,51 @@ class Dij(PyRadPlanBaseModel):
             out["let_beam"] = []
             for i in range(self.num_of_beams):
                 beam_mask = (self.beam_num == i).astype(bool)
-                let_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
-                phy_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
-                let_beam_val = let_matrix @ intensity[beam_mask]
-                phy_beam_val = phy_matrix @ intensity[beam_mask]
-                ratio = np.zeros_like(let_beam_val)
-                valid = phy_beam_val > 0.0
-                ratio[valid] = let_beam_val[valid] / phy_beam_val[valid]
-                out["let_beam"].append(ratio)
+                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
+
+                phys_dose_beam = out["physical_dose_beam"][i]
+
+                let_beam = np.zeros_like(let_dose_beam)
+                if np.max(phys_dose_beam) > 0:
+                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                    let_beam[indices_beam] = (
+                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
+                    )
+
+                out["let_beam"].append(let_beam)
+
+            out["let_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
+                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
+
+                phys_dose_beam = out["physical_dose_beam"][i]
+
+                let_beam = np.zeros_like(let_dose_beam)
+                if np.max(phys_dose_beam) > 0:
+                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                    let_beam[indices_beam] = (
+                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
+                    )
+
+                out["let_beam"].append(let_beam)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
             out["effect"] = (
                 self.alpha_dose.flat[scenario_index] @ intensity
                 + (self.sqrt_beta_dose.flat[scenario_index] @ intensity) ** 2
             )
+
+            out["effect_beam"] = []
+            for i in range(self.num_of_beams):
+                beam_mask = (self.beam_num == i).astype(bool)
+                alpha_matrix = self.alpha_dose.flat[scenario_index][:, beam_mask]
+                sqrt_beta_matrix = self.sqrt_beta_dose.flat[scenario_index][:, beam_mask]
+
+                w_beam = intensity[beam_mask]
+                out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
 
         return out
 
@@ -350,6 +412,21 @@ class Dij(PyRadPlanBaseModel):
 
         for key, value in out.items():
             # Create a sitk image for each scenario
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    value[i] = sitk.GetImageFromArray(
+                        value[i].reshape(self.dose_grid.dimensions[::-1])
+                    )
+                    value[i].SetOrigin(self.dose_grid.origin)
+                    value[i].SetSpacing(self.dose_grid.resolution_vector)
+                    value[i].SetDirection(self.dose_grid.direction.ravel())
+            else:
+                # handling collective of all beams
+                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
+                out[key].SetOrigin(self.dose_grid.origin)
+                out[key].SetSpacing(self.dose_grid.resolution_vector)
+                out[key].SetDirection(self.dose_grid.direction.ravel())
             if isinstance(value, list):
                 #  handle every single beam information
                 for i in range(len(value)):
@@ -406,7 +483,55 @@ class Dij(PyRadPlanBaseModel):
             else:
                 # handle the collective of all beams
                 out[key] = resampler.Execute(value)
+
+            if isinstance(value, list):
+                #  handle every single beam information
+                for i in range(len(value)):
+                    out[key][i] = resampler.Execute(value[i])
+            else:
+                # handle the collective of all beams
+                out[key] = resampler.Execute(value)
         return out
+
+    def to_namespace(
+        self, xp_new: Union[ArrayNamespace, str], *, keep_sparse_compat: bool = True
+    ) -> Self:
+        """
+        Convert all influence matrices in the Dij to a different array namespace.
+
+        Parameters
+        ----------
+        xp_new : ArrayNamespace
+            The target array namespace.
+        keep_sparse_compat : bool
+            Whether to keep sparse matrix compatibility when converting to a new namespace.
+            If False, sparse matrices will be converted to arrays of the namespace, even if the
+            sparse format is compatible with the target namespace. For example, converting from
+            scipy.sparse to numpy will result in a dense numpy array instead of a sparse matrix.
+            Default is True.
+        """
+
+        # We need to check this deep copy, if it can be avoided (or does it even copy the full
+        # NDArray object containers? Not sure)
+        dij_copy = self.model_copy(deep=True)
+
+        for q in self.quantities:
+            q_container: InfluenceMatrixContainer = getattr(self, q)
+            if q_container is not None:
+                for i in range(q_container.size):
+                    if q_container.flat[i] is not None:
+                        getattr(dij_copy, q).flat[i] = to_namespace(
+                            xp_new, q_container.flat[i], keep_sparse_compat=keep_sparse_compat
+                        )
+
+        if isinstance(xp_new, str):
+            name = xp_new
+        else:
+            name = xp_new.__name__
+
+        logger.info(f"Converted Dij to namespace '{name}'")
+
+        return dij_copy
 
 
 def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:

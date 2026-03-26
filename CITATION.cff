@@ -1,0 +1,66 @@
+cff-version: 1.2.0
+title: pyRadPlan
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Tobias
+    family-names: Becher
+    email: t.becher@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+    orcid: 'https://orcid.org/0009-0002-5467-9605'
+  - given-names: Lina
+    family-names: Bucher
+    email: lina.bucher@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Antonios
+    family-names: Kontopoulos
+    email: antonios.kontopoulos@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Julius
+    family-names: Laub
+    email: julius.laub@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Florian
+    family-names: Leininger
+    email: florian.leininger@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+    orcid: 'https://orcid.org/0009-0001-6852-5933'
+  - given-names: Tim
+    family-names: Ortkamp
+    email: tim.ortkamp@kit.edu
+    affiliation: Karlsruhe Institute of Technology (KIT)
+  - given-names: Victoria
+    family-names: Santiago Aguilar
+    email: victoria.santiagoaguilar@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Goran
+    family-names: Stanic
+    email: goran.stanic@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Samir
+    family-names: Schulz
+    email: samirshivaji.schulz@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Niklas
+    family-names: Wahl
+    email: n.wahl@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+    orcid: 'https://orcid.org/0000-0002-1451-223X'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.15006909
+    description: The Zenodo DOI of the work.
+repository-code: 'https://github.com/e0404/pyRadPlan'
+url: 'https://pyradplan.readthedocs.io/'
+abstract: >-
+  pyRadPlan is an AI-ready open-source radiotherapy
+  treatment planning toolkit designed for interoperability
+  with matRad.
+keywords:
+  - radiotherapy
+  - treatment planning
+  - plan optimization
+  - dose calculation
+license: BSD-3-Clause

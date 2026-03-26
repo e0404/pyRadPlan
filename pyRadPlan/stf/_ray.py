@@ -5,6 +5,7 @@ The ray is pointing from the beam source to a position in the patient.
 
 import functools
 from typing import Any, Union, Optional
+from typing_extensions import Self
 import numpy as np
 from pydantic import (
     create_model,
@@ -16,7 +17,6 @@ from pydantic import (
     field_serializer,
     SerializationInfo,
     SerializerFunctionWrapHandler,
-    computed_field,
     ValidationError,
 )
 from numpydantic import NDArray, Shape
@@ -183,22 +183,46 @@ class Ray(PyRadPlanBaseModel):
         return model_dump
 
     @classmethod
-    def create_matrad_helper_model(cls):
-        """Create a helper model for matRad serialization."""
+    def create_matrad_helper_model(cls) -> Self:
+        """
+        Create a helper model for matRad serialization.
 
-        def get_property_list(self: Ray, name: str):
-            return [getattr(beamlet, name) for beamlet in self.beamlets]
+        This creates a dynamic pydantic model that takes the Beamlet fields
+        and organizes them as lists within the Ray for serialization within
+        matRad.
+        This is quite hacked, because the fields wouldn't need to carry the
+        information. However, computed_fields do not work in create_model
+        in pydantic>=2.11. Thus we create normal model fields, with a default
+        factory that extracts the information from the beamlets.
+        """
 
         beamlet_fields = Beamlet.model_fields
-        prop_lambdas = {}
-        for field in beamlet_fields:
-            prop_lambdas[field] = computed_field(
-                functools.partial(get_property_list, name=field),
-                return_type=list[beamlet_fields[field].annotation],
-                alias=beamlet_fields[field].serialization_alias,
+
+        dynamic_fields = {}
+
+        # Create dynamic list fields for each beamlet property
+        for field_name, field_info in beamlet_fields.items():
+            dynamic_fields[field_name] = (
+                list[field_info.annotation],
+                Field(
+                    alias=field_info.serialization_alias,
+                    default_factory=functools.partial(
+                        lambda field_name, data: [
+                            getattr(beamlet, field_name) for beamlet in data["beamlets"]
+                        ],
+                        field_name,
+                    ),
+                ),
             )
 
-        return create_model("RayMatRadHelper", __base__=Ray, **prop_lambdas)
+        # Create the Model
+        helper_model = create_model(
+            "RayMatRadHelper",
+            __base__=Ray,
+            **dynamic_fields,
+        )
+
+        return helper_model
 
     @property
     def energies(self):

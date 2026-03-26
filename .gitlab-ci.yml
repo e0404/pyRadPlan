@@ -7,6 +7,7 @@ variables:  # Change pip's cache directory to be inside the project directory si
 stages:
     - build
     - test
+    - report
     - package
     - deploy
 
@@ -14,32 +15,38 @@ stages:
     # - apk add --no-cache alpine-sdk g++ hdf5-dev llvm14-dev linux-headers
     # - apt-get update
 
-build:
+build-matrix:
     stage: build
+    parallel:
+        matrix:
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+    image: python:${PYTHON_VERSION}-slim-bookworm
+    variables:
+        MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
     script:
-        - python3 -m pip install --upgrade pip
-        - python3 -m venv .venv
-        - source .venv/bin/activate
-        # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite
-        - pip install -e .
+        - python -m pip install --upgrade pip
+        - python -m venv .venv
+        - . .venv/bin/activate
+        # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite  # Uncomment if needed for numba on specific images
+        - pip install --upgrade --upgrade-strategy eager -e .
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "$MATRIX_CACHE_KEY"
         paths:
             - .venv/
             - .cache/pip/
         policy: pull-push
-
 # TODO: as soon as the COS cache on gitlab works, separate into three jobs running in parallel to the tests
 lint:
     stage: test
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
         policy: pull
     script:
-        - source .venv/bin/activate
+        # - if [ ! -d .venv ]; then python -m venv .venv; fi
+        - . .venv/bin/activate
         - pip install ruff
         - return_code=0
         - ruff check --output-format grouped || return_code=$(($return_code + $?))
@@ -58,39 +65,84 @@ lint:
 format:
     stage: test
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
         policy: pull
     script:
-        - source .venv/bin/activate
+        - . .venv/bin/activate
         - pip install ruff
         - ruff format --check
 
-tests:
+
+# Run tests in parallel across multiple Python versions for Merge Requests only
+tests-matrix:
     stage: test
+    parallel:
+        matrix:
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+    image: python:${PYTHON_VERSION}-slim-bookworm
+    variables:
+        MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
+        COVERAGE_FILE: ".coverage.${PYTHON_VERSION}"
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "$MATRIX_CACHE_KEY"
         paths:
             - .venv/
             - .cache/pip/
-        policy: pull
+        policy: pull-push
     script:
-        - source .venv/bin/activate
+        - python -m pip install --upgrade pip
+        - python -m venv .venv
+        - . .venv/bin/activate
+        - pip install --upgrade --upgrade-strategy eager -e .
         - pip install coverage pytest pytest-cov
-        - pytest test --junitxml=.testreports/report.xml --cov=pyRadPlan --cov-report term --cov-report xml:.testreports/coverage.xml --cov-report html:.testreports/html
+        - mkdir -p .testreports
+        - PYVER_SAFE=${PYTHON_VERSION//./}
+        - COVER_XML=.testreports/coverage-${PYTHON_VERSION}.xml
+        - HTML_DIR=.testreports/html-${PYTHON_VERSION}
+        - mkdir -p $HTML_DIR
+        - pytest test --junitxml=.testreports/report-${PYTHON_VERSION}.xml --cov=pyRadPlan --cov-report term --cov-report xml:$COVER_XML --cov-report html:$HTML_DIR
+    artifacts:
+        when: always
+        reports:
+          junit: .testreports/report-${PYTHON_VERSION}.xml
+          coverage_report:
+            coverage_format: cobertura
+            path: .testreports/coverage-${PYTHON_VERSION}.xml
+        paths:
+            - .coverage.${PYTHON_VERSION}
+            - .testreports/html-${PYTHON_VERSION}
+            - .testreports/coverage-${PYTHON_VERSION}.xml
+            - .testreports/report-${PYTHON_VERSION}.xml
+    coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+
+coverage-aggregate:
+    stage: report
+    image: python:3.11-slim-bookworm
+    needs:
+        - job: tests-matrix
+          artifacts: true
+    script:
+        - python -m pip install --upgrade pip
+        - pip install coverage
+        # Combine only the reference Python (3.11) coverage as canonical; optionally we could merge all.
+        - ls -1 .coverage.* || true
+        - if [ -f .coverage.3.11.9 ]; then cp .coverage.3.11.9 .coverage; fi
+        # If combining all versions is desired later, replace previous line with: coverage combine .coverage.*
+        - coverage xml -o .testreports/coverage-aggregated.xml
+        - coverage html -d .testreports/html-aggregated
+        - coverage report || true
     artifacts:
         when: always
         reports:
           coverage_report:
             coverage_format: cobertura
-            path: .testreports/coverage.xml
-          junit: .testreports/report.xml
+            path: .testreports/coverage-aggregated.xml
         paths:
-            - .testreports/html
-            - .testreports/coverage.xml
-            - .testreports/report.xml
+            - .testreports/html-aggregated
+            - .testreports/coverage-aggregated.xml
     coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
 
 packaging:
@@ -99,13 +151,14 @@ packaging:
         TWINE_USERNAME: gitlab-ci-token
         TWINE_PASSWORD: $CI_JOB_TOKEN
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
         policy: pull
     script:
-        - source .venv/bin/activate
+        #- if [ ! -d .venv ]; then python -m venv .venv; fi
+        - . .venv/bin/activate
         - pip install --upgrade build
         - python -m build
     artifacts:
@@ -116,13 +169,14 @@ packaging:
 docs:
     stage: package
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
         policy: pull
     script:
-        - source .venv/bin/activate
+        #- if [ ! -d .venv ]; then python -m venv .venv; fi
+        - . .venv/bin/activate
         - pip install sphinx
         - pip install sphinx-autodoc-typehints
         - pip install autodoc_pydantic
@@ -141,7 +195,7 @@ deploy-tag-internal:
         TWINE_USERNAME: gitlab-ci-token
         TWINE_PASSWORD: $CI_JOB_TOKEN
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
@@ -149,7 +203,8 @@ deploy-tag-internal:
     rules:
         - if: '$CI_COMMIT_TAG =~ /^v\d+.\d+.\d+$/'
     script:
-        - source .venv/bin/activate
+        #- if [ ! -d .venv ]; then python -m venv .venv; fi
+        - . .venv/bin/activate
         - pip install --upgrade twine
         - python -m twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
     dependencies:
@@ -161,7 +216,7 @@ deploy-tag-pypi:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: $PYPI_TOKEN
     cache:
-        key: "cache-$CI_COMMIT_REF_SLUG"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
         paths:
             - .venv/
             - .cache/pip/
@@ -169,7 +224,8 @@ deploy-tag-pypi:
     rules:
         - if: '$CI_COMMIT_TAG =~ /^v\d+.\d+.\d+$/'
     script:
-        - source .venv/bin/activate
+        #- if [ ! -d .venv ]; then python -m venv .venv; fi
+        - . .venv/bin/activate
         - pip install --upgrade twine
         - python -m twine upload dist/*
     dependencies:
@@ -178,7 +234,7 @@ deploy-tag-pypi:
 pages-internal:
     stage: deploy
     dependencies:
-        - tests
+        - coverage-aggregate
         - docs
     script:
         - mv .doc public/

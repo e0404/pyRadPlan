@@ -10,6 +10,10 @@ else:
     from importlib import resources  # Standard from Python 3.9+
 from pyRadPlan.dose.engines._fredmc import read_sparse_dij_bin_v21
 
+from pyRadPlan import xp_utils
+
+xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "array_api_strict"
+
 
 @pytest.fixture
 def tg119_raw():

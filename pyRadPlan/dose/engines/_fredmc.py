@@ -32,15 +32,18 @@ from pathlib import Path
 
 import numpy as np
 import SimpleITK as sitk
-from scipy.sparse import coo_matrix, lil_matrix
+from scipy import sparse
 
-from pyRadPlan.ct import CT, resample_ct
-from pyRadPlan.cst import StructureSet
-from pyRadPlan.dij import Dij
-from pyRadPlan.plan import Plan
-from pyRadPlan.stf import SteeringInformation
+from ...core import Grid
+from ...ct import CT, resample_ct
+from ...cst import StructureSet
+from ...dij import Dij
+from ...plan import Plan
+from ...stf import SteeringInformation, Beam
+from ...util import swap_orientation_sparse_matrix
+from ...machines.particles import IonAccelerator
+
 from ._base_montecarlo import MonteCarloEngineAbstract
-from pyRadPlan.util import swap_orientation_sparse_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.HU_table_file = "hLut.inp"
         self.scaling_factor = 1e6
         self.fred_version = "3.70.0"
+        self.print_output = False
 
         self.fred_cmd = "fred"
         self.fred_dir = Path(os.environ.get("FREDDIR", ""))
@@ -319,6 +323,10 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         )
 
         resampled_ct.cube_hu = sitk.Cast(resampled_ct.cube_hu, sitk.sitkInt16)
+
+        # Force Origin to (0,0,0) and Direction to Identity to match matRad behavior
+        resampled_ct.cube_hu.SetOrigin((0.0, 0.0, 0.0))
+        resampled_ct.cube_hu.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
 
         sitk.WriteImage(resampled_ct.cube_hu, file_path)
 
@@ -565,7 +573,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 else:
                     fields = [("F" + str(n)) for n in list(range(field_counter))]
                 file.write(
-                    "def: plan = {{ 'SAD': {}, 'Fields': [{}] }}".format(
+                    "def: plan = {{ 'SAD': {}, 'Fields': [{}] }}\n".format(
                         field["BAMS_to_iso"], ", ".join(fields)
                     )
                 )
@@ -602,7 +610,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             The transformed isocenter coordinates in FRED's coordinate system.
         """
 
-        dose_grid = dij["dose_grid"]
+        dose_grid: Grid = dij["dose_grid"]
         dose_grid_resolution = np.array(
             [
                 dose_grid.resolution["x"],
@@ -668,7 +676,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         if self._use_output is not None:
             self.fred_order = self._generate_fred_order(dij, stf)
         if self.dose_cube is None:
-            dij["physical_dose"] = coo_matrix(
+            dij["physical_dose"] = sparse.csc_array(
                 (dij["dose_grid"].num_voxels, stf.total_number_of_bixels), dtype=np.int8
             )
 
@@ -786,7 +794,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 "CA": beam.couch_angle,
                 "field_extent": [],
                 "ISO": (str(n / 10) for n in fred_iso),
-                "BAMS_to_iso": self._machine.bams_to_iso_dist / 10,
+                "BAMS_to_iso": cast(IonAccelerator, self._machine).bams_to_iso_dist / 10,
                 "layers": self._generate_layers_fred(beam, b),
             }
             fwhm_max = max(
@@ -805,7 +813,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         return beams_fred
 
-    def _generate_layers_fred(self, beam, beam_index) -> list[dict]:
+    def _generate_layers_fred(self, beam: Beam, beam_index: int) -> list[dict]:
         """
         Generate the FRED-compatible layers for a beam.
 
@@ -822,24 +830,37 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             A list of dictionaries containing the layer data for FRED.
         """
         layers_fred = []
+        bams_to_iso = cast(IonAccelerator, self._machine).bams_to_iso_dist / 10
+
+        # Linear projection of BEV source (x,y) points to plane at BAMStoISO distance
+        def get_point_at_bams(target, source, distance, bams_to_iso):
+            return (target - source) * (-bams_to_iso) / distance + source
 
         for key, value in beam.energy_layers.items():
             pb_fred = []
             for i in range(len(value["beamlet_idx"])):
                 target_point = beam.rays[value["rays_idx"][i]].target_point_bev / 10
-                source_point = beam.source_point_bev / 10
+                # source_point = beam.source_point_bev / 10 #seems to not be needed in FRED
                 ray_position = beam.rays[value["rays_idx"][i]].ray_pos_bev / 10
                 distance = target_point[1] - ray_position[1]
+
+                # Project the spot to the entrance plane (BAMStoISO distance)
+                ray_pos_z_proj = get_point_at_bams(
+                    target_point[2], ray_position[2], distance, bams_to_iso
+                )
+                ray_pos_x_proj = get_point_at_bams(
+                    target_point[0], ray_position[0], distance, bams_to_iso
+                )
 
                 pb_dict = {
                     "ID": i,
                     "fieldID": beam_index,
                     "particle": beam.radiation_mode,
                     "T": value["full_energy"],
-                    "position_bev": [str(ray_position[2]), str(ray_position[0]), str(0)],
+                    "position_bev": [str(ray_pos_z_proj), str(ray_pos_x_proj), str(0)],
                     "divergence": [
-                        str((target_point[2] - source_point[2]) / distance),
-                        str((target_point[0] - target_point[0]) / distance),
+                        str((target_point[2] - ray_position[2]) / distance),
+                        str((target_point[0] - ray_position[0]) / distance),
                         str(1),
                     ],
                     "weight": beam.rays[value["rays_idx"][i]]
@@ -853,10 +874,11 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
                 pb_fred.append(pb_dict)
 
-            emittance = self._machine.foci[value["full_energy"]][0].emittance
+            emittance = cast(IonAccelerator, self._machine).foci[value["full_energy"]][0].emittance
             layer_dict = {
                 "energy": value["full_energy"],
-                "ESpread": self._machine.spectra[value["full_energy"]].fwhm / 2.355,
+                "ESpread": cast(IonAccelerator, self._machine).spectra[value["full_energy"]].fwhm
+                / 2.355,
                 "FWHM": (
                     2.355
                     * (2 * emittance.sigma_x * emittance.sigma_y)
@@ -881,10 +903,10 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         if self._calc_dose_direct:
             # Direct dose calculation
-            dij["physical_dose"].flat[0] = coo_matrix(self.dose_cube.reshape(-1, 1))
+            dij["physical_dose"].flat[0] = sparse.csc_array(self.dose_cube.reshape(-1, 1))
 
             if self.calc_let and self.let_cube is not None:
-                dij["mLETd"].flat[0] = coo_matrix(
+                dij["mLETd"].flat[0] = sparse.csc_array(
                     (
                         self.let_cube[self._vdose_grid] / 10,
                         (self._vdose_grid, np.ones(len(self._vdose_grid))),
@@ -893,7 +915,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 )
 
                 # LETd * dose
-                dij["mLETDose"].flat[0] = coo_matrix(
+                dij["mLETDose"].flat[0] = sparse.csc_array(
                     (
                         (self.let_cube[self._vdose_grid] / 10) * self.dose_cube[self._vdose_grid],
                         (self._vdose_grid, np.ones(len(self._vdose_grid))),
@@ -902,43 +924,32 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 )
             dij_fields_to_override = [
                 "num_of_beams",
-                "beam_num",
-                "bixel_num",
-                "ray_num",
                 "total_number_of_bixels",
                 "total_number_of_rays",
                 "num_of_rays_per_beam",
             ]
             for field_name in dij_fields_to_override:
                 dij[field_name] = 1
+
+            dij["beam_num"] = 0
+            dij["bixel_num"] = 0
+            dij["ray_num"] = 0
         else:
             # Scorer-ij mode
-            self.dose_cube.col = self.fred_order[self.dose_cube.col]
-
-            self.dose_cube = self.dose_cube.tocsr()
-
+            self.dose_cube = sparse.csc_array(self.dose_cube)
             self.dose_cube = self.dose_cube[:, self.fred_order]
-
-            self.dose_cube = self.dose_cube.tocoo()
 
             dij["physical_dose"].flat[0] = self._conversion_factor * self.dose_cube
 
             if self.calc_let and self.let_cube is not None:
-                self.let_cube.col = self.fred_order[self.let_cube.col]
-
-                self.let_cube = self.let_cube.tocsr()
-
+                self.let_cube = sparse.csc_array(self.let_cube)
                 self.let_cube = self.let_cube[:, self.fred_order]
-
-                self.let_cube = self.let_cube.tocoo()
 
                 # Divide by 10, FRED scores in MeV * cm^2 / g
                 dij["mLETd"].flat[0] = self.let_cube / 10
 
                 # LETd * dose
-                dij["mLETDose"].flat[0] = coo_matrix(
-                    dij["physical_dose"].flat[0].multiply(dij["mLETd"].flat[0])
-                )
+                dij["mLETDose"].flat[0] = dij["physical_dose"].flat[0] * dij["mLETd"].flat[0]
 
         if self.calc_bio_dose:
             logger.warning("Biological dose calculation is not implemented yet.")
@@ -1043,7 +1054,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.dose_cube = dose_cube
         self.let_cube = let_cube
 
-    def read_sparse_dij_bin(self, f_name: str) -> coo_matrix:
+    def read_sparse_dij_bin(self, f_name: str) -> sparse.csc_array:
         """
         Dispatch method to read a sparse dij binary file based on the dij format version.
 
@@ -1053,7 +1064,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         Returns
         -------
-            coo_matrix: Sparse matrix containing the dij data.
+            sparse.csc_array: Sparse matrix containing the dij data.
         """
         with open(f_name, "rb") as f:
             file_format_version = str(np.frombuffer(f.read(4), dtype=np.int32)[0])
@@ -1083,15 +1094,15 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                         dij[q_name].flat[i] = np.zeros(
                             (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
                         )
-                    else:
-                        # This could probably be optimized by using direct access to the
-                        # lil_matrix's data structures
-                        # TODO: we could store a single sparse pattern matrix and then only store
-                        # the values for all quantities for better memory management
-                        dij[q_name].flat[i] = lil_matrix(
-                            (self._num_of_columns_dij, self.dose_grid.num_voxels),
-                            dtype=np.float32,
-                        )
+                    # else:
+                    #     # This could probably be optimized by using direct access to the
+                    #     # lil_matrix's data structures
+                    #     # TODO: we could store a single sparse pattern matrix and then only store
+                    #     # the values for all quantities for better memory management
+                    #     dij[q_name].flat[i] = lil_matrix(
+                    #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
+                    #         dtype=np.float32,
+                    #     )
 
             self._computed_quantities.append(q_name)
 
@@ -1127,13 +1138,21 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 capture_output=not self.print_output,
             )
         except subprocess.CalledProcessError as e:
-            stderr_msg = e.stderr.decode() if e.stderr else "No error details available"
+            stdout_msg = e.stdout.decode(errors="ignore") if e.stdout else ""
+            stderr_msg = e.stderr.decode(errors="ignore") if e.stderr else ""
             logger.error(
-                "FRED execution failed with return code %s. Reason: %s",
+                "FRED execution failed with return code %s. stdout:\n%s\nstderr:\n%s",
                 e.returncode,
-                stderr_msg,
+                stdout_msg,
+                stderr_msg or "No error details available",
             )
             raise SystemExit("Aborting...")
+        except FileNotFoundError as e:
+            logger.error(
+                "FRED executable not found: %s. Ensure 'fred' is in PATH.",
+                e,
+            )
+            raise SystemExit("Aborting... FRED not found")
         else:
             t_end = time.time()
             logger.info("Done in %f seconds.", t_end - t_start)
@@ -1203,16 +1222,22 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                     # Loop over all used quantities
                     for q_name in self._computed_quantities:
                         if not self._calc_dose_direct:
-                            tmp_matrix = cast(lil_matrix, dij[q_name].flat[i])
-                            tmp_matrix = tmp_matrix.tocsr()
-                            tmp_matrix.eliminate_zeros()
+                            tmp_matrix = dij[q_name].flat[i]
 
                             if self._dij_format_version in {"21", "31"}:
+                                if not isinstance(tmp_matrix, sparse.csc_array):
+                                    tmp_matrix = sparse.csc_array(tmp_matrix)
+
+                                tmp_matrix.eliminate_zeros()
+
                                 shape = dij["dose_grid"].dimensions
-                                dij[q_name].flat[i] = swap_orientation_sparse_matrix(
-                                    tmp_matrix, shape, (0, 1)
-                                )
+                                swapped = swap_orientation_sparse_matrix(tmp_matrix, shape, (0, 1))
+                                dij[q_name].flat[i] = swapped
                             else:
+                                if not isinstance(tmp_matrix, sparse.csc_array):
+                                    tmp_matrix = sparse.csc_array(tmp_matrix)
+
+                                tmp_matrix.eliminate_zeros()
                                 dij[q_name].flat[i] = tmp_matrix
                             # dij[q_name].flat[i].data *= self.scaling_factor
 
@@ -1228,7 +1253,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         return available, msg
 
 
-def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v20(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in a Matlab-like format.
 
@@ -1238,7 +1263,7 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1252,18 +1277,17 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
         # Preallocate lists to collect arrays
         all_values_list = []
         all_voxel_inds_list = []
-        all_col_inds_list = []
+        indptr = [0]
         beamlet_counter = 0
 
         for _ in range(number_of_beamlets):
             # Read beamlet header
             _ = np.frombuffer(f.read(4), dtype=np.int32)[0]  # bix_num (unused)
-            num_vox = np.frombuffer(f.read(4), dtype=np.int32)[0]
+            num_vox = int(np.frombuffer(f.read(4), dtype=np.int32)[0])
             beamlet_counter += 1
 
-            # Set column indices vector for this beamlet
-            all_col_inds_list.append(np.full(num_vox, beamlet_counter - 1, dtype=np.int32))
-
+            # Update indptr
+            indptr.append(int(indptr[-1]) + num_vox)
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
             all_voxel_inds_list.append(curr_voxel_indices)
@@ -1279,17 +1303,16 @@ def read_sparse_dij_bin_v20(f_name: str) -> coo_matrix:
         # Concatenate the lists into single NumPy arrays
         all_values = np.concatenate(all_values_list)
         all_voxel_inds = np.concatenate(all_voxel_inds_list)
-        all_col_inds = np.concatenate(all_col_inds_list)
+        indptr = np.array(indptr, dtype=np.int64)
 
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (all_values, (all_voxel_inds, all_col_inds)), shape=(total_voxels, beamlet_counter)
+    dij_matrix = sparse.csc_array(
+        (all_values, all_voxel_inds, indptr), shape=(total_voxels, beamlet_counter)
     )
-    # dij_matrix = dij_matrix.tocsc()
     return dij_matrix
 
 
-def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v21(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in version 2.1 format.
 
@@ -1299,7 +1322,7 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1314,18 +1337,18 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
         # Preallocate lists to collect arrays
         all_values_list = []
         all_voxel_inds_list = []
-        all_col_inds_list = []
+        indptr = [0]
         beamlet_counter = 0
 
         for _ in range(number_of_beamlets):
             # Read beamlet header
             _ = np.frombuffer(f.read(4), dtype=np.uint32)[0]  # bix_num
-            num_vox = np.frombuffer(f.read(4), dtype=np.int32)[0]
+            num_vox = int(np.frombuffer(f.read(4), dtype=np.int32)[0])
 
             beamlet_counter += 1
 
-            # Set column indices vector for this beamlet
-            all_col_inds_list.append(np.full(num_vox, beamlet_counter - 1, dtype=np.int32))
+            # Update indptr
+            indptr.append(int(indptr[-1]) + num_vox)
 
             # Read voxel indices
             curr_voxel_indices = np.frombuffer(f.read(4 * num_vox), dtype=np.uint32)
@@ -1352,16 +1375,16 @@ def read_sparse_dij_bin_v21(f_name: str) -> coo_matrix:
     # Concatenate the lists into single NumPy arrays
     all_values = np.concatenate(all_values_list)
     all_voxel_inds = np.concatenate(all_voxel_inds_list)
-    all_col_inds = np.concatenate(all_col_inds_list)
+    indptr = np.array(indptr, dtype=np.int64)
 
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (all_values, (all_voxel_inds, all_col_inds)), shape=(total_voxels, beamlet_counter)
+    dij_matrix = sparse.csc_array(
+        (all_values, all_voxel_inds, indptr), shape=(total_voxels, beamlet_counter)
     )
     return dij_matrix
 
 
-def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
+def read_sparse_dij_bin_v31(f_name: str) -> sparse.csc_array:
     """
     Read a sparse dij binary file in version 3.1 format.
 
@@ -1371,7 +1394,7 @@ def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
 
     Returns
     -------
-        coo_matrix: Sparse matrix containing the dij data.
+        sparse.csc_array: Sparse matrix containing the dij data.
     """
     with open(f_name, "rb") as f:
         # Read header
@@ -1423,8 +1446,15 @@ def read_sparse_dij_bin_v31(f_name: str) -> coo_matrix:
 
     # Create sparse matrix
     total_voxels = int(np.prod(dims))
-    dij_matrix = coo_matrix(
-        (values, (permuted_voxel_indices, pb_idxs[0])),
+
+    # Optimization: Construct CSC directly using indptr
+    # We assume the data in the file is sorted by beamlet index (pb_idxs), which is standard.
+    # This avoids the overhead of coo_array -> csc_array conversion.
+    counts = np.bincount(pb_idxs[0], minlength=number_of_beamlets)
+    indptr = np.concatenate(([0], np.cumsum(counts))).astype(np.int32)
+
+    dij_matrix = sparse.csc_array(
+        (values, permuted_voxel_indices, indptr),
         shape=(total_voxels, number_of_beamlets),
     )
 

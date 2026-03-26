@@ -120,7 +120,13 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if v is None:
             return v
 
-        if v.shape[0] != info.data["depths"].shape[0]:
+        # The imported array might be transposed
+        if (
+            v.shape[1] != info.data["depths"].shape[0]
+            and v.shape[0] == info.data["depths"].shape[0]
+        ):
+            v = np.ascontiguousarray(v.T)
+        elif v.shape[0] != info.data["depths"].shape[0]:
             raise ValueError("Kernel data length does not match the depth data length.")
 
         return v
@@ -134,7 +140,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if v is None:
             return v
 
-        # Check if kernel is transposed but oterhwise of correct shape
+        # Check if kernel is transposed but otherwise of correct shape
         if (
             v.shape[0] == info.data["depths"].shape[0]
             and v.shape[1] == info.data["alpha_x"].size
