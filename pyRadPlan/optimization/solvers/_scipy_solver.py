@@ -36,21 +36,29 @@ class OptimizerSciPy(NonLinearOptimizer):
 
     options: dict[str]
     method: Union[str, Callable]
+    display: bool
 
     def __init__(self):
         self.options = {
-            "disp": True,
             "ftol": 1e-5,
             "gtol": 1e-5,
         }
 
         self.method = "L-BFGS-B"
+        self.display = True
+        self._iter_count = 0
 
         super().__init__()
 
-    def _callback(self, xk: np.ndarray):
+    def _callback(self, xk: np.ndarray, xp=None):
         if self._keyboard_listener.stop_event.is_set():
             raise StopIteration("Optimization cancelled by user")
+        if self.display:
+            self._iter_count += 1
+            if xp is not None:
+                xk = xp_utils.from_numpy(xp, xk)
+            f_val = float(self.objective(xk))
+            logger.info("Iteration %d: f = %g", self._iter_count, f_val)
 
     def _solve_problem(self, x0: Array) -> tuple[Array, dict]:
         """
@@ -67,6 +75,7 @@ class OptimizerSciPy(NonLinearOptimizer):
         """
 
         self.options.update({"maxiter": self.max_iter})
+        self._iter_count = 0
 
         if isinstance(x0, list):
             x0 = np.asarray(x0)
@@ -93,8 +102,10 @@ class OptimizerSciPy(NonLinearOptimizer):
             # hess=self.hessian,
             tol=self.abs_obj_tol,
             bounds=bounds,
-            callback=self._callback,
+            callback=lambda xk: self._callback(xk, xp=xp),
             options=self.options,
         )
+
+        logger.info("SciPy finished: %s", result.get("message", ""))
 
         return xp_utils.from_numpy(xp, result["x"]), result

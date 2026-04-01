@@ -58,7 +58,11 @@ class PlanningProblem(ABC):
     ]
 
     apply_overlap: bool
+    display: bool
+    max_iter: int
     solver: Union[str, dict, SolverBase]
+    solver_options: dict
+    obj_history: list
 
     # Private properties
     _ct: CT
@@ -82,6 +86,10 @@ class PlanningProblem(ABC):
 
         self.solver = "ipopt"
         self.apply_overlap = True
+        self.display = True
+        self.max_iter = 500
+        self.solver_options = {}
+        self.obj_history = None
 
         if pln is not None:
             pln = validate_pln(pln)
