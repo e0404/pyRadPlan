@@ -324,12 +324,12 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Optional[str] = N
 
 def to_namespace(
     xp_new: Union[ArrayNamespace, str],
-    arr: Union[Array],
+    arr: Array,
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,
     device: Optional[str] = None,
-) -> Union[Array]:
+) -> Array:
     """
     Convert an array to the specified array namespace.
 
