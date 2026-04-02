@@ -366,11 +366,19 @@ class VOI(PyRadPlanBaseModel, ABC):
             raise ValueError("new_ct must be a CT object")
 
         if self.mask.GetDimension() == 3:
-            new_mask = sitk.Resample(self.mask, new_ct.cube_hu)
+            new_mask = sitk.Resample(
+                self.mask, new_ct.cube_hu, interpolator=sitk.sitkNearestNeighbor
+            )
         elif self.mask.GetDimension() == 4:
             new_mask = []
             for i in range(self.mask.GetSize()[-1]):
-                new_mask.append(sitk.Resample(self.mask[:, :, :, i], new_ct.cube_hu))
+                new_mask.append(
+                    sitk.Resample(
+                        self.mask[:, :, :, i],
+                        new_ct.cube_hu,
+                        interpolator=sitk.sitkNearestNeighbor,
+                    )
+                )
             new_mask = sitk.JoinSeries(new_mask)
         else:
             raise ValueError("Sanity check failed -- mask has invalid dimensions")
