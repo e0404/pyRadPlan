@@ -14,7 +14,7 @@ from scipy import ndimage
 import SimpleITK as sitk
 
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.cst import VOI, ExternalVOI, validate_voi
+from pyRadPlan.cst import VOI, ExternalVOI, GlobalVOI, validate_voi
 from pyRadPlan.ct import CT, validate_ct
 
 
@@ -275,17 +275,31 @@ class StructureSet(PyRadPlanBaseModel):
             The StructureSet with overlaps applied.
         """
 
+        new_vois = [None] * len(self.vois)
+
+        # VOIs with None will instantly be copied to new_vois.
+        overlap_indices = []
+        for i, v in enumerate(self.vois):
+            if v.apply_overlap is not None:
+                overlap_indices.append(i)
+            else:
+                new_vois[i] = v.model_copy()
+
+        # Cases where all VOIs were set to None
+        if not overlap_indices:
+            return self.model_copy(deep=True, update={"vois": new_vois})
+
         # gather overlaps
-        overlaps = [v.overlap_priority for v in self.vois]
+        overlaps = [self.vois[i].overlap_priority for i in overlap_indices]
 
         # sort by overlap priority
-        ix_sorted = np.argsort(overlaps)
+        ix_sorted_subset = np.argsort(overlaps)
+        ix_sorted = [overlap_indices[i] for i in ix_sorted_subset]
 
         overlap_mask = self.vois[ix_sorted[0]].mask  # Will aggregate the overlap masks using OR
         last_priority_mask = sitk.Image(overlap_mask.GetSize(), overlap_mask.GetPixelID())
         last_priority_mask.CopyInformation(overlap_mask)
 
-        new_vois = [None] * len(self.vois)
         new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].model_copy()
 
         for i, ix_voi in enumerate(ix_sorted[1:], 1):
@@ -293,13 +307,18 @@ class StructureSet(PyRadPlanBaseModel):
             curr_mask = curr_voi.mask
 
             # if the overlap prirority is higher than we need to apply overlap
-            if curr_voi.overlap_priority >= new_vois[ix_sorted[i - 1]].overlap_priority:
-                if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
+            prev_voi = new_vois[ix_sorted[i - 1]]
+            if curr_voi.overlap_priority >= prev_voi.overlap_priority:
+                if curr_voi.overlap_priority > prev_voi.overlap_priority:
                     last_priority_mask = overlap_mask
-                curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
+
+                # False means IT DOES NOT UPDATE ITS VOXELS (is not masked by higher priority)
+                if curr_voi.apply_overlap is not False:
+                    curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
 
             curr_voi.mask = curr_mask
 
+            # Both True and False contribute to overlap_mask
             overlap_mask = sitk.Or(overlap_mask, curr_mask)
 
             # sitk.Show(overlap_mask, debugOn = True)
@@ -307,6 +326,22 @@ class StructureSet(PyRadPlanBaseModel):
             new_vois[ix_voi] = curr_voi
 
         return self.model_copy(deep=True, update={"vois": new_vois})
+
+    def add_global_voi(self, **kwargs) -> Self:
+        """Add a Global VOI spanning the entire CT grid to the StructureSet."""
+
+        mask_arr = np.ones(self.ct_image.cube_hu.GetSize()[::-1], dtype=np.uint8)
+        mask_img = sitk.GetImageFromArray(mask_arr)
+        mask_img.CopyInformation(self.ct_image.cube_hu)
+
+        name = kwargs.pop("name", "Global")
+        objectives = kwargs.pop("objectives", [])
+
+        global_voi = GlobalVOI(
+            name=name, ct_image=self.ct_image, mask=mask_img, objectives=objectives, **kwargs
+        )
+        self.vois.append(global_voi)
+        return self
 
     def create_body_seg(
         self, threshold: float = -200.0, name: str = "BODY", voi_type="OAR"
