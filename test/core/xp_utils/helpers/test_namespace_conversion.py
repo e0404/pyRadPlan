@@ -4,7 +4,7 @@ import array_api_compat
 import array_api_strict
 from array_api_compat import numpy as np
 import scipy.sparse as sp
-from pyRadPlan.core.xp_utils import to_namespace
+from pyRadPlan.core.xp_utils import to_namespace, from_numpy
 
 # Check for optional dependencies
 try:
@@ -161,3 +161,36 @@ def test_cupy_sparse_to_torch_gpu(scipy_sparse_matrix):
     result = to_namespace(torch, c_sp, device="gpu")
     assert result.is_sparse
     assert result.is_cuda
+
+
+# --- from_numpy with device ---
+@pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
+def test_from_numpy_torch_cpu(numpy_array):
+    import array_api_compat.torch as xp
+
+    result = from_numpy(xp, numpy_array)
+    assert isinstance(result, torch.Tensor)
+    assert result.device.type == "cpu"
+
+
+@pytest.mark.skipif(
+    not (has_torch and torch.cuda.is_available()), reason="PyTorch GPU not available"
+)
+def test_from_numpy_torch_gpu(numpy_array):
+    import array_api_compat.torch as xp
+
+    result = from_numpy(xp, numpy_array, device="cuda:0")
+    assert isinstance(result, torch.Tensor)
+    assert result.is_cuda
+    assert result.device.index == 0
+
+
+# --- to_namespace multi-GPU (device index) ---
+@pytest.mark.skipif(
+    not (has_torch and torch.cuda.is_available() and torch.cuda.device_count() > 1),
+    reason="Multiple CUDA GPUs required",
+)
+def test_to_namespace_torch_specific_gpu(numpy_array):
+    result = to_namespace(torch, numpy_array, device="cuda:1")
+    assert result.is_cuda
+    assert result.device.index == 1
