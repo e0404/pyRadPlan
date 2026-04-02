@@ -18,6 +18,7 @@ from pyRadPlan.cst import (
     HelperVOI,
     Target,
     OAR,
+    GlobalVOI,
 )
 # @pytest.fixture
 # def sample_ct():
@@ -287,6 +288,107 @@ def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
         voi_mask_overlapped = sitk.GetArrayViewFromImage(structure_set_overlap.vois[i].mask)
 
         assert np.isclose(voi_mask, voi_mask_overlapped).all()
+
+
+def test_apply_overlap_flags(generic_ct):
+    """Test standard boolean overrides for overlap applying exclusions."""
+    mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask1[2:8, 2:8, 2:8] = 1  # overlap_priority 2
+
+    mask2 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask2[4:9, 4:9, 4:9] = 1  # overlap_priority 1
+
+    mask3 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask3[6:10, 6:10, 6:10] = 1  # overlap_priority 3
+
+    mask4 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask4[0:10, 0:10, 0:10] = 1  # overlap_priority 4
+
+    v1 = Target(
+        name="v1",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask1),
+        overlap_priority=2,
+        apply_overlap=True,
+    )
+    v2 = Target(
+        name="v2",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask2),
+        overlap_priority=1,
+        apply_overlap=False,
+    )
+    v3 = Target(
+        name="v3",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask3),
+        overlap_priority=3,
+        apply_overlap=None,
+    )
+    v4 = Target(
+        name="v4",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask4),
+        overlap_priority=4,
+        apply_overlap=True,
+    )
+
+    for v in [v1, v2, v3, v4]:
+        v.mask.CopyInformation(generic_ct.cube_hu)
+
+    cst = StructureSet(ct_image=generic_ct, vois=[v1, v2, v3, v4])
+    cst_overlapped = cst.apply_overlap_priorities()
+
+    m1_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[0].mask)
+    m2_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[1].mask)
+    m3_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[2].mask)
+    m4_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[3].mask)
+
+    # v2 is top priority and False, so it's intact
+    assert np.array_equal(m2_out, mask2)
+
+    # v1 is priority 2. Should be cut by v2 because v2 overrides it
+    expected_m1 = mask1.copy()
+    expected_m1[mask2 == 1] = 0
+    assert np.array_equal(m1_out, expected_m1)
+
+    # v3 is None, it remains totally untouched by anything above
+    assert np.array_equal(m3_out, mask3)
+
+    # v4 intersects everything. Cut by v2 and v1, NOT v3!
+    expected_m4 = mask4.copy()
+    expected_m4[mask2 == 1] = 0
+    expected_m4[mask1 == 1] = 0
+    assert np.array_equal(m4_out, expected_m4)
+
+
+def test_add_global_voi(generic_ct):
+    cst = StructureSet(ct_image=generic_ct, vois=[])
+
+    # add arbitrary VOI
+    mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask1[2:8, 2:8, 2:8] = 1
+    m1_img = sitk.GetImageFromArray(mask1)
+    m1_img.CopyInformation(generic_ct.cube_hu)
+    cst.vois.append(Target(name="PTV", ct_image=generic_ct, mask=m1_img, apply_overlap=True))
+
+    cst.add_global_voi(name="Global_test", objectives=["test_objective"])
+
+    assert len(cst.vois) == 2
+    global_voi = cst.vois[-1]
+    assert global_voi.voi_type == "GLOBAL"
+    assert global_voi.name == "Global_test"
+    assert global_voi.apply_overlap is None
+    assert global_voi.ignore_dose_calc is True
+    assert "test_objective" in global_voi.objectives
+
+    # Needs to match CT full shape directly (10x10x10 initialized as exactly 1)
+    mask_arr = sitk.GetArrayViewFromImage(global_voi.mask)
+    assert np.all(mask_arr == 1)
+
+    # After overlapping, PTV should remain completely intact (Global bypasses overlap completely)
+    cst_overlapped = cst.apply_overlap_priorities()
+    assert np.array_equal(sitk.GetArrayViewFromImage(cst_overlapped.vois[0].mask), mask1)
 
 
 # --- Helpers for body segmentation tests ---
