@@ -101,6 +101,7 @@ def quantile(
     """
 
     xp = array_api_compat.array_namespace(x)
+    arr_device = x.device  # making sure same device is used
 
     if not is_sorted:
         x_sorted = xp.sort(x, axis=axis, stable=False)
@@ -111,7 +112,9 @@ def quantile(
 
     if method == "nearest" or float_ix == round(float_ix):
         k = int(round(float_ix))
-        return xp.take(x_sorted, xp.reshape(xp.asarray(k), shape=(1,)), axis=axis)
+        return xp.take(
+            x_sorted, xp.reshape(xp.asarray(k, device=arr_device), shape=(1,)), axis=axis
+        )
 
     # Note that the case float_ix == round(float_ix) is already handled above, so we can assume
     # that our float_ix lies between two indices
@@ -122,13 +125,15 @@ def quantile(
         assert k_lower != k_upper  # This should be captured above
 
         # We try to do as much in place on x_upper to save memory allocations
-        x_upper = xp.take(x_sorted, xp.reshape(xp.asarray(k_upper), shape=(1,)), axis=axis)
+        x_upper = xp.take(
+            x_sorted, xp.reshape(xp.asarray(k_upper, device=arr_device), shape=(1,)), axis=axis
+        )
         weight_upper = float_ix - k_lower
 
         x_upper *= weight_upper
 
         x_upper += (1.0 - weight_upper) * xp.take(
-            x_sorted, xp.reshape(xp.asarray(k_lower), shape=(1,)), axis=axis
+            x_sorted, xp.reshape(xp.asarray(k_lower, device=arr_device), shape=(1,)), axis=axis
         )
 
         # Squeeze might not work correctly with pytorch?

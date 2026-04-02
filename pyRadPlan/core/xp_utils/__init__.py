@@ -125,7 +125,7 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
         return importlib.import_module(namespace)
 
 
-def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
+def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Union[str, None]:
     """
     Choose the default device for the given array namespace.
 
@@ -133,17 +133,20 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
     ----------
     xp : Optional[ArrayNamespace], optional
         The array namespace. If None, the preferred backend is used.
+    gpu_index : int, optional
+        GPU device index to use when a GPU backend is selected. Default is 0.
+        Pass ``1``, ``2``, etc. for multi-GPU setups.
     """
     if xp is None:
         xp = choose_array_api_namespace()
 
     if PREFER_GPU:
         if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
-            return "cuda"
+            return f"cuda:{gpu_index}"
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
-            return "0"
+            return str(gpu_index)
 
-    # We need to handle apray_api_strict separately, as it does not provide device info!
+    # We need to handle array_api_strict separately, as it does not provide device info!
     if array_api_compat.is_array_api_strict_namespace(xp):
         return None
 
@@ -153,6 +156,8 @@ def choose_device(xp: Optional[ArrayNamespace] = None) -> Union[str, int, None]:
 __all__ = [
     "DLPACK_CPU",
     "DLPACK_CUDA",
+    "choose_array_api_namespace",
+    "choose_device",
     "get_device_info",
     "is_on_gpu",
     "cp",
