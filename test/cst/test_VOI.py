@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import SimpleITK as sitk
-from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi
+from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, GlobalVOI, create_voi
 
 
 def test_create_voi_no_args():
@@ -22,6 +22,11 @@ def test_oar_constructor_empty_args():
 def test_helper_voi_constructor_empty_args():
     with pytest.raises(ValueError):
         HelperVOI()
+
+
+def test_global_voi_constructor_empty_args():
+    with pytest.raises(ValueError):
+        GlobalVOI()
 
 
 def test_target_constructor_3d(generic_input_3d):
@@ -115,6 +120,21 @@ def tet_external_voi_constructor(generic_input_3d):
     assert helper_voi_2.beta_x == beta_x
 
 
+def test_global_voi_constructor(generic_input_3d):
+    name, ct, mask, alpha_x, beta_x = generic_input_3d
+    global_voi = GlobalVOI(name=name, ct_image=ct, mask=mask)
+    assert global_voi.ct_image == ct
+    assert isinstance(global_voi.mask, sitk.Image)
+    assert global_voi.voi_type == "GLOBAL"
+    assert global_voi.apply_overlap is None
+    assert global_voi.ignore_dose_calc is True
+
+    # test non default alpha_x and beta_x
+    global_voi_2 = GlobalVOI(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
+    assert global_voi_2.alpha_x == alpha_x
+    assert global_voi_2.beta_x == beta_x
+
+
 def test_voi_idx_wrong_shape(generic_input_3d):
     name, ct, _, _, _ = generic_input_3d
     with pytest.raises(ValueError):
@@ -185,6 +205,15 @@ def test_create_voi_invalid_voi_type(generic_input_3d):
     name, ct, mask, _, _ = generic_input_3d
     with pytest.raises(ValueError):
         create_voi(data={"voi_type": "invalid", "name": name, "ct_image": ct, "mask": mask})
+
+
+def test_create_voi_global_from_dict(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = create_voi(data={"voi_type": "GLOBAL", "name": name, "ct_image": ct, "mask": mask})
+    assert isinstance(voi, GlobalVOI)
+    assert voi.ct_image == ct
+    assert isinstance(voi.mask, sitk.Image)
+    assert voi.voi_type == "GLOBAL"
 
 
 def test_create_voi_no_voi_type(generic_input_3d):

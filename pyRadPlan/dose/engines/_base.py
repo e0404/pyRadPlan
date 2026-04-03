@@ -521,9 +521,16 @@ class DoseEngineBase(ABC):
         dij["num_of_particles_per_mu"] = np.ones(self._num_of_columns_dij) * 1e6
 
         if self.voxel_sub_ix is None:
-            self.voxel_sub_ix = np.unique(
-                np.concatenate([cst.vois[c].indices_numpy for c in range(0, len(cst.vois))])
-            )
+            # Filter out VOIs where ignore_dose_calc is True
+            valid_indices = [
+                cst.vois[c].indices_numpy
+                for c in range(len(cst.vois))
+                if not cst.vois[c].ignore_dose_calc
+            ]
+            if valid_indices:
+                self.voxel_sub_ix = np.unique(np.concatenate(valid_indices))
+            else:
+                self.voxel_sub_ix = np.array([])
 
         tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
 

@@ -17,7 +17,7 @@ from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
 
 # Default overlap priorities
-DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15}
+DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15, "GLOBAL": 20}
 
 
 class VOI(PyRadPlanBaseModel, ABC):
@@ -51,6 +51,8 @@ class VOI(PyRadPlanBaseModel, ABC):
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
+    apply_overlap: Union[bool, None] = Field(default=True)
+    ignore_dose_calc: bool = Field(default=False)
 
     # TODO: it would be nicer if this was a list of optimization.Objective, but that would create a
     # circular import. Forward type hinting does not work directly due to pydantic. If someone has
@@ -562,7 +564,58 @@ class ExternalVOI(VOI):
         return v
 
 
-__VOITYPES__ = {"OAR": OAR, "TARGET": Target, "HELPER": HelperVOI, "EXTERNAL": ExternalVOI}
+class GlobalVOI(VOI):
+    """
+    Represents a global VOI spanning the entire grid, bypassing default overlap rules and dose calculation masks.
+
+    Attributes
+    ----------
+    Inherits all attributes from Plan.
+
+    Methods
+    -------
+    voi_type : str
+        Returns the voi_type as 'GLOBAL'.
+    """
+
+    voi_type: str = "GLOBAL"
+    apply_overlap: Union[bool, None] = Field(default=None)
+    ignore_dose_calc: bool = Field(default=True)
+
+    @field_validator("voi_type", mode="after")
+    @classmethod
+    def validate_voi_type(cls, v: str) -> str:
+        """
+        Validate the voi type for a Global VOI.
+
+        Parameters
+        ----------
+        v : str
+            The voi type to be validated.
+
+        Returns
+        -------
+        str
+            The validated voi type.
+
+        Raises
+        ------
+        ValueError
+            If the voi type is not "GLOBAL".
+        """
+
+        if v != "GLOBAL":
+            raise ValueError('VOI type for GLOBAL must be "GLOBAL"')
+        return v
+
+
+__VOITYPES__ = {
+    "OAR": OAR,
+    "TARGET": Target,
+    "HELPER": HelperVOI,
+    "EXTERNAL": ExternalVOI,
+    "GLOBAL": GlobalVOI,
+}
 
 
 def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
