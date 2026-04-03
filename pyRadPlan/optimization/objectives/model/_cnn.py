@@ -21,10 +21,12 @@ Example
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, ClassVar, Dict, Literal, Optional
 import logging
 
-import numpy as np
+import array_api_compat
+import matplotlib.pyplot as plt
 from pydantic import Field, model_validator
 
 try:
@@ -33,6 +35,7 @@ except ImportError:
     torch = None  # type: ignore
 
 from pyRadPlan.core import Grid
+from pyRadPlan.core import xp_utils
 from pyRadPlan.optimization.objectives._objective import Objective
 from pyRadPlan.data.ml_models.pytorch_model_importer import load_model
 from .preprocessor._outcome_cnn_preprocessor import OutcomeCnnPreprocessor
@@ -80,6 +83,9 @@ class OutcomeCNN(Objective):
     preprocessor: Optional[OutcomeCnnPreprocessor] = Field(default=None, exclude=True)
     iteration_count: int = Field(default=0, exclude=True)
     ntcp_history: list[float] = Field(default_factory=list)
+    debug_grad_dir: Optional[str] = Field(
+        default=None, description="Directory to save gradient debug plots"
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -134,7 +140,7 @@ class OutcomeCNN(Objective):
     # Objective interface
     # ------------------------------------------------------------------
 
-    def compute_objective(self, dose_values: np.ndarray) -> float:
+    def compute_objective(self, dose_values) -> float:
         """Compute the outcome probability.
 
         Returns
@@ -153,16 +159,18 @@ class OutcomeCNN(Objective):
 
         return -prob if self.mode == "TCP" else prob
 
-    def compute_gradient(self, dose_values: np.ndarray) -> np.ndarray:
+    def compute_gradient(self, dose_values):
         """Compute the gradient of the outcome probability w.r.t. dose.
 
         Returns
         -------
-        np.ndarray
-            1-D gradient array (Fortran order) matching ``dose_values``.
+        Array
+            1-D gradient array (Fortran order) matching ``dose_values``, in
+            the same array namespace as the input.
         """
         self._check_ready()
 
+        xp = array_api_compat.array_namespace(dose_values)
         self.iteration_count += 1
 
         # Warmup / monitor-only: log probability, return zero gradient
@@ -174,7 +182,7 @@ class OutcomeCNN(Objective):
                     "Outcome CNN warmup complete after %d iterations. Activating gradient.",
                     self.warmup_iterations,
                 )
-            return np.zeros(dose_values.size, dtype=np.float32)
+            return xp.zeros(array_api_compat.size(dose_values), dtype=xp.float32)
 
         # Build input with gradient tracking on dose
         input_tensor, dose_leaf = self.preprocessor.build_input_tensor(
@@ -192,14 +200,16 @@ class OutcomeCNN(Objective):
         # Backward pass — gradient flows through grid_sample to dose_leaf
         prob.backward()
 
-        # dose_leaf.grad is (Z, Y, X) → transpose to (X, Y, Z) → Fortran flatten
-        grad_zyx = dose_leaf.grad.detach().cpu().numpy()
-        grad_xyz = np.transpose(grad_zyx, (2, 1, 0))
+        # dose_leaf is (Z, Y, X); C-order flatten equals Fortran-order flatten of (X, Y, Z)
+        grad = dose_leaf.grad.detach().contiguous().to(dtype=torch.float32)
 
         if self.mode == "TCP":
-            grad_xyz = -grad_xyz
+            grad = -grad
 
-        return grad_xyz.ravel(order="F").astype(np.float32, copy=False)
+        if self.debug_grad_dir is not None:
+            self._save_grad_plot(grad)
+
+        return xp_utils.to_namespace(xp, grad.reshape(-1))
 
     # ------------------------------------------------------------------
     # Utility
@@ -223,11 +233,28 @@ class OutcomeCNN(Objective):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _save_grad_plot(self, grad_zyx: "torch.Tensor") -> None:
+        """Save a center-slice plot of the gradient to debug_grad_dir."""
+        out = Path(self.debug_grad_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        g = grad_zyx.cpu().numpy()  # (Z, Y, X)
+        mid_z = g.shape[0] // 2
+
+        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+        im = ax.imshow(g[mid_z], cmap="RdBu_r", origin="lower")
+        ax.set_title(f"Iter {self.iteration_count}  |  NTCP={self.ntcp_history[-1]:.4f}")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        fig.colorbar(im, ax=ax, label="dNTCP/dDose")
+        fig.savefig(out / f"grad_{self.iteration_count:04d}.png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+
     def _check_ready(self) -> None:
         if self.preprocessor is None or self.nn_model is None:
             raise RuntimeError("OutcomeCNN not initialised — provide ct and cst at construction.")
 
-    def _forward_no_grad(self, dose_values: np.ndarray) -> float:
+    def _forward_no_grad(self, dose_values) -> float:
         """Run a forward pass without gradient tracking."""
         input_tensor = self.preprocessor.build_input_tensor(dose_values, requires_grad=False)
         with torch.no_grad():

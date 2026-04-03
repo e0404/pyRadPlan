@@ -14,6 +14,7 @@ import logging
 
 import numpy as np
 import SimpleITK as sitk
+from pyRadPlan.core import xp_utils
 
 if TYPE_CHECKING:
     from pyRadPlan.core import Grid
@@ -390,17 +391,15 @@ class OutcomeCnnPreprocessor:
 
     # --- Dose helper ---
 
-    def _dose_to_tensor(self, dose_values: np.ndarray) -> "torch.Tensor":
-        """Convert dose array to a (Z, Y, X) tensor on device."""
-        if hasattr(dose_values, "get"):  # cupy
-            arr = dose_values.get()
-        else:
-            arr = np.asarray(dose_values)
+    def _dose_to_tensor(self, dose_values) -> "torch.Tensor":
+        """Convert dose array (any array namespace) to a (Z, Y, X) tensor on device."""
 
-        if arr.ndim == 1:
+        t = xp_utils.to_namespace(torch, dose_values).to(dtype=torch.float32)
+        if t.ndim == 1:
             dx, dy, dz = self._dose_grid["size"]
-            arr = arr.reshape((dx, dy, dz), order="F")
-
-        # (X, Y, Z) → (Z, Y, X)
-        zyx = np.ascontiguousarray(arr.astype(np.float32).transpose(2, 1, 0))
-        return torch.from_numpy(zyx).to(self.device)
+            # Fortran-order reshape (X,Y,Z) == C-order reshape (Z,Y,X)
+            t = t.reshape(dz, dy, dx)
+        else:
+            # Input is (X,Y,Z) → permute to (Z,Y,X)
+            t = t.permute(2, 1, 0)
+        return t.contiguous().to(self.device)
