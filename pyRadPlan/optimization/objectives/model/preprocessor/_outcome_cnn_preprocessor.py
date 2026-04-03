@@ -9,7 +9,7 @@ dose resampling.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 import logging
 
 import numpy as np
@@ -154,29 +154,31 @@ class OutcomeCnnPreprocessor:
 
     def build_input_tensor(
         self,
-        dose_values: np.ndarray,
+        dose_values,
         requires_grad: bool = False,
-    ) -> Union["torch.Tensor", Tuple["torch.Tensor", "torch.Tensor"]]:
-        """Build the concatenated model input tensor.
+    ) -> Tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", ...]:
+        """Build model input tensors (dose, CT, mask) separately.
 
         Parameters
         ----------
-        dose_values : np.ndarray
+        dose_values
             1-D Fortran-order flat dose array **or** 3-D ``(X, Y, Z)`` array.
+            Accepts any array namespace (numpy, cupy, torch).
         requires_grad : bool
-            If *True*, returns ``(input_tensor, dose_leaf)`` where
-            ``dose_leaf`` is a leaf tensor in dose-grid space with
-            ``requires_grad=True``.  After ``backward()``, read
-            ``dose_leaf.grad`` for the exact gradient.
+            If *True*, the returned tuple includes ``dose_leaf`` — the leaf
+            tensor in dose-grid space with ``requires_grad=True``.
 
         Returns
         -------
-        torch.Tensor or (torch.Tensor, torch.Tensor)
+        tuple
+            ``(dose_model, ct_tensor, mask_tensor)`` when
+            ``requires_grad=False``, or
+            ``(dose_model, ct_tensor, mask_tensor, dose_leaf)`` when *True*.
         """
         if self._grid_sample_coords is None:
             raise RuntimeError("Preprocessor not prepared — call prepare() first.")
 
-        # --- Dose: numpy → torch (Z, Y, X) ---
+        # --- Dose: any array → torch (Z, Y, X) ---
         dose_src = self._dose_to_tensor(dose_values)
         if requires_grad:
             dose_src = dose_src.requires_grad_(True)
@@ -200,25 +202,9 @@ class OutcomeCnnPreprocessor:
         if self.dose_config.get("extract", False):
             dose_model = dose_model * self._mask_tensor
 
-        # --- Concatenate channels per type_order ---
-        channel_map: dict[str, torch.Tensor] = {
-            "dose": dose_model,
-            "ct": self._ct_tensor,
-            "mask": self._mask_tensor,
-        }
-
-        parts: list[torch.Tensor] = []
-        for name in self.type_order:
-            t = channel_map.get(name)
-            if t is None:
-                raise ValueError(f"Unknown modality '{name}' in type_order.")
-            parts.append(t)
-
-        input_tensor = torch.cat(parts, dim=1)  # (1, C_total, Z, Y, X)
-
         if requires_grad:
-            return input_tensor, dose_src
-        return input_tensor
+            return dose_model, self._ct_tensor, self._mask_tensor, dose_src
+        return dose_model, self._ct_tensor, self._mask_tensor
 
     def set_dose_grid(self, dose_grid: "Grid") -> None:
         """Update the dose grid and recompute sampling coordinates.
@@ -402,4 +388,4 @@ class OutcomeCnnPreprocessor:
         else:
             # Input is (X,Y,Z) → permute to (Z,Y,X)
             t = t.permute(2, 1, 0)
-        return t.contiguous().to(self.device)
+        return t.contiguous().to(self.device).detach()

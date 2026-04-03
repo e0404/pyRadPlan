@@ -185,12 +185,12 @@ class OutcomeCNN(Objective):
             return xp.zeros(array_api_compat.size(dose_values), dtype=xp.float32)
 
         # Build input with gradient tracking on dose
-        input_tensor, dose_leaf = self.preprocessor.build_input_tensor(
+        dose_model, ct_tensor, mask_tensor, dose_leaf = self.preprocessor.build_input_tensor(
             dose_values, requires_grad=True
         )
 
-        # Forward pass
-        logit = self.nn_model(input_tensor)
+        # Forward pass — separate args so model correctly identifies dose vs ct/mask
+        logit = self.nn_model(dose_model, mask_tensor, ct_tensor)
         prob = torch.sigmoid(logit).sum()
 
         # Log
@@ -238,11 +238,15 @@ class OutcomeCNN(Objective):
         out = Path(self.debug_grad_dir)
         out.mkdir(parents=True, exist_ok=True)
 
+        import numpy as np
+
         g = grad_zyx.cpu().numpy()  # (Z, Y, X)
-        mid_z = g.shape[0] // 2
+        # Show slice with strongest gradient signal
+        abs_sum_per_z = np.abs(g).sum(axis=(1, 2))
+        best_z = int(np.argmax(abs_sum_per_z))
 
         fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-        im = ax.imshow(g[mid_z], cmap="RdBu_r", origin="lower")
+        im = ax.imshow(g[best_z], cmap="RdBu_r", origin="lower")
         ax.set_title(f"Iter {self.iteration_count}  |  NTCP={self.ntcp_history[-1]:.4f}")
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
@@ -256,7 +260,9 @@ class OutcomeCNN(Objective):
 
     def _forward_no_grad(self, dose_values) -> float:
         """Run a forward pass without gradient tracking."""
-        input_tensor = self.preprocessor.build_input_tensor(dose_values, requires_grad=False)
+        dose_model, ct_tensor, mask_tensor = self.preprocessor.build_input_tensor(
+            dose_values, requires_grad=False
+        )
         with torch.no_grad():
-            logit = self.nn_model(input_tensor)
+            logit = self.nn_model(dose_model, mask_tensor, ct_tensor)
             return torch.sigmoid(logit.view(-1)[0]).item()
