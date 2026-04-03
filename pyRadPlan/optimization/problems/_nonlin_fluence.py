@@ -104,7 +104,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     obj.priority * obj.compute_objective(q_vectors[obj.quantity].flat[scen_ix][ix])
                     for scen_ix in q_scenarios[obj.quantity]
                 ]
-                f_vals[obj_ix] = xp.sum(xp.stack(f_tmp_scen))
+                f_vals[obj_ix] = xp.sum(xp.asarray(f_tmp_scen))
                 obj_ix += 1
 
         return f_vals
