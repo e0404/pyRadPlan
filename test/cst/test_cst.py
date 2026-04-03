@@ -319,6 +319,32 @@ def _expected_body_mask(ct):
     return sitk.GetImageFromArray(mask)
 
 
+def test_create_cst_with_float_and_empty_indices():
+    """Regression: matRad indices can be floats; empty VOIs have no indices."""
+    ct = create_ct(cube_hu=sitk.Image(3, 3, 3, sitk.sitkInt16))
+
+    # matRad-style cst: [id, name, type, indices, priority, objectives]
+    # Float indices (as MATLAB would produce)
+    float_idx = np.array([1.0, 2.0, 3.0])
+    # Empty indices
+    empty_idx = np.array([], dtype=np.float64)
+
+    cst_data = [
+        [0, "Target", "TARGET", float_idx, 1, []],
+        [1, "Empty", "OAR", empty_idx, 2, []],
+    ]
+
+    cst = create_cst(cst_data, ct=ct)
+    assert isinstance(cst, StructureSet)
+    assert len(cst.vois) == 2
+    assert cst.vois[0].name == "Target"
+    assert cst.vois[1].name == "Empty"
+
+    # Empty VOI should have an all-zero mask
+    empty_mask = sitk.GetArrayViewFromImage(cst.vois[1].mask)
+    assert empty_mask.sum() == 0
+
+
 def test_create_body_seg_default():
     ct = _make_test_ct()
     structure_set = StructureSet(ct_image=ct, vois=[])
