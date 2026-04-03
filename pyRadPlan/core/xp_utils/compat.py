@@ -3,6 +3,7 @@
 from typing import Literal, Union, Sequence, Any
 
 from .typing import Array
+from . import pytorch_gpu_available
 
 import array_api_compat
 import numpy as np
@@ -11,6 +12,55 @@ try:
     import cupy as cp
 except ImportError:
     cp = None
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+if pytorch_gpu_available():
+
+    @torch.jit.script
+    def _interp1d_torch_kernel(xq, x, y):
+        # xq: (N_out)
+        # x: (N_in)
+        # y: (N_channels, N_in) or (N_in)
+
+        # Clip xq
+        xq = torch.clamp(xq, min=x[0], max=x[-1])
+
+        # Searchsorted
+        idx = torch.searchsorted(x, xq, right=False)
+        idx = idx - 1
+        idx = torch.clamp(idx, min=0, max=x.shape[0] - 2)
+
+        i0 = idx
+        i1 = idx + 1
+
+        x0 = x[i0]
+        x1 = x[i1]
+
+        # Compute t
+        t = (xq - x0) / (x1 - x0)
+
+        # y interpolation
+        # Handle y dim
+        if y.ndim == 1:
+            y0 = y[i0]
+            y1 = y[i1]
+            return y0 + (y1 - y0) * t
+        else:
+            # y is (C, N_in) (stacked)
+            # We need y[:, i0]
+            # i0 is (N_out). y is (C, N_in).
+            # We want (C, N_out).
+            y0 = y[:, i0]
+            y1 = y[:, i1]
+
+            # t is (N_out).
+            # y1-y0 is (C, N_out)
+            # We need to unsqueeze t to (1, N_out) to broadcast against C
+            return y0 + (y1 - y0) * t.unsqueeze(0)
 
 
 def quantile(
@@ -51,6 +101,7 @@ def quantile(
     """
 
     xp = array_api_compat.array_namespace(x)
+    arr_device = x.device  # making sure same device is used
 
     if not is_sorted:
         x_sorted = xp.sort(x, axis=axis, stable=False)
@@ -61,7 +112,9 @@ def quantile(
 
     if method == "nearest" or float_ix == round(float_ix):
         k = int(round(float_ix))
-        return xp.take(x_sorted, xp.reshape(xp.asarray(k), shape=(1,)), axis=axis)
+        return xp.take(
+            x_sorted, xp.reshape(xp.asarray(k, device=arr_device), shape=(1,)), axis=axis
+        )
 
     # Note that the case float_ix == round(float_ix) is already handled above, so we can assume
     # that our float_ix lies between two indices
@@ -72,13 +125,15 @@ def quantile(
         assert k_lower != k_upper  # This should be captured above
 
         # We try to do as much in place on x_upper to save memory allocations
-        x_upper = xp.take(x_sorted, xp.reshape(xp.asarray(k_upper), shape=(1,)), axis=axis)
+        x_upper = xp.take(
+            x_sorted, xp.reshape(xp.asarray(k_upper, device=arr_device), shape=(1,)), axis=axis
+        )
         weight_upper = float_ix - k_lower
 
         x_upper *= weight_upper
 
         x_upper += (1.0 - weight_upper) * xp.take(
-            x_sorted, xp.reshape(xp.asarray(k_lower), shape=(1,)), axis=axis
+            x_sorted, xp.reshape(xp.asarray(k_lower, device=arr_device), shape=(1,)), axis=axis
         )
 
         # Squeeze might not work correctly with pytorch?
@@ -126,6 +181,64 @@ def interp1d(
     """
 
     xp = array_api_compat.array_namespace(x, xq)
+
+    if torch is not None and array_api_compat.is_torch_namespace(xp):
+        # Optimized PyTorch implementation
+        y_stacked = None
+        is_seq = isinstance(y, (list, tuple))
+        is_dict = isinstance(y, dict)
+
+        keys = None
+        if is_dict:
+            keys = list(y.keys())
+            try:
+                # Assuming all values in dict are tensors of same shape
+                y_stacked = torch.stack([y[k] for k in keys], dim=0)
+            except Exception:
+                # Fallback if stack fails (e.g. different shapes/devices)
+                pass
+        elif is_seq:
+            try:
+                y_stacked = torch.stack(y, dim=0)
+            except Exception:
+                pass
+        elif isinstance(y, torch.Tensor):
+            y_stacked = y
+
+        if y_stacked is not None:
+            # Run JIT optimized kernel
+            # Ensure dtypes match where needed or let JIT handle it
+            res = _interp1d_torch_kernel(xq, x, y_stacked)
+
+            if stack:
+                return res
+
+            if is_dict:
+                return {k: res[i] for i, k in enumerate(keys)}
+            elif is_seq:
+                return [res[i] for i in range(len(y))]
+            else:
+                return res
+
+    # Optimization: Use xp.interp if available (e.g. numpy, cupy) for list/dict inputs
+    # This avoids stacking inputs and using the slower manual implementation
+    interp_func = None
+
+    if hasattr(xp, "interp"):
+        interp_func = xp.interp
+
+    if interp_func is not None:
+        if isinstance(y, dict) and all(v.ndim == 1 for v in y.values()):
+            res = {k: interp_func(xq, x, v) for k, v in y.items()}
+            if stack:
+                return xp.stack(list(res.values()), axis=0)
+            return res
+
+        if isinstance(y, (list, tuple)) and all(v.ndim == 1 for v in y):
+            res = [interp_func(xq, x, v) for v in y]
+            if stack:
+                return xp.stack(res, axis=0)
+            return res
 
     if isinstance(y, (list, tuple)) and stack:
         y = xp.stack(y, axis=0)
@@ -180,10 +293,12 @@ def interp1d(
         y1 += y0
         return y1
 
-    # Perform interpolation on y
-    if isinstance(y, (list, tuple)):
+    is_sequence = isinstance(y, (list, tuple))
+    is_dict = isinstance(y, dict)
+
+    if is_sequence:
         result = [_final_y_interp(y_arr, i0, i1, xq) for y_arr in y]
-    elif isinstance(y, dict):
+    elif is_dict:
         result = {key: _final_y_interp(ytmp, i0, i1, xq) for key, ytmp in y.items()}
     else:
         result = _final_y_interp(y, i0, i1, xq)
