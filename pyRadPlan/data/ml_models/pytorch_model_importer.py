@@ -21,6 +21,8 @@ try:  # pragma: no cover
 except ImportError:  # pragma: no cover
     torch = None  # type: ignore
 
+from pyRadPlan.core.xp_utils import pytorch_gpu_available
+
 __all__ = ["load_model", "discover_models", "list_categories"]
 
 # Category aliases mapping keywords to subdirectory paths
@@ -70,7 +72,7 @@ def load_model(
     if torch is None:
         raise RuntimeError("PyTorch required for model loading.")
 
-    device = device or "cpu"
+    device = device or ("cuda" if pytorch_gpu_available() else "cpu")
     base_dir = Path(base_dir) if base_dir else _DEFAULT_BASE_DIR
 
     # Resolve category to subdirectory path

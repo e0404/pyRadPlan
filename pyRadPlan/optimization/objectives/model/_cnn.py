@@ -141,9 +141,7 @@ class OutcomeCNN(Objective):
 
         # Load CNN + JSON config via the model importer
         nn_model, config = load_model(model_name, category=category)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        nn_model = nn_model.to(device)
-        nn_model.eval()
+        device = next(nn_model.parameters()).device
 
         data["nn_model"] = nn_model
         data["loaded_config"] = config
