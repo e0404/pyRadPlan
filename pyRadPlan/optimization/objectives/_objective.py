@@ -151,6 +151,10 @@ class Objective(PyRadPlanBaseModel):
         """Compute the objective Hessian."""
         return
 
+    def report_info(self) -> dict:
+        """Return auxiliary info collected during optimization. Override in subclasses."""
+        return {}
+
     @computed_field
     @property
     def parameter_names(self) -> list[str]:

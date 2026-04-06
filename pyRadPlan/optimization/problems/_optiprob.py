@@ -305,6 +305,16 @@ class PlanningProblem(ABC):
         x = xp_utils.to_numpy(x)
         return x, info
 
+    def collect_objective_info(self) -> list[dict]:
+        """Collect auxiliary info reported by objectives after optimization."""
+        collected = []
+        for _mask, obj_list in self._objective_list:
+            for obj in obj_list:
+                report = obj.report_info()
+                if report:
+                    collected.append({"objective": obj.name, **report})
+        return collected
+
 
 class NonLinearPlanningProblem(PlanningProblem):
     """Abstract Class for all Treatment Planning Problems."""

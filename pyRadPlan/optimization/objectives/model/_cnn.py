@@ -89,6 +89,25 @@ class OutcomeCNN(Objective):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    def __deepcopy__(self, memo):
+        """Deep copy sharing the PyTorch model and preprocessor (read-only)."""
+        import copy
+
+        # Fields that contain PyTorch tensors/modules and are read-only
+        # during optimization — share instead of copying.
+        shared = {"nn_model", "preprocessor", "loaded_config"}
+        new_data = {}
+        for name, value in self.__dict__.items():
+            if name in shared:
+                new_data[name] = value
+            else:
+                new_data[name] = copy.deepcopy(value, memo)
+
+        clone = object.__new__(self.__class__)
+        clone.__dict__.update(new_data)
+        memo[id(self)] = clone
+        return clone
+
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -152,8 +171,8 @@ class OutcomeCNN(Objective):
         self._check_ready()
 
         prob = self._forward_no_grad(dose_values)
+        self.ntcp_history.append(prob)
 
-        # TODO: Why not above prob?
         if self.monitor_only:
             return 0.0
 
@@ -173,11 +192,13 @@ class OutcomeCNN(Objective):
         xp = array_api_compat.array_namespace(dose_values)
         self.iteration_count += 1
 
-        # Warmup / monitor-only: log probability, return zero gradient
-        if self.monitor_only or self.iteration_count <= self.warmup_iterations:
-            prob = self._forward_no_grad(dose_values)
-            self.ntcp_history.append(prob)
-            if not self.monitor_only and self.iteration_count == self.warmup_iterations:
+        # monitor_only: objective already logged probability, just return zeros
+        if self.monitor_only:
+            return xp.zeros(array_api_compat.size(dose_values), dtype=xp.float32)
+
+        # Warmup: probability already logged by compute_objective, return zero gradient
+        if self.iteration_count <= self.warmup_iterations:
+            if self.iteration_count == self.warmup_iterations:
                 logger.info(
                     "Outcome CNN warmup complete after %d iterations. Activating gradient.",
                     self.warmup_iterations,
@@ -192,10 +213,6 @@ class OutcomeCNN(Objective):
         # Forward pass — separate args so model correctly identifies dose vs ct/mask
         logit = self.nn_model(dose_model, mask_tensor, ct_tensor)
         prob = torch.sigmoid(logit).sum()
-
-        # Log
-        prob_val = prob.detach().item()
-        self.ntcp_history.append(prob_val)
 
         # Backward pass — gradient flows through grid_sample to dose_leaf
         prob.backward()
@@ -214,6 +231,12 @@ class OutcomeCNN(Objective):
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    def report_info(self) -> dict:
+        """Return NTCP history collected during optimization."""
+        if self.ntcp_history:
+            return {"ntcp_history": list(self.ntcp_history)}
+        return {}
 
     def set_dose_grid(self, dose_grid: Grid) -> None:
         """Update the dose grid (recomputes sampling coordinates)."""
@@ -246,7 +269,7 @@ class OutcomeCNN(Objective):
         best_z = int(np.argmax(abs_sum_per_z))
 
         fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-        im = ax.imshow(g[best_z], cmap="RdBu_r", origin="lower")
+        im = ax.imshow(g[best_z], cmap="RdBu_r")
         ax.set_title(f"Iter {self.iteration_count}  |  NTCP={self.ntcp_history[-1]:.4f}")
         ax.set_xlabel("X")
         ax.set_ylabel("Y")

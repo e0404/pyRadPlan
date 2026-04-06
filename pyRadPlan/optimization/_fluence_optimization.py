@@ -31,6 +31,7 @@ class OptInfo(TypedDict, total=False):
     obj_history: list[float]
     num_iter: int
     result_info: dict
+    objective_info: list[dict]
 
 
 def fluence_optimization(
@@ -84,5 +85,9 @@ def fluence_optimization(
         # Extract iteration count from solver-specific result
         if isinstance(result_info, dict):
             opt_info["num_iter"] = result_info.get("nit", result_info.get("iter_count", 0))
+        # Collect objective-reported info (e.g. NTCP histories)
+        objective_info = planning_prob.collect_objective_info()
+        if objective_info:
+            opt_info["objective_info"] = objective_info
 
     return x
