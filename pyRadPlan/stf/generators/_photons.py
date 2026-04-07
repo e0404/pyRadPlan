@@ -82,7 +82,7 @@ class StfGeneratorPhotonIMRT(StfGeneratorExternalBeamRayBixel):
         return rays
 
 
-class StfGeneratorPhotonCollimatedSquareFields(StfGeneratorExternalBeamRayBixel):
+class StfGeneratorPhotonCollimatedSquareFields(StfGeneratorPhotonIMRT):
     """Class representing a Photon Collimated Square Fields Stf Generator.
 
     Attributes
