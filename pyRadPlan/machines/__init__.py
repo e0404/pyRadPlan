@@ -4,6 +4,10 @@ from .base import (
     Machine,
     ExternalBeamMachine,
     InternalBeamMachine,
+    BeamLimitingDevice,
+    MLC,
+    Jaw,
+    create_bld,
     register_machine,
 )
 from .photons import PhotonLINAC, PhotonSVDKernel
@@ -24,6 +28,10 @@ __all__ = [
     "Machine",
     "ExternalBeamMachine",
     "InternalBeamMachine",
+    "BeamLimitingDevice",
+    "MLC",
+    "Jaw",
+    "create_bld",
     "PhotonLINAC",
     "PhotonSVDKernel",
     "ParticlePencilBeamKernel",
