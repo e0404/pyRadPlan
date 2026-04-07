@@ -390,6 +390,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         start_time = time.time()
 
         self._raytracer.debug_core_performance = True
+        self._raytracer.lateral_cut_off = beam_info["beam"].get(
+            "effective_lateral_cut_off", self._effective_lateral_cutoff
+        )
         rad_depth_cubes = self._raytracer.trace_cubes(beam_info["beam"])
         self._raytracer.debug_core_performance = False
 

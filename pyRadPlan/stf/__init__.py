@@ -4,7 +4,15 @@ from .generators import get_available_generators, get_generator, register_genera
 from ._steeringinformation import SteeringInformation, create_stf, validate_stf
 from ._beam import Beam  # , create_beam, validate_beam
 from ._ray import Ray
-from ._beamlet import Beamlet, IonSpot, PhotonBixel
+from ._beamlet import (
+    Beamlet,
+    IonSpot,
+    PhotonBixel,
+    FieldShape,
+    FieldShapeAsBLD,
+    FieldShapeAsMask,
+    FieldShapeComposite,
+)
 from ._rangeshifter import RangeShifter
 
 __all__ = [
@@ -19,5 +27,9 @@ __all__ = [
     "Beamlet",
     "IonSpot",
     "PhotonBixel",
+    "FieldShape",
+    "FieldShapeAsBLD",
+    "FieldShapeAsMask",
+    "FieldShapeComposite",
     "RangeShifter",
 ]
