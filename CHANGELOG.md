@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 0.3.2
+Small patch release with a new optimization objective, a structure for Beam Limiting Devices for Field/Shape-based dose calculation, and several bug fixes, and a CITATION.cff.
+
+### New Features
+- Mimicking objective for dose-mimicking optimization (`SquaredMimicking`)
+- includes prototype for field-based dose calculation using Beam Limiting Device & FieldShape hierarchy
+- Added CITATION.cff with authors and ORCIDs
+
+### Bug Fixes
+- Raytracer candidate matrix now uses lateral cutoff by default (overridable)
+- Fixed binary mask interpolation in VOI
+- Fixed import of empty voxel index lists from matRad
+- Fixed crash when optimization problem has no objectives
+- Fixed export of `None` values and type check in `dij`/grids
+- Fixed missing x-divergence of ray in FRED MC engine
+- Fixed single-field STF generator to properly inherit from IMRT generator
+
 ## Version 0.3.1
 Small update to drop `numba` as a mandatory dependency. `numba` accelerations can still be provided but should only compliment Array API conform base implementations and be appropriately checked.
 - Performant and Array API compatible candidate ray matrix setup alternative for cube raytracing

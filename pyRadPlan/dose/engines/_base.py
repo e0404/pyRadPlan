@@ -27,7 +27,7 @@ from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
-from pyRadPlan.machines import load_machine_from_mat, validate_machine
+from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class DoseEngineBase(ABC):
         self._ct_grid = None
 
         # Protected properties with public get access
-        self._machine = None  # base data defined in machine file
+        self._machine: Machine = None  # base data defined in machine file
         self._timers = None  # timers of dose calc
         self._num_of_columns_dij = None  # number of columns in the dij struct
         self._vox_world_coords = None  # ct voxel coordinates in world

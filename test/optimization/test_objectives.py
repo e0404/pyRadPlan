@@ -2,6 +2,7 @@
 from pyRadPlan.optimization.objectives import (
     DoseUniformity,
     SquaredDeviation,
+    SquaredMimicking,
     SquaredOverdosing,
     SquaredUnderdosing,
     EUD,
@@ -12,7 +13,10 @@ from pyRadPlan.optimization.objectives import (
     get_objective,
 )
 
-import array_api_strict as np
+import array_api_strict as xp
+import numpy as np
+import SimpleITK as sitk
+from pyRadPlan.core import Grid, xp_utils
 
 
 def test_objective_availability():
@@ -71,15 +75,15 @@ def test_DoseUniformity_constructor():
 def test_DoseUniformity_compute_objective():
     doseUni = DoseUniformity()
 
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
-    assert np.abs(doseUni.compute_objective(dose) - 1) <= np.finfo(np.float32).eps
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
+    assert xp.abs(doseUni.compute_objective(dose) - 1) <= xp.finfo(xp.float32).eps
 
 
 def test_DoseUniformity_compute_gradient():
     doseUni = DoseUniformity()
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
-    grad_expected = 1 / 2 * np.asarray([-1, 0, 1], dtype=np.float32)
-    assert np.all((doseUni.compute_gradient(dose) - grad_expected) <= np.finfo(np.float32).eps)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
+    grad_expected = 1 / 2 * xp.asarray([-1, 0, 1], dtype=xp.float32)
+    assert xp.all((doseUni.compute_gradient(dose) - grad_expected) <= xp.finfo(xp.float32).eps)
 
 
 def test_SquaredDeviation_constructor():
@@ -91,16 +95,59 @@ def test_SquaredDeviation_constructor():
 
 
 def test_SquaredDeviation_compute_objective():
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     sq_dev = SquaredDeviation(d_ref=2.0)
     assert sq_dev.compute_objective(dose) == 2 / 3
 
 
 def test_SquaredDeviation_compute_gradient():
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     sq_dev = SquaredDeviation(d_ref=2.0)
-    grad_expected = 2 / 3 * np.asarray([-1, 0, 1], dtype=np.float32)
-    assert np.all(sq_dev.compute_gradient(dose) == grad_expected)
+    grad_expected = 2 / 3 * xp.asarray([-1, 0, 1], dtype=xp.float32)
+    assert xp.all(sq_dev.compute_gradient(dose) == grad_expected)
+
+
+def test_SquaredMimicking_image():
+    image = sitk.GetImageFromArray(xp.full((5, 5, 5), 60.0))
+    image.SetOrigin((0.0, 0.0, 0.0))
+    image.SetSpacing((1.0, 1.0, 1.0))
+    sq_mimic = SquaredMimicking(d_ref=image)
+    assert isinstance(sq_mimic, SquaredMimicking)
+    assert isinstance(sq_mimic.d_ref, sitk.Image)
+
+
+def test_SquaredMimicking_array():
+    array = xp.full((5, 5, 5), 60.0)
+    grid = Grid(
+        resolution={"x": 3.0, "y": 3.0, "z": 3.0}, dimensions=(5, 5, 5), origin=[0.0, 0.0, 0.0]
+    )
+    sq_mimic = SquaredMimicking(d_ref=(array, grid))
+    assert isinstance(sq_mimic, SquaredMimicking)
+    assert isinstance(sq_mimic.d_ref, tuple)
+    assert isinstance(sq_mimic.d_ref[0], xp._array_object.Array)
+    assert isinstance(sq_mimic.d_ref[1], Grid)
+
+
+def test_SquaredMimicking_compute_objective():
+    sq_mimic = SquaredMimicking()
+    sq_mimic._resampled_image_reference_cache["d_ref"] = xp.full(8, 60.0)
+    dose = xp.full(8, 60.0)
+    assert float(sq_mimic.compute_objective(dose)) == 0.0
+
+
+def test_SquaredMimicking_cache():
+    array = xp.full((2, 2, 2), 60.0)
+    grid = Grid(
+        resolution={"x": 3.0, "y": 3.0, "z": 3.0}, dimensions=(2, 2, 2), origin=[0.0, 0.0, 0.0]
+    )
+    sq_mimic = SquaredMimicking(d_ref=(array, grid))
+    sq_mimic.preprocess_image_reference_parameters(target_grid=grid, index_list=xp.arange(8))
+    assert sq_mimic._resampled_image_reference_cache["d_ref"].shape == (8,)
+    assert np.allclose(
+        xp_utils.to_numpy(sq_mimic._resampled_image_reference_cache["d_ref"]),
+        np.full(8, 60.0),
+        atol=1e-10,
+    )
 
 
 def test_SquaredOverdosing_constructor():
@@ -114,15 +161,15 @@ def test_SquaredOverdosing_constructor():
 
 def test_SquaredOverdosing_compute_objective():
     sq_over = SquaredOverdosing(d_max=2.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     assert sq_over.compute_objective(dose) == 1 / 3
 
 
 def test_SquaredOverdosing_compute_gradient():
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     sq_over = SquaredOverdosing(d_max=2)
-    grad_expected = 2 / 3 * np.asarray([0, 0, 1], dtype=np.float32)
-    assert np.all(sq_over.compute_gradient(dose) == grad_expected)
+    grad_expected = 2 / 3 * xp.asarray([0, 0, 1], dtype=xp.float32)
+    assert xp.all(sq_over.compute_gradient(dose) == grad_expected)
 
 
 def test_SquaredUnderdosing_constructor():
@@ -137,15 +184,15 @@ def test_SquaredUnderdosing_constructor():
 
 def test_SquaredUnderdosing_compute_objective():
     sq_under = SquaredUnderdosing(d_min=2.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     assert sq_under.compute_objective(dose) == 1.0 / 3.0
 
 
 def test_SquaredUnderdosing_compute_gradient():
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     sq_under = SquaredUnderdosing(d_min=2.0)
-    grad_expected = 2 / 3 * np.asarray([-1, 0, 0], dtype=np.float32)
-    assert np.all(sq_under.compute_gradient(dose) == grad_expected)
+    grad_expected = 2 / 3 * xp.asarray([-1, 0, 0], dtype=xp.float32)
+    assert xp.all(sq_under.compute_gradient(dose) == grad_expected)
 
 
 def test_EUD_constructor():
@@ -159,7 +206,7 @@ def test_EUD_constructor():
 
 def test_EUD_compute_objective():
     eud = EUD(k=3, EUD_ref=0.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     assert (eud.compute_objective(dose) - (1 / 3 * (1 + 2 ** (1 / 3) + 3 ** (1 / 3))) ** 6) < 1e-10
 
     eud.f_diff = "linear"
@@ -168,20 +215,20 @@ def test_EUD_compute_objective():
 
 def test_EUD_compute_gradient():
     eud_obj = EUD(k=3, EUD_ref=0.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     d_eud = (
         (1 + 2 ** (1 / 3) + 3 ** (1 / 3)) ** 2
-        * np.asarray([1, 2, 3], dtype=np.float32) ** (-2 / 3)
+        * xp.asarray([1, 2, 3], dtype=xp.float32) ** (-2 / 3)
         * 1
         / 3**3
     )
     eud = (1 / 3 * (1 + 2 ** (1 / 3) + 3 ** (1 / 3))) ** 3
     grad_expected = 2 * (eud - 0) * d_eud
-    assert np.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
+    assert xp.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
 
     eud_obj.f_diff = "linear"
-    grad_expected = np.sign(np.asarray(eud - 0.0, dtype=np.float32)) * d_eud
-    assert np.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
+    grad_expected = xp.sign(xp.asarray(eud - 0.0, dtype=xp.float32)) * d_eud
+    assert xp.all((eud_obj.compute_gradient(dose) - grad_expected) < 1e-10)
 
 
 def test_MeanDose_constructor():
@@ -197,7 +244,7 @@ def test_MeanDose_constructor():
 
 def test_MeanDose_compute_objective():
     mean_dose = MeanDose(d_ref=2.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
     assert mean_dose.compute_objective(dose) == 0
     mean_dose.f_diff = "linear"
     mean_dose.d_ref = 1.0
@@ -206,14 +253,14 @@ def test_MeanDose_compute_objective():
 
 def test_MeanDose_compute_gradient():
     mean_dose = MeanDose(d_ref=2.0)
-    dose = np.asarray([1, 2, 3], dtype=np.float32)
-    grad_expected = np.zeros(3)
-    assert np.all(mean_dose.compute_gradient(dose) == grad_expected)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
+    grad_expected = xp.zeros(3)
+    assert xp.all(mean_dose.compute_gradient(dose) == grad_expected)
 
     mean_dose.f_diff = "linear"
     mean_dose.d_ref = 1.0
-    grad_expected = np.full(3, 1 / 3, dtype=np.float32)
-    assert np.all(mean_dose.compute_gradient(dose) == grad_expected)
+    grad_expected = xp.full(3, 1 / 3, dtype=xp.float32)
+    assert xp.all(mean_dose.compute_gradient(dose) == grad_expected)
 
 
 def test_MinDVH_constructor():
@@ -229,20 +276,20 @@ def test_MinDVH_constructor():
 
 def test_MinDVH_compute_objective():
     min_dvh = MinDVH(d=30.0, v_min=95)
-    dose = np.ones(100)
-    dose_2 = np.ones(100) * 50
+    dose = xp.ones(100)
+    dose_2 = xp.ones(100) * 50
     assert min_dvh.compute_objective(dose) == 841
     assert min_dvh.compute_objective(dose_2) == 0
 
 
 def test_MinDVH_compute_gradient():
     min_dvh = MinDVH(d=30.0, v_min=95)
-    dose = np.ones(100)
-    dose_2 = np.ones(100) * 50
-    grad_expected = np.ones(100) * -0.58
-    grad_expected2 = np.zeros(100)
-    assert np.all(min_dvh.compute_gradient(dose) == grad_expected)
-    assert np.all(min_dvh.compute_gradient(dose_2) == grad_expected2)
+    dose = xp.ones(100)
+    dose_2 = xp.ones(100) * 50
+    grad_expected = xp.ones(100) * -0.58
+    grad_expected2 = xp.zeros(100)
+    assert xp.all(min_dvh.compute_gradient(dose) == grad_expected)
+    assert xp.all(min_dvh.compute_gradient(dose_2) == grad_expected2)
 
 
 def test_MaxDVH_constructor():
@@ -258,17 +305,17 @@ def test_MaxDVH_constructor():
 
 def test_MaxDVH_compute_objective():
     max_dvh = MaxDVH(d=30.0, v_max=50)
-    dose = np.ones(100)
-    dose_2 = np.ones(100) * 50
+    dose = xp.ones(100)
+    dose_2 = xp.ones(100) * 50
     assert max_dvh.compute_objective(dose) == 0
     assert max_dvh.compute_objective(dose_2) == 400
 
 
 def test_MaxDVH_compute_gradient():
     max_dvh = MaxDVH(d=30.0, v_max=50)
-    dose = np.ones(100)
-    dose_2 = np.ones(100) * 50
-    grad_expected = np.zeros(100)
-    grad_expected2 = np.ones(100) * 0.4
-    assert np.all(max_dvh.compute_gradient(dose) == grad_expected)
-    assert np.all(max_dvh.compute_gradient(dose_2) == grad_expected2)
+    dose = xp.ones(100)
+    dose_2 = xp.ones(100) * 50
+    grad_expected = xp.zeros(100)
+    grad_expected2 = xp.ones(100) * 0.4
+    assert xp.all(max_dvh.compute_gradient(dose) == grad_expected)
+    assert xp.all(max_dvh.compute_gradient(dose_2) == grad_expected2)

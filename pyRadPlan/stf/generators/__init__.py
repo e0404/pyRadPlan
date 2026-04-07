@@ -3,7 +3,11 @@
 from ._base import StfGeneratorBase
 from ._externalbeam import StfGeneratorExternalBeamRayBixel, StfGeneratorExternalBeam
 from ._ions import StfGeneratorIonSingleSpot, StfGeneratorIMPT
-from ._photons import StfGeneratorPhotonIMRT, StfGeneratorPhotonCollimatedSquareFields
+from ._photons import (
+    StfGeneratorPhotonIMRT,
+    StfGeneratorPhotonCollimatedSquareFields,
+    StfGeneratorPhotonSingleBixel,
+)
 from ._vhee import StfGeneratorVHEE
 
 
@@ -11,6 +15,7 @@ from ._factory import get_generator, get_available_generators, register_generato
 
 register_generator(StfGeneratorIMPT)
 register_generator(StfGeneratorPhotonIMRT)
+register_generator(StfGeneratorPhotonSingleBixel)
 register_generator(StfGeneratorIonSingleSpot)
 register_generator(StfGeneratorPhotonCollimatedSquareFields)
 register_generator(StfGeneratorVHEE)
@@ -20,6 +25,7 @@ __all__ = [
     "StfGeneratorExternalBeam",
     "StfGeneratorExternalBeamRayBixel",
     "StfGeneratorPhotonIMRT",
+    "StfGeneratorPhotonSingleBixel",
     "StfGeneratorPhotonCollimatedSquareFields",
     "StfGeneratorIonSingleSpot",
     "StfGeneratorIMPT",

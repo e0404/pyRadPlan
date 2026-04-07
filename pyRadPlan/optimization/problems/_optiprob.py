@@ -173,20 +173,36 @@ class PlanningProblem(ABC):
 
         # apply overlap priorities
         if self.apply_overlap:
-            self._cst = self._cst.apply_overlap_priorities().resample_on_new_ct(self._ct)
-        else:
-            self._cst = self._cst.resample_on_new_ct(self._ct)
+            self._cst = self._cst.apply_overlap_priorities()
+
+        self._cst = self._cst.resample_on_new_ct(self._ct)
 
         # sanitize objectives and constraints and manage required quantities
         objectives: list[tuple] = []
         quantity_ids = []
         for voi in self._cst.vois:
-            if len(voi.objectives) > 0:
+            # Filter out empty/invalid objective entries (e.g. [] from matRad import)
+            valid_objectives = [
+                obj
+                for obj in voi.objectives
+                if not (
+                    obj is None
+                    or (isinstance(obj, (list, tuple)) and len(obj) == 0)
+                    or (isinstance(obj, np.ndarray) and obj.size == 0)
+                )
+            ]
+            if len(valid_objectives) > 0:
                 # get the index list
                 cube_ix = voi.indices_numpy
                 linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
                 linear_mask[cube_ix] = True
-                objs = [get_objective(obj) for obj in voi.objectives]
+                objs = [get_objective(obj) for obj in valid_objectives]
+
+                # Set grids and preprocess reference images
+                for obj in objs:
+                    obj.preprocess_image_reference_parameters(
+                        target_grid=self._dij.dose_grid, index_list=cube_ix
+                    )
 
                 objectives.append((linear_mask, objs))
 
@@ -199,12 +215,14 @@ class PlanningProblem(ABC):
         # get the quantities and check if they are fluence dependent
         quantities = [get_quantity(qid) for qid in quantity_ids]
 
-        for q in quantities:
-            if not issubclass(q, FluenceDependentQuantity):
-                raise ValueError(
-                    f"Quantity {q} is not fluence dependent! Currently only fluence dependent "
-                    "quantities can be used in inverse planning!"
-                )
+        non_fluence_dependent = [
+            q for q in quantities if not issubclass(q, FluenceDependentQuantity)
+        ]
+        if non_fluence_dependent:
+            raise ValueError(
+                f"Quantities {non_fluence_dependent} are not fluence dependent! "
+                "Currently only fluence dependent quantities can be used in inverse planning!"
+            )
 
         # TODO: manage scenarios
 
@@ -222,6 +240,7 @@ class PlanningProblem(ABC):
         self._q_cache_index = []
         self._objectives_per_quantity = {q.identifier: [] for q in self._quantities}
         obj_ix = 0
+
         for obj_info in self._objective_list:
             for obj in obj_info[1]:
                 for q in self._quantities:

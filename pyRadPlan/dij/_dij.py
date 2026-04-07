@@ -286,6 +286,11 @@ class Dij(PyRadPlanBaseModel):
 
         dij_dict = super().to_matrad(context=context)
 
+        # Replace None values with np.array([0]) for savemat compatibility
+        for key, value in dij_dict.items():
+            if value is None:
+                dij_dict[key] = np.array([0])
+
         return dij_dict
 
     def get_result_arrays_from_intensity(
