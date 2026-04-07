@@ -22,7 +22,12 @@ from pydantic import (
 from numpydantic import NDArray, Shape
 from pyRadPlan.util.helpers import dl2ld, ld2dl
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.stf._beamlet import Beamlet
+from pyRadPlan.stf._beamlet import (
+    Beamlet,
+    FieldShapeAsMask,
+    FieldShapeAsBLD,
+    FieldShapeComposite,
+)
 
 
 class Ray(PyRadPlanBaseModel):
@@ -46,7 +51,7 @@ class Ray(PyRadPlanBaseModel):
         The beamlets in the ray.
     """
 
-    beamlets: list[Beamlet]
+    beamlets: list[Union[Beamlet, FieldShapeAsMask, FieldShapeAsBLD, FieldShapeComposite]]
 
     ray_pos_bev: NDArray[Shape["3"], np.float64] = Field(alias="rayPos_bev")
     ray_pos: NDArray[Shape["3"], np.float64]
