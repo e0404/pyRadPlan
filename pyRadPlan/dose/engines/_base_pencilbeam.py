@@ -296,6 +296,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             wed_cube_trace = self.cube_wed
 
         self._raytracer = RayTracerSiddon([wed_cube_trace])
+        self._raytracer.lateral_cut_off = self.geometric_lateral_cutoff
 
         return dij
 
