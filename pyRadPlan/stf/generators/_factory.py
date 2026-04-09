@@ -101,6 +101,7 @@ def get_generator(pln: Union[Plan, dict]) -> StfGeneratorBase:
             warnings.warn(f"Generator '{pln.prop_stf['generator']}' not available for Plan.")
 
         # If no generator name was found, we choose the first as default
+        # TODO: Check for if field shape was provided and choose appropriate generator
         logger.warning(
             "No generator specified in Plan. Using first available generator %s.",
             generator_names[0],

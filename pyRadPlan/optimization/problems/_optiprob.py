@@ -181,12 +181,22 @@ class PlanningProblem(ABC):
         objectives: list[tuple] = []
         quantity_ids = []
         for voi in self._cst.vois:
-            if len(voi.objectives) > 0:
+            # Filter out empty/invalid objective entries (e.g. [] from matRad import)
+            valid_objectives = [
+                obj
+                for obj in voi.objectives
+                if not (
+                    obj is None
+                    or (isinstance(obj, (list, tuple)) and len(obj) == 0)
+                    or (isinstance(obj, np.ndarray) and obj.size == 0)
+                )
+            ]
+            if len(valid_objectives) > 0:
                 # get the index list
                 cube_ix = voi.indices_numpy
                 linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
                 linear_mask[cube_ix] = True
-                objs = [get_objective(obj) for obj in voi.objectives]
+                objs = [get_objective(obj) for obj in valid_objectives]
 
                 # Set grids and preprocess reference images
                 for obj in objs:

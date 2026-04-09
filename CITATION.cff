@@ -48,6 +48,7 @@ authors:
     email: n.wahl@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
     orcid: 'https://orcid.org/0000-0002-1451-223X'
+    alias: wahln
 identifiers:
   - type: doi
     value: 10.5281/zenodo.15006909

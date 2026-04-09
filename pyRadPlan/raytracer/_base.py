@@ -1,7 +1,7 @@
 """Interface for voxel geometry ray tracers."""
 
 from abc import ABC, abstractmethod
-from typing import Union, Any
+from typing import Union, Any, Optional
 import logging
 import time
 
@@ -27,6 +27,7 @@ class RayTracerBase(ABC):
 
     lateral_cut_off: float
     precision: np.dtype
+    fixed_ray_spacing_range: Optional[float]
 
     @property
     def cubes(self):
@@ -44,6 +45,7 @@ class RayTracerBase(ABC):
     def __init__(self, cubes: Union[sitk.Image, list[sitk.Image]]):
         self.lateral_cut_off = 50.0
         self.precision = np.float32
+        self.fixed_ray_spacing_length = None
         self.cubes = cubes
         self._coords = None
 
@@ -183,8 +185,18 @@ class RayTracerBase(ABC):
             [ray.ray_pos_bev for ray in beam.rays]
         )
 
+        if self.fixed_ray_spacing_length is not None:
+            ray_extent = self.fixed_ray_spacing_length
+        else:
+            # look at max ray_positions in bev and add lateral cutoff
+            ray_extent = 2.0 * (
+                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + self.lateral_cut_off
+            )
+
         spacing_range = ray_spacing * np.arange(
-            np.floor(-500.0 / ray_spacing), np.ceil(500.0 / ray_spacing) + 1, dtype=self.precision
+            np.floor(-ray_extent / ray_spacing),
+            np.ceil(ray_extent / ray_spacing) + 1,
+            dtype=self.precision,
         )
 
         candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
