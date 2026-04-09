@@ -30,7 +30,7 @@ class Dose(FluenceDependentQuantity):
     def _compute_chained_fluence_gradient_single_scenario_from_cache(
         self, d_quantity, scenario_index: int
     ) -> Array:
-        # Implemented as transpose to be array api compliant in case of scipy / array_api_strict
+        # Implemented as __rmatmul__ to be array api compliant in case of scipy / array_api_strict
         # compatibility
         return self.array_backend.asarray(
             self._dij.physical_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False

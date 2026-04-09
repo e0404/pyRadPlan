@@ -50,12 +50,14 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         # TODO: This backend check and conversion should be a part of the dij
         xp = compute_backend.choose_array_api_namespace()
+        device = compute_backend.choose_device(xp)
 
         influence_matrix = getattr(dij, self.identifier, None)
         if influence_matrix is None:
             raise ValueError(f"Influence matrix {self.identifier} not available in Dij object.")
 
-        self._dij = dij.to_namespace(xp)
+        self._dij = dij.to_namespace(xp, device=device)
+        self.device = device
 
         try:
             typename = getattr(self._dij, self.identifier).flat[0].dtype.name
