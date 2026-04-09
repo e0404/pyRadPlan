@@ -260,26 +260,13 @@ def elapsed_time(xp: ArrayNamespace, start, end) -> float:
 
 def to_numpy(arr: Array, detach: bool = True) -> NDArray:
     """Convert an array to a NumPy array."""
-    if array_api_compat.is_cupy_array(arr):
-        return cp.asnumpy(arr)
-    elif array_api_compat.is_torch_array(arr):
+    if array_api_compat.is_torch_array(arr):
         if detach and arr.requires_grad:
             arr = arr.detach()
         return arr.cpu().numpy()
-    elif array_api_compat.is_numpy_array(arr):
-        return arr
-
-    # Try DLPack (e.g. array_api_strict or other compliant arrays)
-    if hasattr(arr, "__dlpack__"):
-        try:
-            if _NP_DLPACK_HAS_DEVICE and is_on_gpu(arr):
-                return np.from_dlpack(arr, device="cpu", copy=False)
-            else:
-                return np.from_dlpack(arr)
-        except Exception:
-            pass
-
-    raise TypeError("Conversion helper to NumPy not implemented for type '{}'.".format(type(arr)))
+    if array_api_compat.is_cupy_array(arr):
+        return cp.asnumpy(arr)
+    return np.asarray(arr)
 
 
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Optional[str] = None) -> Array:
