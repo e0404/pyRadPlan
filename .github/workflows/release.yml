@@ -35,8 +35,28 @@ jobs:
           version: ${{ steps.version.outputs.version }}
           path: CHANGELOG.md
 
+      - name: Read tag annotation
+        id: tag_annotation
+        if: github.ref_type == 'tag'
+        run: |
+          ANNOTATION=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
+          {
+            echo 'annotation<<EOF'
+            echo "$ANNOTATION"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Write release notes file
-        run: echo "${{ steps.changelog.outputs.changes }}" > RELEASE_NOTES.md
+        run: |
+          {
+            if [[ -n "${{ steps.tag_annotation.outputs.annotation }}" ]]; then
+              echo "${{ steps.tag_annotation.outputs.annotation }}"
+              echo ""
+              echo "---"
+              echo ""
+            fi
+            echo "${{ steps.changelog.outputs.changes }}"
+          } > RELEASE_NOTES.md
 
       - name: Upload release notes as artifact
         uses: actions/upload-artifact@v4
@@ -50,6 +70,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changes }}
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: ${{ steps.changelog.outputs.status == 'prereleased' || steps.changelog.outputs.status == 'unreleased' }}
