@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
+- CI Release Workflow now fetches tags correctly and supplies the correct release body from the tag message
+
 ## [0.3.3] - 2026-04-14
 
 ### Added
