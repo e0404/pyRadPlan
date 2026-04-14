@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # Strip leading 'v' from tag name (e.g. v0.3.3 -> 0.3.3)
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            # Use 'Unreleased' to preview the next release notes
+            echo "version=Unreleased" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read changelog
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          version: ${{ steps.version.outputs.version }}
+          path: CHANGELOG.md
+
+      - name: Read tag annotation
+        id: tag_annotation
+        if: github.ref_type == 'tag'
+        run: |
+          ANNOTATION=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
+          {
+            echo 'annotation<<EOF'
+            echo "$ANNOTATION"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes file
+        run: |
+          {
+            if [[ -n "${{ steps.tag_annotation.outputs.annotation }}" ]]; then
+              echo "${{ steps.tag_annotation.outputs.annotation }}"
+              echo ""
+              echo "---"
+              echo ""
+            fi
+            echo "${{ steps.changelog.outputs.changes }}"
+          } > RELEASE_NOTES.md
+
+      - name: Upload release notes as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ steps.changelog.outputs.version }}
+          path: RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ steps.changelog.outputs.status == 'prereleased' || steps.changelog.outputs.status == 'unreleased' }}

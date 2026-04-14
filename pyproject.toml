@@ -10,7 +10,7 @@ pyRadPlan = ["data/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.3.2"
+version = "0.3.3"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
@@ -67,7 +67,7 @@ octave = ["oct2py"]
 gui    = ["PyQt5"]
 numba  = ["numba>=0.61.0"]
 
-dev = ["pytest","coverage","pytest-cov","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"

@@ -1,14 +1,35 @@
 # Changelog
 
-## Version 0.3.2
-Small patch release with a new optimization objective, a structure for Beam Limiting Devices for Field/Shape-based dose calculation, and several bug fixes, and a CITATION.cff.
+All notable changes to this project will be documented in this file.
 
-### New Features
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.3] - 2026-04-14
+
+### Added
+- Automatic Release workflow on GitHub reading CHANGELOG.md and tag message
+- Benchmark Folder with inital Raytracer benchmark that can be run with pytest-benchmark
+
+### Changed
+- Changelog now follows thee Keep A Changelog conventions
+
+### Fixed
+
+- Fixed raytracer issue where certain geometrical configurations could lead to individual rays starting with invalid indices, inserting misplaced NaN's into the radiological depth cube.
+
+## [0.3.2] - 2026-04-07
+
+Small patch release with a new optimization objective, a structure for Beam Limiting Devices for field/shape-based dose calculation, several bug fixes, and a CITATION.cff.
+
+### Added
+
 - Mimicking objective for dose-mimicking optimization (`SquaredMimicking`)
-- includes prototype for field-based dose calculation using Beam Limiting Device & FieldShape hierarchy
-- Added CITATION.cff with authors and ORCIDs
+- Prototype for field-based dose calculation using Beam Limiting Device & FieldShape hierarchy
+- CITATION.cff with authors and ORCIDs
 
-### Bug Fixes
+### Fixed
+
 - Raytracer candidate matrix now uses lateral cutoff by default (overridable)
 - Fixed binary mask interpolation in VOI
 - Fixed import of empty voxel index lists from matRad
@@ -17,80 +38,134 @@ Small patch release with a new optimization objective, a structure for Beam Limi
 - Fixed missing x-divergence of ray in FRED MC engine
 - Fixed single-field STF generator to properly inherit from IMRT generator
 
-## Version 0.3.1
-Small update to drop `numba` as a mandatory dependency. `numba` accelerations can still be provided but should only compliment Array API conform base implementations and be appropriately checked.
+## [0.3.1] - 2026-01-28
+
+Small update to drop `numba` as a mandatory dependency. `numba` accelerations are still available as an optional complement to Array API conform base implementations.
+
+### Added
+
 - Performant and Array API compatible candidate ray matrix setup alternative for cube raytracing
-- Fix readthedocs-YAML to fix Python version
-- Add convenience plotting function to display multiple slices `plot_distributions`
+- Convenience plotting function to display multiple slices (`plot_distributions`)
+
+### Changed
+
+- `numba` is no longer a mandatory dependency
+
+### Fixed
+
+- Fix readthedocs YAML to correct Python version
 - Small code quality fixes
 
-## Version 0.3.0 - Pre-Release
-This update features Array API compatibility, a FRED interface, VHEE model, documentation, examples in jupytext style, some refactoring and bugfixes.
-We further are removing python 3.9 support due to array api compatibility.
+## [0.3.0] - 2026-01-12
 
-### New Features
-- Partly integrated Array API compatibility. Coming with GPU support for Cupy and Torch. Note: Python 3.9 support has been removed.
+Array API compatibility, FRED Monte Carlo interface, VHEE model, Sphinx documentation, jupytext-style examples, refactoring, and bugfixes. **Python 3.9 support has been removed.**
+
+### Added
+
+- Partial Array API compatibility with GPU support for CuPy and Torch (drops Python 3.9)
 - FRED interface (Monte Carlo tool)
-- VHEE planning with a Generic (unfocused) beam and a focused beam.
-- `dij.compute_result_ct_grid()` now returns quantities per beam too.
+- VHEE planning with a generic (unfocused) beam and a focused beam
+- `dij.compute_result_ct_grid()` now returns quantities per beam
 - `create_body_segmentation()` method for the CST object
 - Option to cancel solver at any iteration via keyboard input
+- Comprehensive Sphinx documentation
+- Various examples conforming to jupytext norm
 
-### Bug Fixes & Performance
-- Increased memory efficiency in dose calc
+### Changed
+
+- Increased memory efficiency in dose calculation
+- Tuned initial Scipy solver parameters
+- Refactored cst, ct, machine, and stf test data
+- Added Python version matrix to CI tests
+
+### Fixed
+
 - Fixed overlap priorities when similar levels exist
 - Fixed `np.floating` deprecation
-- Fixed pydantic>=2.11 compatibility
-- Fixed issues with single bixel calculations in Raytracer
+- Fixed pydantic >= 2.11 compatibility
+- Fixed issues with single bixel calculations in raytracer
 - Elevated minimum required version of numpydantic
-- Tuning of initial Scipy parameters
 
-### User Experience
-- Comprehensive documentation using Sphinx
-- Added various examples and conform to jupytext norm
+## [0.2.8] - 2025-06-28
 
-### Development and CI
-- Refactoring cst, ct, machine and stf test data
-- Adding python versions tests
+Performance improvements, plan analysis via DVHs, and data validation fixes. Corresponds to the version used in the [SynthRad2025 challenge](https://github.com/SynthRad2025).
 
-## Version 0.2.8 - Patch Release
-This patch release incorporates performance improvements, plan analysis in form of DVHs, and some data validation fixes.
-It corresponds to the version used in the SynthRad2025 challenge, see also https://github.com/SynthRad2025
+### Added
 
-### New Features
-- DVHCollection and DVH for plan analysis
-- Maps to associate bixel/beamlet indices with beams / rays in stf
+- `DVHCollection` and `DVH` for plan analysis
+- Maps to associate bixel/beamlet indices with beams/rays in stf
 
-### Bug Fixes & Performance
-- Ray Tracer recovery in case of numerical issues
-- CT validates given x/y/z vectors correctly
-- Fix for validating VOIs with single voxels from matRad
+### Changed
+
 - Performance improvements for raytracer and dij filling
 
-## Version 0.2.3 - Patch Release
+### Fixed
 
-### New Features
-- Added slice visualization function
-- Added LET for protons
+- Ray tracer recovery in case of numerical issues
+- CT validates given x/y/z vectors correctly
+- Fixed validation of VOIs with single voxels imported from matRad
 
-### Bug Fixes & Performance
+## [0.2.7] - 2025-06-27
+
+## [0.2.6] - 2025-06-26
+
+## [0.2.5] - 2025-06-20
+
+## [0.2.4] - 2025-05-22
+
+## [0.2.3] - 2025-05-09
+
+### Added
+
+- Slice visualization function
+- LET calculation for protons
+
+### Changed
+
+- Scenarios are now pydantic models
+- Docstring and code quality improvements
+
+### Fixed
+
 - Performance fix for raytracer
-- Fixes issues with ray validation
+- Fixed issues with ray validation
 - Various validation fixes
 
-### Development
-- Scenarios are now pydantic models
-- Docstring / code quality improvements
+## [0.2.2] - 2025-02-27
 
-## Version 0.2.2 - First Official Pre-release
-First official pre-release of pyRadPlan. pyRadPlan is an open-source radiotherapy treatment planning toolkit designed for interoperability with matRad.
+First official pre-release of pyRadPlan — an open-source radiotherapy treatment planning toolkit designed for interoperability with matRad.
 
-### Major Changes and New Features
-- matRad compatible data structures with stable validation and serialization with pydantic
-- native reimplementation of matRad's pencil beam dose calculation for photons, protons & ions
-- generic machine data
-- native optimization framework using scipy or IPOPT (via ipyopt)
+### Added
 
-### Disclaimers & License
-- pyRadPlan is still a work in progress, thus we decided to not assign a major version number yet. Everything is still subject to change, so handle with care.
-- DO NOT USE PYRADPLAN CLINICALLY - Check the LICENSE file and README.md for more infos.
+- matRad-compatible data structures with stable validation and serialization using pydantic
+- Native reimplementation of matRad's pencil beam dose calculation for photons, protons & ions
+- Generic machine data
+- Native optimization framework using scipy or IPOPT (via ipyopt)
+
+## [0.2.1] - 2025-02-20
+
+## [0.2.0] - 2025-02-13
+
+## [0.1.0] - 2025-02-05
+
+## [0.0.2] - 2025-01-10
+
+## [0.0.1] - 2025-01-10
+
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/e0404/pyRadPlan/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/e0404/pyRadPlan/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/e0404/pyRadPlan/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/e0404/pyRadPlan/compare/v0.2.8...v0.3.0
+[0.2.8]: https://github.com/e0404/pyRadPlan/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/e0404/pyRadPlan/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/e0404/pyRadPlan/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/e0404/pyRadPlan/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/e0404/pyRadPlan/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/e0404/pyRadPlan/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/e0404/pyRadPlan/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/e0404/pyRadPlan/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/e0404/pyRadPlan/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/e0404/pyRadPlan/compare/v0.0.2...v0.1.0
+[0.0.2]: https://github.com/e0404/pyRadPlan/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/e0404/pyRadPlan/releases/tag/v0.0.1
