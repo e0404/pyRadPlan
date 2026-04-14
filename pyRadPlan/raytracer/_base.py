@@ -227,7 +227,9 @@ class RayTracerBase(ABC):
         logger.debug("Cube ray tracing took %s seconds...", t_trace_end - t_trace_start)
 
         # Now we compute which rays will respectively give the voxel value for radiological depth
-        valid_ix = np.isfinite(ix)
+        # We don't want -1 to be counted as "valid"
+        # or else the coords[ix[valid_ix], 1] silently reads the last elemtn
+        valid_ix = ix >= 0  # & np.isfinite(ix)
 
         scale_factor = np.zeros_like(ix, dtype=self.precision)
         scale_factor[valid_ix] = (ray_matrix_bev_y + beam.sad) / coords[ix[valid_ix], 1]
@@ -262,8 +264,11 @@ class RayTracerBase(ABC):
         ]
 
         for i, cube in enumerate(rad_depth_cubes):
-            rel_depths = lengths * rho[i]
-            rel_depths = np.cumsum(rel_depths, axis=1) - rel_depths / 2.0
+            segment_depths = lengths * rho[i]
+            # Replace NaN with 0 before cumsum to prevent a single invalid voxel
+            # np.cumsum([[0.5, 0.33, NaN, 0.18, 0.22]]) -> [0.5, 0.83, NaN, NaN, NaN], which is bad
+            segment_depths = np.where(np.isfinite(segment_depths), segment_depths, 0.0)
+            rel_depths = np.cumsum(segment_depths, axis=1) - segment_depths / 2.0
 
             try:
                 ix_assign = np.unravel_index(ix[ix_remember_from_tracing], cube.shape, order="F")

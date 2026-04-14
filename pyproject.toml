@@ -10,12 +10,13 @@ pyRadPlan = ["data/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.3.2"
+version = "0.3.3"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
+  { name="Louis Ermeneux", email = "louis.ermeneux@gmail.com" },
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
   { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
@@ -23,6 +24,7 @@ authors = [
   { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },
   { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
   { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" },
+  { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" },
 ]
 
 maintainers = [
@@ -67,7 +69,7 @@ octave = ["oct2py"]
 gui    = ["PyQt5"]
 numba  = ["numba>=0.61.0"]
 
-dev = ["pytest","coverage","pytest-cov","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"
