@@ -13,6 +13,7 @@ from pyRadPlan.stf import FieldShape
 
 # from pyRadPlan.stf import Beam
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
+from pyRadPlan.core.xp_utils import to_numpy
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 
@@ -263,11 +264,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 f_pre = np.real(f_pre)
 
         # get index of central ray or closest to the central ray
-        center = np.argmin(
-            np.sum(
-                np.array([ray["ray_pos_bev"] for ray in beam_info["beam"]["rays"]]) ** 2, axis=1
-            )
+        xp = self.xp
+        ray_pos_bev = xp.stack(
+            [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
+        center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
 
         center_ssd = beam_info["beam"]["rays"][center]["SSD"]
 
@@ -331,7 +332,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
-        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
+        # scipy interpolators require NumPy arrays
+        iso_lat_dists_np = to_numpy(iso_lat_dists)
+        interpolated_kernels = [interp(iso_lat_dists_np) for interp in interpolators]
 
         for c, interp in enumerate(interpolated_kernels):
             dose_component[c, :] *= xp.asarray(interp)
