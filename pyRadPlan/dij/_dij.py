@@ -427,21 +427,6 @@ class Dij(PyRadPlanBaseModel):
                 out[key].SetOrigin(self.dose_grid.origin)
                 out[key].SetSpacing(self.dose_grid.resolution_vector)
                 out[key].SetDirection(self.dose_grid.direction.ravel())
-            if isinstance(value, list):
-                #  handle every single beam information
-                for i in range(len(value)):
-                    value[i] = sitk.GetImageFromArray(
-                        value[i].reshape(self.dose_grid.dimensions[::-1])
-                    )
-                    value[i].SetOrigin(self.dose_grid.origin)
-                    value[i].SetSpacing(self.dose_grid.resolution_vector)
-                    value[i].SetDirection(self.dose_grid.direction.ravel())
-            else:
-                # handling collective of all beams
-                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
-                out[key].SetOrigin(self.dose_grid.origin)
-                out[key].SetSpacing(self.dose_grid.resolution_vector)
-                out[key].SetDirection(self.dose_grid.direction.ravel())
 
         return out
 
