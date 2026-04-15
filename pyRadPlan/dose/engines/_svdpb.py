@@ -1,4 +1,4 @@
-from typing import TypedDict, Literal, Any, cast, Callable
+from typing import TypedDict, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
@@ -7,6 +7,7 @@ from scipy import fft
 from scipy.interpolate import RegularGridInterpolator
 
 from pyRadPlan.plan import PhotonPlan
+from pyRadPlan.stf import FieldShape
 
 # from pyRadPlan.stf import Beam
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
@@ -23,6 +24,8 @@ class DijSamplingConfig(TypedDict):
     lat_cut_off: float
     type: Literal["radius", "depth"]
     delta_rad_depth: float
+    force_penumbra: Optional[float]
+    force_uniform_fluence: bool
 
 
 class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
@@ -69,6 +72,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         self.kernel_cutoff = np.inf
         self.random_seed = 0
         self.int_conv_resolution = 0.5
+        self.force_penumbra = None
+        self.force_uniform_fluence = False
         self.enable_dij_sampling = True
         self.dij_sampling = DijSamplingConfig(
             rel_dose_threshold=0.01, lat_cut_off=20, type="radius", delta_rad_depth=5
@@ -76,16 +81,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         super().__init__(pln)
 
-        # Protected/Private attributes (equivalent to SetAccess = protected)
-        self._is_field_based_dose_calc = None  # will be set
-        self._field_width = None  # will be obtained during calculation
-
-        self._collimation = None  # collimation structure from DICOM import
-
     def _init_dose_calc(self, ct, cst, stf) -> dict[str, Any]:
-        # TODO: What is "s" here?
-        # self._is_field_based_dose_calc = any(str(s['bixelWidth']) == 'field' for s in stf)
-
         dij = super()._init_dose_calc(ct, cst, stf)
 
         # dij = []
@@ -131,25 +127,58 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             Updated beam information struct.
         """
 
-        beam_info = super()._init_beam(beam_info, ct, cst, stf, i)
-
         field_based_dose_calc = False
-        if self._is_field_based_dose_calc:
+        field_width = 0
+        field_shape_idx = []
+        for j, ray in enumerate(stf.beams[i].rays):
+            for k, beamlet in enumerate(ray.beamlets):
+                if isinstance(beamlet, FieldShape):
+                    field_shape_idx.append([j, k])
+                    # field_based_dose_calc set to true if only one beamlet has a field shape
+                    if not field_based_dose_calc:
+                        field_based_dose_calc = True
+
+                    # find largest field_width
+                    field_width = max(beamlet.field_width, field_width)
+
+        # TODO: it would probably be much faster to not use the full field extent, but maximum jaw positions
+        # as field width here
+
+        if field_based_dose_calc:
             logger.debug("Enabling field-based dose calculation for beam %d!", i)
-            self.int_conv_resolution = self._collimation["conv_resolution"]
-            field_width = self._collimation["field_width"]
-            field_based_dose_calc = True
+            self._effective_lateral_cutoff = self.geometric_lateral_cutoff + field_width / np.sqrt(
+                2
+            )
         else:
             logger.debug("Enabling bixel-based dose calculation for beam %d!", i)
+
+        beam_info = super()._init_beam(beam_info, ct, cst, stf, i)
+
+        if not field_based_dose_calc:
             field_width = beam_info["beam"]["bixel_width"]
 
         beam_info["field_based_dose_calc"] = field_based_dose_calc
+        beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
-        # TODO: obtain maximum field limits
+        # TODO: resampling should directly change object, not create new one?
+        # TODO: the model_dump here is unfortunate?
+        for j, k in field_shape_idx:
+            stf.beams[i].rays[j].beamlets[k] = (
+                stf.beams[i]
+                .rays[j]
+                .beamlets[k]
+                .resample(new_resolution=self.int_conv_resolution, new_field_width=field_width)
+            )
+            beam_info["beam"]["rays"][j]["beamlets"][k] = (
+                stf.beams[i].rays[j].beamlets[k].model_dump()
+            )
+            # TODO: add mask as computed field?
+            beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
+                stf.beams[i].rays[j].beamlets[k].mask, k=-1
+            )
 
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        # TODO: should this be +1 as end or is it correct? In matRad it is equivalent to no +1
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit)
+        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
         beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
 
         # Get the kernel
@@ -175,7 +204,19 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         else:
             kernel_cutoff = self.kernel_cutoff
 
-        sigma_gauss = kernel.penumbra / np.sqrt(8 * np.log(2))  # [mm]
+        if self.force_penumbra is not None:
+            penumbra = self.force_penumbra
+            logger.info(
+                "Using forced penumbra of %f mm for beam %d instead of kernel penumbra of %f mm.",
+                penumbra,
+                i,
+                kernel.penumbra,
+            )
+        else:
+            penumbra = kernel.penumbra
+            logger.info("Kernel penumbra: %f mm for beam %d.", penumbra, i)
+
+        sigma_gauss = penumbra / np.sqrt(8 * np.log(2))  # [mm]
 
         # use 5 times sigma as the limits for the gaussian convolution
         gauss_limit = np.ceil(5 * sigma_gauss / self.int_conv_resolution)
@@ -207,9 +248,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         conv_mx_x, conv_mx_z = np.meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
 
         kernel_conv_size = 2 * kernel_conv_limit.astype(int)
-
-        effective_lateral_cut_off = self.geometric_lateral_cutoff + field_width / np.sqrt(2)
-        beam_info["effective_lateral_cut_off"] = effective_lateral_cut_off
 
         if not field_based_dose_calc:
             n = np.floor(field_width / self.int_conv_resolution).astype(int)
@@ -251,14 +289,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         beam_info["kernel"] = kernel
         beam_info["kernel_mxs"] = kernel_mxs
-        beam_info["f_pre"] = f_pre
         # beam_info["kernel_xz"] = (kernel_x.ravel(), kernel_z.ravel())
         # beam_info["conv_mx_xz"] = (conv_mx_x, conv_mx_z)
         beam_info["kernel_conv_grid"] = kernel_conv_grid
         beam_info["kernel_conv_size"] = kernel_conv_size
 
-        kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
-        beam_info["kernel_interpolators"] = kernel_interpolators
+        if not field_based_dose_calc and not self.use_custom_primary_photon_fluence:
+            beam_info["f_pre"] = f_pre
+            kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
+            beam_info["kernel_interpolators"] = kernel_interpolators
 
         return beam_info
 
@@ -331,9 +370,17 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         ray["kernel"] = beam_info["kernel"]
 
         if self.use_custom_primary_photon_fluence or beam_info["field_based_dose_calc"]:
+            print("Calculating custom kernel interpolators for ray ", j)
             if beam_info["field_based_dose_calc"]:
-                f = ray["shape"]
+                f = ray["beamlets"][0]["mask"]
+                # multiply masks of beamlets on a ray to get field mask for ray
+                # TODO: ensure matching grids? should be handled in ersampling above
+                for k, beamlet in enumerate(ray["beamlets"]):
+                    if k == 0:
+                        continue
+                    f *= ray["beamlets"][k]["mask"]
             else:
+                # TODO: Not saved yet
                 f = beam_info["f_pre"]
 
             f = cast(np.ndarray, f)  # Typing
@@ -341,9 +388,16 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
             r = np.sqrt(
                 (beam_info["f_x"] - ray["ray_pos_bev"][0]) ** 2
-                + (beam_info["f_x"] - ray["ray_pos_bev"][2]) ** 2
+                + (beam_info["f_z"] - ray["ray_pos_bev"][2]) ** 2
             )
-            fx = f * np.interp(r, primary_fluence[:, 0], primary_fluence[:, 1])
+
+            if not (f.shape == beam_info["f_x"].shape == beam_info["f_z"].shape == r.shape):
+                raise ValueError("Shape mismatch in kernel interpolation!")
+
+            if self.force_uniform_fluence:
+                fx = f
+            else:
+                fx = f * np.interp(r, primary_fluence[:, 0], primary_fluence[:, 1])
 
             n = beam_info["gauss_conv_size"]
             gauss_filter = beam_info["gauss_filter"]
