@@ -143,27 +143,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Compute Bixel
         self._calc_particle_bixel(bixel)
 
-        # Optimization: Compact results after calculation to avoid slow boolean indexing on inputs
-        # We perform the compaction on the output dose and indices, which saves us from compacting
-        # multiple input arrays (rad_depths, radial_dist_sq, lat_dists, etc.)
-        if "mask" in bixel:
-            mask = bixel["mask"]
-            bixel["ix"] = bixel["ix"][mask]
-
-            # List of potential result keys to compact
-            # We check for existence to support different engines/modes
-            keys_to_compact = [
-                "physical_dose",
-                "let_dose",
-                "alpha_dose",
-                "sqrt_beta_dose",
-                "biological_dose",
-            ]
-
-            for key in keys_to_compact:
-                if key in bixel:
-                    bixel[key] = bixel[key][mask]
-
         return bixel
 
     def _init_bixel(self, curr_ray, k):
@@ -394,18 +373,17 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         else:
             raise ValueError("dosimetric_lateral_cutoff must be a value > 0 and <= 1!")
 
-        # Optimization: Defer compaction to _compute_bixel
-        # Instead of compacting inputs (ix, radial_dist_sq, rad_depths, etc.) here,
-        # we pass the full arrays and the mask. This avoids multiple slow boolean indexing operations.
-        curr_bixel["mask"] = curr_ix
-        curr_bixel["ix"] = curr_ray["ix"]  # Full array
+        # Apply mask
+        curr_bixel["ix"] = curr_ray["ix"][curr_ix]
 
-        # Get quantities 1:1 from ray (Full arrays)
-        curr_bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"]
-        curr_bixel["rad_depths"] = curr_ray["rad_depths"]
+        # Get quantities from ray and mask them
+        curr_bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][curr_ix]
+        curr_bixel["rad_depths"] = curr_ray["rad_depths"][curr_ix]
+
         # Propagate lateral distances if available (needed for singleXY focused model)
         if "lat_dists" in curr_ray:
-            curr_bixel["lat_dists"] = curr_ray["lat_dists"]
+            curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
+
         # TODO:
         # if self.calc_bio_dose:
         #     bixel["v_tissue_index"] = curr_ray["v_tissue_index"]
