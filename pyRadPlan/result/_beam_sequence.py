@@ -68,13 +68,9 @@ class BeamSequence(PyRadPlanBaseModel):
 
         if info.context and info.context.get("from_matRad"):
             arr = np.asarray(v, dtype=np.float64)
-            # Sadly I haven't found a neater way to handle this because of "nan - 1"
-            # TODO: might change this to None or find a better way to handle this
-            for i in range(len(arr)):
-                for j in range(len(arr[i])):
-                    if not np.isnan(arr[i][j]):
-                        arr[i][j] = int(arr[i][j]) - 1  # Convert to 0-based indexing
-            return arr.T  # TODO: might have to undo .T here (when changing in to_aperture_info())
+            mask = ~np.isnan(arr)
+            arr[mask] -= 1  # Convert to 0-based indexing
+            return arr.T
 
         return v
 

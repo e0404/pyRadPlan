@@ -11,8 +11,6 @@ from pydantic import (
 )
 import SimpleITK as sitk
 import numpy as np
-from pyRadPlan.core import resample_image
-
 from pyRadPlan.core import PyRadPlanBaseModel, Grid
 
 
@@ -26,23 +24,21 @@ class QuantityDistribution(PyRadPlanBaseModel):
     values: Annotated[sitk.Image, Field(init=False)]  # ,alias="values")]
 
     @classmethod
-    def _retrieve_data(cls, data: Any, info: ValidationInfo) -> dict:
-        """Search for data coming from validation."""
-        if isinstance(data, Union[sitk.Image, np.ndarray]):
-            # If the input is a SimpleITK image or numpy array, set it as the values
+    def _retrieve_data(cls, data: Any, info: ValidationInfo) -> tuple:
+        """Extract values from input data, normalizing various input formats."""
+        if isinstance(data, (sitk.Image, np.ndarray)):
             data = {"values": data}
         if not isinstance(data, dict):
-            raise ValueError("Invalid type for dose values input.")
-        # Try to get the values using our internal key or its alias
+            raise ValueError(f"Invalid type for quantity values input: {type(data).__name__}")
+
         if "cube" in data:
             values = data.get("cube")
         elif "values" in data:
             values = data.get("values")
-        if values is None:
-            values_fieldname = cls.model_fields.get("cube").validation_alias
-            values = data.pop(values_fieldname, None)
-        if values is None:
-            raise ValueError("Dose values not present in dictionary.")
+        else:
+            raise ValueError(
+                "Quantity values not present in dictionary. Expected 'cube' or 'values' key."
+            )
         return values, data
 
     @model_validator(mode="before")
@@ -227,19 +223,6 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
     @computed_field
     @property
-    def values_dim(self) -> tuple:
-        """
-        Get the values dimensions in x, y, and z.
-
-        Returns
-        -------
-        tuple
-            A tuple containing the values dimensions.
-        """
-        return self.size[0:3]
-
-    @computed_field
-    @property
     def origin(self) -> tuple:
         """
         Get the origin of the image.
@@ -294,7 +277,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         x_spacing = self.values.GetSpacing()[0]
         x_origin = self.values.GetOrigin()[0]
         n_x = self.size[0]
-        return np.arange(x_origin, x_origin + n_x * x_spacing, x_spacing)
+        return np.linspace(x_origin, x_origin + (n_x - 1) * x_spacing, n_x)
 
     @computed_field
     @property
@@ -310,7 +293,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         y_spacing = self.values.GetSpacing()[1]
         y_origin = self.values.GetOrigin()[1]
         n_y = self.size[1]
-        return np.arange(y_origin, y_origin + n_y * y_spacing, y_spacing)
+        return np.linspace(y_origin, y_origin + (n_y - 1) * y_spacing, n_y)
 
     @computed_field
     @property
@@ -326,7 +309,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
         z_spacing = self.values.GetSpacing()[2]
         z_origin = self.values.GetOrigin()[2]
         n_z = self.size[2]
-        return np.arange(z_origin, z_origin + n_z * z_spacing, z_spacing)
+        return np.linspace(z_origin, z_origin + (n_z - 1) * z_spacing, n_z)
 
     @property
     def grid(self) -> Grid:
@@ -377,34 +360,9 @@ class QuantityDistribution(PyRadPlanBaseModel):
         resampler.SetOutputSpacing(grid.resolution_vector)
         resampler.SetSize(grid.dimensions)
 
-        # if self.num_of_ct_scen > 1:
-        #     new_images = []
-        #     for i in range(self.values.GetSize()[-1]):
-        #         new_images.append(resampler.Execute(self.values[:, :, :, i]))
-        #     new_values = sitk.JoinSeries(new_images)
-        # else:
         new_values = resampler.Execute(self.values)
 
         return self.model_validate({"values": new_values})
-
-
-def resample_ct(
-    values: QuantityDistribution, interpolator=sitk.sitkBSpline, **kwargs
-) -> QuantityDistribution:
-    """
-    Resample QuantityDistribution to a different grid.
-
-    Returns
-    -------
-    QuantityDistribution
-        A resampled QuantityDistribution object
-    """
-
-    values = QuantityDistribution.values
-
-    resampled_values = resample_image(input_image=values, interpolator=interpolator, **kwargs)
-
-    return QuantityDistribution(values_hu=resampled_values)
 
 
 def create_distribution(

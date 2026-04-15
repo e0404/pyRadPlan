@@ -29,16 +29,11 @@ class BeamAccessor:
     """
     A class to access beam quantities in a PlanResult object.
 
-    Dynamically injects type annotations for dynamic keys.
+    Provides attribute and dict-like access to per-beam quantity distributions.
     """
 
-    # physical_dose: list[QuantityDistribution]
     def __init__(self, beam_quantities: dict):
         self.beam_quantities = beam_quantities
-        # Dynamically assign each key as an instance attribute and update annotations.
-        # for key, value in beam_quantities.items():
-        #     #setattr(self, key, value)
-        #     self.__class__.__annotations__[key] = list[QuantityDistribution]
 
     def __getattr__(self, attr):
         if attr in self.beam_quantities:
@@ -62,10 +57,6 @@ class BeamAccessor:
 
     def values(self):
         return self.beam_quantities.values()
-
-    # def __dir__(self):
-    #     default = super().__dir__()
-    #     return list(default) + list(self.beam_quantities.keys())
 
 
 class PlanResult(PyRadPlanBaseModel):
@@ -114,7 +105,7 @@ class PlanResult(PyRadPlanBaseModel):
     mu: np.ndarray | None = Field(default=None, alias="MU")
 
     info: dict[str, Any] = Field(default_factory=dict)
-    used_optimizer: Union[str, dict[str, any]] = Field(default="")
+    used_optimizer: Union[str, dict[str, Any]] = Field(default="")
 
     sequence: Sequence = Field(default=None, alias="sequencing")
 
@@ -130,11 +121,9 @@ class PlanResult(PyRadPlanBaseModel):
 
     @property
     def beam(self):
-        return BeamAccessor(self.beam_quantities)
-
-    @classmethod
-    def _process_sequencing_data(cls, data: Any, info: ValidationInfo) -> Any:
-        pass
+        if not hasattr(self, "_beam_accessor") or self._beam_accessor is None:
+            object.__setattr__(self, "_beam_accessor", BeamAccessor(self.beam_quantities))
+        return self._beam_accessor
 
     @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
@@ -237,9 +226,13 @@ class PlanResult(PyRadPlanBaseModel):
 
     def __setattr__(self, name, value):
         if name == "quantities":
-            raise Warning("Direct modification of 'quantities' is not allowed.")
+            raise AttributeError(
+                "Direct modification of 'quantities' is not allowed. Use add_quantity() instead."
+            )
         elif name == "beam_quantities":
-            raise Warning("Direct modification of 'beam_quantities' is not allowed.")
+            raise AttributeError(
+                "Direct modification of 'beam_quantities' is not allowed. Use add_beam_quantity() instead."
+            )
         super().__setattr__(name, value)
 
     def add_quantity(
@@ -417,18 +410,21 @@ def create_result(
         if isinstance(data, PlanResult):
             return data
 
-        if isinstance(data, dict):
-            # Merge additional key-value pairs (like info) into the dictionary.
-            data.update(kwargs)
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected dict or PlanResult, got {type(data).__name__}")
+
+        # Merge additional key-value pairs (like info) into the dictionary.
+        data.update(kwargs)
 
         context = {"from_matRad": False}
-        for key, value in data.items():
+        for key in data:
             if "beam1" in key:
                 logger.info(
                     "matRad typical convention detected. Assuming matRad import. "
                     "If this is not the case, please rename variable '...beam1'"
                 )
                 context = {"from_matRad": True}
+                break
 
         return PlanResult.model_validate(data, context=context)
     return PlanResult(**kwargs)
