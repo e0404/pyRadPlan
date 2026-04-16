@@ -443,7 +443,11 @@ class Dij(PyRadPlanBaseModel):
         return out
 
     def to_namespace(
-        self, xp_new: Union[ArrayNamespace, str], *, keep_sparse_compat: bool = True
+        self,
+        xp_new: Union[ArrayNamespace, str],
+        *,
+        keep_sparse_compat: bool = True,
+        device: Optional[str] = None,
     ) -> Self:
         """
         Convert all influence matrices in the Dij to a different array namespace.
@@ -458,20 +462,25 @@ class Dij(PyRadPlanBaseModel):
             sparse format is compatible with the target namespace. For example, converting from
             scipy.sparse to numpy will result in a dense numpy array instead of a sparse matrix.
             Default is True.
+        device : Optional[str]
+            Target device for the arrays (e.g. "cuda:0", "cpu").
         """
 
-        # We need to check this deep copy, if it can be avoided (or does it even copy the full
-        # NDArray object containers? Not sure)
-        dij_copy = self.model_copy(deep=True)
+        dij_copy = self.model_copy(deep=False)
 
         for q in self.quantities:
             q_container: InfluenceMatrixContainer = getattr(self, q)
             if q_container is not None:
+                new_container = q_container.copy()
                 for i in range(q_container.size):
                     if q_container.flat[i] is not None:
-                        getattr(dij_copy, q).flat[i] = to_namespace(
-                            xp_new, q_container.flat[i], keep_sparse_compat=keep_sparse_compat
+                        new_container.flat[i] = to_namespace(
+                            xp_new,
+                            q_container.flat[i],
+                            keep_sparse_compat=keep_sparse_compat,
+                            device=device,
                         )
+                object.__setattr__(dij_copy, q, new_container)
 
         if isinstance(xp_new, str):
             name = xp_new

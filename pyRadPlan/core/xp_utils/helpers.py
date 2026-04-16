@@ -260,26 +260,13 @@ def elapsed_time(xp: ArrayNamespace, start, end) -> float:
 
 def to_numpy(arr: Array, detach: bool = True) -> NDArray:
     """Convert an array to a NumPy array."""
-    if array_api_compat.is_cupy_array(arr):
-        return cp.asnumpy(arr)
-    elif array_api_compat.is_torch_array(arr):
+    if array_api_compat.is_torch_array(arr):
         if detach and arr.requires_grad:
             arr = arr.detach()
         return arr.cpu().numpy()
-    elif array_api_compat.is_numpy_array(arr):
-        return arr
-
-    # Try DLPack (e.g. array_api_strict or other compliant arrays)
-    if hasattr(arr, "__dlpack__"):
-        try:
-            if _NP_DLPACK_HAS_DEVICE and is_on_gpu(arr):
-                return np.from_dlpack(arr, device="cpu", copy=False)
-            else:
-                return np.from_dlpack(arr)
-        except Exception:
-            pass
-
-    raise TypeError("Conversion helper to NumPy not implemented for type '{}'.".format(type(arr)))
+    if array_api_compat.is_cupy_array(arr):
+        return cp.asnumpy(arr)
+    return np.asarray(arr)
 
 
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Optional[str] = None) -> Array:
@@ -510,22 +497,18 @@ def _convert_scipy_sparse_for_namespace(
         return sparray  # No conversion needed, scipy sparse is compatible with numpy
 
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
-        if fmt != "coo":
-            sparray = sparray.tocoo()
-        values = torch.from_numpy(sparray.data)
-        indices = torch.from_numpy(np.vstack((sparray.row, sparray.col)).astype(np.int64))
-        shape = sparray.shape
-        sparray = torch.sparse_coo_tensor(indices, values, size=shape)
-
-        format_func = getattr(torch.Tensor, "to_sparse_" + fmt, None)
-        if format_func is not None:
-            if fmt != "coo":
-                sparray = format_func(sparray)
+        if fmt in ("csr", "csc"):
+            f_create = torch.sparse_csr_tensor if fmt == "csr" else torch.sparse_csc_tensor
+            crow_indices = torch.from_numpy(sparray.indptr.astype(np.int64, copy=False))
+            col_indices = torch.from_numpy(sparray.indices.astype(np.int64, copy=False))
+            values = torch.from_numpy(sparray.data)
+            sparray = f_create(crow_indices, col_indices, values, size=sparray.shape)
         else:
-            warnings.warn(
-                f"Conversion of sparse matrix to format '{fmt}' "
-                "is not directly supported in PyTorch. Keeping 'coo' format."
-            )
+            if fmt != "coo":
+                sparray = sparray.tocoo()
+            values = torch.from_numpy(sparray.data)
+            indices = torch.from_numpy(np.vstack((sparray.row, sparray.col)).astype(np.int64))
+            sparray = torch.sparse_coo_tensor(indices, values, size=sparray.shape)
 
         if device is not None and device.startswith("gpu"):
             if not torch.cuda.is_available():

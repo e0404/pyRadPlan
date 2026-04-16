@@ -324,6 +324,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             wed_cube_trace = self.cube_wed
 
         self._raytracer = RayTracerSiddon([wed_cube_trace])
+        self._raytracer.lateral_cut_off = self.geometric_lateral_cutoff
 
         return dij
 
@@ -459,6 +460,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         start_time = time.time()
 
         self._raytracer.debug_core_performance = True
+        self._raytracer.lateral_cut_off = beam_info["beam"].get(
+            "effective_lateral_cut_off", self._effective_lateral_cutoff
+        )
         rad_depth_cubes = self._raytracer.trace_cubes(beam_info["beam"])
         self._raytracer.debug_core_performance = False
 
@@ -786,109 +790,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
 
         return ray.get("effective_lateral_cut_off", self._effective_lateral_cutoff)
-
-    def _fill_dij_gpu(
-        self,
-        bixel: dict,
-        dij: dict,
-        _stf: SteeringInformation,
-        scen_idx: int,
-        curr_beam_idx: int,
-        curr_ray_idx: int,
-        curr_bixel_idx: int,
-        bixel_counter: int,
-    ):
-        """
-        Fill the dose influence matrix (dij) with bixel contents.
-
-        This is the last step in bixel dose calculation. It will fill all
-        the computed quantities into sparse matrix containers.
-        If forward calculation is active, accumulation into dense vectors
-        will be performed instead.
-
-        Parameters
-        ----------
-        bixel : dict
-            The bixel data.
-        dij : dict
-            The dose influence matrix.
-        stf : SteeringInformation
-            The structure containing beam information.
-            Unused in this base implementation.
-        scen_idx : int
-            The scenario index.
-        curr_beam_idx : int
-            The current beam index.
-        curr_ray_idx : int
-            The current ray index.
-        curr_bixel_idx : int
-            The current bixel index.
-        bixel_counter : int
-            The counter for the bixels.
-
-        Returns
-        -------
-        dict
-            The updated dose influence matrix.
-        """
-        xp = array_api_compat.array_namespace(bixel["physical_dose"])
-
-        # Determine if we have entries to store for this bixel
-        ix_size = 0
-        if bixel and "ix" in bixel:
-            ix_val = bixel["ix"]
-            try:
-                ix_size = ix_val.shape[0]
-            except AttributeError:
-                ix_size = len(ix_val)
-
-        sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
-
-        for q_name in self._computed_quantities:
-            if self._calc_dose_direct:
-                if ix_size > 0:
-                    dij[q_name][sub_scen_idx][bixel["ix"], curr_beam_idx] += (
-                        bixel["weight"] * bixel[q_name]
-                    )
-            else:
-                data_dict = dij[q_name][sub_scen_idx]
-                # Advance column pointer even when ix_size == 0 to keep CSC valid
-                start = data_dict["indptr"][bixel_counter]
-                end = start + ix_size
-                data_dict["indptr"][bixel_counter + 1] = end
-
-                if ix_size > 0:
-                    need_nnz = data_dict["nnz"] + ix_size
-                    if data_dict["data"].shape[0] < need_nnz:
-                        logger.debug("Resizing data and indices arrays for %s...", q_name)
-                        grow = max(
-                            ix_size, (self._num_of_columns_dij - bixel_counter) * (ix_size + 1)
-                        )
-                        new_size = data_dict["data"].shape[0] + grow
-                        old = data_dict["data"]
-                        new = xp.zeros((int(new_size),), dtype=old.dtype, device=self.device)
-                        new[: old.shape[0]] = old
-                        data_dict["data"] = new
-                        old = data_dict["indices"]
-                        new = xp.zeros((int(new_size),), dtype=old.dtype, device=self.device)
-                        new[: old.shape[0]] = old
-                        data_dict["indices"] = new
-
-                    # Fill values and indices into the allocated slice
-                    data_dict["data"][start:end] = bixel[q_name]
-                    data_dict["indices"][start:end] = bixel["ix"]
-                    data_dict["nnz"] += ix_size
-
-        # Bookkeeping of bixel numbers
-        # remember beam and bixel number
-        if self._calc_dose_direct:
-            dij["beam_num"][int(curr_beam_idx)] = curr_beam_idx
-            dij["ray_num"][int(curr_beam_idx)] = curr_beam_idx
-            dij["bixel_num"][int(curr_beam_idx)] = curr_beam_idx
-        else:
-            dij["beam_num"][int(bixel_counter)] = curr_beam_idx
-            dij["ray_num"][int(bixel_counter)] = curr_ray_idx
-            dij["bixel_num"][int(bixel_counter)] = curr_bixel_idx
 
     def _fill_dij(
         self,

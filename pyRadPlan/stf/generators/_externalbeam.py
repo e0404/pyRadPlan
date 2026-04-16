@@ -202,3 +202,76 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
 
             stf.append(beam)
         return stf
+
+
+class StfGeneratorSingleBixel(StfGeneratorExternalBeam):
+    """Base class for ray-bixel-based geometry for IMRT."""
+
+    def __init__(self, pln: Plan = None):
+        super().__init__(pln)
+
+    def _computed_target_margin(self) -> float:
+        """Target margin to apply for beamlet placing."""
+        return 0.0
+
+    def _create_rays(self, beam) -> list[dict]:
+        """Get the rays on a beam / stf element."""
+
+        ray_pos = np.array([0.0, 0.0, 0.0]).reshape((3, 1))
+
+        # Get the rotation matrix in LPS rotating the coordinates into the BEV System
+        rotation_matrix = lps.get_beam_rotation_matrix(beam["gantry_angle"], beam["couch_angle"])
+
+        ray = {
+            "ray_pos_bev": ray_pos[:, 0].flatten(),
+            "ray_pos": rotation_matrix @ ray_pos[:, 0].flatten(),
+        }
+
+        return [ray]
+
+    def _generate_source_geometry(self):
+        """Generate the source geometry for the STF."""
+
+        # Validate iso center
+        if self.iso_center is None:
+            self.iso_center = self._cst.target_center_of_mass().reshape((1, 3))
+        else:
+            self.iso_center = np.asarray(self.iso_center, dtype=np.float64).reshape((-1, 3))
+
+        # Now check isocenter
+        if (
+            self.iso_center.shape[0] != self.num_of_beams or self.iso_center.shape[0] != 1
+        ) and self.iso_center.shape[1] != 3:
+            raise ValueError(
+                "Iso center needs to have three coordinates (1x3 array) ",
+                " or a set of 3D coordinates for each beam (nx3 array).",
+            )
+
+        if self.iso_center.shape[0] == 1:
+            self.iso_center = np.repeat(self.iso_center, self.num_of_beams, axis=0)
+
+        stf = []
+
+        for i in tqdm(range(self.num_of_beams), desc="Beam", unit="b", leave=False):
+            beam = {}
+
+            # Save meta information for treatment plan
+            beam["gantry_angle"] = self.gantry_angles[i]
+            beam["couch_angle"] = self.couch_angles[i]
+            beam["radiation_mode"] = self.radiation_mode
+            beam["sad"] = self.machine.sad
+            beam["iso_center"] = self.iso_center[i]
+            beam["machine"] = self.machine.name
+            beam["source_point_bev"] = np.array([0.0, -beam["sad"], 0.0], dtype=float)
+
+            # Get the rotation matrix in LPS rotating the coordinates into the BEV system
+            rotation_matrix = lps.get_beam_rotation_matrix(
+                beam["gantry_angle"], beam["couch_angle"]
+            )
+
+            beam["source_point"] = rotation_matrix @ beam["source_point_bev"]
+
+            beam["rays"] = self._create_rays(beam)
+
+            stf.append(beam)
+        return stf
