@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
+- Issue and Pull/Merge Request templates
 
 ### Changed
 - Sparse structure now uses one shared index structure across dijs if possible
