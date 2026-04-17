@@ -1,4 +1,4 @@
-from typing import TypedDict, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
@@ -59,6 +59,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     short_name = "SVDPB"
     name = "SVD Pencil Beam"
     possible_radiation_modes = ["photons"]
+
+    _dij_guarantee_canonical: ClassVar[bool] = True
+    _dij_guarantee_nonzero: ClassVar[bool] = True
 
     use_custom_primary_photon_fluence: bool
     kernel_cutoff: float

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
+
+### Changed
+- Sparse structure now uses one shared index structure across dijs if possible
+
 ### Fixed
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
 - CI Release Workflow now fetches tags correctly and supplies the correct release body from the tag message

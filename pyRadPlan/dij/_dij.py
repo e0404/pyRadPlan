@@ -29,6 +29,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
+from ..core.xp_utils.helpers import _rebuild_scipy_csc_in_namespace
 
 InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
 InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
@@ -471,23 +472,77 @@ class Dij(PyRadPlanBaseModel):
             Default is True.
         """
 
-        # We need to check this deep copy, if it can be avoided (or does it even copy the full
-        # NDArray object containers? Not sure)
-        dij_copy = self.model_copy(deep=True)
+        # record memory addresses here, before model_copy would break the sharing.
+        _shared_idx_cache: dict[int, tuple | None] = {}
+        if keep_sparse_compat:
+            for q in self.quantities:
+                q_container = getattr(self, q)
+                if q_container is None:
+                    continue
+                for i in range(q_container.size):
+                    mat = q_container.flat[i]
+                    if mat is not None and isinstance(mat, (sp.csc_matrix, sp.csc_array)):
+                        _shared_idx_cache.setdefault(mat.indices.ctypes.data, None)
+
+            n_unique = len(_shared_idx_cache)
+            n_total = sum(
+                sum(
+                    1
+                    for idx in range(getattr(self, q).size)
+                    if getattr(self, q).flat[idx] is not None
+                    and isinstance(getattr(self, q).flat[idx], (sp.csc_matrix, sp.csc_array))
+                )
+                for q in self.quantities
+                if getattr(self, q) is not None
+            )
+            if n_total > n_unique:
+                ns_name = xp_new if isinstance(xp_new, str) else xp_new.__name__
+                logger.debug(
+                    "to_namespace: %d CSC matrices share %d unique row-index array(s) — "
+                    "converting index arrays only once to namespace '%s'.",
+                    n_total,
+                    n_unique,
+                    ns_name,
+                )
+
+        # shallow copy and then convert the matrices in-place to avoid unnecessary copying of large arrays.
+        dij_copy = self.model_copy(deep=False)
+        for _q in self.quantities:
+            _src = getattr(self, _q)
+            if _src is not None:
+                _fresh = np.empty_like(_src)  # same shape, dtype=object
+                _fresh.flat[:] = None
+                object.__setattr__(dij_copy, _q, _fresh)
 
         for q in self.quantities:
             q_container: InfluenceMatrixContainer = getattr(self, q)
             if q_container is not None:
                 for i in range(q_container.size):
-                    if q_container.flat[i] is not None:
-                        getattr(dij_copy, q).flat[i] = to_namespace(
-                            xp_new, q_container.flat[i], keep_sparse_compat=keep_sparse_compat
-                        )
+                    mat = q_container.flat[i]
+                    if mat is None:
+                        continue
 
-        if isinstance(xp_new, str):
-            name = xp_new
-        else:
-            name = xp_new.__name__
+                    # scipy CSC matrices whose index arrays may be shared
+                    if keep_sparse_compat and isinstance(mat, (sp.csc_matrix, sp.csc_array)):
+                        addr = mat.indices.ctypes.data
+                        if addr in _shared_idx_cache:
+                            if _shared_idx_cache[addr] is None:
+                                # First encounter for this index array: convert once
+                                conv_indices = to_namespace(xp_new, mat.indices)
+                                conv_indptr = to_namespace(xp_new, mat.indptr)
+                                _shared_idx_cache[addr] = (conv_indices, conv_indptr)
+                            conv_indices, conv_indptr = _shared_idx_cache[addr]
+                            conv_data = to_namespace(xp_new, mat.data)
+                            getattr(dij_copy, q).flat[i] = _rebuild_scipy_csc_in_namespace(
+                                xp_new, conv_data, conv_indices, conv_indptr, mat.shape
+                            )
+                            continue
+
+                    getattr(dij_copy, q).flat[i] = to_namespace(
+                        xp_new, mat, keep_sparse_compat=keep_sparse_compat
+                    )
+
+        name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")
 

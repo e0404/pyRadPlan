@@ -2,7 +2,7 @@
 
 import warnings
 from abc import abstractmethod
-from typing import cast, Literal, Any
+from typing import cast, ClassVar, Literal, Any
 import logging
 import time
 from copy import deepcopy
@@ -55,6 +55,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     air_offset_correction: bool
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"]
     cut_off_method: Literal["integral", "relative"]
+
+    _dij_guarantee_canonical: ClassVar[bool]
+    _dij_guarantee_nonzero: ClassVar[bool]
 
     def __init__(self, pln):
         self.calc_let = True
