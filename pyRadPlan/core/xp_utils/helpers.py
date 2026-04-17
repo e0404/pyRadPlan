@@ -383,3 +383,54 @@ def is_sparse_array(arr: Any) -> bool:
         return True
 
     raise TypeError("Sparse check helper not implemented for type '{}'.".format(type(arr)))
+
+
+def _rebuild_scipy_csc_in_namespace(
+    xp_new: ArrayNamespace,
+    data: Array,
+    indices: Array,
+    indptr: Array,
+    shape: tuple,
+) -> Union[scp.spmatrix, scp.sparray]:
+    """Reconstruct a CSC sparse matrix in *xp_new* from pre-converted component arrays.
+
+    This is a low-level helper used by :meth:`Dij.to_namespace` to avoid uploading
+    shared row-index arrays more than once when multiple dose quantities share the
+    same CSC index storage (as assembled by the pencil-beam engine).
+
+    Parameters
+    ----------
+    xp_new :
+        Target array namespace (numpy, cupy, torch, …).
+    data :
+        Non-zero values already in *xp_new*.
+    indices :
+        CSC row-index array already in *xp_new*.
+    indptr :
+        CSC column-pointer array already in *xp_new*.
+    shape :
+        Matrix shape ``(nrows, ncols)``.
+
+    Returns
+    -------
+        Sparse matrix compatible with *xp_new*.
+
+    Raises
+    ------
+    TypeError
+        If rebuilding is not yet supported for *xp_new*.
+    """
+    if array_api_compat.is_numpy_namespace(
+        xp_new
+    ) or array_api_compat.is_array_api_strict_namespace(xp_new):
+        return scp.csc_array((data, indices, indptr), shape=shape, copy=False)
+
+    if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
+        return csp.csc_matrix((data, indices, indptr), shape=shape)
+
+    if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
+        return torch.sparse_csc_tensor(indptr, indices, data, size=shape)
+
+    raise TypeError(
+        f"Rebuilding a CSC sparse matrix in namespace '{xp_new.__name__}' is not yet supported."
+    )
