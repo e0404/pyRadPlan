@@ -22,7 +22,7 @@ optimization with focus on ion planning.
 ### Data Structures
 pyRadPlan uses a similar datastructure and workflow concept as in matRad, while trying to ensure
 that the corresponding datastructures can be easily imported and exported from/to matRad.
-This facilitates the application of either algortihms from matRad or native pyRadPlan at any stage
+This facilitates the application of either algorithms from matRad or native pyRadPlan at any stage
 of the treatment planning workflow.
 
 To enforce valid datastructures, we perform validation and serialization with

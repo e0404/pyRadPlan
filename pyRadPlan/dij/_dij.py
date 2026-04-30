@@ -257,7 +257,7 @@ class Dij(PyRadPlanBaseModel):
                 )
                 if value.flat[i] is not None and not isinstance(value.flat[i], sp.csc_matrix):
                     value.flat[i] = sp.csc_matrix(value.flat[i])
-        # return 0 if value is None. savemat() cant handle 'None'
+        # return 0 if value is None. savemat() can't handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
         return value
@@ -268,7 +268,7 @@ class Dij(PyRadPlanBaseModel):
         if context and context.get("matRad") == "mat-file" and value is not None:
             # TODO: it might be necessary to rotate the cube!
             return value
-        # return 0 if value is None. savemat() cant handle 'None'
+        # return 0 if value is None. savemat() can't handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
         return value
@@ -320,7 +320,7 @@ class Dij(PyRadPlanBaseModel):
             out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
             out["physical_dose_beam"] = []
 
-            # !Note: This implementaion is faster than the intuitive:
+            # !Note: This implementation is faster than the intuitive:
             # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
             # Since slicing over the intensity vector reduces the matrix operation size.
             for i in range(self.num_of_beams):

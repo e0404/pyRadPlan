@@ -583,7 +583,7 @@ class DoseEngineBase(ABC):
         self._machine = self.load_machine(radiation_mode, machine)
 
         # Voxel selection for dose calculation
-        # TODO: set overlap priorites - Skips most of the function
+        # TODO: set overlap priorities - Skips most of the function
         cst = self.set_overlap_priorities(cst, ct_dim=None)
 
         # resizing cst to dose cube resolution

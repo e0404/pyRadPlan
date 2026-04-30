@@ -136,7 +136,7 @@ class ScenarioModel(PyRadPlanBaseModel):
         """
         Post-assignment validator for ct_scen_prob.
 
-        Ensures sensible probabilities for ct scnearios.
+        Ensures sensible probabilities for ct scenarios.
         """
         if not all(0 <= x[1] <= 1 for x in ct_scen_prob):
             raise ValueError("All probabilities must be between 0 and 1.")
@@ -331,7 +331,7 @@ class ScenarioModel(PyRadPlanBaseModel):
 
     def scen_num(self, full_scen_ix: int) -> int:
         """
-        Return the scenario number given the scecnario ray index.
+        Return the scenario number given the scenario ray index.
 
         This corresponds to the first occurrence of `full_scen_ix` in
         `self.scen_mask`.

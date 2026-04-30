@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class PlanningProblem(ABC):
     """
-    Abstrac class for all planning problems.
+    Abstract class for all planning problems.
 
     Parameters
     ----------
@@ -226,7 +226,7 @@ class PlanningProblem(ABC):
 
         # TODO: manage scenarios
 
-        # Manage quantites by getting them from the objective quantities
+        # Manage quantities by getting them from the objective quantities
         self._quantities = [q(self._dij) for q in quantities]
 
         if len(set([q.array_backend for q in self._quantities])) == 1:

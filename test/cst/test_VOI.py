@@ -442,7 +442,7 @@ def test_resample_on_new_ct_binary_mask_4d():
     mask_4d = sitk.JoinSeries([sitk.GetImageFromArray(mask_arr)] * 2)
     voi = create_voi(voi_type="TARGET", name="block", ct_image=orig_ct, mask=mask_4d)
 
-    # Correspondance is a 3d CT as before
+    # Correspondence is a 3d CT as before
     new_img = sitk.Image(7, 7, 7, sitk.sitkInt16)
     new_img.SetSpacing((3.0, 3.0, 3.0))
     new_ct = create_ct(cube_hu=new_img)

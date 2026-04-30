@@ -277,7 +277,7 @@ def _convert_scipy_sparse_for_namespace(
 
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
         try:
-            # Access the copy constructur from the fmt string
+            # Access the copy constructor from the fmt string
             f_create = getattr(csp, fmt + "_matrix")
         except AttributeError:
             sparray = sparray.tocoo()

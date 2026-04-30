@@ -14,7 +14,7 @@ def sample_model_dict_matrad():
         "shiftSD": (3.0, 3.0, 3.0),
         # TODO!: MatRad export has e.g. (1, 0.5) as indexing.
         # The Model does not yet respect that (converting 1 to 0)
-        # because it cant distinguish whether its from the user or matRad. (adding '1' or keeping '0')
+        # because it can't distinguish whether its from the user or matRad. (adding '1' or keeping '0')
         "ctScenProb": [(1, 0.5)],
         "wcSigma": 5.0,
     }

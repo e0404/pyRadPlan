@@ -54,10 +54,10 @@ result = dij.compute_result_ct_grid(fluence)
 # ### Visualizing a single slice with `plot_slice()`
 # %%
 
-# Visualize only ct and choosen quantity
+# Visualize only ct and chosen quantity
 plot_slice(ct=ct, overlay=result["physical_dose"])
 
-# Visualize ct, cst and choosen quantity
+# Visualize ct, cst and chosen quantity
 plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
 
 # %% [markdown]
@@ -94,7 +94,7 @@ plot_slice(
 )
 
 # %% [markdown]
-# ### Visualizing multiple overlays/quantites with `plot_distributions()`
+# ### Visualizing multiple overlays/quantities with `plot_distributions()`
 # This function might be useful in cases you want to compare multiple overlays/quantities/beams side by side.
 
 # `plot_distributions()` has similar parameters to `plot_slice()`:
