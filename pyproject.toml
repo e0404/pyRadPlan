@@ -25,6 +25,7 @@ authors = [
   { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
   { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" },
   { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" },
+  { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" }
 ]
 
 maintainers = [

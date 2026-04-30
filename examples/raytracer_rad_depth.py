@@ -95,7 +95,7 @@ print(f"Minimum rad depth: {min_rad_depth}Maximum rad depth: {max_rad_depth}")
 
 # Visualize
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=rd_np,
     view_slice=view_slice,
