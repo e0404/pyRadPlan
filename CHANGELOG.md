@@ -15,9 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
 - Issue and Pull/Merge Request templates
+- `plot_slice()` and `plot_multiple_slices()` now accept a generic `image_volume` (CT, dict, or `sitk.Image`) instead of only a `CT` via the `ct` argument
+- `plot_slice()` gained `image_window` and `window_mode` (`"minmax"` or `"centerwidth"`) options for grayscale windowing, replacing the previous `ct_window`
+- `overlay_unit` in `plot_slice()` now also accepts a `pint.Quantity`
+- Jennifer Josephine Hardt added as author (CITATION.cff and pyproject.toml)
 
 ### Changed
 - Sparse structure now uses one shared index structure across dijs if possible
+- `plot_slice()` internally refactored into modular helpers (input validation, axis resolution, image/contour/overlay drawing, scale bar, finalization) for readability and reuse
+- Slice titles now follow the format `Slice ID = N at X mm` (or `Slice ID = N` when no image volume is provided)
+- `plot_slice()`/`plot_multiple_slices()` parameter `ct` renamed to `image_volume` and `ct_window` renamed to `image_window`
+
+### Deprecated
+- `ct` and `ct_window` arguments to `plot_slice()`/`plot_multiple_slices()` still work as aliases for `image_volume` and `image_window` but emit a `DeprecationWarning`
 
 ### Fixed
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
