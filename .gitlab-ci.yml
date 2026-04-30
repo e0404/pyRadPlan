@@ -75,6 +75,31 @@ format:
         - pip install ruff
         - ruff format --check
 
+codespell:
+    stage: test
+    cache:
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
+        paths:
+            - .venv/
+            - .cache/pip/
+        policy: pull
+    script:
+        - . .venv/bin/activate
+        - pip install codespell
+        - return_code=0
+        - codespell > codespell.txt || return_code=$?
+        - cat codespell.txt
+        - python .gitlab/scripts/codespell_to_codequality.py < codespell.txt > gl-codespell-quality.json
+        - exit $return_code
+    artifacts:
+        when: always
+        reports:
+            codequality: gl-codespell-quality.json
+        paths:
+            - codespell.txt
+            - gl-codespell-quality.json
+    allow_failure: true
+
 
 # Run tests in parallel across multiple Python versions for Merge Requests only
 tests-matrix:
