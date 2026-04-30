@@ -151,6 +151,9 @@ exclude = [
   "test" ]
 extend-ignore = ["E203","E701","F722"]
 
+[tool.codespell]
+skip = "./matRad,*/matRad/*"
+
 [tool.pydocstringformatter]
 write = true
 exclude = [

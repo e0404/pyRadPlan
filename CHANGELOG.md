@@ -11,13 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - New version of photons_Generic.mat basedata file can now be provided, allowing a "version" field alongside "meta" and "data" files within the machine struct. Version 2 requires correct kernel normalization (without implying a spacing in the convolution integral). photons_Generic.mat has been updated to version 2 with correct kernel normalization.
 - Photon dose calculation now does not rely on hardcoded convolution resolution integral normalization of machine kernels. Assumes that old kernels use hardcoded factor of 4 for 0.5 mm resolution (1/0.5^2).
+- Sparse structure now uses one shared index structure across dijs if possible
 
 ### Added
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
 - Issue and Pull/Merge Request templates
-
-### Changed
-- Sparse structure now uses one shared index structure across dijs if possible
+- default pre-commit hooks for line endings, case conflicts, merge conflicts, etc. Also added codespell, CITATION.cff verifyer and toml check
 
 ### Fixed
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
@@ -27,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Automatic Release workflow on GitHub reading CHANGELOG.md and tag message
-- Benchmark Folder with inital Raytracer benchmark that can be run with pytest-benchmark
+- Benchmark Folder with initial Raytracer benchmark that can be run with pytest-benchmark
 
 ### Changed
 - Changelog now follows thee Keep A Changelog conventions
@@ -37,8 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed raytracer issue where certain geometrical configurations could lead to individual rays starting with invalid indices, inserting misplaced NaN's into the radiological depth cube.
 
 ## [0.3.2] - 2026-04-07
-
-Small patch release with a new optimization objective, a structure for Beam Limiting Devices for field/shape-based dose calculation, several bug fixes, and a CITATION.cff.
 
 ### Added
 
@@ -58,8 +55,6 @@ Small patch release with a new optimization objective, a structure for Beam Limi
 
 ## [0.3.1] - 2026-01-28
 
-Small update to drop `numba` as a mandatory dependency. `numba` accelerations are still available as an optional complement to Array API conform base implementations.
-
 ### Added
 
 - Performant and Array API compatible candidate ray matrix setup alternative for cube raytracing
@@ -75,8 +70,6 @@ Small update to drop `numba` as a mandatory dependency. `numba` accelerations ar
 - Small code quality fixes
 
 ## [0.3.0] - 2026-01-12
-
-Array API compatibility, FRED Monte Carlo interface, VHEE model, Sphinx documentation, jupytext-style examples, refactoring, and bugfixes. **Python 3.9 support has been removed.**
 
 ### Added
 
@@ -105,8 +98,6 @@ Array API compatibility, FRED Monte Carlo interface, VHEE model, Sphinx document
 - Elevated minimum required version of numpydantic
 
 ## [0.2.8] - 2025-06-28
-
-Performance improvements, plan analysis via DVHs, and data validation fixes. Corresponds to the version used in the [SynthRad2025 challenge](https://github.com/SynthRad2025).
 
 ### Added
 
@@ -150,8 +141,6 @@ Performance improvements, plan analysis via DVHs, and data validation fixes. Cor
 - Various validation fixes
 
 ## [0.2.2] - 2025-02-27
-
-First official pre-release of pyRadPlan — an open-source radiotherapy treatment planning toolkit designed for interoperability with matRad.
 
 ### Added
 
