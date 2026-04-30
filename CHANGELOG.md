@@ -7,16 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
+- Issue and Pull/Merge Request templates
+- default pre-commit hooks for line endings, case conflicts, merge conflicts, etc. Also added codespell, CITATION.cff verifyer and toml check
+- `plot_slice()` and `plot_multiple_slices()` now accept a generic `image_volume` (CT, dict, or `sitk.Image`) instead of only a `CT` via the `ct` argument
+- `plot_slice()` gained `image_window` and `window_mode` (`"minmax"` or `"centerwidth"`) options for grayscale windowing, replacing the previous `ct_window`
+- `overlay_unit` in `plot_slice()` now also accepts a `pint.Quantity`
+- Jennifer Josephine Hardt added as author (CITATION.cff and pyproject.toml)
 
 ### Changed
 - New version of photons_Generic.mat basedata file can now be provided, allowing a "version" field alongside "meta" and "data" files within the machine struct. Version 2 requires correct kernel normalization (without implying a spacing in the convolution integral). photons_Generic.mat has been updated to version 2 with correct kernel normalization.
 - Photon dose calculation now does not rely on hardcoded convolution resolution integral normalization of machine kernels. Assumes that old kernels use hardcoded factor of 4 for 0.5 mm resolution (1/0.5^2).
 - Sparse structure now uses one shared index structure across dijs if possible
+- `plot_slice()` internally refactored into modular helpers (input validation, axis resolution, image/contour/overlay drawing, scale bar, finalization) for readability and reuse
+- Slice titles now follow the format `Slice ID = N at X mm` (or `Slice ID = N` when no image volume is provided)
+- `plot_slice()`/`plot_multiple_slices()` parameter `ct` renamed to `image_volume` and `ct_window` renamed to `image_window`
 
-### Added
-- dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
-- Issue and Pull/Merge Request templates
-- default pre-commit hooks for line endings, case conflicts, merge conflicts, etc. Also added codespell, CITATION.cff verifyer and toml check
+### Deprecated
+- `ct` and `ct_window` arguments to `plot_slice()`/`plot_multiple_slices()` still work as aliases for `image_volume` and `image_window` but emit a `DeprecationWarning`
 
 ### Fixed
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.

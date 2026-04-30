@@ -32,7 +32,7 @@ result = dij.compute_result_ct_grid(fluence)
 
 # Plot
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
     overlay_unit="Gy",

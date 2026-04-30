@@ -55,10 +55,10 @@ result = dij.compute_result_ct_grid(fluence)
 # %%
 
 # Visualize only ct and chosen quantity
-plot_slice(ct=ct, overlay=result["physical_dose"])
+plot_slice(image_volume=ct, overlay=result["physical_dose"])
 
 # Visualize ct, cst and chosen quantity
-plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
+plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"])
 
 # %% [markdown]
 # ## Visualze more abstract settings using `plot_slice()` <br>
@@ -79,7 +79,7 @@ plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
 # %%
 # Feel free to change the parameters to see how they affect the plot.
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
     view_slice=64,  # Visualize slice 10
@@ -112,9 +112,13 @@ plot_slice(
 # - **use_global_max**:  If True, uses the global maximum of the overlay for scaling
 # - **overlay_titles**:  Custom titles for each overlay type (optional)
 # %%
+plot_multiple_slices(
+    image_volume=ct,
+)
+# %%
 # Feel free to change the parameters to see how they affect the plot.
 plot_multiple_slices(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlays=[result["physical_dose"], result["effect"]],
     view_slice=[64, 65],  # Visualize slices 64 and 65
@@ -140,7 +144,7 @@ fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 # Plot physical dose for both slices
 for i, slice_idx in enumerate(slices):
     plot_slice(
-        ct=ct,
+        image_volume=ct,
         cst=cst,
         overlay=result["physical_dose"],
         view_slice=slice_idx,  # Single slice
@@ -154,7 +158,7 @@ for i, slice_idx in enumerate(slices):
 # Plot biological effect for both slices
 for i, slice_idx in enumerate(slices):
     plot_slice(
-        ct=ct,
+        image_volume=ct,
         cst=cst,
         overlay=result["effect"],
         view_slice=slice_idx,  # Single slice
