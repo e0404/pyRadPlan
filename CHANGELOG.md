@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-05
+
 ### Added
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
 - Issue and Pull/Merge Request templates
@@ -169,7 +171,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.3
 [0.3.3]: https://github.com/e0404/pyRadPlan/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/e0404/pyRadPlan/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/e0404/pyRadPlan/compare/v0.3.0...v0.3.1
