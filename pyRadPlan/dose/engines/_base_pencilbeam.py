@@ -447,7 +447,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
             beam_info["valid_coords"][c] = coord_is_valid
 
-            # TODO: !remove brakets once mutliscen is implemented
+            # TODO: !remove brackets once multscen is implemented
             beam_info["rad_depths"][c] = rad_depth_vdose_grid
 
         beam_info["geo_depths"] = geo_dist_vdose_grid
