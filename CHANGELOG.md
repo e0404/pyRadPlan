@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_slice()` gained `image_window` and `window_mode` (`"minmax"` or `"centerwidth"`) options for grayscale windowing, replacing the previous `ct_window`
 - `overlay_unit` in `plot_slice()` now also accepts a `pint.Quantity`
 - Jennifer Josephine Hardt added as author (CITATION.cff and pyproject.toml)
+- Added an `extrapolate` option to `resample_image` to choose the extrapolator. Default is to use a nearest neighbor extrapolator, but individual values can beprovided as well.
 
 ### Changed
 - New version of photons_Generic.mat basedata file can now be provided, allowing a "version" field alongside "meta" and "data" files within the machine struct. Version 2 requires correct kernel normalization (without implying a spacing in the convolution integral). photons_Generic.mat has been updated to version 2 with correct kernel normalization.
