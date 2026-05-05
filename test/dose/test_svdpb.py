@@ -21,7 +21,7 @@ def test_photons(test_data_photons):
 
     # Keeping this for debugging:
     # plot_slice(
-    #     ct=ct,
+    #     image_volume=ct,
     #     cst=cst,
     #     overlay=result_matRad_rot,#-result_matRad_rot,
     #     view_slice=5,

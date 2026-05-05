@@ -84,4 +84,4 @@ matRad's example `matRad.m <https://github.com/e0404/matRad/blob/master/matRad.m
     result = dij.compute_result_ct_grid(fluence)
 
     # Visualize
-    plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"], overlay_unit="Gy")
+    plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"], overlay_unit="Gy")
