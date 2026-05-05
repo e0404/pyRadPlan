@@ -27,6 +27,7 @@ Closes #<!-- issue number -->
 - [ ] Unit tests pass locally (`pytest test`).
 - [ ] New or changed code is covered by tests; coverage has not dropped significantly.
 - [ ] `CHANGELOG.md` has been updated in the `[UNRELEASED]` section following [Keep a Changelog](https://keepachangelog.com/) conventions.
+- [ ] If new contributor: Authors in  `CITATION.cff` and `pyproject.toml` have been updated
 
 ## Testing
 
