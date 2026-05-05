@@ -20,7 +20,7 @@ class MeanDose(Objective):
     Attributes
     ----------
     d_ref : float
-        referene mean dose to achieve
+        reference mean dose to achieve
 
     Notes
     -----

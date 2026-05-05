@@ -288,7 +288,7 @@ class FieldShapeAsMask(FieldShape):
         self.__dict__["resolution"] = self._resolve_resolution(self.resolution, self.grid)
 
         if self.grid is None and self.resolution is not None:
-            # center grid around (0,0) (asume mask is centered at (0,0))
+            # center grid around (0,0) (assume mask is centered at (0,0))
             half_size = self.mask.shape[0] // 2
             self.__dict__["grid"] = self.resolution * np.arange(-half_size, half_size + 1)
 
@@ -352,7 +352,7 @@ class FieldShapeAsBLD(FieldShape):
         # TODO: add field_width here directly & build grid with _build_grid
 
         if self.grid is None:
-            # center grid around (0,0) (asume mask is centered at (0,0))
+            # center grid around (0,0) (assume mask is centered at (0,0))
             half_size = self.mask.shape[0] // 2
             self.__dict__["grid"] = self.resolution * np.arange(-half_size, half_size + 1)
 

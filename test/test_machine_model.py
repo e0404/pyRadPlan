@@ -24,7 +24,7 @@ def test_basic_machine_model():
         created_by="Jay Doe",
         last_modified_by="Jay Doe",
         data_type="-",
-        version="1.0.0",
+        version="1",
     )
 
     assert isinstance(machine.created_on, datetime)
@@ -38,7 +38,7 @@ def test_basic_machine_model():
     assert machine.created_by == "Jay Doe"
     assert machine.last_modified_by == "Jay Doe"
     assert machine.data_type == "-"
-    assert machine.version == "1.0.0"
+    assert machine.version == 1
 
 
 def test_machine_model_only_required():
@@ -51,12 +51,12 @@ def test_machine_model_only_required():
     assert machine.created_by == ""
     assert machine.last_modified_by == ""
     assert machine.data_type == "-"
-    assert machine.version == "0.0.1"
+    assert machine.version == 1
 
 
 def test_machine_model_invalid_version():
     with pytest.raises(ValueError):
-        machine = Machine(radiation_mode="photons", name="Generic_name", version="1.0")
+        machine = Machine(radiation_mode="photons", name="Generic_name", version="abc")
 
 
 def test_machine_model_invalid_machine():

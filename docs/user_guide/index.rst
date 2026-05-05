@@ -22,7 +22,7 @@ optimization with focus on ion planning.
 ### Data Structures
 pyRadPlan uses a similar datastructure and workflow concept as in matRad, while trying to ensure
 that the corresponding datastructures can be easily imported and exported from/to matRad.
-This facilitates the application of either algortihms from matRad or native pyRadPlan at any stage
+This facilitates the application of either algorithms from matRad or native pyRadPlan at any stage
 of the treatment planning workflow.
 
 To enforce valid datastructures, we perform validation and serialization with
@@ -84,4 +84,4 @@ matRad's example `matRad.m <https://github.com/e0404/matRad/blob/master/matRad.m
     result = dij.compute_result_ct_grid(fluence)
 
     # Visualize
-    plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"], overlay_unit="Gy")
+    plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"], overlay_unit="Gy")

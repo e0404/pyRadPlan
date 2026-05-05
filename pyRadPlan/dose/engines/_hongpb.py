@@ -1,4 +1,4 @@
-from typing import cast
+from typing import ClassVar, cast
 import array_api_compat
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
 from ...machines import ParticlePencilBeamKernel
@@ -9,6 +9,9 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
     short_name = "HongPB"
     name = "Hong Particle Pencil-Beam"
     possible_radiation_modes = ["protons", "helium", "carbon", "VHEE"]
+
+    _dij_guarantee_canonical: ClassVar[bool] = True
+    _dij_guarantee_nonzero: ClassVar[bool] = True
 
     # private methods
     def _calc_particle_bixel(self, bixel):

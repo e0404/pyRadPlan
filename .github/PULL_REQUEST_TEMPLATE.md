@@ -15,14 +15,14 @@ Closes #<!-- issue number -->
 - [ ] Refactor
 - [ ] Interface to external software
 - [ ] DevOps / CI
-- [ ] Documnetation
+- [ ] Documentation
 - [ ] Other — please describe:
 
 ## Checklist
 
 <!-- All items must be checked before this PR can be merged. -->
 
-- [ ] This PR targets the `develop` branch (or `main` for hotfixes and documnetation only).
+- [ ] This PR targets the `develop` branch (or `main` for hotfixes and documentation only).
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
 - [ ] Unit tests pass locally (`pytest test`).
 - [ ] New or changed code is covered by tests; coverage has not dropped significantly.

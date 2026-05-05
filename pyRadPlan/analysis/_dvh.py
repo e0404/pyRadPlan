@@ -134,7 +134,7 @@ class DVH(PyRadPlanBaseModel):
         Notes
         -----
         The x ccoordinate (dose/quantity) corresponds to the histograms
-        bin center for the differntial DVH. This is because the differential
+        bin center for the differential DVH. This is because the differential
         DVH captures the relative volume within a bin, thus the center
         represents the dose/quantity value for that bin best.
         Be aware of this difference to the cumulative DVH.

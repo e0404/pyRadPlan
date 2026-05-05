@@ -133,7 +133,7 @@ class MLC(BeamLimitingDevice):
         has_positions = self.leaf_positions is not None
 
         if has_boundaries != has_positions:
-            raise ValueError("Leaf postions and boundaries must both be set or both be empty")
+            raise ValueError("Leaf positions and boundaries must both be set or both be empty")
 
         if has_boundaries and has_positions:
             if len(self.leaf_positions) != len(self.leaf_position_boundaries):
@@ -151,7 +151,7 @@ class MLC(BeamLimitingDevice):
             boundary_diffs = np.unique(np.abs(np.diff(self.leaf_position_boundaries)))
             if len(boundary_diffs) != 1:
                 raise ValueError(
-                    f"Leaf boundary positions contain inconsistant leaf widths: {boundary_diffs}"
+                    f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
                 )
             if self.leaf_width is None:
                 self.leaf_width = boundary_diffs[0]
@@ -364,7 +364,7 @@ def create_bld(
     if device_type.upper() in ["JAW", "JAWX", "JAWY"]:
         return Jaw(**kwargs)
 
-    raise ValueError(f"Unkown device type: {device_type}")
+    raise ValueError(f"Unknown device type: {device_type}")
 
 
 def validate_bld(

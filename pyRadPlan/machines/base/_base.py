@@ -24,6 +24,7 @@ class Machine(PyRadPlanBaseModel):
         The name of the machine.
     """
 
+    version: int = Field(default=1)
     radiation_mode: str = Field()
     description: str = Field(default="")
     name: Annotated[str, StringConstraints(min_length=1)] = Field(
@@ -34,9 +35,6 @@ class Machine(PyRadPlanBaseModel):
     created_by: Optional[str] = Field(default="")
     last_modified_by: Optional[str] = Field(default="")
     data_type: Optional[str] = Field(default="-")
-    version: Annotated[str, StringConstraints(pattern=r"^\d+\.\d+\.\d+$")] = Field(
-        default="0.0.1", validate_default=True
-    )
 
     # Abstract property handled by the individual machines:
     _possible_radiation_modes: list[str]

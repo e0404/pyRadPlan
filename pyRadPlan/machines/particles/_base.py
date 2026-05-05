@@ -115,7 +115,7 @@ class ParticleAccelerator(ExternalBeamMachine):
 
     @property
     def has_pb_kernels(self):
-        """Test for existance of valid pencil-beam kernels."""
+        """Test for existence of valid pencil-beam kernels."""
         return self.pb_kernels is not None
 
     @property
@@ -200,7 +200,7 @@ class ParticleAccelerator(ExternalBeamMachine):
 
         Notes
         -----
-        If your intention is to build a new machine / add kernels to a machine without exisiting
+        If your intention is to build a new machine / add kernels to a machine without existing
         kernels, you should create the machine from scratch or set the whole model field at once
         which is a dictionary of all kernels with the energy as key
         """
