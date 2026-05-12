@@ -17,6 +17,15 @@ import numpy as np
 from pyRadPlan.core import PyRadPlanBaseModel
 
 
+def _smooth_step(coord: NDArray, edge: float, dx: float) -> NDArray:
+    """Linear ramp centred on *edge* with transition width *dx*.
+
+    Returns 0 for ``coord <= edge - dx/2``, 1 for ``coord >= edge + dx/2``,
+    and a linear interpolation in between
+    """
+    return np.clip((coord - edge) / dx + 0.5, 0.0, 1.0)
+
+
 class BeamLimitingDevice(PyRadPlanBaseModel):
     """Base class for beam limiting device objects.
 
@@ -165,58 +174,77 @@ class MLC(BeamLimitingDevice):
     def calculate_transmission_mask(
         self, spacing: Union[float, tuple[NDArray, NDArray]]
     ) -> NDArray:
-        """Calculate transmission mask from leaf boundaries and positions."""
+        """Calculate transmission mask with smooth edge weighting.
 
-        if (self.leaf_position_boundaries is not None) and (self.leaf_positions is not None):
-            boundaries_max = np.abs(self.leaf_position_boundaries).max()
-            positions_max = np.abs(self.leaf_positions).max()
-            half_size = max(boundaries_max, positions_max)
-            if isinstance(spacing, float):
-                n = int(np.ceil(2 * half_size / spacing))
-                # enforce odd mask width, so 0 is centered
-                if n % 2 == 0:
-                    n += 1
-                spacing_vector = np.linspace(-half_size, half_size, n)
-                grid_x, grid_y = np.meshgrid(spacing_vector, spacing_vector, indexing="xy")
-            elif isinstance(spacing, tuple) and spacing[0].ndim == 1 and spacing[1].ndim == 1:
-                grid_x, grid_y = np.meshgrid(spacing[0], spacing[1], indexing="xy")
-            elif isinstance(spacing, tuple) and spacing[0].ndim == 2 and spacing[1].ndim == 2:
-                grid_x, grid_y = spacing[0], spacing[1]
+        Each leaf opening contributes a coverage fraction computed from the
+        product of two smooth step functions per axis.  The transition width
+        equals one grid-cell width so values at the edge receive 0.5
+        transmission, with a linear ramp over +/- 1/2 cell on either side.
+        """
+        if (self.leaf_position_boundaries is None) or (self.leaf_positions is None):
+            return None
+
+        boundaries_max = np.abs(self.leaf_position_boundaries).max()
+        positions_max = np.abs(self.leaf_positions).max()
+        half_size = max(boundaries_max, positions_max)
+
+        if isinstance(spacing, float):
+            n = int(np.ceil(2 * half_size / spacing))
+            if n % 2 == 0:
+                n += 1
+            spacing_vector = np.linspace(-half_size, half_size, n)
+            grid_x, grid_y = np.meshgrid(spacing_vector, spacing_vector, indexing="xy")
+            dx_x = spacing
+            dx_y = spacing
+        elif isinstance(spacing, tuple) and spacing[0].ndim == 1 and spacing[1].ndim == 1:
+            grid_x, grid_y = np.meshgrid(spacing[0], spacing[1], indexing="xy")
+            dx_x = float(np.diff(spacing[0]).min())
+            dx_y = float(np.diff(spacing[1]).min())
+        elif isinstance(spacing, tuple) and spacing[0].ndim == 2 and spacing[1].ndim == 2:
+            grid_x, grid_y = spacing[0], spacing[1]
+            dx_x = float(np.diff(grid_x[0, :]).min())
+            dx_y = float(np.diff(grid_y[:, 0]).min())
+        else:
+            raise ValueError(
+                "Spacing must be either a float or a tuple of two 1D or two 2D arrays"
+            )
+
+        mask = np.full_like(grid_x, self.leaf_leakage, dtype=np.float32)
+        open_weight = 1.0 - self.leaf_leakage
+
+        for i in range(len(self.leaf_position_boundaries)):
+            b_start = self.leaf_position_boundaries[i]
+            b_end = b_start + self.leaf_width
+            o_start = self.leaf_positions[i, 0]
+            o_end = self.leaf_positions[i, 1]
+
+            if o_end <= o_start:
+                # Fully closed leaf — skip entirely
+                continue
+
+            if self.device_orientation == "X":
+                # boundary runs along Y axis, opening runs along X axis
+                cov_boundary = _smooth_step(grid_y, b_start, dx_y) * (
+                    1.0 - _smooth_step(grid_y, b_end, dx_y)
+                )
+                cov_opening = _smooth_step(grid_x, o_start, dx_x) * (
+                    1.0 - _smooth_step(grid_x, o_end, dx_x)
+                )
+            elif self.device_orientation == "Y":
+                # boundary runs along X axis, opening runs along Y axis
+                cov_boundary = _smooth_step(grid_x, b_start, dx_x) * (
+                    1.0 - _smooth_step(grid_x, b_end, dx_x)
+                )
+                cov_opening = _smooth_step(grid_y, o_start, dx_y) * (
+                    1.0 - _smooth_step(grid_y, o_end, dx_y)
+                )
             else:
                 raise ValueError(
-                    "Spacing must be either a float or a tuple of two 1D or two 2D arrays"
+                    f"Device orientation {self.device_orientation} not recognized. Must be 'X' or 'Y'."
                 )
+            mask += open_weight * cov_boundary * cov_opening
 
-            mask = np.full_like(grid_x, self.leaf_leakage, dtype=np.float32)
-
-            for i in range(len(self.leaf_position_boundaries)):
-                leaf_boundary_start = self.leaf_position_boundaries[i]
-                leaf_boundary_end = leaf_boundary_start + self.leaf_width
-                if i + 1 < len(self.leaf_position_boundaries):
-                    assert np.isclose(leaf_boundary_end, self.leaf_position_boundaries[i + 1])
-                leaf_opening_start = self.leaf_positions[i, 0]
-                leaf_opening_end = self.leaf_positions[i, 1]
-
-                if self.device_orientation == "X":
-                    leaf_mask = (
-                        (grid_y >= leaf_boundary_start)
-                        & (grid_y < leaf_boundary_end)
-                        & (grid_x >= leaf_opening_start)
-                        & (grid_x < leaf_opening_end)
-                    )
-                elif self.device_orientation == "Y":
-                    leaf_mask = (
-                        (grid_x >= leaf_boundary_start)
-                        & (grid_x < leaf_boundary_end)
-                        & (grid_y >= leaf_opening_start)
-                        & (grid_y < leaf_opening_end)
-                    )
-                else:
-                    raise ValueError(
-                        f"Device orientation {self.device_orientation} not recognized. Must be 'X' or 'Y'."
-                    )
-                mask[leaf_mask] = 1
-            return mask
+        return mask
 
 
 class Jaw(BeamLimitingDevice):
@@ -289,31 +317,49 @@ class Jaw(BeamLimitingDevice):
     def calculate_transmission_mask(
         self, spacing: Union[float, tuple[NDArray, NDArray]]
     ) -> NDArray:
+        """Calculate transmission mask with smooth edge weighting.
+
+        The jaw opening contributes a coverage fraction computed from smooth
+        step functions at each jaw edge.  The transition width equals one
+        grid-cell width, giving 0.5 transmission exactly at the edge and a
+        linear ramp over +/- 1/2 cell on either side.
+        """
         if isinstance(spacing, float):
             n = int(np.ceil(self.field_width / spacing))
-            # enforce odd mask width, so 0 is centered
             if n % 2 == 0:
                 n += 1
             spacing_vector = np.linspace(-self.field_width / 2, self.field_width / 2, n)
             grid_x, grid_y = np.meshgrid(spacing_vector, spacing_vector, indexing="xy")
+            dx_x = spacing
+            dx_y = spacing
         elif isinstance(spacing, tuple) and spacing[0].ndim == 1 and spacing[1].ndim == 1:
             grid_x, grid_y = np.meshgrid(spacing[0], spacing[1], indexing="xy")
+            dx_x = float(np.diff(spacing[0]).min())
+            dx_y = float(np.diff(spacing[1]).min())
         elif isinstance(spacing, tuple) and spacing[0].ndim == 2 and spacing[1].ndim == 2:
             grid_x, grid_y = spacing[0], spacing[1]
-
-        mask = np.full_like(grid_x, self.leakage, dtype=np.float32)
+            dx_x = float(np.diff(grid_x[0, :]).min())
+            dx_y = float(np.diff(grid_y[:, 0]).min())
+        else:
+            raise ValueError(
+                "Spacing must be either a float or a tuple of two 1D or two 2D arrays"
+            )
 
         if self.device_orientation == "X":
-            jaw_mask = (grid_x >= self.positions[0]) & (grid_x < self.positions[1])
+            cov = _smooth_step(grid_x, self.positions[0], dx_x) * (
+                1.0 - _smooth_step(grid_x, self.positions[1], dx_x)
+            )
         elif self.device_orientation == "Y":
-            jaw_mask = (grid_y >= self.positions[0]) & (grid_y < self.positions[1])
+            cov = _smooth_step(grid_y, self.positions[0], dx_y) * (
+                1.0 - _smooth_step(grid_y, self.positions[1], dx_y)
+            )
         else:
             raise ValueError(
                 f"Device orientation '{self.device_orientation}' not recognized. "
                 "Must be 'X' or 'Y'."
             )
-        mask[jaw_mask] = 1
 
+        mask = (self.leakage + (1.0 - self.leakage) * cov).astype(np.float32)
         return mask
 
 
