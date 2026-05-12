@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-12
+
 ### Changed
 - transmission mask in beam limiting devices now uses edge smoothing to account for finite grid size
 
@@ -178,8 +180,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...HEAD
-[0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.3
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/e0404/pyRadPlan/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/e0404/pyRadPlan/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/e0404/pyRadPlan/compare/v0.3.0...v0.3.1
