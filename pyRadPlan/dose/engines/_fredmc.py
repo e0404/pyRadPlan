@@ -956,8 +956,6 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         return dij
 
     def _check_saving_options(self) -> None:
-        if self._save_input is None and self._save_output is None:
-            return
         if self._save_input is not None:
             if not os.path.isdir(self._save_input):
                 raise ValueError(
