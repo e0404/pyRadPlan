@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- transmission mask in beam limiting devices now uses edge smoothing to account for finite grid size
+
 ### Fixed
 
 - Bugfix in FRED MC engine, where temporary files were not deleted
