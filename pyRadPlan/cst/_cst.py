@@ -306,7 +306,7 @@ class StructureSet(PyRadPlanBaseModel):
             curr_voi = self.vois[ix_voi].model_copy()
             curr_mask = curr_voi.mask
 
-            # if the overlap prirority is higher than we need to apply overlap
+            # if the overlap priority is higher than we need to apply overlap
             prev_voi = new_vois[ix_sorted[i - 1]]
             if curr_voi.overlap_priority >= prev_voi.overlap_priority:
                 if curr_voi.overlap_priority > prev_voi.overlap_priority:

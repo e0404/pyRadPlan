@@ -537,7 +537,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                             for n in list(range(num_beamlet_start_layer, beamlet_counter))
                         ]
 
-                        # TODO: print gaus corresponding parameters  -> here FWHM
+                        # TODO: print gauss corresponding parameters  -> here FWHM
                         file.write(
                             "\t def: L{0} = {{'Energy': {1}, 'Espread': {2}, 'FWHM':{3}, 'beamlets': [{4}]}} \n".format(
                                 layer_counter,
@@ -956,8 +956,6 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         return dij
 
     def _check_saving_options(self) -> None:
-        if self._save_input is None and self._save_output is None:
-            return
         if self._save_input is not None:
             if not os.path.isdir(self._save_input):
                 raise ValueError(

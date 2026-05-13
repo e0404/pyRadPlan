@@ -1,4 +1,4 @@
-from typing import TypedDict, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
@@ -59,6 +59,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     short_name = "SVDPB"
     name = "SVD Pencil Beam"
     possible_radiation_modes = ["photons"]
+
+    _dij_guarantee_canonical: ClassVar[bool] = True
+    _dij_guarantee_nonzero: ClassVar[bool] = True
 
     use_custom_primary_photon_fluence: bool
     kernel_cutoff: float
@@ -193,6 +196,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         kernel = cast(PhotonLINAC, self._machine).get_kernel_by_energy(energy)
 
+        min_kernel_spacing = np.min(np.diff(kernel.kernel_pos))
+        if self.int_conv_resolution > min_kernel_spacing:
+            logger.warning(
+                "Chosen kernel convolution resolution of %f mm is larger than minimum kernel "
+                "spacing of %f mm. This can strongly affect absolute dosimetry.",
+                self.int_conv_resolution,
+                min_kernel_spacing,
+            )
+
         if self.kernel_cutoff > kernel.kernel_pos[-1]:
             logger.info(
                 "Kernel cutoff (%f mm) is larger than the beam's kernel range (%f mm)."
@@ -223,9 +235,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         gauss_grid = self.int_conv_resolution * np.arange(-gauss_limit, gauss_limit)
 
         gauss_filter_x, gauss_filter_z = np.meshgrid(gauss_grid, gauss_grid, indexing="xy")
+        # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
         gauss_filter = (
-            1.0
-            / (2 * np.pi * sigma_gauss**2 / self.int_conv_resolution**2)
+            self.int_conv_resolution**2
+            / (2 * np.pi * sigma_gauss**2)
             * np.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
@@ -279,9 +292,13 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # Get Interpolators
         # TODO: need scipy interpolate here probably
+        # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
         kernel_mxs = np.apply_along_axis(
-            lambda x: np.interp(
-                np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+            lambda x: (
+                self.int_conv_resolution**2
+                * np.interp(
+                    np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+                )
             ),
             axis=1,
             arr=kernels_at_ssd,
