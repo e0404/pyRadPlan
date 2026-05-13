@@ -16,11 +16,14 @@ class PlotSliceKwargs(TypedDict, total=False):
     overlay_alpha: float
     overlay_unit: Union[str, pint.Unit, pint.Quantity]
     overlay_rel_threshold: float
+    overlay_window: Optional[tuple[float, float]]
+    overlay_cmap: str
     contour_line_width: float
     save_filename: Optional[str]
     show_plot: bool
     use_global_max: bool
     image_window: Optional[tuple[float, float]]
+    image_cmap: str
     window_mode: Literal["minmax", "centerwidth"]
     ct_window: Optional[tuple[float, float]]
     ax: Optional[plt.Axes]
@@ -41,6 +44,9 @@ class _OverlayStyle(NamedTuple):
     unit: pint.Unit
     alpha: float
     rel_threshold: float
+    cmap: str
+    vmin: Optional[float]
+    vmax: Optional[float]
 
 
 class _SliceConfig(NamedTuple):
@@ -50,6 +56,7 @@ class _SliceConfig(NamedTuple):
     image_cube: Optional[np.ndarray]
     image_vmin: Optional[float]
     image_vmax: Optional[float]
+    image_cmap: str
     cst: Optional[StructureSet]
     contour_line_width: float
     overlay: Optional[np.ndarray]
@@ -142,11 +149,13 @@ def _compute_image_window(
     raise ValueError(f"Invalid window_mode: {window_mode}")
 
 
-def _draw_image_slice(ctx: _PlotCtx, image_2d: np.ndarray, vmin: float, vmax: float) -> None:
+def _draw_image_slice(
+    ctx: _PlotCtx, image_2d: np.ndarray, vmin: float, vmax: float, cmap: str
+) -> None:
     if ctx.transpose:
         image_2d = image_2d.T
     ctx.ax.pcolormesh(
-        ctx.x_plot, ctx.y_plot, image_2d, cmap="gray", vmin=vmin, vmax=vmax, shading="nearest"
+        ctx.x_plot, ctx.y_plot, image_2d, cmap=cmap, vmin=vmin, vmax=vmax, shading="nearest"
     )
 
 
@@ -174,14 +183,16 @@ def _draw_overlay(
 ) -> None:
     if ctx.transpose:
         overlay_2d = overlay_2d.T
+    vmin = style.vmin if style.vmin is not None else 0
+    vmax = style.vmax if style.vmax is not None else current_max
     im = ctx.ax.pcolormesh(
         ctx.x_plot,
         ctx.y_plot,
         overlay_2d,
-        cmap="jet",
+        cmap=style.cmap,
         alpha=style.alpha * (overlay_2d > style.rel_threshold * current_max),
-        vmin=0,
-        vmax=current_max,
+        vmin=vmin,
+        vmax=vmax,
         shading="nearest",
     )
     plt.colorbar(im, ax=ctx.ax, label="" if style.unit.dimensionless else f"{style.unit:~P}")
@@ -259,7 +270,9 @@ def _render_slice(ctx: _PlotCtx, slice_idx: int, cfg: _SliceConfig) -> None:
     slice_indexing = tuple(slice(None) if j != cfg.plane else slice_idx for j in range(3))
 
     if cfg.image_cube is not None:
-        _draw_image_slice(ctx, cfg.image_cube[slice_indexing], cfg.image_vmin, cfg.image_vmax)
+        _draw_image_slice(
+            ctx, cfg.image_cube[slice_indexing], cfg.image_vmin, cfg.image_vmax, cfg.image_cmap
+        )
 
     if cfg.cst is not None:
         _draw_contours(ctx, cfg.cst, slice_indexing, cfg.contour_line_width)
@@ -320,10 +333,16 @@ def plot_slice(
         If True, use the overlay's global maximum for scaling. Default is False.
     image_window: Optional[tuple[float, float]]
         Minimum and maximum image value for image_volume visualization
+    image_cmap : str
+        Colormap for the image_volume. Default is "bone".
     window_mode: Literal["minmax", "centerwidth"]
         Windowing mode for image_volume visualization. Can be "minmax" or "centerwidth".
         Default is "minmax". In "minmax" mode, image_window is interpreted as (min, max).
         In "centerwidth" mode, image_window is interpreted as (center, width).
+    overlay_window : Optional[tuple[float, float]]
+        Value window (vmin, vmax) for the overlay colormap. Defaults to (0, max) when None.
+    overlay_cmap : str
+        Colormap for the overlay. Default is "jet".
     ax : plt.Axes, optional
         Existing axes to plot on. If provided, only single slice plotting is supported.
     """
@@ -357,11 +376,16 @@ def plot_slice(
         if use_global_max:
             global_overlay_max = float(np.max(overlay))
 
+    overlay_window = kwargs.get("overlay_window", None)
+    overlay_vmin = overlay_window[0] if overlay_window is not None else None
+    overlay_vmax = overlay_window[1] if overlay_window is not None else None
+
     cfg = _SliceConfig(
         plane=plane,
         image_cube=image_cube,
         image_vmin=image_vmin,
         image_vmax=image_vmax,
+        image_cmap=kwargs.get("image_cmap", "bone"),
         cst=cst,
         contour_line_width=kwargs.get("contour_line_width", 1.0),
         overlay=overlay,
@@ -369,6 +393,9 @@ def plot_slice(
             unit=overlay_unit,
             alpha=kwargs.get("overlay_alpha", 0.5),
             rel_threshold=kwargs.get("overlay_rel_threshold", 0.01),
+            cmap=kwargs.get("overlay_cmap", "jet"),
+            vmin=overlay_vmin,
+            vmax=overlay_vmax,
         ),
         global_overlay_max=global_overlay_max,
         z_plot=z_plot,
