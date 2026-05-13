@@ -22,7 +22,7 @@ from pyRadPlan.core import Grid
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.resample import resample_numpy_array
 from pyRadPlan.ct import CT, resample_ct
-from pyRadPlan.cst import StructureSet
+from pyRadPlan.cst import StructureSet, GlobalVOI
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
@@ -516,11 +516,11 @@ class DoseEngineBase(ABC):
         dij["num_of_particles_per_mu"] = np.ones(self._num_of_columns_dij) * 1e6
 
         if self.voxel_sub_ix is None:
-            # Filter out VOIs where ignore_dose_calc is True
+            # GlobalVOIs span the whole grid and must not drive the dose calc mask
             valid_indices = [
                 cst.vois[c].indices_numpy
                 for c in range(len(cst.vois))
-                if not cst.vois[c].ignore_dose_calc
+                if not isinstance(cst.vois[c], GlobalVOI)
             ]
             if valid_indices:
                 self.voxel_sub_ix = np.unique(np.concatenate(valid_indices))

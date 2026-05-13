@@ -127,7 +127,6 @@ def test_global_voi_constructor(generic_input_3d):
     assert isinstance(global_voi.mask, sitk.Image)
     assert global_voi.voi_type == "GLOBAL"
     assert global_voi.apply_overlap is None
-    assert global_voi.ignore_dose_calc is True
 
     # test non default alpha_x and beta_x
     global_voi_2 = GlobalVOI(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)

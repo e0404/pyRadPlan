@@ -52,7 +52,6 @@ class VOI(PyRadPlanBaseModel, ABC):
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
     apply_overlap: Union[bool, None] = Field(default=True)
-    ignore_dose_calc: bool = Field(default=False)
 
     # TODO: it would be nicer if this was a list of optimization.Objective, but that would create a
     # circular import. Forward type hinting does not work directly due to pydantic. If someone has
@@ -580,7 +579,6 @@ class GlobalVOI(VOI):
 
     voi_type: str = "GLOBAL"
     apply_overlap: Union[bool, None] = Field(default=None)
-    ignore_dose_calc: bool = Field(default=True)
 
     @field_validator("voi_type", mode="after")
     @classmethod
