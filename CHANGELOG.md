@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- resampling in BLD now uses interpolation to return mask on the grid provided by the dose engine
+- in SVDPB field_grid is now built before the resampling of the beamlet mask to guarantee matching grids
+
 ## [0.3.5] - 2026-05-12
 
 ### Changed

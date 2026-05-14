@@ -163,14 +163,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["field_based_dose_calc"] = field_based_dose_calc
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
+        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
+        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
+
         # TODO: resampling should directly change object, not create new one?
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
             stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i]
-                .rays[j]
-                .beamlets[k]
-                .resample(new_resolution=self.int_conv_resolution, new_field_width=field_width)
+                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
             )
             beam_info["beam"]["rays"][j]["beamlets"][k] = (
                 stf.beams[i].rays[j].beamlets[k].model_dump()
@@ -179,10 +180,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
                 stf.beams[i].rays[j].beamlets[k].mask, k=-1
             )
-
-        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
-        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
