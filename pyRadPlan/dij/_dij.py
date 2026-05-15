@@ -84,6 +84,9 @@ class Dij(PyRadPlanBaseModel):
     ray_num: Annotated[NDArray, Field(default=None)]
     beam_num: Annotated[NDArray, Field(default=None)]
 
+    alphax: Annotated[Optional[Array], Field(default=None)]
+    betax: Annotated[Optional[Array], Field(default=None)]
+
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
     @computed_field
@@ -102,7 +105,12 @@ class Dij(PyRadPlanBaseModel):
     @property
     def quantities(self) -> list[str]:
         """Name of available uantities matrices."""
-        potential_quantities = ["physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose"]
+        potential_quantities = [
+            "physical_dose",
+            "let_dose",
+            "alpha_dose",
+            "sqrt_beta_dose",
+        ]
         return [q for q in potential_quantities if getattr(self, q) is not None]
 
     @field_validator("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose", mode="wrap")
@@ -230,6 +238,41 @@ class Dij(PyRadPlanBaseModel):
             v -= 1
         return v
 
+    @field_validator(
+        "alphax",
+        "betax",
+        mode="before",
+    )
+    @classmethod
+    def validate_voxel_arrays(cls, v: Any, info: ValidationInfo) -> np.ndarray:
+        """
+        Validate the voxel arrays.
+
+        Raises
+        ------
+            ValueError: inconsistent voxel arrays.
+        """
+        if not isinstance(v, np.ndarray) and isinstance(v, int):
+            v = np.array([v])
+        # Check if the voxel arrays have the correct shape
+        if info.data.get("physical_dose") is not None:
+            dij_matrices = cast(np.ndarray, info.data["physical_dose"])
+            for i in range(dij_matrices.size):
+                if dij_matrices.flat[i] is not None:
+                    mat = cast(Union[sp.spmatrix, sp.sparray, np.ndarray], dij_matrices.flat[i])
+
+                    vox_num = mat.shape[0]
+
+                    if v.ndim != 1:
+                        raise ValueError("Voxel arrays must be 1-dimensional")
+
+                    if v.size != vox_num:
+                        raise ValueError("Voxel arrays shape inconsistent with number of voxels")
+
+        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+            v -= 1
+        return v
+
     # Serialization
     @field_serializer("dose_grid", "ct_grid", mode="wrap")
     def grid_serializer(
@@ -240,7 +283,12 @@ class Dij(PyRadPlanBaseModel):
             return value.to_matrad(context=context["matRad"])
         return handler(value, info)
 
-    @field_serializer("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose")
+    @field_serializer(
+        "physical_dose",
+        "let_dose",
+        "alpha_dose",
+        "sqrt_beta_dose",
+    )
     def physical_dose_serializer(self, value: np.ndarray, info: SerializationInfo) -> np.ndarray:
         context = info.context
         if context and context.get("matRad") == "mat-file" and value is not None:
@@ -369,6 +417,38 @@ class Dij(PyRadPlanBaseModel):
 
                 w_beam = intensity[beam_mask]
                 out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
+
+            indices = (out["physical_dose"] > 0) & (self.betax > 0)
+            out["rbe_dose"] = np.zeros_like(out["effect"])
+            out["rbe_dose"][indices] = (
+                np.sqrt(
+                    self.alphax[indices] ** 2 + 4 * self.betax[indices] * out["effect"][indices]
+                )
+                - self.alphax[indices]
+            ) / (2 * self.betax[indices])
+            out["rbe"] = np.zeros_like(out["rbe_dose"])
+            out["rbe"][indices] = out["rbe_dose"][indices] / out["physical_dose"][indices]
+
+            out["rbe_dose_beam"] = []
+            out["rbe_beam"] = []
+            for i in range(self.num_of_beams):
+                rbe_dose_beam = np.zeros_like(out["effect_beam"][i])
+                rbe_beam = np.zeros_like(out["effect_beam"][i])
+
+                indices_beam = (out["physical_dose_beam"][i] > 0) & (self.betax > 0)
+                rbe_dose_beam[indices_beam] = (
+                    np.sqrt(
+                        self.alphax[indices_beam] ** 2
+                        + 4 * self.betax[indices_beam] * out["effect_beam"][i][indices_beam]
+                    )
+                    - self.alphax[indices_beam]
+                ) / (2 * self.betax[indices_beam])
+                rbe_beam[indices_beam] = (
+                    rbe_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
+                )
+
+                out["rbe_dose_beam"].append(rbe_dose_beam)
+                out["rbe_beam"].append(rbe_beam)
 
         return out
 
@@ -542,6 +622,10 @@ class Dij(PyRadPlanBaseModel):
                         xp_new, mat, keep_sparse_compat=keep_sparse_compat
                     )
 
+        if self.alphax is not None:
+            dij_copy.alphax = to_namespace(xp_new, self.alphax)
+        if self.betax is not None:
+            dij_copy.betax = to_namespace(xp_new, self.betax)
         name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")

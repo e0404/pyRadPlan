@@ -1,6 +1,6 @@
 """Structure Set Implementation."""
 
-from typing import Any, Union
+from typing import Any, Union, Optional
 from typing_extensions import Self
 from pydantic import (
     Field,
@@ -8,14 +8,14 @@ from pydantic import (
     ValidationInfo,
 )
 
-
 import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
 
-from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.cst import VOI, ExternalVOI, validate_voi
-from pyRadPlan.ct import CT, validate_ct
+from ..core import PyRadPlanBaseModel, Grid
+from ..core.resample import resample_numpy_array
+from ..ct import CT, validate_ct
+from . import VOI, ExternalVOI, validate_voi
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -387,6 +387,36 @@ class StructureSet(PyRadPlanBaseModel):
 
         # Add to existing VOIs
         self.vois = self.vois + [body_voi]
+
+    def get_reference_lq_params(
+        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
+
+        if not overlap_is_applied:
+            cst = self.apply_overlap_priorities()
+        num_voxels = np.prod(cst.vois[0].ct_image.size)
+        alpha = np.zeros(num_voxels)
+        beta = np.zeros(num_voxels)
+        for voi in cst.vois:
+            alpha[voi.indices_numpy] = voi.alpha_x
+            beta[voi.indices_numpy] = voi.beta_x
+
+        if resample_grid is not None:
+            original_grid = cst.ct_image.grid
+            alpha = resample_numpy_array(
+                alpha.reshape(original_grid.dimensions[::-1]),
+                reference_grid=original_grid,
+                interpolator=sitk.sitkNearestNeighbor,
+                target_grid=resample_grid,
+            ).ravel()
+            beta = resample_numpy_array(
+                beta.reshape(original_grid.dimensions[::-1]),
+                reference_grid=original_grid,
+                interpolator=sitk.sitkNearestNeighbor,
+                target_grid=resample_grid,
+            ).ravel()
+        return alpha, beta
 
 
 def create_cst(

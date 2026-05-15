@@ -9,6 +9,7 @@ if sys.version_info < (3, 10):
 else:
     from importlib import resources  # Standard from Python 3.9+
 
+
 import warnings
 import time
 from typing import ClassVar, Union
@@ -277,22 +278,20 @@ class DoseEngineBase(ABC):
 
         return dij
 
-    def set_overlap_priorities(self, cst: StructureSet, ct_dim=None) -> StructureSet:
-        """Set overlap priorities for the structures in the CST."""
+    def set_overlap_priorities(self, cst: StructureSet, resample: bool = True) -> StructureSet:
+        """Apply overlap priorities and, if enabled, resample the CST to the dose grid."""
 
         logger.info("Adjusting structures for overlap... ")
         t_start = time.time()
 
         num_of_ct_scenarios = np.unique([x.num_of_scenarios for x in cst.vois])
 
-        # Sanity check
         if len(num_of_ct_scenarios) > 1:
             raise ValueError("Inconsistent number of scenarios in cst struct.")
 
         new_cst = cst.apply_overlap_priorities()
 
         t_end = time.time()
-
         logger.info("Done in %.2f seconds.", t_end - t_start)
 
         return new_cst
@@ -393,14 +392,14 @@ class DoseEngineBase(ABC):
 
         return include_mask
 
-    def resize_cst_to_grid(self, cst: StructureSet, dij, new_ct: CT) -> StructureSet:
+    def resize_cst_to_grid(self, cst: StructureSet, ct_with_new_grid: CT) -> StructureSet:
         """Resize the CST to the dose cube resolution."""
 
         logger.info("Resampling structure set... ")
 
         t_start = time.time()
 
-        cst.resample_on_new_ct(new_ct)
+        cst.resample_on_new_ct(ct_with_new_grid)
 
         t_end = time.time()
 
@@ -582,12 +581,12 @@ class DoseEngineBase(ABC):
         # Load machine file from base data folder
         self._machine = self.load_machine(radiation_mode, machine)
 
-        # Voxel selection for dose calculation
-        # TODO: set overlap priorities - Skips most of the function
-        cst = self.set_overlap_priorities(cst, ct_dim=None)
+        # TODO: this is currently not needed, but may be needed in the future
+        # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)
 
-        # resizing cst to dose cube resolution
-        cst = self.resize_cst_to_grid(cst, dij, resampled_ct)
+        dij["alphax"], dij["betax"] = cst.get_reference_lq_params(
+            overlap_is_applied=False, resample_grid=self.dose_grid
+        )
 
         # TODO: this function has not yet been implemented
         # structures that are selected here will be included in dose calculation over

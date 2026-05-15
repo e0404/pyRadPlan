@@ -367,7 +367,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         if self.mask.GetDimension() == 3:
             new_mask = sitk.Resample(
-                self.mask, new_ct.cube_hu, interpolator=sitk.sitkNearestNeighbor
+                self.mask, new_ct.cube_hu, sitk.Transform(), sitk.sitkNearestNeighbor, 0
             )
         elif self.mask.GetDimension() == 4:
             new_mask = []
@@ -376,7 +376,9 @@ class VOI(PyRadPlanBaseModel, ABC):
                     sitk.Resample(
                         self.mask[:, :, :, i],
                         new_ct.cube_hu,
-                        interpolator=sitk.sitkNearestNeighbor,
+                        sitk.Transform(),
+                        sitk.sitkNearestNeighbor,
+                        0,
                     )
                 )
             new_mask = sitk.JoinSeries(new_mask)
