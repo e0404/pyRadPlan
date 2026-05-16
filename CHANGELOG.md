@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - biological based optimization
 - alpha and beta parameters to dij with function `get_reference_lq_params` to get them for a given ct and cst
 - quantity resolver that checks for presence of quantities and instantiates the required ones
+- a TOPAS monte carlo interface. Implemented are protons and ions with basic physical and let based scoring. Material conversions are water and a pre defined schneider converter. The interface is structure into input files so that different beam models or scorers can be added easily. The interface also as template files that are used to create the simulation files. Which also give a nice overwiev on the structure of the simulation files.
+- jinja2 as project dependency
 - Documentation: extended user guide
 
 ### Changed

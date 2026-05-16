@@ -60,6 +60,7 @@ dependencies = [
     "SimpleITK>=2.4.0",
     "tqdm>=4.0.0",
     "pint>=0.24.0",
+    "jinja2",
 #   "cudatoolkit",
 #   "Raytrace@git+https://github.com/ryanneph/raytrace.git@master#egg=raytrace"
 ]

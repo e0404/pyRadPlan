@@ -74,6 +74,7 @@ class Dij(PyRadPlanBaseModel):
     ct_grid: Annotated[Grid, Field(default=None)]
 
     physical_dose: Annotated[InfluenceMatrixContainer, Field(default=None)]
+    physical_dose_var: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
     let_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None, alias="mLETDose")]
     alpha_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
     sqrt_beta_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
@@ -107,13 +108,21 @@ class Dij(PyRadPlanBaseModel):
         """Name of available uantities matrices."""
         potential_quantities = [
             "physical_dose",
+            "physical_dose_var",
             "let_dose",
             "alpha_dose",
             "sqrt_beta_dose",
         ]
         return [q for q in potential_quantities if getattr(self, q) is not None]
 
-    @field_validator("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose", mode="wrap")
+    @field_validator(
+        "physical_dose",
+        "physical_dose_var",
+        "let_dose",
+        "alpha_dose",
+        "sqrt_beta_dose",
+        mode="wrap",
+    )
     @classmethod
     def validate_influenc_matrix_conatiner(
         cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
@@ -285,6 +294,7 @@ class Dij(PyRadPlanBaseModel):
 
     @field_serializer(
         "physical_dose",
+        "physical_dose_var",
         "let_dose",
         "alpha_dose",
         "sqrt_beta_dose",
@@ -376,6 +386,9 @@ class Dij(PyRadPlanBaseModel):
                 dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
                 out["physical_dose_beam"].append(dose_matrix @ intensity[beam_mask])
 
+        if self.physical_dose_var is not None:
+            out["physical_dose_var"] = self.physical_dose_var.flat[scenario_index] @ intensity
+
         if self.let_dose is not None:
             if self.physical_dose is None:
                 raise ValueError("Physical dose must be calculated for dose-weighted let")
@@ -419,24 +432,24 @@ class Dij(PyRadPlanBaseModel):
                 out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
 
             indices = (out["physical_dose"] > 0) & (self.betax > 0)
-            out["rbe_dose"] = np.zeros_like(out["effect"])
-            out["rbe_dose"][indices] = (
+            out["rbe_x_dose"] = np.zeros_like(out["effect"])
+            out["rbe_x_dose"][indices] = (
                 np.sqrt(
                     self.alphax[indices] ** 2 + 4 * self.betax[indices] * out["effect"][indices]
                 )
                 - self.alphax[indices]
             ) / (2 * self.betax[indices])
-            out["rbe"] = np.zeros_like(out["rbe_dose"])
-            out["rbe"][indices] = out["rbe_dose"][indices] / out["physical_dose"][indices]
+            out["rbe"] = np.zeros_like(out["rbe_x_dose"])
+            out["rbe"][indices] = out["rbe_x_dose"][indices] / out["physical_dose"][indices]
 
-            out["rbe_dose_beam"] = []
+            out["rbe_x_dose_beam"] = []
             out["rbe_beam"] = []
             for i in range(self.num_of_beams):
-                rbe_dose_beam = np.zeros_like(out["effect_beam"][i])
+                rbe_x_dose_beam = np.zeros_like(out["effect_beam"][i])
                 rbe_beam = np.zeros_like(out["effect_beam"][i])
 
                 indices_beam = (out["physical_dose_beam"][i] > 0) & (self.betax > 0)
-                rbe_dose_beam[indices_beam] = (
+                rbe_x_dose_beam[indices_beam] = (
                     np.sqrt(
                         self.alphax[indices_beam] ** 2
                         + 4 * self.betax[indices_beam] * out["effect_beam"][i][indices_beam]
@@ -444,10 +457,10 @@ class Dij(PyRadPlanBaseModel):
                     - self.alphax[indices_beam]
                 ) / (2 * self.betax[indices_beam])
                 rbe_beam[indices_beam] = (
-                    rbe_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
+                    rbe_x_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
                 )
 
-                out["rbe_dose_beam"].append(rbe_dose_beam)
+                out["rbe_x_dose_beam"].append(rbe_x_dose_beam)
                 out["rbe_beam"].append(rbe_beam)
 
         return out
