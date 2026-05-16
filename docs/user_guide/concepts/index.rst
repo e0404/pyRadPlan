@@ -18,6 +18,7 @@ in :ref:`quickstart`.
     optimization
     quantities
     visualization
+    ai_agents
 
 .. rubric:: Workflow at a glance
 
@@ -30,3 +31,7 @@ in :ref:`quickstart`.
     fluence_optimization()  →  fluence array         (optimization)
     dij.compute_result_*()  →  dose result dict      (quantities)
     plot_slice()            →  figure                (visualization)
+
+    # optional AI-assisted steps
+    ai_agents.generate_beam_angles()    →  Plan with gantry angles  (ai_agents)
+    ai_agents.generate_voi_objectives() →  StructureSet with objectives

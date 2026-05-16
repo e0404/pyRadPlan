@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `pyRadPlan.ai_agents` module: LLM-powered treatment planning helpers built on `pydantic-ai`
+  - `generate_beam_angles(pln, treatment_site)` — queries an LLM to suggest gantry and couch angles for a given treatment site and radiation mode, and writes them into `pln.prop_stf`
+  - `generate_voi_objectives(pln, cst, treatment_site)` — queries an LLM to propose optimization objectives for each VOI in a `StructureSet` and attaches validated objective instances directly to the VOIs
+  - `AiSettings` — pydantic-settings class for global configuration; reads the default model from the `PYRADPLAN_AI_MODEL` environment variable (default: `claude-sonnet-4-5`); any provider supported by pydantic-ai can be selected via the model string
+  - New example `examples/utils_ai_agents.py` demonstrating an end-to-end proton prostate plan with AI-generated beam angles and objectives
 - AGENTS.md and CLAUDE.md for AI-assisted development
 - GPU-accelerated dose calculation via Array API using CuPy and PyTorch backends (alongside NumPy/`array_api_strict`), including memory management, streaming, and per-beam cleanup
 - `to_namespace()` helper to convert arrays (and scipy sparse matrices) between Array API namespaces, with explicit `device=` and `keep_sparse_compat` options
