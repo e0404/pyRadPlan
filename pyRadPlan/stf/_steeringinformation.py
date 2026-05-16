@@ -56,7 +56,7 @@ class SteeringInformation(PyRadPlanBaseModel):
             return handler(data, info)
         except ValidationError:
             # Check if import is from matlab
-            # If from matlab but stf already choosen, the code is executed as normal
+            # If from matlab but stf already chosen, the code is executed as normal
             matrad_format = ["__header__", "__version__", "__globals__"]
             if all(key in data for key in matrad_format):
                 # struct of matlab usual in 4. position. #TODO: are there exceptions?

@@ -14,6 +14,17 @@ authors:
     family-names: Bucher
     email: lina.bucher@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Louis
+    family-names: Ermeneux
+    email: louis.ermeneux@gmail.com
+    affiliation: Institut Curie, Paris
+    alias: luigirme
+  - given-names: Jennifer Josephine
+    family-names: Hardt
+    email: jennifer.hardt@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+    alias: JenHardt
+    orcid: 'https://orcid.org/0000-0001-8827-3094'
   - given-names: Antonios
     family-names: Kontopoulos
     email: antonios.kontopoulos@dkfz-heidelberg.de
@@ -43,11 +54,17 @@ authors:
     family-names: Schulz
     email: samirshivaji.schulz@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Wilfrid
+    family-names: Wangon Zekou
+    email: wangonwil@gmail.com
+    affiliation: Institut Curie, Paris
+    alias: 56Nights
   - given-names: Niklas
     family-names: Wahl
     email: n.wahl@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
     orcid: 'https://orcid.org/0000-0002-1451-223X'
+    alias: wahln
 identifiers:
   - type: doi
     value: 10.5281/zenodo.15006909

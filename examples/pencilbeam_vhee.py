@@ -81,7 +81,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 
 # Visualize
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
     view_slice=view_slice,

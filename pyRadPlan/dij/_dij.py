@@ -29,6 +29,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
+from ..core.xp_utils.helpers import _rebuild_scipy_csc_in_namespace
 
 InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
 InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
@@ -73,6 +74,7 @@ class Dij(PyRadPlanBaseModel):
     ct_grid: Annotated[Grid, Field(default=None)]
 
     physical_dose: Annotated[InfluenceMatrixContainer, Field(default=None)]
+    physical_dose_var: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
     let_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None, alias="mLETDose")]
     alpha_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
     sqrt_beta_dose: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
@@ -82,6 +84,9 @@ class Dij(PyRadPlanBaseModel):
     bixel_num: Annotated[NDArray, Field(default=None)]
     ray_num: Annotated[NDArray, Field(default=None)]
     beam_num: Annotated[NDArray, Field(default=None)]
+
+    alphax: Annotated[Optional[Array], Field(default=None)]
+    betax: Annotated[Optional[Array], Field(default=None)]
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
@@ -101,10 +106,23 @@ class Dij(PyRadPlanBaseModel):
     @property
     def quantities(self) -> list[str]:
         """Name of available uantities matrices."""
-        potential_quantities = ["physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose"]
+        potential_quantities = [
+            "physical_dose",
+            "physical_dose_var",
+            "let_dose",
+            "alpha_dose",
+            "sqrt_beta_dose",
+        ]
         return [q for q in potential_quantities if getattr(self, q) is not None]
 
-    @field_validator("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose", mode="wrap")
+    @field_validator(
+        "physical_dose",
+        "physical_dose_var",
+        "let_dose",
+        "alpha_dose",
+        "sqrt_beta_dose",
+        mode="wrap",
+    )
     @classmethod
     def validate_influenc_matrix_conatiner(
         cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
@@ -229,6 +247,41 @@ class Dij(PyRadPlanBaseModel):
             v -= 1
         return v
 
+    @field_validator(
+        "alphax",
+        "betax",
+        mode="before",
+    )
+    @classmethod
+    def validate_voxel_arrays(cls, v: Any, info: ValidationInfo) -> np.ndarray:
+        """
+        Validate the voxel arrays.
+
+        Raises
+        ------
+            ValueError: inconsistent voxel arrays.
+        """
+        if not isinstance(v, np.ndarray) and isinstance(v, int):
+            v = np.array([v])
+        # Check if the voxel arrays have the correct shape
+        if info.data.get("physical_dose") is not None:
+            dij_matrices = cast(np.ndarray, info.data["physical_dose"])
+            for i in range(dij_matrices.size):
+                if dij_matrices.flat[i] is not None:
+                    mat = cast(Union[sp.spmatrix, sp.sparray, np.ndarray], dij_matrices.flat[i])
+
+                    vox_num = mat.shape[0]
+
+                    if v.ndim != 1:
+                        raise ValueError("Voxel arrays must be 1-dimensional")
+
+                    if v.size != vox_num:
+                        raise ValueError("Voxel arrays shape inconsistent with number of voxels")
+
+        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+            v -= 1
+        return v
+
     # Serialization
     @field_serializer("dose_grid", "ct_grid", mode="wrap")
     def grid_serializer(
@@ -239,7 +292,13 @@ class Dij(PyRadPlanBaseModel):
             return value.to_matrad(context=context["matRad"])
         return handler(value, info)
 
-    @field_serializer("physical_dose", "let_dose", "alpha_dose", "sqrt_beta_dose")
+    @field_serializer(
+        "physical_dose",
+        "physical_dose_var",
+        "let_dose",
+        "alpha_dose",
+        "sqrt_beta_dose",
+    )
     def physical_dose_serializer(self, value: np.ndarray, info: SerializationInfo) -> np.ndarray:
         context = info.context
         if context and context.get("matRad") == "mat-file" and value is not None:
@@ -256,7 +315,7 @@ class Dij(PyRadPlanBaseModel):
                 )
                 if value.flat[i] is not None and not isinstance(value.flat[i], sp.csc_matrix):
                     value.flat[i] = sp.csc_matrix(value.flat[i])
-        # return 0 if value is None. savemat() cant handle 'None'
+        # return 0 if value is None. savemat() can't handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
         return value
@@ -267,7 +326,7 @@ class Dij(PyRadPlanBaseModel):
         if context and context.get("matRad") == "mat-file" and value is not None:
             # TODO: it might be necessary to rotate the cube!
             return value
-        # return 0 if value is None. savemat() cant handle 'None'
+        # return 0 if value is None. savemat() can't handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
         return value
@@ -285,6 +344,11 @@ class Dij(PyRadPlanBaseModel):
         """Convert the Dij to matRad-compatible dictionary."""
 
         dij_dict = super().to_matrad(context=context)
+
+        # Replace None values with np.array([0]) for savemat compatibility
+        for key, value in dij_dict.items():
+            if value is None:
+                dij_dict[key] = np.array([0])
 
         return dij_dict
 
@@ -308,61 +372,87 @@ class Dij(PyRadPlanBaseModel):
         """
 
         out = {}
+        xp = array_api_compat.array_namespace(intensity)
 
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
-            out["physical_dose"] = self.physical_dose.flat[scenario_index] @ intensity
-            out["physical_dose_beam"] = []
+            dose_mat = self.physical_dose.flat[scenario_index]
+            out["physical_dose"] = dose_mat @ intensity
 
-            # !Note: This implementaion is faster than the intuitive:
-            # out_example = self.physical_dose.flat[scenario_index]@(intensity*beam_mask)
-            # Since slicing over the intensity vector reduces the matrix operation size.
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                dose_matrix = self.physical_dose.flat[scenario_index][:, beam_mask]
-                out["physical_dose_beam"].append(dose_matrix @ intensity[beam_mask])
+            # Slicing intensity by beam is faster than multiplying by a beam mask,
+            # since it shrinks the matmul size instead of just zeroing terms.
+            beam_num = xp.asarray(self.beam_num)
+            beam_indices = [xp.nonzero(beam_num == i)[0] for i in range(self.num_of_beams)]
+            out["physical_dose_beam"] = [dose_mat[:, idx] @ intensity[idx] for idx in beam_indices]
+
+        if self.physical_dose_var is not None:
+            out["physical_dose_var"] = self.physical_dose_var.flat[scenario_index] @ intensity
 
         if self.let_dose is not None:
             if self.physical_dose is None:
                 raise ValueError("Physical dose must be calculated for dose-weighted let")
 
-            indices = out["physical_dose"] > 0.05 * np.max(out["physical_dose"])
+            indices = out["physical_dose"] > 0.05 * xp.max(out["physical_dose"])
 
-            let_dose = self.let_dose.flat[scenario_index] @ intensity
-            out["let"] = np.zeros_like(let_dose)
+            let_mat = self.let_dose.flat[scenario_index]
+            let_dose = let_mat @ intensity
+            out["let"] = xp.zeros_like(let_dose)
             out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
 
+            let_dose_beams = [let_mat[:, idx] @ intensity[idx] for idx in beam_indices]
             out["let_beam"] = []
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
-                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
-
+            for i, let_dose_beam in enumerate(let_dose_beams):
                 phys_dose_beam = out["physical_dose_beam"][i]
-
-                let_beam = np.zeros_like(let_dose_beam)
-                if np.max(phys_dose_beam) > 0:
-                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
+                let_beam = xp.zeros_like(let_dose_beam)
+                max_phys = xp.max(phys_dose_beam)
+                if max_phys > 0:
+                    indices_beam = phys_dose_beam > 0.05 * max_phys
                     let_beam[indices_beam] = (
                         let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
                     )
-
                 out["let_beam"].append(let_beam)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
-            out["effect"] = (
-                self.alpha_dose.flat[scenario_index] @ intensity
-                + (self.sqrt_beta_dose.flat[scenario_index] @ intensity) ** 2
-            )
+            alpha_mat = self.alpha_dose.flat[scenario_index]
+            sqrt_beta_mat = self.sqrt_beta_dose.flat[scenario_index]
+            out["effect"] = alpha_mat @ intensity + (sqrt_beta_mat @ intensity) ** 2
 
-            out["effect_beam"] = []
+            out["effect_beam"] = [
+                alpha_mat[:, idx] @ intensity[idx] + (sqrt_beta_mat[:, idx] @ intensity[idx]) ** 2
+                for idx in beam_indices
+            ]
+
+            indices = (out["physical_dose"] > 0) & (self.betax > 0)
+            out["rbe_x_dose"] = np.zeros_like(out["effect"])
+            out["rbe_x_dose"][indices] = (
+                np.sqrt(
+                    self.alphax[indices] ** 2 + 4 * self.betax[indices] * out["effect"][indices]
+                )
+                - self.alphax[indices]
+            ) / (2 * self.betax[indices])
+            out["rbe"] = np.zeros_like(out["rbe_x_dose"])
+            out["rbe"][indices] = out["rbe_x_dose"][indices] / out["physical_dose"][indices]
+
+            out["rbe_x_dose_beam"] = []
+            out["rbe_beam"] = []
             for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                alpha_matrix = self.alpha_dose.flat[scenario_index][:, beam_mask]
-                sqrt_beta_matrix = self.sqrt_beta_dose.flat[scenario_index][:, beam_mask]
+                rbe_x_dose_beam = np.zeros_like(out["effect_beam"][i])
+                rbe_beam = np.zeros_like(out["effect_beam"][i])
 
-                w_beam = intensity[beam_mask]
-                out["effect_beam"].append(alpha_matrix @ w_beam + (sqrt_beta_matrix @ w_beam) ** 2)
+                indices_beam = (out["physical_dose_beam"][i] > 0) & (self.betax > 0)
+                rbe_x_dose_beam[indices_beam] = (
+                    np.sqrt(
+                        self.alphax[indices_beam] ** 2
+                        + 4 * self.betax[indices_beam] * out["effect_beam"][i][indices_beam]
+                    )
+                    - self.alphax[indices_beam]
+                ) / (2 * self.betax[indices_beam])
+                rbe_beam[indices_beam] = (
+                    rbe_x_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
+                )
+
+                out["rbe_x_dose_beam"].append(rbe_x_dose_beam)
+                out["rbe_beam"].append(rbe_beam)
 
         return out
 
@@ -449,7 +539,11 @@ class Dij(PyRadPlanBaseModel):
         return out
 
     def to_namespace(
-        self, xp_new: Union[ArrayNamespace, str], *, keep_sparse_compat: bool = True
+        self,
+        xp_new: Union[ArrayNamespace, str],
+        *,
+        keep_sparse_compat: bool = True,
+        device: Optional[str] = None,
     ) -> Self:
         """
         Convert all influence matrices in the Dij to a different array namespace.
@@ -464,25 +558,85 @@ class Dij(PyRadPlanBaseModel):
             sparse format is compatible with the target namespace. For example, converting from
             scipy.sparse to numpy will result in a dense numpy array instead of a sparse matrix.
             Default is True.
+        device : Optional[str]
+            Target device for the arrays (e.g. "cuda:0", "cpu").
         """
 
-        # We need to check this deep copy, if it can be avoided (or does it even copy the full
-        # NDArray object containers? Not sure)
-        dij_copy = self.model_copy(deep=True)
+        # record memory addresses here, before model_copy would break the sharing.
+        _shared_idx_cache: dict[int, tuple | None] = {}
+        if keep_sparse_compat:
+            for q in self.quantities:
+                q_container = getattr(self, q)
+                if q_container is None:
+                    continue
+                for i in range(q_container.size):
+                    mat = q_container.flat[i]
+                    if mat is not None and isinstance(mat, (sp.csc_matrix, sp.csc_array)):
+                        _shared_idx_cache.setdefault(mat.indices.ctypes.data, None)
+
+            n_unique = len(_shared_idx_cache)
+            n_total = sum(
+                sum(
+                    1
+                    for idx in range(getattr(self, q).size)
+                    if getattr(self, q).flat[idx] is not None
+                    and isinstance(getattr(self, q).flat[idx], (sp.csc_matrix, sp.csc_array))
+                )
+                for q in self.quantities
+                if getattr(self, q) is not None
+            )
+            if n_total > n_unique:
+                ns_name = xp_new if isinstance(xp_new, str) else xp_new.__name__
+                logger.debug(
+                    "to_namespace: %d CSC matrices share %d unique row-index array(s) — "
+                    "converting index arrays only once to namespace '%s'.",
+                    n_total,
+                    n_unique,
+                    ns_name,
+                )
+
+        # shallow copy and then convert the matrices in-place to avoid unnecessary copying of large arrays.
+        dij_copy = self.model_copy(deep=False)
+        for _q in self.quantities:
+            _src = getattr(self, _q)
+            if _src is not None:
+                _fresh = np.empty_like(_src)  # same shape, dtype=object
+                _fresh.flat[:] = None
+                object.__setattr__(dij_copy, _q, _fresh)
 
         for q in self.quantities:
             q_container: InfluenceMatrixContainer = getattr(self, q)
             if q_container is not None:
                 for i in range(q_container.size):
-                    if q_container.flat[i] is not None:
-                        getattr(dij_copy, q).flat[i] = to_namespace(
-                            xp_new, q_container.flat[i], keep_sparse_compat=keep_sparse_compat
-                        )
+                    mat = q_container.flat[i]
+                    if mat is None:
+                        continue
 
-        if isinstance(xp_new, str):
-            name = xp_new
-        else:
-            name = xp_new.__name__
+                    # scipy CSC matrices whose index arrays may be shared
+                    if keep_sparse_compat and isinstance(mat, (sp.csc_matrix, sp.csc_array)):
+                        addr = mat.indices.ctypes.data
+                        if addr in _shared_idx_cache:
+                            if _shared_idx_cache[addr] is None:
+                                # First encounter for this index array: convert once
+                                conv_indices = to_namespace(xp_new, mat.indices, device=device)
+                                conv_indptr = to_namespace(xp_new, mat.indptr, device=device)
+                                _shared_idx_cache[addr] = (conv_indices, conv_indptr)
+                            conv_indices, conv_indptr = _shared_idx_cache[addr]
+                            conv_data = to_namespace(xp_new, mat.data, device=device)
+                            getattr(dij_copy, q).flat[i] = _rebuild_scipy_csc_in_namespace(
+                                xp_new, conv_data, conv_indices, conv_indptr, mat.shape
+                            )
+                            continue
+
+                    getattr(dij_copy, q).flat[i] = to_namespace(
+                        xp_new, mat, keep_sparse_compat=keep_sparse_compat, device=device
+                    )
+
+        if self.alphax is not None:
+            dij_copy.alphax = to_namespace(xp_new, self.alphax)
+        if self.betax is not None:
+            dij_copy.betax = to_namespace(xp_new, self.betax)
+        name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")
 

@@ -1,0 +1,67 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in pyRadPlan
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below as completely as possible.
+        Before submitting, check whether the issue already exists.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the unexpected behavior...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps or a minimal script to reproduce the behavior.
+      placeholder: |
+        1. Import pyRadPlan with `...`
+        2. Run `...`
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include the full traceback if applicable.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Please provide relevant environment information.
+      placeholder: |
+        - pyRadPlan version:
+        - Python version:
+        - OS:
+        - Compute backend (numpy / cupy / pytorch):
+        - Relevant dependency versions (e.g. pydantic, SimpleITK):
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or data files that may help diagnose the issue.

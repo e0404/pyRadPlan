@@ -48,13 +48,13 @@ class IonAccelerator(ParticleAccelerator):
             tabulated_energy_data, returned_data
         )
 
-        # extrac required quantities
+        # extract required quantities
         if "offset" in tabulated_energy_data:
             returned_data["peak_positions"] = np.array(
                 tabulated_energy_data["peakPos"], dtype=np.float64
             ) + np.array(tabulated_energy_data["offset"], dtype=np.float64)
         # Extract the pencil beam kernels
-        # Pencil beam kernels are not requried so we may skip them
+        # Pencil beam kernels are not required so we may skip them
         # if they can't be validated
         try:
             tmp = dl2ld(tabulated_energy_data)

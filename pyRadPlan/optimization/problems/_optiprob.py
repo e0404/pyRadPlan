@@ -14,7 +14,7 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import ScenarioModel
-from pyRadPlan.quantities import FluenceDependentQuantity, get_quantity
+from pyRadPlan.quantities import RTQuantity, QuantityResolver
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class PlanningProblem(ABC):
     """
-    Abstrac class for all planning problems.
+    Abstract class for all planning problems.
 
     Parameters
     ----------
@@ -56,6 +56,15 @@ class PlanningProblem(ABC):
         "oxygen",
         "VHEE",
     ]
+    default_quantities: dict[str, str] = {
+        "photons": "physical_dose",
+        "protons": "physical_dose",
+        "helium": "physical_dose",
+        "carbon": "rbe_x_dose",
+        "oxygen": "physical_dose",
+        "VHEE": "physical_dose",
+    }
+    # right now only kernel based rbe model which is only standard in the carbon machine
 
     apply_overlap: bool
     solver: Union[str, dict, SolverBase]
@@ -70,7 +79,7 @@ class PlanningProblem(ABC):
     _objective_list: list[tuple]
     _constraint_list: list
 
-    _quantities: list[FluenceDependentQuantity]
+    _quantities: list[RTQuantity]
     _q_cache_index: list[int]
     _objectives_per_quantity: dict[str, int]
     _num_objectives: int
@@ -82,6 +91,8 @@ class PlanningProblem(ABC):
 
         self.solver = "ipopt"
         self.apply_overlap = True
+
+        self.convert_dose_objectives = True
 
         if pln is not None:
             pln = validate_pln(pln)
@@ -165,6 +176,52 @@ class PlanningProblem(ABC):
     def _solve(self) -> tuple[Array, dict]:
         """Solve the planning problem."""
 
+    def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
+        """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
+        default_quantity = self.default_quantities.get(
+            self._stf.beams[0].radiation_mode, "physical_dose"
+        )
+        objectives: list[tuple] = []
+        quantity_ids: list[str] = []
+
+        if self.convert_dose_objectives:
+            logger.info(
+                "Converting all objectives to use quantity: "
+                + self.default_quantities.get(self._stf.beams[0].radiation_mode, "physical_dose")
+            )
+
+        for voi in self._cst.vois:
+            valid_objectives = [
+                obj
+                for obj in voi.objectives
+                if not (
+                    obj is None
+                    or (isinstance(obj, (list, tuple)) and len(obj) == 0)
+                    or (isinstance(obj, np.ndarray) and obj.size == 0)
+                )
+            ]
+            if not valid_objectives:
+                continue
+
+            cube_ix = voi.indices_numpy
+            linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
+            linear_mask[cube_ix] = True
+            objs = [get_objective(obj) for obj in valid_objectives]
+
+            if self.convert_dose_objectives:
+                for obj in objs:
+                    obj.quantity = default_quantity
+
+            for obj in objs:
+                obj.preprocess_image_reference_parameters(
+                    target_grid=self._dij.dose_grid, index_list=cube_ix
+                )
+
+            objectives.append((linear_mask, objs))
+            quantity_ids.extend([obj.quantity for obj in objs])
+
+        return objectives, quantity_ids
+
     def _initialize(self):
         """Initialize the data for the planning problem."""
 
@@ -178,46 +235,18 @@ class PlanningProblem(ABC):
         self._cst = self._cst.resample_on_new_ct(self._ct)
 
         # sanitize objectives and constraints and manage required quantities
-        objectives: list[tuple] = []
-        quantity_ids = []
-        for voi in self._cst.vois:
-            if len(voi.objectives) > 0:
-                # get the index list
-                cube_ix = voi.indices_numpy
-                linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
-                linear_mask[cube_ix] = True
-                objs = [get_objective(obj) for obj in voi.objectives]
-
-                # Set grids and preprocess reference images
-                for obj in objs:
-                    obj.preprocess_image_reference_parameters(
-                        target_grid=self._dij.dose_grid, index_list=cube_ix
-                    )
-
-                objectives.append((linear_mask, objs))
-
-                quantity_ids.extend([obj.quantity for obj in objs])
+        objectives, quantity_ids = self._collect_objectives()
 
         self._objective_list = objectives
-
         # unique quantities
         quantity_ids = list(set(quantity_ids))
-        # get the quantities and check if they are fluence dependent
-        quantities = [get_quantity(qid) for qid in quantity_ids]
 
-        non_fluence_dependent = [
-            q for q in quantities if not issubclass(q, FluenceDependentQuantity)
-        ]
-        if non_fluence_dependent:
-            raise ValueError(
-                f"Quantities {non_fluence_dependent} are not fluence dependent! "
-                "Currently only fluence dependent quantities can be used in inverse planning!"
-            )
-
-        # TODO: manage scenarios
-
-        # Manage quantites by getting them from the objective quantities
-        self._quantities = [q(self._dij) for q in quantities]
+        # Resolve all requested quantities (plus their transitive dependencies) through a
+        # shared resolver so that any quantity referenced by multiple roots is instantiated
+        # exactly once.
+        resolver = QuantityResolver(self._dij)
+        resolver.resolve(quantity_ids)
+        self._quantities = list(resolver.instances.values())
 
         if len(set([q.array_backend for q in self._quantities])) == 1:
             self._array_backend = self._quantities[0].array_backend

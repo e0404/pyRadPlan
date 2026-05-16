@@ -43,21 +43,21 @@ class Grid(PyRadPlanBaseModel):
 
     @computed_field
     @property
-    def x(self) -> float:
+    def x(self) -> NDArray:
         """Return the x coordinates in the LPS world system."""
         x = np.arange(self.dimensions[0]) * self.resolution["x"] + self.origin[0]
         return x
 
     @computed_field
     @property
-    def y(self) -> float:
+    def y(self) -> NDArray:
         """Return the y coordinates in the LPS world system."""
         y = np.arange(self.dimensions[1]) * self.resolution["y"] + self.origin[1]
         return y
 
     @computed_field
     @property
-    def z(self) -> float:
+    def z(self) -> NDArray:
         """Return the z coordinates in the LPS world system."""
         z = np.arange(self.dimensions[2]) * self.resolution["z"] + self.origin[2]
         return z

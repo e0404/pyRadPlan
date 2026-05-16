@@ -1,7 +1,7 @@
 """Interface for voxel geometry ray tracers."""
 
 from abc import ABC, abstractmethod
-from typing import Union, Any
+from typing import Union, Any, Optional
 import logging
 import time
 
@@ -27,10 +27,11 @@ class RayTracerBase(ABC):
 
     lateral_cut_off: float
     precision: np.dtype
+    fixed_ray_spacing_range: Optional[float]
 
     @property
     def cubes(self):
-        """CT or other abritrary cubes of similar resolution to be traced."""
+        """CT or other arbitrary cubes of similar resolution to be traced."""
         return self._cubes
 
     @cubes.setter
@@ -44,6 +45,7 @@ class RayTracerBase(ABC):
     def __init__(self, cubes: Union[sitk.Image, list[sitk.Image]]):
         self.lateral_cut_off = 50.0
         self.precision = np.float32
+        self.fixed_ray_spacing_length = None
         self.cubes = cubes
         self._coords = None
 
@@ -80,7 +82,7 @@ class RayTracerBase(ABC):
 
         Notes
         -----
-        The default implementation loops over the trace_ray function. The separte implementation is
+        The default implementation loops over the trace_ray function. The separate implementation is
         here to enable more performant implementations for specific ray tracers, e.g. through
         vectorization.
         """
@@ -183,8 +185,18 @@ class RayTracerBase(ABC):
             [ray.ray_pos_bev for ray in beam.rays]
         )
 
+        if self.fixed_ray_spacing_length is not None:
+            ray_extent = self.fixed_ray_spacing_length
+        else:
+            # look at max ray_positions in bev and add lateral cutoff
+            ray_extent = 2.0 * (
+                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + self.lateral_cut_off
+            )
+
         spacing_range = ray_spacing * np.arange(
-            np.floor(-500.0 / ray_spacing), np.ceil(500.0 / ray_spacing) + 1, dtype=self.precision
+            np.floor(-ray_extent / ray_spacing),
+            np.ceil(ray_extent / ray_spacing) + 1,
+            dtype=self.precision,
         )
 
         candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
@@ -215,7 +227,9 @@ class RayTracerBase(ABC):
         logger.debug("Cube ray tracing took %s seconds...", t_trace_end - t_trace_start)
 
         # Now we compute which rays will respectively give the voxel value for radiological depth
-        valid_ix = np.isfinite(ix)
+        # We don't want -1 to be counted as "valid"
+        # or else the coords[ix[valid_ix], 1] silently reads the last elemtn
+        valid_ix = ix >= 0  # & np.isfinite(ix)
 
         scale_factor = np.zeros_like(ix, dtype=self.precision)
         scale_factor[valid_ix] = (ray_matrix_bev_y + beam.sad) / coords[ix[valid_ix], 1]
@@ -250,8 +264,11 @@ class RayTracerBase(ABC):
         ]
 
         for i, cube in enumerate(rad_depth_cubes):
-            rel_depths = lengths * rho[i]
-            rel_depths = np.cumsum(rel_depths, axis=1) - rel_depths / 2.0
+            segment_depths = lengths * rho[i]
+            # Replace NaN with 0 before cumsum to prevent a single invalid voxel
+            # np.cumsum([[0.5, 0.33, NaN, 0.18, 0.22]]) -> [0.5, 0.83, NaN, NaN, NaN], which is bad
+            segment_depths = np.where(np.isfinite(segment_depths), segment_depths, 0.0)
+            rel_depths = np.cumsum(segment_depths, axis=1) - segment_depths / 2.0
 
             try:
                 ix_assign = np.unravel_index(ix[ix_remember_from_tracing], cube.shape, order="F")

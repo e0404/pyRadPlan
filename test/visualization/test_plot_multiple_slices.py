@@ -53,20 +53,21 @@ def test_plot_multiple_slices_noargs():
 
 def test_plot_multiple_slices_no_overlays(sample_ct, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         save_filename=str(tmp_path / "distributions_no_overlays.png"),
         show_plot=False,
     )
 
 
 def test_plot_multiple_slices_empty_overlays(sample_ct):
+    """Ensure empty overlays raise a ValueError."""
     with pytest.raises(ValueError):
-        plot_multiple_slices(ct=sample_ct, overlays=[])
+        plot_multiple_slices(image_volume=sample_ct, overlays=[])
 
 
 def test_plot_multiple_slices_ct_single_overlay(sample_ct, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=[sample_overlays[0]],
         save_filename=str(tmp_path / "distributions_ct_single.png"),
         show_plot=False,
@@ -75,7 +76,7 @@ def test_plot_multiple_slices_ct_single_overlay(sample_ct, sample_overlays, tmp_
 
 def test_plot_multiple_slices_ct_multiple_overlays(sample_ct, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=sample_overlays,
         save_filename=str(tmp_path / "distributions_ct_multiple.png"),
         show_plot=False,
@@ -84,7 +85,7 @@ def test_plot_multiple_slices_ct_multiple_overlays(sample_ct, sample_overlays, t
 
 def test_plot_multiple_slices_ct_cst_overlays(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         save_filename=str(tmp_path / "distributions_ct_cst_overlays.png"),
@@ -94,7 +95,7 @@ def test_plot_multiple_slices_ct_cst_overlays(sample_ct, sample_cst, sample_over
 
 def test_plot_multiple_slices_with_parameters(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         view_slice=[2, 5],
@@ -112,7 +113,7 @@ def test_plot_multiple_slices_with_parameters(sample_ct, sample_cst, sample_over
 
 def test_plot_multiple_slices_coronal_plane(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         view_slice=[30, 40, 50],
@@ -125,7 +126,7 @@ def test_plot_multiple_slices_coronal_plane(sample_ct, sample_cst, sample_overla
 
 def test_plot_multiple_slices_sagittal_plane(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         view_slice=[30, 40],
@@ -138,7 +139,7 @@ def test_plot_multiple_slices_sagittal_plane(sample_ct, sample_cst, sample_overl
 def test_plot_multiple_slices_invalid_plane(sample_ct, sample_overlays):
     with pytest.raises(ValueError):
         plot_multiple_slices(
-            ct=sample_ct,
+            image_volume=sample_ct,
             overlays=sample_overlays,
             plane="invalid_plane",
             show_plot=False,
@@ -149,7 +150,7 @@ def test_plot_multiple_slices_numpy_overlays(
     sample_ct, sample_cst, sample_overlays_numpy, tmp_path
 ):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays_numpy,
         save_filename=str(tmp_path / "distributions_numpy_overlays.png"),
@@ -163,7 +164,7 @@ def test_plot_multiple_slices_mixed_overlays(
     # Mix SimpleITK and numpy overlays
     mixed_overlays = [sample_overlays[0], sample_overlays_numpy[1]]
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=mixed_overlays,
         save_filename=str(tmp_path / "distributions_mixed_overlays.png"),
         show_plot=False,
@@ -172,7 +173,7 @@ def test_plot_multiple_slices_mixed_overlays(
 
 def test_plot_multiple_slices_single_slice(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         view_slice=5,  # Single slice instead of list
@@ -183,7 +184,7 @@ def test_plot_multiple_slices_single_slice(sample_ct, sample_cst, sample_overlay
 
 def test_plot_multiple_slices_numpy_slice_array(sample_ct, sample_cst, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=sample_overlays,
         view_slice=np.array([2, 5, 8]),
@@ -196,7 +197,7 @@ def test_plot_multiple_slices_mismatched_units(sample_ct, sample_overlays):
     # Test with mismatched number of units vs overlays
     with pytest.raises(ValueError):
         plot_multiple_slices(
-            ct=sample_ct,
+            image_volume=sample_ct,
             overlays=sample_overlays,  # 2 overlays
             overlay_unit=["Gy"],  # Only 1 unit
             show_plot=False,
@@ -206,7 +207,7 @@ def test_plot_multiple_slices_mismatched_units(sample_ct, sample_overlays):
 def test_plot_multiple_slices_mismatched_titles(sample_ct, sample_overlays):
     # Test with mismatched number of titles vs overlays
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=sample_overlays,  # 2 overlays
         overlay_titles=["Physical Dose"],  # Only 1 title
         show_plot=False,
@@ -221,7 +222,7 @@ def test_plot_multiple_slices_three_overlays(
     three_overlays = sample_overlays_numpy + [overlay3]
 
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlays=three_overlays,
         overlay_unit=["Gy", "dimensionless", "dimensionless"],
@@ -239,7 +240,7 @@ def test_plot_multiple_slices_global_max_single_overlay(
     overlay_modified[2] = overlay_modified[2] * 3  # Make one slice much brighter
 
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=[overlay_modified],
         view_slice=[2, 5, 8],
         use_global_max=True,
@@ -268,7 +269,7 @@ def test_plot_multiple_slices_only_cst(sample_cst, tmp_path):
 
 def test_plot_multiple_slices_custom_threshold(sample_ct, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=sample_overlays,
         overlay_rel_threshold=0.1,  # Higher threshold
         save_filename=str(tmp_path / "distributions_custom_threshold.png"),
@@ -278,7 +279,7 @@ def test_plot_multiple_slices_custom_threshold(sample_ct, sample_overlays, tmp_p
 
 def test_plot_multiple_slices_high_alpha(sample_ct, sample_overlays, tmp_path):
     plot_multiple_slices(
-        ct=sample_ct,
+        image_volume=sample_ct,
         overlays=sample_overlays,
         overlay_alpha=0.9,  # High transparency
         save_filename=str(tmp_path / "distributions_high_alpha.png"),

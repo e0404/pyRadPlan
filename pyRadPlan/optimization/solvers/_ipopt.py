@@ -90,13 +90,15 @@ class OptimizerIpopt(NonLinearOptimizer):
 
         x0 = np.asarray(x0)
 
+        device = self.device
+
         def ipopt_objective(x: NDArray) -> NDArray[np.float64]:
-            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x)))
+            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x, device=device)))
 
         def ipopt_derivative(x: NDArray, out: Array) -> NDArray[np.float64]:
-            out[()] = xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x))).astype(
-                np.float64
-            )
+            out[()] = xp_utils.to_numpy(
+                self.gradient(xp_utils.from_numpy(xp, x, device=device))
+            ).astype(np.float64)
             return out
 
         # Build Ipopt problem via helper to centralize validation & option fallbacks

@@ -72,11 +72,11 @@ class PhotonLINAC(ExternalBeamMachine):
         cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> PhotonSVDKernel:
         try:
-            return handler(v, info)
+            pb_kernels = handler(v, info)
         except ValidationError as err:
             # If we have a dict, we try to convert it to a PhotonSVDKernel object
             if isinstance(v, dict):
-                # This check tries to check if we have a matRad kenrel data set
+                # This check tries to check if we have a matRad kernel data set
                 if "kernel" in v and "kernel_data" not in v:
                     try:
                         kernel = cast(dict, v["kernel"])
@@ -94,10 +94,23 @@ class PhotonLINAC(ExternalBeamMachine):
                     except Exception as exc:
                         raise ValueError("Could not parse matRad kernel data") from exc
 
-                    return handler(v, info)
+                    pb_kernels = handler(v, info)
+                else:
+                    # Otherwise we don't know what to do
+                    raise err
+            else:
+                raise err
 
-            # Otherwise we don't know what to do
-            raise err
+        # Version specific handling
+        pb_kernels = cast(dict[float, PhotonSVDKernel], pb_kernels)
+
+        if info.data["version"] < 2:
+            # We need to rescale the pencil beam kernels by 4 due to their
+            # hardcoded implied 2D convolution resolution of (0.5 mm)^2
+            for _, kernel in pb_kernels.items():
+                kernel.kernel_data *= 4.0
+
+        return pb_kernels
 
     def get_kernel_by_index(self, ix_energy: int) -> PhotonSVDKernel:
         """Get the pencil beam kernel for a specific energy index.

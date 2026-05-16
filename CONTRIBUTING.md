@@ -31,3 +31,5 @@ When you think a something is ready to integrate, prepare a merge request. Here'
 - Run **pytest** run unit tests before publishing the code. Run on the test folder via `pytest test`, or choose any test file following the pytest syntax. We encourage writing at least fundamental unit tests for new code. Will also install `coverage` and the pytest extension to monitor coverage. If coverage drops too much because of insufficient testing, we will (probably) not merge.
 
 Merge requests should (almost) always point to the `develop` branch. Exceptions are hotfixes of a crucial problem.
+
+To finalize the MR, please modify the CHANGELOG.md in the [UNRELEASED] section at the top with your changes. The CHANGELOG.md follows the [Keep A Changelog](https://keepachangelog.com/) conventions.
