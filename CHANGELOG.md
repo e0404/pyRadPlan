@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `resample_image` now falls back to linear interpolation when BSpline is requested but the image has fewer than 4 voxels in any dimension, preventing intermittent NaN values from the BSpline prefilter on small grids
 - CuPy issue in LPS coordinate handling (gantry/couch rotation matrices now built via `xp.stack` with the correct device/dtype)
 - SVD pencil beam engine updated to match changes in the base pencil beam engine
 - Device handling and type checks in optimization solvers (IPOPT and SciPy) so the optimization runs on the same device as the quantities
