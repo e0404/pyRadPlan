@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - biological based optimization
 - alpha and beta parameters to dij with function `get_reference_lq_params` to get them for a given ct and cst
 - quantity resolver that checks for presence of quantities and instantiates the required ones
+- Documentation: extended user guide
 
 ### Changed
 - resampling in BLD now uses interpolation to return mask on the grid provided by the dose engine
