@@ -1,0 +1,67 @@
+# BASIC GEOMETRY DEFINITION
+
+includeFile = pyRadPlan_cube.txt
+
+s:Ge/World/Material = Sim/WorldMaterial
+d:Ge/World/HLX=200.0 cm
+d:Ge/World/HLY=200.0 cm
+d:Ge/World/HLZ=200.0 cm
+b:Ge/World/Invisible = "TRUE"
+
+s:Ge/Nozzle/Parent = "World"
+s:Ge/Nozzle/Type = "Group"
+
+s:Ge/Isocenter/Parent = "Couch"
+s:Ge/Isocenter/Type = "Group"
+d:Ge/Isocenter/RotX = -90. deg
+d:Ge/Isocenter/RotY = 0. deg
+d:Ge/Isocenter/RotZ = 0. deg
+
+s:Ge/Couch/Parent = "Gantry"
+s:Ge/Couch/Type = "Group"
+d:Ge/Couch/RotX = 0. deg
+d:Ge/Couch/RotY = 0. deg
+d:Ge/Couch/RotZ = Sim/CouchAngle deg
+
+s:Ge/Gantry/Parent = "World"
+s:Ge/Gantry/Type = "Group"
+d:Ge/Gantry/RotX = Sim/GantryAngle deg
+d:Ge/Gantry/RotY =  0 deg
+d:Ge/Gantry/RotZ = -90. deg
+
+s:Sim/WorldMaterial = "{{ world_material }}"
+
+d:Ge/Nozzle/TransZ = -{{ BAMS_to_iso }} cm
+d:Ge/Nozzle/RotX = Tf/Beam/AngleX/Value rad
+d:Ge/Nozzle/RotY = Tf/Beam/AngleY/Value rad
+d:Ge/Nozzle/RotZ = 0.0 rad
+
+s:Sim/ParticleName = "{{ particle_name }}"
+
+d:Sim/GantryAngle = {{ gantry_angle }} deg
+d:Sim/CouchAngle = {{ couch_angle }} deg
+
+d:Ge/Patient/TransX      = {{trans_x}} mm
+d:Ge/Patient/TransY      = {{trans_y}} mm
+d:Ge/Patient/TransZ      = {{trans_z}} mm
+d:Ge/Patient/RotX=0. deg
+d:Ge/Patient/RotY=0. deg
+d:Ge/Patient/RotZ=0. deg
+
+# TIMELINE DEFINITION
+d:Tf/TimelineStart = {{ timeline_start }} ms
+d:Tf/TimelineEnd = {{ timeline_end }} ms
+i:Tf/NumberOfSequentialTimes = {{ num_times }}
+
+dv:Tf/Beam/Spot/Times = {{ num_times }} {{ range(timeline_start+10, timeline_end + 1, 10) | map('string') | join(' ') }} ms
+
+# INPUT BEAM DEFINITION
+{{ input_beam_definition }}
+
+# INPUT PHYSICS SETTINGS
+s:Ph/ListName = "PhysicsList"
+s:Ph/PhysicsList/Type = "Geant4_Modular"
+sv:Ph/PhysicsList/Modules = {{ physics_modules | length }}{% for m in physics_modules %} "{{ m }}"{% endfor %}"
+d:Ph/PhysicsList/CutForElectron = 0.050000 mm
+d:Ph/PhysicsList/CutForAllParticles = 0.050000 mm
+d:Ph/PhysicsList/CutForGamma = 0.050000 mm

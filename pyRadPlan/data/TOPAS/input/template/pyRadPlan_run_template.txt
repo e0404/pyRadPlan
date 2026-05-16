@@ -1,0 +1,22 @@
+s:Sim/ScoreLabel = "score_pyRadPlan_plan_field{{beam_ix}}_run{{run_ix}}"
+
+i:Ma/Verbosity = 0
+i:Ts/TrackingVerbosity = 0
+i:Ts/EventVerbosity = 0
+i:Ts/RunVerbosity = 0
+b:Ts/ShowCPUTime = "True"
+i:Tf/Verbosity = 0
+i:Ts/MaxInterruptedHistories = 1000
+i:Ts/NumberOfThreads = {{num_threads}}
+i:Ts/MaximumNumberOfDetailedErrorReports = 0
+i:Ts/ParameterizationErrorMaxReports = 1
+i:Ts/ShowHistoryCountAtInterval = 1000000
+
+s:Sim/DoseScorerOutputType = "{{scorer_output_type}}"
+sv:Sim/DoseScorerReport = 1 "Sum"
+
+i:Ts/Seed = {{run_ix+1}}
+includeFile = ./beamSetup_pyRadPlan_plan_field{{beam_ix}}.txt
+
+# INPUT SCORER DEFINITION
+{{ input_scorer_definition }}
