@@ -28,6 +28,7 @@ class RayTracerSiddon(RayTracerBase):
     def __init__(self, cubes: Union[sitk.Image, list[sitk.Image]]):
         self.debug_core_performance = False
         self.use_gpu = True
+        self.device = xp_utils.choose_device()
         super().__init__(cubes)
 
     # @jit(nopython=True)
@@ -41,9 +42,9 @@ class RayTracerSiddon(RayTracerBase):
 
         xp = xp_utils.choose_array_api_namespace()
 
-        target_points = xp.asarray(target_points)
-        source_points = xp.asarray(source_points)
-        isocenter = xp.asarray(isocenter)
+        target_points = xp.asarray(target_points, device=self.device)
+        source_points = xp.asarray(source_points, device=self.device)
+        isocenter = xp.asarray(isocenter, device=self.device)
 
         if target_points.size != 3 or source_points.size != 3 or isocenter.size != 3:
             raise ValueError(
@@ -87,9 +88,9 @@ class RayTracerSiddon(RayTracerBase):
         # xp = np
         xp = xp_utils.choose_array_api_namespace()
 
-        target_points = xp.asarray(target_points)
-        source_points = xp.asarray(source_points)
-        isocenter = xp.asarray(isocenter)
+        target_points = xp.asarray(target_points, device=self.device)
+        source_points = xp.asarray(source_points, device=self.device)
+        isocenter = xp.asarray(isocenter, device=self.device)
 
         self._array_api_precision = getattr(xp, np.dtype(self.precision).name)
 
@@ -190,7 +191,9 @@ class RayTracerSiddon(RayTracerBase):
         # Compute alphas for each plane and merge parametric sets
         s1 = xp_utils.create_stream(xp)
         with s1:
-            x_planes = xp.asarray(self._x_planes, dtype=self._array_api_precision)
+            x_planes = xp.asarray(
+                self._x_planes, dtype=self._array_api_precision, device=self.device
+            )
             alpha_x = self._compute_plane_alphas(
                 i_min,
                 i_max,
@@ -200,7 +203,9 @@ class RayTracerSiddon(RayTracerBase):
             )
         s2 = xp_utils.create_stream(xp)
         with s2:
-            y_planes = xp.asarray(self._y_planes, dtype=self._array_api_precision)
+            y_planes = xp.asarray(
+                self._y_planes, dtype=self._array_api_precision, device=self.device
+            )
             alpha_y = self._compute_plane_alphas(
                 j_min,
                 j_max,
@@ -210,7 +215,9 @@ class RayTracerSiddon(RayTracerBase):
             )
         s3 = xp_utils.create_stream(xp)
         with s3:
-            z_planes = xp.asarray(self._z_planes, dtype=self._array_api_precision)
+            z_planes = xp.asarray(
+                self._z_planes, dtype=self._array_api_precision, device=self.device
+            )
             alpha_z = self._compute_plane_alphas(
                 k_min,
                 k_max,
@@ -231,7 +238,11 @@ class RayTracerSiddon(RayTracerBase):
         # alphas.sort(axis=1)  # Sort each row ascendingly
         mask = (
             xp.diff(
-                alphas, axis=1, prepend=xp.full((alphas.shape[0], 1), xp.inf, dtype=alphas.dtype)
+                alphas,
+                axis=1,
+                prepend=xp.full(
+                    (alphas.shape[0], 1), xp.inf, dtype=alphas.dtype, device=self.device
+                ),
             )
             == 0
         )  # Identify duplicates
@@ -291,7 +302,7 @@ class RayTracerSiddon(RayTracerBase):
 
         # ensure 1-D
         # 1) make a (1, P) index row, and compare to (N, 1) dim_min/max → (N, P) mask
-        plane_ix = xp.arange(planes.shape[0], dtype=self._array_api_precision)[
+        plane_ix = xp.arange(planes.shape[0], dtype=self._array_api_precision, device=self.device)[
             None, :
         ]  # shape (1, P)
         low = plane_ix < dim_min[:, None]  # before entry
@@ -334,10 +345,12 @@ class RayTracerSiddon(RayTracerBase):
         p_min = xp.asarray(
             [self._x_planes[0], self._y_planes[0], self._z_planes[0]],
             dtype=self._array_api_precision,
+            device=self.device,
         )
         p_max = xp.asarray(
             [self._x_planes[-1], self._y_planes[-1], self._z_planes[-1]],
             dtype=self._array_api_precision,
+            device=self.device,
         )
 
         # 1) raw alpha to the two planes per axis, shape (N, 3, 2)
@@ -405,9 +418,9 @@ class RayTracerSiddon(RayTracerBase):
     def _compute_indices_from_alpha(self, alphas_mid: Array):
         xp = array_api_compat.array_namespace(alphas_mid)
 
-        cube_origin = xp.asarray(self._cubes[0].GetOrigin())
+        cube_origin = xp.asarray(self._cubes[0].GetOrigin(), device=self.device)
 
-        res = xp.asarray(self._resolution)
+        res = xp.asarray(self._resolution, device=self.device)
 
         # Compute coordinates
         sp_scaled = (self._source_points - cube_origin) / res
@@ -419,7 +432,7 @@ class RayTracerSiddon(RayTracerBase):
         # Round in place
         ijk = xp.astype(xp.round(ijk), xp.int32)
 
-        cube_dim_brd = xp.asarray(self._cube_dim)[None, :, None]
+        cube_dim_brd = xp.asarray(self._cube_dim, device=self.device)[None, :, None]
         val_ix = xp.all((ijk >= 0) & (ijk < cube_dim_brd), axis=1)
 
         return val_ix, ijk
@@ -447,13 +460,15 @@ class RayTracerSiddon(RayTracerBase):
 
         ix[~val_ix] = -1
 
-        rho = [xp.full(val_ix.shape, xp.nan, dtype=self._array_api_precision) for _ in self._cubes]
+        rho = [
+            xp.full(val_ix.shape, xp.nan, dtype=self._array_api_precision, device=self.device)
+            for _ in self._cubes
+        ]
         for s, cube in enumerate(self._cubes):
             # Views SimpleITKs image buffer as a numpy array, preserving dimension ordering of
             # sitk
-            cube_linear = xp_utils.from_numpy(
-                xp, sitk.GetArrayViewFromImage(cube).ravel(order="F")
-            )
+            cube_np = sitk.GetArrayViewFromImage(cube).ravel(order="F")
+            cube_linear = xp_utils.to_namespace(xp, cube_np, device=self.device)
             # cube_values = cube_linear[ix[val_ix]]
             # cube_mask   = xp.arange(len(cube_linear),ix.dtype)[None,:] == ix[val_ix][:,None]
 
@@ -487,14 +502,18 @@ class RayTracerSiddon(RayTracerBase):
         lower_planes = xp.asarray(
             (self._x_planes[0], self._y_planes[0], self._z_planes[0]),
             dtype=self._array_api_precision,
+            device=self.device,
         )
         upper_planes = xp.asarray(
             (self._x_planes[-1], self._y_planes[-1], self._z_planes[-1]),
             dtype=self._array_api_precision,
+            device=self.device,
         )
 
-        nplanes = xp.asarray(self._num_planes, dtype=self._array_api_precision)
-        resolution = xp.asarray(self._resolution, dtype=self._array_api_precision)
+        nplanes = xp.asarray(self._num_planes, dtype=self._array_api_precision, device=self.device)
+        resolution = xp.asarray(
+            self._resolution, dtype=self._array_api_precision, device=self.device
+        )
 
         dim_min = (
             nplanes[None, :]

@@ -93,7 +93,7 @@ extend-include = [
 [tool.ruff.lint]
 extend-select = ["PL","D", "NPY", "N"]
 extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999"]
-exclude = ["test/**/*.py"]
+exclude = ["test/**/*.py", "benchmark/**/*.py"]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]

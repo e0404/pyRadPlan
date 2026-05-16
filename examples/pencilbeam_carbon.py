@@ -47,6 +47,8 @@ stf = generate_stf(ct, cst, pln)
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
+# %%
+# Optimize
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Result

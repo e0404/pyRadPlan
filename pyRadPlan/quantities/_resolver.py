@@ -28,10 +28,12 @@ class QuantityResolver:
 
     def __init__(self, dij: Dij, *, _dij_already_in_namespace: bool = False):
         xp = compute_backend.choose_array_api_namespace()
+        device = compute_backend.choose_device(xp)
+
         if _dij_already_in_namespace:
             self._dij = dij
         else:
-            self._dij = dij.to_namespace(xp)
+            self._dij = dij.to_namespace(xp, device=device)
         self._instances: dict[str, FluenceDependentQuantity] = {}
         # In-progress identifiers used for cycle detection.
         self._resolving: set[str] = set()
