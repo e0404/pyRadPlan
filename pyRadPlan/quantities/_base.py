@@ -66,13 +66,18 @@ class FluenceDependentQuantity(RTQuantity, ABC):
     ):
         super().__init__(dij, scenarios=scenarios)
         xp = compute_backend.choose_array_api_namespace()
+        device = compute_backend.choose_device(xp)
+
+        logger.info("Optimization will use array backend: %s", xp.__name__)
+
         self.array_backend: ArrayNamespace = xp
 
         # The resolver pre-converts the dij to the target namespace and supplies
         # `mode` + `dependencies`. When invoked directly (e.g. from tests) we do the
         # conversion ourselves and build deps lazily via the resolver.
         if mode is None:
-            self._dij = dij.to_namespace(xp)
+            self._dij = dij.to_namespace(xp, device=device)
+            self.device = device
             self._mode = self._choose_mode()
             self._deps: dict[str, FluenceDependentQuantity] = dict(dependencies or {})
             if self._mode == "indirect" and not self._deps:
@@ -88,6 +93,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             self._dij = dij
             self._mode = mode
             self._deps = dict(dependencies or {})
+            self.device = device
 
         self._validate_dependencies()
 

@@ -43,6 +43,7 @@ class SolverBase(ABC):
     def __init__(self):
         self.max_time = 3600
         self.bounds = [0.0, np.inf]
+        self.device = None
         # Keyboard listener utility (manages platform specifics internally)
         self._keyboard_listener = KeyboardListener(
             allow_keyboard_cancel=self.allow_keyboard_cancel,

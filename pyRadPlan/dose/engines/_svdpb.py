@@ -3,6 +3,8 @@ import logging
 import random
 
 import numpy as np
+import array_api_compat
+
 from scipy import fft
 from scipy.interpolate import RegularGridInterpolator
 
@@ -11,6 +13,7 @@ from pyRadPlan.stf import FieldShape
 
 # from pyRadPlan.stf import Beam
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
+from pyRadPlan.core.xp_utils import to_numpy
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 
@@ -271,11 +274,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 f_pre = np.real(f_pre)
 
         # get index of central ray or closest to the central ray
-        center = np.argmin(
-            np.sum(
-                np.array([ray["ray_pos_bev"] for ray in beam_info["beam"]["rays"]]) ** 2, axis=1
-            )
+        xp = self.xp
+        ray_pos_bev = xp.stack(
+            [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
+        center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
 
         center_ssd = beam_info["beam"]["rays"][center]["SSD"]
 
@@ -327,23 +330,32 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
 
         m = kernel.m
-        betas = kernel.kernel_betas.reshape((-1, 1))
-        rd = curr_ray["rad_depths"].reshape((1, -1))
+        betas = kernel.kernel_betas
+        rd = curr_ray["rad_depths"]
         interpolators = cast(list[RegularGridInterpolator], curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
 
-        dose_component = betas / (betas - m) * (np.exp(-m * rd) - np.exp(-betas * rd))
+        xp = array_api_compat.array_namespace(rd)
 
-        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
+        # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
+        betas = xp.reshape(xp.asarray(betas), (-1, 1))
+        rd = xp.reshape(rd, (1, -1))
+        m_arr = xp.asarray(m, dtype=rd.dtype)
+
+        dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
+
+        # scipy interpolators require NumPy arrays
+        iso_lat_dists_np = to_numpy(iso_lat_dists)
+        interpolated_kernels = [interp(iso_lat_dists_np) for interp in interpolators]
 
         for c, interp in enumerate(interpolated_kernels):
-            dose_component[c, :] *= interp
+            dose_component[c, :] *= xp.asarray(interp)
 
-        bixel_dose = np.sum(dose_component, axis=0)
+        bixel_dose = xp.sum(dose_component, axis=0)
 
-        bixel_dose *= ((sad) / geo_depths) ** 2
+        bixel_dose = bixel_dose * ((sad / geo_depths) ** 2)
 
         bixel["physical_dose"] = bixel_dose
         bixel["weight"] = curr_ray["beamlets"][k]["weight"]

@@ -29,6 +29,8 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
+from ...core.xp_utils import choose_array_api_namespace, choose_device
+
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,9 @@ class DoseEngineBase(ABC):
         # Protected properties with private get access
         self._last_progress_update = None
         self._calc_dose_direct = False
+
+        self.xp = choose_array_api_namespace()
+        self.device = choose_device()
 
         # initializing super() class (here: ABC)
         super().__init__()

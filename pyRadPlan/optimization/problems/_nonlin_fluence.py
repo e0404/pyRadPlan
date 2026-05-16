@@ -62,6 +62,10 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         if not isinstance(self.solver, NonLinearOptimizer):
             raise ValueError("Solver must be an instance of SolverBase")
 
+        # Propagate device from quantities to solver and problem
+        self._device = getattr(self._quantities[0], "device", None)
+        self.solver.device = self._device
+
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
@@ -82,11 +86,11 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         # Loop over all objectives
 
-        f_vals = xp.zeros(self._num_objectives, dtype=x.dtype)
+        f_vals = xp.zeros(self._num_objectives, dtype=x.dtype, device=self._device)
 
         obj_ix = 0
         for obj_info in self._objective_list:
-            ix = xp_utils.from_numpy(xp, obj_info[0])
+            ix = xp_utils.from_numpy(xp, obj_info[0], device=self._device)
             tmp_obj_list = cast(list[Objective], obj_info[1])
             for obj in tmp_obj_list:
                 f_tmp_scen = [
@@ -133,6 +137,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                         self._dij.dose_grid.num_voxels,
                     ),
                     dtype=xp.float32,
+                    device=self._device,
                 )
             else:
                 # The trailing ellipsis here is needed for array_api compatibility
@@ -151,7 +156,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 n_grad_caches = num_objectives
 
             self._grad_cache = xp.zeros(
-                (n_grad_caches, self._dij.total_num_of_bixels), dtype=xp.float64
+                (n_grad_caches, self._dij.total_num_of_bixels),
+                dtype=xp.float64,
+                device=self._device,
             )
         else:
             self._grad_cache[:, ...] = 0.0
@@ -182,7 +189,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         cnt = 0
         for obj_info in self._objective_list:
-            ix = xp_utils.from_numpy(xp, obj_info[0])
+            ix = xp_utils.from_numpy(xp, obj_info[0], device=self._device)
             tmp_obj_list = cast(list[Objective], obj_info[1])
             for obj in tmp_obj_list:
                 if self.bypass_objective_jacobian:
@@ -243,7 +250,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         xp = self._array_backend
 
-        x0 = xp.zeros((self._dij.total_num_of_bixels,), dtype=xp.float64)
+        x0 = xp.zeros((self._dij.total_num_of_bixels,), dtype=xp.float64, device=self._device)
         t_start = xp_utils.record_event(xp)
         result = self.solver.solve(x0)
         t_end = xp_utils.record_event(xp)

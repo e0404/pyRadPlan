@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- AGENTS.md and CLAUDE.md for AI-assisted development
+- GPU-accelerated dose calculation via Array API using CuPy and PyTorch backends (alongside NumPy/`array_api_strict`), including memory management, streaming, and per-beam cleanup
+- `to_namespace()` helper to convert arrays (and scipy sparse matrices) between Array API namespaces, with explicit `device=` and `keep_sparse_compat` options
+- `choose_device()` to select a sensible default device for a given namespace, with multi-GPU index support (`gpu:N` / `cuda:N`)
+- DLPack-based device handling (`get_device_info`, `is_on_gpu`, `DLPACK_CPU`/`DLPACK_CUDA` constants) for seamless backend interop
+- GPU lifecycle helpers: `free_gpu_memory()`, `create_stream()`, `get_current_stream()`, `synchronize()`, `record_event()`, `elapsed_time()`
+- `from_numpy()` / `to_numpy()` helpers with device targeting
+- Backend availability checks and a preferred-backend wishlist (`cupy_available`, `pytorch_gpu_available`, `jax_available`, `jax_gpu_available`, `numba_cuda_available`, `PREFERRED_GPU_ARRAY_BACKEND`)
+- Native CUDA kernel implementation for geometric distance calculation: `_calc_geo_dists_cupy_kernel` (CuPy `ElementwiseKernel`), `_calc_geo_dists_cupy_raw_kernel` (CuPy `RawKernel`), and `_calc_geo_dists_torch_kernel`, replacing the previous Numba CUDA path
+- Array API conform N-D interpolation `interpnd()` on rectilinear grids (generic 2D/3D fallback, with dedicated `RegularGridInterpolator` paths for NumPy/SciPy, JAX, and CuPy)
+- Improved `interp1d`: fast paths using `xp.interp` for NumPy/JAX/CuPy, JAX `jit` and PyTorch `torch.compile` backends (with `torch.jit.script` fallback if Triton is not installed), support for lists/tuples/dicts of arrays with optional stacking
+- Array API compatibility for beam initialization and ray geometry computation (`get_gantry_rotation_matrix`, `get_couch_rotation_matrix`)
+- More efficient sparse matrix conversion using direct CSR/CSC construction, avoiding unnecessary deep copies
+- Kernel-data caching and `ParticlePencilBeamKernel.to_namespace()` to move kernel arrays onto the active backend/device
+- Device propagation through fluence optimization (`NonLinearFluencePlanningProblem`, `OptimizerIpopt`, scipy solver, `SolverBase.device`)
+- New example `examples/utils_backends.py` demonstrating how to query backends and run dose calculation on different array backends
+- Benchmarks `benchmark/benchmark_interp1d.py` and `benchmark/benchmark_interpnd.py` for interpolation across backends
+- quantity resolver that checks for presence of quantities and instantiates the required ones
 - biological RBE calculation from alpha and beta kernels
 - biological based optimization
 - alpha and beta parameters to dij with function `get_reference_lq_params` to get them for a given ct and cst
@@ -17,8 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: extended user guide
 
 ### Changed
+
+- Pencil beam dose calculation now applies the lateral cutoff mask before computation rather than after, and keeps Dij assembly on the CPU (size limited) while the rest of the calculation runs on GPU
+- Per-beam dose/LET/effect computation in `Dij.compute_beam_dose()` now slices intensities by beam (faster matmul) instead of multiplying by a beam mask, and is fully Array API namespace aware
+- Siddon raytracer now picks up the engine's device and allocates plane/coordinate arrays directly on that device
+- SVD photon pencil beam engine refactored to use Array API arrays for ray-position aggregation and kernel weighting (still calls SciPy interpolators on host arrays)
 - resampling in BLD now uses interpolation to return mask on the grid provided by the dose engine
 - in SVDPB field_grid is now built before the resampling of the beamlet mask to guarantee matching grids
+
+### Fixed
+
+- CuPy issue in LPS coordinate handling (gantry/couch rotation matrices now built via `xp.stack` with the correct device/dtype)
+- SVD pencil beam engine updated to match changes in the base pencil beam engine
+- Device handling and type checks in optimization solvers (IPOPT and SciPy) so the optimization runs on the same device as the quantities
+- Preliminary workaround for CUDA / cuBLAS DLL conflicts when PyTorch and CuPy are imported in the same environment
+- `free_gpu_memory()` now skips NumPy/`array_api_strict` namespaces silently
+- `Beam.validate_nparray_dtype` handles non-list array inputs via `to_numpy()` so non-NumPy arrays validate correctly on import
+- `to_namespace()` raises `TypeError` for scalar / list / tuple inputs instead of failing on the sparse-array check
 
 ## [0.3.5] - 2026-05-12
 
