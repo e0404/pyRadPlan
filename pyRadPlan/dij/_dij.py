@@ -238,7 +238,7 @@ class Dij(PyRadPlanBaseModel):
                     if v.ndim != 1:
                         raise ValueError("Numbering arrays must be 1-dimensional")
 
-                    if v.size != bix_num:
+                    if array_api_compat.size(v) != bix_num:
                         raise ValueError(
                             "Numbering arrays shape inconsistent with number of bixels"
                         )
@@ -275,7 +275,7 @@ class Dij(PyRadPlanBaseModel):
                     if v.ndim != 1:
                         raise ValueError("Voxel arrays must be 1-dimensional")
 
-                    if v.size != vox_num:
+                    if array_api_compat.size(v) != vox_num:
                         raise ValueError("Voxel arrays shape inconsistent with number of voxels")
 
         if info.context and "from_matRad" in info.context and info.context["from_matRad"]:

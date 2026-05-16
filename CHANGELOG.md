@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `free_gpu_memory()` now skips NumPy/`array_api_strict` namespaces silently
 - `Beam.validate_nparray_dtype` handles non-list array inputs via `to_numpy()` so non-NumPy arrays validate correctly on import
 - `to_namespace()` raises `TypeError` for scalar / list / tuple inputs instead of failing on the sparse-array check
-
+- property .size raising an error in dij.py when torch is used. Switching to array_api_compat.size()
 ## [0.3.5] - 2026-05-12
 
 ### Changed
