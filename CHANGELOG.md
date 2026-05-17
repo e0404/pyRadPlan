@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - a TOPAS monte carlo interface. Implemented are protons and ions with basic physical and let based scoring. Material conversions are water and a pre defined schneider converter. The interface is structure into input files so that different beam models or scorers can be added easily. The interface also as template files that are used to create the simulation files. Which also give a nice overwiev on the structure of the simulation files.
 - jinja2 as project dependency
 - Documentation: extended user guide
+- Documentation: extended installation instructions
 - First implementation of an interactive result viewer widget (`gui` extra) for visualizing dose/quantity distributions slice-by-slice with scroll/zoom, VOI contour overlay, isoline rendering, and colormap selection
 - DVH viewer and DVH comparison tools in the GUI analysis widget
 - Quality indicator (QI) panel in the GUI analysis widget
