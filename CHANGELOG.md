@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-17
+
 ### Added
 - `pyRadPlan.ai_agents` module: LLM-powered treatment planning helpers built on `pydantic-ai`
 - `generate_beam_angles(pln, treatment_site)` — queries an LLM to suggest gantry and couch angles for a given treatment site and radiation mode, and writes them into `pln.prop_stf`
@@ -243,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/e0404/pyRadPlan/compare/v0.3.2...v0.3.3
