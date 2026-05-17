@@ -1,17 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, Union
+from typing import ClassVar, Optional, Union
 
 import logging
 
 import numpy as np
 import array_api_compat
-
-try:
-    import cupy as cp
-    import cupyx.scipy.sparse as cusparse
-except ImportError:
-    cp = None
-    cusparse = None
 
 from ..core.xp_utils.typing import Array, ArrayNamespace
 
@@ -31,48 +24,133 @@ class RTQuantity(ABC):
     identifier: ClassVar[str]
     unit: ClassVar[pint.Unit]
     dim: ClassVar[int]  # To differentiate between scalar and vector quantities
-
     precision: str
 
-    def __init__(self, scenarios=None):
+    def __init__(self, dij: Dij, scenarios=None):
         if scenarios is None:
             scenarios = [0]
         self.scenarios = np.asarray(scenarios, dtype=np.int64)
 
 
 class FluenceDependentQuantity(RTQuantity, ABC):
-    """Base class for quantities that depend on fluence distributions."""
+    """
+    Base class for quantities that depend on fluence distributions.
+
+    Concrete subclasses declare how they relate to a :class:`Dij` via two ClassVars:
+
+    - :attr:`required_dependencies`: identifiers of upstream quantities that are always
+      needed to compute this quantity. The resolver must produce them; failure raises.
+    - :attr:`optional_dependencies`: identifiers of upstream quantities used as a fallback
+      computation path when no direct Dij matrix is available.
+
+    The resolution mode (``"direct"`` vs ``"indirect"``) is decided at instantiation time:
+    if the dij carries an attribute whose name matches this quantity's ``identifier``, the
+    direct path wins; otherwise the indirect path is used and ``required + optional`` deps
+    must resolve.  This enforces a consistent naming convention: a Dij matrix attribute must
+    share its name with the quantity identifier it represents.
+    """
+
+    # ClassVar metadata describing how this quantity is computed.
+    required_dependencies: ClassVar[tuple[str, ...]] = ()
+    optional_dependencies: ClassVar[tuple[str, ...]] = ()
 
     array_backend: ArrayNamespace
 
-    def __init__(self, dij: Dij, **kwargs):
-        super().__init__(**kwargs)
-
-        # TODO: This backend check and conversion should be a part of the dij
+    def __init__(
+        self,
+        dij: Dij,
+        *,
+        mode: Optional[str] = None,
+        dependencies: Optional[dict[str, "FluenceDependentQuantity"]] = None,
+        scenarios=None,
+    ):
+        super().__init__(dij, scenarios=scenarios)
         xp = compute_backend.choose_array_api_namespace()
+        device = compute_backend.choose_device(xp)
 
-        influence_matrix = getattr(dij, self.identifier, None)
-        if influence_matrix is None:
-            raise ValueError(f"Influence matrix {self.identifier} not available in Dij object.")
-
-        self._dij = dij.to_namespace(xp)
-
-        try:
-            typename = getattr(self._dij, self.identifier).flat[0].dtype.name
-            self._dtype = getattr(xp, typename)
-        except AttributeError:
-            self._dtype = getattr(self._dij, self.identifier).flat[0].dtype
-
-        logger.info("Optimization uses array backend: %s", xp.__name__)
+        logger.info("Optimization will use array backend: %s", xp.__name__)
 
         self.array_backend: ArrayNamespace = xp
+
+        # The resolver pre-converts the dij to the target namespace and supplies
+        # `mode` + `dependencies`. When invoked directly (e.g. from tests) we do the
+        # conversion ourselves and build deps lazily via the resolver.
+        if mode is None:
+            self._dij = dij.to_namespace(xp, device=device)
+            self.device = device
+            self._mode = self._choose_mode()
+            self._deps: dict[str, FluenceDependentQuantity] = dict(dependencies or {})
+            if self._mode == "indirect" and not self._deps:
+                # Lazy import to avoid circular dependency at module import time.
+                from ._resolver import QuantityResolver  # noqa: PLC0415
+
+                resolver = QuantityResolver(self._dij, _dij_already_in_namespace=True)
+                for dep_id in self._dep_ids_for_indirect():
+                    self._deps[dep_id] = resolver.get(dep_id)
+        else:
+            if mode not in ("direct", "indirect"):
+                raise ValueError(f"Unknown quantity mode: {mode!r}")
+            self._dij = dij
+            self._mode = mode
+            self._deps = dict(dependencies or {})
+            self.device = device
+
+        self._validate_dependencies()
+
+        # dtype is inferred from the matrix actually driving the computation in
+        # direct mode, and from the canonical `physical_dose` container otherwise.
+        self._dtype = self._infer_dtype(xp)
 
         # Fluence cache for derivative calculation
         self._w_cache: Union[Array, None] = None
         self._w_grad_cache: Union[Array, None] = None
-        # Quantity vector cache
-        self._q_cache = np.empty_like(getattr(self._dij, self.identifier), dtype=object)
+        # Quantity vector cache (shape mirrors the scenario container layout)
+        self._q_cache = np.empty_like(getattr(self._dij, "physical_dose"), dtype=object)
         self._qgrad_cache = np.empty_like(self._q_cache)
+
+    @property
+    def mode(self) -> str:
+        """The resolution mode chosen for this instance: ``"direct"`` or ``"indirect"``."""
+        return self._mode
+
+    @property
+    def dependencies(self) -> dict[str, "FluenceDependentQuantity"]:
+        """Mapping of identifier to resolved upstream quantity instance."""
+        return self._deps
+
+    def _choose_mode(self) -> str:
+        """Pick the resolution mode for this dij; direct wins when both are available."""
+        if getattr(self._dij, self.identifier, None) is not None:
+            return "direct"
+        if self.required_dependencies or self.optional_dependencies:
+            return "indirect"
+        raise ValueError(
+            f"Quantity {type(self).__name__!r} cannot be computed: dij has no attribute "
+            f"{self.identifier!r} and no dependencies are declared."
+        )
+
+    def _dep_ids_for_indirect(self) -> tuple[str, ...]:
+        """Return identifiers that must be resolved to compute this quantity indirectly."""
+        return tuple(self.required_dependencies) + tuple(self.optional_dependencies)
+
+    def _validate_dependencies(self) -> None:
+        if self._mode == "indirect":
+            for dep_id in self.required_dependencies:
+                if dep_id not in self._deps:
+                    raise ValueError(
+                        f"Required dependency {dep_id!r} missing for {type(self).__name__!r}."
+                    )
+
+    def _infer_dtype(self, xp: ArrayNamespace):
+        if self._mode == "direct":
+            container = getattr(self._dij, self.identifier)
+            sample = container.flat[0]
+        else:
+            sample = self._dij.physical_dose.flat[0]
+        try:
+            return getattr(xp, sample.dtype.name)
+        except AttributeError:
+            return sample.dtype
 
     def __call__(self, fluence: Array) -> Array:
         """
@@ -153,44 +231,23 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         return self._qgrad_cache
 
     def _compute_quantity_cache(self):
-        """
-        Protected function to compute the quantity from the fluence and write it into the cache.
-
-        Parameters
-        ----------
-        fluence : Array
-            Fluence distribution.
-        """
+        """Compute the quantity from the fluence and write it into the cache."""
 
         for scenario_index in self.scenarios:
-            self._q_cache.flat[scenario_index] = self._compute_quantity_single_scenario_from_cache(
+            self._q_cache.flat[scenario_index] = self._compute_quantity_single_scenario(
                 scenario_index
             )
 
     def _compute_chain_derivative_cache(self, d_quantity: Array) -> Array:
-        """
-        Protected interface for calculating the fluence derivative from quantity derivative.
-
-        Parameters
-        ----------
-        d_quantity : Array
-            Derivative w.r.t. to the quantity.
-
-        Returns
-        -------
-        Array
-            Derivative of the quantity w.r.t. the fluence.
-        """
+        """Compute the fluence derivative from the quantity derivative into the cache."""
 
         for scenario_index in self.scenarios:
             self._qgrad_cache.flat[scenario_index] = (
-                self._compute_chained_fluence_gradient_single_scenario_from_cache(
-                    d_quantity, scenario_index
-                )
+                self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
             )
 
     @abstractmethod
-    def _compute_quantity_single_scenario_from_cache(self, scenario_index: int) -> Array:
+    def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         """
         Calculate the quantity in a specific scenario.
 
@@ -206,7 +263,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         """
 
     @abstractmethod
-    def _compute_chained_fluence_gradient_single_scenario_from_cache(
+    def _compute_chain_derivative_single_scenario(
         self, d_quantity: Array, scenario_index: int
     ) -> Array:
         """

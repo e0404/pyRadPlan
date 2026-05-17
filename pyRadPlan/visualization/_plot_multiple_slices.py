@@ -17,12 +17,15 @@ class PlotMultipleSlicesKwargs(TypedDict, total=False):
     overlay_alpha: float
     overlay_unit: Union[str, pint.Unit, list[Union[str, pint.Unit]]]
     overlay_rel_threshold: float
+    overlay_window: Optional[tuple[float, float]]
+    overlay_cmap: str
     contour_line_width: float
     save_filename: Optional[str]
     show_plot: bool
     use_global_max: bool
     overlay_titles: Optional[list[str]]
     image_window: Optional[tuple[float, float]]
+    image_cmap: str
     window_mode: Literal["minmax", "centerwidth"]
     ct_window: Optional[tuple[float, float]]
 
@@ -69,6 +72,16 @@ def plot_multiple_slices(
         If True, use the overlay's global maximum for scaling. Default is False.
     overlay_titles : list of str, optional
         Custom titles for each overlay type. Default is None.
+    image_cmap : str
+        Colormap for the image_volume. Default is "bone".
+    image_window : Optional[tuple[float, float]]
+        Minimum and maximum image value for image_volume visualization.
+    window_mode : Literal["minmax", "centerwidth"]
+        Windowing mode for image_volume. Default is "minmax".
+    overlay_window : Optional[tuple[float, float]]
+        Value window (vmin, vmax) for the overlay colormap. Defaults to (0, max) when None.
+    overlay_cmap : str
+        Colormap for the overlay. Default is "jet".
     """
     image_volume = _apply_deprecated_aliases(image_volume, ct, kwargs)
 

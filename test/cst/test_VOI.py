@@ -471,3 +471,21 @@ def test_create_voi_invalid_voi_type_camel_case(generic_input_3d):
 #     voi_2.validate_voi()
 #     voi_3 = create_voi(voi_type="HELPER", name=name, ct_image=ct, mask=mask)
 #     voi_3.validate_voi()
+
+
+@pytest.mark.parametrize(
+    "color_in, color_expected",
+    [
+        ("red", (255, 0, 0)),
+        ((0.5, 0.5, 0.5), (128, 128, 128)),
+        ((10, 20, 30), (10, 20, 30)),
+        (np.array([40, 50, 60]), (40, 50, 60)),
+        (np.array([0.5, 0.25, 0.0]), (128, 64, 0)),
+        (None, None),
+    ],
+)
+def test_voi_visible_color_validator(generic_input_3d, color_in, color_expected):
+    name, ct, mask, _, _ = generic_input_3d
+    kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
+    voi = create_voi(**kwargs, visible_color=color_in)
+    assert voi.visible_color == color_expected

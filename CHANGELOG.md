@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-17
+
+### Added
+- `pyRadPlan.ai_agents` module: LLM-powered treatment planning helpers built on `pydantic-ai`
+- `generate_beam_angles(pln, treatment_site)` — queries an LLM to suggest gantry and couch angles for a given treatment site and radiation mode, and writes them into `pln.prop_stf`
+- `generate_voi_objectives(pln, cst, treatment_site)` — queries an LLM to propose optimization objectives for each VOI in a `StructureSet` and attaches validated objective instances directly to the VOIs
+- `AiSettings` — pydantic-settings class for global configuration; reads the default model from the `PYRADPLAN_AI_MODEL` environment variable (default: `claude-sonnet-4-5`); any provider supported by pydantic-ai can be selected via the model string
+- New example `examples/utils_ai_agents.py` demonstrating an end-to-end proton prostate plan with AI-generated beam angles and objectives
+- AGENTS.md and CLAUDE.md for AI-assisted development
+- GPU-accelerated dose calculation via Array API using CuPy and PyTorch backends (alongside NumPy/`array_api_strict`), including memory management, streaming, and per-beam cleanup
+- `to_namespace()` helper to convert arrays (and scipy sparse matrices) between Array API namespaces, with explicit `device=` and `keep_sparse_compat` options
+- `choose_device()` to select a sensible default device for a given namespace, with multi-GPU index support (`gpu:N` / `cuda:N`)
+- DLPack-based device handling (`get_device_info`, `is_on_gpu`, `DLPACK_CPU`/`DLPACK_CUDA` constants) for seamless backend interop
+- GPU lifecycle helpers: `free_gpu_memory()`, `create_stream()`, `get_current_stream()`, `synchronize()`, `record_event()`, `elapsed_time()`
+- `from_numpy()` / `to_numpy()` helpers with device targeting
+- Backend availability checks and a preferred-backend wishlist (`cupy_available`, `pytorch_gpu_available`, `jax_available`, `jax_gpu_available`, `numba_cuda_available`, `PREFERRED_GPU_ARRAY_BACKEND`)
+- Native CUDA kernel implementation for geometric distance calculation: `_calc_geo_dists_cupy_kernel` (CuPy `ElementwiseKernel`), `_calc_geo_dists_cupy_raw_kernel` (CuPy `RawKernel`), and `_calc_geo_dists_torch_kernel`, replacing the previous Numba CUDA path
+- Array API conform N-D interpolation `interpnd()` on rectilinear grids (generic 2D/3D fallback, with dedicated `RegularGridInterpolator` paths for NumPy/SciPy, JAX, and CuPy)
+- Improved `interp1d`: fast paths using `xp.interp` for NumPy/JAX/CuPy, JAX `jit` and PyTorch `torch.compile` backends (with `torch.jit.script` fallback if Triton is not installed), support for lists/tuples/dicts of arrays with optional stacking
+- Array API compatibility for beam initialization and ray geometry computation (`get_gantry_rotation_matrix`, `get_couch_rotation_matrix`)
+- More efficient sparse matrix conversion using direct CSR/CSC construction, avoiding unnecessary deep copies
+- Kernel-data caching and `ParticlePencilBeamKernel.to_namespace()` to move kernel arrays onto the active backend/device
+- Device propagation through fluence optimization (`NonLinearFluencePlanningProblem`, `OptimizerIpopt`, scipy solver, `SolverBase.device`)
+- New example `examples/utils_backends.py` demonstrating how to query backends and run dose calculation on different array backends
+- Benchmarks `benchmark/benchmark_interp1d.py` and `benchmark/benchmark_interpnd.py` for interpolation across backends
+- quantity resolver that checks for presence of quantities and instantiates the required ones
+- biological RBE calculation from alpha and beta kernels
+- biological based optimization
+- alpha and beta parameters to dij with function `get_reference_lq_params` to get them for a given ct and cst
+- quantity resolver that checks for presence of quantities and instantiates the required ones
+- a TOPAS monte carlo interface. Implemented are protons and ions with basic physical and let based scoring. Material conversions are water and a pre defined schneider converter. The interface is structure into input files so that different beam models or scorers can be added easily. The interface also as template files that are used to create the simulation files. Which also give a nice overwiev on the structure of the simulation files.
+- jinja2 as project dependency
+- Documentation: extended user guide
+- Documentation: extended installation instructions
+- First implementation of an interactive result viewer widget (`gui` extra) for visualizing dose/quantity distributions slice-by-slice with scroll/zoom, VOI contour overlay, isoline rendering, and colormap selection
+- DVH viewer and DVH comparison tools in the GUI analysis widget
+- Quality indicator (QI) panel in the GUI analysis widget
+- `visible` and `visible_color` fields on `VOI` for storing per-structure display properties
+- `DEFAULT_VOI_COLORS` palette (per VOI type: TARGET, OAR, EXTERNAL, HELPER) exported from `pyRadPlan.cst`
+- `StructureSet.set_colors()` method that auto-assigns colors from the predefined palette, skipping colors already in use, preserving any explicitly set `visible_color`
+- `visible_color` field validator on `VOI` accepting named color strings, float 0–1 arrays, and int 0–255 tuples
+
+### Changed
+- Pencil beam dose calculation now applies the lateral cutoff mask before computation rather than after, and keeps Dij assembly on the CPU (size limited) while the rest of the calculation runs on GPU
+- Per-beam dose/LET/effect computation in `Dij.compute_beam_dose()` now slices intensities by beam (faster matmul) instead of multiplying by a beam mask, and is fully Array API namespace aware
+- Siddon raytracer now picks up the engine's device and allocates plane/coordinate arrays directly on that device
+- SVD photon pencil beam engine refactored to use Array API arrays for ray-position aggregation and kernel weighting (still calls SciPy interpolators on host arrays)
+- resampling in BLD now uses interpolation to return mask on the grid provided by the dose engine
+- in SVDPB field_grid is now built before the resampling of the beamlet mask to guarantee matching grids
+- `_draw_contours()` in `plot_slice` now uses `voi.visible_color` instead of a colormap cycle, so contour colors are consistent with the GUI viewer
+- GUI optional dependency changed from `PyQt5` to `pyside6>=6.0.1` and `pyqtgraph>=0.12.0`
+- Proton pencil-beam example updated to use the new dose viewer widget
+
+### Fixed
+- `resample_image` now falls back to linear interpolation when BSpline is requested but the image has fewer than 4 voxels in any dimension, preventing intermittent NaN values from the BSpline prefilter on small grids
+- CuPy issue in LPS coordinate handling (gantry/couch rotation matrices now built via `xp.stack` with the correct device/dtype)
+- SVD pencil beam engine updated to match changes in the base pencil beam engine
+- Device handling and type checks in optimization solvers (IPOPT and SciPy) so the optimization runs on the same device as the quantities
+- Preliminary workaround for CUDA / cuBLAS DLL conflicts when PyTorch and CuPy are imported in the same environment
+- `free_gpu_memory()` now skips NumPy/`array_api_strict` namespaces silently
+- `Beam.validate_nparray_dtype` handles non-list array inputs via `to_numpy()` so non-NumPy arrays validate correctly on import
+- `to_namespace()` raises `TypeError` for scalar / list / tuple inputs instead of failing on the sparse-array check
+- `StructureSet` now calls `set_colors()` during validation so every VOI always has a color assigned
+- property .size raising an error in dij.py when torch is used. Switching to array_api_compat.size()
+-
 ## [0.3.5] - 2026-05-12
 
 ### Changed
@@ -180,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/e0404/pyRadPlan/compare/v0.3.2...v0.3.3
