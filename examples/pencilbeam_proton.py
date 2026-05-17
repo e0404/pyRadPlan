@@ -21,11 +21,10 @@ from pyRadPlan import (
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
-    plot_slice,
     load_tg119,
     xp_utils,
 )
-
+from pyRadPlan.gui import launch_viewer
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
@@ -72,11 +71,4 @@ result = dij.compute_result_ct_grid(fluence)
 view_slice = int(np.round(ct.size[2] / 2))
 
 # Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+launch_viewer(ct, cst, result)

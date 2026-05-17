@@ -1,6 +1,15 @@
 """Clinical structures and volumes of interest."""
 
-from ._voi import VOI, OAR, Target, HelperVOI, ExternalVOI, create_voi, validate_voi
+from ._voi import (
+    VOI,
+    OAR,
+    Target,
+    HelperVOI,
+    ExternalVOI,
+    create_voi,
+    validate_voi,
+    DEFAULT_VOI_COLORS,
+)
 from ._cst import StructureSet, create_cst, validate_cst
 
 __all__ = [
@@ -14,4 +23,5 @@ __all__ = [
     "ExternalVOI",
     "create_voi",
     "validate_voi",
+    "DEFAULT_VOI_COLORS",
 ]
