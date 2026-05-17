@@ -28,7 +28,7 @@ build-matrix:
         - python -m venv .venv
         - . .venv/bin/activate
         # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite  # Uncomment if needed for numba on specific images
-        - pip install --upgrade --upgrade-strategy eager -e .
+        - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -111,6 +111,7 @@ tests-matrix:
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
         COVERAGE_FILE: ".coverage.${PYTHON_VERSION}"
+        QT_QPA_PLATFORM: "offscreen"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -118,10 +119,11 @@ tests-matrix:
             - .cache/pip/
         policy: pull-push
     script:
+        - apt-get update && apt-get install -y libgl1 libxkbcommon-x11-0 libegl1 libdbus-1-3 libglib2.0-0 libfontconfig1 libnss3 libasound2 # needed for pyqt tests
         - python -m pip install --upgrade pip
         - python -m venv .venv
         - . .venv/bin/activate
-        - pip install --upgrade --upgrade-strategy eager -e .
+        - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
         - pip install coverage pytest pytest-cov
         - mkdir -p .testreports
         - PYVER_SAFE=${PYTHON_VERSION//./}

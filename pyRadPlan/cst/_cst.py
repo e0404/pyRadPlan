@@ -15,7 +15,7 @@ import SimpleITK as sitk
 from ..core import PyRadPlanBaseModel, Grid
 from ..core.resample import resample_numpy_array
 from ..ct import CT, validate_ct
-from . import VOI, ExternalVOI, validate_voi
+from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -78,15 +78,17 @@ class StructureSet(PyRadPlanBaseModel):
             if not isinstance(objectives, list):
                 objectives = [objectives]
 
+            props = vdata[4] if len(vdata) > 4 and isinstance(vdata[4], dict) else {}
+
             voi = validate_voi(
                 name=str(vdata[1]),
                 voi_type=str(vdata[2]),
                 mask=masks,
                 ct_image=ct,
                 objectives=objectives,
+                **props,
             )
             voi_list.append(voi)
-
         return {"vois": voi_list, "ct_image": ct}
 
     @model_validator(mode="before")
@@ -135,6 +137,7 @@ class StructureSet(PyRadPlanBaseModel):
                 if voi.ct_image != self.ct_image:
                     raise ValueError("All VOIs must reference the same CT image.")
 
+        self.set_colors()
         return self
 
     def to_matrad(self, context: str = "mat-file") -> Any:
@@ -417,6 +420,31 @@ class StructureSet(PyRadPlanBaseModel):
                 target_grid=resample_grid,
             ).ravel()
         return alpha, beta
+
+    def set_colors(self) -> Self:
+        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``visible_color``.
+
+        Colors are popped in order from the predefined list for each VOI type, skipping
+        any color already taken by another VOI. If the list is exhausted the last color
+        in the list is reused. Existing ``visible_color`` values are preserved.
+        """
+        # Per-type pool of unused predefined colors.
+        pool: dict[str, list[tuple[int, int, int]]] = {
+            t: list(palette) for t, palette in DEFAULT_VOI_COLORS.items()
+        }
+        for voi in self.vois:
+            if voi.visible_color is not None:
+                color = tuple(voi.visible_color)
+                if color in pool.get(voi.voi_type, []):
+                    pool[voi.voi_type].remove(color)
+
+        for voi in self.vois:
+            if voi.visible_color is None:
+                palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
+                remaining = pool.setdefault(voi.voi_type, list(palette))
+                voi.visible_color = remaining.pop(0) if remaining else palette[-1]
+
+        return self
 
 
 def create_cst(

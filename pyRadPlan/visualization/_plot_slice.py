@@ -162,10 +162,11 @@ def _draw_image_slice(
 def _draw_contours(
     ctx: _PlotCtx, cst: StructureSet, slice_indexing: tuple, line_width: float
 ) -> None:
-    cmap = plt.colormaps["cool"]
-    n = len(cst.vois)
-    for v, voi in enumerate(cst.vois):
+    for voi in cst.vois:
         mask = sitk.GetArrayViewFromImage(voi.mask)[slice_indexing]
+        color = voi.visible_color
+        color = [tuple(float(c) / 255.0 for c in voi.visible_color)]
+
         if ctx.transpose:
             mask = mask.T
         ctx.ax.contour(
@@ -173,7 +174,7 @@ def _draw_contours(
             ctx.y_plot,
             mask,
             levels=[0.5],
-            colors=[cmap(v / n)],
+            colors=color,
             linewidths=line_width,
         )
 
