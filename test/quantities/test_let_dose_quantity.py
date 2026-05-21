@@ -5,7 +5,7 @@ import array_api_strict as xp
 from scipy.sparse import csc_array
 
 from pyRadPlan.dij import Dij
-from pyRadPlan.quantities import LETxDose, RTQuantity
+from pyRadPlan.quantities import LETxDose, FluenceDependentQuantity
 
 
 @pytest.fixture
@@ -53,7 +53,8 @@ def sample_dij_sparse(sample_base_dij_dict):
 
 def test_LETxDose_constructor(sample_dij_dense):
     let_dose = LETxDose(sample_dij_dense)
-    assert isinstance(let_dose, RTQuantity)
+    assert isinstance(let_dose, FluenceDependentQuantity)
+    assert let_dose.mode == "direct"
     assert let_dose.scenarios == [0]
     assert let_dose._dij == sample_dij_dense.to_namespace(xp)
     assert let_dose.dim == 1

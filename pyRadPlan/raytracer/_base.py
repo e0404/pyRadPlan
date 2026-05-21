@@ -31,7 +31,7 @@ class RayTracerBase(ABC):
 
     @property
     def cubes(self):
-        """CT or other abritrary cubes of similar resolution to be traced."""
+        """CT or other arbitrary cubes of similar resolution to be traced."""
         return self._cubes
 
     @cubes.setter
@@ -82,7 +82,7 @@ class RayTracerBase(ABC):
 
         Notes
         -----
-        The default implementation loops over the trace_ray function. The separte implementation is
+        The default implementation loops over the trace_ray function. The separate implementation is
         here to enable more performant implementations for specific ray tracers, e.g. through
         vectorization.
         """

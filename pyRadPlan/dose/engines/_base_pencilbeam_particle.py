@@ -2,7 +2,7 @@
 
 import warnings
 from abc import abstractmethod
-from typing import cast, Literal, Any
+from typing import cast, ClassVar, Literal, Any
 import logging
 import time
 from copy import deepcopy
@@ -57,6 +57,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     air_offset_correction: bool
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"]
     cut_off_method: Literal["integral", "relative"]
+
+    _dij_guarantee_canonical: ClassVar[bool]
+    _dij_guarantee_nonzero: ClassVar[bool]
 
     def __init__(self, pln):
         self.calc_let = True
@@ -421,7 +424,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Initialize dose calculation.
 
         Modified inherited method of the superclass DoseEngine,
-        containing intialization which are specificly needed for
+        containing initialization which are specifically needed for
         pencil beam calculation and not for other engines.
         """
 
@@ -451,10 +454,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self.calc_bio_dose:
             dij = self._load_biological_kernel(cst, dij)  # TODO: Not fully implemented yet
             # allocate alpha and beta dose container and sparse matrices in the dij struct,
-            # for more informations see corresponding method
+            # for more information see corresponding method
             dij = self._allocate_bio_dose_container(dij)  # TODO: Not fully implemented yet
 
-        # Allocate LET containner and let sparse matrix in dij struct
+        # Allocate LET container and let sparse matrix in dij struct
         if self.calc_let:
             if self._machine.has_let_kernel:
                 dij = self._allocate_let_container(dij)
@@ -530,7 +533,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             beam_info["valid_coords"][scen] = sub_select_ix[scen] & beam_info["valid_coords"][scen]
 
         xp = array_api_compat.array_namespace(self._vox_world_coords)
-        # TODO: We should definetly enforce arrays in the future not lists.
+        # TODO: We should definitely enforce arrays in the future not lists.
         beam_info["valid_coords"] = [to_namespace(xp, v) for v in beam_info["valid_coords"]]
         beam_info["valid_coords_all"] = xp.any(xp.stack(beam_info["valid_coords"], axis=1), axis=1)
 
@@ -698,7 +701,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         for ray in stf_element["beam"]["rays"]:
             len_ray_energy = len([beamlet["energy"] for beamlet in ray["beamlets"]])
             v_ssd[cnt : cnt + len_ray_energy] = ray["SSD"]
-            # TODO: whats the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
+            # TODO: what's the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
             cnt += len_ray_energy
 
         # Setup energy, focus index, sigma look up table - only consider unique rows

@@ -129,9 +129,9 @@ def get_beam_rotation_matrix(gantry_angle: Array, couch_angle: Array) -> Array:
     Examples
     --------
     >>> get_beam_rotation_matrix(90, 45)
-    array([[-0.70710678, -0.70710678,  0.        ],
-           [ 0.        ,  0.        ,  1.        ],
-           [ 0.70710678, -0.70710678,  0.        ]])
+    array([[ 0.        , -0.70710678,  0.70710678],
+           [ 1.        ,  0.        ,  0.        ],
+           [ 0.        ,  0.70710678,  0.70710678]])
     """
     # Array API compatibility requires angles to be arrays.
     # Force to numpy arrays. Legacy code would have done so either way.

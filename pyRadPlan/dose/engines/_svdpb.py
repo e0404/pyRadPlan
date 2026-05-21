@@ -1,4 +1,4 @@
-from typing import TypedDict, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
@@ -62,6 +62,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     short_name = "SVDPB"
     name = "SVD Pencil Beam"
     possible_radiation_modes = ["photons"]
+
+    _dij_guarantee_canonical: ClassVar[bool] = True
+    _dij_guarantee_nonzero: ClassVar[bool] = True
 
     use_custom_primary_photon_fluence: bool
     kernel_cutoff: float
@@ -163,14 +166,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["field_based_dose_calc"] = field_based_dose_calc
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
+        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
+        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
+
         # TODO: resampling should directly change object, not create new one?
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
             stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i]
-                .rays[j]
-                .beamlets[k]
-                .resample(new_resolution=self.int_conv_resolution, new_field_width=field_width)
+                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
             )
             beam_info["beam"]["rays"][j]["beamlets"][k] = (
                 stf.beams[i].rays[j].beamlets[k].model_dump()
@@ -179,10 +183,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
                 stf.beams[i].rays[j].beamlets[k].mask, k=-1
             )
-
-        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
-        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -195,6 +195,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         energy = energies[0]
 
         kernel = cast(PhotonLINAC, self._machine).get_kernel_by_energy(energy)
+
+        min_kernel_spacing = np.min(np.diff(kernel.kernel_pos))
+        if self.int_conv_resolution > min_kernel_spacing:
+            logger.warning(
+                "Chosen kernel convolution resolution of %f mm is larger than minimum kernel "
+                "spacing of %f mm. This can strongly affect absolute dosimetry.",
+                self.int_conv_resolution,
+                min_kernel_spacing,
+            )
 
         if self.kernel_cutoff > kernel.kernel_pos[-1]:
             logger.info(
@@ -226,9 +235,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         gauss_grid = self.int_conv_resolution * np.arange(-gauss_limit, gauss_limit)
 
         gauss_filter_x, gauss_filter_z = np.meshgrid(gauss_grid, gauss_grid, indexing="xy")
+        # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
         gauss_filter = (
-            1.0
-            / (2 * np.pi * sigma_gauss**2 / self.int_conv_resolution**2)
+            self.int_conv_resolution**2
+            / (2 * np.pi * sigma_gauss**2)
             * np.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
@@ -282,9 +292,13 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # Get Interpolators
         # TODO: need scipy interpolate here probably
+        # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
         kernel_mxs = np.apply_along_axis(
-            lambda x: np.interp(
-                np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+            lambda x: (
+                self.int_conv_resolution**2
+                * np.interp(
+                    np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+                )
             ),
             axis=1,
             arr=kernels_at_ssd,

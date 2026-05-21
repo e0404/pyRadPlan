@@ -288,7 +288,7 @@ class FieldShapeAsMask(FieldShape):
         self.__dict__["resolution"] = self._resolve_resolution(self.resolution, self.grid)
 
         if self.grid is None and self.resolution is not None:
-            # center grid around (0,0) (asume mask is centered at (0,0))
+            # center grid around (0,0) (assume mask is centered at (0,0))
             half_size = self.mask.shape[0] // 2
             self.__dict__["grid"] = self.resolution * np.arange(-half_size, half_size + 1)
 
@@ -352,7 +352,7 @@ class FieldShapeAsBLD(FieldShape):
         # TODO: add field_width here directly & build grid with _build_grid
 
         if self.grid is None:
-            # center grid around (0,0) (asume mask is centered at (0,0))
+            # center grid around (0,0) (assume mask is centered at (0,0))
             half_size = self.mask.shape[0] // 2
             self.__dict__["grid"] = self.resolution * np.arange(-half_size, half_size + 1)
 
@@ -361,8 +361,19 @@ class FieldShapeAsBLD(FieldShape):
 
         return self._validate_and_derive_spatial()
 
-    def _resample_to_grid(self, new_grid: np.ndarray) -> "FieldShapeAsBLD":
-        return FieldShapeAsBLD(energy=self.energy, bld=self.bld, grid=new_grid, weight=self.weight)
+    def _resample_to_grid(self, new_grid: np.ndarray) -> "FieldShapeAsMask":
+        interpolator = RegularGridInterpolator(
+            (self.grid, self.grid), self.mask, method="linear", bounds_error=False, fill_value=0.0
+        )
+        xx, yy = np.meshgrid(new_grid, new_grid, indexing="ij")
+        new_mask = (
+            interpolator(np.stack([xx.ravel(), yy.ravel()], axis=-1))
+            .reshape(xx.shape)
+            .astype(np.float32)
+        )
+        return FieldShapeAsMask(
+            energy=self.energy, mask=new_mask, grid=new_grid, weight=self.weight
+        )
 
 
 class FieldShapeComposite(FieldShape):

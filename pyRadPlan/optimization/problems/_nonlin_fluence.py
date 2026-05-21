@@ -29,7 +29,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
     Attributes
     ----------
     bypass_objective_jacobian : bool, optional, default=True
-        Whether to bypass the objective jacobian calculation. This is usefull for scalarized
+        Whether to bypass the objective jacobian calculation. This is useful for scalarized
         optimization (e.g. weighted sum of objectives) as it will minimize storage to only a single
         gradient vector per quantity.
     """

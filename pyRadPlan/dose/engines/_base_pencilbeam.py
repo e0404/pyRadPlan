@@ -1,7 +1,7 @@
 """Base class for pencil beam dose calculation algorithms."""
 
 from abc import abstractmethod
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 import warnings
 import logging
 import time
@@ -105,6 +105,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     trace_on_dose_grid: bool
     cube_wed: sitk.Image
     hlut: np.ndarray
+
+    # Every derived engine must declare both flags.
+    _dij_guarantee_canonical: ClassVar[bool]
+    """``True`` iff the engine guarantees that every assembled CSC column already has
+    sorted, unique row indices (no duplicate entries, ascending order)"""
+
+    _dij_guarantee_nonzero: ClassVar[bool]
+    """``True`` iff the engine guarantees that it never writes structural zero
+    entries into the dose influence matrix"""
 
     def __init__(self, pln=None):
         self.keep_rad_depth_cubes = False
@@ -331,6 +340,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     def _allocate_quantity_matrices(self, dij: dict[str, Any], names: list[str]):
         device = "cpu"
         xp = np  # self.xp
+        # initialize shared structure container on first call
+        if "shared_structure" not in dij:
+            dij["shared_structure"] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+
         # Loop over all requested quantities
         for q_name in names:
             # Create dij list for each quantity
@@ -351,19 +364,26 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         # We allocate raw csc sparse matrix structures using
                         # a rough estimat ebased on number of voxels and
                         # beamlets
-                        est_nnz = np.fix(
-                            self.assumed_sparsity
-                            * self.dose_grid.num_voxels
-                            * self._num_of_columns_dij
-                        ).astype(np.int64)
+
+                        if dij["shared_structure"].flat[i] is None:
+                            est_nnz = np.fix(
+                                self.assumed_sparsity
+                                * self.dose_grid.num_voxels
+                                * self._num_of_columns_dij
+                            ).astype(np.int64)
+                            dij["shared_structure"].flat[i] = {
+                                "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
+                                "indptr": xp.zeros(
+                                    (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
+                                ),
+                                "nnz": 0,
+                            }
+                        else:
+                            # If shared structure already exists, we use its size
+                            est_nnz = dij["shared_structure"].flat[i]["indices"].size
 
                         dij[q_name].flat[i] = {
                             "data": xp.empty((est_nnz,), dtype=xp.float32, device=device),
-                            "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
-                            "indptr": xp.zeros(
-                                (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
-                            ),
-                            "nnz": 0,
                         }
 
             self._computed_quantities.append(q_name)
@@ -499,7 +519,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
             beam_info["valid_coords"][c] = coord_is_valid
 
-            # TODO: !remove brakets once mutliscen is implemented
+            # TODO: !remove brackets once multscen is implemented
             beam_info["rad_depths"][c] = rad_depth_vdose_grid
 
         beam_info["geo_depths"] = geo_dist_vdose_grid
@@ -812,6 +832,31 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             ix_size = ix_val.shape[0]
 
         sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
+
+        if not self._calc_dose_direct:
+            shared_struct = dij["shared_structure"][sub_scen_idx]
+            # Advance column pointer even when ix_size == 0 to keep CSC valid
+            start = shared_struct["indptr"][bixel_counter]
+            end = start + ix_size
+            shared_struct["indptr"][bixel_counter + 1] = end
+
+            if ix_size > 0:
+                need_nnz = shared_struct["nnz"] + ix_size
+                if shared_struct["indices"].size < need_nnz:
+                    logger.debug("Resizing data and indices arrays for all quantities...")
+                    # heuristic growth factor
+                    grow = max(ix_size, (self._num_of_columns_dij - bixel_counter) * (ix_size + 1))
+                    new_size = shared_struct["indices"].size + grow
+                    shared_struct["indices"].resize((new_size,), refcheck=False)
+
+                    # Trigger resize for all quantities associated with this scenario
+                    for q in self._computed_quantities:
+                        dij[q][sub_scen_idx]["data"].resize((new_size,), refcheck=False)
+
+                bixel["ix"] = to_numpy(bixel["ix"])
+                shared_struct["indices"][start:end] = bixel["ix"]
+                shared_struct["nnz"] += ix_size
+
         for q_name in self._computed_quantities:
             if self._calc_dose_direct:
                 if ix_size > 0:
@@ -822,28 +867,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     )
             else:
                 data_dict = dij[q_name][sub_scen_idx]
-                # Advance column pointer even when ix_size == 0 to keep CSC valid
-                start = data_dict["indptr"][bixel_counter]
-                end = start + ix_size
-                data_dict["indptr"][bixel_counter + 1] = end
 
                 if ix_size > 0:
-                    need_nnz = data_dict["nnz"] + ix_size
-                    if data_dict["data"].size < need_nnz:
-                        logger.debug("Resizing data and indices arrays for %s...", q_name)
-                        grow = max(
-                            ix_size, (self._num_of_columns_dij - bixel_counter) * (ix_size + 1)
-                        )
-                        new_size = data_dict["data"].size + grow
-                        data_dict["data"].resize((new_size,), refcheck=False)
-                        data_dict["indices"].resize((new_size,), refcheck=False)
-
-                    # Fill values and indices into the allocated slice
+                    start = dij["shared_structure"][sub_scen_idx]["indptr"][bixel_counter]
+                    end = start + ix_size
+                    # Fill values into the allocated slice
                     bixel[q_name] = to_numpy(bixel[q_name])
-                    bixel["ix"] = to_numpy(bixel["ix"])
                     data_dict["data"][start:end] = bixel[q_name]
-                    data_dict["indices"][start:end] = bixel["ix"]
-                    data_dict["nnz"] += ix_size
 
         # Bookkeeping of bixel numbers
         # remember beam and bixel number
@@ -878,6 +908,12 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         for i in range(self.mult_scen.scen_mask.size):
             # Only if there is a scenario we will allocate
             if self.mult_scen.scen_mask.flat[i]:
+                shared_struct = None
+                if not self._calc_dose_direct:
+                    shared_struct = dij["shared_structure"].flat[i]
+                    # Resize shared indices to actual NNZ
+                    shared_struct["indices"].resize((shared_struct["nnz"],), refcheck=False)
+
                 # Loop over all used quantities
                 for q_name in self._computed_quantities:
                     if not self._calc_dose_direct:
@@ -885,107 +921,33 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         # tmp_matrix = tmp_matrix.tocsr().T
                         data_dict = dij[q_name].flat[i]
 
+                        indices = shared_struct["indices"]
+                        indptr = shared_struct["indptr"]
+                        nnz = shared_struct["nnz"]
+
                         # Resize to the actual number of non-zero elements
-                        data_dict["data"].resize((data_dict["nnz"],), refcheck=False)
-                        data_dict["indices"].resize((data_dict["nnz"],), refcheck=False)
+                        data_dict["data"].resize((nnz,), refcheck=False)
 
                         # Create the matrix, avoid copies
                         tmp_matrix = sparse.csc_array(
-                            (data_dict["data"], data_dict["indices"], data_dict["indptr"]),
+                            (data_dict["data"], indices, indptr),
                             shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
                             dtype=np.float32,
                             copy=False,
                         )
 
-                        # Do we need this?
-                        tmp_matrix.eliminate_zeros()
-
-                        # make sure indices are sorted and matrix is canonical
-                        if not tmp_matrix.has_sorted_indices:
-                            logger.debug("Sorting indices for %s...", q_name)
-                            tmp_matrix.sort_indices()
-
-                        if not tmp_matrix.has_canonical_format:
-                            logger.debug("Matrix is not in canonical format for %s...", q_name)
-                            tmp_matrix.sum_duplicates()
-
-                        dij[q_name].flat[i] = tmp_matrix
-
-        if self.keep_rad_depth_cubes and self._rad_depth_cubes:
-            dij["rad_depth_cubes"] = self._rad_depth_cubes
-
-        # Call the finalizeDose method from the base class
-        return super()._finalize_dose(dij)
-
-    def _finalize_dose_new(self, dij: dict):
-        """
-        Finalize the dose influence matrix.
-
-        Pruning the matrix and concatenating the containers to a compressed
-        sparse matrix.
-
-        Parameters
-        ----------
-        dij : dict
-            The dose influence matrix.
-
-        Returns
-        -------
-        Dij
-            The finalized dose influence matrix.
-        """
-
-        # Loop over all scenarios and remove dose influence for voxels outside of segmentations
-        for i in range(self.mult_scen.scen_mask.size):
-            # Only if there is a scenario we will allocate
-            if self.mult_scen.scen_mask.flat[i]:
-                # Loop over all used quantities
-                for q_name in self._computed_quantities:
-                    if not self._calc_dose_direct:
-                        # tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
-                        # tmp_matrix = tmp_matrix.tocsr().T
-                        data_dict = dij[q_name].flat[i]
-                        # TODO: dont move to numpy and make array api compatible
-                        data_dict["data"] = to_numpy(data_dict["data"])
-                        data_dict["indices"] = to_numpy(data_dict["indices"])
-                        data_dict["indptr"] = to_numpy(data_dict["indptr"])
-                        # Resize to the actual number of non-zero elements
-                        # data_dict["data"].resize((data_dict["nnz"],), refcheck=False)
-                        # data_dict["indices"].resize((data_dict["nnz"],), refcheck=False)
-                        nnz = int(data_dict["nnz"])
-                        old_data = data_dict["data"]
-                        new_data = np.zeros((nnz,), dtype=old_data.dtype)
-                        new_data[:nnz] = old_data[:nnz]
-                        data_dict["data"] = new_data
-                        old_idx = data_dict["indices"]
-                        new_idx = np.zeros((nnz,), dtype=old_idx.dtype)
-                        new_idx[:nnz] = old_idx[:nnz]
-                        data_dict["indices"] = new_idx
-
-                        # Create the matrix; allow SciPy to copy if necessary to guarantee mutability
-                        tmp_matrix = sparse.csc_array(
-                            (data_dict["data"], data_dict["indices"], data_dict["indptr"]),
-                            shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
-                            dtype=np.float32,
-                            copy=False,
-                        )
-
-                        # Eliminate explicit zeros only if any exist to avoid WRITEBACKIFCOPY issues
-                        try:
-                            tmp_matrix.eliminate_zeros()
-                        except ValueError:
-                            # Fallback: force a copy then eliminate
-                            tmp_matrix = sparse.csc_array(tmp_matrix, copy=True)
+                        if not self._dij_guarantee_nonzero:
                             tmp_matrix.eliminate_zeros()
 
-                        # make sure indices are sorted and matrix is canonical
-                        if not tmp_matrix.has_sorted_indices:
-                            logger.debug("Sorting indices for %s...", q_name)
-                            tmp_matrix.sort_indices()
+                        if not self._dij_guarantee_canonical:
+                            # make sure indices are sorted and matrix is canonical
+                            if not tmp_matrix.has_sorted_indices:
+                                logger.debug("Sorting indices for %s...", q_name)
+                                tmp_matrix.sort_indices()
 
-                        if not tmp_matrix.has_canonical_format:
-                            logger.debug("Matrix is not in canonical format for %s...", q_name)
-                            tmp_matrix.sum_duplicates()
+                            if not tmp_matrix.has_canonical_format:
+                                logger.debug("Matrix is not in canonical format for %s...", q_name)
+                                tmp_matrix.sum_duplicates()
 
                         dij[q_name].flat[i] = tmp_matrix
 
@@ -1007,7 +969,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
         Calculate geometric distances for dose calculation.
 
-        This function relys on FOUR different ways to compute distances:
+        This function relies on FOUR different ways to compute distances:
         1) GPU with cupy kernel
         2) GPU with torch kernel
         3) Base path (CPU/GPU) - backend supports fancy indexing regarding __setitem__

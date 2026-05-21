@@ -4,6 +4,7 @@ import array_api_compat
 import array_api_extra as xpx
 import numpy as np
 
+
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
 
 skipif_no_ipopt = pytest.mark.skipif(

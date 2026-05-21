@@ -163,7 +163,7 @@ class NonLinearOptimizer(SolverBase):
         """
         Get or set solver information as iteration callback.
 
-        Agnostic signature with *args and **kwargs to be able to accomodate
+        Agnostic signature with *args and **kwargs to be able to accommodate
         various solvers.
 
         Parameters

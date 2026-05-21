@@ -10,14 +10,14 @@ except ImportError:
 from typing import Optional, Union
 
 try:
-    import cupy as cp
-except ImportError:
-    cp = None
-
-try:
     import torch
 except ImportError:
     torch = None
+
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
 
 try:
     import jax
