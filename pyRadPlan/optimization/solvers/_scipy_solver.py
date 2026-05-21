@@ -77,11 +77,13 @@ class OptimizerSciPy(NonLinearOptimizer):
         bounds = [xp_utils.to_numpy(xp.asarray(b)) for b in self.bounds]
         bounds = Bounds(lb=bounds[0], ub=bounds[1])
 
+        device = self.device
+
         def scipy_objective(x: Array):
-            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x)))
+            return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x, device=device)))
 
         def scipy_gradient(x: Array):
-            return xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x)))
+            return xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x, device=device)))
 
         # Initialize the SciPy solution function and its arguments
         result = minimize(

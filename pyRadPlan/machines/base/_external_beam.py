@@ -12,7 +12,7 @@ from ._base import Machine
 
 class ExternalBeamMachine(Machine):
     """
-    Base class for Machine used for external irradation.
+    Base class for Machine used for external irradiation.
 
     Attributes
     ----------

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pint
 import re
 from pyRadPlan import CT, StructureSet
-from pyRadPlan.visualization._plot_slice import plot_slice
+from pyRadPlan.visualization._plot_slice import _apply_deprecated_aliases, plot_slice
 
 # Initialize Units
 ureg = pint.UnitRegistry()
@@ -17,26 +17,34 @@ class PlotMultipleSlicesKwargs(TypedDict, total=False):
     overlay_alpha: float
     overlay_unit: Union[str, pint.Unit, list[Union[str, pint.Unit]]]
     overlay_rel_threshold: float
+    overlay_window: Optional[tuple[float, float]]
+    overlay_cmap: str
     contour_line_width: float
     save_filename: Optional[str]
     show_plot: bool
     use_global_max: bool
     overlay_titles: Optional[list[str]]
+    image_window: Optional[tuple[float, float]]
+    image_cmap: str
+    window_mode: Literal["minmax", "centerwidth"]
+    ct_window: Optional[tuple[float, float]]
 
 
 def plot_multiple_slices(
-    ct: Optional[Union[CT, dict]] = None,
+    image_volume: Optional[Union[CT, dict, sitk.Image]] = None,
     cst: Optional[Union[StructureSet, dict, list]] = None,
     overlays: Optional[Union[sitk.Image, np.ndarray]] = None,
     view_slice: Optional[Union[list[int], np.ndarray, int]] = None,
+    *,
+    ct: Optional[Union[CT, dict, sitk.Image]] = None,
     **kwargs: Unpack[PlotMultipleSlicesKwargs],
 ):
     """Plot multiple distributions for given slices with dynamic figure sizing.
 
     Parameters
     ----------
-    ct : CT
-        The CT object.
+    image_volume : image_volume
+        The image_volume object.
     cst : StructureSet
         The StructureSet object.
     overlays : list of sitk.Image or np.ndarray
@@ -64,14 +72,26 @@ def plot_multiple_slices(
         If True, use the overlay's global maximum for scaling. Default is False.
     overlay_titles : list of str, optional
         Custom titles for each overlay type. Default is None.
+    image_cmap : str
+        Colormap for the image_volume. Default is "bone".
+    image_window : Optional[tuple[float, float]]
+        Minimum and maximum image value for image_volume visualization.
+    window_mode : Literal["minmax", "centerwidth"]
+        Windowing mode for image_volume. Default is "minmax".
+    overlay_window : Optional[tuple[float, float]]
+        Value window (vmin, vmax) for the overlay colormap. Defaults to (0, max) when None.
+    overlay_cmap : str
+        Colormap for the overlay. Default is "jet".
     """
+    image_volume = _apply_deprecated_aliases(image_volume, ct, kwargs)
+
     overlay_unit = kwargs.get("overlay_unit", pint.Unit(""))
     save_filename = kwargs.get("save_filename", None)
     show_plot = kwargs.get("show_plot", True)
     overlay_titles = kwargs.get("overlay_titles", None)
 
-    if ct is None and overlays is None:
-        raise ValueError("At least one of 'ct' or 'overlays' must be provided.")
+    if image_volume is None and overlays is None:
+        raise ValueError("At least one of 'image_volume' or 'overlays' must be provided.")
     # Ensure inputs are lists/arrays
     view_slice = [view_slice] if not isinstance(view_slice, (list, np.ndarray)) else view_slice
     overlays = [overlays] if not isinstance(overlays, list) else overlays
@@ -112,12 +132,22 @@ def plot_multiple_slices(
             plot_slice_kwargs.pop("overlay_titles", None)
             plot_slice_kwargs.pop("save_filename", None)  # Handled at the end
 
-            plot_slice(ct=ct, cst=cst, overlay=overlay, view_slice=slice_idx, **plot_slice_kwargs)
+            plot_slice(
+                image_volume=image_volume,
+                cst=cst,
+                overlay=overlay,
+                view_slice=slice_idx,
+                **plot_slice_kwargs,
+            )
 
             # Try to extract slice index from the title set by plot_slice
-            # Title format: "Slice z={slice_idx}"
             idx = (
-                int(re.search(r"Slice [xyz]=(\d+)", axes[i, j].get_title()).group(1))
+                int(
+                    re.search(
+                        r"Slice ID\s*=\s*(\d+)(?:\s+at\s+[-+]?\d*\.?\d+\s*mm)?",
+                        axes[i, j].get_title(),
+                    ).group(1)
+                )
                 if slice_idx is None
                 else slice_idx
             )

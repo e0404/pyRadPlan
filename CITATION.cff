@@ -19,6 +19,12 @@ authors:
     email: louis.ermeneux@gmail.com
     affiliation: Institut Curie, Paris
     alias: luigirme
+  - given-names: Jennifer Josephine
+    family-names: Hardt
+    email: jennifer.hardt@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+    alias: JenHardt
+    orcid: 'https://orcid.org/0000-0001-8827-3094'
   - given-names: Antonios
     family-names: Kontopoulos
     email: antonios.kontopoulos@dkfz-heidelberg.de
