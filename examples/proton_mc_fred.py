@@ -91,12 +91,10 @@ cst.vois[2].objectives = [
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
 
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
 # %% [markdown]
 # Compute dose distribution and other quantities given in pln.prop_opt
 # %%
-result_opt = dij.compute_result_ct_grid(fluence)
+result_opt = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
@@ -108,7 +106,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
     ct=ct,
     cst=cst,
-    overlay=result_opt["physical_dose"],
+    overlay=result_opt.physical_dose.values,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",

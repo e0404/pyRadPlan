@@ -45,9 +45,7 @@ stf = generate_stf(ct, cst, pln)
 
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 # %% [markdown]
 # TOPAS recalc
 pln.prop_dose_calc = {
@@ -55,4 +53,4 @@ pln.prop_dose_calc = {
     "num_histories_direct": 1e7,
     "external_calculation": True,  # "E:\Code\pyRadPlan\pyRadPlan\data\TOPAS\2026-02-18",
 }
-result_mc = calc_dose_forward(ct, cst, stf, pln, fluence)
+result_mc = calc_dose_forward(ct, cst, stf, pln, result.fluence)

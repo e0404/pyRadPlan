@@ -47,18 +47,17 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # Run fluence optimization and compute the result
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # ### Visualizing a single slice with `plot_slice()`
 # %%
 
 # Visualize only ct and chosen quantity
-plot_slice(image_volume=ct, overlay=result["physical_dose"])
+plot_slice(image_volume=ct, overlay=result.physical_dose.values)
 
 # Visualize ct, cst and chosen quantity
-plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"])
+plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values)
 
 # %% [markdown]
 # ## Visualze more abstract settings using `plot_slice()` <br>
@@ -81,7 +80,7 @@ plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"])
 plot_slice(
     image_volume=ct,
     cst=cst,
-    overlay=result["physical_dose"],
+    overlay=result.physical_dose.values,
     view_slice=64,  # Visualize slice 10
     plane="coronal",  # axial, coronal or sagittal
     overlay_alpha=0.5,  # Transparency of the overlay
@@ -120,7 +119,7 @@ plot_multiple_slices(
 plot_multiple_slices(
     image_volume=ct,
     cst=cst,
-    overlays=[result["physical_dose"], result["effect"]],
+    overlays=[result.physical_dose.values, result.effect.values],
     view_slice=[64, 65],  # Visualize slices 64 and 65
     plane="axial",  # axial, coronal or sagittal
     overlay_alpha=0.5,  # Transparency of the overlay
@@ -146,7 +145,7 @@ for i, slice_idx in enumerate(slices):
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose.values,
         view_slice=slice_idx,  # Single slice
         plane="axial",
         overlay_unit="Gy",
@@ -160,7 +159,7 @@ for i, slice_idx in enumerate(slices):
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["effect"],
+        overlay=result.effect.values,
         view_slice=slice_idx,  # Single slice
         plane="axial",
         overlay_unit="dimensionless",

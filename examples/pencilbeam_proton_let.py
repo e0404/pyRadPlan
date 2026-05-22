@@ -66,10 +66,7 @@ cst.vois[2].objectives = [
 # We then calculate the optimized fluence and the corresponding result of the plan.
 # Additionally we plot both the physical dose and the LET.
 # %%
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))

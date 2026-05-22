@@ -119,10 +119,8 @@ for voi in cst.vois:
 # %%
 stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-result = dij.compute_result_ct_grid(fluence)
-dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
+result = fluence_optimization(ct, cst, stf, dij, pln)
+dvhs = DVHCollection.from_structure_set(cst, result.physical_dose.values)
 
 # %%
 # TODO: agentic adaptation loop with information from DVH Collection
@@ -133,4 +131,4 @@ dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
 """
 
 # %%
-plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
+plot_slice(ct=ct, cst=cst, overlay=result.physical_dose.values)
