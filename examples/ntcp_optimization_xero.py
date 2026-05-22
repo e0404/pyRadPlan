@@ -74,9 +74,9 @@ ntcp_obj = OutcomeCNN(
     model="densenet_xerostomia_photons",  # name to identify the folder with json pt and py
     mode="NTCP",  # used to identify the folder with json pt and py
     warmup_iterations=5,
-    ct=ct,
-    cst=cst,
-    stf=stf,
+    ct=ct,  # needed as model input
+    cst=cst,  # needed as model input
+    pln=pln,  # needed for dose grid info
     cst_masks=[
         "Parotid_LT",
         "Parotid_RT",
