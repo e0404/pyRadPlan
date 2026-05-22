@@ -14,7 +14,6 @@ Example
 ...     warmup_iterations=5,
 ...     ct=ct,
 ...     cst=cst,
-...     stf=stf,
 ...     pln=pln,
 ...     cst_masks=["parotid_lt", "parotid_rt"],
 ... )
@@ -22,12 +21,10 @@ Example
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, ClassVar, Dict, Literal, Optional
 import logging
 
 import array_api_compat
-import matplotlib.pyplot as plt
 from pydantic import Field, model_validator
 
 try:
@@ -89,25 +86,6 @@ class OutcomeCNN(Objective):
     )
 
     model_config = {"arbitrary_types_allowed": True}
-
-    def __deepcopy__(self, memo):
-        """Deep copy sharing the PyTorch model and preprocessor (read-only)."""
-        import copy
-
-        # Fields that contain PyTorch tensors/modules and are read-only
-        # during optimization — share instead of copying.
-        shared = {"nn_model", "preprocessor", "loaded_config"}
-        new_data = {}
-        for name, value in self.__dict__.items():
-            if name in shared:
-                new_data[name] = value
-            else:
-                new_data[name] = copy.deepcopy(value, memo)
-
-        clone = object.__new__(self.__class__)
-        clone.__dict__.update(new_data)
-        memo[id(self)] = clone
-        return clone
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -280,27 +258,6 @@ class OutcomeCNN(Objective):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _save_grad_plot(self, grad_zyx: "torch.Tensor") -> None:
-        """Save a center-slice plot of the gradient to debug_grad_dir."""
-        out = Path(self.debug_grad_dir)
-        out.mkdir(parents=True, exist_ok=True)
-
-        import numpy as np
-
-        g = grad_zyx.cpu().numpy()  # (Z, Y, X)
-        # Show slice with strongest gradient signal
-        abs_sum_per_z = np.abs(g).sum(axis=(1, 2))
-        best_z = int(np.argmax(abs_sum_per_z))
-
-        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-        im = ax.imshow(g[best_z], cmap="RdBu_r")
-        ax.set_title(f"Iter {self.iteration_count}  |  NTCP={self.ntcp_history[-1]:.4f}")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        fig.colorbar(im, ax=ax, label="dNTCP/dDose")
-        fig.savefig(out / f"grad_{self.iteration_count:04d}.png", dpi=100, bbox_inches="tight")
-        plt.close(fig)
 
     def _check_ready(self) -> None:
         if self.preprocessor is None or self.nn_model is None:
