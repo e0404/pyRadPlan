@@ -9,6 +9,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.cst._cst import StructureSet
 from pyRadPlan.ct._ct import CT
+from pyRadPlan.result import PlanResult
 
 from .windows._result_win import _launch_result_window
 
@@ -21,7 +22,7 @@ def gui() -> None:
 def launch_viewer(
     ct: CT,
     cst: StructureSet = None,
-    result: Optional[Union[dict, Union[np.ndarray, sitk.Image]]] = None,
+    result: Optional[Union[PlanResult, dict, np.ndarray, sitk.Image]] = None,
 ) -> None:
     """Launch the quantity viewer with optional CT background and VOI contours.
 
@@ -32,7 +33,7 @@ def launch_viewer(
     cst:
         StructureSet object providing VOIs for contour display.
     result:
-        Dict or single image/array.
+        PlanResult, dict, or single image/array.
     """
 
     # TODO: Maybe remove this fallback if imports are possible
@@ -41,9 +42,7 @@ def launch_viewer(
             "Launching viewer without CT, CST, and result is not supported yet."
         )
 
-    # TODO: Overhaul needed once result is implemented properly
     if isinstance(result, (np.ndarray, sitk.Image)):
-        # Wrap single array/image into dict
         result = {"quantity": result}
 
     _launch_result_window(ct=ct, cst=cst, result=result)

@@ -15,6 +15,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.widgets import ViewingWidget
 from pyRadPlan import validate_ct, validate_cst
+from pyRadPlan.result import PlanResult
 
 
 class QuantityWindow(QMainWindow):
@@ -101,10 +102,22 @@ def _compute_isocenter_vox(ct: CT, cst: StructureSet) -> np.ndarray | None:
     return np.array([isocenter_vox_phys[2], isocenter_vox_phys[0], isocenter_vox_phys[1]])
 
 
-def _process_result(result: dict | None) -> dict | np.ndarray | None:
-    """Convert a result dict or raw array into viewer-ready form (transposed arrays)."""
+def _process_plan_result(result: PlanResult) -> dict:
+    """Extract sitk.Image values from a PlanResult and delegate to _process_dict_result."""
+    raw: dict = {}
+    for k, v in result.quantities.items():
+        raw[k] = v.values
+    for k, vs in result.beam_quantities.items():
+        raw[k] = [v.values for v in vs]
+    return _process_dict_result(raw)
+
+
+def _process_result(result) -> dict | np.ndarray | None:
+    """Convert a PlanResult, result dict, or raw array into viewer-ready form (transposed arrays)."""
     if result is None:
         return None
+    if isinstance(result, PlanResult):
+        return _process_plan_result(result)
     if isinstance(result, dict):
         return _process_dict_result(result)
     return _process_raw_result(result)
@@ -206,8 +219,6 @@ def _launch_result_window(ct: CT, cst: StructureSet, result: dict | None = None)
 
     isocenter_vox = _compute_isocenter_vox(ct, cst)
 
-    # TODO. Replace once result is merged!
-    # result = validate_result(result, ct)
     quantity_data = _process_result(result)
     overlay_units, overlay_labels = _build_overlay_meta(quantity_data)
 
