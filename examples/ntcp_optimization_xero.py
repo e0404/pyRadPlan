@@ -1,0 +1,130 @@
+# %% [markdown]
+"""# Example for proton dose calculation using pencilbeam engine."""
+# %% [markdown]
+# This example demonstrates how to use the pyRadPlan library to perform proton dose calculations.
+
+# To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
+# This will create a .ipynb file in the same directory:
+
+# ```bash
+# pip install jupytext
+# jupytext --to notebook path/to/this/file/pencilbeam_proton.py
+
+# %%
+# Import necessary libraries
+import logging
+from pyRadPlan import (
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+    xp_utils,
+)
+
+from pyRadPlan.gui.apps import launch_viewer
+from pyRadPlan.io._patient_loader import load_patient
+from pyRadPlan.optimization.objectives import (
+    SquaredDeviation,
+    SquaredOverdosing,
+    OutcomeCNN,
+)
+import numpy as np
+import os
+
+from pyRadPlan.plan._plans import PhotonPlan
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+xp_utils.PREFER_GPU = True
+xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
+logging.basicConfig(level=logging.INFO)
+# os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
+
+# %%
+# Load TG119 (provided within pyRadPlan)
+ct, cst = load_patient(r"C:\Users\f687r\Projects\matRad\matRad\phantoms\HEAD_AND_NECK.mat")
+
+cst.vois[0] = cst.vois[12]  # PAROTID_LT
+cst.vois[1] = cst.vois[13]  # PAROTID_RT
+cst.vois[2] = cst.vois[14]  # PTV63
+cst.vois[3] = cst.vois[15]  # PTV70
+cst.vois = cst.vois[:4]
+cst.create_body_seg()  # adds BODY/SKIN as vois[4]
+
+# %% [markdown]
+# In this section, we create a proton therapy plan using the ParticleHongPencilBeamEngine.
+# %%
+# Create a plan object
+pln = PhotonPlan(radiation_mode="photons", machine="Generic")
+pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+num_of_beams = 8
+pln.prop_stf = {
+    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
+    "couch_angles": np.zeros((num_of_beams,)),
+}
+stf = generate_stf(ct, cst, pln)
+# Optimization
+# Configure CNN-based NTCP objective for an OAR
+
+# Create the CNN objective (channels order for the model: [ct, dose, mask])
+# Keep handle to the CNN objective to access NTCP history after optimization
+ntcp_obj = OutcomeCNN(
+    priority=150000.0,
+    model="densenet_xerostomia_photons",  # name to identify the folder with json pt and py
+    mode="NTCP",  # used to identify the folder with json pt and py
+    warmup_iterations=5,
+    ct=ct,
+    cst=cst,
+    stf=stf,
+    cst_masks=[
+        "Parotid_LT",
+        "Parotid_RT",
+    ],  # if json is not "collapse":True, this order is important!
+    debug_grad_dir="debug_grads",
+)
+
+cst.vois[0].objectives = [  # PAROTID_LT
+    SquaredOverdosing(priority=100.0, d_max=25.0),
+]
+cst.vois[1].objectives = [  # PAROTID_RT
+    SquaredOverdosing(priority=100.0, d_max=25.0),
+]
+cst.vois[2].objectives = [SquaredDeviation(priority=1000.0, d_ref=63.0)]  # PTV63
+cst.vois[3].objectives = [SquaredDeviation(priority=1000.0, d_ref=70.0)]  # PTV70
+cst.vois[4].objectives = [SquaredOverdosing(priority=800.0, d_max=30.0)]  # SKIN/BODY
+
+
+# Calculate Dose Influence Matrix ("dij")
+dij = calc_dose_influence(ct, cst, stf, pln)
+
+cst.add_global_voi()
+cst.vois[5].objectives = [ntcp_obj]
+opt_info = {}
+# Calculate optimized fluence
+fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+
+# Save NTCP history from active optimization
+ntcp_history_active = list(ntcp_obj.ntcp_history)
+ntcp_obj.reset_history()
+
+# Native optimization: switch CNN NTCP objective to monitor-only mode (logs but zero gradients)
+ntcp_obj.monitor_only = True
+cst.vois[5].objectives = [ntcp_obj]
+
+opt_info_native = {}
+fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+
+
+# # Compute the result on the CT grid
+result = dij.compute_result_ct_grid(fluence)
+result_native = dij.compute_result_ct_grid(fluence_native)
+# %% [markdown]
+# Native plots: dose, native dose, signed difference; NTCP curve; DVHs
+# %%
+
+
+result_collective = result.copy()
+result_collective["physical_dose_native"] = result_native["physical_dose"]
+result_collective["physical_dose_diff"] = result["physical_dose"] - result_native["physical_dose"]
+launch_viewer(ct, cst, result_collective)
