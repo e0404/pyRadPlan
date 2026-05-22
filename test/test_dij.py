@@ -4,6 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 from pyRadPlan.core import Grid
 from pyRadPlan.dij import Dij, create_dij, validate_dij, compose_beam_dijs
+from pyRadPlan.result import PlanResult
 
 import array_api_strict
 import array_api_compat
@@ -205,10 +206,10 @@ def test_result_computation_physical_dose_ct_grid(sample_dij_dict):
     dij = create_dij(**sample_dij_dict)
     f = np.ones((dij.total_num_of_bixels,), dtype=np.float32)
     result = dij.compute_result_ct_grid(f)
-    assert isinstance(result, dict)
-    assert "physical_dose" in result
-    assert isinstance(result["physical_dose"], sitk.Image)
-    assert result["physical_dose"].GetSize() == dij.ct_grid.dimensions
+    assert isinstance(result, PlanResult)
+    assert "physical_dose" in result.quantities
+    assert isinstance(result.physical_dose.values, sitk.Image)
+    assert result.physical_dose.values.GetSize() == dij.ct_grid.dimensions
 
 
 def test_result_computation_let(sample_dij_dict):
