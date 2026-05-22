@@ -236,7 +236,7 @@ class VOIsWidget(QWidget):
         cb.setChecked(voi.name in checked_set)
         cb.stateChanged.connect(lambda s, n=voi.name: self._on_voi_toggled(n, bool(s)))
 
-        rgb = tuple(int(c) for c in voi.visible_color)
+        rgb = tuple(int(c) for c in voi.color)
         self._voi_colors[voi.name] = rgb
 
         swatch = QPushButton()

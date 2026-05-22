@@ -88,12 +88,10 @@ class VOI(PyRadPlanBaseModel, ABC):
     apply_overlap: Union[bool, None] = Field(default=True)
 
     visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
-    visible_color: Union[tuple[int, int, int], None] = Field(
-        default=None, description="RGB color for visualization in GUI applications"
-    )
-    default_color: tuple[int, int, int] = Field(
+    color: tuple[int, int, int] = Field(
         default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
-        description="Default RGB color bound to the VOI type",
+        alias="visibleColor",
+        description="RGB color for visualization in GUI applications",
     )
 
     # TODO: it would be nicer if this was a list of optimization.Objective, but that would create a
@@ -152,9 +150,9 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         raise ValueError("mask must be either passed as numpy array or SimpleITK image")
 
-    @field_validator("visible_color", mode="before")
+    @field_validator("color", mode="before")
     @classmethod
-    def validate_visible_color(cls, v: Any) -> Any:
+    def validate_color(cls, v: Any) -> Any:
         """
         Validate the visible color.
 
