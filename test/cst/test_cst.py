@@ -380,7 +380,6 @@ def test_add_global_voi(generic_ct):
     assert global_voi.voi_type == "GLOBAL"
     assert global_voi.name == "Global_test"
     assert global_voi.apply_overlap is None
-    assert global_voi.ignore_dose_calc is True
     assert "test_objective" in global_voi.objectives
 
     # Needs to match CT full shape directly (10x10x10 initialized as exactly 1)

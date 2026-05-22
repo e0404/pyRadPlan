@@ -310,8 +310,9 @@ class StructureSet(PyRadPlanBaseModel):
             curr_mask = curr_voi.mask
 
             # if the overlap priority is higher than we need to apply overlap
-            if curr_voi.overlap_priority >= new_vois[ix_sorted[i - 1]].overlap_priority:
-                if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
+            prev_voi = new_vois[ix_sorted[i - 1]]
+            if curr_voi.overlap_priority >= prev_voi.overlap_priority:
+                if curr_voi.overlap_priority > prev_voi.overlap_priority:
                     last_priority_mask = overlap_mask
 
                 # False means IT DOES NOT UPDATE ITS VOXELS (is not masked by higher priority)

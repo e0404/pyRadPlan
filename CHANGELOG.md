@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- New `GlobalVOI` type for VOIs spanning the entire CT grid. Bypasses overlap priorities by default and is excluded from the dose calculation mask in the dose engine.
+- `StructureSet.add_global_voi()` convenience method to add a grid-spanning `GlobalVOI` with optional objectives.
+- `apply_overlap` field on `VOI` controlling per-VOI overlap behavior: `True` (default, masked by higher-priority VOIs), `False` (contributes to the overlap mask but is not itself masked), `None` (skipped from overlap handling entirely).
+
+### Changed
+- `StructureSet.apply_overlap_priorities()` now honors the `apply_overlap` flag on each VOI.
+
 ## [0.4.0] - 2026-05-17
 
 ### Added

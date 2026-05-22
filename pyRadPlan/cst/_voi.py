@@ -46,6 +46,11 @@ DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
         (255, 140, 0),
         (230, 180, 50),
     ],
+    "GLOBAL": [
+        (200, 200, 200),
+        (150, 150, 150),
+        (220, 220, 220),
+    ],
 }
 
 
@@ -81,7 +86,6 @@ class VOI(PyRadPlanBaseModel, ABC):
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
     apply_overlap: Union[bool, None] = Field(default=True)
-    ignore_dose_calc: bool = Field(default=False)
 
     visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
     visible_color: Union[tuple[int, int, int], None] = Field(
@@ -652,7 +656,6 @@ class GlobalVOI(VOI):
 
     voi_type: str = "GLOBAL"
     apply_overlap: Union[bool, None] = Field(default=None)
-    ignore_dose_calc: bool = Field(default=True)
 
     @field_validator("voi_type", mode="after")
     @classmethod
