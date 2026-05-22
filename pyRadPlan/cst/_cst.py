@@ -422,27 +422,27 @@ class StructureSet(PyRadPlanBaseModel):
         return alpha, beta
 
     def set_colors(self) -> Self:
-        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``visible_color``.
+        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``color``.
 
         Colors are popped in order from the predefined list for each VOI type, skipping
         any color already taken by another VOI. If the list is exhausted the last color
-        in the list is reused. Existing ``visible_color`` values are preserved.
+        in the list is reused. Existing ``color`` values are preserved.
         """
         # Per-type pool of unused predefined colors.
         pool: dict[str, list[tuple[int, int, int]]] = {
             t: list(palette) for t, palette in DEFAULT_VOI_COLORS.items()
         }
         for voi in self.vois:
-            if voi.visible_color is not None:
-                color = tuple(voi.visible_color)
+            if "color" in voi.model_fields_set:
+                color = tuple(voi.color)
                 if color in pool.get(voi.voi_type, []):
                     pool[voi.voi_type].remove(color)
 
         for voi in self.vois:
-            if voi.visible_color is None:
+            if "color" not in voi.model_fields_set:
                 palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
                 remaining = pool.setdefault(voi.voi_type, list(palette))
-                voi.visible_color = remaining.pop(0) if remaining else palette[-1]
+                voi.color = remaining.pop(0) if remaining else palette[-1]
 
         return self
 
