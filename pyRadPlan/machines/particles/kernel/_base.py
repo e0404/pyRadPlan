@@ -13,6 +13,7 @@ from pydantic import (
 )
 from numpydantic import NDArray, Shape
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core.xp_utils import to_namespace as xp_to_namespace
 from .._beam_cutoff import LateralCutOff
 
 
@@ -166,3 +167,56 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if self.alpha is None or self.beta is None:
             return None
         return self.alpha_x / self.beta_x
+
+    def to_namespace(self, xp, device=None):
+        """
+        Convert kernel data to the specified array namespace.
+
+        Parameters
+        ----------
+        xp : module
+            The array namespace module (e.g., numpy, cupy).
+        device : str, optional
+            The device to move the data to.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the kernel data as arrays in the specified namespace.
+        """
+        data = {
+            "energy": self.energy,
+            "range": self.range,
+            "offset": float(self.offset),
+            "depths": xp_to_namespace(xp, self.depths, device=device),
+            "idd": xp_to_namespace(xp, self.idd, device=device),
+        }
+
+        # Optional fields
+        for field in [
+            "sigma",
+            "sigma_1",
+            "sigma_2",
+            "sigma_x",
+            "sigma_y",
+            "weight",
+            "sigma_multi",
+            "weight_multi",
+            "let",
+            "alpha_x",
+            "beta_x",
+            "alpha",
+            "beta",
+        ]:
+            val = getattr(self, field)
+            if val is not None:
+                data[field] = xp_to_namespace(xp, val, device=device)
+
+        if self.lateral_cut_off is not None:
+            data["lateral_cut_off"] = {
+                "comp_fac": float(self.lateral_cut_off.comp_fac),
+                "cut_off": xp_to_namespace(xp, self.lateral_cut_off.cut_off, device=device),
+                "depths": xp_to_namespace(xp, self.lateral_cut_off.depths, device=device),
+            }
+
+        return data

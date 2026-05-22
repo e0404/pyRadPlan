@@ -8,6 +8,8 @@ import time
 from copy import deepcopy
 
 import numpy as np
+import array_api_compat
+
 from scipy.interpolate import interp1d
 from scipy.integrate import cumulative_trapezoid
 
@@ -15,13 +17,13 @@ from pyRadPlan.ct import CT
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.machines.particles import (
     ParticleAccelerator,
-    ParticlePencilBeamKernel,
     LateralCutOff,
 )
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
+from ...core.xp_utils import to_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_tissue_index = None  # Stores tissue indices available in the matRad base data
         self._v_alpha_x = None  # Stores Photon Alpha
         self._v_beta_x = None  # Stores Photon Beta
+
+        self._kernel_cache = {}
 
         super().__init__(pln)
 
@@ -183,6 +187,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Find energy index in base data
         energy = curr_ray["beamlets"][k]["energy"]
+        # TODO: This here has some overhead. Can be done faster!
         energy_ix = self._machine.get_energy_index(energy, 4)
 
         if energy_ix.size > 1:
@@ -194,7 +199,23 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Get the kernel for the current energy
         tmp_machine = cast(ParticleAccelerator, self._machine)
-        bixel["kernel"] = tmp_machine.get_kernel_by_index(energy_ix)
+
+        # Determine namespace from ray data
+        xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
+
+        kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
+
+        # NOTE: This here makes dosecalc way faster.
+        # TODO: Maybe think of a better way then kernel_obj.to_namespace()
+        # Get kernel and convert to namespace
+        cache_key = (energy_ix, xp)
+        if cache_key in self._kernel_cache:
+            bixel["kernel"] = self._kernel_cache[cache_key]
+        else:
+            bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
+            # kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
+
+            self._kernel_cache[cache_key] = bixel["kernel"]
 
         bixel["range_shifter"] = curr_ray["beamlets"][k]["range_shifter"]
         bixel["SSD"] = curr_ray["SSD"]
@@ -209,17 +230,19 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Gets bixel.ix (voxel indices) and bixel.subIx (logical
         # indices to be used) after cutoff. Storing these allows us to
         # use indexing for performance and avoid too many copies
+
         self._get_bixel_indices_on_ray(bixel, curr_ray)
 
         # Get quantities 1:1 from ray. Here we trust Python's memory
         # management to not copy the arrays until they are modified.
         # This allows us to efficiently access them by indexing in the
         # bixel computation
-        bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][bixel["sub_ix"]]
-        bixel["rad_depths"] = curr_ray["rad_depths"][bixel["sub_ix"]]
+        # NOTE: These are now handled inside _get_bixel_indices_on_ray (deferred compaction)
+        # bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][bixel["sub_ix"]]
+        # bixel["rad_depths"] = curr_ray["rad_depths"][bixel["sub_ix"]]
         # Propagate lateral distances if available (needed for singleXY focused model)
-        if "lat_dists" in curr_ray:
-            bixel["lat_dists"] = curr_ray["lat_dists"][bixel["sub_ix"]]
+        # if "lat_dists" in curr_ray:
+        #    bixel["lat_dists"] = curr_ray["lat_dists"][bixel["sub_ix"]]
         # TODO:
         # if self.calc_bio_dose:
         #     bixel["v_tissue_index"] = curr_ray["v_tissue_index"][bixel["sub_ix"]]
@@ -229,117 +252,148 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         return bixel
 
     def _interpolate_kernels_in_depth(self, bixel):
-        kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
-        depths = kernel.depths
+        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
+        kernel = bixel["kernel"]
+        depths = kernel["depths"]
 
         # xp = array_api_compat.array_namespace(bixel["rad_depths"])
 
         # Add potential offset
-        depths = depths + kernel.offset - bixel["rad_depth_offset"]
+        # Ensure depths is on the correct device
+        # depths = xp.asarray(depths, dtype=bixel["rad_depths"].dtype)
+        depths = depths + kernel["offset"] - bixel["rad_depth_offset"]
 
         # Conversion factor from MeV cm^2/g per primary to Gy mm^2 per 1e6 primaries
         conversion_factor = 1.6021766208e-02
 
         # Find all values we need to interpolate
         used_kernels = {}
-        used_kernels["idd"] = conversion_factor * kernel.idd
+        used_kernels["idd"] = conversion_factor * kernel["idd"]
 
         # Lateral Kernel Model
         if self.lateral_model == "single":
-            used_kernels["sigma"] = kernel.sigma
+            used_kernels["sigma"] = kernel["sigma"]
         elif self.lateral_model == "singleXY":
-            used_kernels["sigma_x"] = kernel.sigma_x
-            used_kernels["sigma_y"] = kernel.sigma_y
+            used_kernels["sigma_x"] = kernel["sigma_x"]
+            used_kernels["sigma_y"] = kernel["sigma_y"]
         elif self.lateral_model == "double":
-            used_kernels["sigma_1"] = kernel.sigma_1
-            used_kernels["sigma_2"] = kernel.sigma_2
-            used_kernels["weight"] = kernel.weight
+            used_kernels["sigma_1"] = kernel["sigma_1"]
+            used_kernels["sigma_2"] = kernel["sigma_2"]
+            used_kernels["weight"] = kernel["weight"]
         elif self.lateral_model == "multi":
-            used_kernels["weight_multi"] = kernel.weight_multi
-            used_kernels["sigma_multi"] = kernel.sigma_multi
+            used_kernels["weight_multi"] = kernel["weight_multi"]
+            used_kernels["sigma_multi"] = kernel["sigma_multi"]
         else:
             raise ValueError("Invalid Lateral Model")
 
         # LET
         if self.calc_let:
-            used_kernels["let"] = kernel.let
+            used_kernels["let"] = kernel["let"]
 
         # bioDose
         # TODO:
         if self.calc_bio_dose:
-            used_kernels["alpha"] = kernel.alpha
-            used_kernels["beta"] = kernel.beta
+            used_kernels["alpha"] = kernel["alpha"]
+            used_kernels["beta"] = kernel["beta"]
 
         # Interpolate all fields in X
         kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
+        # fields = list(used_kernels.keys()) #108 ns ± 4.09 ns
+        # kernel_interp = {} # 26 ns ± 0.518 ns
+
+        # kernel_interp = {field: xp.interp(bixel["rad_depths"], depths,used_kernels[field])for field in fields} # 467 μs ± 3.67 μs
 
         return kernel_interp
 
-    def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
-        lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
-
-        # Ray tracing for beam i and ray j
-        ix, radial_dist_sq, lat_dists, _ = self.calc_geo_dists(
-            beam_info["bev_coords"],
-            ray["source_point_bev"],
-            ray["target_point_bev"],
-            ray["sad"],
-            beam_info["valid_coords_all"],
-            lateral_ray_cutoff,
-        )
-
-        # Subindex given the relevant indices from the geometric distance calculation
-        ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
-
-        ray["radial_dist_sq"] = [
-            radial_dist_sq[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]
-        ]
-        if lat_dists is not None:
-            ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
-
-        ray["valid_coords_all"] = np.any(np.vstack(ray["valid_coords"]), axis=1)
-
-        ray["geo_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
-        ]  # usually not needed for particle beams
-        ray["rad_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
-        ]
-
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
-        kernel = cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
+        kernel = curr_bixel["kernel"]  # cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
+        xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
+        # tmp_offset = xp.asarray(kernel.offset) - curr_bixel["rad_depth_offset"]
+        # depths = xp.asarray(kernel.depths)
+        # cutoff_info = kernel.lateral_cut_off
+        # cutoff_depths = xp.asarray(cutoff_info.depths)
+        # cutoff_cut_off = xp.asarray(cutoff_info.cut_off)
 
         # Create offset vector to account for additional offsets modeled in the base data
         # and a potential range shifter
-        tmp_offset = kernel.offset - curr_bixel["rad_depth_offset"]
-
+        tmp_offset = kernel["offset"] - curr_bixel["rad_depth_offset"]
+        cut_off_info = kernel["lateral_cut_off"]
         # Find depth-dependent lateral cutoff
         if self.dosimetric_lateral_cutoff == 1:
-            curr_ix = curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset
+            curr_ix = curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
         elif 0 < self.dosimetric_lateral_cutoff < 1:
-            cutoff_info = kernel.lateral_cut_off
+            # cutoff_info = kernel.get("lateral_cut_off")
 
-            if cutoff_info.cut_off.size > 1:
-                curr_ix = (
-                    np.interp(
+            if cut_off_info is not None and cut_off_info["cut_off"].shape[0] > 1:
+                # Move lookup tables to the correct device/namespace
+                # cutoff_depths = cutoff_info["depths"]
+                # Optimization: Cache squared cutoff values
+
+                if "cutoff_vals_sq" not in cut_off_info or cut_off_info["cutoff_vals_sq"] is None:
+                    cut_off_info["cutoff_vals_sq"] = cut_off_info["cut_off"] ** 2
+                cutoff_vals_sq = cut_off_info["cutoff_vals_sq"]
+
+                # Optimization: Use xp.interp with fill values if available to avoid bounds check
+                if hasattr(xp, "interp"):
+                    # xp.interp supports left/right (numpy and cupy do)
+                    # We use -1 as fill value so that (interp_vals >= radial_dist_sq) is False
+                    # radial_dist_sq is always >= 0
+                    interp_vals = xp.interp(
                         curr_ray["rad_depths"],
-                        cutoff_info.depths + tmp_offset,
-                        cutoff_info.cut_off**2,
-                        left=np.nan,
-                        right=np.nan,
+                        cut_off_info["depths"] + tmp_offset,
+                        cutoff_vals_sq,
+                        left=-1.0,
+                        right=-1.0,
                     )
-                    >= curr_ray["radial_dist_sq"]
-                ) & (curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset)
+
+                    curr_ix = (interp_vals >= curr_ray["radial_dist_sq"]) & (
+                        curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
+                    )
+                else:
+                    interp_vals = array_interp(
+                        curr_ray["rad_depths"], cut_off_info["depths"] + tmp_offset, cutoff_vals_sq
+                    )
+
+                    # Check bounds (mimic left=nan, right=nan behavior for comparison)
+                    min_depth = cut_off_info["depths"][0] + tmp_offset
+                    max_depth = cut_off_info["depths"][-1] + tmp_offset
+                    in_bounds = (curr_ray["rad_depths"] >= min_depth) & (
+                        curr_ray["rad_depths"] <= max_depth
+                    )
+
+                    curr_ix = (
+                        (interp_vals >= curr_ray["radial_dist_sq"])
+                        & in_bounds
+                        & (curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset)
+                    )
             else:
-                curr_ix = (cutoff_info.cut_off[0] ** 2 >= curr_ray["radial_dist_sq"]) & (
-                    curr_ray["rad_depths"] <= kernel.depths[-1] + tmp_offset
+                cutoff_val_sq = xp.asarray(
+                    cut_off_info["cut_off"][0] ** 2, dtype=curr_ray["radial_dist_sq"].dtype
+                )
+                curr_ix = (cutoff_val_sq >= curr_ray["radial_dist_sq"]) & (
+                    curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
                 )
         else:
             raise ValueError("dosimetric_lateral_cutoff must be a value > 0 and <= 1!")
 
-        curr_bixel["sub_ix"] = curr_ix
+        # Apply mask
         curr_bixel["ix"] = curr_ray["ix"][curr_ix]
+
+        # Get quantities from ray and mask them
+        curr_bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][curr_ix]
+        curr_bixel["rad_depths"] = curr_ray["rad_depths"][curr_ix]
+
+        # Propagate lateral distances if available (needed for singleXY focused model)
+        if "lat_dists" in curr_ray:
+            curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
+
+        # TODO:
+        # if self.calc_bio_dose:
+        #     bixel["v_tissue_index"] = curr_ray["v_tissue_index"]
+        #     bixel["v_alpha_x"] = curr_ray["v_alpha_x"]
+        #     bixel["v_beta_x"] = curr_ray["v_beta_x"]
+
+        return curr_bixel
 
     def _get_beam_modifiers(self, curr_bixel):
         add_sigma_sq = 0
@@ -355,7 +409,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
             # Compute!
             sigma_rashi = self._calc_sigma_rashi(
-                curr_bixel["kernel"]["energy"], curr_bixel["range_shifter"], curr_bixel["SSD"]
+                curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
             )
 
             # Add to initial sigma in quadrature
@@ -443,6 +497,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             Updated Beam Information dictionary.
         """
+
+        # xp = array_api_compat.array_namespace
+
         beam_info = super()._init_beam(dij, ct, cst, stf, i)
 
         # Sanity Check
@@ -469,20 +526,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         rad_depth_offset = max_energy_kernel.offset + min_ra_shi
 
         # Apply limit in depth
-        sub_select_ix = [
-            rD < (max_energy_kernel.depths[-1] - rad_depth_offset)
-            for rD in beam_info["rad_depths"]
-        ]
+        depth_limit = float(max_energy_kernel.depths[-1] - rad_depth_offset)
+        sub_select_ix = [rD < depth_limit for rD in beam_info["rad_depths"]]
 
         for scen in range(len(beam_info["valid_coords"])):
-            beam_info["valid_coords"][scen] = np.array(
-                [
-                    True if ss & vc else False
-                    for ss, vc in zip(sub_select_ix[scen], beam_info["valid_coords"][scen])
-                ]
-            )
+            beam_info["valid_coords"][scen] = sub_select_ix[scen] & beam_info["valid_coords"][scen]
 
-        beam_info["valid_coords_all"] = np.any(np.column_stack(beam_info["valid_coords"]), axis=1)
+        xp = array_api_compat.array_namespace(self._vox_world_coords)
+        # TODO: We should definitely enforce arrays in the future not lists.
+        beam_info["valid_coords"] = [to_namespace(xp, v) for v in beam_info["valid_coords"]]
+        beam_info["valid_coords_all"] = xp.any(xp.stack(beam_info["valid_coords"], axis=1), axis=1)
 
         # Precompute CutOff
         logger.info("Calculating lateral cutoffs for beam %d...", i)
@@ -789,7 +842,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 # depth
                 bixel = {
                     "energy_ix": energy_ix,
-                    "kernel": base_kernel,
+                    "kernel": base_kernel.to_namespace(np),
                     "radial_dist_sq": radial_dist_sq,
                     "lat_dists": lat_dists,
                     "sigma_ini_sq": largest_sigma_sq4unique_energies[
@@ -839,12 +892,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
         ray = super()._init_ray(beam_info, j)
-
+        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
         self._machine = cast(ParticleAccelerator, self._machine)
 
         # Calculate initial sigma for all bixels on the current ray
         # TODO: here [ray] since calc_sigma_ini takes multiple rays (why?)
-        ray["sigma_ini"] = self._calc_sigma_ini_on_ray(ray)
+        # TODO: use to_namespace here. Issues with api_strict due to float64!
+        ray["sigma_ini"] = xp.asarray(
+            self._calc_sigma_ini_on_ray(ray), dtype=xp.float64, device=self.device
+        )
 
         # Since pyRadPlan's ray cast starts at the skin and base data
         # is generated at some source to phantom distance
@@ -978,10 +1034,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         p = 1.77  # [1]
 
         # Determine range
-        if "range" in bd_entry:
+        range_in_water = None
+        if isinstance(bd_entry, dict) and "range" in bd_entry:
             range_in_water = bd_entry["range"]
-        else:
-            energy = bd_entry["energy"]
+
+        if range_in_water is None:
+            if isinstance(bd_entry, dict) and "energy" in bd_entry:
+                energy = bd_entry["energy"]
+            else:
+                energy = bd_entry
             range_in_water = alpha * (energy**p)
 
         # Check if valid computation possible or range shifter too thick

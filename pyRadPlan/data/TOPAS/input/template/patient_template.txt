@@ -1,0 +1,19 @@
+# -- Patient parameters
+s:Ge/Patient/Parent="Isocenter"
+s:Ge/Patient/Type = "TsImageCube"
+b:Ge/Patient/DumpImagingValues = "True"
+s:Ge/Patient/InputDirectory = "./"
+s:Ge/Patient/InputFile = "pyRadPlan_cube.dat"
+
+i:Ge/Patient/NumberOfVoxelsX = {{ct_dim1}}
+i:Ge/Patient/NumberOfVoxelsY = {{ct_dim0}}
+iv:Ge/Patient/NumberOfVoxelsZ = 1 {{ct_dim2}}
+d:Ge/Patient/VoxelSizeX       = {{resx}} mm
+d:Ge/Patient/VoxelSizeY       = {{resy}} mm
+dv:Ge/Patient/VoxelSizeZ       = 1 {{resz}} mm
+s:Ge/Patient/DataType  = "SHORT"
+
+s:Ge/Patient/ImagingtoMaterialConverter = "{{material_converter}}"
+
+# INPUT MATERIAL DEFINITION
+{{ input_material_definition }}

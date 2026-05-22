@@ -57,6 +57,10 @@ def resample_image(
     elif target_grid_spacing is not None:
         target_grid = image_grid.resample(target_grid_spacing)
 
+    # BSpline (order 3) requires >= 4 voxels per dimension; fall back to linear for small images
+    if interpolator == sitk.sitkBSpline and any(s < 4 for s in input_image.GetSize()):
+        interpolator = sitk.sitkLinear
+
     resample = sitk.ResampleImageFilter()
     resample.UseNearestNeighborExtrapolatorOff()
     if extrapolate == "nearest":

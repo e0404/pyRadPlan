@@ -361,8 +361,19 @@ class FieldShapeAsBLD(FieldShape):
 
         return self._validate_and_derive_spatial()
 
-    def _resample_to_grid(self, new_grid: np.ndarray) -> "FieldShapeAsBLD":
-        return FieldShapeAsBLD(energy=self.energy, bld=self.bld, grid=new_grid, weight=self.weight)
+    def _resample_to_grid(self, new_grid: np.ndarray) -> "FieldShapeAsMask":
+        interpolator = RegularGridInterpolator(
+            (self.grid, self.grid), self.mask, method="linear", bounds_error=False, fill_value=0.0
+        )
+        xx, yy = np.meshgrid(new_grid, new_grid, indexing="ij")
+        new_mask = (
+            interpolator(np.stack([xx.ravel(), yy.ravel()], axis=-1))
+            .reshape(xx.shape)
+            .astype(np.float32)
+        )
+        return FieldShapeAsMask(
+            energy=self.energy, mask=new_mask, grid=new_grid, weight=self.weight
+        )
 
 
 class FieldShapeComposite(FieldShape):
