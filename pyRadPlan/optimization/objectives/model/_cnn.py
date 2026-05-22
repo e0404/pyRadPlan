@@ -15,6 +15,7 @@ Example
 ...     ct=ct,
 ...     cst=cst,
 ...     stf=stf,
+...     pln=pln,
 ...     cst_masks=["parotid_lt", "parotid_rt"],
 ... )
 """
@@ -62,7 +63,7 @@ class OutcomeCNN(Objective):
         gradient is returned.
     cst_masks : list[str], optional
         VOI names for the mask channels.  If the config sets
-        ``collaps: true`` the masks are collapsed into one channel;
+        ``collapse: true`` the masks are collapsed into one channel;
         otherwise the ordering matters.
     """
 
@@ -126,6 +127,7 @@ class OutcomeCNN(Objective):
         # Pop non-field init arguments
         ct = data.pop("ct", None)
         cst = data.pop("cst", None)
+        pln = data.pop("pln", None)
         data.pop("stf", None)  # reserved for future use
 
         if ct is None or cst is None:
@@ -149,9 +151,34 @@ class OutcomeCNN(Objective):
         # Build preprocessor from config
         preprocessor = OutcomeCnnPreprocessor(config=config, device=device)
         preprocessor.prepare(ct, cst, cst_masks=cst_masks)
+
+        # Align dose grid with the one the optimizer will use
+        dose_grid = cls._resolve_dose_grid(pln, ct)
+        if dose_grid is not None:
+            preprocessor.set_dose_grid(dose_grid)
+
         data["preprocessor"] = preprocessor
 
         return data
+
+    # TODO: This here can be done better. pln is not properly validated so
+    # this here needs to be done
+    @staticmethod
+    def _resolve_dose_grid(pln: Any, ct: Any) -> Optional[Grid]:
+        """Derive the dose-calc grid from ``pln.prop_dose_calc`` (mirrors the engine)."""
+        if pln is None:
+            return None
+        prop = getattr(pln, "prop_dose_calc", None) or {}
+        spec = prop.get("dose_grid") if isinstance(prop, dict) else None
+        if spec is None:
+            return None
+        if isinstance(spec, Grid):
+            return spec
+        try:
+            return Grid.model_validate(spec)
+        except Exception:
+            resolution = spec["resolution"] if isinstance(spec, dict) else spec
+            return ct.grid.resample(resolution)
 
     # ------------------------------------------------------------------
     # Objective interface
