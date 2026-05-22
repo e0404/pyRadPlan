@@ -26,6 +26,7 @@ import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.result import create_result, PlanResult
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
@@ -517,7 +518,7 @@ class Dij(PyRadPlanBaseModel):
 
     def compute_result_ct_grid(
         self, intensities: np.ndarray, scenario_index: int = 0
-    ) -> dict[str, sitk.Image]:
+    ) -> PlanResult:
         """
         Compute results on the CT grid from intensity vector.
 
@@ -530,8 +531,8 @@ class Dij(PyRadPlanBaseModel):
 
         Returns
         -------
-        dict[str,sitk.Image]
-            A dictionary containing the quantity images for each scenario.
+        PlanResult
+            A PlanResult object containing the quantity distributions on the CT grid.
         """
 
         out = self.compute_result_dose_grid(intensities, scenario_index=scenario_index)
@@ -561,7 +562,7 @@ class Dij(PyRadPlanBaseModel):
             else:
                 # handle the collective of all beams
                 out[key] = resampler.Execute(value)
-        return out
+        return create_result(out, fluence=intensities)
 
     def to_namespace(
         self,

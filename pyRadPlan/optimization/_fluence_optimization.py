@@ -3,7 +3,7 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.stf import SteeringInformation, validate_stf
-from pyRadPlan.result import PlanResult, validate_result
+from pyRadPlan.result import PlanResult
 from .problems import get_problem_from_pln
 
 
@@ -41,6 +41,6 @@ def fluence_optimization(
     planning_prob = get_problem_from_pln(_pln)
 
     fluence, _result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
-    cubes = dij.compute_result_ct_grid(fluence)
-    result = validate_result(cubes, fluence=fluence, info=_result_info)
+    result = dij.compute_result_ct_grid(fluence)
+    result.info = _result_info
     return result
