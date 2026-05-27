@@ -440,6 +440,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 )
         for ray in beam_info["beam"]["rays"]:
             for key in ["ray_pos", "ray_pos_bev", "target_point", "target_point_bev"]:
+                if ray[key] is None:
+                    continue
                 if array_api_compat.is_array_api_obj(ray[key]):
                     ray[key] = to_namespace(xp, ray[key], device=self.device)
                 else:
