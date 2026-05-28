@@ -231,8 +231,9 @@ class SiochiLeafSequencer(PhotonSequencer):
                 result_tmp["sequence"][key] = val
 
         # Interpolate dose.
+        cubes = {}
         if dij is not None:
-            cubes = dij.compute_result_ct_grid(sequencing["fluence"])
+            cubes = dij.compute_result_ct_grid(sequencing["fluence"]).model_dump()
 
         # if hasattr(result, 'w_dao'):
         #     pass
