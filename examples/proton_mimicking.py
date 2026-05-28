@@ -67,27 +67,19 @@ cst.vois[2].objectives = [
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
 
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %%
-# Now let's mimick a reference dose distribution from the reference plan with noise
+# Now let's mimic a reference dose distribution from the reference plan with noise
 noise_stdev = 0.02
-reference_dose = sitk.SpeckleNoise(result["physical_dose"], noise_stdev)
+reference_dose = sitk.SpeckleNoise(result.physical_dose.values, noise_stdev)
 
-# Let's mimick the noisy dose distribution by using the SquaredMimicking objective.
+# Let's mimic the noisy dose distribution by using the SquaredMimicking objective.
 cst.vois[1].objectives = []  # Target
 cst.vois[0].objectives = []  # OAR
 cst.vois[2].objectives = [SquaredMimicking(priority=1000.0, d_ref=reference_dose)]  # BODY
 
-# Calculate optimized fluence
-fluence_mimicked = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result on the CT grid
-result_mimicked = dij.compute_result_ct_grid(fluence_mimicked)
+result_mimicked = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
@@ -97,9 +89,9 @@ view_slice = int(np.round(ct.size[2] / 2))
 
 # Visualize
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
-    overlay=result_mimicked["physical_dose"],
+    overlay=result_mimicked.physical_dose.values,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",

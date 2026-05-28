@@ -54,7 +54,7 @@ def test_jaw_wrong_args():
         Jaw(device_type="JAWX", positions=[-30, 40, 0], field_width=60)
     with pytest.raises(ValueError):
         Jaw(device_type="JAWX", positions=[-30], field_width=60)
-    # field_width samller than maximum position
+    # field_width smaller than maximum position
     with pytest.raises(ValueError):
         Jaw(device_type="JAWX", positions=[-30, 40], field_width=20)
 

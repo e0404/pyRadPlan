@@ -27,7 +27,7 @@ def test_protons_cd_forward(test_data_protons):
     assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
 
     # plot_slice(
-    #     ct=ct,
+    #     image_volume=ct,
     #     cst=cst,
     #     overlay=result_py-result_matRad_rot,
     #     view_slice=5,

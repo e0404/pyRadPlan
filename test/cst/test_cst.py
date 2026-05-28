@@ -18,6 +18,7 @@ from pyRadPlan.cst import (
     HelperVOI,
     Target,
     OAR,
+    DEFAULT_VOI_COLORS,
 )
 # @pytest.fixture
 # def sample_ct():
@@ -380,3 +381,63 @@ def test_create_body_seg_custom_name_type():
     for z in range(4):
         assert body_mask_arr[z, 2, 2] == 1
     # Connectivity may include diagonal, so we skip asserting removal of small component.
+
+
+def test_set_colors_all_missing(generic_ct):
+    # Create dummy masks
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(generic_ct.cube_hu)
+
+    # Case 1: All missing colors
+    voi1 = Target(name="V1", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi2 = OAR(name="V2", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi3 = ExternalVOI(name="V3", mask=mask_image, ct_image=generic_ct, visible_color=None)
+
+    cst = StructureSet(ct_image=generic_ct, vois=[voi1, voi2, voi3])
+
+    # Colors are auto-assigned on CST creation via check_cst(); verify they are valid.
+    cst.set_colors()
+
+    # Verify assigned
+    for v in cst.vois:
+        assert v.visible_color is not None
+        assert len(v.visible_color) == 3
+        assert all(isinstance(c, int) for c in v.visible_color)
+        assert all(0 <= c <= 255 for c in v.visible_color)
+
+    # Verify distinctness (simple check for small number)
+    colors = [tuple(v.visible_color) for v in cst.vois]
+    assert len(set(colors)) == 3
+
+
+def test_set_colors_preserve_existing(generic_ct):
+    # Create dummy masks
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(generic_ct.cube_hu)
+
+    # Case 2: Preserve existing
+    existing_color = (255, 0, 0)
+    voi4 = Target(name="V4", mask=mask_image, ct_image=generic_ct, visible_color=existing_color)
+    voi5 = OAR(name="V5", mask=mask_image, ct_image=generic_ct, visible_color=None)
+
+    cst2 = StructureSet(ct_image=generic_ct, vois=[voi4, voi5])
+    cst2.set_colors()
+
+    assert tuple(cst2.vois[0].visible_color) == existing_color
+    assert cst2.vois[1].visible_color is not None
+    assert tuple(cst2.vois[1].visible_color) != existing_color
+
+
+def test_set_colors_predefined_order(generic_ct):
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(generic_ct.cube_hu)
+
+    voi1 = Target(name="T1", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi2 = Target(name="T2", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    cst = StructureSet(ct_image=generic_ct, vois=[voi1, voi2])
+
+    assert tuple(cst.vois[0].visible_color) == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert tuple(cst.vois[1].visible_color) == DEFAULT_VOI_COLORS["TARGET"][1]

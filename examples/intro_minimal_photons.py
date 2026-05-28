@@ -25,15 +25,12 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # Fluence Optimization (objectives loaded from "cst")
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Plot
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
-    overlay=result["physical_dose"],
+    overlay=result.physical_dose.values,
     overlay_unit="Gy",
 )

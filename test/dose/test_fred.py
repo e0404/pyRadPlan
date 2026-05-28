@@ -103,7 +103,7 @@ class Test_file_handling:
             "Output files should not be generated when save_input is set."
         )
 
-    # this test basicly tests if fred is properly working.
+    # this test basically tests if fred is properly working.
     @pytest.mark.skipif(
         not is_fred_installed(),
         reason="FRED is not installed on this system.",

@@ -12,12 +12,41 @@ from pydantic import (
 
 import numpy as np
 import SimpleITK as sitk
+import matplotlib.colors as mcolors
 
 from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
 
 # Default overlap priorities
 DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15}
+
+# Preferred colors per VOI type (RGB 0..255), tried in order before HSV fallback.
+DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
+    "TARGET": [
+        (255, 80, 80),
+        (200, 0, 0),
+        (255, 120, 120),
+        (180, 0, 80),
+        (255, 50, 150),
+    ],
+    "OAR": [
+        (80, 140, 255),
+        (0, 80, 200),
+        (120, 180, 255),
+        (0, 200, 200),
+        (0, 150, 180),
+    ],
+    "EXTERNAL": [
+        (100, 220, 100),
+        (0, 180, 0),
+        (150, 255, 150),
+    ],
+    "HELPER": [
+        (255, 200, 60),
+        (255, 140, 0),
+        (230, 180, 50),
+    ],
+}
 
 
 class VOI(PyRadPlanBaseModel, ABC):
@@ -50,6 +79,15 @@ class VOI(PyRadPlanBaseModel, ABC):
 
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
+    )
+
+    visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
+    visible_color: Union[tuple[int, int, int], None] = Field(
+        default=None, description="RGB color for visualization in GUI applications"
+    )
+    default_color: tuple[int, int, int] = Field(
+        default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
+        description="Default RGB color bound to the VOI type",
     )
 
     # TODO: it would be nicer if this was a list of optimization.Objective, but that would create a
@@ -107,6 +145,38 @@ class VOI(PyRadPlanBaseModel, ABC):
             return v
 
         raise ValueError("mask must be either passed as numpy array or SimpleITK image")
+
+    @field_validator("visible_color", mode="before")
+    @classmethod
+    def validate_visible_color(cls, v: Any) -> Any:
+        """
+        Validate the visible color.
+
+        Parameters
+        ----------
+        v : Any
+            The visible color value to be validated.
+
+        Returns
+        -------
+        tuple[int, int, int]
+            The validated visible color.
+        """
+
+        if isinstance(v, str):
+            # convert color to rgb tuple
+            rgb = mcolors.to_rgb(v)
+            return tuple(int(round(c * 255)) for c in rgb)
+
+        # Accept array-like inputs, handle scaling and conversion
+        if isinstance(v, (tuple, list, np.ndarray)):
+            arr = np.asarray(v)
+            if arr.size == 3 and np.issubdtype(arr.dtype, np.number):
+                if np.issubdtype(arr.dtype, np.floating):
+                    arr = np.round(arr * 255)
+                return tuple(arr.astype(int).tolist())
+
+        return v
 
     @model_validator(mode="after")
     def validate_mask(self):
@@ -367,7 +437,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         if self.mask.GetDimension() == 3:
             new_mask = sitk.Resample(
-                self.mask, new_ct.cube_hu, interpolator=sitk.sitkNearestNeighbor
+                self.mask, new_ct.cube_hu, sitk.Transform(), sitk.sitkNearestNeighbor, 0
             )
         elif self.mask.GetDimension() == 4:
             new_mask = []
@@ -376,7 +446,9 @@ class VOI(PyRadPlanBaseModel, ABC):
                     sitk.Resample(
                         self.mask[:, :, :, i],
                         new_ct.cube_hu,
-                        interpolator=sitk.sitkNearestNeighbor,
+                        sitk.Transform(),
+                        sitk.sitkNearestNeighbor,
+                        0,
                     )
                 )
             new_mask = sitk.JoinSeries(new_mask)

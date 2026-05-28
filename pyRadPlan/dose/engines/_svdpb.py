@@ -1,8 +1,10 @@
-from typing import TypedDict, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
 import numpy as np
+import array_api_compat
+
 from scipy import fft
 from scipy.interpolate import RegularGridInterpolator
 
@@ -11,6 +13,7 @@ from pyRadPlan.stf import FieldShape
 
 # from pyRadPlan.stf import Beam
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
+from pyRadPlan.core.xp_utils import to_numpy
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 
@@ -59,6 +62,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     short_name = "SVDPB"
     name = "SVD Pencil Beam"
     possible_radiation_modes = ["photons"]
+
+    _dij_guarantee_canonical: ClassVar[bool] = True
+    _dij_guarantee_nonzero: ClassVar[bool] = True
 
     use_custom_primary_photon_fluence: bool
     kernel_cutoff: float
@@ -160,14 +166,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["field_based_dose_calc"] = field_based_dose_calc
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
+        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
+        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
+
         # TODO: resampling should directly change object, not create new one?
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
             stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i]
-                .rays[j]
-                .beamlets[k]
-                .resample(new_resolution=self.int_conv_resolution, new_field_width=field_width)
+                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
             )
             beam_info["beam"]["rays"][j]["beamlets"][k] = (
                 stf.beams[i].rays[j].beamlets[k].model_dump()
@@ -176,10 +183,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
                 stf.beams[i].rays[j].beamlets[k].mask, k=-1
             )
-
-        field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
-        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -192,6 +195,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         energy = energies[0]
 
         kernel = cast(PhotonLINAC, self._machine).get_kernel_by_energy(energy)
+
+        min_kernel_spacing = np.min(np.diff(kernel.kernel_pos))
+        if self.int_conv_resolution > min_kernel_spacing:
+            logger.warning(
+                "Chosen kernel convolution resolution of %f mm is larger than minimum kernel "
+                "spacing of %f mm. This can strongly affect absolute dosimetry.",
+                self.int_conv_resolution,
+                min_kernel_spacing,
+            )
 
         if self.kernel_cutoff > kernel.kernel_pos[-1]:
             logger.info(
@@ -223,9 +235,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         gauss_grid = self.int_conv_resolution * np.arange(-gauss_limit, gauss_limit)
 
         gauss_filter_x, gauss_filter_z = np.meshgrid(gauss_grid, gauss_grid, indexing="xy")
+        # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
         gauss_filter = (
-            1.0
-            / (2 * np.pi * sigma_gauss**2 / self.int_conv_resolution**2)
+            self.int_conv_resolution**2
+            / (2 * np.pi * sigma_gauss**2)
             * np.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
@@ -261,11 +274,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 f_pre = np.real(f_pre)
 
         # get index of central ray or closest to the central ray
-        center = np.argmin(
-            np.sum(
-                np.array([ray["ray_pos_bev"] for ray in beam_info["beam"]["rays"]]) ** 2, axis=1
-            )
+        xp = self.xp
+        ray_pos_bev = xp.stack(
+            [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
+        center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
 
         center_ssd = beam_info["beam"]["rays"][center]["SSD"]
 
@@ -279,9 +292,13 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # Get Interpolators
         # TODO: need scipy interpolate here probably
+        # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
         kernel_mxs = np.apply_along_axis(
-            lambda x: np.interp(
-                np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+            lambda x: (
+                self.int_conv_resolution**2
+                * np.interp(
+                    np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
+                )
             ),
             axis=1,
             arr=kernels_at_ssd,
@@ -313,23 +330,32 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
 
         m = kernel.m
-        betas = kernel.kernel_betas.reshape((-1, 1))
-        rd = curr_ray["rad_depths"].reshape((1, -1))
+        betas = kernel.kernel_betas
+        rd = curr_ray["rad_depths"]
         interpolators = cast(list[RegularGridInterpolator], curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
 
-        dose_component = betas / (betas - m) * (np.exp(-m * rd) - np.exp(-betas * rd))
+        xp = array_api_compat.array_namespace(rd)
 
-        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
+        # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
+        betas = xp.reshape(xp.asarray(betas), (-1, 1))
+        rd = xp.reshape(rd, (1, -1))
+        m_arr = xp.asarray(m, dtype=rd.dtype)
+
+        dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
+
+        # scipy interpolators require NumPy arrays
+        iso_lat_dists_np = to_numpy(iso_lat_dists)
+        interpolated_kernels = [interp(iso_lat_dists_np) for interp in interpolators]
 
         for c, interp in enumerate(interpolated_kernels):
-            dose_component[c, :] *= interp
+            dose_component[c, :] *= xp.asarray(interp)
 
-        bixel_dose = np.sum(dose_component, axis=0)
+        bixel_dose = xp.sum(dose_component, axis=0)
 
-        bixel_dose *= ((sad) / geo_depths) ** 2
+        bixel_dose = bixel_dose * ((sad / geo_depths) ** 2)
 
         bixel["physical_dose"] = bixel_dose
         bixel["weight"] = curr_ray["beamlets"][k]["weight"]

@@ -21,11 +21,10 @@ from pyRadPlan import (
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
-    plot_slice,
     load_tg119,
     xp_utils,
 )
-
+from pyRadPlan.gui import launch_viewer
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
@@ -59,11 +58,7 @@ cst.vois[2].objectives = [
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
 
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
@@ -72,11 +67,4 @@ result = dij.compute_result_ct_grid(fluence)
 view_slice = int(np.round(ct.size[2] / 2))
 
 # Visualize
-plot_slice(
-    ct=ct,
-    cst=cst,
-    overlay=result.physical_dose.values,
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+launch_viewer(ct, cst, result)

@@ -4,6 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 from pyRadPlan.core import Grid
 from pyRadPlan.dij import Dij, create_dij, validate_dij, compose_beam_dijs
+from pyRadPlan.result import PlanResult
 
 import array_api_strict
 import array_api_compat
@@ -28,6 +29,12 @@ def sample_dij_dict():
         "bixel_num": np.ones(65),
         "ray_num": np.ones(65),
         "beam_num": np.ones(65),
+        "alphax": np.ones(
+            17 * 17 * 10,
+        ),
+        "betax": np.ones(
+            17 * 17 * 10,
+        ),
     }
     return dose_information
 
@@ -51,6 +58,12 @@ def sample_dij_dict_camel():
         "bixelNum": np.ones(65),
         "rayNum": np.ones(65),
         "beamNum": np.ones(65),
+        "alphax": np.ones(
+            17 * 17 * 10,
+        ),
+        "betax": np.ones(
+            17 * 17 * 10,
+        ),
     }
     return dose_information
 
@@ -193,10 +206,10 @@ def test_result_computation_physical_dose_ct_grid(sample_dij_dict):
     dij = create_dij(**sample_dij_dict)
     f = np.ones((dij.total_num_of_bixels,), dtype=np.float32)
     result = dij.compute_result_ct_grid(f)
-    assert isinstance(result, dict)
-    assert "physical_dose" in result
-    assert isinstance(result["physical_dose"], sitk.Image)
-    assert result["physical_dose"].GetSize() == dij.ct_grid.dimensions
+    assert isinstance(result, PlanResult)
+    assert "physical_dose" in result.quantities
+    assert isinstance(result.physical_dose.values, sitk.Image)
+    assert result.physical_dose.values.GetSize() == dij.ct_grid.dimensions
 
 
 def test_result_computation_let(sample_dij_dict):
@@ -271,3 +284,64 @@ def test_to_namespace_nosparse(sample_dij_dict):
                 assert array_api_compat.is_array_api_strict_namespace(
                     q_container.flat[i].__array_namespace__()
                 )
+
+
+@pytest.fixture
+def sample_dij_shared_indices():
+    """Dij whose physical_dose and let_dose share the same indices/indptr arrays."""
+    n_vox = 17 * 17 * 10
+    n_bix = 65
+
+    rng = np.random.default_rng(42)
+    nnz = 30
+
+    data_phys = rng.random(nnz).astype(np.float32)
+    data_let = rng.random(nnz).astype(np.float32)
+
+    indices_input = np.arange(nnz, dtype=np.int32)
+    indptr_input = np.zeros(n_bix + 1, dtype=np.int32)
+    indptr_input[1 : nnz + 1] = np.arange(1, nnz + 1, dtype=np.int32)
+    indptr_input[nnz + 1 :] = nnz
+
+    phys = sp.csc_array((data_phys, indices_input, indptr_input), shape=(n_vox, n_bix))
+
+    let_ = phys.copy()
+    let_.data = data_let.copy()
+    let_.indices = phys.indices
+    let_.indptr = phys.indptr
+
+    return (
+        create_dij(
+            ct_grid={"resolution": {"x": 1.5, "y": 1.5, "z": 1.5}, "dimensions": (33, 33, 21)},
+            dose_grid={"resolution": {"x": 3.0, "y": 3.0, "z": 3.0}, "dimensions": (17, 17, 10)},
+            physical_dose=[[[phys]]],
+            let_dose=[[[let_]]],
+            num_of_beams=1,
+            bixel_num=np.ones(n_bix),
+            ray_num=np.ones(n_bix),
+            beam_num=np.ones(n_bix),
+        ),
+        data_phys,
+        data_let,
+        phys.indices.copy(),
+    )
+
+
+def test_to_namespace_shared_indices_values_correct(sample_dij_shared_indices):
+    """Both quantities must have the correct values after shared-index conversion."""
+    dij, data_phys, data_let, shared_indices = sample_dij_shared_indices
+
+    dij_out = dij.to_namespace(array_api_strict)
+
+    phys_out = dij_out.physical_dose.flat[0]
+    let_out = dij_out.let_dose.flat[0]
+
+    assert isinstance(phys_out, sp.csc_array)
+    assert isinstance(let_out, sp.csc_array)
+
+    np.testing.assert_array_equal(phys_out.data, data_phys)
+    np.testing.assert_array_equal(let_out.data, data_let)
+    np.testing.assert_array_equal(phys_out.indices, shared_indices)
+    np.testing.assert_array_equal(let_out.indices, shared_indices)
+    # check for shared memory
+    assert phys_out.indices.ctypes.data == let_out.indices.ctypes.data

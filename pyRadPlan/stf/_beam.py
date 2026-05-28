@@ -13,6 +13,7 @@ from numpydantic import NDArray, Shape
 
 from pyRadPlan.stf._ray import Ray
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.util.helpers import models2recarray
 
 
@@ -134,6 +135,12 @@ class Beam(PyRadPlanBaseModel):
     @classmethod
     def validate_nparray_dtype(cls, v: Any) -> Any:
         """Validate arrays to have floating point values."""
+        # NOTE: This is needed due to to_numpy not being able
+        # to convert lists to numpy. Only arrays.
+        # This is happening during import.
+        # Latter is making sure that array is present and the right dtype!
+        if not isinstance(v, list):
+            v = to_numpy(v)
         v = np.asarray(v, dtype=np.float64)
         return v.reshape((3,))
 

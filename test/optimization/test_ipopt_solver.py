@@ -2,6 +2,7 @@ import pytest
 import array_api_strict as xp
 import array_api_compat
 import array_api_extra as xpx
+import numpy as np
 
 
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
