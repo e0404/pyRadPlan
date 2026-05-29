@@ -29,6 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
+from pyRadPlan.bio_models._base import BiologicalModelBase
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -75,7 +76,7 @@ class DoseEngineBase(ABC):
     is_dose_engine: ClassVar[bool] = True  # Helper variable
 
     mult_scen: Union[str, ScenarioModel]
-    bio_model: Union[str, dict]
+    bio_model: Union[str, BiologicalModelBase]
     dose_grid: Union[Grid, dict]
 
     select_voxels_in_scenarios: bool
@@ -92,6 +93,9 @@ class DoseEngineBase(ABC):
             self.assign_properties_from_pln(pln, True)
 
         self._ct_grid = None
+
+        if isinstance(self.bio_model, str):
+            self.bio_model = BiologicalModelBase.create(self.bio_model, pln.radiation_mode)
 
         # Protected properties with public get access
         self._machine: Machine = None  # base data defined in machine file

@@ -157,7 +157,7 @@ extend-ignore = ["E203","E701","F722"]
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*"
-ignore-words-list = "coo"
+ignore-words-list = ["coo", "HEL"]
 
 [tool.pydocstringformatter]
 write = true

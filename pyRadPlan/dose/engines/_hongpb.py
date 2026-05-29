@@ -1,5 +1,6 @@
 from typing import ClassVar
 import array_api_compat
+
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
 
 
@@ -81,13 +82,11 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
         if self.calc_bio_dose:
-            # TODO: correct / adaptive alpha / beta values given tissue indices
-            bixel_alpha = kernels["alpha"][0]
-            bixel_beta = kernels["beta"][0]
-
-            # Multiple with dose
-            bixel["alpha_dose"] = bixel["physical_dose"] * bixel_alpha
-            bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(bixel_beta)
+            bixel = self.bio_model.calc_biological_quantities_for_bixel(bixel)
+            if isinstance(self.bio_model, LQModel):
+                # Multiple with dose
+                bixel["alpha_dose"] = bixel["physical_dose"] * bixel["alpha"]
+                bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(bixel["beta"])
 
     @staticmethod
     def is_available(pln, machine):

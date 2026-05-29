@@ -16,6 +16,7 @@ from pydantic import (
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
+from pyRadPlan.bio_models._base import BiologicalModelBase
 
 
 class Plan(PyRadPlanBaseModel, ABC):
@@ -50,8 +51,8 @@ class Plan(PyRadPlanBaseModel, ABC):
     machine: Union[Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
+    bio_model: Union[str, BiologicalModelBase] = Field(default="none")
 
-    # Abstract property handled by below validator
     radiation_mode: str
 
     @field_validator("radiation_mode", mode="after")

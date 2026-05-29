@@ -69,7 +69,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self.cut_off_method = "integral"
 
         # Protected properties with public get access
-        self._constant_rbe = None  # constant RBE value
         self._v_tissue_index = None  # Stores tissue indices available in the matRad base data
         self._v_alpha_x = None  # Stores Photon Alpha
         self._v_beta_x = None  # Stores Photon Beta
@@ -442,8 +441,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 
         # biology
-        if hasattr(self, "_constant_rbe") and self._constant_rbe is not None:
-            dij["RBE"] = self._constant_rbe
+        if isinstance(self.bio_model, ConstantRBEModel):
+            dij["RBE"] = self.bio_model.rbe
 
         # TODO: (Comment from matlab): This is clumsy and needs to be changed with the biomodel
         # update
