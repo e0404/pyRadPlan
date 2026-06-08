@@ -29,7 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
-from pyRadPlan.bio_models._base import BiologicalModelBase
+from pyRadPlan.bio_models import get_bio_model, BiologicalModelBase
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -88,6 +88,7 @@ class DoseEngineBase(ABC):
         self.select_voxels_in_scenarios = None
         self.voxel_sub_ix = None  # selection of where to calculate / store dose, empty by default
         self.dose_grid = None
+        self.bio_model = "none"
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
@@ -95,7 +96,9 @@ class DoseEngineBase(ABC):
         self._ct_grid = None
 
         if isinstance(self.bio_model, str):
-            self.bio_model = BiologicalModelBase.create(self.bio_model, pln.radiation_mode)
+            self.bio_model = get_bio_model(
+                self.bio_model, pln.radiation_mode, ["physical_dose", "LET"]
+            )
 
         # Protected properties with public get access
         self._machine: Machine = None  # base data defined in machine file
@@ -147,8 +150,8 @@ class DoseEngineBase(ABC):
             self.mult_scen = pln.mult_scen
 
         # Assign Biologival Model
-        if hasattr(pln, "bio_param"):
-            self.bio_param = pln.bio_param  # TODO: No bio_param yet
+        if hasattr(pln, "bio_model"):
+            self.bio_model = pln.bio_model  # TODO: No bio_model yet
 
         if not isinstance(warn_when_property_changed, bool):
             warn_when_property_changed = False

@@ -1,4 +1,4 @@
-from ._base import BiologicalModelBase
+from pyRadPlan.bio_models._base import BiologicalModelBase
 
 
 class ConstantRBEModel(BiologicalModelBase):

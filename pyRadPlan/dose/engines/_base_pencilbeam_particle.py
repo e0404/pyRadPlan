@@ -19,6 +19,7 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
+from pyRadPlan.bio_models import ConstantRBEModel
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -437,6 +438,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # TODO: this is a dummy. bio_param not implemented yet...
         self.bio_param = {"bioOpt": False}
+        self.bio_param = {"bioOpt": True}
 
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 

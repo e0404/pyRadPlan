@@ -1,5 +1,6 @@
-import numpy.array_api as xp
-from lq_models import LQModel
+import array_api_strict as xp
+from .lq_models import LQModel
+from abc import abstractmethod
 
 
 class LETBasedLQModel(LQModel):
@@ -31,6 +32,13 @@ class RBEMinMax(LETBasedLQModel):
         bixel["alpha"] = RBEmax * bixel["_v_alpha_x"]
         bixel["beta"] = RBEmin**2 * bixel["_v_beta_x"]
         return bixel
+
+    @abstractmethod
+    def get_rbe_min_max(self, bixel: dict) -> tuple[xp.asarray, xp.asarray]:
+        """
+        Return (RBEmin, RBEmax) arrays of shape (n_depths,).
+        Must be implemented by concrete subclasses.
+        """
 
 
 class Wedenberg(RBEMinMax):
