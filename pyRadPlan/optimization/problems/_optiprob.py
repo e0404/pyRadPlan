@@ -78,6 +78,8 @@ class PlanningProblem(ABC):
 
     _array_backend: ArrayNamespace
 
+    _num_of_fractions: int = 1
+
     def __init__(self, pln: Union[Plan, dict] = None):
         self._scenario_model = None
 
@@ -130,6 +132,8 @@ class PlanningProblem(ABC):
         warn_when_property_changed : bool
             Whether to warn when properties are changed.
         """
+
+        self._num_of_fractions = pln.num_of_fractions
 
         # Set Scenario Model
         self._mult_scen = pln.mult_scen
@@ -218,7 +222,8 @@ class PlanningProblem(ABC):
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
-
+            for obj in objs:
+                obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
 
@@ -238,7 +243,6 @@ class PlanningProblem(ABC):
 
         # sanitize objectives and constraints and manage required quantities
         objectives, quantity_ids = self._collect_objectives()
-
         self._objective_list = objectives
         # unique quantities
         quantity_ids = list(set(quantity_ids))

@@ -139,6 +139,28 @@ class Objective(PyRadPlanBaseModel):
                 # Cache the resampled value
                 self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
 
+    def normalize_to_fraction_num(self, num_of_fractions: int):
+        """
+        Normalize the objective to the number of fractions.
+
+        This is relevant for objectives that are defined in terms of total dose, but the optimization
+        is performed on dose per fraction. In such cases, the objective needs to be normalized to
+        the number of fractions to ensure correct optimization behavior.
+
+        Parameters
+        ----------
+        num_of_fractions : int
+            The number of fractions to normalize to.
+        """
+        if num_of_fractions <= 0:
+            raise ValueError("Number of fractions must be greater than zero.")
+        for param_name, param_type in zip(self.parameter_names, self.parameter_types):
+            if param_type == "reference":
+                current_value = getattr(self, param_name)
+                normalized_value = current_value / num_of_fractions
+                setattr(self, param_name, normalized_value)
+        return self
+
     @abstractmethod
     def compute_objective(self, values):
         """Compute the objective function."""
