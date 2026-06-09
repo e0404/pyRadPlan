@@ -12,11 +12,21 @@ from pydantic import (
     Field,
     field_validator,
     ValidationError,
+    model_validator,
 )
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
 from pyRadPlan.bio_models._base import BiologicalModelBase
+
+default_bio_models: dict[str, str] = {
+    "photons": "none",
+    "protons": "constant_rbe",
+    "helium": "HEL",
+    "carbon": "kernel_based_rbe",
+    "oxygen": "kernel_based_rbe",
+    "VHEE": "none",
+}
 
 
 class Plan(PyRadPlanBaseModel, ABC):
@@ -104,7 +114,6 @@ class Plan(PyRadPlanBaseModel, ABC):
                 "mult_scen must be a ScenarioModel object or respective dictionary"
             ) from exc
 
-    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_opt", mode="after")
     @classmethod
     def validate_prop(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -185,6 +194,13 @@ class PhotonPlan(Plan):
             raise ValueError('radiation_mode for PhotonPlan must be "photons"')
         return v
 
+    @model_validator(mode="after")
+    def set_default_bio_model(self) -> "PhotonPlan":
+        """Set bio_model from default_bio_models if not explicitly provided."""
+        if self.bio_model == "none":
+            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
+        return self
+
 
 class IonPlan(Plan):
     """
@@ -243,6 +259,13 @@ class IonPlan(Plan):
             )
         return v
 
+    @model_validator(mode="after")
+    def set_default_bio_model(self) -> "IonPlan":
+        """Set bio_model from default_bio_models if not explicitly provided."""
+        if self.bio_model == "none":
+            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
+        return self
+
 
 def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan:
     """
@@ -273,6 +296,7 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
 
         # obtain the radiation mode if we have a dictionary at our hands
         radiation_mode = data.get("radiation_mode")
+        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
 
         # Since we also allow camelCase, try to get radiationMode if radiation_mode is not set
         if radiation_mode is None:
