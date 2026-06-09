@@ -2,17 +2,16 @@
 # Import necessary libraries
 import logging
 
-import numpy as np
 
 from pyRadPlan import (
     IonPlan,
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
-    plot_slice,
     load_tg119,
 )
-
+import SimpleITK as sitk
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,8 +23,8 @@ ct, cst = load_tg119()
 
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
+pln.bio_model = "none"
 pln.prop_opt = {"solver": "scipy"}
-pln.bio_model = "MCN"
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
@@ -43,22 +42,27 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 # %%
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
-# Compute the result
+
 result = dij.compute_result_ct_grid(fluence)
 
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
+profile = {}
+bio_models = ["none", "constant_rbe", "WED", "MCN", "CAR", "LSM"]
+profile["none"] = sitk.GetArrayFromImage(result["physical_dose"])[
+    int(ct.size[0] / 2), :, int(ct.size[2] / 2)
+]
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-)
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["rbe_x_dose"],
-    view_slice=view_slice,
-)
+# %%
+for model in bio_models[1:]:
+    pln.bio_model = model
+    dij = calc_dose_influence(ct, cst, stf, pln)  # alpha and beta parameters need to be calculated
+    result = dij.compute_result_ct_grid(fluence)
+    profile[model] = sitk.GetArrayFromImage(result["rbe_x_dose"])[
+        int(ct.size[0] / 2), :, int(ct.size[2] / 2)
+    ]
+
+# %%
+plt.figure(figsize=(10, 6))
+for model in bio_models:
+    plt.plot(profile[model], label=model)
+plt.legend()
+# %%

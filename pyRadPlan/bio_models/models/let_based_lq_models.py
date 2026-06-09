@@ -156,7 +156,7 @@ class LinearScaling(RBEMinMax):
         LET = xp.asarray(kernels["let"])
         RBEmax = xp.nan * xp.ones(len(bixel["v_alpha_x"]))
 
-        ix = self.p_lowerLETThreshold < LET < self.p_upperLETThreshold
+        ix = (self.p_lowerLETThreshold < LET) & (LET < self.p_upperLETThreshold)
 
         alpha_0 = xp.reshape(xp.asarray(bixel["v_alpha_x"]), (-1,)) - (
             self.p_lamda_1_1 * self.p_corrFacEntranceRBE
@@ -164,7 +164,7 @@ class LinearScaling(RBEMinMax):
 
         RBEmax[ix] = alpha_0[ix] + self.p_lamda_1_1 * LET[ix]
 
-        if xp.sum(ix) < len(LET):
+        if int(xp.count_nonzero(ix)) < LET.shape[0]:
             RBEmax[LET > self.p_upperLETThreshold] = (
                 alpha_0[LET > self.p_upperLETThreshold]
                 + self.p_lamda_1_1 * self.p_upperLETThreshold
@@ -174,6 +174,6 @@ class LinearScaling(RBEMinMax):
                 + self.p_lamda_1_1 * self.p_lowerLETThreshold
             )
 
-        RBEmax = RBEmax / xp.asarray(bixel["v_alpha_x"])[ix]
+        RBEmax = RBEmax / xp.reshape(xp.asarray(bixel["v_alpha_x"]), (-1,))[ix]
         RBEmin = 1
         return RBEmin, RBEmax
