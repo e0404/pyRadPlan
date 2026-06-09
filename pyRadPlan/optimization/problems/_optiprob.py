@@ -56,14 +56,6 @@ class PlanningProblem(ABC):
         "oxygen",
         "VHEE",
     ]
-    default_quantities: dict[str, str] = {
-        "photons": "physical_dose",
-        "protons": "rbe_x_dose",
-        "helium": "rbe_x_dose",
-        "carbon": "rbe_x_dose",
-        "oxygen": "rbe_x_dose",
-        "VHEE": "physical_dose",
-    }
     # right now only kernel based rbe model which is only standard in the carbon machine
 
     apply_overlap: bool
@@ -111,6 +103,18 @@ class PlanningProblem(ABC):
             )
 
             self.solver = solver_names[0]
+
+    def get_default_quantities(self, radiation_mode: str) -> str:
+        use_rbe = self._dij.rbe is not None
+        default_quantities = {
+            "photons": "physical_dose",
+            "protons": "constant_rbe_x_dose" if use_rbe else "rbe_x_dose",
+            "helium": "rbe_x_dose",
+            "carbon": "rbe_x_dose",
+            "oxygen": "rbe_x_dose",
+            "VHEE": "physical_dose",
+        }
+        return default_quantities.get(radiation_mode, "physical_dose")
 
     def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
         """
@@ -178,16 +182,14 @@ class PlanningProblem(ABC):
 
     def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
         """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
-        default_quantity = self.default_quantities.get(
-            self._stf.beams[0].radiation_mode, "physical_dose"
-        )
+        default_quantity = self.get_default_quantities(self._stf.beams[0].radiation_mode)
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
 
         if self.convert_dose_objectives:
             logger.info(
                 "Converting all objectives to use quantity: "
-                + self.default_quantities.get(self._stf.beams[0].radiation_mode, "physical_dose")
+                + self.get_default_quantities(self._stf.beams[0].radiation_mode)
             )
 
         for voi in self._cst.vois:

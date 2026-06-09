@@ -42,6 +42,6 @@ class ConstantRBEModel(BiologicalModelBase):
         """
         bixel["alpha"] = self.rbe * bixel["_v_alpha_x"]
         bixel["beta"] = (
-            self.rbe**2 * bixel["_v_beta_x"]
+            self.rbe**2 * bixel["v_beta_x"]
         )  # do i want this, not necessary for the constant RBE model, but would then work with the current RBE optimization
         return bixel

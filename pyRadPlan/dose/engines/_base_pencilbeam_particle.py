@@ -433,13 +433,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 
         # biology
-        if isinstance(self.bio_model, ConstantRBEModel):
-            dij["rbe"] = self.bio_model.rbe
 
         # TODO: (Comment from matlab): This is clumsy and needs to be changed with the biomodel
         # update
         if self.bio_param["bioOpt"]:
             self.calc_bio_dose = True
+        if isinstance(self.bio_model, ConstantRBEModel):
+            dij["rbe"] = self.bio_model.rbe
+            self.calc_bio_dose = False
 
         # Load biologicla base data if needed
         if self.calc_bio_dose:

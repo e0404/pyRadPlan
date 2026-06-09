@@ -59,6 +59,6 @@ plot_slice(
 plot_slice(
     image_volume=ct,
     cst=cst,
-    overlay=result["RBExDose"],
+    overlay=result["rbe_x_dose"],
     view_slice=view_slice,
 )

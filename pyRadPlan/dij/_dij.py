@@ -427,15 +427,15 @@ class Dij(PyRadPlanBaseModel):
                 for idx in beam_indices
             ]
 
-            indices = (out["physical_dose"] > 0) & (self.betax > 0)
+            indices = (out["physical_dose"] > 0) & (self.betax[:, scenario_index] > 0)
             out["rbe_x_dose"] = np.zeros_like(out["effect"])
             out["rbe_x_dose"][indices] = (
                 np.sqrt(
-                    self.alphax[scenario_index][indices] ** 2
-                    + 4 * self.betax[scenario_index][indices] * out["effect"][indices]
+                    self.alphax[:, scenario_index][indices] ** 2
+                    + 4 * self.betax[:, scenario_index][indices] * out["effect"][indices]
                 )
-                - self.alphax[scenario_index][indices]
-            ) / (2 * self.betax[scenario_index][indices])
+                - self.alphax[:, scenario_index][indices]
+            ) / (2 * self.betax[:, scenario_index][indices])
             out["rbe"] = np.zeros_like(out["rbe_x_dose"])
             out["rbe"][indices] = out["rbe_x_dose"][indices] / out["physical_dose"][indices]
 
@@ -446,17 +446,17 @@ class Dij(PyRadPlanBaseModel):
                 rbe_beam = np.zeros_like(out["effect_beam"][i])
 
                 indices_beam = (out["physical_dose_beam"][i] > 0) & (
-                    self.betax[scenario_index] > 0
+                    self.betax[:, scenario_index] > 0
                 )
                 rbe_x_dose_beam[indices_beam] = (
                     np.sqrt(
-                        self.alphax[scenario_index][indices_beam] ** 2
+                        self.alphax[:, scenario_index][indices_beam] ** 2
                         + 4
-                        * self.betax[scenario_index][indices_beam]
+                        * self.betax[:, scenario_index][indices_beam]
                         * out["effect_beam"][i][indices_beam]
                     )
-                    - self.alphax[scenario_index][indices_beam]
-                ) / (2 * self.betax[scenario_index][indices_beam])
+                    - self.alphax[:, scenario_index][indices_beam]
+                ) / (2 * self.betax[:, scenario_index][indices_beam])
                 rbe_beam[indices_beam] = (
                     rbe_x_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
                 )
@@ -465,8 +465,9 @@ class Dij(PyRadPlanBaseModel):
                 out["rbe_beam"].append(rbe_beam)
         if self.rbe is not None:
             out["rbe_x_dose"] = self.rbe * out["physical_dose"]
-            for i in range(self.num_of_beams):
-                out["rbe_x_dose_beam"][i] = self.rbe * out["physical_dose_beam"][i]
+            out["rbe_x_dose_beam"] = [
+                self.rbe * dose_mat[:, idx] @ intensity[idx] for idx in beam_indices
+            ]
 
         return out
 
