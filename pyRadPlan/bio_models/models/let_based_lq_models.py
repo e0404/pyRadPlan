@@ -128,7 +128,7 @@ class HeliumMairani(RBEMinMax):
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         LET = xp.asarray(kernels["let"])
         f_QE = (self.p1_HEL * LET**2) * xp.exp(-self.p2_HEL * LET)
-        RBEmax_QE = 1 + ((self.p0_HEL + (bixel["vABratio"]) ** -1) * f_QE)
+        RBEmax_QE = 1 + (self.p0_HEL + (xp.reshape(bixel["v_abr_x"], (-1,)) ** -1) * f_QE)
 
         # the linear quadratic fit yielded the best fitting result
         RBEmax = RBEmax_QE
