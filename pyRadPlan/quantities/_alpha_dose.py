@@ -22,7 +22,7 @@ class AlphaDose(FluenceDependentQuantity):
             )
         # Indirect path: alpha_x * physical_dose
         dose = self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index]
-        return self.array_backend.asarray(self._dij.alphax * dose, copy=False)
+        return self.array_backend.asarray(self._dij.alphax[scenario_index] * dose, copy=False)
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         if self._mode == "direct":
@@ -31,7 +31,7 @@ class AlphaDose(FluenceDependentQuantity):
                 self._dij.alpha_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
             )
         # Chain rule for alpha_x * Dose: d/dw = alpha_x * dDose/dw, scaled by d_quantity.
-        scaled = self._dij.alphax * d_quantity
+        scaled = self._dij.alphax[:, scenario_index] * d_quantity
         return self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
             scaled, scenario_index
         )

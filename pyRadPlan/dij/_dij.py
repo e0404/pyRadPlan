@@ -85,10 +85,12 @@ class Dij(PyRadPlanBaseModel):
     ray_num: Annotated[NDArray, Field(default=None)]
     beam_num: Annotated[NDArray, Field(default=None)]
 
-    alphax: Annotated[Optional[Array], Field(default=None)]
-    betax: Annotated[Optional[Array], Field(default=None)]
+    alphax: Annotated[Optional[NDArray], Field(default=None)]
+    betax: Annotated[Optional[NDArray], Field(default=None)]
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
+
+    rbe: Optional[float] = Field(default=None)
 
     @computed_field
     @property
@@ -272,11 +274,14 @@ class Dij(PyRadPlanBaseModel):
 
                     vox_num = mat.shape[0]
 
-                    if v.ndim != 1:
-                        raise ValueError("Voxel arrays must be 1-dimensional")
+                    scen_num = dij_matrices.size
 
-                    if array_api_compat.size(v) != vox_num:
+                    if v.shape[0] != vox_num:
                         raise ValueError("Voxel arrays shape inconsistent with number of voxels")
+                    if v.shape[1] != scen_num:
+                        raise ValueError(
+                            "Voxel arrays shape inconsistent with number of scenarios"
+                        )
 
         if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
             v -= 1
@@ -426,10 +431,11 @@ class Dij(PyRadPlanBaseModel):
             out["rbe_x_dose"] = np.zeros_like(out["effect"])
             out["rbe_x_dose"][indices] = (
                 np.sqrt(
-                    self.alphax[indices] ** 2 + 4 * self.betax[indices] * out["effect"][indices]
+                    self.alphax[scenario_index][indices] ** 2
+                    + 4 * self.betax[scenario_index][indices] * out["effect"][indices]
                 )
-                - self.alphax[indices]
-            ) / (2 * self.betax[indices])
+                - self.alphax[scenario_index][indices]
+            ) / (2 * self.betax[scenario_index][indices])
             out["rbe"] = np.zeros_like(out["rbe_x_dose"])
             out["rbe"][indices] = out["rbe_x_dose"][indices] / out["physical_dose"][indices]
 
@@ -439,20 +445,28 @@ class Dij(PyRadPlanBaseModel):
                 rbe_x_dose_beam = np.zeros_like(out["effect_beam"][i])
                 rbe_beam = np.zeros_like(out["effect_beam"][i])
 
-                indices_beam = (out["physical_dose_beam"][i] > 0) & (self.betax > 0)
+                indices_beam = (out["physical_dose_beam"][i] > 0) & (
+                    self.betax[scenario_index] > 0
+                )
                 rbe_x_dose_beam[indices_beam] = (
                     np.sqrt(
-                        self.alphax[indices_beam] ** 2
-                        + 4 * self.betax[indices_beam] * out["effect_beam"][i][indices_beam]
+                        self.alphax[scenario_index][indices_beam] ** 2
+                        + 4
+                        * self.betax[scenario_index][indices_beam]
+                        * out["effect_beam"][i][indices_beam]
                     )
-                    - self.alphax[indices_beam]
-                ) / (2 * self.betax[indices_beam])
+                    - self.alphax[scenario_index][indices_beam]
+                ) / (2 * self.betax[scenario_index][indices_beam])
                 rbe_beam[indices_beam] = (
                     rbe_x_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
                 )
 
                 out["rbe_x_dose_beam"].append(rbe_x_dose_beam)
                 out["rbe_beam"].append(rbe_beam)
+        if self.rbe is not None:
+            out["rbe_x_dose"] = self.rbe * out["physical_dose"]
+            for i in range(self.num_of_beams):
+                out["rbe_x_dose_beam"][i] = self.rbe * out["physical_dose_beam"][i]
 
         return out
 
