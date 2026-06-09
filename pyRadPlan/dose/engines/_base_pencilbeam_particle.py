@@ -288,8 +288,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels["let"] = kernel["let"]
 
         # bioDose
-        if self.bio_kernel_quantities is not None:
-            for quantity in self.bio_kernel_quantities:
+        if self._bio_kernel_quantities is not None:
+            for quantity in self._bio_kernel_quantities:
                 used_kernels[quantity] = kernel[quantity]
 
         # Interpolate all fields in X
@@ -567,7 +567,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_tissue_index = np.zeros_like(self._v_alpha_x)
 
         if isinstance(self.bio_model, KernelBasedLQModel):  # these models dont exist yet
-            self.bio_kernel_quantities = self.bio_model.kernel_quantities
+            self._bio_kernel_quantities = self.bio_model.kernel_quantities
             self._v_tissue_index = self.bio_model.get_tissue_information(
                 self._machine, self._v_alpha_x, self._v_beta_x
             )
