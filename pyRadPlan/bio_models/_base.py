@@ -27,7 +27,7 @@ class BiologicalModelBase(ABC):
     ]  # default suggested quantity to use for display and planning
 
     @abstractmethod
-    def calc_biological_quantities_for_bixel(self, bixel: dict) -> dict:
+    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         raise NotImplementedError(
             "Method '_calc_biological_quantities_for_bixel' must be implemented."
         )
@@ -125,6 +125,6 @@ class EmptyModel(BiologicalModelBase):
     ]  # Compatible with all common modalities
     default_report_quantity = "physical_dose"  # Suggested quantity for display and planning
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, **kwargs: Any) -> dict:
+    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         """No biological weighting — returns the bixel unchanged."""
         return bixel

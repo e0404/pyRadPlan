@@ -13,12 +13,6 @@ class LETBasedLQModel(LQModel):
     required_quantities = ["physical_dose", "LET"]  # Requires physical dose and LET information
     default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
 
-    def __init__(self, pln):
-        self.v_alpha_x = 0.1
-        self.v_beta_x = 0.05
-        self.v_abr_x = self.v_alpha_x / self.v_beta_x
-        super().__init__(pln)
-
 
 class RBEMinMax(LETBasedLQModel):
     """
@@ -26,15 +20,17 @@ class RBEMinMax(LETBasedLQModel):
 
     """
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict) -> dict:
-        bixel = super().calc_biological_quantities_for_bixel(bixel)
-        [RBEmin, RBEmax] = self._get_RBE_min_max(bixel)
-        bixel["alpha"] = RBEmax * bixel["_v_alpha_x"]
-        bixel["beta"] = RBEmin**2 * bixel["_v_beta_x"]
+    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        bixel["v_abr_x"] = bixel["v_alpha_x"] / bixel["v_beta_x"]
+        bixel["v_abr_x"] = xp.reshape(xp.asarray(bixel["v_abr_x"]), (-1,))
+        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
+        [RBEmin, RBEmax] = self._get_RBE_min_max(bixel, kernels)
+        bixel["alpha"] = RBEmax * xp.reshape(xp.asarray(bixel["v_alpha_x"]), (-1,))
+        bixel["beta"] = RBEmin**2 * xp.reshape(xp.asarray(bixel["v_beta_x"]), (-1,))
         return bixel
 
     @abstractmethod
-    def get_rbe_min_max(self, bixel: dict) -> tuple[xp.asarray, xp.asarray]:
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[xp.asarray, xp.asarray]:
         """
         Return (RBEmin, RBEmax) arrays of shape (n_depths,).
         Must be implemented by concrete subclasses.
@@ -51,15 +47,15 @@ class Wedenberg(RBEMinMax):
     model = "WED"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self, pln):
+    def __init__(self):
         self.p0_WED = 1
         self.p1_WED = 0.434
         self.p2_WED = 1
-        super().__init__(pln)
+        super().__init__()
 
-    def _get_RBE_min_max(self, bixel: dict) -> tuple[float, float]:
-        LET = bixel["kernel"]["let"]
-        RBEmax = self.p0_WED + (self.p1_WED * LET) / self.v_abr_x
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
+        LET = xp.asarray(kernels["let"])
+        RBEmax = self.p0_WED + (self.p1_WED * LET) / bixel["v_abr_x"]
         RBEmin = self.p2_WED
         return RBEmin, RBEmax
 
@@ -74,17 +70,17 @@ class MCNamara(RBEMinMax):
     model = "MCN"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self, pln):
+    def __init__(self):
         self.p0_MCN = 0.999064
         self.p1_MCN = 0.35605
         self.p2_MCN = 1.1012
         self.p3_MCN = -0.0038703
-        super().__init__(pln)
+        super().__init__()
 
-    def _get_RBE_min_max(self, bixel: dict) -> tuple[float, float]:
-        LET = bixel["kernel"]["let"]
-        RBEmax = self.p0_MCN + ((self.p1_MCN * LET) / self.v_abr_x)
-        RBEmin = self.p2_MCN + (self.p3_MCN * xp.sqrt(self.v_abr_x) * LET)
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
+        LET = xp.asarray(kernels["let"])
+        RBEmax = self.p0_MCN + ((self.p1_MCN * LET) / bixel["v_abr_x"])
+        RBEmin = self.p2_MCN + (self.p3_MCN * xp.sqrt(bixel["v_abr_x"]) * LET)
         return RBEmin, RBEmax
 
 
@@ -98,18 +94,18 @@ class Carabe(RBEMinMax):
     model = "CAR"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self, pln):
+    def __init__(self):
         self.p0_CAR = 0.843
         self.p1_CAR = 0.154
         self.p2_CAR = 2.686
         self.p3_CAR = 1.09
         self.p4_CAR = 0.006
-        super().__init__(pln)
+        super().__init__()
 
-    def _get_RBE_min_max(self, bixel: dict) -> tuple[float, float]:
-        LET = bixel["kernel"]["let"]
-        RBEmax = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / self.v_abr_x) * LET
-        RBEmin = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / self.v_abr_x) * LET
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
+        LET = xp.asarray(kernels["let"])
+        RBEmax = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / bixel["v_abr_x"]) * LET
+        RBEmin = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / bixel["v_abr_x"]) * LET
         return RBEmin, RBEmax
 
 
@@ -123,16 +119,16 @@ class HeliumMairani(RBEMinMax):
     model = "HEL"
     possible_radiation_modes = ["helium"]
 
-    def __init__(self, pln):
+    def __init__(self):
         self.p0_HEL = 1.36938e-1
         self.p1_HEL = 9.73154e-3
         self.p2_HEL = 1.51998e-2
-        super().__init__(pln)
+        super().__init__()
 
-    def _get_RBE_min_max(self, bixel: dict) -> tuple[float, float]:
-        LET = bixel["kernel"]["let"]
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
+        LET = xp.asarray(kernels["let"])
         f_QE = (self.p1_HEL * LET**2) * xp.exp(-self.p2_HEL * LET)
-        RBEmax_QE = 1 + ((self.p0_HEL + (bixel["vABratio"] ** -1)) * f_QE)
+        RBEmax_QE = 1 + ((self.p0_HEL + (bixel["vABratio"]) ** -1) * f_QE)
 
         # the linear quadratic fit yielded the best fitting result
         RBEmax = RBEmax_QE
@@ -149,21 +145,22 @@ class LinearScaling(RBEMinMax):
     model = "LSM"
     possible_radiation_modes = ["protons", "helium", "carbon"]
 
-    def __init__(self, pln):
+    def __init__(self):
         self.p_lamda_1_1 = 0.008
         self.p_corrFacEntranceRBE = 0.5  # [kev/mum]
         self.p_upperLETThreshold = 30  # [kev/mum]
         self.p_lowerLETThreshold = 0.3  # [kev/mum]
+        super().__init__()
 
-        super().__init__(pln)
-
-    def _get_RBE_min_max(self, bixel: dict) -> tuple[float, float]:
-        LET = bixel["kernel"]["let"]
+    def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
+        LET = xp.asarray(kernels["let"])
         RBEmax = xp.nan * xp.ones(len(bixel["v_alpha_x"]))
 
         ix = self.p_lowerLETThreshold < LET < self.p_upperLETThreshold
 
-        alpha_0 = bixel["v_alpha_x"] - (self.p_lamda_1_1 * self.p_corrFacEntranceRBE)
+        alpha_0 = xp.reshape(xp.asarray(bixel["v_alpha_x"]), (-1,)) - (
+            self.p_lamda_1_1 * self.p_corrFacEntranceRBE
+        )
 
         RBEmax[ix] = alpha_0[ix] + self.p_lamda_1_1 * LET[ix]
 
@@ -177,6 +174,6 @@ class LinearScaling(RBEMinMax):
                 + self.p_lamda_1_1 * self.p_lowerLETThreshold
             )
 
-        RBEmax = RBEmax / bixel["v_alpha_x"][ix]
+        RBEmax = RBEmax / xp.asarray(bixel["v_alpha_x"])[ix]
         RBEmin = 1
         return RBEmin, RBEmax

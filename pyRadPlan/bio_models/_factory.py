@@ -79,4 +79,4 @@ def get_bio_model(
             stacklevel=2,
         )
         return EmptyModel()
-    return class_list[model_id]
+    return class_list[model_id]()

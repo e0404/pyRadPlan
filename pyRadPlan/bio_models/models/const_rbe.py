@@ -18,11 +18,11 @@ class ConstantRBEModel(BiologicalModelBase):
     ]  # Compatible with all common modalities
     default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
 
-    def __init__(self, pln):
+    def __init__(self):
         self.rbe = 1.1  # Default RBE value, can be overridden by user input
-        super().__init__(pln)
+        super().__init__()
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict) -> dict:
+    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         """
         Calculate the RBE-weighted dose for a given bixel using the constant RBE value.
 
@@ -31,6 +31,8 @@ class ConstantRBEModel(BiologicalModelBase):
         bixel:
             A data structure representing a bixel, which should contain at least
             the physical dose information.
+        kernels:
+            A dictionary containing the kernel values, including LET.
 
         Returns
         -------
