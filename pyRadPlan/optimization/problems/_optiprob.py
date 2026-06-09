@@ -241,6 +241,13 @@ class PlanningProblem(ABC):
 
         self._cst = self._cst.resample_on_new_ct(self._ct)
 
+        # check consistency of bio models and dij
+        if getattr(self._dij, "alphax", None) is not None:
+            [ax, bx] = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
+            if not np.array_equal(ax, self._dij.alphax) or not np.array_equal(bx, self._dij.betax):
+                logger.error(
+                    "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
+                )
         # sanitize objectives and constraints and manage required quantities
         objectives, quantity_ids = self._collect_objectives()
         self._objective_list = objectives

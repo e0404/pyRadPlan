@@ -401,7 +401,7 @@ class StructureSet(PyRadPlanBaseModel):
         num_voxels = np.prod(self.vois[0].ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
-        for voi in cst.vois:
+        for voi in self.vois:
             alpha[voi.indices_numpy] = voi.alpha_x
             beta[voi.indices_numpy] = voi.beta_x
 
