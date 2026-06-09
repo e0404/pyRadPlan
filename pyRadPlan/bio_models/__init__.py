@@ -11,6 +11,7 @@ from .models.let_based_lq_models import (
     HeliumMairani,
     LinearScaling,
 )
+from .models.kernel_based_lq_model import KernelBasedLQModel
 from .models.lq_models import LQModel
 from ._factory import register_model, get_available_models, get_bio_model
 
@@ -20,6 +21,7 @@ register_model(Wedenberg)
 register_model(MCNamara)
 register_model(Carabe)
 register_model(HeliumMairani)
+register_model(KernelBasedLQModel)
 register_model(LinearScaling)
 
 __all__ = [
@@ -33,6 +35,7 @@ __all__ = [
     "Carabe",
     "HeliumMairani",
     "LinearScaling",
+    "KernelBasedLQModel",
     "LQModel",
     "get_available_models",
     "get_bio_model",

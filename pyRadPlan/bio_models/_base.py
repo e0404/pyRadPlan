@@ -1,8 +1,7 @@
 from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Optional, List
-import array_api_strict as xp
+from typing import ClassVar, Optional, List
 
 
 logger = logging.getLogger(__name__)
@@ -16,6 +15,7 @@ class BiologicalModelBase(ABC):
     """
 
     model: ClassVar[str]
+    model_aliases: ClassVar[list[str]] = []  # default: no aliases
     required_quantities: ClassVar[
         list[str]
     ]  # kernels in base data needed for the alpha/beta calculation
@@ -31,17 +31,6 @@ class BiologicalModelBase(ABC):
         raise NotImplementedError(
             "Method '_calc_biological_quantities_for_bixel' must be implemented."
         )
-
-    def get_tissue_information(
-        self,
-        v_alpha_x: List[xp.ndarray],
-        **kwargs: Any,
-    ) -> List[xp.ndarray]:
-        """
-        Default tissue-index assignment — all voxels get index 0.
-        Override in subclasses that need tissue-class discrimination.
-        """
-        return [xp.zeros(a.shape, dtype=int) for a in v_alpha_x]
 
     def is_available(
         self,
@@ -93,19 +82,6 @@ class BiologicalModelBase(ABC):
         ok, msg = self.is_available(radiation_mode, provided_quantities)
         if not ok:
             raise ValueError(f"Biological model '{self.model}' not valid: {msg}")
-
-    @staticmethod
-    def get_available_tissue_parameters(
-        machine: Optional[dict] = None,
-    ) -> tuple[Optional[xp.ndarray], Optional[xp.ndarray]]:
-        """
-        Return alpha_X / beta_X vectors from a machine data dict.
-        Base implementation returns (None, None); override in kernel-based subclasses.
-        """
-        return None, None
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(model='{self.model}')"
 
 
 class EmptyModel(BiologicalModelBase):

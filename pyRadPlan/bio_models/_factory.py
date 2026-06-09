@@ -27,23 +27,26 @@ def register_model(model_cls: Type[BiologicalModelBase]) -> None:
     if model_cls.possible_radiation_modes is None:
         raise ValueError("Model must have a 'possible_radiation_modes' attribute.")
 
-    model_name = model_cls.model
-    if model_name in BIO_MODELS:
-        warnings.warn(f"Model '{model_name}' is already registered.")
-    else:
-        BIO_MODELS[model_name] = model_cls
+    for name in [model_cls.model, *model_cls.model_aliases]:
+        if name in BIO_MODELS:
+            warnings.warn(f"Model '{name}' is already registered.")
+        else:
+            BIO_MODELS[name] = model_cls
 
 
 def get_available_models(
     radiation_mode: str,
     provided_quantities: List[str],
 ) -> dict[str, type[BiologicalModelBase]]:
-    return {
-        name: cls
-        for name, cls in BIO_MODELS.items()
-        if radiation_mode in cls.possible_radiation_modes
-        and all(q in provided_quantities for q in cls.required_quantities)
-    }
+    result = {}
+    for cls in set(BIO_MODELS.values()):
+        if radiation_mode in cls.possible_radiation_modes and all(
+            q in provided_quantities for q in cls.required_quantities
+        ):
+            result[cls.model] = cls
+            for alias in cls.model_aliases:
+                result[alias] = cls
+    return result
 
 
 def get_bio_model(

@@ -17,14 +17,13 @@ from pydantic import (
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
-from pyRadPlan.bio_models._base import BiologicalModelBase
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
     "protons": "constant_rbe",
     "helium": "HEL",
-    "carbon": "kernel_based_rbe",
-    "oxygen": "kernel_based_rbe",
+    "carbon": "kernel_based_lq",
+    "oxygen": "kernel_based_lq",
     "VHEE": "none",
 }
 
@@ -61,7 +60,7 @@ class Plan(PyRadPlanBaseModel, ABC):
     machine: Union[Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
-    bio_model: Union[str, BiologicalModelBase] = Field(default="none")
+    bio_model: Union[str, Any] = Field(default="none")
 
     radiation_mode: str
 
