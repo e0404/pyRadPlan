@@ -58,10 +58,10 @@ class PlanningProblem(ABC):
     ]
     default_quantities: dict[str, str] = {
         "photons": "physical_dose",
-        "protons": "physical_dose",
-        "helium": "physical_dose",
+        "protons": "rbe_x_dose",
+        "helium": "rbe_x_dose",
         "carbon": "rbe_x_dose",
-        "oxygen": "physical_dose",
+        "oxygen": "rbe_x_dose",
         "VHEE": "physical_dose",
     }
     # right now only kernel based rbe model which is only standard in the carbon machine
