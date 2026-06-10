@@ -25,6 +25,7 @@ from pyRadPlan import (
     plot_multiple_slices,
 )
 
+
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -41,9 +42,12 @@ pln.prop_dose_calc = {"calc_bio_dose": True, "dose_grid": {"resolution": {"x": 3
 
 pln.prop_opt = {"solver": "scipy"}
 
+
+# %%
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
 
+# %%
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
@@ -64,10 +68,12 @@ view_slice = [int(np.round(ct.size[2] / 2))]
 plot_multiple_slices(
     image_volume=ct,
     cst=cst,
-    overlays=[result["effect"], result["physical_dose"], result["rbe_x_dose"]],
+    overlays=[result["effect"], result["physical_dose"], result["rbe_x_dose"], result["rbe"]],
     view_slice=view_slice,
     plane="axial",
-    overlay_unit=["dimensionless", "Gy", "Gy"],
-    overlay_titles=["Biological Effect", "Physical Dose", "RBE x Dose"],
+    overlay_unit=["1", "Gy", "Gy", "1"],
+    overlay_titles=["Biological Effect", "Physical Dose", "RBE x Dose", "RBE"],
     show_plot=True,
 )
+
+# %%
