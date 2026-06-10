@@ -26,8 +26,8 @@ class RBEMinMax(LETBasedLQModel):
         bixel["v_abr_x"] = bixel["v_alpha_x"] / bixel["v_beta_x"]
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         [RBEmin, RBEmax] = self._get_RBE_min_max(bixel, kernels)
-        bixel["alpha"] = xp.asarray(RBEmax * bixel["v_alpha_x"][:, 0])
-        bixel["beta"] = xp.asarray(RBEmin**2 * bixel["v_beta_x"][:, 0])
+        bixel["alpha"] = RBEmax * bixel["v_alpha_x"][:, 0]
+        bixel["beta"] = RBEmin**2 * bixel["v_beta_x"][:, 0]
         return bixel
 
     @abstractmethod
@@ -158,7 +158,7 @@ class LinearScaling(RBEMinMax):
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         xp = array_api_compat.array_namespace(kernels["let"])
         LET = kernels["let"]
-        RBEmax = xp.full(len(bixel["v_alpha_x"][:, 0]), xp.nan)
+        RBEmax = xp.full(bixel["v_alpha_x"][:, 0].shape[0], xp.nan)
 
         ix = (self.p_lowerLETThreshold < LET) & (LET < self.p_upperLETThreshold)
 
@@ -175,7 +175,7 @@ class LinearScaling(RBEMinMax):
                 alpha_0[LET < self.p_lowerLETThreshold]
                 + self.p_lamda_1_1 * self.p_lowerLETThreshold
             )
-
-        RBEmax = RBEmax / bixel["v_alpha_x"][ix, 0]
+        if xp.count_nonzero(xp.isnan(RBEmax)) > 0:
+            RBEmax = RBEmax / bixel["v_alpha_x"][ix, 0]
         RBEmin = 1
         return RBEmin, RBEmax

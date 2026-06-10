@@ -40,7 +40,7 @@ class ConstantRBEModel(BiologicalModelBase):
             A dictionary containing the RBE-weighted dose calculated as:
             RBE-weighted dose = physical dose * constant RBE value.
         """
-        bixel["alpha"] = self.rbe * bixel["_v_alpha_x"]
+        bixel["alpha"] = self.rbe * bixel["v_alpha_x"]
         bixel["beta"] = (
             self.rbe**2 * bixel["v_beta_x"]
         )  # do i want this, not necessary for the constant RBE model, but would then work with the current RBE optimization

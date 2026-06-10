@@ -1,5 +1,4 @@
 import array_api_compat
-import numpy as np
 
 from pyRadPlan.machines.particles._base import ParticleAccelerator
 from .lq_models import LQModel
@@ -21,7 +20,6 @@ class KernelBasedLQModel(LQModel):
         "protons",
         "helium",
         "carbon",
-        "oxygen",
     ]  # Compatible with common ion modalities
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
@@ -32,8 +30,6 @@ class KernelBasedLQModel(LQModel):
             mask = bixel["v_tissue_index"] == i
             bixel["alpha"] = kernels["alpha"][i, :]
             bixel["beta"] = kernels["beta"][i, :]
-        bixel["alpha"] = xp.asarray(bixel["alpha"])
-        bixel["beta"] = xp.asarray(bixel["beta"])
         return bixel
 
     def get_tissue_information(
@@ -43,11 +39,12 @@ class KernelBasedLQModel(LQModel):
         Build per-scenario tissue-index vectors.
 
         """
+        xp = array_api_compat.array_namespace(v_alpha_x)
         num_of_ct_scen = v_alpha_x.shape[1]
         # Initialise output arrays (one per scenario)
-        v_tissue_index = np.zeros(v_alpha_x.shape)
+        v_tissue_index = xp.zeros(v_alpha_x.shape)
 
-        machine_pairs = np.array(
+        machine_pairs = xp.asarray(
             list(
                 zip(
                     machine.pb_kernels[machine.energies[0]].alpha_x,
@@ -55,14 +52,18 @@ class KernelBasedLQModel(LQModel):
                 )
             )
         )
-        unique_alpha_beta_pairs = set(zip(v_alpha_x.flat, v_beta_x.flat))
+        flat_alpha = xp.reshape(v_alpha_x, (-1,))
+        flat_beta = xp.reshape(v_beta_x, (-1,))
+        unique_alpha_beta_pairs = set(
+            (float(flat_alpha[i]), float(flat_beta[i])) for i in range(int(flat_alpha.shape[0]))
+        )
         unique_alpha_beta_pairs.discard((0.0, 0.0))
         ix_tissue = []  # tissue index for each unique alpha-beta pair
 
         for i, (alpha_set, beta_set) in enumerate(unique_alpha_beta_pairs):
-            cst_paris = np.array([alpha_set, beta_set])
-            matches = np.all(machine_pairs == cst_paris, axis=1)
-            idx = np.nonzero(matches)[0]
+            cst_paris = xp.asarray([alpha_set, beta_set])
+            matches = xp.all(machine_pairs == cst_paris, axis=1)
+            idx = xp.nonzero(matches)[0]
             if idx.shape[0] != 1:
                 raise ValueError(
                     f"No matching alpha-beta pair found in machine data for alpha={alpha_set}, beta={beta_set}"
@@ -71,9 +72,9 @@ class KernelBasedLQModel(LQModel):
 
         for i in ix_tissue:
             for s in range(num_of_ct_scen):
-                mask = (v_alpha_x[:, s] == machine.pb_kernels[machine.energies[0]].alpha_x[i]) & (
-                    v_beta_x[:, s] == machine.pb_kernels[machine.energies[0]].beta_x[i]
-                )
-                v_tissue_index[mask, s] = i
-
+                alpha_ref = machine.pb_kernels[machine.energies[0]].alpha_x[i].item()
+                beta_ref = machine.pb_kernels[machine.energies[0]].beta_x[i].item()
+                mask = (v_alpha_x[:, s] == alpha_ref) & (v_beta_x[:, s] == beta_ref)
+                col = v_tissue_index[:, s]
+                v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
         return v_tissue_index

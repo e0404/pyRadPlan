@@ -562,9 +562,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
 
         # here ct scenarios
-        self._v_alpha_x = dij["alphax"]
-        self._v_beta_x = dij["betax"]
-        self._v_tissue_index = np.zeros_like(self._v_alpha_x)
+        self._v_alpha_x = self.xp.asarray(dij["alphax"])
+        self._v_beta_x = self.xp.asarray(dij["betax"])
+        self._v_tissue_index = self.xp.zeros(self._v_alpha_x.shape)
 
         if isinstance(self.bio_model, KernelBasedLQModel):  # these models dont exist yet
             self._bio_kernel_quantities = self.bio_model.kernel_quantities
@@ -921,9 +921,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
             for s in range(self.mult_scen.num_of_ct_scen):
-                ray["v_tissue_index"][s] = self._v_tissue_index[ray["ix"][s], :]
-                ray["v_alpha_x"][s] = self._v_alpha_x[ray["ix"][s], :]
-                ray["v_beta_x"][s] = self._v_beta_x[ray["ix"][s], :]
+                ray["v_tissue_index"][s] = xp.take(self._v_tissue_index, ray["ix"][s], axis=0)
+                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x, ray["ix"][s], axis=0)
+                ray["v_beta_x"][s] = xp.take(self._v_beta_x, ray["ix"][s], axis=0)
 
         return ray
 
