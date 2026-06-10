@@ -851,9 +851,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                     ],  # TODO: check if this result is correct (rounded but may be right)
                     "rad_depths": (current_depth + base_kernel.offset)
                     * np.ones_like(radial_dist_sq),
-                    "v_tissue_index": np.ones_like(radial_dist_sq),
-                    "v_alpha_x": 0.5 * np.ones_like(radial_dist_sq),
-                    "v_beta_x": 0.05 * np.ones_like(radial_dist_sq),
+                    "v_tissue_index": np.ones((len(radial_dist_sq), 1)),
+                    "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq), 1)),
+                    "v_beta_x": 0.05 * np.ones((len(radial_dist_sq), 1)),
                     "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
                     "ix": np.arange(len(radial_dist_sq)),
                     "rad_depth_offset": 0,

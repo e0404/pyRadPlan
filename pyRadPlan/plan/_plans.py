@@ -113,6 +113,7 @@ class Plan(PyRadPlanBaseModel, ABC):
                 "mult_scen must be a ScenarioModel object or respective dictionary"
             ) from exc
 
+    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_opt", mode="after")
     @classmethod
     def validate_prop(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -196,8 +197,7 @@ class PhotonPlan(Plan):
     @model_validator(mode="after")
     def set_default_bio_model(self) -> "PhotonPlan":
         """Set bio_model from default_bio_models if not explicitly provided."""
-        if self.bio_model == "none":
-            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
+        # default model is all ready "none" for photons, but we keep this for consistency and future extensibility
         return self
 
 

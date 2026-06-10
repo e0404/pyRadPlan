@@ -95,11 +95,6 @@ class DoseEngineBase(ABC):
 
         self._ct_grid = None
 
-        if isinstance(self.bio_model, str):
-            self.bio_model = get_bio_model(
-                self.bio_model, pln.radiation_mode, ["physical_dose", "LET"]
-            )
-
         # Protected properties with public get access
         self._machine: Machine = None  # base data defined in machine file
         self._timers = None  # timers of dose calc
@@ -592,6 +587,11 @@ class DoseEngineBase(ABC):
 
         # Load machine file from base data folder
         self._machine = self.load_machine(radiation_mode, machine)
+
+        if isinstance(self.bio_model, str):
+            self.bio_model = get_bio_model(
+                self.bio_model, radiation_mode, self._machine.provided_quantities()
+            )
 
         # TODO: this is currently not needed, but may be needed in the future
         # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)

@@ -1,4 +1,4 @@
-import array_api_strict as xp
+import array_api_compat
 import numpy as np
 
 from pyRadPlan.machines.particles._base import ParticleAccelerator
@@ -9,7 +9,7 @@ from typing import ClassVar, Any
 class KernelBasedLQModel(LQModel):
     """ """
 
-    required_quantities = ["physical_dose"]  # Requires physical dose
+    required_quantities = ["physical_dose", "alpha", "beta"]  # Requires physical dose
     default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
     kernel_quantities = [
         "alpha",
@@ -26,15 +26,14 @@ class KernelBasedLQModel(LQModel):
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
+        xp = array_api_compat.array_namespace(bixel["rad_depths"])
         num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
         for i in range(num_tissue_classes):
-            mask = xp.asarray(bixel["v_tissue_index"] == i)
-            bixel["alpha"] = xp.reshape(
-                xp.asarray(kernels["alpha"][i], dtype=bixel["alpha"].dtype), (-1,)
-            )
-            bixel["beta"] = xp.reshape(
-                xp.asarray(kernels["beta"][i], dtype=bixel["beta"].dtype), (-1,)
-            )
+            mask = bixel["v_tissue_index"] == i
+            bixel["alpha"] = kernels["alpha"][i, :]
+            bixel["beta"] = kernels["beta"][i, :]
+        bixel["alpha"] = xp.asarray(bixel["alpha"])
+        bixel["beta"] = xp.asarray(bixel["beta"])
         return bixel
 
     def get_tissue_information(
@@ -45,7 +44,6 @@ class KernelBasedLQModel(LQModel):
 
         """
         num_of_ct_scen = v_alpha_x.shape[1]
-
         # Initialise output arrays (one per scenario)
         v_tissue_index = np.zeros(v_alpha_x.shape)
 

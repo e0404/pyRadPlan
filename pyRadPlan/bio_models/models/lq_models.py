@@ -1,5 +1,6 @@
+import array_api_compat
+
 from pyRadPlan.bio_models._base import BiologicalModelBase
-import array_api_strict as xp
 
 
 class LQModel(BiologicalModelBase):
@@ -21,7 +22,8 @@ class LQModel(BiologicalModelBase):
         Initialise alpha/beta arrays to NaN and compute the alpha/beta ratio.
         Subclasses call super() then fill in the actual values.
         """
-        n = len(bixel["rad_depths"])
+        xp = array_api_compat.array_namespace(bixel["rad_depths"])
+        n = xp.unique_values(bixel["rad_depths"]).shape[0]
         bixel["alpha"] = xp.full(n, xp.nan)
         bixel["beta"] = xp.full(n, xp.nan)
         return bixel

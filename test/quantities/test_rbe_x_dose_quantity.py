@@ -30,8 +30,8 @@ def sample_base_dij_dict():
         "bixel_num": np.arange(10),
         "ray_num": np.arange(10),
         "beam_num": np.zeros((10,), dtype=np.int64),
-        "alphax": np.ones((125,), dtype=np.float32),
-        "betax": np.ones((125,), dtype=np.float32),
+        "alphax": np.ones((125, 1), dtype=np.float32),
+        "betax": np.ones((125, 1), dtype=np.float32),
     }
     return dij_dict
 
@@ -86,16 +86,16 @@ def test_RBExDose_dense(sample_dij_dense):
     alpha_mat = sample_dij_dense.alpha_dose.flat[0]
     beta_mat = sample_dij_dense.sqrt_beta_dose.flat[0]
     effect = alpha_mat @ fluence + (beta_mat @ fluence) ** 2
-    gamma = sample_dij_dense.alphax / sample_dij_dense.betax / 2
+    gamma = sample_dij_dense.alphax[:, 0] / sample_dij_dense.betax[:, 0] / 2
     rbe_x_dose_expected = np.zeros_like(effect)
-    rbe_x_dose_expected = np.sqrt(gamma**2 + effect / sample_dij_dense.betax) - gamma
+    rbe_x_dose_expected = np.sqrt(gamma**2 + effect / sample_dij_dense.betax[:, 0]) - gamma
     assert np.allclose(ret_callable.flat[0], rbe_x_dose_expected)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
     dose_grad = xp.ones((1, 125), dtype=xp.float32)
     ret_deriv = rbe_x_dose.compute_chain_derivative(dose_grad, fluence)
     effect = effect + gamma
-    betax = xp.asarray(sample_dij_dense.betax)
+    betax = xp.asarray(sample_dij_dense.betax[:, 0])
     effect = xp.asarray(effect)
     fgrad = dose_grad / (2 * betax * effect)
     calc_derivative = rbe_x_dose.dependencies["effect"]._compute_chain_derivative_single_scenario(
@@ -119,12 +119,12 @@ def test_RBExDose_sparse(sample_dij_sparse):
     alpha_mat = sample_dij_sparse.alpha_dose.flat[0]
     beta_mat = sample_dij_sparse.sqrt_beta_dose.flat[0]
     effect = alpha_mat @ fluence + (beta_mat @ fluence) ** 2
-    ix = sample_dij_sparse.betax > 0
-    gamma = np.zeros_like(sample_dij_sparse.betax)
-    gamma[ix] = sample_dij_sparse.alphax[ix] / sample_dij_sparse.betax[ix] / 2
+    ix = sample_dij_sparse.betax[:, 0] > 0
+    gamma = np.zeros_like(sample_dij_sparse.betax[:, 0])
+    gamma[ix] = sample_dij_sparse.alphax[:, 0][ix] / sample_dij_sparse.betax[:, 0][ix] / 2
     rbe_x_dose_expected = np.zeros_like(effect)
     rbe_x_dose_expected[ix] = (
-        np.sqrt(gamma[ix] ** 2 + effect[ix] / sample_dij_sparse.betax[ix]) - gamma[ix]
+        np.sqrt(gamma[ix] ** 2 + effect[ix] / sample_dij_sparse.betax[:, 0][ix]) - gamma[ix]
     )
     assert np.allclose(ret_callable.flat[0], rbe_x_dose_expected)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])

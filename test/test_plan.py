@@ -99,6 +99,7 @@ def test_create_pln_dict_photons_snake():
     # print(set(pln_dict) ^ set(pln_from_dict))
     pln_dict.pop("mult_scen")
     pln_from_dict.pop("mult_scen")
+    pln_from_dict.pop("bio_model")
     assert pln_dict == pln_from_dict
 
 
@@ -148,10 +149,12 @@ def test_create_pln_dict_photons_camel():
 
     pln_to_dict = pln.model_dump()
     pln_to_dict.pop("mult_scen")
+    pln_to_dict.pop("bio_model")
     assert pln_dict_snake == pln_to_dict
 
     pln_to_dict_camel = pln.to_matrad()
     pln_to_dict_camel.pop("multScen")
+    pln_to_dict_camel.pop("bioModel")
     print(set(pln_dict_camel) ^ set(pln_to_dict_camel))
     assert pln_dict_camel == pln_to_dict_camel
 

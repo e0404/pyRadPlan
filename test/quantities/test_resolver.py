@@ -32,8 +32,8 @@ def base_dij_dict():
         "bixel_num": np.arange(10),
         "ray_num": np.arange(10),
         "beam_num": np.zeros((10,), dtype=np.int64),
-        "alphax": np.ones(125, dtype=np.float32),
-        "betax": np.ones(125, dtype=np.float32),
+        "alphax": np.ones((125, 1), dtype=np.float32),
+        "betax": np.ones((125, 1), dtype=np.float32),
     }
 
 
