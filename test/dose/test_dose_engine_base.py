@@ -25,6 +25,8 @@ def fake_dij(test_data_protons):
 
     dij_matRad.physical_dose = np.empty((1,), dtype=object)
     dij_matRad.physical_dose[0] = dose_mat
+    dij_matRad.let_dose = np.empty((1,), dtype=object)
+    dij_matRad.let_dose[0] = dose_mat
     return dij_matRad
 
 
@@ -71,13 +73,13 @@ def test_calc_dose_forward(test_data_protons, fake_dij):
     dose_engine = DummyDoseEngine(pln, fake_dij=fake_dij)
     result_py = dose_engine.calc_dose_forward(ct, cst, stf, w=None)
 
-    assert isinstance(result_py["physical_dose"], sitk.Image)
-    assert isinstance(result_py["let"], sitk.Image)
+    assert isinstance(result_py.physical_dose.values, sitk.Image)
+    assert isinstance(result_py.let.values, sitk.Image)
 
-    result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    arr = sitk.GetArrayFromImage(result_py.physical_dose.values)
 
-    assert result_py.shape == (10, 20, 10)
-    assert np.all(result_py == 12)
+    assert arr.shape == (10, 20, 10)
+    assert np.all(arr == 12)
 
 
 def test_calc_dose_influence(test_data_protons, fake_dij):
