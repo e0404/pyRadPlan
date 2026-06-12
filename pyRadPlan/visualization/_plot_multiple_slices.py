@@ -89,6 +89,7 @@ def plot_multiple_slices(
     save_filename = kwargs.get("save_filename", None)
     show_plot = kwargs.get("show_plot", True)
     overlay_titles = kwargs.get("overlay_titles", None)
+    overlay_window = kwargs.get("overlay_window", None)
 
     if image_volume is None and overlays is None:
         raise ValueError("At least one of 'image_volume' or 'overlays' must be provided.")
@@ -126,6 +127,7 @@ def plot_multiple_slices(
                     "overlay_unit": overlay_unit[i],
                     "show_plot": False,
                     "ax": axes[i, j],
+                    "overlay_window": overlay_window[i] if overlay_window else None,
                 }
             )
             # Remove arguments that are not in plot_slice kwargs or handled explicitly
