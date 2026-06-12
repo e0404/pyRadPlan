@@ -13,7 +13,7 @@ def test_photons(test_data_photons):
     pln.prop_dose_calc["lateral_model"] = "single"
 
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
-    result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    result_py = sitk.GetArrayFromImage(result_py.physical_dose.values)
 
     result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
 
