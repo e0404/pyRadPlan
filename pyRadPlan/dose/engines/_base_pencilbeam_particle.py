@@ -19,7 +19,8 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import ConstantRBEModel, LETBasedLQModel, KernelBasedLQModel
+from pyRadPlan.bio_models import ConstantRBEModel, LETBasedLQModel, KernelBasedLQModel, EmptyModel
+from pyRadPlan.bio_models.models.tabulated_rbe_models import TabulatedRBEModel
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -294,10 +295,11 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Interpolate all fields in X
         kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
-        # fields = list(used_kernels.keys()) #108 ns ± 4.09 ns
-        # kernel_interp = {} # 26 ns ± 0.518 ns
 
-        # kernel_interp = {field: xp.interp(bixel["rad_depths"], depths,used_kernels[field])for field in fields} # 467 μs ± 3.67 μs
+        if isinstance(self.bio_model, TabulatedRBEModel):
+            kernel_interp["fluence_spectrum"] = self.bio_model.interpolate_in_depth_kernels(
+                kernel, bixel["rad_depths"], depths
+            )
 
         return kernel_interp
 
@@ -444,6 +446,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             self.calc_bio_dose = True
         if isinstance(self.bio_model, ConstantRBEModel):
             dij["rbe"] = self.bio_model.rbe
+        if isinstance(self.bio_model, ConstantRBEModel) or isinstance(self.bio_model, EmptyModel):
             self.calc_bio_dose = False
 
         # Load biologicla base data if needed
@@ -452,7 +455,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             # allocate alpha and beta dose container and sparse matrices in the dij struct,
             # for more information see corresponding method
             dij = self._allocate_bio_dose_container(dij)  # TODO: Not fully implemented yet
-
+            # initialize the tabulate rbe model by pre interpolating the fluence spectrum and tables to thesame energies
+            if isinstance(self.bio_model, TabulatedRBEModel):
+                self.bio_model.set_kernel_fragments(
+                    self._machine.pb_kernels[self._machine.energies[0]]
+                )
+                for pb_energy in self._machine.energies:
+                    self._machine.pb_kernels[pb_energy] = self.bio_model.interpolate_in_energies(
+                        self._machine.pb_kernels[pb_energy]
+                    )
         # Allocate LET container and let sparse matrix in dij struct
         if self.calc_let:
             if self._machine.has_let_kernel:
@@ -590,8 +601,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             The updated dose influence matrix dictionary with LET containers allocated.
         """
-
-        dij = self._allocate_quantity_matrices(dij, ["alpha_dose", "sqrt_beta_dose"])
+        if self.calc_bio_dose:
+            dij = self._allocate_quantity_matrices(dij, ["alpha_dose", "sqrt_beta_dose"])
 
         return dij
 
@@ -851,7 +862,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                     ],  # TODO: check if this result is correct (rounded but may be right)
                     "rad_depths": (current_depth + base_kernel.offset)
                     * np.ones_like(radial_dist_sq),
-                    "v_tissue_index": np.ones((len(radial_dist_sq), 1)),
+                    "v_tissue_index": np.zeros((len(radial_dist_sq), 1)),
                     "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq), 1)),
                     "v_beta_x": 0.05 * np.ones((len(radial_dist_sq), 1)),
                     "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),

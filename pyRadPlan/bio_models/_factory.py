@@ -69,8 +69,8 @@ def get_bio_model(
     except RuntimeError:
         warnings.warn(
             "Biological Model not found, creating Empty Model!",
-            UserWarning,
-            stacklevel=2,
+            Warning,
+            stacklevel=0,
         )
         return EmptyModel()
 
@@ -78,8 +78,8 @@ def get_bio_model(
     if model_id not in model_names:
         warnings.warn(
             f"Biological model '{model_id}' not found. Creating EmptyBiologicalModel.",
-            UserWarning,
-            stacklevel=2,
+            Warning,
+            stacklevel=0,
         )
         return EmptyModel()
     return class_list[model_id]()

@@ -64,4 +64,6 @@ class Machine(PyRadPlanBaseModel):
         if hasattr(self, "has_alpha_beta_kernels") and self.has_alpha_beta_kernels:
             quantities.append("alpha")
             quantities.append("beta")
+        if hasattr(self, "has_fluence_spectrum") and self.has_fluence_spectrum:
+            quantities.append("fluence")
         return quantities

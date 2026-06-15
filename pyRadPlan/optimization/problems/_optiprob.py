@@ -107,13 +107,15 @@ class PlanningProblem(ABC):
             self.solver = solver_names[0]
 
     def get_default_quantities(self, radiation_mode: str) -> str:
-        use_rbe = self._dij.rbe is not None
+        use_rbe = (hasattr(self._dij, "rbe") and self._dij.rbe is not None) or (
+            hasattr(self._dij, "alpha_dose") and self._dij.alpha_dose is not None
+        )
         default_quantities = {
             "photons": "physical_dose",
             "protons": "constant_rbe_x_dose" if use_rbe else "rbe_x_dose",
-            "helium": "rbe_x_dose",
-            "carbon": "rbe_x_dose",
-            "oxygen": "rbe_x_dose",
+            "helium": "rbe_x_dose" if use_rbe else "physical_dose",
+            "carbon": "rbe_x_dose" if use_rbe else "physical_dose",
+            "oxygen": "rbe_x_dose" if use_rbe else "physical_dose",
             "VHEE": "physical_dose",
         }
         return default_quantities.get(radiation_mode, "physical_dose")

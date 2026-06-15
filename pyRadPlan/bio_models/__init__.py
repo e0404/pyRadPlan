@@ -13,6 +13,7 @@ from .models.let_based_lq_models import (
 )
 from .models.kernel_based_lq_model import KernelBasedLQModel
 from .models.lq_models import LQModel
+from .models.tabulated_rbe_models import TabulatedAlphaBetaModel
 from ._factory import register_model, get_available_models, get_bio_model
 
 register_model(EmptyModel)
@@ -23,6 +24,7 @@ register_model(Carabe)
 register_model(HeliumMairani)
 register_model(KernelBasedLQModel)
 register_model(LinearScaling)
+register_model(TabulatedAlphaBetaModel)
 
 __all__ = [
     "BiologicalModelBase",
@@ -37,6 +39,7 @@ __all__ = [
     "LinearScaling",
     "KernelBasedLQModel",
     "LQModel",
+    "TabulatedAlphaBetaModel",
     "get_available_models",
     "get_bio_model",
 ]
