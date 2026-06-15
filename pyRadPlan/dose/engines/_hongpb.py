@@ -43,14 +43,13 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             lateral = (1 - kernels["weight"]) * l_narr + kernels["weight"] * l_bro
         elif self.lateral_model == "multi":
             sigma_sq = kernels["sigma_multi"] ** 2 + bixel["sigma_ini_sq"]
+            weight = kernels["weight_multi"]
+            w = weight.reshape(len(weight), -1)  # (n,1) or (n,m)
+            weights_full = xp.column_stack((1 - w.sum(axis=1), w))
             lateral = xp.sum(
-                (
-                    xp.column_stack(
-                        (1 - xp.sum(kernels["weight_multi"], axis=1), kernels["weight_multi"])
-                    )
-                    * xp.exp(-bixel["radial_dist_sq"][:, xp.newaxis] / (2 * sigma_sq))
-                    / (2 * xp.pi * sigma_sq)
-                ),
+                weights_full
+                * xp.exp(-bixel["radial_dist_sq"] / (2 * sigma_sq)).T
+                / (2 * xp.pi * sigma_sq.T),
                 axis=1,
             )
         elif self.lateral_model == "singleXY":
