@@ -1,7 +1,6 @@
 import array_api_compat
 import numpy as np
 from pymatreader import read_mat
-import copy
 from typing import Any
 from abc import abstractmethod
 from ...core.xp_utils.typing import Array
@@ -15,6 +14,10 @@ else:
     from importlib import resources  # Standard from Python 3.9+
 
 from pyRadPlan.machines.particles._base import ParticleAccelerator
+from pyRadPlan.machines.particles._beam_fragment_spectrum import (
+    ChargedBeamFragmentSpectrum,
+    FragmentFluence,
+)
 from .lq_models import LQModel
 
 
@@ -211,13 +214,20 @@ class TabulatedRBEModel(LQModel):
         self, kernel: dict, rad_depths: Array, kernel_depths: Array
     ) -> dict:
         # Interpolate alpha and beta values for each fragment and tissue class, then average them according to the dose contribution of each fragment to get depth-dependent alpha and beta values for the bixel
-        kernel_copy = copy.deepcopy(kernel)
-        for fragment in kernel_copy["fluence_spectrum"].fragments:
-            fragment.fluenceZ = array_interp(rad_depths, kernel_depths, fragment.fluenceZ)
-            fragment.fluence_spectrum = array_interp(
-                rad_depths, kernel_depths, fragment.fluence_spectrum
+        fragments = []
+        for fragment in kernel["fluence_spectrum"].fragments:
+            fluenceZ = array_interp(rad_depths, kernel_depths, fragment.fluenceZ)
+            fluence_spectrum = array_interp(rad_depths, kernel_depths, fragment.fluence_spectrum)
+            fragments.append(
+                FragmentFluence(
+                    Z=fragment.Z,
+                    A=fragment.A,
+                    energy=fragment.energy,
+                    fluenceZ=fluenceZ,
+                    fluence_spectrum=fluence_spectrum,
+                )
             )
-        return kernel_copy["fluence_spectrum"]
+        return ChargedBeamFragmentSpectrum(fragments=fragments)
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
