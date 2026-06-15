@@ -162,6 +162,14 @@ def _build_overlay_meta(
         "let_beam": ("LET", "keV/\u00b5m"),
         "effect": ("Effect", ""),
         "effect_beam": ("Effect", ""),
+        "rbe_x_dose": ("RBE-weighted Dose", "Gy (RBE)"),
+        "rbe_x_dose_beam": ("RBE-weighted Dose", "Gy (RBE)"),
+        "alpha_dose": ("Alpha Dose", "Gy"),
+        "alpha_dose_beam": ("Alpha Dose", "Gy"),
+        "sqrt_beta_dose": ("Sqrt(Beta) Dose", "Gy\u00bd"),
+        "sqrt_beta_dose_beam": ("Sqrt(Beta) Dose", "Gy\u00bd"),
+        "let_dose": ("LET\u00b7Dose", "Gy\u00b7keV/\u00b5m"),
+        "let_dose_beam": ("LET\u00b7Dose", "Gy\u00b7keV/\u00b5m"),
     }
 
     overlay_units: dict[str, str] = {}
