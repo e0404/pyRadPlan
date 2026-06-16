@@ -292,12 +292,19 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if isinstance(self.bio_model, KernelBasedLQModel):
             for quantity in self._bio_kernel_quantities:
                 used_kernels[quantity] = kernel[quantity]
-        if isinstance(self.bio_model, TabulatedRBEModel):
-            for quantity in self.bio_model.quantities_in_kernel:
-                used_kernels[quantity] = kernel["quantities"][quantity]
-
         # Interpolate all fields in X
         kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
+
+        if isinstance(self.bio_model, TabulatedRBEModel):
+            xp = array_api_compat.array_namespace(bixel["rad_depths"])
+            for quantity in self.bio_model.quantities_in_kernel:
+                kernel_interp[quantity] = xp.zeros(
+                    (bixel["rad_depths"].shape[0], kernel["quantities"][quantity].shape[1])
+                )
+                for i in range(kernel["quantities"][quantity].shape[1]):  # for all tissue classes
+                    kernel_interp[quantity][:, i] = array_interp(
+                        bixel["rad_depths"], depths, kernel["quantities"][quantity][:, i]
+                    )
 
         return kernel_interp
 

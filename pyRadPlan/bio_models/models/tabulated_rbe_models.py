@@ -153,37 +153,44 @@ class TabulatedRBEModel(LQModel):
                 v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
         return v_tissue_index
 
-    def get_quantity(self, qty: str, fragment_ix: int, xp) -> Array:
-        raw = self._Qtable[qty][fragment_ix, :]
+    def get_quantity(self, Qtable: dict, qty: str, fragment_ix: int, xp) -> Array:
+        raw = Qtable[qty][fragment_ix, :]
         transform = self.quantity_transforms.get(qty)
         return getattr(xp, transform)(raw) if transform else raw
 
-    def interpolate_in_energies(self, kernel: dict) -> dict:
-        energies = self._Qtable["energies"]  # energies for which the RBE table has values
+    def interpolate_in_energies(self, kernel: dict) -> tuple[dict, dict]:
+        xp = array_api_compat.array_namespace(kernel.fluence_spectrum.fragments[0].energy)
+        energies = xp.stack(
+            [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
+        )  # energies for which the kernel table has values
         # interppolate dEdx
-        xp = array_api_compat.array_namespace(energies)
+        SPtable = {}
         dE_dx_interp = xp.full((self._SPtable["dE_dx"].shape[0], energies.shape[1]), 0.0)
         new_energies = xp.full((self._SPtable["energies"].shape[0], energies.shape[1]), 0.0)
         for i, ix in enumerate(self.fragments_sp_table_ix):
             dE_dx_interp[ix, :] = array_interp(
-                energies[self.fragments_q_table_ix[i], :],
+                energies[i, :],
                 self._SPtable["energies"][ix, :],
                 self._SPtable["dE_dx"][ix, :],
             )
             new_energies[ix, :] = energies[ix, :]
-        self._SPtable["dE_dx"] = dE_dx_interp
-        self._SPtable["energies"] = new_energies
-        # interpolate fragment spectra to the energies of the RBE table,
-        for i, ix in enumerate(self.fragments_kernel_ix):
-            kernel.fluence_spectrum.fragments[ix].fluence_spectrum = array_interp(
-                energies[self.fragments_q_table_ix[i], :],
-                kernel.fluence_spectrum.fragments[ix].energy,
-                kernel.fluence_spectrum.fragments[ix].fluence_spectrum.T,
-            ).T
-            kernel.fluence_spectrum.fragments[ix].energy = energies[
-                self.fragments_q_table_ix[i], :
-            ]
-        return kernel
+        SPtable["dE_dx"] = dE_dx_interp
+        SPtable["energies"] = new_energies
+        Qtable = {}
+        # interpolate quantity table values
+        for qty in self.quantities_in_table:
+            qty_interp = xp.full((self._Qtable[qty].shape[0], energies.shape[1]), 0.0)
+            new_energies = xp.full((self._Qtable["energies"].shape[0], energies.shape[1]), 0.0)
+            for i, ix in enumerate(self.fragments_q_table_ix):
+                qty_interp[ix, :] = array_interp(
+                    energies[i, :],
+                    self._Qtable["energies"][ix, :],
+                    self._Qtable[qty][ix, :],
+                )
+                new_energies[ix, :] = energies[ix, :]
+            Qtable[qty] = qty_interp
+        Qtable["energies"] = new_energies
+        return Qtable, SPtable
 
     def set_kernel_fragments(self, kernel: dict):
         self.fragments_kernel_ix = []
@@ -203,7 +210,7 @@ class TabulatedRBEModel(LQModel):
             self.fragments_kernel_ix.append(int(idx[0]))
 
     def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
-        kernel = self.interpolate_in_energies(kernel)
+        [Qtable, SPtable] = self.interpolate_in_energies(kernel)
         xp = array_api_compat.array_namespace(kernel.depths)
 
         n_depths = len(kernel.depths)
@@ -213,8 +220,8 @@ class TabulatedRBEModel(LQModel):
             [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
         )  # (n_fragments, n_energies)
 
-        q_energies = xp.stack([self._Qtable["energies"][f] for f in self.fragments_q_table_ix])
-        sp_energies = xp.stack([self._SPtable["energies"][f] for f in self.fragments_sp_table_ix])
+        q_energies = xp.stack([Qtable["energies"][f] for f in self.fragments_q_table_ix])
+        sp_energies = xp.stack([SPtable["energies"][f] for f in self.fragments_sp_table_ix])
 
         if not xp.all(q_energies == sp_energies):
             raise ValueError(
@@ -227,16 +234,19 @@ class TabulatedRBEModel(LQModel):
                 f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
             )
 
-        dE_dx = xp.stack([self._SPtable["dE_dx"][f] for f in self.fragments_sp_table_ix])
+        dE_dx = xp.stack([SPtable["dE_dx"][f] for f in self.fragments_sp_table_ix])
         quantitys = {}
-        for qty in self.quantities_in_table:
+        for iqty, qty in enumerate(self.quantities_in_kernel):
             quantitys[qty] = xp.stack(
-                [self.get_quantity(qty, f, xp) for f in self.fragments_q_table_ix]
+                [
+                    self.get_quantity(Qtable, self.quantities_in_table[iqty], f, xp)
+                    for f in self.fragments_q_table_ix
+                ]
             )
 
         # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
         dE_dx = dE_dx[:, :, xp.newaxis]
-        for qty in self.quantities_in_table:
+        for qty in self.quantities_in_kernel:
             quantitys[qty] = quantitys[qty][:, :, xp.newaxis]
 
         # fluence_spectra: (n_fragments, n_energies, n_depths)
@@ -247,38 +257,33 @@ class TabulatedRBEModel(LQModel):
             ]
         )
 
-        energy_bin_widths = xp.diff(kernel_spectra_energies, prepend=0)
-        energy_bin_width = energy_bin_widths[
-            :, :, xp.newaxis
-        ]  # (n_fragments, n_energies, 1) for broadcasting
-
         # Weighted sums over energy axis → (n_fragments, n_depths)
-        dose_per_fragment = xp.sum(dE_dx * fluence_spectra * energy_bin_width, axis=1)
+        dose_per_fragment = xp.sum(dE_dx * fluence_spectra, axis=1)
         quantity_num_per_fragment = {}
-        for qty in self.quantities_in_table:
+        for qty in self.quantities_in_kernel:
             quantity_num_per_fragment[qty] = xp.sum(
-                quantitys[qty] * dE_dx * fluence_spectra * energy_bin_width, axis=1
+                quantitys[qty] * dE_dx * fluence_spectra, axis=1
             )
 
         # Accumulate over fragments and tissue classes
         denominator = xp.zeros((n_depths, n_tissue))
         quantity_numerators = {
-            qty: xp.zeros((n_depths, n_tissue)) for qty in self.quantities_in_table
+            qty: xp.zeros((n_depths, n_tissue)) for qty in self.quantities_in_kernel
         }
 
         for t in range(n_tissue):
             t_dose = xp.sum(dose_per_fragment, axis=0)
             t_quantityt = {}
-            for qty in self.quantities_in_table:
+            for qty in self.quantities_in_kernel:
                 t_quantityt[qty] = xp.sum(quantity_num_per_fragment[qty], axis=0)
 
-            denominator = denominator + t_dose
-            for qty in self.quantities_in_table:
-                quantity_numerators[qty] = quantity_numerators[qty] + t_quantityt[qty]
+            denominator[:, t] = denominator[:, t] + t_dose
+            for qty in self.quantities_in_kernel:
+                quantity_numerators[qty][:, t] = quantity_numerators[qty][:, t] + t_quantityt[qty]
 
         valid = denominator > 0
-        for i, qty in enumerate(self.quantities_in_table):
-            kernel.quantities[self.quantities_in_kernel[i]] = xp.where(
+        for i, qty in enumerate(self.quantities_in_kernel):
+            kernel.quantities[qty] = xp.where(
                 valid, quantity_numerators[qty] / denominator, 0
             )  # depths, n_tissue_classes
 
@@ -349,8 +354,8 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
         num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
         for i in range(num_tissue_classes):
             mask = bixel["v_tissue_index"] == i
-            alpha[mask] = xp.where(mask, kernels["alpha"][i, :], alpha[mask])
-            sqrt_beta[mask] = xp.where(mask, kernels["sqrt_beta"][i, :], sqrt_beta[mask])
+            alpha[mask] = xp.where(mask, kernels["alpha"][:, i], alpha[mask])
+            sqrt_beta[mask] = xp.where(mask, kernels["sqrt_beta"][:, i], sqrt_beta[mask])
         bixel["alpha"] = alpha
         bixel["beta"] = sqrt_beta**2
         return bixel
