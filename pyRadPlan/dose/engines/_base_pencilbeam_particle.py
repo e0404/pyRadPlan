@@ -289,17 +289,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels["let"] = kernel["let"]
 
         # bioDose
-        if self._bio_kernel_quantities is not None:
+        if isinstance(self.bio_model, KernelBasedLQModel):
             for quantity in self._bio_kernel_quantities:
                 used_kernels[quantity] = kernel[quantity]
+        if isinstance(self.bio_model, TabulatedRBEModel):
+            for quantity in self.bio_model.quantities_in_kernel:
+                used_kernels[quantity] = kernel["quantities"][quantity]
 
         # Interpolate all fields in X
         kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
-
-        if isinstance(self.bio_model, TabulatedRBEModel):
-            kernel_interp["fluence_spectrum"] = self.bio_model.interpolate_in_depth_kernels(
-                kernel, bixel["rad_depths"], depths
-            )
 
         return kernel_interp
 
@@ -458,11 +456,11 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             # initialize the tabulate rbe model by pre interpolating the fluence spectrum and tables to thesame energies
             if isinstance(self.bio_model, TabulatedRBEModel):
                 self.bio_model.set_kernel_fragments(
-                    self._machine.pb_kernels[self._machine.energies[0]]
+                    self._machine.pb_kernels[self._machine.energies[0]],
                 )
                 for pb_energy in self._machine.energies:
-                    self._machine.pb_kernels[pb_energy] = self.bio_model.interpolate_in_energies(
-                        self._machine.pb_kernels[pb_energy]
+                    self._machine.pb_kernels[pb_energy] = self.bio_model.compute_kernel_quantities(
+                        self._machine.pb_kernels[pb_energy], self._v_tissue_index
                     )
         # Allocate LET container and let sparse matrix in dij struct
         if self.calc_let:
@@ -579,6 +577,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         if isinstance(self.bio_model, KernelBasedLQModel):  # these models dont exist yet
             self._bio_kernel_quantities = self.bio_model.kernel_quantities
+        if isinstance(self.bio_model, TabulatedRBEModel) or isinstance(
+            self.bio_model, KernelBasedLQModel
+        ):
             self._v_tissue_index = self.bio_model.get_tissue_information(
                 self._machine, self._v_alpha_x, self._v_beta_x
             )
@@ -862,9 +863,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                     ],  # TODO: check if this result is correct (rounded but may be right)
                     "rad_depths": (current_depth + base_kernel.offset)
                     * np.ones_like(radial_dist_sq),
-                    "v_tissue_index": np.zeros((len(radial_dist_sq), 1)),
-                    "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq), 1)),
-                    "v_beta_x": 0.05 * np.ones((len(radial_dist_sq), 1)),
+                    "v_tissue_index": np.zeros((len(radial_dist_sq),)),
+                    "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq),)),
+                    "v_beta_x": 0.05 * np.ones((len(radial_dist_sq),)),
                     "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
                     "ix": np.arange(len(radial_dist_sq)),
                     "rad_depth_offset": 0,
@@ -932,9 +933,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
             for s in range(self.mult_scen.num_of_ct_scen):
-                ray["v_tissue_index"][s] = xp.take(self._v_tissue_index, ray["ix"][s], axis=0)
-                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x, ray["ix"][s], axis=0)
-                ray["v_beta_x"][s] = xp.take(self._v_beta_x, ray["ix"][s], axis=0)
+                len_ix = ray["ix"][0].size
+                ray["v_tissue_index"][s] = xp.reshape(
+                    xp.take(self._v_tissue_index, ray["ix"][0], axis=0), (len_ix,)
+                )
+                ray["v_alpha_x"][s] = xp.reshape(
+                    xp.take(self._v_alpha_x, ray["ix"][0], axis=0), (len_ix,)
+                )
+                ray["v_beta_x"][s] = xp.reshape(
+                    xp.take(self._v_beta_x, ray["ix"][0], axis=0), (len_ix,)
+                )
 
         return ray
 

@@ -51,6 +51,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         serialization_alias="Fluence",
         default=None,
     )
+    quantities: dict[str, NDArray] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -268,6 +269,9 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
                 "depths": xp_to_namespace(xp, self.lateral_cut_off.depths, device=device),
             }
 
-        if hasattr(self, "fluence_spectrum") and self.fluence_spectrum is not None:
-            data["fluence_spectrum"] = self.fluence_spectrum.to_namespace(xp, device=device)
+        if hasattr(self, "quantities") and self.quantities is not None:
+            data["quantities"] = {
+                key: xp_to_namespace(xp, val, device=device)
+                for key, val in self.quantities.items()
+            }
         return data

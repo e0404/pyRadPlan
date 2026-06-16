@@ -13,11 +13,6 @@ if sys.version_info < (3, 10):
 else:
     from importlib import resources  # Standard from Python 3.9+
 
-from pyRadPlan.machines.particles._base import ParticleAccelerator
-from pyRadPlan.machines.particles._beam_fragment_spectrum import (
-    ChargedBeamFragmentSpectrum,
-    FragmentFluence,
-)
 from .lq_models import LQModel
 
 
@@ -113,9 +108,7 @@ class TabulatedRBEModel(LQModel):
         sp_table["units"]["dE_dx"] = "keV/um"
         return sp_table
 
-    def get_tissue_information(
-        self, machine: ParticleAccelerator, v_alpha_x: Any, v_beta_x: Any
-    ) -> Any:
+    def get_tissue_information(self, _, v_alpha_x: Any, v_beta_x: Any) -> Any:
         """
         Build per-scenario tissue-index vectors.
         TODO: can this be generalized with the kernel based model? It is currently duplicated in both models, but it is not specific to either of them.
@@ -125,26 +118,25 @@ class TabulatedRBEModel(LQModel):
         num_of_ct_scen = v_alpha_x.shape[1]
         # Initialise output arrays (one per scenario)
         v_tissue_index = xp.zeros(v_alpha_x.shape)
-
-        kernel_pairs = xp.asarray(
-            list(
-                zip(
-                    self._Qtable["alpha_x"],
-                    self._Qtable["beta_x"],
-                )
-            )
-        )
+        alpha_x = self._Qtable["alpha_x"]
+        beta_x = self._Qtable["beta_x"]
+        # normalize to 1D lists
+        if np.isscalar(alpha_x):
+            alpha_x = [alpha_x]
+        if np.isscalar(beta_x):
+            beta_x = [beta_x]
+        quantity_pairs = xp.asarray(list(zip(alpha_x, beta_x)))
         flat_alpha = xp.reshape(v_alpha_x, (-1,))
         flat_beta = xp.reshape(v_beta_x, (-1,))
-        unique_alpha_beta_pairs = set(
-            (float(flat_alpha[i]), float(flat_beta[i])) for i in range(int(flat_alpha.shape[0]))
-        )
-        unique_alpha_beta_pairs.discard((0.0, 0.0))
+        unique_alpha_beta_pairs = xp.unique(xp.stack((flat_alpha, flat_beta), axis=1), axis=0)
+        unique_alpha_beta_pairs = unique_alpha_beta_pairs[
+            ~((unique_alpha_beta_pairs[:, 0] == 0) & (unique_alpha_beta_pairs[:, 1] == 0))
+        ]
         ix_tissue = []  # tissue index for each unique alpha-beta pair
 
         for i, (alpha_set, beta_set) in enumerate(unique_alpha_beta_pairs):
             cst_paris = xp.asarray([alpha_set, beta_set])
-            matches = xp.all(kernel_pairs == cst_paris, axis=1)
+            matches = xp.all(quantity_pairs == cst_paris, axis=1)
             idx = xp.nonzero(matches)[0]
             if idx.shape[0] != 1:
                 raise ValueError(
@@ -154,9 +146,9 @@ class TabulatedRBEModel(LQModel):
 
         for i in ix_tissue:
             for s in range(num_of_ct_scen):
-                alpha_ref = machine.pb_kernels[machine.energies[0]].alpha_x[i].item()
-                beta_ref = machine.pb_kernels[machine.energies[0]].beta_x[i].item()
-                mask = (v_alpha_x[:, s] == alpha_ref) & (v_beta_x[:, s] == beta_ref)
+                mask = (v_alpha_x[:, s] == unique_alpha_beta_pairs[i][0]) & (
+                    v_beta_x[:, s] == unique_alpha_beta_pairs[i][1]
+                )
                 col = v_tissue_index[:, s]
                 v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
         return v_tissue_index
@@ -210,39 +202,15 @@ class TabulatedRBEModel(LQModel):
                 )
             self.fragments_kernel_ix.append(int(idx[0]))
 
-    def interpolate_in_depth_kernels(
-        self, kernel: dict, rad_depths: Array, kernel_depths: Array
-    ) -> dict:
-        # Interpolate alpha and beta values for each fragment and tissue class, then average them according to the dose contribution of each fragment to get depth-dependent alpha and beta values for the bixel
-        fragments = []
-        for fragment in kernel["fluence_spectrum"].fragments:
-            fluenceZ = array_interp(rad_depths, kernel_depths, fragment.fluenceZ)
-            fluence_spectrum = array_interp(rad_depths, kernel_depths, fragment.fluence_spectrum)
-            fragments.append(
-                FragmentFluence(
-                    Z=fragment.Z,
-                    A=fragment.A,
-                    energy=fragment.energy,
-                    fluenceZ=fluenceZ,
-                    fluence_spectrum=fluence_spectrum,
-                )
-            )
-        return ChargedBeamFragmentSpectrum(fragments=fragments)
+    def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
+        kernel = self.interpolate_in_energies(kernel)
+        xp = array_api_compat.array_namespace(kernel.depths)
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
-        xp = array_api_compat.array_namespace(bixel["rad_depths"])
-
-        n_fragments = len(self.fragments_kernel_ix)
-        tissue_indices = xp.reshape(bixel["v_tissue_index"], -1)
-        num_tissue_classes = xp.unique_values(xp.asarray(tissue_indices)).shape[0]
-
+        n_depths = len(kernel.depths)
+        n_tissue = xp.unique_values(v_tissue_index).shape[0]
         # Stack energy arrays
         kernel_spectra_energies = xp.stack(
-            [
-                kernels["fluence_spectrum"].fragments[f_ix].energy
-                for f_ix in self.fragments_kernel_ix
-            ]
+            [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
         )  # (n_fragments, n_energies)
 
         q_energies = xp.stack([self._Qtable["energies"][f] for f in self.fragments_q_table_ix])
@@ -274,7 +242,7 @@ class TabulatedRBEModel(LQModel):
         # fluence_spectra: (n_fragments, n_energies, n_depths)
         fluence_spectra = xp.stack(
             [
-                kernels["fluence_spectrum"].fragments[f].fluence_spectrum
+                kernel.fluence_spectrum.fragments[f].fluence_spectrum
                 for f in self.fragments_kernel_ix
             ]
         )
@@ -293,28 +261,31 @@ class TabulatedRBEModel(LQModel):
             )
 
         # Accumulate over fragments and tissue classes
-        denominator = xp.zeros(tissue_indices.shape)
+        denominator = xp.zeros((n_depths, n_tissue))
         quantity_numerators = {
-            qty: xp.zeros(tissue_indices.shape) for qty in self.quantities_in_table
+            qty: xp.zeros((n_depths, n_tissue)) for qty in self.quantities_in_table
         }
 
-        for t in range(num_tissue_classes):
-            mask = tissue_indices == t
+        for t in range(n_tissue):
             t_dose = xp.sum(dose_per_fragment, axis=0)
             t_quantityt = {}
             for qty in self.quantities_in_table:
                 t_quantityt[qty] = xp.sum(quantity_num_per_fragment[qty], axis=0)
 
-            denominator = xp.where(mask, denominator + t_dose, denominator)
+            denominator = denominator + t_dose
             for qty in self.quantities_in_table:
-                quantity_numerators[qty] = xp.where(
-                    mask, quantity_numerators[qty] + t_quantityt[qty], quantity_numerators[qty]
-                )
+                quantity_numerators[qty] = quantity_numerators[qty] + t_quantityt[qty]
 
         valid = denominator > 0
-        for qty in self.quantities_in_table:
-            bixel[qty] = xp.where(valid, quantity_numerators[qty] / denominator, 0)
+        for i, qty in enumerate(self.quantities_in_table):
+            kernel.quantities[self.quantities_in_kernel[i]] = xp.where(
+                valid, quantity_numerators[qty] / denominator, 0
+            )  # depths, n_tissue_classes
 
+        return kernel
+
+    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         return bixel
 
     @abstractmethod
@@ -332,6 +303,7 @@ class TabulatedRBEModel(LQModel):
 class TabulatedAlphaBetaModel(TabulatedRBEModel):
     model = "dose_average_alpha_beta"
     quantities_in_table = ["alpha", "beta"]
+    quantities_in_kernel = ["alpha", "sqrt_beta"]
     required_quantities = ["fluence"]  # input in machine file
     quantity_transforms = {
         "alpha": None,
@@ -371,5 +343,14 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         # here we do calculation from the quantity to the alpha and beta value from the LQ model, here simple **2 for beta
-        bixel["beta"] = bixel["beta"] ** 2
+        xp = array_api_compat.array_namespace(bixel["rad_depths"])
+        alpha = xp.zeros_like(bixel["rad_depths"])
+        sqrt_beta = xp.zeros_like(bixel["rad_depths"])
+        num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
+        for i in range(num_tissue_classes):
+            mask = bixel["v_tissue_index"] == i
+            alpha[mask] = xp.where(mask, kernels["alpha"][i, :], alpha[mask])
+            sqrt_beta[mask] = xp.where(mask, kernels["sqrt_beta"][i, :], sqrt_beta[mask])
+        bixel["alpha"] = alpha
+        bixel["beta"] = sqrt_beta**2
         return bixel
