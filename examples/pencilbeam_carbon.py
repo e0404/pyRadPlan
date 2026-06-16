@@ -73,7 +73,12 @@ view_slice = [int(np.round(ct.size[2] / 2))]
 plot_multiple_slices(
     image_volume=ct,
     cst=cst,
-    overlays=[result.effect.values, result.physical_dose.values, result.rbe_x_dose.values, result.rbe.values],
+    overlays=[
+        result.effect.values,
+        result.physical_dose.values,
+        result.rbe_x_dose.values,
+        result.rbe.values,
+    ],
     view_slice=view_slice,
     plane="axial",
     overlay_unit=["1", "Gy", "Gy", "1"],
