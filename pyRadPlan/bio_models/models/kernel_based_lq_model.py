@@ -26,10 +26,14 @@ class KernelBasedLQModel(LQModel):
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         xp = array_api_compat.array_namespace(bixel["rad_depths"])
         num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
+        alpha = xp.zeros_like(bixel["rad_depths"])
+        beta = xp.zeros_like(bixel["rad_depths"])
         for i in range(num_tissue_classes):
             mask = bixel["v_tissue_index"] == i
-            bixel["alpha"] = kernels["alpha"][i, :]
-            bixel["beta"] = kernels["beta"][i, :]
+            alpha[mask] = xp.where(mask, kernels["alpha"][i, :], alpha[mask])
+            beta[mask] = xp.where(mask, kernels["beta"][i, :], beta[mask])
+        bixel["alpha"] = alpha
+        bixel["beta"] = beta
         return bixel
 
     def get_tissue_information(

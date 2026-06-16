@@ -295,3 +295,15 @@ def test_carbon_cd_influence_bio_model_none(test_data_carbon):
     physical_dose_mat_dense = dij.physical_dose.flat[0].toarray()
 
     assert np.allclose(physical_dose_py_dense, physical_dose_mat_dense, atol=1e-6)
+
+
+def test_carbon_cd_influence_bio_model_LSM(test_data_carbon):
+    pln, ct, cst, stf, dij, result = test_data_carbon
+    pln.bio_model = "LSM"
+
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    physical_dose_py_dense = dij_py.physical_dose.flat[0].toarray()
+    physical_dose_mat_dense = dij.physical_dose.flat[0].toarray()
+
+    assert np.allclose(physical_dose_py_dense, physical_dose_mat_dense, atol=1e-6)

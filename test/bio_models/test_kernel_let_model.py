@@ -1,3 +1,4 @@
+from pyparsing import dblQuotedString
 import pytest
 import array_api_strict as xp
 from pyRadPlan.bio_models._base import BiologicalModelBase
@@ -16,8 +17,8 @@ def sample_bixel():
     bixel_dict = {
         "rad_depths": xp.asarray([0.0, 1.0, 2.0]),
         "v_tissue_index": xp.asarray([0, 0, 0]),
-        "v_alpha_x": xp.asarray([[0.1], [0.1], [0.1]]),
-        "v_beta_x": xp.asarray([[0.05], [0.05], [0.05]]),
+        "v_alpha_x": xp.asarray([0.1, 0.1, 0.1]),
+        "v_beta_x": xp.asarray([0.05, 0.05, 0.05]),
     }
     return bixel_dict
 
@@ -48,10 +49,10 @@ def test_Wedenberg_calc_biological_quantities_for_bixel(sample_bixel, sample_ker
     p1 = 0.434
     p2 = 1
     result = wedenberg_model.calc_biological_quantities_for_bixel(bixel, kernels)
-    RBEmax = p0 + (p1 * kernels["let"]) / (bixel["v_alpha_x"][:, 0] / bixel["v_beta_x"][:, 0])
+    RBEmax = p0 + (p1 * kernels["let"]) / (bixel["v_alpha_x"] / bixel["v_beta_x"])
     RBEmin = p2
-    expected_alpha = RBEmax * bixel["v_alpha_x"][:, 0]
-    expected_beta = RBEmin**2 * bixel["v_beta_x"][:, 0]
+    expected_alpha = RBEmax * bixel["v_alpha_x"]
+    expected_beta = RBEmin**2 * bixel["v_beta_x"]
     assert np.allclose(np.asarray(result["alpha"]), np.asarray(expected_alpha))
     assert np.allclose(np.asarray(result["beta"]), np.asarray(expected_beta))
 
@@ -73,12 +74,12 @@ def test_MCnamara_calc_biological_quantities_for_bixel(sample_bixel, sample_kern
     p2 = 1.1012
     p3 = -0.0038703
     result = mcnamara_model.calc_biological_quantities_for_bixel(bixel, kernels)
-    RBEmax = p0 + (p1 * kernels["let"]) / (bixel["v_alpha_x"][:, 0])
-    RBEmin = p2 + p3 * kernels["let"]
-    expected_alpha = RBEmax * bixel["v_alpha_x"][:, 0]
-    expected_beta = RBEmin**2 * bixel["v_beta_x"][:, 0]
-    assert np.allclose(np.asarray(result["alpha"]), np.asarray(bixel["alpha"]))
-    assert np.allclose(np.asarray(result["beta"]), np.asarray(bixel["beta"]))
+    RBEmax = p0 + (p1 * kernels["let"]) / (bixel["v_abr_x"])
+    RBEmin = p2 + (p3 * kernels["let"] * xp.sqrt(bixel["v_abr_x"]))
+    expected_alpha = RBEmax * bixel["v_alpha_x"]
+    expected_beta = RBEmin**2 * bixel["v_beta_x"]
+    assert np.allclose(np.asarray(result["alpha"]), np.asarray(expected_alpha))
+    assert np.allclose(np.asarray(result["beta"]), np.asarray(expected_beta))
 
 
 def test_Carabe_constructor():
@@ -99,12 +100,12 @@ def test_Carabe_calc_biological_quantities_for_bixel(sample_bixel, sample_kernel
     p3 = 1.09
     p4 = 0.006
     result = carabe_model.calc_biological_quantities_for_bixel(bixel, kernels)
-    RBEmax = p0 + ((p1 * p2) / bixel["v_abr_x"][:, 0]) * kernels["let"]
-    RBEmin = p3 + ((p4 * p2) / bixel["v_abr_x"][:, 0]) * kernels["let"]
-    expected_alpha = RBEmax * bixel["v_alpha_x"][:, 0]
-    expected_beta = RBEmin**2 * bixel["v_beta_x"][:, 0]
-    assert np.allclose(np.asarray(result["alpha"]), np.asarray(bixel["alpha"]))
-    assert np.allclose(np.asarray(result["beta"]), np.asarray(bixel["beta"]))
+    RBEmax = p0 + ((p1 * p2) / bixel["v_abr_x"]) * kernels["let"]
+    RBEmin = p3 + ((p4 * p2) / bixel["v_abr_x"]) * kernels["let"]
+    expected_alpha = RBEmax * bixel["v_alpha_x"]
+    expected_beta = RBEmin**2 * bixel["v_beta_x"]
+    assert np.allclose(np.asarray(result["alpha"]), np.asarray(expected_alpha))
+    assert np.allclose(np.asarray(result["beta"]), np.asarray(expected_beta))
 
 
 def test_HeliumMairani_constructor():
@@ -124,13 +125,13 @@ def test_HeliumMairani_calc_biological_quantities_for_bixel(sample_bixel, sample
     p2 = 1.51998e-2
     result = helium_mairani_model.calc_biological_quantities_for_bixel(bixel, kernels)
     f_QE = (p1 * kernels["let"] ** 2) * xp.exp(-p2 * kernels["let"])
-    RBEmax_QE = 1 + (p0 + bixel["v_abr_x"][:, 0]) * f_QE
+    RBEmax_QE = 1 + (p0 + bixel["v_abr_x"]) * f_QE
     RBEmax = RBEmax_QE
     RBEmin = 1  #
-    expected_alpha = RBEmax * bixel["v_alpha_x"][:, 0]
-    expected_beta = RBEmin**2 * bixel["v_beta_x"][:, 0]
-    assert np.allclose(np.asarray(result["alpha"]), np.asarray(bixel["alpha"]))
-    assert np.allclose(np.asarray(result["beta"]), np.asarray(bixel["beta"]))
+    expected_alpha = RBEmax * bixel["v_alpha_x"]
+    expected_beta = RBEmin**2 * bixel["v_beta_x"]
+    assert np.allclose(np.asarray(result["alpha"]), np.asarray(expected_alpha))
+    assert np.allclose(np.asarray(result["beta"]), np.asarray(expected_beta))
 
 
 def test_LinearScaling_constructor():
@@ -150,9 +151,9 @@ def test_LinearScaling_calc_biological_quantities_for_bixel(sample_bixel, sample
     p_upperLETThreshold = 30  # [kev/mum]
     p_lowerLETThreshold = 0.3  # [kev/mum]
     result = linear_scaling_model.calc_biological_quantities_for_bixel(bixel, kernels)
-    RBEmax = xp.full(bixel["v_alpha_x"][:, 0].shape[0], xp.nan)
+    RBEmax = xp.full(bixel["v_alpha_x"].shape[0], 0.0)
     ix = (p_lowerLETThreshold < kernels["let"]) & (kernels["let"] < p_upperLETThreshold)
-    alpha_0 = bixel["v_alpha_x"][:, 0] - (p_lamda_1_1 * p_corrFacEntranceRBE)
+    alpha_0 = bixel["v_alpha_x"] - (p_lamda_1_1 * p_corrFacEntranceRBE)
     RBEmax[ix] = alpha_0[ix] + p_lamda_1_1 * kernels["let"][ix]
     if int(xp.count_nonzero(ix)) < kernels["let"].shape[0]:
         RBEmax[kernels["let"] > p_upperLETThreshold] = (
@@ -161,10 +162,9 @@ def test_LinearScaling_calc_biological_quantities_for_bixel(sample_bixel, sample
         RBEmax[kernels["let"] < p_lowerLETThreshold] = (
             alpha_0[kernels["let"] < p_lowerLETThreshold] + p_lamda_1_1 * p_lowerLETThreshold
         )
-    if xp.count_nonzero(xp.isnan(RBEmax)) > 0:
-        RBEmax = RBEmax / bixel["v_alpha_x"][ix, 0]
+    RBEmax[ix] = RBEmax[ix] / bixel["v_alpha_x"][ix]
     RBEmin = 1
-    expected_alpha = RBEmax * bixel["v_alpha_x"][:, 0]
-    expected_beta = RBEmin**2 * bixel["v_beta_x"][:, 0]
-    assert np.allclose(np.asarray(result["alpha"]), np.asarray(bixel["alpha"]))
-    assert np.allclose(np.asarray(result["beta"]), np.asarray(bixel["beta"]))
+    expected_alpha = RBEmax * bixel["v_alpha_x"]
+    expected_beta = RBEmin**2 * bixel["v_beta_x"]
+    assert np.allclose(np.asarray(result["alpha"]), np.asarray(expected_alpha))
+    assert np.allclose(np.asarray(result["beta"]), np.asarray(expected_beta))

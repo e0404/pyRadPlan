@@ -26,8 +26,8 @@ class RBEMinMax(LETBasedLQModel):
         bixel["v_abr_x"] = bixel["v_alpha_x"] / bixel["v_beta_x"]
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         [RBEmin, RBEmax] = self._get_RBE_min_max(bixel, kernels)
-        bixel["alpha"] = RBEmax * bixel["v_alpha_x"][:, 0]
-        bixel["beta"] = RBEmin**2 * bixel["v_beta_x"][:, 0]
+        bixel["alpha"] = RBEmax * bixel["v_alpha_x"]
+        bixel["beta"] = RBEmin**2 * bixel["v_beta_x"]
         return bixel
 
     @abstractmethod
@@ -56,7 +56,7 @@ class Wedenberg(RBEMinMax):
 
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         LET = kernels["let"]
-        RBEmax = self.p0_WED + (self.p1_WED * LET) / bixel["v_abr_x"][:, 0]
+        RBEmax = self.p0_WED + (self.p1_WED * LET) / bixel["v_abr_x"]
         RBEmin = self.p2_WED
         return RBEmin, RBEmax
 
@@ -81,8 +81,8 @@ class MCNamara(RBEMinMax):
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         xp = array_api_compat.array_namespace(kernels["let"])
         LET = kernels["let"]
-        RBEmax = self.p0_MCN + ((self.p1_MCN * LET) / bixel["v_abr_x"][:, 0])
-        RBEmin = self.p2_MCN + (self.p3_MCN * xp.sqrt(bixel["v_abr_x"][:, 0]) * LET)
+        RBEmax = self.p0_MCN + ((self.p1_MCN * LET) / bixel["v_abr_x"])
+        RBEmin = self.p2_MCN + (self.p3_MCN * xp.sqrt(bixel["v_abr_x"]) * LET)
         return RBEmin, RBEmax
 
 
@@ -106,8 +106,8 @@ class Carabe(RBEMinMax):
 
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         LET = kernels["let"]
-        RBEmax = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / bixel["v_abr_x"][:, 0]) * LET
-        RBEmin = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / bixel["v_abr_x"][:, 0]) * LET
+        RBEmax = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / bixel["v_abr_x"]) * LET
+        RBEmin = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / bixel["v_abr_x"]) * LET
         return RBEmin, RBEmax
 
 
@@ -131,7 +131,7 @@ class HeliumMairani(RBEMinMax):
         xp = array_api_compat.array_namespace(kernels["let"])
         LET = kernels["let"]
         f_QE = (self.p1_HEL * LET**2) * xp.exp(-self.p2_HEL * LET)
-        RBEmax_QE = 1 + (self.p0_HEL + bixel["v_abr_x"][:, 0]) * f_QE
+        RBEmax_QE = 1 + (self.p0_HEL + bixel["v_abr_x"]) * f_QE
 
         # the linear quadratic fit yielded the best fitting result
         RBEmax = RBEmax_QE
@@ -158,11 +158,11 @@ class LinearScaling(RBEMinMax):
     def _get_RBE_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
         xp = array_api_compat.array_namespace(kernels["let"])
         LET = kernels["let"]
-        RBEmax = xp.full(bixel["v_alpha_x"][:, 0].shape[0], xp.nan)
+        RBEmax = xp.full(bixel["v_alpha_x"].shape[0], 0.0)
 
         ix = (self.p_lowerLETThreshold < LET) & (LET < self.p_upperLETThreshold)
 
-        alpha_0 = bixel["v_alpha_x"][:, 0] - (self.p_lamda_1_1 * self.p_corrFacEntranceRBE)
+        alpha_0 = bixel["v_alpha_x"] - (self.p_lamda_1_1 * self.p_corrFacEntranceRBE)
 
         RBEmax[ix] = alpha_0[ix] + self.p_lamda_1_1 * LET[ix]
 
@@ -175,7 +175,6 @@ class LinearScaling(RBEMinMax):
                 alpha_0[LET < self.p_lowerLETThreshold]
                 + self.p_lamda_1_1 * self.p_lowerLETThreshold
             )
-        if xp.count_nonzero(xp.isnan(RBEmax)) > 0:
-            RBEmax = RBEmax / bixel["v_alpha_x"][ix, 0]
+        RBEmax[ix] = RBEmax[ix] / bixel["v_alpha_x"][ix]
         RBEmin = 1
         return RBEmin, RBEmax
