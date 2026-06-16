@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- multiple corresponding units for given quantities in the GUI
+
+### Fixed
+- missing keys in init_beam not being skipped
+- hotfix for deprecated numpy.matrix in to_namespace()  
+
 ## [0.4.0] - 2026-05-17
 
 ### Added
