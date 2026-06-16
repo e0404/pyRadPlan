@@ -63,7 +63,7 @@ class ChargedBeamFragmentSpectrum(PyRadPlanBaseModel):
     @classmethod
     def from_dict(cls, data: dict) -> "ChargedBeamFragmentSpectrum":
         """
-        Construct from a imported machine data matfile loaded as a dict,
+        Construct from a imported machine data matfile loaded as a dict.
 
         Expected dict keys (matching MATLAB field names):
             Z               : array-like, shape (n_entries,)

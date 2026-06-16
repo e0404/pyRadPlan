@@ -3,7 +3,19 @@ from pyRadPlan.bio_models._base import BiologicalModelBase
 
 class ConstantRBEModel(BiologicalModelBase):
     """
-    A simple model that assumes a constant RBE value.
+    Biological model applying a single, user-configurable RBE to all bixels.
+
+    The relative biological effectiveness (RBE) is assumed to be spatially
+    uniform and independent of dose, LET, or tissue type. Alpha and beta
+    values are scaled from their reference (photon) counterparts by the
+    constant RBE, making the model compatible with RBE-weighted optimisation
+    frameworks that operate on alpha/beta directly.
+
+    Parameters
+    ----------
+    rbe : float, optional
+        Constant RBE factor applied to all bixels. Defaults to ``1.1``,
+        the clinically adopted value for proton therapy.
 
     """
 

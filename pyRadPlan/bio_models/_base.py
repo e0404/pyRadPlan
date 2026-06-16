@@ -9,9 +9,27 @@ logger = logging.getLogger(__name__)
 
 class BiologicalModelBase(ABC):
     """
-    Abstract base class for biological models used in dose calculation and
-    plan optimisation.
+    Abstract base class for all biological models used in dose calculation
+    and plan optimisation.
 
+    Subclasses must declare the following class-level attributes and implement
+    the abstract method:
+
+    Class Attributes
+    ----------------
+    model : str
+        Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
+    model_aliases : list[str]
+        Alternative names by which this model can be looked up. Defaults to an
+        empty list.
+    required_quantities : list[str]
+        Names of the kernel quantities that must be present in the base data
+        for the model to compute alpha/beta values (e.g. ``["physical_dose", "let"]``).
+    possible_radiation_modes : list[str]
+        Radiation modalities this model supports (e.g. ``["photons", "protons"]``).
+    default_report_quantity : str
+        The quantity recommended for display and planning by default
+        (e.g. ``"rbe_weighted_dose"``).
     """
 
     model: ClassVar[str]
@@ -86,8 +104,27 @@ class BiologicalModelBase(ABC):
 
 class EmptyModel(BiologicalModelBase):
     """
-    A model that implements the None model
+    Passthrough biological model that applies no biological weighting.
 
+    This model represents the absence of a biological correction: bixels are
+    returned unchanged, and the recommended reporting quantity is raw physical
+    dose. It is compatible with all common radiation modalities and requires
+    no additional kernel data beyond what the dose engine already provides.
+
+    Intended for use in purely physical dose calculations or as a neutral
+    placeholder when no radiobiological model is needed.
+
+    Class Attributes
+    ----------------
+    model : str
+        ``"none"`` — the canonical identifier for this no-op model.
+    required_quantities : list[str]
+        Empty; no extra kernel quantities are needed.
+    possible_radiation_modes : list[str]
+        Supports ``"photons"``, ``"protons"``, ``"helium"``, ``"carbon"``,
+        and ``"VHEE"``.
+    default_report_quantity : str
+        ``"physical_dose"``
     """
 
     model = "none"

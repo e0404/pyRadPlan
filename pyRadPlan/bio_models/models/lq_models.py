@@ -5,17 +5,22 @@ from pyRadPlan.bio_models._base import BiologicalModelBase
 
 class LQModel(BiologicalModelBase):
     """
-    Abstract base class for linear-quadratic (LQ) models, which are commonly used
-    to describe the relationship between radiation dose and biological effect.
+    Abstract base class for linear-quadratic (LQ) biological models.
+
+    The linear-quadratic model describes cell survival after irradiation as:
+
+    .. math::
+
+        S = exp(-(alpha d + beta d^2)
+
+    where d is the dose per fraction, and alpha and
+    beta are tissue-specific radiosensitivity parameters.
+    Subclasses are responsible for providing the actual per-voxel
+    alpha and beta values via calc_biological_quantities_for_bixel`.
 
     """
 
-    default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
-
-    def __init__(self):
-        self.default_alpha_x: float = 0.1
-        self.default_beta_x: float = 0.05
-        super().__init__()
+    default_report_quantity = "rbe_x_dose"  # Suggested quantity for display and planning
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         """

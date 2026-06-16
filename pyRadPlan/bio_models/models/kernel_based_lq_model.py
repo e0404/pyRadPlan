@@ -6,10 +6,39 @@ from typing import ClassVar, Any
 
 
 class KernelBasedLQModel(LQModel):
-    """ """
+    """
+    LQ model that derives alpha and beta from pre-computed pencil-beam kernels.
+
+    Rather than computing alpha and beta analytically, this model looks them up
+    from tabulated kernel data stored in the machine dataset, indexed by tissue
+    class. Tissue classes are identified by matching each voxel's
+    (alpha_x, beta_x) reference pair against the kernel table, so the number
+    of distinct tissue classes is driven entirely by the machine data and the
+    structure set.
+
+    This is the standard implementation for heavy-ion therapy (LEM-style
+    workflows) where separate alpha/beta kernels are pre-computed per ion
+    energy and tissue type.
+
+    Class Attributes
+    ----------------
+    model : str
+        ``"kernel_based_lq"``
+    model_aliases : list[str]
+        ``["LEM"]``
+    required_quantities : list[str]
+        ``["physical_dose", "alpha", "beta"]``
+    kernel_quantities : list[str]
+        ``["alpha", "beta"]`` — the kernel arrays that must be present in the
+        kernels dict passed to :meth:`calc_biological_quantities_for_bixel`.
+    possible_radiation_modes : list[str]
+        ``["protons", "helium", "carbon"]``
+    default_report_quantity : str
+        ``"rbe_x_dose"``
+    """
 
     required_quantities = ["physical_dose", "alpha", "beta"]  # Requires physical dose
-    default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
+    default_report_quantity = "rbe_x_dose"  # Suggested quantity for display and planning
     kernel_quantities = [
         "alpha",
         "beta",

@@ -397,7 +397,7 @@ class StructureSet(PyRadPlanBaseModel):
         """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
 
         if not overlap_is_applied:
-            cst = self.apply_overlap_priorities()
+            self.apply_overlap_priorities()
         num_voxels = np.prod(self.vois[0].ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)

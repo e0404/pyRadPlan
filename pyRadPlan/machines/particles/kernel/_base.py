@@ -199,12 +199,12 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
                 "Fluence spectrum data has inconsistent number of fragments and Z/A entries."
             )
         for entry in v.fragments:
-            nE = len(entry.energy)
+            n_e = len(entry.energy)
             if entry.fluenceZ.shape[0] != n_depths:
                 raise ValueError(
                     "Fluence spectrum data has inconsistent number of depths between fluenceZ and kernel depths."
                 )
-            if entry.fluence_spectrum.shape != (nE, n_depths):
+            if entry.fluence_spectrum.shape != (n_e, n_depths):
                 raise ValueError(
                     "Fluence spectrum data has inconsistent shape between fluence_spectrum and kernel depths / energy bins."
                 )

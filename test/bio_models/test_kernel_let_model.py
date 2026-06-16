@@ -37,7 +37,7 @@ def test_Wedenberg_constructor():
     wedenberg_model = Wedenberg()
     assert isinstance(wedenberg_model, BiologicalModelBase)
     assert wedenberg_model.model == "WED"
-    assert wedenberg_model.required_quantities == ["physical_dose", "LET"]
+    assert wedenberg_model.required_quantities == ["physical_dose", "let"]
     assert wedenberg_model.possible_radiation_modes == ["protons"]
 
 
@@ -61,7 +61,7 @@ def test_MCnamara_constructor():
     mcnamara_model = MCNamara()
     assert isinstance(mcnamara_model, BiologicalModelBase)
     assert mcnamara_model.model == "MCN"
-    assert mcnamara_model.required_quantities == ["physical_dose", "LET"]
+    assert mcnamara_model.required_quantities == ["physical_dose", "let"]
     assert mcnamara_model.possible_radiation_modes == ["protons"]
 
 
@@ -86,7 +86,7 @@ def test_Carabe_constructor():
     carabe_model = Carabe()
     assert isinstance(carabe_model, BiologicalModelBase)
     assert carabe_model.model == "CAR"
-    assert carabe_model.required_quantities == ["physical_dose", "LET"]
+    assert carabe_model.required_quantities == ["physical_dose", "let"]
     assert carabe_model.possible_radiation_modes == ["protons"]
 
 
@@ -112,7 +112,7 @@ def test_HeliumMairani_constructor():
     helium_mairani_model = HeliumMairani()
     assert isinstance(helium_mairani_model, BiologicalModelBase)
     assert helium_mairani_model.model == "HEL"
-    assert helium_mairani_model.required_quantities == ["physical_dose", "LET"]
+    assert helium_mairani_model.required_quantities == ["physical_dose", "let"]
     assert helium_mairani_model.possible_radiation_modes == ["helium"]
 
 
@@ -138,7 +138,7 @@ def test_LinearScaling_constructor():
     linear_scaling_model = LinearScaling()
     assert isinstance(linear_scaling_model, BiologicalModelBase)
     assert linear_scaling_model.model == "LSM"
-    assert linear_scaling_model.required_quantities == ["physical_dose", "LET"]
+    assert linear_scaling_model.required_quantities == ["physical_dose", "let"]
     assert linear_scaling_model.possible_radiation_modes == ["protons", "helium", "carbon"]
 
 

@@ -60,7 +60,7 @@ class Machine(PyRadPlanBaseModel):
         """Return the quantities provided by this machine."""
         quantities = ["physical_dose"]  # All machines provide physical dose
         if hasattr(self, "has_let_kernel") and self.has_let_kernel:
-            quantities.append("LET")
+            quantities.append("let")
         if hasattr(self, "has_alpha_beta_kernels") and self.has_alpha_beta_kernels:
             quantities.append("alpha")
             quantities.append("beta")

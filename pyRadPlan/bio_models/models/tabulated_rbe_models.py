@@ -18,7 +18,53 @@ from .lq_models import LQModel
 
 class TabulatedRBEModel(LQModel):
     """
-    Abstract base class for tabulated RBE models, which use pre-computed tables of RBE valuees, could probably be generalized to other types of tabulated models in the future.
+    Abstract base class for RBE models driven by pre-computed lookup tables.
+
+    This family of models interpolates alpha and beta (or related quantities) from tabulated
+    data stored in mat files bundled with pyRadPlan. Two tables are
+    always required:
+
+    - A **quantity table** (e.g. alpha/beta vs. energy per fragment species),
+      loaded by the concrete subclass via `load_quantity_table`.
+    - A **stopping power table** (dE/dx vs. energy per fragment species),
+      loaded by `load_sp_table` from ``pyRadPlan.data.SPtables``.
+
+    Fragment species present in the quantity table must be a subset of those
+    in the stopping power table; a :exc:`ValueError` is raised at construction
+    if this constraint is violated.
+
+    Class Attributes
+    ----------------
+    possible_radiation_modes : list[str]
+        ``["protons", "helium", "carbon"]``
+    fragments_to_include : list or None
+        Fragment (A, Z) pairs to use. ``None`` or ``"all"`` includes every
+        fragment in the quantity table.
+    fragments_q_table_ix : list[int] or None
+        Row indices into the quantity table for the selected fragments.
+        Populated by load_fragments.
+    fragments_sp_table_ix : list[int] or None
+        Row indices into the stopping power table corresponding to each
+        selected fragment. Populated by load_fragments`.
+    fragments_kernel_ix : list[int] or None
+        Indices into the kernel fluence spectrum fragments. Populated by
+        set_kernel_fragments` at dose-calculation time.
+    quantities_in_table : list[str] or None
+        Names of quantity columns present in the loaded quantity table
+        (e.g. ``["alpha", "beta"]``). Set by the concrete subclass.
+    required_quantities : list[str] or None
+        Quantity names that must be supplied by the machine file / dose engine.
+        Overrides the parent class attribute; set by the concrete subclass.
+    quantity_transforms : dict[str, str] or None
+        Optional element-wise array transforms to apply when reading a
+        quantity from the table (e.g. ``{"beta": "sqrt"}`` applies
+        ``xp.sqrt`` before returning). ``None`` means no transform.
+
+    Parameters
+    ----------
+    sp_table_name : str
+        Filename of the stopping power table inside ``pyRadPlan.data.SPtables``.
+        Defaults to ``"SPtable.mat"``. Can be overridden by subclasses.
 
     """
 
@@ -42,24 +88,36 @@ class TabulatedRBEModel(LQModel):
         "pyRadPlan.data.SPtables"
     )  # Folder where stopping power tables are stored
 
-    _SPtable = None
-    _Qtable = None
+    _sp_table = None
+    _q_table = None
 
     def __init__(self):
         super().__init__()
         # should be overwritten with pln params, in genereall some parameters are coming that need to be overwritten
         self.sp_table_name = "SPtable.mat"
-        self._SPtable = self.load_sp_table()
-        self._Qtable = self.load_quantity_table()  # could maybe also be a z* table or so
+        self._sp_table = self.load_sp_table()
+        self._q_table = self.load_quantity_table()  # could maybe also be a z* table or so
         # check if sp and rbe table have same fragments otherwise raise errors
         # set and check fragments to include
         self.load_fragments()
 
     def load_fragments(self):
-        quantity_fragments = self._Qtable[
+        """
+        Validate fragment consistency and build index mappings between tables.
+
+        Checks that every fragment in the quantity table is also present in the
+        stopping power table, then populates :attr:`fragments_q_table_ix` and
+        :attr:`fragments_sp_table_ix` with the corresponding row indices.
+
+        If :attr:`fragments_to_include` is ``None`` or ``"all"``, all fragments
+        in the quantity table are selected; otherwise only the (A, Z) pairs
+        listed in :attr:`fragments_to_include` are used.
+
+        """
+        quantity_fragments = self._q_table[
             "fragments_AZ"
         ]  # matrix A, Z values for each fragment in the quantity table
-        sp_fragments = self._SPtable["fragments_AZ"]
+        sp_fragments = self._sp_table["fragments_AZ"]
         if not set(map(tuple, quantity_fragments)).issubset(set(map(tuple, sp_fragments))):
             sp_keys = set(map(tuple, sp_fragments))
             missing_fragments = [f for f in quantity_fragments if tuple(f) not in sp_keys]
@@ -89,7 +147,11 @@ class TabulatedRBEModel(LQModel):
 
     def load_sp_table(self) -> dict:
         """
-        Load the stopping power table from the specified file. The table is expected to be in a .mat format and should contain the necessary data for stopping power calculations.
+        Load and parse the stopping power table from disk.
+
+        Reads the ``.mat`` file at ``pyRadPlan.data.SPtables/<sp_table_name>``
+        and returns a normalised dict with consistent key names and explicit
+        unit annotations.
 
         Returns
         -------
@@ -110,7 +172,8 @@ class TabulatedRBEModel(LQModel):
 
     def get_tissue_information(self, _, v_alpha_x: Any, v_beta_x: Any) -> Any:
         """
-        Build per-scenario tissue-index vectors.
+        Build a per-voxel tissue-index array by matching reference alpha/beta pairs
+
         TODO: can this be generalized with the kernel based model? It is currently duplicated in both models, but it is not specific to either of them.
         ALso here more checks for the nucelous or other tissue parameters can be added in the future if needed.
         """
@@ -118,8 +181,8 @@ class TabulatedRBEModel(LQModel):
         num_of_ct_scen = v_alpha_x.shape[1]
         # Initialise output arrays (one per scenario)
         v_tissue_index = xp.zeros(v_alpha_x.shape)
-        alpha_x = self._Qtable["alpha_x"]
-        beta_x = self._Qtable["beta_x"]
+        alpha_x = self._q_table["alpha_x"]
+        beta_x = self._q_table["beta_x"]
         # normalize to 1D lists
         if np.isscalar(alpha_x):
             alpha_x = [alpha_x]
@@ -153,46 +216,58 @@ class TabulatedRBEModel(LQModel):
                 v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
         return v_tissue_index
 
-    def get_quantity(self, Qtable: dict, qty: str, fragment_ix: int, xp) -> Array:
-        raw = Qtable[qty][fragment_ix, :]
+    def get_quantity(self, q_table: dict, qty: str, fragment_ix: int, xp) -> Array:
+        """
+        Read a single quantity row from the quantity table, applying any
+        configured transform.
+        """
+        raw = q_table[qty][fragment_ix, :]
         transform = self.quantity_transforms.get(qty)
         return getattr(xp, transform)(raw) if transform else raw
 
     def interpolate_in_energies(self, kernel: dict) -> tuple[dict, dict]:
+        """
+        Interpolate the quantity and stopping power tables onto the kernel's
+        energy grid.
+        """
         xp = array_api_compat.array_namespace(kernel.fluence_spectrum.fragments[0].energy)
         energies = xp.stack(
             [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
         )  # energies for which the kernel table has values
         # interppolate dEdx
-        SPtable = {}
-        dE_dx_interp = xp.full((self._SPtable["dE_dx"].shape[0], energies.shape[1]), 0.0)
-        new_energies = xp.full((self._SPtable["energies"].shape[0], energies.shape[1]), 0.0)
+        sp_table = {}
+        dE_dx_interp = xp.full((self._sp_table["dE_dx"].shape[0], energies.shape[1]), 0.0)
+        new_energies = xp.full((self._sp_table["energies"].shape[0], energies.shape[1]), 0.0)
         for i, ix in enumerate(self.fragments_sp_table_ix):
             dE_dx_interp[ix, :] = array_interp(
                 energies[i, :],
-                self._SPtable["energies"][ix, :],
-                self._SPtable["dE_dx"][ix, :],
+                self._sp_table["energies"][ix, :],
+                self._sp_table["dE_dx"][ix, :],
             )
             new_energies[ix, :] = energies[ix, :]
-        SPtable["dE_dx"] = dE_dx_interp
-        SPtable["energies"] = new_energies
-        Qtable = {}
+        sp_table["dE_dx"] = dE_dx_interp
+        sp_table["energies"] = new_energies
+        q_table = {}
         # interpolate quantity table values
         for qty in self.quantities_in_table:
-            qty_interp = xp.full((self._Qtable[qty].shape[0], energies.shape[1]), 0.0)
-            new_energies = xp.full((self._Qtable["energies"].shape[0], energies.shape[1]), 0.0)
+            qty_interp = xp.full((self._q_table[qty].shape[0], energies.shape[1]), 0.0)
+            new_energies = xp.full((self._q_table["energies"].shape[0], energies.shape[1]), 0.0)
             for i, ix in enumerate(self.fragments_q_table_ix):
                 qty_interp[ix, :] = array_interp(
                     energies[i, :],
-                    self._Qtable["energies"][ix, :],
-                    self._Qtable[qty][ix, :],
+                    self._q_table["energies"][ix, :],
+                    self._q_table[qty][ix, :],
                 )
                 new_energies[ix, :] = energies[ix, :]
-            Qtable[qty] = qty_interp
-        Qtable["energies"] = new_energies
-        return Qtable, SPtable
+            q_table[qty] = qty_interp
+        q_table["energies"] = new_energies
+        return q_table, sp_table
 
     def set_kernel_fragments(self, kernel: dict):
+        """
+        Map quantity-table fragments to their positions in the kernel fluence
+        spectrum.
+        """
         self.fragments_kernel_ix = []
         fragment_kernels = np.array(
             [
@@ -200,7 +275,7 @@ class TabulatedRBEModel(LQModel):
                 [k.Z for k in kernel.fluence_spectrum.fragments],
             ]
         ).T
-        quantity_fragments = self._Qtable["fragments_AZ"]
+        quantity_fragments = self._q_table["fragments_AZ"]
         for fragment in quantity_fragments[self.fragments_q_table_ix]:
             idx = np.where(np.all(fragment_kernels == fragment, axis=1))[0]
             if idx.shape[0] == 0:
@@ -210,7 +285,11 @@ class TabulatedRBEModel(LQModel):
             self.fragments_kernel_ix.append(int(idx[0]))
 
     def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
-        [Qtable, SPtable] = self.interpolate_in_energies(kernel)
+        """
+        Compute dose-averaged biological quantities for a pencil-beam kernel.
+
+        """
+        [q_table, sp_table] = self.interpolate_in_energies(kernel)
         xp = array_api_compat.array_namespace(kernel.depths)
 
         n_depths = len(kernel.depths)
@@ -220,8 +299,8 @@ class TabulatedRBEModel(LQModel):
             [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
         )  # (n_fragments, n_energies)
 
-        q_energies = xp.stack([Qtable["energies"][f] for f in self.fragments_q_table_ix])
-        sp_energies = xp.stack([SPtable["energies"][f] for f in self.fragments_sp_table_ix])
+        q_energies = xp.stack([q_table["energies"][f] for f in self.fragments_q_table_ix])
+        sp_energies = xp.stack([sp_table["energies"][f] for f in self.fragments_sp_table_ix])
 
         if not xp.all(q_energies == sp_energies):
             raise ValueError(
@@ -234,12 +313,12 @@ class TabulatedRBEModel(LQModel):
                 f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
             )
 
-        dE_dx = xp.stack([SPtable["dE_dx"][f] for f in self.fragments_sp_table_ix])
+        dE_dx = xp.stack([sp_table["dE_dx"][f] for f in self.fragments_sp_table_ix])
         quantitys = {}
         for iqty, qty in enumerate(self.quantities_in_kernel):
             quantitys[qty] = xp.stack(
                 [
-                    self.get_quantity(Qtable, self.quantities_in_table[iqty], f, xp)
+                    self.get_quantity(q_table, self.quantities_in_table[iqty], f, xp)
                     for f in self.fragments_q_table_ix
                 ]
             )
@@ -306,6 +385,34 @@ class TabulatedRBEModel(LQModel):
 
 
 class TabulatedAlphaBetaModel(TabulatedRBEModel):
+    """
+    Tabulated LQ model using dose-averaged alpha and sqrt(beta) kernels.
+
+    Looks up pre-computed alpha and sqrt(beta) values from a RBE
+    table and accumulates dose-averaged quantities over the pencil-beam
+    fluence spectrum.
+
+    Class Attributes
+    ----------------
+    model : str
+        ``"dose_average_alpha_beta``"
+    quantities_in_table : list[str]
+        ``["alpha", "beta"]`` — columns read from the ``.mat`` quantity table.
+    quantities_in_kernel : list[str]
+        ``["alpha", "sqrt_beta"]`` — names used in ``kernel.quantities``.
+    required_quantities : list[str]
+        ``["fluence"]`` — the machine file must supply fluence spectra.
+    quantity_transforms : dict
+        ``{"beta": "sqrt"}`` — beta is stored as sqrt(beta) in the kernel to
+        allow dose-weighted averaging; squared back to beta at bixel level.
+
+    Parameters
+    ----------
+    quantity_table_name : str
+        Filename of the RBE table inside ``pyRadPlan.data.RBEtables``.
+        Defaults to ``"RBEtable_LEMI_Scholz06_AX01_BX005.mat"``.
+    """
+
     model = "dose_average_alpha_beta"
     quantities_in_table = ["alpha", "beta"]
     quantities_in_kernel = ["alpha", "sqrt_beta"]
