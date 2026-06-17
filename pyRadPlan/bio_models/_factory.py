@@ -69,7 +69,7 @@ def get_available_models(
     provided_quantities: List[str],
 ) -> dict[str, type[BiologicalModelBase]]:
     """
-    Return all registered models compatible with the given runtime context.
+    Return all registered models given the radiaiton mode and provided quantities.
     """
     result = {}
     for cls in set(BIO_MODELS.values()):

@@ -156,7 +156,7 @@ class HeliumMairani(RBEMinMax):
 
 class LinearScaling(RBEMinMax):
     """
-    The class implements the Linear Scaling Model
+    The class implements the Linear Scaling Model.
     according to Malte Frese https://www.ncbi.nlm.nih.gov/pubmed/20382482 (FITTED for head and neck patients !)
     """
 

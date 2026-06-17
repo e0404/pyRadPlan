@@ -236,16 +236,16 @@ class TabulatedRBEModel(LQModel):
         )  # energies for which the kernel table has values
         # interppolate dEdx
         sp_table = {}
-        dE_dx_interp = xp.full((self._sp_table["dE_dx"].shape[0], energies.shape[1]), 0.0)
+        sp_interp = xp.full((self._sp_table["dE_dx"].shape[0], energies.shape[1]), 0.0)
         new_energies = xp.full((self._sp_table["energies"].shape[0], energies.shape[1]), 0.0)
         for i, ix in enumerate(self.fragments_sp_table_ix):
-            dE_dx_interp[ix, :] = array_interp(
+            sp_interp[ix, :] = array_interp(
                 energies[i, :],
                 self._sp_table["energies"][ix, :],
                 self._sp_table["dE_dx"][ix, :],
             )
             new_energies[ix, :] = energies[ix, :]
-        sp_table["dE_dx"] = dE_dx_interp
+        sp_table["dE_dx"] = sp_interp
         sp_table["energies"] = new_energies
         q_table = {}
         # interpolate quantity table values
@@ -313,7 +313,7 @@ class TabulatedRBEModel(LQModel):
                 f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
             )
 
-        dE_dx = xp.stack([sp_table["dE_dx"][f] for f in self.fragments_sp_table_ix])
+        sp = xp.stack([sp_table["dE_dx"][f] for f in self.fragments_sp_table_ix])
         quantitys = {}
         for iqty, qty in enumerate(self.quantities_in_kernel):
             quantitys[qty] = xp.stack(
@@ -324,7 +324,7 @@ class TabulatedRBEModel(LQModel):
             )
 
         # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
-        dE_dx = dE_dx[:, :, xp.newaxis]
+        sp = sp[:, :, xp.newaxis]
         for qty in self.quantities_in_kernel:
             quantitys[qty] = quantitys[qty][:, :, xp.newaxis]
 
@@ -337,12 +337,10 @@ class TabulatedRBEModel(LQModel):
         )
 
         # Weighted sums over energy axis → (n_fragments, n_depths)
-        dose_per_fragment = xp.sum(dE_dx * fluence_spectra, axis=1)
+        dose_per_fragment = xp.sum(sp * fluence_spectra, axis=1)
         quantity_num_per_fragment = {}
         for qty in self.quantities_in_kernel:
-            quantity_num_per_fragment[qty] = xp.sum(
-                quantitys[qty] * dE_dx * fluence_spectra, axis=1
-            )
+            quantity_num_per_fragment[qty] = xp.sum(quantitys[qty] * sp * fluence_spectra, axis=1)
 
         # Accumulate over fragments and tissue classes
         denominator = xp.zeros((n_depths, n_tissue))
