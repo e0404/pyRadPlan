@@ -146,7 +146,7 @@ class HeliumMairani(RBEMinMax):
         xp = array_api_compat.array_namespace(kernels["let"])
         let = kernels["let"]
         f_qe = (self.p1_HEL * let**2) * xp.exp(-self.p2_HEL * let)
-        rbe_max_qe = 1 + (self.p0_HEL + bixel["v_abr_x"]) * f_qe
+        rbe_max_qe = 1 + (self.p0_HEL + 1 / bixel["v_abr_x"]) * f_qe
 
         # the linear quadratic fit yielded the best fitting result
         rbe_max = rbe_max_qe

@@ -125,7 +125,7 @@ def test_HeliumMairani_calc_biological_quantities_for_bixel(sample_bixel, sample
     p2 = 1.51998e-2
     result = helium_mairani_model.calc_biological_quantities_for_bixel(bixel, kernels)
     f_QE = (p1 * kernels["let"] ** 2) * xp.exp(-p2 * kernels["let"])
-    RBEmax_QE = 1 + (p0 + bixel["v_abr_x"]) * f_QE
+    RBEmax_QE = 1 + (p0 + 1 / bixel["v_abr_x"]) * f_QE
     RBEmax = RBEmax_QE
     RBEmin = 1  #
     expected_alpha = RBEmax * bixel["v_alpha_x"]

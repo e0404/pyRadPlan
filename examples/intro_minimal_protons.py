@@ -17,7 +17,6 @@ ct, cst = load_tg119()
 
 # Create a plan object
 pln = IonPlan()
-pln.bio_model = "WED"
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)

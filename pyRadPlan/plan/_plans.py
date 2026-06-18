@@ -60,7 +60,7 @@ class Plan(PyRadPlanBaseModel, ABC):
     machine: Union[Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
-    bio_model: Union[str, Any] = Field(default="none")
+    bio_model: Union[str, Any] = Field(default=None)
 
     radiation_mode: str
 
@@ -261,7 +261,7 @@ class IonPlan(Plan):
     @model_validator(mode="after")
     def set_default_bio_model(self) -> "IonPlan":
         """Set bio_model from default_bio_models if not explicitly provided."""
-        if self.bio_model == "none":
+        if self.bio_model == None:
             self.bio_model = default_bio_models.get(self.radiation_mode, "none")
         return self
 
