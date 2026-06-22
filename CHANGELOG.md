@@ -7,16 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-16
+
 ### Added
+
 - multiple corresponding units for given quantities in the GUI
 
 ### Fixed
+
 - missing keys in init_beam not being skipped
-- hotfix for deprecated numpy.matrix in to_namespace()  
+- hotfix for deprecated numpy.matrix in to_namespace()
 
 ## [0.4.0] - 2026-05-17
 
 ### Added
+
 - `pyRadPlan.ai_agents` module: LLM-powered treatment planning helpers built on `pydantic-ai`
 - `generate_beam_angles(pln, treatment_site)` — queries an LLM to suggest gantry and couch angles for a given treatment site and radiation mode, and writes them into `pln.prop_stf`
 - `generate_voi_objectives(pln, cst, treatment_site)` — queries an LLM to propose optimization objectives for each VOI in a `StructureSet` and attaches validated objective instances directly to the VOIs
@@ -57,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `visible_color` field validator on `VOI` accepting named color strings, float 0–1 arrays, and int 0–255 tuples
 
 ### Changed
+
 - Pencil beam dose calculation now applies the lateral cutoff mask before computation rather than after, and keeps Dij assembly on the CPU (size limited) while the rest of the calculation runs on GPU
 - Per-beam dose/LET/effect computation in `Dij.compute_beam_dose()` now slices intensities by beam (faster matmul) instead of multiplying by a beam mask, and is fully Array API namespace aware
 - Siddon raytracer now picks up the engine's device and allocates plane/coordinate arrays directly on that device
@@ -68,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Proton pencil-beam example updated to use the new dose viewer widget
 
 ### Fixed
+
 - `resample_image` now falls back to linear interpolation when BSpline is requested but the image has fewer than 4 voxels in any dimension, preventing intermittent NaN values from the BSpline prefilter on small grids
 - CuPy issue in LPS coordinate handling (gantry/couch rotation matrices now built via `xp.stack` with the correct device/dtype)
 - SVD pencil beam engine updated to match changes in the base pencil beam engine
@@ -78,10 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `to_namespace()` raises `TypeError` for scalar / list / tuple inputs instead of failing on the sparse-array check
 - `StructureSet` now calls `set_colors()` during validation so every VOI always has a color assigned
 - property .size raising an error in dij.py when torch is used. Switching to array_api_compat.size()
--
+
 ## [0.3.5] - 2026-05-12
 
 ### Changed
+
 - transmission mask in beam limiting devices now uses edge smoothing to account for finite grid size
 
 ### Fixed
@@ -91,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2026-05-05
 
 ### Added
+
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
 - Issue and Pull/Merge Request templates
 - default pre-commit hooks for line endings, case conflicts, merge conflicts, etc. Also added codespell, CITATION.cff verifyer and toml check
@@ -101,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `extrapolate` option to `resample_image` to choose the extrapolator. Default is to use a nearest neighbor extrapolator, but individual values can beprovided as well.
 
 ### Changed
+
 - New version of photons_Generic.mat basedata file can now be provided, allowing a "version" field alongside "meta" and "data" files within the machine struct. Version 2 requires correct kernel normalization (without implying a spacing in the convolution integral). photons_Generic.mat has been updated to version 2 with correct kernel normalization.
 - Photon dose calculation now does not rely on hardcoded convolution resolution integral normalization of machine kernels. Assumes that old kernels use hardcoded factor of 4 for 0.5 mm resolution (1/0.5^2).
 - Sparse structure now uses one shared index structure across dijs if possible
@@ -109,19 +119,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_slice()`/`plot_multiple_slices()` parameter `ct` renamed to `image_volume` and `ct_window` renamed to `image_window`
 
 ### Deprecated
+
 - `ct` and `ct_window` arguments to `plot_slice()`/`plot_multiple_slices()` still work as aliases for `image_volume` and `image_window` but emit a `DeprecationWarning`
 
 ### Fixed
+
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
 - CI Release Workflow now fetches tags correctly and supplies the correct release body from the tag message
 
 ## [0.3.3] - 2026-04-14
 
 ### Added
+
 - Automatic Release workflow on GitHub reading CHANGELOG.md and tag message
 - Benchmark Folder with initial Raytracer benchmark that can be run with pytest-benchmark
 
 ### Changed
+
 - Changelog now follows thee Keep A Changelog conventions
 
 ### Fixed
@@ -252,7 +266,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...v0.3.4
