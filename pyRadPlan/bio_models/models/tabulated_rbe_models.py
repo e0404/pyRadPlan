@@ -1,3 +1,5 @@
+"""Tabulated RBE models based on pre-computed lookup tables."""
+
 import array_api_compat
 import numpy as np
 from pymatreader import read_mat
@@ -172,7 +174,7 @@ class TabulatedRBEModel(LQModel):
 
     def get_tissue_information(self, _, v_alpha_x: Any, v_beta_x: Any) -> Any:
         """
-        Build a per-voxel tissue-index array by matching reference alpha/beta pairs
+        Build a per-voxel tissue-index array by matching reference alpha/beta pairs.
 
         TODO: can this be generalized with the kernel based model? It is currently duplicated in both models, but it is not specific to either of them.
         ALso here more checks for the nucelous or other tissue parameters can be added in the future if needed.
@@ -218,8 +220,9 @@ class TabulatedRBEModel(LQModel):
 
     def get_quantity(self, q_table: dict, qty: str, fragment_ix: int, xp) -> Array:
         """
-        Read a single quantity row from the quantity table, applying any
-        configured transform.
+        Read a single quantity row from the quantity table.
+
+        Hereby any configured transform (e.g. sqrt) is applied before returning the value.
         """
         raw = q_table[qty][fragment_ix, :]
         transform = self.quantity_transforms.get(qty)
@@ -265,8 +268,7 @@ class TabulatedRBEModel(LQModel):
 
     def set_kernel_fragments(self, kernel: dict):
         """
-        Map quantity-table fragments to their positions in the kernel fluence
-        spectrum.
+        Map quantity-table fragments to their positions in the kernel fluence spectrum.
         """
         self.fragments_kernel_ix = []
         fragment_kernels = np.array(
@@ -287,7 +289,6 @@ class TabulatedRBEModel(LQModel):
     def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
         """
         Compute dose-averaged biological quantities for a pencil-beam kernel.
-
         """
         [q_table, sp_table] = self.interpolate_in_energies(kernel)
         xp = array_api_compat.array_namespace(kernel.depths)
@@ -367,6 +368,7 @@ class TabulatedRBEModel(LQModel):
         return kernel
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        """Calculate the biological quantities for a bixel."""
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         return bixel
 
@@ -451,6 +453,7 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
         return quantity_table
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        """Calculate the biological quantities for a bixel."""
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         # here we do calculation from the quantity to the alpha and beta value from the LQ model, here simple **2 for beta
         xp = array_api_compat.array_namespace(bixel["rad_depths"])

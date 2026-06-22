@@ -1,3 +1,5 @@
+"""LET-based Linear-Quadratic (LQ) models."""
+
 import array_api_compat
 from .lq_models import LQModel
 from abc import abstractmethod
@@ -38,6 +40,7 @@ class RBEMinMax(LETBasedLQModel):
     """
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        """Calculate biological quantities for a bixel."""
         bixel["v_abr_x"] = bixel["v_alpha_x"] / bixel["v_beta_x"]
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         [rbe_min, rbe_max] = self._get_rbe_min_max(bixel, kernels)
@@ -48,7 +51,8 @@ class RBEMinMax(LETBasedLQModel):
     @abstractmethod
     def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[Any, Any]:
         """
-        Return (rbe_min, rbe_max) arrays of shape (n_depths,).
+        Return (rbe_min, rbe_max) arrays of shape (n_depths).
+
         Must be implemented by concrete subclasses.
         """
 
@@ -57,6 +61,7 @@ class Wedenberg(RBEMinMax):
     """
     Wedenberg model, which is a specific implementation of the linear-quadratic
     model that incorporates LET dependence.
+
     (https://www.ncbi.nlm.nih.gov/pubmed/22909391) (accessed on 21/7/2023)
     """
 
@@ -80,6 +85,7 @@ class MCNamara(RBEMinMax):
     """
     McNamara model, which is a specific implementation of the linear-quadratic
     model that incorporates LET dependence.
+
     https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4634882/) (accessed on 21/7/2023)
     """
 
@@ -105,6 +111,7 @@ class Carabe(RBEMinMax):
     """
     Carabe model, which is a specific implementation of the linear-quadratic
     model that incorporates LET dependence.
+
     (https://www.tandfonline.com/doi/full/10.1080/09553000601087176?journalCode=irab20)% (accessed on 21/7/2023)
     """
 
@@ -130,6 +137,7 @@ class HeliumMairani(RBEMinMax):
     """
     Mairani model for helium ions, which is a specific implementation of the linear-quadratic
     model that incorporates LET dependence.
+
     https://iopscience.iop.org/article/10.1088/0031-9155/61/2/888
     """
 
@@ -157,7 +165,9 @@ class HeliumMairani(RBEMinMax):
 class LinearScaling(RBEMinMax):
     """
     The class implements the Linear Scaling Model.
-    according to Malte Frese https://www.ncbi.nlm.nih.gov/pubmed/20382482 (FITTED for head and neck patients !)
+    according to Malte Frese.
+
+    https://www.ncbi.nlm.nih.gov/pubmed/20382482 (FITTED for head and neck patients !)
     """
 
     model = "LSM"

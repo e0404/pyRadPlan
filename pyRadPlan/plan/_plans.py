@@ -261,7 +261,7 @@ class IonPlan(Plan):
     @model_validator(mode="after")
     def set_default_bio_model(self) -> "IonPlan":
         """Set bio_model from default_bio_models if not explicitly provided."""
-        if self.bio_model == None:
+        if self.bio_model is None:
             self.bio_model = default_bio_models.get(self.radiation_mode, "none")
         return self
 

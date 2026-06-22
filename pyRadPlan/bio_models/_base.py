@@ -13,10 +13,10 @@ class BiologicalModelBase(ABC):
     and plan optimisation.
 
     Subclasses must declare the following class-level attributes and implement
-    the abstract method:
+    the abstract method.
 
     Class Attributes
-    ----------------
+    ---------------
     model : str
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
     model_aliases : list[str]
@@ -57,7 +57,7 @@ class BiologicalModelBase(ABC):
     ) -> tuple[bool, str]:
         """
         Check whether this model is compatible with the given radiation mode
-        and the quantities supplied by the dose engine / machine dataset.
+        and the quantities supplied by the dose engine or machine dataset.
 
         Parameters
         ----------

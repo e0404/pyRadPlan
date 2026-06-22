@@ -25,6 +25,7 @@ class LQModel(BiologicalModelBase):
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
         """
         Initialise alpha/beta arrays to NaN and compute the alpha/beta ratio.
+
         Subclasses call super() then fill in the actual values.
         """
         xp = array_api_compat.array_namespace(bixel["rad_depths"])

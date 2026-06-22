@@ -1,3 +1,5 @@
+"""Kernel-based Linear-Quadratic (LQ) model."""
+
 import array_api_compat
 
 from pyRadPlan.machines.particles._base import ParticleAccelerator
@@ -52,6 +54,9 @@ class KernelBasedLQModel(LQModel):
     ]  # Compatible with common ion modalities
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
+        """
+        Compute tissue-specific alpha and beta values for a bixel.
+        """
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         xp = array_api_compat.array_namespace(bixel["rad_depths"])
         num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]

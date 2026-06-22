@@ -1,3 +1,6 @@
+# %% [markdown]
+"""# Example for proton dose calculation using pencilbeam engine and variable RBE."""
+
 # %%
 # Import necessary libraries
 import logging

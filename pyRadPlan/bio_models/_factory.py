@@ -87,7 +87,6 @@ def get_bio_model(
 ) -> BiologicalModelBase:
     """
     Instantiate a biological model by name, with a safe fallback.
-
     """
     try:
         class_list = get_available_models(radiation_mode, provided_quantities)

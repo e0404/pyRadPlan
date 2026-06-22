@@ -378,6 +378,8 @@ class Dij(PyRadPlanBaseModel):
 
         out = {}
         xp = array_api_compat.array_namespace(intensity)
+        beam_num = xp.asarray(self.beam_num)
+        beam_indices = [xp.nonzero(beam_num == i)[0] for i in range(self.num_of_beams)]
 
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
@@ -386,8 +388,6 @@ class Dij(PyRadPlanBaseModel):
 
             # Slicing intensity by beam is faster than multiplying by a beam mask,
             # since it shrinks the matmul size instead of just zeroing terms.
-            beam_num = xp.asarray(self.beam_num)
-            beam_indices = [xp.nonzero(beam_num == i)[0] for i in range(self.num_of_beams)]
             out["physical_dose_beam"] = [dose_mat[:, idx] @ intensity[idx] for idx in beam_indices]
 
         if self.physical_dose_var is not None:
@@ -418,81 +418,47 @@ class Dij(PyRadPlanBaseModel):
                 out["let_beam"].append(let_beam)
 
         if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
+            alphax = self.alphax[:, scenario_index]
+            betax = self.betax[:, scenario_index]
             alpha_mat = self.alpha_dose.flat[scenario_index]
             sqrt_beta_mat = self.sqrt_beta_dose.flat[scenario_index]
             out["effect"] = alpha_mat @ intensity + (sqrt_beta_mat @ intensity) ** 2
-
-            out["effect_beam"] = [
-                alpha_mat[:, idx] @ intensity[idx] + (sqrt_beta_mat[:, idx] @ intensity[idx]) ** 2
-                for idx in beam_indices
-            ]
             out["alpha_dose"] = alpha_mat @ intensity
             out["sqrt_beta_dose"] = sqrt_beta_mat @ intensity
 
-            indices = (out["physical_dose"] > 0) & (self.betax[:, scenario_index] > 0)
-            out["rbe_x_dose"] = np.zeros_like(out["effect"])
-            out["rbe_x_dose"][indices] = (
-                np.sqrt(
-                    self.alphax[:, scenario_index][indices] ** 2
-                    + 4 * self.betax[:, scenario_index][indices] * out["effect"][indices]
-                )
-                - self.alphax[:, scenario_index][indices]
-            ) / (2 * self.betax[:, scenario_index][indices])
-            out["rbe"] = np.zeros_like(out["rbe_x_dose"])
-            out["rbe"][indices] = out["rbe_x_dose"][indices] / out["physical_dose"][indices]
-            out["alpha"] = np.zeros_like(out["alpha_dose"])
-            out["alpha"][indices] = out["alpha_dose"][indices] / out["physical_dose"][indices]
-            out["beta"] = np.zeros_like(out["sqrt_beta_dose"])
-            out["beta"][indices] = (
-                out["sqrt_beta_dose"][indices] / out["physical_dose"][indices]
-            ) ** 2
+            valid = (out["physical_dose"] > 0) & (betax > 0)
+            phys = out["physical_dose"]
+            out["rbe_x_dose"] = self._compute_rbe_x_dose(out["effect"], phys, alphax, betax)
+            out["rbe"] = np.where(valid, out["rbe_x_dose"] / np.where(valid, phys, 1.0), 0.0)
+            out["alpha"] = np.where(valid, out["alpha_dose"] / np.where(valid, phys, 1.0), 0.0)
+            out["beta"] = np.where(
+                valid, (out["sqrt_beta_dose"] / np.where(valid, phys, 1.0)) ** 2, 0.0
+            )
 
             out["rbe_x_dose_beam"] = []
             out["rbe_beam"] = []
+            out["effect_beam"] = []
             out["alpha_beam"] = []
             out["beta_beam"] = []
             out["alpha_dose_beam"] = []
             out["sqrt_beta_dose_beam"] = []
-            for i in range(self.num_of_beams):
-                rbe_x_dose_beam = np.zeros_like(out["effect_beam"][i])
-                rbe_beam = np.zeros_like(out["effect_beam"][i])
-
-                indices_beam = (out["physical_dose_beam"][i] > 0) & (
-                    self.betax[:, scenario_index] > 0
-                )
-                rbe_x_dose_beam[indices_beam] = (
-                    np.sqrt(
-                        self.alphax[:, scenario_index][indices_beam] ** 2
-                        + 4
-                        * self.betax[:, scenario_index][indices_beam]
-                        * out["effect_beam"][i][indices_beam]
-                    )
-                    - self.alphax[:, scenario_index][indices_beam]
-                ) / (2 * self.betax[:, scenario_index][indices_beam])
-                rbe_beam[indices_beam] = (
-                    rbe_x_dose_beam[indices_beam] / out["physical_dose_beam"][i][indices_beam]
+            for idx, phys_beam in zip(beam_indices, out["physical_dose_beam"]):
+                alpha_dose_beam = alpha_mat[:, idx] @ intensity[idx]
+                sqrt_beta_dose_beam = sqrt_beta_mat[:, idx] @ intensity[idx]
+                effect_beam = alpha_dose_beam + sqrt_beta_dose_beam**2
+                rbe_x_beam = self._compute_rbe_x_dose(effect_beam, phys_beam, alphax, betax)
+                mask_beam = phys_beam > 0
+                denom_beam = np.where(mask_beam, phys_beam, 1.0)
+                out["effect_beam"].append(effect_beam)
+                out["alpha_dose_beam"].append(alpha_dose_beam)
+                out["sqrt_beta_dose_beam"].append(sqrt_beta_dose_beam)
+                out["rbe_x_dose_beam"].append(rbe_x_beam)
+                out["rbe_beam"].append(np.where(mask_beam, rbe_x_beam / denom_beam, 0.0))
+                out["alpha_beam"].append(np.where(mask_beam, alpha_dose_beam / denom_beam, 0.0))
+                out["beta_beam"].append(
+                    np.where(mask_beam, (sqrt_beta_dose_beam / denom_beam) ** 2, 0.0)
                 )
 
-                out["rbe_x_dose_beam"].append(rbe_x_dose_beam)
-                out["rbe_beam"].append(rbe_beam)
-                out["alpha_dose_beam"].append(
-                    alpha_mat[:, beam_indices[i]] @ intensity[beam_indices[i]]
-                )
-                out["sqrt_beta_dose_beam"].append(
-                    sqrt_beta_mat[:, beam_indices[i]] @ intensity[beam_indices[i]]
-                )
-                alpha_beam = np.zeros_like(out["alpha_dose_beam"][i])
-                sqrt_beta_beam = np.zeros_like(out["sqrt_beta_dose_beam"][i])
-                alpha_beam[indices_beam] = (
-                    out["alpha_dose_beam"][i][indices_beam]
-                    / out["physical_dose_beam"][i][indices_beam]
-                )
-                sqrt_beta_beam[indices_beam] = (
-                    out["sqrt_beta_dose_beam"][i][indices_beam]
-                    / out["physical_dose_beam"][i][indices_beam]
-                )
-                out["alpha_beam"].append(alpha_beam)
-                out["beta_beam"].append(sqrt_beta_beam**2)
         if self.rbe is not None:
             out["rbe_x_dose"] = self.rbe * out["physical_dose"]
             out["rbe_x_dose_beam"] = [
@@ -686,6 +652,15 @@ class Dij(PyRadPlanBaseModel):
         logger.info(f"Converted Dij to namespace '{name}'")
 
         return dij_copy
+
+    @staticmethod
+    def _compute_rbe_x_dose(effect, phys, alphax, betax):
+        mask = (phys > 0) & (betax > 0)
+        rbe_x = np.zeros_like(effect)
+        rbe_x[mask] = (
+            np.sqrt(alphax[mask] ** 2 + 4 * betax[mask] * effect[mask]) - alphax[mask]
+        ) / (2 * betax[mask])
+        return rbe_x
 
 
 def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:

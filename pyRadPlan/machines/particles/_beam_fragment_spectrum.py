@@ -10,6 +10,7 @@ from numpydantic import NDArray, Shape
 class FragmentFluence(PyRadPlanBaseModel):
     """
     Fluence data for a single fragment species.
+
     ----
     fluence_spectrum : (n_depths, n_energies)
         Fluence at each depth × energy bin.
@@ -36,7 +37,6 @@ class FragmentFluence(PyRadPlanBaseModel):
 class ChargedBeamFragmentSpectrum(PyRadPlanBaseModel):
     """
     Fragment spectrum data for a charged particle beam.
-    .
     """
 
     type: Final[str] = "fluence"

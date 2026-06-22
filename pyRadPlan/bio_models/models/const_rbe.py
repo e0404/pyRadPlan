@@ -1,3 +1,5 @@
+"""Constant relative biological effectiveness (RBE) model."""
+
 from pyRadPlan.bio_models._base import BiologicalModelBase
 
 
