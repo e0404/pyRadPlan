@@ -1,0 +1,67 @@
+name: Feature Request
+description: Propose a new feature or enhancement for pyRadPlan
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! We recommend getting in touch with the team first so we can avoid duplicating work.
+        See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for guidance.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: |
+        What problem does this feature solve? What use case or workflow would it enable?
+        Link related issues if applicable.
+      placeholder: I often find myself needing to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Proposed Feature
+      description: A clear and concise description of the feature or enhancement you'd like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Suggested API / Interface
+      description: |
+        If applicable, sketch out how the feature might look from a user's perspective
+        (e.g., a short Python snippet using the top-level or low-level API).
+      render: python
+
+  - type: dropdown
+    id: modality
+    attributes:
+      label: Relevant Modality / Workflow Step
+      description: Which part of the treatment planning workflow does this concern?
+      multiple: true
+      options:
+        - Patient / CT data structures
+        - Dose calculation (photons)
+        - Dose calculation (ions / protons)
+        - Steering geometry (STF)
+        - Fluence optimization
+        - matRad / Octave interface
+        - DevOps / CI
+        - Documentation
+        - Other
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches or workarounds you have considered.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to implement this feature and open a pull request.

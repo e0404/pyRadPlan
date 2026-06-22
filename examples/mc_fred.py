@@ -106,7 +106,7 @@ result_opt = dij.compute_result_ct_grid(fluence)
 view_slice = int(np.round(ct.size[2] / 2))
 
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result_opt["physical_dose"],
     view_slice=view_slice,

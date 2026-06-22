@@ -103,7 +103,7 @@ class Test_file_handling:
             "Output files should not be generated when save_input is set."
         )
 
-    # this test basicly tests if fred is properly working.
+    # this test basically tests if fred is properly working.
     @pytest.mark.skipif(
         not is_fred_installed(),
         reason="FRED is not installed on this system.",
@@ -223,8 +223,7 @@ class Test_file_correctness:
 
         assert (tmp_path / "out/score/Phantom.Dose.mhd").exists()
         dose_cube = sitk.GetArrayFromImage(sitk.ReadImage(tmp_path / "out/score/Phantom.Dose.mhd"))
-        # TODO: 1e-3 should be possible!
-        assert np.allclose(phantom_dose, dose_cube, atol=1e-2)
+        assert np.allclose(phantom_dose, dose_cube, atol=1e-3)
 
 
 @pytest.mark.skipif(

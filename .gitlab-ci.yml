@@ -28,7 +28,7 @@ build-matrix:
         - python -m venv .venv
         - . .venv/bin/activate
         # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite  # Uncomment if needed for numba on specific images
-        - pip install --upgrade --upgrade-strategy eager -e .
+        - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -75,6 +75,31 @@ format:
         - pip install ruff
         - ruff format --check
 
+codespell:
+    stage: test
+    cache:
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
+        paths:
+            - .venv/
+            - .cache/pip/
+        policy: pull
+    script:
+        - . .venv/bin/activate
+        - pip install codespell
+        - return_code=0
+        - codespell > codespell.txt || return_code=$?
+        - cat codespell.txt
+        - python .gitlab/scripts/codespell_to_codequality.py < codespell.txt > gl-codespell-quality.json
+        - exit $return_code
+    artifacts:
+        when: always
+        reports:
+            codequality: gl-codespell-quality.json
+        paths:
+            - codespell.txt
+            - gl-codespell-quality.json
+    allow_failure: true
+
 
 # Run tests in parallel across multiple Python versions for Merge Requests only
 tests-matrix:
@@ -86,6 +111,7 @@ tests-matrix:
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
         COVERAGE_FILE: ".coverage.${PYTHON_VERSION}"
+        QT_QPA_PLATFORM: "offscreen"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -93,10 +119,11 @@ tests-matrix:
             - .cache/pip/
         policy: pull-push
     script:
+        - apt-get update && apt-get install -y libgl1 libxkbcommon-x11-0 libegl1 libdbus-1-3 libglib2.0-0 libfontconfig1 libnss3 libasound2 # needed for pyqt tests
         - python -m pip install --upgrade pip
         - python -m venv .venv
         - . .venv/bin/activate
-        - pip install --upgrade --upgrade-strategy eager -e .
+        - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
         - pip install coverage pytest pytest-cov
         - mkdir -p .testreports
         - PYVER_SAFE=${PYTHON_VERSION//./}

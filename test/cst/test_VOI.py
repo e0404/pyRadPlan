@@ -406,6 +406,57 @@ def test_create_helper_camel_case(generic_input_3d):
     assert voi.beta_x == beta_x
 
 
+def test_resample_on_new_ct_binary_mask_3d():
+    """Resampling with linear interpolation eroded mask boundaries. Making sure that resampling is done right"""
+    from pyRadPlan.ct import create_ct
+
+    orig_ct = create_ct(cube_hu=sitk.Image(10, 10, 10, sitk.sitkInt16))
+    orig_ct.cube_hu.SetSpacing((2.0, 2.0, 2.0))
+
+    mask_arr = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_arr[4:7, 4:7, 4:7] = 1
+    voi = create_voi(voi_type="TARGET", name="block", ct_image=orig_ct, mask=mask_arr)
+
+    # round-trip must preserve the block
+    new_img = sitk.Image(7, 7, 7, sitk.sitkInt16)
+    new_img.SetSpacing((3.0, 3.0, 3.0))
+    new_ct = create_ct(cube_hu=new_img)
+
+    back_arr = sitk.GetArrayFromImage(
+        voi.resample_on_new_ct(new_ct).resample_on_new_ct(orig_ct).mask
+    )
+    assert back_arr[4:7, 4:7, 4:7].sum() == 27
+    assert back_arr.sum() == 27
+
+
+def test_resample_on_new_ct_binary_mask_4d():
+    """Same boundary-erosion bug for 4D masks."""
+    from pyRadPlan.ct import create_ct
+
+    phase = sitk.Image(10, 10, 10, sitk.sitkInt16)
+    phase.SetSpacing((2.0, 2.0, 2.0))
+    orig_ct = create_ct(cube_hu=sitk.JoinSeries([phase, phase]))
+
+    mask_arr = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_arr[4:7, 4:7, 4:7] = 1
+    mask_4d = sitk.JoinSeries([sitk.GetImageFromArray(mask_arr)] * 2)
+    voi = create_voi(voi_type="TARGET", name="block", ct_image=orig_ct, mask=mask_4d)
+
+    # Correspondence is a 3d CT as before
+    new_img = sitk.Image(7, 7, 7, sitk.sitkInt16)
+    new_img.SetSpacing((3.0, 3.0, 3.0))
+    new_ct = create_ct(cube_hu=new_img)
+
+    # Round-trip: resample to different grid and back, block must survive
+    orig_3d_ct = create_ct(cube_hu=phase)
+    back_arr = sitk.GetArrayFromImage(
+        voi.resample_on_new_ct(new_ct).resample_on_new_ct(orig_3d_ct).mask
+    )
+    assert back_arr[0, 4:7, 4:7, 4:7].sum() == 27
+    assert back_arr[1, 4:7, 4:7, 4:7].sum() == 27
+    assert back_arr.sum() == 54
+
+
 def test_create_voi_invalid_voi_type_camel_case(generic_input_3d):
     name, ct, mask, _, _ = generic_input_3d
     with pytest.raises(ValueError):
@@ -420,3 +471,21 @@ def test_create_voi_invalid_voi_type_camel_case(generic_input_3d):
 #     voi_2.validate_voi()
 #     voi_3 = create_voi(voi_type="HELPER", name=name, ct_image=ct, mask=mask)
 #     voi_3.validate_voi()
+
+
+@pytest.mark.parametrize(
+    "color_in, color_expected",
+    [
+        ("red", (255, 0, 0)),
+        ((0.5, 0.5, 0.5), (128, 128, 128)),
+        ((10, 20, 30), (10, 20, 30)),
+        (np.array([40, 50, 60]), (40, 50, 60)),
+        (np.array([0.5, 0.25, 0.0]), (128, 64, 0)),
+        (None, None),
+    ],
+)
+def test_voi_visible_color_validator(generic_input_3d, color_in, color_expected):
+    name, ct, mask, _, _ = generic_input_3d
+    kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
+    voi = create_voi(**kwargs, visible_color=color_in)
+    assert voi.visible_color == color_expected

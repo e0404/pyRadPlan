@@ -1,5 +1,7 @@
 """Image / Grid Resampling."""
 
+from typing import Literal, Union
+
 import numpy as np
 import SimpleITK as sitk
 from ._grids import Grid
@@ -11,6 +13,7 @@ def resample_image(
     target_image: sitk.Image = None,
     target_grid_spacing: tuple[float, float, float] = None,
     target_grid: Grid = None,
+    extrapolate: Union[float, int, bool, Literal["nearest"]] = "nearest",
 ) -> sitk.Image:  # also accept sitk images and grid points. Can be dealt with with kwargs
     """
     Resample an sitk Image.
@@ -23,6 +26,8 @@ def resample_image(
         The input image to be resampled.
     interpolator : sitk.InterpolatorEnum, optional
         The interpolator to use for resampling. Default is sitk.sitkBSpline.
+    extrapolate : Union[float, int, bool, Literal["nearest"], None], optional
+        The value to use for extrapolation outside the image boundaries. Default is None.
     target_image : sitk.Image, optional
         The reference image to resample to. Default is None.
     target_grid_spacing : tuple[float,float,float], optional
@@ -52,7 +57,23 @@ def resample_image(
     elif target_grid_spacing is not None:
         target_grid = image_grid.resample(target_grid_spacing)
 
+    # BSpline (order 3) requires >= 4 voxels per dimension; fall back to linear for small images
+    if interpolator == sitk.sitkBSpline and any(s < 4 for s in input_image.GetSize()):
+        interpolator = sitk.sitkLinear
+
     resample = sitk.ResampleImageFilter()
+    resample.UseNearestNeighborExtrapolatorOff()
+    if extrapolate == "nearest":
+        resample.UseNearestNeighborExtrapolatorOn()
+    elif isinstance(extrapolate, (int, float)):
+        resample.SetDefaultPixelValue(extrapolate)
+    elif extrapolate is False:
+        resample.SetDefaultPixelValue(0)
+    elif extrapolate is True:
+        resample.SetDefaultPixelValue(1)
+    else:
+        raise ValueError("Invalid value for 'extrapolate' parameter.")
+
     resample.SetOutputSpacing(target_grid.resolution_vector)
     resample.SetSize(target_grid.dimensions)
     resample.SetOutputDirection(target_grid.direction.ravel())
@@ -71,6 +92,7 @@ def resample_numpy_array(
     target_image: sitk.Image = None,
     target_grid_spacing: tuple[float, float, float] = None,
     target_grid: Grid = None,
+    extrapolate: Union[float, int, bool, Literal["nearest"]] = "nearest",
 ) -> np.ndarray:
     """
     Resample a numpy grid.
@@ -130,6 +152,7 @@ def resample_numpy_array(
         target_image=target_image,
         target_grid_spacing=target_grid_spacing,
         target_grid=target_grid,
+        extrapolate=extrapolate,
     )
 
     return sitk.GetArrayFromImage(resampled_array_sitk)

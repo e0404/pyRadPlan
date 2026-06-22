@@ -43,7 +43,31 @@ def test_plot_slice_noargs():
 
 
 def test_plot_slice_ct(sample_ct, tmp_path):
-    plot_slice(ct=sample_ct, save_filename=str(tmp_path / "slice_ct.png"), show_plot=False)
+    plot_slice(
+        image_volume=sample_ct, save_filename=str(tmp_path / "slice_ct.png"), show_plot=False
+    )
+
+
+def test_plot_slice_ct_alias_deprecated(sample_ct, tmp_path):
+    with pytest.warns(DeprecationWarning, match="ct"):
+        plot_slice(
+            ct=sample_ct, save_filename=str(tmp_path / "slice_ct_alias.png"), show_plot=False
+        )
+
+
+def test_plot_slice_ct_window_alias_deprecated(sample_ct, tmp_path):
+    with pytest.warns(DeprecationWarning, match="ct_window"):
+        plot_slice(
+            image_volume=sample_ct,
+            ct_window=(-100, 100),
+            save_filename=str(tmp_path / "slice_ct_window_alias.png"),
+            show_plot=False,
+        )
+
+
+def test_plot_slice_ct_and_image_volume_conflict(sample_ct):
+    with pytest.raises(TypeError):
+        plot_slice(image_volume=sample_ct, ct=sample_ct, show_plot=False)
 
 
 def test_plot_slice_cst(sample_cst, tmp_path):
@@ -52,7 +76,7 @@ def test_plot_slice_cst(sample_cst, tmp_path):
 
 def test_plot_slice_ct_cst(sample_ct, sample_cst, tmp_path):
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         save_filename=str(tmp_path / "slice_ct_cst.png"),
         show_plot=False,
@@ -61,7 +85,7 @@ def test_plot_slice_ct_cst(sample_ct, sample_cst, tmp_path):
 
 def test_plot_slice_with_overlay(sample_ct, sample_cst, sample_overlay, tmp_path):
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         overlay_unit="Gy",
@@ -73,7 +97,7 @@ def test_plot_slice_with_overlay(sample_ct, sample_cst, sample_overlay, tmp_path
 
 def test_plot_slice_parameters_coronal(sample_ct, sample_cst, sample_overlay, tmp_path):
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         view_slice=[50, 2, 5],
@@ -89,7 +113,7 @@ def test_plot_slice_parameters_coronal(sample_ct, sample_cst, sample_overlay, tm
 
 def test_plot_slice_parameters_sagittal(sample_ct, sample_cst, sample_overlay, tmp_path):
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         plane="sagittal",
@@ -101,7 +125,7 @@ def test_plot_slice_parameters_sagittal(sample_ct, sample_cst, sample_overlay, t
 def test_plot_slice_parameters_invalid_plane(sample_ct, sample_cst, sample_overlay, tmp_path):
     with pytest.raises(ValueError):
         plot_slice(
-            ct=sample_ct,
+            image_volume=sample_ct,
             cst=sample_cst,
             overlay=sample_overlay,
             plane="invalid_plane",
@@ -111,7 +135,7 @@ def test_plot_slice_parameters_invalid_plane(sample_ct, sample_cst, sample_overl
 
 def test_plot_slice_multiple_slices_ct(sample_ct, tmp_path):
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         view_slice=[2, 5, 8],
         save_filename=str(tmp_path / "slice_multiple_slices_ct.png"),
         show_plot=False,
@@ -122,7 +146,7 @@ def test_global_max(sample_ct, sample_cst, sample_overlay, tmp_path):
     sample_overlay = sitk.GetArrayFromImage(sample_overlay)
     sample_overlay[2] = sample_overlay[2] * 3
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         use_global_max=True,
@@ -135,7 +159,7 @@ def test_global_max(sample_ct, sample_cst, sample_overlay, tmp_path):
 def test_plot_multiple_slices(sample_ct, sample_cst, sample_overlay, tmp_path):
     sample_overlay = sitk.GetArrayFromImage(sample_overlay)
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         view_slice=[2, 5, 8],
@@ -147,10 +171,33 @@ def test_plot_multiple_slices(sample_ct, sample_cst, sample_overlay, tmp_path):
 def test_plot_multiple_slices_numpy(sample_ct, sample_cst, sample_overlay, tmp_path):
     sample_overlay = sitk.GetArrayFromImage(sample_overlay)
     plot_slice(
-        ct=sample_ct,
+        image_volume=sample_ct,
         cst=sample_cst,
         overlay=sample_overlay,
         view_slice=np.array([2, 5, 8]),
         show_plot=False,
         save_filename=str(tmp_path / "plot_multiple_slices.png"),
+    )
+
+
+def test_image_windowing(sample_ct, sample_cst, sample_overlay, tmp_path):
+    plot_slice(
+        image_volume=sample_ct,
+        cst=sample_cst,
+        overlay=sample_overlay,
+        image_window=(-200, 200),
+        window_mode="minmax",
+        view_slice=5,
+        save_filename=str(tmp_path / "image_windowing_minmax.png"),
+        show_plot=False,
+    )
+    plot_slice(
+        image_volume=sample_ct,
+        cst=sample_cst,
+        overlay=sample_overlay,
+        image_window=(-200, 200),
+        window_mode="centerwidth",
+        view_slice=5,
+        save_filename=str(tmp_path / "image_windowing_centerwidth.png"),
+        show_plot=False,
     )

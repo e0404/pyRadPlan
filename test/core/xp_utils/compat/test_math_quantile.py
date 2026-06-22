@@ -1,6 +1,6 @@
 import pytest
 from pyRadPlan.core.xp_utils.compat import quantile
-from pyRadPlan.core.xp_utils import to_numpy, from_numpy
+from pyRadPlan.core.xp_utils import to_numpy, from_numpy, choose_array_api_namespace
 
 # Use array_api_strict to ensure Array API compatibility
 import timeit
@@ -74,3 +74,35 @@ def test_quantile_is_sorted_flag_equivalence():
     y_unsorted_lin = quantile(x_unsorted, 0.25, method="linear", is_sorted=False)
     y_sorted_lin = quantile(x_sorted, 0.25, method="linear", is_sorted=True)
     assert np.allclose(to_numpy(y_unsorted_lin), to_numpy(y_sorted_lin), atol=1e-6)
+
+
+@pytest.mark.parametrize("backend", ["torch", "cupy"])
+def test_quantile_gpu_device_consistency(backend):
+    """Quantile indices must stay on the same device as the input — no device mismatch."""
+    try:
+        import importlib
+        import torch as _torch
+        import array_api_compat
+
+        gpu_xp = importlib.import_module(f"array_api_compat.{backend}")
+        if backend == "torch":
+            if not _torch.cuda.is_available():
+                pytest.skip("CUDA not available")
+            x_gpu = _torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0], device="cuda")
+        else:
+            import cupy as _cp
+
+            if not _cp.cuda.is_available():
+                pytest.skip("CUDA not available for CuPy")
+            x_gpu = _cp.array([1.0, 2.0, 3.0, 4.0, 5.0])
+
+        # Should not raise a device mismatch error
+        result = quantile(x_gpu, 0.5, method="nearest")
+        result_lin = quantile(x_gpu, 0.3, method="linear")
+
+        from pyRadPlan.core.xp_utils.helpers import is_on_gpu
+
+        assert is_on_gpu(result), "Result should be on GPU"
+        assert is_on_gpu(result_lin), "Linear result should be on GPU"
+    except ImportError:
+        pytest.skip(f"{backend} not installed")
