@@ -12,7 +12,6 @@ try:
     import cupyx.scipy.sparse as csp
 
     CupySpmatrix = csp.spmatrix
-    CupySpmatrix = csp.spmatrix
 except ImportError:
     cp = None
     CupySpmatrix = Any

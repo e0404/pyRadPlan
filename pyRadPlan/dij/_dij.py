@@ -373,7 +373,6 @@ class Dij(PyRadPlanBaseModel):
 
         out = {}
         xp = array_api_compat.array_namespace(intensity)
-        xp = array_api_compat.array_namespace(intensity)
 
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:

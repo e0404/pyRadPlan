@@ -17,7 +17,7 @@ from typing import Optional, Union
 try:
     import torch
 except ImportError:
-    torch = None, Union
+    torch = None
 
 try:
     import cupy as cp

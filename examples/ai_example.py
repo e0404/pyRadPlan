@@ -11,7 +11,6 @@ from pyRadPlan import (
     generate_stf,
     calc_dose_influence,
     plot_slice,
-    fluence_optimization,
     xp_utils,
     load_tg119,
 )
@@ -52,7 +51,7 @@ cst.vois[2].objectives = [
     MeanDose(priority=1.0, d_ref=0.0),
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
+fluence = np.ones(dij.total_num_of_bixels)  # fluence_optimization(ct, cst, stf, dij, pln)
 result = dij.compute_result_ct_grid(fluence)
 
 view_slice = int(np.round(ct.size[2] / 2))

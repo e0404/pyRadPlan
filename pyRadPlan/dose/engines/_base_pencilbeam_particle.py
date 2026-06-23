@@ -146,27 +146,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Compute Bixel
         self._calc_particle_bixel(bixel)
 
-        # Optimization: Compact results after calculation to avoid slow boolean indexing on inputs
-        # We perform the compaction on the output dose and indices, which saves us from compacting
-        # multiple input arrays (rad_depths, radial_dist_sq, lat_dists, etc.)
-        if "mask" in bixel:
-            mask = bixel["mask"]
-            bixel["ix"] = bixel["ix"][mask]
-
-            # List of potential result keys to compact
-            # We check for existence to support different engines/modes
-            keys_to_compact = [
-                "physical_dose",
-                "let_dose",
-                "alpha_dose",
-                "sqrt_beta_dose",
-                "biological_dose",
-            ]
-
-            for key in keys_to_compact:
-                if key in bixel:
-                    bixel[key] = bixel[key][mask]
-
         return bixel
 
     def _init_bixel(self, curr_ray, k):
