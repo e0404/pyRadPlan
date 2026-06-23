@@ -6,7 +6,8 @@
     "imsize": 26,
     "projection_dim": [12, 6, 6],
     "energy_encoding": true,
-    "reduced_model": true
+    "reduced_model": true,
+    "use_mlp": true
   },
   "grid_parameters": {
     "spacing": 2,
@@ -15,8 +16,8 @@
     "depth_range": 320
   },
   "normalization": {
-    "max_dose": 0.001831,
-    "max_energy": 160
+    "max_dose": 0.0018201525,
+    "max_energy": 159.85914873034454
   },
-  "model_path": "pyRadPlan/data/ai_models/p_2_reduced.pt"
+  "model_path": "pyRadPlan/data/ai_models/pat_0.pt"
 }

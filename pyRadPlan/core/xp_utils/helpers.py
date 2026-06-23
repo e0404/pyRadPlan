@@ -337,6 +337,18 @@ def to_namespace(
     Array
         The converted array.
     """
+    # We need these checks, to ensure that the error makes sense.
+    # Otherwise this function will complain about a sparse array error :)
+    if isinstance(arr, (int, float, bool, complex)):
+        raise TypeError(
+            "Conversion of scalar values to array namespaces is not supported. "
+            "Create an array first or use it as is in calculations as int/float/bool/complex do not need conversion."
+        )
+    if isinstance(arr, (list, tuple)):
+        raise TypeError(
+            "Conversion of lists or tuples to array namespaces is not supported. "
+            "Create an array first!"
+        )
 
     if isinstance(xp_new, str):
         try:

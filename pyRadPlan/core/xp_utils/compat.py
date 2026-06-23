@@ -5,7 +5,6 @@ from typing import Literal, Union, Sequence, Any
 
 from .typing import Array
 from functools import lru_cache, partial
-from . import pytorch_gpu_available
 from . import to_numpy
 import importlib.util
 import array_api_compat
@@ -79,51 +78,6 @@ except ModuleNotFoundError:
     CupyRegularGridInterpolator = None
 
 from scipy.interpolate import RegularGridInterpolator as NumpyRegularGridInterpolator
-
-
-if pytorch_gpu_available():
-
-    @torch.jit.script
-    def _interp1d_torch_kernel(xq, x, y):
-        # xq: (N_out)
-        # x: (N_in)
-        # y: (N_channels, N_in) or (N_in)
-
-        # Clip xq
-        xq = torch.clamp(xq, min=x[0], max=x[-1])
-
-        # Searchsorted
-        idx = torch.searchsorted(x, xq, right=False)
-        idx = idx - 1
-        idx = torch.clamp(idx, min=0, max=x.shape[0] - 2)
-
-        i0 = idx
-        i1 = idx + 1
-
-        x0 = x[i0]
-        x1 = x[i1]
-
-        # Compute t
-        t = (xq - x0) / (x1 - x0)
-
-        # y interpolation
-        # Handle y dim
-        if y.ndim == 1:
-            y0 = y[i0]
-            y1 = y[i1]
-            return y0 + (y1 - y0) * t
-        else:
-            # y is (C, N_in) (stacked)
-            # We need y[:, i0]
-            # i0 is (N_out). y is (C, N_in).
-            # We want (C, N_out).
-            y0 = y[:, i0]
-            y1 = y[:, i1]
-
-            # t is (N_out).
-            # y1-y0 is (C, N_out)
-            # We need to unsqueeze t to (1, N_out) to broadcast against C
-            return y0 + (y1 - y0) * t.unsqueeze(0)
 
 
 # %%

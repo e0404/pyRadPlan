@@ -195,10 +195,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 )
 
             bixel_counter = 0
-            # We store this here extra so init_beam does not rebel
-            self._vdose_grid_np = self._vdose_grid
-
-            self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
 
             # Loop over all beams
             with logging_redirect_tqdm():
@@ -259,12 +255,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         bixel_beam_counter += curr_ray["num_of_bixels"]
 
                     # Free GPU memory from curr_beam
-                    del curr_beam["bev_coords"]
-                    del curr_beam["rad_depths"]
-                    del curr_beam["geo_depths"]
-                    del curr_beam["valid_coords"]
-                    del curr_beam["valid_coords_all"]
-                    del curr_beam["rot_mat_system_T"]
+                    for _key in (
+                        "bev_coords",
+                        "rad_depths",
+                        "geo_depths",
+                        "valid_coords",
+                        "valid_coords_all",
+                        "rot_mat_system_T",
+                    ):
+                        curr_beam.pop(_key, None)
                     curr_beam = None
 
                     # Force GPU memory cleanup
@@ -423,8 +422,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         # TODO: here .model_dump() is used to get beam as dict. Its possible to change...
         # ... the ray_tracing to handle this as the model
         beam_info = {"beam": stf.beams[i].model_dump(), "beam_index": i}
-
-        xp = array_api_compat.array_namespace(self._vox_world_coords)
 
         xp = array_api_compat.array_namespace(self._vox_world_coords)
 
@@ -819,7 +816,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         return ray.get("effective_lateral_cut_off", self._effective_lateral_cutoff)
 
-    def _fill_dij_gpu(
+    def _fill_dij(
         self,
         bixel: dict,
         dij: dict,
@@ -1013,6 +1010,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             Lateral distances to the central ray projected onto the isocenter plane.
         """
 
+        # xp = array_api_compat.array_namespace(
+        #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
+        # )
         xp = array_api_compat.array_namespace(
             rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
         )

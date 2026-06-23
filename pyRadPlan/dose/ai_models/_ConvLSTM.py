@@ -60,6 +60,7 @@ class predict_ConvLSTM(AIDoseModelBase):
             projection_dim=arch_config["projection_dim"],
             energy_encoding=arch_config["energy_encoding"],
             reduced_model=arch_config["reduced_model"],
+            use_mlp=arch_config["use_mlp"],
         ).to(self.device)
         self.network.load_state_dict(
             torch.load(model_path, weights_only=True, map_location=self.device)
@@ -141,7 +142,7 @@ class predict_ConvLSTM(AIDoseModelBase):
         if t_single.device.type != "cuda" and torch.cuda.is_available():
             t_single = t_single.to(self.device, dtype=torch.float32)
 
-        t = t_single.expand(B, -1, -1, -1) if B > 1 else t_single
+        t = t_single.expand(B, -1, -1, -1)
 
         e_t = to_namespace("torch", energy).float().detach()
         if e_t.device.type != "cuda" and torch.cuda.is_available():
@@ -150,13 +151,6 @@ class predict_ConvLSTM(AIDoseModelBase):
         if e_t.ndim == 0:
             e_t = e_t.view(1)
 
-        # If batch is singleton, duplicate to avoid 0-D energy token inside network
-        duplicated_singleton = False
-        if B == 1:
-            duplicated_singleton = True
-            t = t.repeat(2, 1, 1, 1)
-            e_t = e_t.expand(2)
-            B = 2
         # Build energy channel of shape (B,1,H,W) and concatenate to channel dim
         # Current `t` shape: (B, D, H, W) -> treat D as channel dim
         H = t.shape[-2]
@@ -169,9 +163,6 @@ class predict_ConvLSTM(AIDoseModelBase):
         # Forward pass in inference mode
         with torch.inference_mode():
             pred_t = self.network(inp)
-
-        if duplicated_singleton:
-            pred_t = pred_t[:1]
 
         result = to_namespace(xp, pred_t)
 

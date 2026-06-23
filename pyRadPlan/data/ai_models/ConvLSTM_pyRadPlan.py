@@ -21,6 +21,7 @@ class ConvBayes_new(nn.Module):
         nlayer=1,
         energy_encoding=False,
         reduced_model=False,
+        use_mlp=False,
     ):
         super(ConvBayes_new, self).__init__()
 
@@ -35,6 +36,10 @@ class ConvBayes_new(nn.Module):
         self.projection_dim = projection_dim
         self.energy_encoding = energy_encoding
         self.energy_token = None
+        self.use_mlp = use_mlp
+
+        self.norm = nn.LayerNorm(self.n_outputs, eps=1e-6)
+        self.mlp = MLP(self.n_outputs)
 
         if reduced_model:
             self.conv_encoder = ConvEncoder_reduced(
@@ -66,7 +71,7 @@ class ConvBayes_new(nn.Module):
     def forward(self, x):
         if x.ndim == 4:
             if self.energy_encoding is True:
-                self.energy_token = x[:, :1, 0, 0].squeeze()
+                self.energy_token = x[:, :1, 0, 0].squeeze(1)
                 x = x[:, 1:, :, :]
             x = x.unsqueeze(1)
 
@@ -77,6 +82,11 @@ class ConvBayes_new(nn.Module):
             x = x.unsqueeze(0).unsqueeze(1)
 
         x = self.conv_encoder(tokens=x, energy_token=self.energy_token)
+
+        if getattr(self, "use_mlp", False):
+            mlp_out = self.mlp(self.norm(x))
+            x = x + mlp_out
+
         lstm_out, temp = self.lstm(x)
 
         # if self.energy_encoding is True:
@@ -88,15 +98,9 @@ class ConvBayes_new(nn.Module):
 
         # out = self.backend(out)
 
-        # For reduced model, decoder returns (batch, time, height, width)
-        # For full model, decoder returns (batch, 1, 1, depth, height, width)
-        if out.ndim == 4:
-            # Reduced model - already correct shape
-            return out
-        else:
-            # Full model - squeeze dimensions
-            out = out.squeeze(1)
-            return out
+        out = out.squeeze(1)
+
+        return out
 
 
 class TimeDistributed(nn.Module):
@@ -397,18 +401,22 @@ class ConvEncoder_reduced(nn.Module):
             padding=(0, 1, 1),
         )
 
-        # Normalization layers (simplified - using BatchNorm for speed)
-        self.norm1 = nn.BatchNorm3d(self.num_channels)
-        self.norm3 = nn.BatchNorm3d(self.projection_channels)
+        # Normalization layers
+        self.norm1 = TimeDistributed(nn.GroupNorm(num_groups=16, num_channels=self.num_channels))
+        self.norm3 = TimeDistributed(
+            nn.GroupNorm(num_groups=4, num_channels=self.projection_channels)
+        )
 
         # Activation layer
-        self.h1 = nn.ReLU(inplace=True)
-        self.h3 = nn.ReLU(inplace=True)
+        self.h1 = TimeDistributed(nn.ReLU())
+        self.h3 = TimeDistributed(nn.ReLU())
 
-        # Positional encoding - support both with and without energy token
-        # Energy token adds one extra position
+        # Flatten 3D slices to 1D vectors
+        self.flatten = TimeDistributed(nn.Flatten(1, 3), tensor_size=3)
+
+        # Positional encoding
         self.positional_encoder = nn.Embedding(
-            num_embeddings=self.num_tokens + 1, embedding_dim=self.projection_dim_flat
+            num_embeddings=self.num_tokens, embedding_dim=self.projection_dim_flat
         )
 
         # Linear transformation of the energy
@@ -417,46 +425,25 @@ class ConvEncoder_reduced(nn.Module):
         )  # W_0 in paper (e = W_O * E), E is tensor of size batch_size
 
     def forward(self, tokens, energy_token=None):
-        # Vectorized convolutional blocks (no TimeDistributed)
-        # Input tokens shape: (batch, 1, time_steps, height, width) = 5D
-        # We need to reshape to: (batch, time_steps, 1, height, width) for processing
-        batch_size = tokens.shape[0]
-        time_steps = tokens.shape[2]  # time_steps is at index 2
-
-        # Permute from (batch, 1, time_steps, height, width) to (batch, time_steps, 1, height, width)
-        x = tokens.permute(0, 2, 1, 3, 4)
-
-        # Merge batch and time dimensions for vectorized processing
-        # x shape: (batch, time_steps, 1, height, width)
-        x = x.reshape(-1, 1, 1, tokens.shape[3], tokens.shape[4])
-        # x shape: (batch*time_steps, 1, 1, height, width) - ready for Conv3d
-
         # First convolutional block
-        x = self.h1(self.norm1(self.conv1(x)))
+        x = self.h1(self.norm1(self.conv1(tokens)))
 
         # Last convolution
-        x = self.h3(self.norm3(self.conv3(x)))
+        x = self.h3(self.conv3(x))
 
-        # Reshape back and flatten
-        # After conv: (batch*time, channels, depth, height, width)
-        out_depth, out_height, out_width = x.shape[2], x.shape[3], x.shape[4]
-        x = x.view(
-            batch_size, time_steps, self.projection_channels, out_depth, out_height, out_width
-        )
-        # Flatten spatial dimensions: (batch, time, channels*depth*height*width)
-        x = x.reshape(batch_size, time_steps, -1)
+        # Flatten to 1D vector (permute for "channels_last")
+        x = self.flatten(x.permute(0, 2, 1, 3, 4))
 
         if energy_token is not None:
             # Encode energy and concatenate
             e = self.linear(energy_token.float().unsqueeze(1)).unsqueeze(1)
             x = torch.cat((e, x), dim=1)
-            # Now x has shape (batch, time_steps+1, projection_dim_flat)
 
         # Add positional encoding
         if self.pos_encoding:
-            # Use correct number of positions based on whether energy token was added
-            num_positions = x.shape[1]
-            positions = torch.arange(start=0, end=num_positions).int().to(device)
+            positions = (
+                torch.arange(start=0, end=self.num_tokens).int().to(device)
+            )  # num_tokens-1 because no energy added
             encoded = x + self.positional_encoder(positions)
             return encoded
         else:
@@ -484,11 +471,19 @@ class ConvDecoder_reduced(nn.Module):
         self.strides = strides
         self.energy_encoding = energy_encoding
 
+        # Reshape to 3D
+        self.reshape = TimeDistributed(
+            nn.Unflatten(
+                dim=1, unflattened_size=[projection_dim[1], projection_dim[2], projection_dim[0]]
+            ),
+            tensor_size=3,
+        )  # dim=1 do to TimeDistribution going through all batches --> 0:slice, 1:flattened tensor
+
         # Convolutional Transpose Layers
-        # Configure conv-transpose to upscale from projection spatial dims (6x6)
-        # back to the original image size (26x26).
-        # Formula: (in-1)*stride - 2*pad + kernel + output_pad
-        # (6-1)*4 - 2*2 + 7 + 3 = 20 - 4 + 7 + 3 = 26
+        # Configure conv-transpose to upscale from projection spatial dims (e.g. 3x3)
+        # back to the original image size (e.g. 15x15). For projection 3 ->
+        # output 15 use kernel=7, stride=4, padding=0 because:
+        # (in-1)*stride - 2*pad + kernel = (3-1)*4 - 0 + 7 = 15
         self.conv1 = nn.ConvTranspose3d(
             self.projection_channels,
             self.num_channels,
@@ -496,57 +491,32 @@ class ConvDecoder_reduced(nn.Module):
             stride=self.strides,
             padding=(0, 2, 2),
             output_padding=(0, 3, 3),
-        )
+        )  # , output_padding=(0,1,1)) padding for MU dataset
 
         # Output convolutional
         self.conv3 = nn.Conv3d(
             self.num_channels, 1, kernel_size=(1, 3, 3), stride=1, padding=(0, 1, 1)
         )
 
-        # Normalization layers (simplified - using BatchNorm for speed)
-        self.norm1 = nn.BatchNorm3d(self.num_channels)
+        # Normalization layers
+        self.norm1 = TimeDistributed(nn.GroupNorm(num_groups=16, num_channels=self.num_channels))
 
         # Activation layer
-        self.h1 = nn.ReLU(inplace=True)
+        self.h1 = TimeDistributed(nn.ReLU())
 
     def forward(self, tokens):
-        # Remove energy token if present - it was added for encoding only
         if self.energy_encoding:
+            # remove first token (energy token)
             tokens = tokens[:, 1:, :]
 
-        # Vectorized decoder (no TimeDistributed)
-        batch_size, time_steps = tokens.shape[0], tokens.shape[1]
+        # Reshape (permute for "channels_first")
+        x = (self.reshape(tokens)).permute(0, 4, 1, 2, 3)
 
-        # Calculate spatial dimensions from flattened projection
-        # projection_dim_flat = channels * depth * height * width
-        # Reshape from (batch, time, flat) to (batch, time, height, width, channels)
-        x = tokens.view(
-            batch_size,
-            time_steps,
-            self.projection_dim[1],
-            self.projection_dim[2],
-            self.projection_dim[0],
-        )
-        # Permute to (batch, time, channels, height, width)
-        x = x.permute(0, 1, 4, 2, 3)
-
-        # Merge batch and time for vectorized processing
-        # Reshape to (batch*time, channels, height, width)
-        x = x.reshape(-1, self.projection_channels, self.projection_dim[1], self.projection_dim[2])
-        x = x.unsqueeze(2)  # Add depth dimension: (batch*time, channels, 1, height, width)
-
-        # First convolutional block (upsamples spatial dims)
+        # First convolutional block
         x = self.h1(self.norm1(self.conv1(x)))
 
         # Last convolution
         x = self.conv3(x)
-
-        # Remove depth dimension and reshape back to batch, time format
-        # x shape: (batch*time, 1, depth, height, width)
-        x = x.squeeze(2)  # Remove depth: (batch*time, 1, height, width)
-        x = x.squeeze(1)  # Remove channel: (batch*time, height, width)
-        # Reshape back to (batch, time, height, width)
-        x = x.view(batch_size, time_steps, x.shape[1], x.shape[2])
 
         return x
 
