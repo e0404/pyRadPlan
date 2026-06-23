@@ -24,6 +24,11 @@ try:
 except ImportError:
     torch = None
 
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
 if torch is not None:
 
     @torch.jit.script

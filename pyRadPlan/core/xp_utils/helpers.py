@@ -393,8 +393,10 @@ def to_namespace(
                 if not copy:
                     return arr
 
-    # --- Target: NumPy ---
-    if array_api_compat.is_numpy_namespace(xp_new):
+    # --- Target: NumPy / array_api_strict ---
+    if array_api_compat.is_numpy_namespace(
+        xp_new
+    ) or array_api_compat.is_array_api_strict_namespace(xp_new):
         if device is not None and device.startswith("gpu"):
             raise ValueError("NumPy does not support GPU.")
 
