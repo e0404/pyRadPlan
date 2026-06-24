@@ -33,3 +33,4 @@ class AiSettings(BaseSettings):
     )
 
     model: str = "claude-sonnet-4-5"
+    display_usage: bool = True

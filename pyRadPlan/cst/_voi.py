@@ -90,10 +90,42 @@ class VOI(PyRadPlanBaseModel, ABC):
         description="Default RGB color bound to the VOI type",
     )
 
-    # TODO: it would be nicer if this was a list of optimization.Objective, but that would create a
-    # circular import. Forward type hinting does not work directly due to pydantic. If someone has
-    # a better idea how to solve this, please do so.
+    # Annotating list[Objective] would create a circular import, so entries are converted to
+    # Objective instances lazily in the validator below.
     objectives: list[Any] = Field(default=[], description="List of objective function definitions")
+
+    @field_validator("objectives", mode="before")
+    @classmethod
+    def validate_objectives(cls, v: Any) -> Any:
+        """
+        Convert objective definitions (names or dictionaries) into Objective instances.
+
+        Entries that are not recognizable objective definitions (e.g. empty placeholders from
+        matRad imports) are passed through unchanged.
+
+        Parameters
+        ----------
+        v : Any
+            The objectives value to be validated.
+
+        Returns
+        -------
+        list
+            The objectives with recognizable definitions converted to Objective instances.
+        """
+
+        # deferred import to avoid circular import issues
+        from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
+
+        if not isinstance(v, list):
+            v = [v]
+
+        return [
+            get_objective(entry)
+            if isinstance(entry, dict) and ("name" in entry or "className" in entry)
+            else entry
+            for entry in v
+        ]
 
     @field_validator("mask", mode="before")
     @classmethod

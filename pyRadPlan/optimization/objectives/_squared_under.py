@@ -1,6 +1,6 @@
 """Squared Underdosing Objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 import array_api_compat
@@ -22,9 +22,13 @@ class SquaredUnderdosing(Objective):
         minimum values value (below which we penalize)
     """
 
-    name = "Squared Underdosing"
+    name: Literal["Squared Underdosing"] = "Squared Underdosing"
 
-    d_min: Annotated[float, Field(default=60.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d_min: Annotated[
+        float,
+        Field(default=60.0, ge=0.0, description="Minimum dose below which dose is penalized."),
+        ParameterMetadata(kind="reference"),
+    ]
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
