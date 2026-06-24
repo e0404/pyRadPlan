@@ -1,6 +1,6 @@
 """Maximum DVH objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -24,11 +24,22 @@ class MaxDVH(Objective):
         max. relative volume [%]
     """
 
-    name = "Max DVH"
+    name: Literal["Max DVH"] = "Max DVH"
 
-    d: Annotated[float, Field(default=30.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d: Annotated[
+        float,
+        Field(default=30.0, ge=0.0, description="Dose point of the DVH constraint."),
+        ParameterMetadata(kind="reference"),
+    ]
     v_max: Annotated[
-        float, Field(default=50.0, ge=0.0, le=100.0), ParameterMetadata(kind="relative_volume")
+        float,
+        Field(
+            default=50.0,
+            ge=0.0,
+            le=100.0,
+            description="Maximum relative volume [%] allowed to receive dose d or more.",
+        ),
+        ParameterMetadata(kind="relative_volume"),
     ]
 
     def compute_objective(self, values: Array) -> Array:

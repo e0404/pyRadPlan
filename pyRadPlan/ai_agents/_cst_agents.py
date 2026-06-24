@@ -1,41 +1,54 @@
-from typing import List, Literal, Optional
-from pydantic import BaseModel
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, create_model
 from pydantic_ai import Agent
+
 from pyRadPlan.cst import StructureSet, validate_cst
-from pyRadPlan.optimization import objectives as opt_obj
+from pyRadPlan.optimization.objectives import get_objectives_union
 from pyRadPlan.plan._plans import Plan
 from ._settings import AiSettings
+from ._usage import log_run_usage
 
 
-class ObjectiveParams(BaseModel):
-    d_ref: Optional[float] = None
-    d_max: Optional[float] = None
-    d_min: Optional[float] = None
-    d: Optional[float] = None
-    v_min: Optional[float] = None
-    v_max: Optional[float] = None
-    eud_ref: Optional[float] = None
-    k: Optional[float] = None
-    priority: float
+def _create_output_model(voi_names: tuple[str, ...]) -> type[BaseModel]:
+    """
+    Create the agent output model for objective suggestions.
 
+    The model is built from the registered objective classes themselves (as a discriminated
+    union), so the LLM sees the exact parameter schema, defaults, bounds and descriptions of
+    pyRadPlan's objectives, and validated output directly yields Objective instances.
 
-class VoiObjectiveSuggestion(BaseModel):
-    voi_name: str
-    objective_type: Literal[
-        "SquaredDeviation",
-        "SquaredOverdosing",
-        "SquaredUnderdosing",
-        "MeanDose",
-        "EUD",
-        "MinDVH",
-        "MaxDVH",
-        "DoseUniformity",
-    ]
-    parameters: ObjectiveParams
+    Parameters
+    ----------
+    voi_names : tuple of str
+        Names of the VOIs in the structure set. Restricts the suggestions to existing VOIs.
 
+    Returns
+    -------
+    type[BaseModel]
+        The output model with per-VOI objective suggestions.
+    """
+    objective_union = get_objectives_union(exclude_image_references=True)
 
-class OptimizationObjectives(BaseModel):
-    objectives: List[VoiObjectiveSuggestion]
+    voi_objectives_model = create_model(
+        "VoiObjectives",
+        voi_name=(
+            Literal[voi_names],
+            Field(description="Name of the VOI the objectives apply to."),
+        ),
+        objectives=(
+            list[objective_union],
+            Field(description="Optimization objectives suggested for this VOI."),
+        ),
+    )
+
+    return create_model(
+        "OptimizationObjectives",
+        objectives=(
+            list[voi_objectives_model],
+            Field(description="Suggested optimization objectives per VOI."),
+        ),
+    )
 
 
 def generate_voi_objectives(
@@ -63,6 +76,8 @@ def generate_voi_objectives(
         The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
         If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
         the default defined in :class:`AiSettings`.
+    clear_existing : bool, optional
+        Whether to clear existing objectives on the VOIs before assigning new ones.
 
     Returns
     -------
@@ -76,67 +91,42 @@ def generate_voi_objectives(
 
     effective_model = model or AiSettings().model
 
+    output_model = _create_output_model(tuple(voi.name for voi in cst.vois))
+
+    system_prompt = """
+        You are a radiotherapy treatment planning assistant.
+        Given a treatment site and a list of Volumes of Interest (VOIs), suggest typical
+        optimization objectives following standard clinical practice.
+
+        The available objective types and the meaning of their parameters are fully
+        described by the output schema. All dosimetric parameter values must be given as
+        dose per fraction. If no prescribed dose is given, prescribe 2 Gy per fraction
+        to the target. Assign a priority (weight) to every objective and leave the
+        'quantity' field at its default.
+        """
+
     voi_list_str = "\n".join(f"- {voi.name} (Type: {voi.voi_type})" for voi in cst.vois)
 
-    # TODO: this prompt can be further refined
-    # - Obtain the objective types as well as their structure programmatically
-    # - We need to provide a prescribed dose?
-    # - The Plan could probably be provided as full model using pydantic_ai's abilities
-    # - Some Parameters that currently are left out
-    #   - MeanDose: d_ref (reference mean dose)
-    #   - EUD: eud_ref (reference EUD), k (exponent)
-    #   - MinDVH: d (dose), v_min (min volume %)
-    #   - MaxDVH: d (dose), v_max (max volume %)
-    #   - DoseUniformity: (no parameters besides priority)
-    prompt = f"""
-        You are a radiotherapy treatment planning assistant.
-        Given a treatment site and a list of Volumes of Interest (VOIs),
-        suggest typical optimization objectives.
-
-        Treatment Site: {treatment_site}
-        Prescribed Dose: {pln.prescribed_dose} Gy (if available)
+    user_prompt = f"""
+        Treatment site: {treatment_site}
+        Prescribed dose (total): {pln.prescribed_dose} Gy
         Number of fractions: {pln.num_of_fractions}
-
-        The dosimetric parameters should prescribe dose per fraction. If no prescribed
-        dose is given, the target should be presribed to 2 Gy/fraction.
 
         Available VOIs:
         {voi_list_str}
 
+        Additional context: {additional_context or "None given"}
+
         For each VOI, suggest one or more objectives if appropriate.
-        Use standard radiotherapy constraints.
-
-        Only use the following objective types and their corresponding parameters:
-        - SquaredDeviation: d_ref (reference dose)
-        - SquaredOverdosing: d_max (maximum dose)
-        - SquaredUnderdosing: d_min (minimum dose)
-
-        All objectives must have a 'priority' (weight).
         """
 
-    agent = Agent(effective_model, output_type=OptimizationObjectives, system_prompt=prompt)
+    agent = Agent(effective_model, output_type=output_model, system_prompt=system_prompt)
 
-    result = agent.run_sync(
-        user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context or 'None given'}"
-    )
+    result = agent.run_sync(user_prompt=user_prompt)
+    log_run_usage(result, effective_model, operation="generate_voi_objectives")
 
-    suggestions = result.output.objectives
-
-    # Map suggestions to cst
-    for suggestion in suggestions:
-        voi = next((v for v in cst.vois if v.name == suggestion.voi_name), None)
-        if voi:
-            obj_class = getattr(opt_obj, suggestion.objective_type, None)
-            if obj_class:
-                params = suggestion.parameters.model_dump(exclude_none=True)
-                try:
-                    objective_instance = obj_class(**params)
-                    if voi.objectives is None:
-                        voi.objectives = []
-                    voi.objectives.append(objective_instance)
-                except Exception as e:
-                    print(
-                        f"Failed to create objective {suggestion.objective_type} for {voi.name}: {e}"
-                    )
+    vois_by_name = {voi.name: voi for voi in cst.vois}
+    for suggestion in result.output.objectives:
+        vois_by_name[suggestion.voi_name].objectives.extend(suggestion.objectives)
 
     return validate_cst(cst)

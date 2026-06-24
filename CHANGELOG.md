@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - multiple corresponding units for given quantities in the GUI
+- AI agents now log token usage and estimated cost (USD) after each run; toggle via `AiSettings.display_usage` (`PYRADPLAN_AI_DISPLAY_USAGE`)
+- `get_objectives_union()` exposing all registered objectives as a discriminated union, used to give the AI agent the exact objective schema
+
+### Changed
+- VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
 
 ### Fixed
 

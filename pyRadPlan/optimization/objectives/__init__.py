@@ -11,7 +11,12 @@ from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
 
-from ._factory import get_available_objectives, get_objective, register_objective
+from ._factory import (
+    get_available_objectives,
+    get_objective,
+    get_objectives_union,
+    register_objective,
+)
 
 register_objective(SquaredDeviation)
 register_objective(SquaredMimicking)
@@ -36,5 +41,6 @@ __all__ = [
     "SquaredUnderdosing",
     "get_available_objectives",
     "get_objective",
+    "get_objectives_union",
     "register_objective",
 ]
