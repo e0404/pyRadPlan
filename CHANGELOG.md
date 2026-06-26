@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- grids now have a 4D representation (x,y,z,t)
+- VOIs now connect to grids (3D or 4D)
+- VOIs validate from more formats formats (given the context)
+
 ## [0.4.1] - 2026-06-16
 
 ### Added
