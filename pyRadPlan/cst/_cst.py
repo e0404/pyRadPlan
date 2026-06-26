@@ -1,6 +1,6 @@
 """Structure Set Implementation."""
 
-from typing import Any, Union, Optional
+from typing import Any, Literal, Union, Optional
 from typing_extensions import Self
 from pydantic import (
     Field,
@@ -24,11 +24,118 @@ class StructureSet(PyRadPlanBaseModel):
     vois: list[VOI] = Field(init=False, description="List of VOIs in the Structure Set")
     ct_image: CT = Field(init=False, description="Reference to the CT Image")
 
+    @model_validator(mode="before")
+    @classmethod
+    def main_validator(cls, data: Any, info: ValidationInfo) -> Any:
+        if data.get("vois") is None:
+            raise ValueError("No cst provided. Please provide a cst.")
+
+        if data.get("ct_image") is None:
+            raise ValueError("No reference CT provided. Please provide a CT.")
+
+        # Check input format and return the appropriate context.
+        context = cls._get_context(data, info)
+
+        if context["format"] == "dicom":
+            return cls._process_dicom_data(data, info)
+
+        elif context["format"] == "matrad":
+            return cls._process_matrad_data(data, info)
+
+        elif context["format"] == "native":
+            return cls._process_native_data(data, info)
+
+        else:
+            raise ValueError(
+                f"Context {context['format']} not supported for StructureSet creation."
+            )
+
+    @classmethod
+    def _get_context(cls, data: dict, info: ValidationInfo) -> dict:
+        """Get the context for formatting the inputs."""
+        supported_formats = {"dicom", "matrad", "native", "not-set"}
+
+        # Extract context string from validation info
+        if not info.context:
+            context_str = "not-set"
+        elif isinstance(info.context, dict):
+            context_str = info.context.get("format", "not-set")
+        else:
+            context_str = str(info.context)
+
+        # Validate context string
+        if context_str not in supported_formats:
+            raise ValueError(
+                f"Context '{context_str}' not supported. "
+                f"Supported contexts are: {', '.join(sorted(supported_formats - {'not-set'}))}."
+            )
+
+        # Auto-detect format if not explicitly set
+        if context_str == "not-set":
+            if not isinstance(data.get("vois"), list):
+                context_str = "native"
+            else:
+                vois = data["vois"]
+                if not vois:  # Empty list
+                    context_str = "native"
+                else:
+                    first_voi = vois[0]
+                    # Check for matRad format characteristics:
+                    # - VOIs are not already VOI instances
+                    # - First element is not a dictionary (matRad uses arrays/tuples)
+                    if not all(isinstance(v, VOI) for v in vois) and not isinstance(
+                        first_voi, dict
+                    ):
+                        context_str = "matrad"
+                    else:
+                        # Default to native format
+                        context_str = "native"
+
+        context = {"format": context_str}
+
+        return context
+
+    @classmethod
+    def _process_dicom_data(cls, data: list, info: ValidationInfo) -> dict:
+        """Handle data coming from dicom file handler."""
+        voi_list = []
+        ct = data["ct_image"]
+
+        data["ct_image"] = validate_ct(data["ct_image"])
+        # The current implementation of the DicomFileHandler returns a list:
+        for i in range(len(data["vois"])):
+            vdata = data["vois"][i]
+            objectives = vdata[5] if len(vdata) > 5 else []
+            if not isinstance(objectives, list):
+                objectives = [objectives]
+            # We have to use "validate_voi" so that TARGET, OAR and so on are validated correctly
+            # Passing only a list of dict will result in general "VOIs" #TODO: maybe change this in the future
+            target_list = ["tv", "target", "gtv", "ctv", "ptv", "boost", "tumor"]
+
+            # Mask has 0 indexing and is already rotated in the dicom loader!
+            tmp_mask = np.zeros((ct.size[2], ct.size[1], ct.size[0]), dtype=np.uint8)
+            tmp_mask.flat[np.asarray(vdata[3])] = 1
+            # tmp_mask = np.swapaxes(tmp_mask, 0, 2)
+            mask_image = sitk.GetImageFromArray(tmp_mask)
+            mask_image.CopyInformation(ct.cube_hu)
+            voi = validate_voi(
+                name=str(vdata[1]),
+                voi_type="TARGET" if str(vdata[2]).lower() in target_list else str(vdata[2]),
+                mask=mask_image,
+                grid=Grid.from_sitk_image(ct.cube_hu),
+                objectives=objectives,
+                **vdata[4],
+            )
+
+            voi_list.append(voi)
+
+        return {"vois": voi_list, "ct_image": ct}
+
     @classmethod
     def _process_matrad_data(cls, data: list, info: ValidationInfo) -> dict:
         """Handle data coming from matRad."""
-        # If the data is from matRad, we need to handle the beam quantities differently.
-        # The keys are usually named with a "_beam" suffix.
+        # Necessary to handle it here and not in the voi class since we need the ct_image!
+
         voi_list = []
         cst_data = data["vois"]
         ct = data["ct_image"]
@@ -84,48 +191,36 @@ class StructureSet(PyRadPlanBaseModel):
                 name=str(vdata[1]),
                 voi_type=str(vdata[2]),
                 mask=masks,
-                ct_image=ct,
+                grid=Grid.from_sitk_image(ct.cube_hu),
                 objectives=objectives,
                 **props,
             )
             voi_list.append(voi)
         return {"vois": voi_list, "ct_image": ct}
 
-    @model_validator(mode="before")
     @classmethod
-    def aggregate_dynamic_quantities(cls, data: Any, info: ValidationInfo) -> Any:
-        # Validate required keys.
-        # Not needed since pydantic validation will take care of this.
-        # But error prompt is in more detail.
-        if data.get("vois") is None:
-            raise ValueError("No cst provided. Please provide a cst.")
-        if data.get("ct_image") is None:
-            raise ValueError("No reference CT provided. Please provide a CT.")
-
+    def _process_native_data(cls, data: dict, info: ValidationInfo) -> dict:
+        """Handle data coming from native format."""
         data["ct_image"] = validate_ct(data["ct_image"])
-
         # Handle the case where vois is supplied as a dict.
         if isinstance(data["vois"], dict):
-            ct_from_vois = data["vois"].pop("ct_image", data["vois"].pop("ctImage", None))
-            if ct_from_vois is not None and ct_from_vois != data["ct_image"]:
-                raise ValueError("CT image mismatch between StructureSet and provided CT")
-            return data
+            # Define possible keys and their validation functions
+            reference_keys = {
+                "ct_image": lambda val: val != data["ct_image"],
+                "ctImage": lambda val: val != data["ct_image"],
+                "image": lambda val: val != data["ct_image"],
+                "grid": lambda val: val != Grid.from_sitk_image(data["ct_image"].cube_hu),
+            }
 
-        # Convert ndarray to list if needed.
-        # needed for matRad cell array
-        if isinstance(data["vois"], np.ndarray):
-            data["vois"] = data["vois"].tolist()
-
-        # If vois is a list and not already a list of VOI dicts, process it
-        # -> assume matrad data
-        if (
-            isinstance(data["vois"], list)
-            and data["vois"]
-            and not isinstance(data["vois"][0], dict)
-            and not all(isinstance(i, VOI) for i in data["vois"])
-        ):
-            data = cls._process_matrad_data(data, info)
-
+            # Check and validate each reference key
+            for key, validator in reference_keys.items():
+                if key in data["vois"]:
+                    value = data["vois"].pop(key)
+                    if value is not None and validator(value):
+                        reference_type = "CT" if "image" in key.lower() else "Grid"
+                        raise ValueError(
+                            f"{reference_type} mismatch between StructureSet VOIs and provided reference"
+                        )
         return data
 
     @model_validator(mode="after")
@@ -134,8 +229,19 @@ class StructureSet(PyRadPlanBaseModel):
 
         if isinstance(self.vois, list):
             for voi in self.vois:
-                if voi.ct_image != self.ct_image:
-                    raise ValueError("All VOIs must reference the same CT image.")
+                # Check if grids are equivalent by comparing their spatial parameters
+                ct_grid = Grid.from_sitk_image(self.ct_image.cube_hu)
+                if voi.grid == ct_grid:
+                    continue
+                elif (
+                    voi.grid.resolution != ct_grid.resolution
+                    or voi.grid.dimensions != ct_grid.dimensions
+                    or not np.allclose(voi.grid.origin, ct_grid.origin)
+                    or not np.allclose(voi.grid.direction, ct_grid.direction)
+                ):
+                    raise ValueError(
+                        "All VOIs must reference the same spatial grid as the CT image."
+                    )
 
         self.set_colors()
         return self
@@ -163,82 +269,268 @@ class StructureSet(PyRadPlanBaseModel):
         """Return the unique VOI types in the Structure Set."""
         return list({voi.voi_type for voi in self.vois})
 
-    def target_union_voxels(self, order="sitk") -> np.ndarray:
-        """Return the union of all target indices."""
-        target_indices = []
-        for voi in self.vois:
-            if voi.voi_type == "TARGET":
-                target_indices.append(voi.get_indices(order=order))
+    @property
+    def num_of_scenarios(self) -> int:
+        """
+        Number of scenarios stored in the underlying CT.
 
-        return np.unique(np.concatenate(target_indices))
+        ``1`` for a 3D CT, ``cube_hu.GetSize()[3]`` for a 4D CT. The same
+        value applies to all VOIs in this StructureSet because grid validation
+        forces VOIs and CT to share dimensionality.
+        """
+        cube = self.ct_image.cube_hu
+        if cube.GetDimension() == 4:
+            return cube.GetSize()[3]
+        return 1
 
-    def target_union_mask(self) -> sitk.Image:
-        """Return the union mask of all target indices."""
+    def _validate_scenario_arg(self, scenario: Union[int, Literal["any", "each"]]) -> None:
+        """Raise ``ValueError`` if ``scenario`` is not int, ``"any"`` or ``"each"``."""
+        if scenario in {"any", "each"}:
+            return
+        if isinstance(scenario, bool) or not isinstance(scenario, (int, np.integer)):
+            raise ValueError(f'scenario must be an int or one of "any", "each"; got {scenario!r}')
+        n = self.num_of_scenarios
+        if scenario < 0 or scenario >= n:
+            raise ValueError(f"Scenario index {scenario} is out of range [0, {n - 1}]")
 
-        target_indices = self.target_union_voxels(order="numpy")
+    @staticmethod
+    def _voi_scenario_mask_3d(voi: VOI, scenario: int) -> sitk.Image:
+        """Return a 3D sitk mask for ``scenario`` of ``voi`` (no-op for 3D VOIs)."""
+        if voi.mask.GetDimension() == 4:
+            return voi.mask[:, :, :, scenario]
+        return voi.mask
 
-        # Creates a copy of the CT image with all zeros
+    @staticmethod
+    def _union_3d_masks(masks: list[sitk.Image]) -> sitk.Image:
+        """OR-combine a non-empty list of 3D ``sitk.Image`` masks."""
+        out = masks[0]
+        for m in masks[1:]:
+            out = sitk.Or(out, m)
+        return out
 
-        if self.ct_image.cube_hu.GetDimension() == 4:
-            sz = np.array(self.ct_image.cube_hu.GetSize())
-            sz[3] = 0
-            tmpmask3d = sitk.Extract(
-                self.ct_image.cube_hu,
-                size=sz.tolist(),
-                index=[0, 0, 0, 0],
-                directionCollapseToStrategy=sitk.ExtractImageFilter.DIRECTIONCOLLAPSETOSUBMATRIX,
+    def _target_vois(self) -> list[VOI]:
+        return [v for v in self.vois if v.voi_type == "TARGET"]
+
+    def _patient_contributing_vois(self) -> list[VOI]:
+        """VOIs that define the patient outline.
+
+        If any ``ExternalVOI`` exists it takes precedence; otherwise every
+        VOI contributes.
+        """
+        external = [v for v in self.vois if isinstance(v, ExternalVOI)]
+        return external if external else list(self.vois)
+
+    def target_union_voxels(
+        self,
+        order: str = "sitk",
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """
+        Return the union of target VOI voxel indices.
+
+        Indices are always referenced against a 3D scenario sub-cube of size
+        ``X * Y * Z``, **not** the full 4D cube.
+
+        Parameters
+        ----------
+        order : str, optional
+            Indexing order, ``"sitk"`` or ``"numpy"``. Defaults to ``"sitk"``.
+        scenario : int or {"any", "each"}, default ``"any"``
+            - ``"any"`` (default): single ndarray of the OR-union of indices
+              across all scenarios. For a 3D CT this is identical to the
+              legacy behaviour.
+            - ``"each"``: per-scenario indices. Single ndarray for a 3D CT,
+              ``list[np.ndarray]`` of length :attr:`num_of_scenarios` for 4D.
+            - ``int``: single ndarray of indices for that specific scenario.
+
+        Returns
+        -------
+        np.ndarray
+            For ``scenario`` integer or ``"any"``, or ``"each"`` on a 3D CT.
+        list[np.ndarray]
+            For ``"each"`` on a 4D CT.
+        """
+        self._validate_scenario_arg(scenario)
+        target_vois = self._target_vois()
+        if not target_vois:
+            empty = np.array([], dtype=np.int64)
+            if scenario == "each" and self.num_of_scenarios > 1:
+                return [empty.copy() for _ in range(self.num_of_scenarios)]
+            return empty
+
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            per_voi = [
+                v.scenario_indices(scenario=int(scenario), order=order) for v in target_vois
+            ]
+            return np.unique(np.concatenate(per_voi))
+
+        if scenario == "any":
+            per_voi: list[np.ndarray] = []
+            for v in target_vois:
+                per_voi.extend(v.scenario_indices(order=order))
+            return np.unique(np.concatenate(per_voi))
+
+        # scenario == "each"
+        per_scen: list[np.ndarray] = []
+        for s in range(n_scen):
+            per_voi = [v.scenario_indices(scenario=s, order=order) for v in target_vois]
+            per_scen.append(np.unique(np.concatenate(per_voi)))
+        if n_scen == 1:
+            return per_scen[0]
+        return per_scen
+
+    def target_union_mask(
+        self,
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> sitk.Image:
+        """
+        Return the union mask of all target VOIs.
+
+        Parameters
+        ----------
+        scenario : int or {"any", "each"}, default ``"any"``
+            - ``"any"`` (default): 3D mask collapsing every scenario via
+              logical OR.
+            - ``"each"``: dim-preserving. 3D mask for a 3D CT; for a 4D CT a
+              4D mask whose t-th slice is the union for scenario ``t``.
+            - ``int``: 3D mask for that scenario only.
+
+        Returns
+        -------
+        sitk.Image
+            3D mask except when ``scenario == "each"`` and the CT is 4D.
+        """
+        self._validate_scenario_arg(scenario)
+        target_vois = self._target_vois()
+        if not target_vois:
+            raise ValueError("No TARGET VOI in StructureSet")
+
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            return self._union_3d_masks(
+                [self._voi_scenario_mask_3d(v, int(scenario)) for v in target_vois]
             )
 
-        else:
-            tmpmask3d = self.ct_image.cube_hu
+        if scenario == "any":
+            slices_3d: list[sitk.Image] = []
+            for s in range(n_scen):
+                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in target_vois)
+            return self._union_3d_masks(slices_3d)
 
-        mask = sitk.GetArrayViewFromImage(tmpmask3d).astype(np.uint8)
-        mask.fill(0)
-        mask.ravel()[target_indices] = 1
+        # scenario == "each"
+        per_scen = [
+            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in target_vois])
+            for s in range(n_scen)
+        ]
+        if n_scen == 1:
+            return per_scen[0]
+        return sitk.JoinSeries(per_scen)
 
-        mask_image = sitk.GetImageFromArray(mask)
-        mask_image.CopyInformation(tmpmask3d)
+    def patient_voxels(
+        self,
+        order: str = "sitk",
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """
+        Return the union of all patient voxel indices.
 
-        return mask_image
+        If an :class:`ExternalVOI` is present it is the sole contributor;
+        otherwise every VOI contributes. Index semantics and the ``scenario``
+        argument mirror :meth:`target_union_voxels`.
+        """
+        self._validate_scenario_arg(scenario)
+        contributing = self._patient_contributing_vois()
+        if not contributing:
+            empty = np.array([], dtype=np.int64)
+            if scenario == "each" and self.num_of_scenarios > 1:
+                return [empty.copy() for _ in range(self.num_of_scenarios)]
+            return empty
 
-    def patient_voxels(self, order="sitk") -> np.ndarray:
-        """Return the union of all patient indices."""
+        n_scen = self.num_of_scenarios
 
-        # First check if we have an "EXTERNAL" VOI designating the outer contour
-        for voi in self.vois:
-            if isinstance(voi, ExternalVOI):
-                return voi.get_indices(order=order)
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            per_voi = [
+                v.scenario_indices(scenario=int(scenario), order=order) for v in contributing
+            ]
+            return np.unique(np.concatenate(per_voi))
 
-        patient_indices = []
-        for voi in self.vois:
-            patient_indices.append(voi.get_indices(order=order))
+        if scenario == "any":
+            per_voi: list[np.ndarray] = []
+            for v in contributing:
+                per_voi.extend(v.scenario_indices(order=order))
+            return np.unique(np.concatenate(per_voi))
 
-        return np.unique(np.concatenate(patient_indices))
+        # scenario == "each"
+        per_scen: list[np.ndarray] = []
+        for s in range(n_scen):
+            per_voi = [v.scenario_indices(scenario=s, order=order) for v in contributing]
+            per_scen.append(np.unique(np.concatenate(per_voi)))
+        if n_scen == 1:
+            return per_scen[0]
+        return per_scen
 
-    def patient_mask(self) -> sitk.Image:
-        """Return the union mask of all patient contours (or the EXTERNAL contour if provided)."""
+    def patient_mask(
+        self,
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> sitk.Image:
+        """
+        Return the union mask of all patient contours.
 
-        patient_indices = self.patient_voxels(order="numpy")
+        EXTERNAL precedence and the ``scenario`` argument mirror
+        :meth:`target_union_mask`.
+        """
+        self._validate_scenario_arg(scenario)
+        contributing = self._patient_contributing_vois()
+        if not contributing:
+            raise ValueError("No VOIs in StructureSet")
 
-        # Creates a copy of the CT image with all zeros
-        mask = sitk.GetArrayFromImage(self.ct_image.cube_hu).astype(np.uint8)
-        mask.fill(0)
-        mask.ravel()[patient_indices] = 1
+        n_scen = self.num_of_scenarios
 
-        mask_image = sitk.GetImageFromArray(mask)
-        mask_image.CopyInformation(self.ct_image.cube_hu)
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            return self._union_3d_masks(
+                [self._voi_scenario_mask_3d(v, int(scenario)) for v in contributing]
+            )
 
-        return mask_image
+        if scenario == "any":
+            slices_3d: list[sitk.Image] = []
+            for s in range(n_scen):
+                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in contributing)
+            return self._union_3d_masks(slices_3d)
 
-    def target_center_of_mass(self) -> np.ndarray:
-        """Return the center of mass of the target."""
-        mask_image = self.target_union_mask()
-        mask = sitk.GetArrayViewFromImage(
-            mask_image
-        ).T  # Transpose allows use to use sitk indexing
+        # scenario == "each"
+        per_scen = [
+            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in contributing])
+            for s in range(n_scen)
+        ]
+        if n_scen == 1:
+            return per_scen[0]
+        return sitk.JoinSeries(per_scen)
 
-        if mask.ndim == 4:
-            mask = mask[:, :, :, 0]
+    def target_center_of_mass(self, scenario: int = 0) -> np.ndarray:
+        """
+        Return the center of mass of the target union mask for one scenario.
+
+        Parameters
+        ----------
+        scenario : int, optional
+            Scenario index in ``[0, num_of_scenarios)``. Defaults to ``0``,
+            which preserves the legacy 3D behaviour and the prior 4D
+            behaviour of implicitly using scenario 0.
+
+        Returns
+        -------
+        np.ndarray
+            World-space coordinates of the center of mass, shape ``(3,)``.
+        """
+        self._validate_scenario_arg(scenario)
+        if not isinstance(scenario, (int, np.integer)) or isinstance(scenario, bool):
+            raise ValueError(f"target_center_of_mass requires an int scenario, got {scenario!r}")
+        mask_image = self.target_union_mask(scenario=int(scenario))
+        # Transpose so axes go (x, y, z) for sitk-style continuous indexing.
+        mask = sitk.GetArrayViewFromImage(mask_image).T
 
         cm_index = ndimage.center_of_mass(mask)
 
@@ -265,7 +557,7 @@ class StructureSet(PyRadPlanBaseModel):
 
         if new_model["ct_image"] != new_ct:
             new_model["ct_image"] = new_ct
-            new_model["vois"] = [voi.resample_on_new_ct(new_ct) for voi in self.vois]
+            new_model["vois"] = [voi._resample_on_new_ct(new_ct) for voi in self.vois]
         return self.model_validate(new_model)
 
     def apply_overlap_priorities(self) -> Self:
@@ -398,7 +690,7 @@ class StructureSet(PyRadPlanBaseModel):
 
         if not overlap_is_applied:
             cst = self.apply_overlap_priorities()
-        num_voxels = np.prod(cst.vois[0].ct_image.size)
+        num_voxels = np.prod(cst.ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
         for voi in cst.vois:
