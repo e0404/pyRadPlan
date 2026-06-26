@@ -25,6 +25,7 @@ from pyRadPlan import (
     load_tg119,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 logging.basicConfig(level=logging.INFO)
@@ -71,19 +72,23 @@ fluence = fluence_optimization(ct, cst, stf, dij, pln)
 # Compute the result
 result = dij.compute_result_ct_grid(fluence)
 
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-)
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["let"],
-    view_slice=view_slice,
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["physical_dose"],
+        view_slice=view_slice,
+    )
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["let"],
+        view_slice=view_slice,
+    )

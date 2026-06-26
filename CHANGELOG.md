@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+
 ### Changed
 
+- launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
 - VOIs now connect to grids (3D or 4D)
 - VOIs validate from more formats formats (given the context)
