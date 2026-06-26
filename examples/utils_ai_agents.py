@@ -33,6 +33,7 @@ from pyRadPlan import (
     plot_slice,
     DVHCollection,
 )
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 ## These two lines are needed to allow nested event loops in Jupyter.
 ## Otherwise you will experience sync-errors when running the AI agents.
 ## Install it using `pip install nest_asyncio`.
@@ -133,4 +134,8 @@ dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
 """
 
 # %%
-plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
