@@ -184,6 +184,287 @@ def test_target_center_of_mass():
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
 
 
+# ---------------------------------------------------------------------------
+# 4D StructureSet helpers & tests
+# ---------------------------------------------------------------------------
+
+
+def _build_4d_cst(num_scenarios: int = 2):
+    """Build a 4D StructureSet whose VOIs hit known voxels per scenario.
+
+    Returns
+    -------
+    cst : StructureSet
+    expected : dict
+        Per-scenario known voxel positions for asserting downstream.
+    """
+    dims = (10, 10, 10)  # numpy (Z, Y, X)
+    cube_3d = sitk.GetImageFromArray(np.zeros(dims, dtype=np.float32))
+    cube_3d.SetSpacing((1.0, 1.0, 1.0))
+    cube_3d.SetOrigin((0.0, 0.0, 0.0))
+    cube_3d.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
+    cube_4d = sitk.JoinSeries([cube_3d for _ in range(num_scenarios)])
+    cube_4d.SetOrigin((0.0, 0.0, 0.0, 0.0))
+    cube_4d.SetSpacing((1.0, 1.0, 1.0, 1.0))
+    cube_4d.SetDirection((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
+    ct = create_ct(cube_hu=cube_4d)
+
+    # One distinct voxel per scenario, well within (Z=10, Y=10, X=10).
+    target_voxels = {s: (s, s, s) for s in range(num_scenarios)}
+    oar_voxels = {s: (5, 5, 5 - s) for s in range(num_scenarios)}
+    external_voxels = {s: (9, 9, 9) for s in range(num_scenarios)}
+
+    def _build_mask(per_scen: dict) -> sitk.Image:
+        arr = np.zeros((num_scenarios,) + dims, dtype=np.uint8)
+        for s in range(num_scenarios):
+            z, y, x = per_scen[s]
+            arr[s, z, y, x] = 1
+        return arr
+
+    target_voi = create_voi(
+        voi_type="TARGET",
+        name="TARGET",
+        ct_image=ct,
+        mask=_build_mask(target_voxels),
+    )
+    oar_voi = create_voi(voi_type="OAR", name="OAR", ct_image=ct, mask=_build_mask(oar_voxels))
+    external_voi = create_voi(
+        voi_type="EXTERNAL",
+        name="BODY",
+        ct_image=ct,
+        mask=_build_mask(external_voxels),
+    )
+    cst = StructureSet(vois=[target_voi, oar_voi, external_voi], ct_image=ct)
+
+    expected = {
+        "dims_zyx": dims,
+        "target": target_voxels,
+        "oar": oar_voxels,
+        "external": external_voxels,
+        "num_scenarios": num_scenarios,
+    }
+    return cst, expected
+
+
+def _flat_idx(zyx, dims_zyx, order):
+    z, y, x = zyx
+    Z, Y, X = dims_zyx
+    if order == "numpy":
+        return x + X * y + X * Y * z
+    # sitk-order: F-ravel of (Z,Y,X) numpy buffer -> z fastest
+    return z + Z * y + Z * Y * x
+
+
+def test_num_of_scenarios(generic_input_3d):
+    name_3d, ct_3d, mask_3d, _, _ = generic_input_3d
+    voi_3d = create_voi(voi_type="TARGET", name=name_3d, ct_image=ct_3d, mask=mask_3d)
+    cst_3d = StructureSet(vois=[voi_3d], ct_image=ct_3d)
+    assert cst_3d.num_of_scenarios == 1
+
+    cst_4d, expected = _build_4d_cst(num_scenarios=3)
+    assert cst_4d.num_of_scenarios == expected["num_scenarios"]
+
+
+def test_target_union_voxels_4d_any():
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+    sub_cube_size = int(np.prod(dims))
+
+    # "any" returns a single ndarray of 3D-sub-cube indices, OR-collapsed
+    ix_np = cst.target_union_voxels(order="numpy")  # default scenario="any"
+    assert isinstance(ix_np, np.ndarray)
+    assert (ix_np < sub_cube_size).all()
+    expected_np = np.unique(
+        np.array([_flat_idx(exp["target"][s], dims, "numpy") for s in exp["target"]])
+    )
+    assert (np.sort(ix_np) == expected_np).all()
+
+    ix_sitk = cst.target_union_voxels(order="sitk")
+    assert isinstance(ix_sitk, np.ndarray)
+    expected_sitk = np.unique(
+        np.array([_flat_idx(exp["target"][s], dims, "sitk") for s in exp["target"]])
+    )
+    assert (np.sort(ix_sitk) == expected_sitk).all()
+
+
+def test_target_union_voxels_4d_each_and_scenario():
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+    sub_cube_size = int(np.prod(dims))
+
+    per_scen = cst.target_union_voxels(scenario="each", order="numpy")
+    assert isinstance(per_scen, list)
+    assert len(per_scen) == cst.num_of_scenarios
+    for s, ix in enumerate(per_scen):
+        assert isinstance(ix, np.ndarray)
+        assert (ix < sub_cube_size).all()
+        assert (ix == np.array([_flat_idx(exp["target"][s], dims, "numpy")])).all()
+
+    for s in range(cst.num_of_scenarios):
+        ix = cst.target_union_voxels(scenario=s, order="numpy")
+        assert isinstance(ix, np.ndarray)
+        assert (ix < sub_cube_size).all()
+        assert (ix == np.array([_flat_idx(exp["target"][s], dims, "numpy")])).all()
+
+
+def test_patient_voxels_4d():
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+    sub_cube_size = int(np.prod(dims))
+
+    # EXTERNAL VOI takes precedence — patient voxels equal external voxels.
+    ix_any = cst.patient_voxels(order="numpy")
+    expected_any = np.unique(
+        np.array([_flat_idx(exp["external"][s], dims, "numpy") for s in exp["external"]])
+    )
+    assert (np.sort(ix_any) == expected_any).all()
+
+    per_scen = cst.patient_voxels(scenario="each", order="numpy")
+    assert len(per_scen) == cst.num_of_scenarios
+    for s, ix in enumerate(per_scen):
+        assert (ix < sub_cube_size).all()
+        assert (ix == np.array([_flat_idx(exp["external"][s], dims, "numpy")])).all()
+
+    for s in range(cst.num_of_scenarios):
+        ix = cst.patient_voxels(scenario=s, order="numpy")
+        assert (ix == np.array([_flat_idx(exp["external"][s], dims, "numpy")])).all()
+
+
+def test_target_union_mask_4d_each_dim_preserving():
+    """Regression test: previously target_union_mask wrote 4D indices into a 3D slice."""
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+
+    each_mask = cst.target_union_mask(scenario="each")
+    assert each_mask.GetDimension() == 4
+    assert each_mask.GetSize()[3] == cst.num_of_scenarios
+
+    each_arr = sitk.GetArrayViewFromImage(each_mask)  # numpy shape (T, Z, Y, X)
+    for s in range(cst.num_of_scenarios):
+        slice_arr = each_arr[s]
+        z, y, x = exp["target"][s]
+        assert slice_arr[z, y, x] == 1
+        # Exactly one voxel set per scenario in this fixture.
+        assert int(slice_arr.sum()) == 1
+
+
+def test_target_union_mask_4d_any_collapses_to_3d():
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+
+    any_mask = cst.target_union_mask()  # default "any"
+    assert any_mask.GetDimension() == 3
+    any_arr = sitk.GetArrayViewFromImage(any_mask)
+    assert any_arr.shape == dims
+    for s in exp["target"]:
+        z, y, x = exp["target"][s]
+        assert any_arr[z, y, x] == 1
+    assert int(any_arr.sum()) == len(exp["target"])
+
+
+def test_target_union_mask_4d_int_scenario():
+    cst, exp = _build_4d_cst()
+    dims = exp["dims_zyx"]
+
+    for s in range(cst.num_of_scenarios):
+        m = cst.target_union_mask(scenario=s)
+        assert m.GetDimension() == 3
+        arr = sitk.GetArrayViewFromImage(m)
+        assert arr.shape == dims
+        z, y, x = exp["target"][s]
+        assert arr[z, y, x] == 1
+        assert int(arr.sum()) == 1
+
+
+def test_patient_mask_4d_each_uses_external_per_scenario():
+    cst, exp = _build_4d_cst()
+    each_mask = cst.patient_mask(scenario="each")
+    assert each_mask.GetDimension() == 4
+    each_arr = sitk.GetArrayViewFromImage(each_mask)
+    for s in range(cst.num_of_scenarios):
+        z, y, x = exp["external"][s]
+        slice_arr = each_arr[s]
+        assert slice_arr[z, y, x] == 1
+        assert int(slice_arr.sum()) == 1
+
+    # "any" collapses to 3D.
+    any_mask = cst.patient_mask()
+    assert any_mask.GetDimension() == 3
+
+
+def test_target_center_of_mass_4d_specific_scenario():
+    """Place distinct CoMs per scenario and verify scenario= selects the right one."""
+    dims = (10, 10, 10)
+    cube_3d = sitk.GetImageFromArray(np.zeros(dims, dtype=np.float32))
+    cube_4d = sitk.JoinSeries([cube_3d, cube_3d])
+    cube_4d.SetOrigin((0.0, 0.0, 0.0, 0.0))
+    cube_4d.SetSpacing((1.0, 1.0, 1.0, 1.0))
+    cube_4d.SetDirection((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
+    ct = create_ct(cube_hu=cube_4d)
+
+    arr = np.zeros((2,) + dims, dtype=np.uint8)
+    # Scenario 0: single voxel at z=y=x=1.
+    arr[0, 1, 1, 1] = 1
+    # Scenario 1: single voxel at z=y=x=5.
+    arr[1, 5, 5, 5] = 1
+    voi = create_voi(voi_type="TARGET", name="t", ct_image=ct, mask=arr)
+    cst = StructureSet(vois=[voi], ct_image=ct)
+
+    com_default = cst.target_center_of_mass()
+    assert np.allclose(com_default, np.array([1.0, 1.0, 1.0]))
+    com_0 = cst.target_center_of_mass(scenario=0)
+    assert np.allclose(com_0, np.array([1.0, 1.0, 1.0]))
+    com_1 = cst.target_center_of_mass(scenario=1)
+    assert np.allclose(com_1, np.array([5.0, 5.0, 5.0]))
+
+
+def test_scenario_arg_validation_4d():
+    cst, _ = _build_4d_cst()
+
+    for method in (cst.target_union_voxels, cst.patient_voxels):
+        with pytest.raises(ValueError):
+            method(scenario=cst.num_of_scenarios)
+        with pytest.raises(ValueError):
+            method(scenario=-1)
+        with pytest.raises(ValueError):
+            method(scenario="bogus")
+        with pytest.raises(ValueError):
+            method(scenario=0.5)
+
+    for method in (cst.target_union_mask, cst.patient_mask):
+        with pytest.raises(ValueError):
+            method(scenario=cst.num_of_scenarios)
+        with pytest.raises(ValueError):
+            method(scenario=-1)
+        with pytest.raises(ValueError):
+            method(scenario="bogus")
+
+    with pytest.raises(ValueError):
+        cst.target_center_of_mass(scenario=cst.num_of_scenarios)
+    with pytest.raises(ValueError):
+        cst.target_center_of_mass(scenario=-1)
+
+
+def test_scenario_arg_validation_3d(generic_input_3d):
+    name_3d, ct_3d, mask_3d, _, _ = generic_input_3d
+    voi_3d = create_voi(voi_type="TARGET", name=name_3d, ct_image=ct_3d, mask=mask_3d)
+    cst = StructureSet(vois=[voi_3d], ct_image=ct_3d)
+
+    # 3D CT has exactly one scenario.
+    with pytest.raises(ValueError):
+        cst.target_union_voxels(scenario=1)
+    with pytest.raises(ValueError):
+        cst.target_union_mask(scenario=1)
+    with pytest.raises(ValueError):
+        cst.target_center_of_mass(scenario=1)
+
+    # "each" on a 3D CT must still return a single ndarray / 3D mask.
+    each_voxels = cst.target_union_voxels(scenario="each")
+    assert isinstance(each_voxels, np.ndarray)
+    each_mask = cst.target_union_mask(scenario="each")
+    assert each_mask.GetDimension() == 3
+
+
 @pytest.fixture
 def generic_ct():
     # Create a simple 3D CT image

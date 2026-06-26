@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Any, Union
+from typing import Any, Optional, Union
 from typing_extensions import Annotated, Self
 import warnings
 from pydantic import (
@@ -16,6 +16,7 @@ import matplotlib.colors as mcolors
 
 from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
+from pyRadPlan.core import Grid
 
 # Default overlap priorities
 DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15}
@@ -57,8 +58,8 @@ class VOI(PyRadPlanBaseModel, ABC):
     ----------
     name : str
         The name of the VOI.
-    ct_image : CT
-        The CT image where the VOI is defined.
+    grid : Grid, optional
+        The grid for the VOI. Defaults to a new Grid instance.
     mask : np.ndarray or sitk.Image
         Boolean mask (using 0,1) for referencing of voxels
         (Multiple allocations possible for robust scenarios)
@@ -71,7 +72,7 @@ class VOI(PyRadPlanBaseModel, ABC):
     """
 
     name: str
-    ct_image: CT
+    grid: Grid
     mask: sitk.Image
     alpha_x: float = Field(default=0.1)
     beta_x: float = Field(default=0.05)
@@ -126,6 +127,159 @@ class VOI(PyRadPlanBaseModel, ABC):
             else entry
             for entry in v
         ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_inputs(cls, v: Any) -> Any:
+        """
+        Validate the inputs and handle CT/Grid conversion.
+
+        Parameters
+        ----------
+        v : Any
+            The input data dictionary to be validated.
+
+        Returns
+        -------
+        Any
+            The validated input data with proper Grid/CT handling.
+        """
+        if not isinstance(v, dict):
+            return v
+
+        # Check the grid sources Grid/CT/SimpleITK
+        grid_sources = cls._detect_grid_sources(v)
+
+        # Check for corresponding grid sources and handle them
+        # We copy and delete so that pydantic will work as intended.
+        # It works without copy/del but might be troubling when editing the cst in the future!
+
+        if grid_sources["count"] > 1:
+            return cls._handle_multiple_grid_sources(v, grid_sources)
+        elif grid_sources["has_ct"]:
+            return cls._convert_ct_to_grid(v, grid_sources["ct_key"])
+        elif grid_sources["has_sitk_image"]:
+            return cls._convert_sitk_to_grid(v, grid_sources["sitk_image_key"])
+
+        # If no grid sources are provided, create Grid from mask dimensions
+        if "mask" in v and "grid" not in v:
+            v_copy = v.copy()
+            v_copy["grid"] = cls._create_grid_from_mask(v["mask"])
+            return v_copy
+
+        # Only Grid / no modification needed:
+        return v
+
+    @classmethod
+    def _detect_grid_sources(cls, v: dict) -> dict:
+        """Detect available grid sources in the input data."""
+        sources = {
+            "has_ct": False,
+            "has_grid": False,
+            "has_sitk_image": False,
+            "ct_key": None,
+            "sitk_image_key": None,
+            "count": 0,
+        }
+
+        for key, value in v.items():
+            if isinstance(value, CT):
+                sources["has_ct"] = True
+                sources["ct_key"] = key
+                sources["count"] += 1
+            elif isinstance(value, Grid):
+                sources["has_grid"] = True
+                sources["count"] += 1
+            # make sure we handle sitk too without using "mask" by accident
+            elif isinstance(value, sitk.Image) and key in ["grid", "image", "ct_image"]:
+                sources["has_sitk_image"] = True
+                sources["sitk_image_key"] = key
+                sources["count"] += 1
+
+        return sources
+
+    @classmethod
+    def _handle_multiple_grid_sources(cls, v: dict, sources: dict) -> dict:
+        """Handle cases where multiple grid sources are provided."""
+        v_copy = v.copy()
+
+        if sources["has_grid"]:
+            # Keep Grid, remove others
+            if sources["has_ct"]:
+                del v_copy[sources["ct_key"]]
+            if sources["has_sitk_image"]:
+                del v_copy[sources["sitk_image_key"]]
+            warnings.warn(
+                "Multiple grid sources provided (Grid, CT, and/or SimpleITK image). Using Grid and ignoring others...",
+                UserWarning,
+            )
+        elif sources["has_ct"]:
+            # Keep CT (convert to Grid), remove SimpleITK image
+            if sources["has_sitk_image"]:
+                del v_copy[sources["sitk_image_key"]]
+            v_copy = cls._convert_ct_to_grid(v_copy, sources["ct_key"])
+            warnings.warn(
+                "Both CT and SimpleITK image provided. Using CT and ignoring SimpleITK image.",
+                UserWarning,
+            )
+
+        return v_copy
+
+    @classmethod
+    def _convert_ct_to_grid(cls, v: dict, ct_key: str) -> dict:
+        """Convert CT to Grid."""
+        v_copy = v.copy()
+        v_copy["grid"] = Grid.from_sitk_image(v_copy[ct_key].cube_hu)
+
+        if ct_key != "grid":
+            del v_copy[ct_key]
+        return v_copy
+
+    @classmethod
+    def _convert_sitk_to_grid(cls, v: dict, sitk_key: str) -> dict:
+        """Convert SimpleITK image to Grid."""
+        v_copy = v.copy()
+        v_copy["grid"] = Grid.from_sitk_image(v_copy[sitk_key])
+
+        if sitk_key != "grid":
+            del v_copy[sitk_key]
+        return v_copy
+
+    @classmethod
+    def _create_grid_from_mask(cls, mask) -> Grid:
+        """Create a default Grid from mask dimensions."""
+
+        # Handle different mask types
+        if hasattr(mask, "shape"):  # numpy
+            return Grid.from_numpy_array(mask)
+        elif hasattr(mask, "GetSize"):  # SimpleITK
+            return Grid.from_sitk_image(mask)
+        else:
+            # Fallback for unknown mask types
+            raise ValueError(
+                f"Unsupported mask type: {type(mask)}. Expected numpy array or SimpleITK image."
+            )
+
+    @field_validator("grid", mode="before")
+    @classmethod
+    def validate_grid(cls, v: Any) -> Any:
+        """
+        Validate the grid type.
+
+        Parameters
+        ----------
+        v : Any
+            The grid value to be validated.
+
+        Returns
+        -------
+        Grid
+        """
+        if isinstance(v, Grid):
+            return v
+        if isinstance(v, dict):
+            return Grid.model_validate(v)
+        raise ValueError("grid must be an instance of Grid")
 
     @field_validator("mask", mode="before")
     @classmethod
@@ -227,28 +381,38 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         # check dimensions of sitk image
         dims = self.mask.GetSize()
-        if dims != self.ct_image.cube_hu.GetSize():
+        if dims != self.grid.dimensions:
             raise ValueError(
                 f"Mask provided with dimensions {dims}, "
-                f"but ct has dimensions {self.ct_image.cube_hu.GetSize()}"
+                f"but grid has dimensions {self.grid.dimensions}"
             )
 
-        # set image parameters for mask in accordance to ct image
-        self.mask.SetOrigin(self.ct_image.cube_hu.GetOrigin())
-        self.mask.SetSpacing(self.ct_image.cube_hu.GetSpacing())
-        self.mask.SetDirection(self.ct_image.cube_hu.GetDirection())
+        self.mask.SetOrigin(self.grid.origin)
+        self.mask.SetSpacing(self.grid.resolution_vector)
+        self.mask.SetDirection(self.grid.direction_vector)
+
         return self
 
     @computed_field
     @property
     def indices(self) -> np.ndarray:
         """
-        Return the indices of the voxels in the mask using Fortran/SITK convention.
+        Return linear voxel indices into the full mask cube (sitk / Fortran order).
+
+        The indices reference the full cube as stored, regardless of dimensionality.
+
+        - For a 3D mask of sitk size ``(X, Y, Z)`` the linear index is
+          ``idx = z + Z * y + Z * Y * x`` (Z varies fastest, X slowest).
+        - For a 4D mask of sitk size ``(X, Y, Z, T)`` the linear index is
+          ``idx = t + T * z + T * Z * y + T * Z * Y * x`` (T varies fastest).
+          Indices from different scenarios are therefore *interleaved* in the
+          returned array. Use :meth:`scenario_indices` to obtain indices into a
+          single 3D scenario sub-cube.
 
         Returns
         -------
         np.ndarray
-            The indices of the voxels.
+            1D array of linear voxel indices into the full mask cube.
         """
         return np2sitk.sitk_mask_to_linear_indices(self.mask, order="sitk")
 
@@ -256,12 +420,23 @@ class VOI(PyRadPlanBaseModel, ABC):
     @property
     def indices_numpy(self) -> np.ndarray:
         """
-        Return the indices of the voxels in the mask using C/numpy convention.
+        Return linear voxel indices into the full mask cube (numpy / C order).
+
+        The indices reference the full cube as stored, regardless of dimensionality.
+
+        - For a 3D mask of numpy shape ``(Z, Y, X)`` the linear index is
+          ``idx = x + X * y + X * Y * z`` (X varies fastest, Z slowest).
+        - For a 4D mask of numpy shape ``(T, Z, Y, X)`` the linear index is
+          ``idx = x + X * y + X * Y * z + X * Y * Z * t`` (X varies fastest, T
+          slowest). With this convention each scenario occupies a contiguous
+          block of size ``X * Y * Z`` within the returned array. Use
+          :meth:`scenario_indices` to obtain indices into a single 3D
+          scenario sub-cube instead.
 
         Returns
         -------
         np.ndarray
-            The indices of the voxels.
+            1D array of linear voxel indices into the full mask cube.
         """
         return np2sitk.sitk_mask_to_linear_indices(self.mask, order="numpy")
 
@@ -282,12 +457,15 @@ class VOI(PyRadPlanBaseModel, ABC):
     @property
     def num_of_scenarios(self) -> int:
         """
-        Returns the number of scenarios.
+        Return the number of scenarios stored in the mask.
+
+        A 3D mask always has a single implicit scenario. A 4D mask has one
+        scenario per slice along the time axis.
 
         Returns
         -------
         int
-            The number of scenarios.
+            The number of scenarios (``1`` for a 3D mask, ``size_t`` for 4D).
         """
 
         if self.mask.GetDimension() == 4:
@@ -295,19 +473,24 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         return 1
 
-    def get_indices(self, order="sitk") -> np.ndarray:
+    def get_indices(self, order: str = "sitk") -> np.ndarray:
         """
-        Return the indices of the voxels in the mask.
+        Return linear voxel indices into the full mask cube.
+
+        Convenience wrapper around :attr:`indices` and :attr:`indices_numpy`.
+        See those properties for the precise meaning of the linear index for
+        3D and 4D masks.
 
         Parameters
         ----------
         order : str, optional
-            The order of the indices. Defaults to "sitk".
+            Indexing order, ``"sitk"`` (Fortran) or ``"numpy"`` (C). Defaults
+            to ``"sitk"``.
 
         Returns
         -------
         np.ndarray
-            The indices of the voxels.
+            1D array of linear voxel indices into the full mask cube.
         """
         if order == "numpy":
             return self.indices_numpy
@@ -315,44 +498,85 @@ class VOI(PyRadPlanBaseModel, ABC):
             return self.indices
         raise ValueError(f"Unknown order: {order}")
 
-    def scenario_indices(self, order_type="numpy") -> Union[np.ndarray, list[np.ndarray]]:
+    def scenario_indices(
+        self,
+        scenario: Optional[int] = None,
+        order: str = "numpy",
+    ) -> Union[np.ndarray, list[np.ndarray]]:
         """
-        Return the flattened indices of the individual scenarios.
+        Return linear voxel indices restricted to a single 3D scenario.
+
+        Unlike :attr:`indices` / :attr:`indices_numpy`, which return indices
+        into the *full* mask cube (including the time axis for 4D masks), the
+        indices returned here are always relative to a single 3D scenario
+        sub-cube of size ``X * Y * Z``.
 
         Parameters
         ----------
-        order_type : str, optional
-            The order type. Defaults to "numpy".
+        scenario : int, optional
+            Scenario index in ``[0, num_of_scenarios)``. If ``None`` (default),
+            a list with one index array per scenario is returned. The list has
+            length ``1`` for a 3D mask and ``num_of_scenarios`` for a 4D mask.
+            If an integer is given, only the index array for that scenario is
+            returned. For a 3D mask only ``scenario == 0`` is valid.
+        order : str, optional
+            Indexing order, ``"numpy"`` (C-order) or ``"sitk"`` (Fortran
+            order). Defaults to ``"numpy"``.
 
         Returns
         -------
-        List[np.ndarray]
-            The flattened indices of the individual scenarios.
+        np.ndarray
+            The 3D linear indices for the requested scenario, if ``scenario``
+            is an integer.
+        list[np.ndarray]
+            One index array per scenario, if ``scenario`` is ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not ``"numpy"`` or ``"sitk"``, if ``scenario`` is
+            out of range, or if the underlying mask has invalid dimensionality.
         """
-        if order_type == "numpy":
+        if order == "numpy":
             _order = "C"
-        elif order_type == "sitk":
+        elif order == "sitk":
             _order = "F"
         else:
-            raise ValueError(f"Unknown order type: {order_type}")
+            raise ValueError(f"Unknown order: {order}")
 
         arr = sitk.GetArrayViewFromImage(self.mask)
-        if len(arr.shape) == 3:
-            return np.ravel_multi_index(np.argwhere(arr).T, dims=arr.shape, order=_order)
-        if len(arr.shape) == 4:
-            return [
-                np.ravel_multi_index(np.argwhere(arr[i]).T, dims=arr[i].shape, order=_order)
-                for i in range(arr.shape[0])
-            ]
+        if arr.ndim == 3:
+            scenario_arrays = [arr]
+        elif arr.ndim == 4:
+            scenario_arrays = [arr[i] for i in range(arr.shape[0])]
+        else:
+            raise ValueError("Sanity check failed - mask has invalid dimensions")
 
-        raise ValueError("Sanity check failed - mask has invalid dimensions")
+        def _flatten(scen_arr: np.ndarray) -> np.ndarray:
+            if _order == "C":
+                return np.flatnonzero(scen_arr)
+            return np.nonzero(scen_arr.ravel(order="F"))[0]
 
-    def masked_ct(self, order_type="numpy") -> Union[sitk.Image, np.ndarray]:
+        if scenario is None:
+            return [_flatten(s) for s in scenario_arrays]
+
+        if not isinstance(scenario, (int, np.integer)) or isinstance(scenario, bool):
+            raise ValueError(f"Scenario index must be an integer, got {type(scenario).__name__}")
+        if scenario < 0 or scenario >= len(scenario_arrays):
+            raise ValueError(
+                f"Scenario index {scenario} is out of range [0, {len(scenario_arrays) - 1}]"
+            )
+
+        return _flatten(scenario_arrays[scenario])
+
+    def mask_image(self, ct: CT, order_type="numpy") -> Union[sitk.Image, np.ndarray]:
         """
         Return the masked CT image, either as a numpy array or a SimpleITK image.
 
         Parameters
         ----------
+        ct : CT
+            The CT image to be masked.
         order_type : str, optional
             The order type. Defaults to "numpy".
 
@@ -366,10 +590,10 @@ class VOI(PyRadPlanBaseModel, ABC):
             raise ValueError(f"Invalid order type requested: {order_type}")
 
         if len(self.mask.GetSize()) == 3:
-            masked_ct = sitk.Mask(self.ct_image.cube_hu, self.mask)
+            masked_ct = sitk.Mask(ct.cube_hu, self.mask)
         elif len(self.mask.GetSize()) == 4:
             masked_ct = [
-                sitk.Mask(self.ct_image.cube_hu[:, :, :, i], self.mask[:, :, :, i])
+                sitk.Mask(ct.cube_hu[:, :, :, i], self.mask[:, :, :, i])
                 for i in range(self.mask.GetSize()[-1])
             ]
             masked_ct = sitk.JoinSeries(masked_ct)
@@ -383,28 +607,61 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         raise ValueError(f"Sanity check failed -- Invalid order type requested: {order_type}")
 
-    @computed_field
-    @property
-    def scenario_ct_data(self) -> Union[list[np.ndarray], np.ndarray]:
+    def scenario_ct_data(
+        self,
+        ct: CT,
+        scenario: Optional[int] = None,
+    ) -> Union[np.ndarray, list[np.ndarray]]:
         """
-        Returns a list of CT data for the individual scenarios.
+        Return per-scenario CT values extracted by the mask.
+
+        Parameters
+        ----------
+        ct : CT
+            The CT image to extract values from.
+        scenario : int, optional
+            Scenario index in ``[0, num_of_scenarios)``. If ``None`` (default),
+            a list with one array per scenario is returned. The list has
+            length ``1`` for a 3D mask and ``num_of_scenarios`` for a 4D mask.
+            If an integer is given, only the values for that scenario are
+            returned. For a 3D mask only ``scenario == 0`` is valid.
 
         Returns
         -------
-        List[np.ndarray]
-            The CT data for the individual scenarios.
+        np.ndarray
+            The masked CT values for the requested scenario, if ``scenario``
+            is an integer.
+        list[np.ndarray]
+            One masked CT array per scenario, if ``scenario`` is ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``scenario`` is out of range or the mask has invalid
+            dimensionality.
         """
 
         mask_np = sitk.GetArrayFromImage(self.mask).astype("bool")
-        ct_np = sitk.GetArrayFromImage(self.ct_image.cube_hu)
+        ct_np = sitk.GetArrayFromImage(ct.cube_hu)
 
-        if len(self.mask.GetSize()) == 3:
-            return ct_np[mask_np]
+        if mask_np.ndim == 3:
+            scenario_data = [ct_np[mask_np]]
+        elif mask_np.ndim == 4:
+            scenario_data = [ct_np[i][mask_np[i]] for i in range(mask_np.shape[0])]
+        else:
+            raise ValueError("Sanity Check failed -- Unsupported dimensionality of stored mask")
 
-        if len(self.mask.GetSize()) == 4:
-            return [ct_np[i][mask_np[i]] for i in range(mask_np.shape[0])]
+        if scenario is None:
+            return scenario_data
 
-        raise ValueError("Sanity Check failed -- Unsupported dimensionality of stored mask")
+        if not isinstance(scenario, (int, np.integer)) or isinstance(scenario, bool):
+            raise ValueError(f"Scenario index must be an integer, got {type(scenario).__name__}")
+        if scenario < 0 or scenario >= len(scenario_data):
+            raise ValueError(
+                f"Scenario index {scenario} is out of range [0, {len(scenario_data) - 1}]"
+            )
+
+        return scenario_data[scenario]
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         """
@@ -430,7 +687,7 @@ class VOI(PyRadPlanBaseModel, ABC):
             index_lists[0] = np.array(indices, dtype=float)
 
         else:
-            index_lists = self.scenario_indices(order_type="numpy")
+            index_lists = self.scenario_indices(order="numpy")
             for i, index_list in enumerate(index_lists):
                 index_lists[i] = index_list.astype(float)
 
@@ -449,7 +706,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         return voi_list
 
-    def resample_on_new_ct(self, new_ct: CT) -> Self:
+    def _resample_on_new_ct(self, new_ct: CT) -> Self:
         """
         Resample on new CT image.
 
@@ -487,7 +744,9 @@ class VOI(PyRadPlanBaseModel, ABC):
         else:
             raise ValueError("Sanity check failed -- mask has invalid dimensions")
 
-        resampled_voi = self.model_copy(update={"mask": new_mask, "ct_image": new_ct})
+        resampled_voi = self.model_copy(
+            update={"mask": new_mask, "grid": Grid.from_sitk_image(new_ct.cube_hu)}
+        )
 
         if len(resampled_voi.indices) == 0:
             warnings.warn("Resampling created an empty structure")
