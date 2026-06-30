@@ -99,53 +99,62 @@ class TabulatedRBEModel(LQModel):
         self.sp_table_name = "SPtable.mat"
         self._sp_table = self.load_sp_table()
         self._q_table = self.load_quantity_table()  # could maybe also be a z* table or so
-        # check if sp and rbe table have same fragments otherwise raise errors
-        # set and check fragments to include
-        self.load_fragments()
 
-    def load_fragments(self):
+    def load_fragments(self, kernel):
         """
         Validate fragment consistency and build index mappings between tables.
 
-        Checks that every fragment in the quantity table is also present in the
-        stopping power table, then populates :attr:`fragments_q_table_ix` and
-        :attr:`fragments_sp_table_ix` with the corresponding row indices.
-
-        If :attr:`fragments_to_include` is ``None`` or ``"all"``, all fragments
-        in the quantity table are selected; otherwise only the (A, Z) pairs
-        listed in :attr:`fragments_to_include` are used.
-
         """
-        quantity_fragments = self._q_table[
-            "fragments_AZ"
-        ]  # matrix A, Z values for each fragment in the quantity table
-        sp_fragments = self._sp_table["fragments_AZ"]
-        if not set(map(tuple, quantity_fragments)).issubset(set(map(tuple, sp_fragments))):
-            sp_keys = set(map(tuple, sp_fragments))
-            missing_fragments = [f for f in quantity_fragments if tuple(f) not in sp_keys]
-            raise ValueError(
-                f"The following RBE fragments are missing from the SP table: {missing_fragments}"
-            )
         if self.fragments_to_include is None or self.fragments_to_include == "all":
-            self.fragments_to_include = quantity_fragments
-            self.fragments_q_table_ix = list(range(quantity_fragments.shape[0]))
+            self.fragments_to_include = np.array(
+                [
+                    [
+                        k.A for k in kernel.fluence_spectrum.fragments if k.Z > 0
+                    ],  # electrons are -1
+                    [k.Z for k in kernel.fluence_spectrum.fragments if k.Z > 0],
+                ]
+            ).T
+            self.fragments_kernel_ix = list(range(self.fragments_to_include.shape[0]))
         else:  # given as A,Z values in matrix
-            self.fragments_q_table_ix = []
-            for fragment in self.fragments_to_include:
-                idx = np.where(np.all(quantity_fragments == fragment, axis=1))[0]
-                if idx.shape[0] == 0:
-                    raise ValueError(
-                        f"Fragment {fragment} specified in fragments_to_include is not present in the RBE table fragments: {quantity_fragments}"
-                    )
-                self.fragments_q_table_ix.append(int(idx[0]))
+            all_fragments = np.array(
+                [
+                    [k.A for k in kernel.fluence_spectrum.fragments if k.Z > 0],
+                    [k.Z for k in kernel.fluence_spectrum.fragments if k.Z > 0],
+                ]
+            ).T
+            self.fragments_kernel_ix = np.where(
+                (all_fragments[:, None] == self.fragments_to_include).all(axis=2).any(axis=1)
+            )[0]
         self.fragments_sp_table_ix = []
-        for fragment in quantity_fragments[self.fragments_q_table_ix]:
-            idx = np.where(np.all(sp_fragments == fragment, axis=1))[0]
-            if idx.shape[0] == 0:
-                raise ValueError(
-                    f"Fragment {fragment} specified in fragments_to_include is not present in the SP table fragments: {sp_fragments}"
+        self.fragments_q_table_ix = []
+        for fragment in self.fragments_to_include:
+            idx_sp = np.where(self._sp_table["fragments_AZ"][:, 1] == fragment[1])[0]
+            idx_q = np.where(self._q_table["fragments_AZ"][:, 1] == fragment[1])[0]
+            if idx_sp.shape[0] == 0 or idx_q.shape[0] == 0:
+                Warning(
+                    f"Fragment {fragment} specified in fragments_to_include is not present in the SP or quantity table fragments: {self._sp_table['fragments_AZ']}  "
                 )
-            self.fragments_sp_table_ix.append(int(idx[0]))
+                self.fragments_kernel_ix = np.delete(
+                    self.fragments_kernel_ix,
+                    np.where((self.fragments_to_include == fragment).all(axis=1))[0],
+                    axis=0,
+                )
+                self.fragments_to_include = np.delete(
+                    self.fragments_to_include,
+                    np.where((self.fragments_to_include == fragment).all(axis=1))[0],
+                    axis=0,
+                )
+            else:
+                self.fragments_sp_table_ix.append(int(idx_sp[0]))
+                self.fragments_q_table_ix.append(int(idx_q[0]))
+        # Check that all selected fragments are present in both tables
+        if not np.array_equal(
+            self._sp_table["fragments_AZ"][self.fragments_sp_table_ix, :],
+            self._q_table["fragments_AZ"][self.fragments_q_table_ix, :],
+        ):
+            raise ValueError(
+                "Selected fragments are not consistent between the SP table and the quantity table."
+            )
 
     def load_sp_table(self) -> dict:
         """
@@ -218,13 +227,13 @@ class TabulatedRBEModel(LQModel):
                 v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
         return v_tissue_index
 
-    def get_quantity(self, q_table: dict, qty: str, fragment_ix: int, xp) -> Array:
+    def get_quantity(self, q_table: dict, qty: str, xp) -> Array:
         """
         Read a single quantity row from the quantity table.
 
         Hereby any configured transform (e.g. sqrt) is applied before returning the value.
         """
-        raw = q_table[qty][fragment_ix, :]
+        raw = q_table[qty]
         transform = self.quantity_transforms.get(qty)
         return getattr(xp, transform)(raw) if transform else raw
 
@@ -239,52 +248,32 @@ class TabulatedRBEModel(LQModel):
         )  # energies for which the kernel table has values
         # interppolate dEdx
         sp_table = {}
-        sp_interp = xp.full((self._sp_table["dE_dx"].shape[0], energies.shape[1]), 0.0)
-        new_energies = xp.full((self._sp_table["energies"].shape[0], energies.shape[1]), 0.0)
+        sp_interp = xp.full(energies.shape, 0.0)
+        new_energies = xp.full(energies.shape, 0.0)
         for i, ix in enumerate(self.fragments_sp_table_ix):
-            sp_interp[ix, :] = array_interp(
+            sp_interp[i, :] = array_interp(
                 energies[i, :],
                 self._sp_table["energies"][ix, :],
                 self._sp_table["dE_dx"][ix, :],
             )
-            new_energies[ix, :] = energies[ix, :]
+            new_energies[i, :] = energies[i, :]
         sp_table["dE_dx"] = sp_interp
         sp_table["energies"] = new_energies
         q_table = {}
         # interpolate quantity table values
         for qty in self.quantities_in_table:
-            qty_interp = xp.full((self._q_table[qty].shape[0], energies.shape[1]), 0.0)
-            new_energies = xp.full((self._q_table["energies"].shape[0], energies.shape[1]), 0.0)
+            qty_interp = xp.full(energies.shape, 0.0)
+            new_energies = xp.full(energies.shape, 0.0)
             for i, ix in enumerate(self.fragments_q_table_ix):
-                qty_interp[ix, :] = array_interp(
+                qty_interp[i, :] = array_interp(
                     energies[i, :],
                     self._q_table["energies"][ix, :],
                     self._q_table[qty][ix, :],
                 )
-                new_energies[ix, :] = energies[ix, :]
+                new_energies[i, :] = energies[i, :]
             q_table[qty] = qty_interp
         q_table["energies"] = new_energies
         return q_table, sp_table
-
-    def set_kernel_fragments(self, kernel: dict):
-        """
-        Map quantity-table fragments to their positions in the kernel fluence spectrum.
-        """
-        self.fragments_kernel_ix = []
-        fragment_kernels = np.array(
-            [
-                [k.A for k in kernel.fluence_spectrum.fragments],
-                [k.Z for k in kernel.fluence_spectrum.fragments],
-            ]
-        ).T
-        quantity_fragments = self._q_table["fragments_AZ"]
-        for fragment in quantity_fragments[self.fragments_q_table_ix]:
-            idx = np.where(np.all(fragment_kernels == fragment, axis=1))[0]
-            if idx.shape[0] == 0:
-                raise ValueError(
-                    f"Fragment {fragment} specified in fragments_to_include is not present in the kernel table fragments: {fragment_kernels}"
-                )
-            self.fragments_kernel_ix.append(int(idx[0]))
 
     def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
         """
@@ -300,8 +289,8 @@ class TabulatedRBEModel(LQModel):
             [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
         )  # (n_fragments, n_energies)
 
-        q_energies = xp.stack([q_table["energies"][f] for f in self.fragments_q_table_ix])
-        sp_energies = xp.stack([sp_table["energies"][f] for f in self.fragments_sp_table_ix])
+        q_energies = q_table["energies"][:]
+        sp_energies = sp_table["energies"][:]
 
         if not xp.all(q_energies == sp_energies):
             raise ValueError(
@@ -314,15 +303,10 @@ class TabulatedRBEModel(LQModel):
                 f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
             )
 
-        sp = xp.stack([sp_table["dE_dx"][f] for f in self.fragments_sp_table_ix])
+        sp = sp_table["dE_dx"][:]
         quantitys = {}
         for iqty, qty in enumerate(self.quantities_in_kernel):
-            quantitys[qty] = xp.stack(
-                [
-                    self.get_quantity(q_table, self.quantities_in_table[iqty], f, xp)
-                    for f in self.fragments_q_table_ix
-                ]
-            )
+            quantitys[qty] = self.get_quantity(q_table, self.quantities_in_table[iqty], xp)
 
         # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
         sp = sp[:, :, xp.newaxis]
@@ -336,7 +320,6 @@ class TabulatedRBEModel(LQModel):
                 for f in self.fragments_kernel_ix
             ]
         )
-
         # Weighted sums over energy axis → (n_fragments, n_depths)
         dose_per_fragment = xp.sum(sp * fluence_spectra, axis=1)
         quantity_num_per_fragment = {}

@@ -462,9 +462,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             dij = self._allocate_bio_dose_container(dij)  # TODO: Not fully implemented yet
             # initialize the tabulate rbe model by pre interpolating the fluence spectrum and tables to thesame energies
             if isinstance(self.bio_model, TabulatedRBEModel):
-                self.bio_model.set_kernel_fragments(
-                    self._machine.pb_kernels[self._machine.energies[0]],
-                )
+                self.bio_model.load_fragments(self._machine.pb_kernels[self._machine.energies[0]])
                 for pb_energy in self._machine.energies:
                     self._machine.pb_kernels[pb_energy] = self.bio_model.compute_kernel_quantities(
                         self._machine.pb_kernels[pb_energy], self._v_tissue_index
