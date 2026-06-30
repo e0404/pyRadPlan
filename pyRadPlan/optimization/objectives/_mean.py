@@ -1,6 +1,6 @@
 """Mean dose objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -27,12 +27,20 @@ class MeanDose(Objective):
     While we implement a reference value, we suggest to only use 0 as reference
     """
 
-    name = "Mean Dose"
+    name: Literal["Mean Dose"] = "Mean Dose"
 
-    d_ref: Annotated[float, Field(default=0.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d_ref: Annotated[
+        float,
+        Field(default=0.0, ge=0.0, description="Reference mean dose to achieve."),
+        ParameterMetadata(kind="reference"),
+    ]
     f_diff: Annotated[
-        str,
-        Field(default="quadratic", alias="f_\{diff\}"),
+        Literal["linear", "quadratic"],
+        Field(
+            default="quadratic",
+            alias="f_\{diff\}",
+            description="Difference function penalizing deviation from the reference mean dose.",
+        ),
         ParameterMetadata(kind=["linear", "quadratic"]),
     ]
 

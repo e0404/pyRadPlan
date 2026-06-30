@@ -76,7 +76,8 @@ Generating beam angles
 ----------------------
 
 :func:`~pyRadPlan.ai_agents.generate_beam_angles` populates ``pln.prop_stf`` with
-``gantry_angles`` and matching ``couch_angles`` (all zeros by default):
+``gantry_angles`` and matching ``couch_angles`` (zeros unless the model suggests
+non-coplanar beams):
 
 .. code-block:: python
 
@@ -129,8 +130,14 @@ previously assigned objectives are cleared first (``clear_existing=True``):
         if voi.objectives:
             print(voi.name, [type(o).__name__ for o in voi.objectives])
 
-The agent currently supports the following objective types:
-``SquaredDeviation``, ``SquaredOverdosing``, ``SquaredUnderdosing``.
+The agent works directly on pyRadPlan's pydantic
+:class:`~pyRadPlan.optimization.objectives.Objective` models: all registered objective
+types (except image-based ones such as ``SquaredMimicking``) are offered to the LLM as a
+discriminated union, so parameter names, bounds, defaults and descriptions are taken
+straight from the objective definitions and the validated output consists of ready-to-use
+objective instances. Objectives registered via
+:func:`~pyRadPlan.optimization.objectives.register_objective` become available to the
+agent automatically.
 
 End-to-end example
 ------------------

@@ -1,6 +1,6 @@
 """Squared Mimicking Objective."""
 
-from typing import Annotated, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import Field
 
@@ -26,7 +26,7 @@ class SquaredMimicking(Objective):
         dose reference image (array)
     """
 
-    name = "Squared Mimicking"
+    name: Literal["Squared Mimicking"] = "Squared Mimicking"
 
     def default():
         image = sitk.Image([1, 1, 1], sitk.sitkFloat32)

@@ -27,6 +27,7 @@ from pyRadPlan import (
     plot_slice,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 logging.basicConfig(level=logging.INFO)
@@ -102,17 +103,16 @@ result_opt = dij.compute_result_ct_grid(fluence)
 # Visualize the results
 # %%
 
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result_opt)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
+    plot_slice(ct, cst, result_opt["physical_dose"], view_slice)
+
 # Choose a slice to visualize
 view_slice = int(np.round(ct.size[2] / 2))
-
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result_opt["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
 
 # %% [markdown]
 # You can also run calc_dose_forward (direct dose calculation) without optimization.

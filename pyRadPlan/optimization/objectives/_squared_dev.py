@@ -1,6 +1,6 @@
 """Squared Deviation Objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -23,9 +23,13 @@ class SquaredDeviation(Objective):
         dose reference value
     """
 
-    name = "Squared Deviation"
+    name: Literal["Squared Deviation"] = "Squared Deviation"
 
-    d_ref: Annotated[float, Field(default=60.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d_ref: Annotated[
+        float,
+        Field(default=60.0, ge=0.0, description="Reference dose the structure should achieve."),
+        ParameterMetadata(kind="reference"),
+    ]
 
     def compute_objective(self, values: Array) -> Array:
         deviation = values - self.d_ref

@@ -26,6 +26,7 @@ from pyRadPlan import (
     load_tg119,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.machines import create_bld
 from pyRadPlan.stf import FieldShapeAsBLD, FieldShapeComposite
 
@@ -173,15 +174,19 @@ dij = calc_dose_forward(ct, cst, stf, pln)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[1] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, dij)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[1] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=dij["physical_dose"],
-    view_slice=view_slice,
-    plane="coronal",
-    overlay_unit="Gy",
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=dij["physical_dose"],
+        view_slice=view_slice,
+        plane="coronal",
+        overlay_unit="Gy",
+    )

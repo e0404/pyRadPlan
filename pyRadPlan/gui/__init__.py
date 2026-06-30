@@ -6,7 +6,10 @@ and analyzing radiotherapy plans and quantity distributions.
 
 try:
     from .apps import gui, launch_viewer, analysis_viewer
+
+    GUI_AVAILABLE = True
 except ImportError as _exc:
+    GUI_AVAILABLE = False
     _import_error = _exc
 
     def _missing_gui(*_args, **_kwargs):
@@ -22,4 +25,5 @@ __all__ = [
     "gui",
     "launch_viewer",
     "analysis_viewer",
+    "GUI_AVAILABLE",
 ]

@@ -1,6 +1,6 @@
 """Equivalent uniform dose objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -22,13 +22,25 @@ class EUD(Objective):
         reference value
     """
 
-    name = "EUD"
+    name: Literal["EUD"] = "EUD"
 
-    eud_ref: Annotated[float, Field(default=0.0, ge=0.0), ParameterMetadata(kind="reference")]
-    k: Annotated[float, Field(default=1.0), ParameterMetadata()]
+    eud_ref: Annotated[
+        float,
+        Field(default=0.0, ge=0.0, description="Reference equivalent uniform dose (EUD)."),
+        ParameterMetadata(kind="reference"),
+    ]
+    k: Annotated[
+        float,
+        Field(default=1.0, description="EUD exponent (volume-effect parameter)."),
+        ParameterMetadata(),
+    ]
     f_diff: Annotated[
-        str,
-        Field(default="quadratic", alias="f_\{diff\}"),
+        Literal["linear", "quadratic"],
+        Field(
+            default="quadratic",
+            alias="f_\{diff\}",
+            description="Difference function penalizing deviation from the reference EUD.",
+        ),
         ParameterMetadata(kind=["linear", "quadratic"]),
     ]
 

@@ -1,5 +1,7 @@
 """Dose uniformity."""
 
+from typing import Literal
+
 import array_api_compat
 
 from ...core.xp_utils.typing import Array
@@ -10,7 +12,7 @@ from ._objective import Objective
 class DoseUniformity(Objective):
     """Uniformity (minimize standard deviation) objective."""
 
-    name = "Dose Uniformity"
+    name: Literal["Dose Uniformity"] = "Dose Uniformity"
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
