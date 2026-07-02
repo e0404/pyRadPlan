@@ -49,8 +49,9 @@ print(f"Device:             {settings.device}")
 
 `list_models` discovers models dynamically: locally downloaded models (with all
 versions available on disk) and, when online, models published on the HuggingFace
-Hub under `MlSettings.hf_org` (most recent version only). The modality is derived
-from the repository name (`dosecalc-*` / `outcome-*`).
+Hub under `MlSettings.hf_org` (most recent version only). Each model lives in its
+own repository; the modality is derived from the repository name (`dosecalc-*` /
+`outcome-*`).
 """
 
 
@@ -123,5 +124,5 @@ optionally, `PYRADPLAN_HUGGINGFACE_PATH` to keep a local copy. Pin a `revision`
 # %%
 model, preprocessor = load_model("outcome-ORPDenseNet-tg119")  # , revision="v1.0.0")
 # Or fully explicit (bypassing the registry):
-model, preprocessor = load_model(repo_id="my-org/dosecalc-bayes-protons", subfolder="lung")
+model, preprocessor = load_model(repo_id="my-org/dosecalc-bayes-protons")
 pass

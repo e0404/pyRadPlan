@@ -17,37 +17,17 @@ def test_modality_from_name():
     assert modality_from_name("something-else") is None
 
 
-def test_variant_name():
-    assert _factory._variant_name("repo", None) == "repo"
-    assert (
-        _factory._variant_name("dosecalc-bayes-protons", "lung") == "dosecalc-bayes-protons-lung"
-    )
-    assert _factory._variant_name("outcome-orpdensenet", "hn/xerostomia") == (
-        "outcome-orpdensenet-hn-xerostomia"
-    )
-
-
 def test_latest_version_ordering():
     # numeric-aware: 1.0.10 must beat 1.0.2, and 'v' prefixes are handled
     assert max(["v1.0.0", "v1.0.10", "v1.0.2"], key=_factory._version_key) == "v1.0.10"
 
 
-def test_remote_variants_root_and_subfolders():
+def test_has_model_contract():
     contract = set(_factory.REQUIRED_FILES)
-    # root-level model
-    root_files = contract | {".gitattributes", "README.md"}
-    assert _factory._remote_variants(root_files) == {None}
-
-    # two subfolder variants plus junk
-    sub_files = (
-        {f"lung/{f}" for f in contract}
-        | {f"head-and-neck/{f}" for f in contract}
-        | {"README.md", "lung/notes.txt"}
-    )
-    assert _factory._remote_variants(sub_files) == {"lung", "head-and-neck"}
-
-    # incomplete contract -> not a variant
-    assert _factory._remote_variants({"model_config.json", "model.py"}) == set()
+    # full contract at the repo root (plus junk)
+    assert _factory._has_model_contract(contract | {".gitattributes", "README.md"})
+    # incomplete contract -> not a model
+    assert not _factory._has_model_contract({"model_config.json", "model.py"})
 
 
 def _fake_discovery(monkeypatch, local=None, remote=None):
@@ -68,22 +48,20 @@ def test_list_models_merges_local_and_remote(monkeypatch):
         local={
             "outcome-tg119": {
                 "repo": "outcome-tg119",
-                "subfolder": None,
                 "versions": ["v1.0.0", "v1.0.1"],
             }
         },
         remote={
-            "outcome-tg119": {"repo": "outcome-tg119", "subfolder": None, "version": "v1.0.1"},
-            "dosecalc-bayes-protons-lung": {
+            "outcome-tg119": {"repo": "outcome-tg119", "version": "v1.0.1"},
+            "dosecalc-bayes-protons": {
                 "repo": "dosecalc-bayes-protons",
-                "subfolder": "lung",
                 "version": "main",
             },
         },
     )
 
     specs = {s.name: s for s in list_models(offline=False)}
-    assert set(specs) == {"outcome-tg119", "dosecalc-bayes-protons-lung"}
+    assert set(specs) == {"outcome-tg119", "dosecalc-bayes-protons"}
 
     merged = specs["outcome-tg119"]
     assert merged.local_versions == ("v1.0.0", "v1.0.1")
@@ -91,8 +69,8 @@ def test_list_models_merges_local_and_remote(monkeypatch):
     assert merged.is_local and merged.is_remote
     assert merged.modality == Modality.OUTCOME
 
-    remote_only = specs["dosecalc-bayes-protons-lung"]
-    assert remote_only.subfolder == "lung"
+    remote_only = specs["dosecalc-bayes-protons"]
+    assert remote_only.repo == "dosecalc-bayes-protons"
     assert remote_only.local_versions == ()
     assert not remote_only.is_local
     assert remote_only.modality == Modality.DOSE_CALC
@@ -101,9 +79,7 @@ def test_list_models_merges_local_and_remote(monkeypatch):
 def test_offline_skips_remote(monkeypatch):
     _fake_discovery(
         monkeypatch,
-        local={
-            "outcome-tg119": {"repo": "outcome-tg119", "subfolder": None, "versions": ["local"]}
-        },
+        local={"outcome-tg119": {"repo": "outcome-tg119", "versions": ["local"]}},
         remote=None,  # would raise if the remote path is taken
     )
 
@@ -116,12 +92,12 @@ def test_list_models_modality_filter(monkeypatch):
     _fake_discovery(
         monkeypatch,
         local={
-            "outcome-a": {"repo": "outcome-a", "subfolder": None, "versions": ["local"]},
-            "dosecalc-b-lung": {"repo": "dosecalc-b", "subfolder": "lung", "versions": ["local"]},
+            "outcome-a": {"repo": "outcome-a", "versions": ["local"]},
+            "dosecalc-b": {"repo": "dosecalc-b", "versions": ["local"]},
         },
     )
     assert [s.name for s in list_models(Modality.OUTCOME, offline=True)] == ["outcome-a"]
-    assert [s.name for s in list_models(Modality.DOSE_CALC, offline=True)] == ["dosecalc-b-lung"]
+    assert [s.name for s in list_models(Modality.DOSE_CALC, offline=True)] == ["dosecalc-b"]
 
 
 def test_get_model_spec(monkeypatch):
@@ -130,7 +106,6 @@ def test_get_model_spec(monkeypatch):
         local={
             "outcome-tg119": {
                 "repo": "outcome-tg119",
-                "subfolder": None,
                 "versions": ["v1.0.0"],
             }
         },
@@ -138,7 +113,6 @@ def test_get_model_spec(monkeypatch):
     spec = get_model_spec("outcome-tg119", offline=True)
     assert isinstance(spec, ModelSpec)
     assert spec.repo == "outcome-tg119"
-    assert spec.subfolder is None
     assert spec.modality == Modality.OUTCOME
 
 
@@ -159,7 +133,7 @@ def test_remote_discovery_is_cached(monkeypatch):
 
     def _remote(org):
         calls["n"] += 1
-        return {"outcome-a": {"repo": "outcome-a", "subfolder": None, "version": "v1"}}
+        return {"outcome-a": {"repo": "outcome-a", "version": "v1"}}
 
     monkeypatch.setattr(_factory, "_discover_local", lambda cfg: {})
     monkeypatch.setattr(_factory, "_discover_remote", _remote)

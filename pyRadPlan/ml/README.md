@@ -15,7 +15,7 @@ model, preprocessor = load_model(local_dir="path/to/model_folder")
 model, preprocessor = load_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
 
 # Explicit repository:
-model, preprocessor = load_model(repo_id="my-org/my-repo", subfolder="lung")
+model, preprocessor = load_model(repo_id="my-org/my-repo")
 
 print(list_models())              # discovered locally + on the Hub
 print(list_models(offline=True))  # only models already on disk
@@ -24,8 +24,8 @@ print(list_models(offline=True))  # only models already on disk
 `list_models` is dynamic: it discovers locally downloaded models (with every
 version on disk) plus, when online, models published on the Hub under
 `MlSettings.hf_org` (latest version only). The modality is derived from the
-repository name (`dosecalc-*` / `outcome-*`). A repository may hold several
-models in subfolders; each valid variant is listed as `"<repo>-<subfolder>"`.
+repository name (`dosecalc-*` / `outcome-*`). Each model lives in its own
+repository and is listed under the repository name.
 
 ## Configuration
 
@@ -43,8 +43,8 @@ models in subfolders; each valid variant is listed as `"<repo>-<subfolder>"`.
 
 ## Model-repository contract
 
-Each model lives in a HuggingFace repo (optionally in a subfolder) or a local
-directory containing exactly these files:
+Each model lives in its own HuggingFace repo (or a local directory) containing
+exactly these files:
 
 ```
 <model folder>/

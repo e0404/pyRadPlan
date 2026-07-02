@@ -103,13 +103,12 @@ def _metadata_matches(path: Path, repo_id: str, revision: Optional[str]) -> bool
     return meta.get("repo_id") == repo_id and meta.get("revision") == revision
 
 
-def _download(  # noqa: PLR0913
+def _download(
     snapshot_download,
     repo_id: str,
     revision: Optional[str],
     cache_dir: Optional[Path],
     local_dir: Optional[Path],
-    allow_patterns: Optional[list[str]],
     offline: bool,
 ) -> Path:
     """Run ``snapshot_download`` with an offline fallback."""
@@ -118,7 +117,6 @@ def _download(  # noqa: PLR0913
         "revision": revision,
         "cache_dir": str(cache_dir) if cache_dir else None,
         "local_dir": str(local_dir) if local_dir else None,
-        "allow_patterns": allow_patterns,
     }
     try:
         return Path(snapshot_download(local_files_only=offline, **kwargs))
@@ -140,10 +138,9 @@ def _download(  # noqa: PLR0913
             ) from exc2
 
 
-def resolve_model_dir(  # noqa: PLR0913
+def resolve_model_dir(
     *,
     repo_id: Optional[str] = None,
-    subfolder: Optional[str] = None,
     revision: Optional[str] = None,
     local_dir: Optional[Union[str, Path]] = None,
     offline: Optional[bool] = None,
@@ -156,8 +153,6 @@ def resolve_model_dir(  # noqa: PLR0913
     repo_id : str, optional
         HuggingFace repository id (``"<org>/<repo>"``). Required unless a valid
         ``local_dir`` is given.
-    subfolder : str, optional
-        Subfolder inside the repository / ``local_dir``.
     revision : str, optional
         Git revision (tag, branch or commit) to download. Used for version
         dedup against ``local_dir`` metadata.
@@ -175,7 +170,7 @@ def resolve_model_dir(  # noqa: PLR0913
     Returns
     -------
     Path
-        The resolved model directory (including ``subfolder`` if given).
+        The resolved model directory.
 
     Raises
     ------
@@ -197,7 +192,7 @@ def resolve_model_dir(  # noqa: PLR0913
 
     if local_dir is not None:
         local_dir = Path(local_dir)
-        target = local_dir / subfolder if subfolder else local_dir
+        target = local_dir
 
         if is_valid_model_dir(target) and (
             repo_id is None or revision is None or _metadata_matches(target, repo_id, revision)
@@ -217,7 +212,6 @@ def resolve_model_dir(  # noqa: PLR0913
         )
 
     snapshot_download = _import_snapshot_download()
-    allow_patterns = [f"{subfolder}/*"] if subfolder else None
 
     logger.info("Resolving model '%s' (revision=%s, offline=%s).", repo_id, revision, offline)
     snapshot = _download(
@@ -226,13 +220,10 @@ def resolve_model_dir(  # noqa: PLR0913
         revision=revision,
         cache_dir=cache_dir,
         local_dir=Path(local_dir) if local_dir is not None else None,
-        allow_patterns=allow_patterns,
         offline=offline,
     )
 
-    resolved = snapshot / subfolder if subfolder else snapshot
-
     if local_dir is not None:
-        _write_metadata(resolved, repo_id, revision)
+        _write_metadata(snapshot, repo_id, revision)
 
-    return resolved
+    return snapshot

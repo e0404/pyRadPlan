@@ -114,11 +114,10 @@ def _load_weights(model: Any, weights_path: Path, device: str) -> None:
     st_load_model(model, str(weights_path), device=device)
 
 
-def load_model(  # noqa: PLR0913
+def load_model(
     name: Optional[str] = None,
     *,
     repo_id: Optional[str] = None,
-    subfolder: Optional[str] = None,
     revision: Optional[str] = None,
     local_dir: Optional[str] = None,
     offline: Optional[bool] = None,
@@ -131,12 +130,10 @@ def load_model(  # noqa: PLR0913
     ----------
     name : str, optional
         Friendly name of a registered model (see
-        :func:`~pyRadPlan.ml.list_models`). Resolves ``repo_id`` and
-        ``subfolder`` from the registry and :attr:`MlSettings.hf_org`.
+        :func:`~pyRadPlan.ml.list_models`). Resolves ``repo_id`` from the
+        registry and :attr:`MlSettings.hf_org`.
     repo_id : str, optional
         Explicit HuggingFace repository id, overriding the registry lookup.
-    subfolder : str, optional
-        Subfolder inside the repository / ``local_dir``.
     revision : str, optional
         Git revision (tag/branch/commit) to load.
     local_dir : str, optional
@@ -172,12 +169,9 @@ def load_model(  # noqa: PLR0913
         spec = get_model_spec(name, offline=offline)
         if repo_id is None:
             repo_id = resolve_repo_id(spec, cfg.hf_org)
-        if subfolder is None:
-            subfolder = spec.subfolder
 
     model_dir = resolve_model_dir(
         repo_id=repo_id,
-        subfolder=subfolder,
         revision=revision,
         local_dir=local_dir,
         offline=offline,
