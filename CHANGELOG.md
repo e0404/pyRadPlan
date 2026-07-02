@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pyRadPlan.ml` module: HuggingFace-based ML model handling. `load_model()` loads a model and its preprocessor from the HuggingFace Hub or a local directory, with version dedup, offline support and logging. `list_models()` discovers models dynamically from local storage (all on-disk versions) and the Hub under `MlSettings.hf_org` (latest version only), with modality derived from the repo name and a short-lived cache to limit Hub requests. Includes a `BasePreprocessor` contract, an example model under `data/ml_models/example_model`, and a `model_config.template.json`. Install extras via `pip install pyRadPlan[ml]`.
+
 ## [0.4.1] - 2026-06-16
 
 ### Added
