@@ -55,19 +55,24 @@ exactly these files:
 ```
 
 Instantiation is driven entirely by `model_config.json` — there is no extra
-init file:
+init file. Any model type (dose calc, outcome, …) uses the same handful of
+loader-consumed keys; everything else is free-form metadata the loader ignores:
 
 - `model_name` selects the class in `model.py`; `model_params` are passed to its
-  constructor as keyword arguments.
+  constructor as keyword arguments (so keep only real constructor kwargs there).
 - the `BasePreprocessor` subclass in `preprocessor.py` is constructed with
-  `model_preprocessing`. If `preprocessor.py` defines more than one subclass,
-  set `preprocessor_name` in `model_config.json` to disambiguate.
+  `model_preprocessing`, which configures **both** `preprocess()` and
+  `postprocess()`. If `preprocessor.py` defines more than one subclass, set
+  `preprocessor_name` in `model_config.json` to disambiguate.
+- `metadata` is optional and never read by the loader; use it to record how the
+  model was trained and any assumptions it makes.
 
 ```json
 {
     "model_name": "ExampleNet",
     "model_params": {"in_channels": 3, "hidden_channels": 4, "out_features": 1},
-    "model_preprocessing": {"type_order": ["dose", "ct", "mask"]}
+    "model_preprocessing": {"type_order": ["dose", "ct", "mask"]},
+    "metadata": {"description": "…", "training": {"modality": "protons"}}
 }
 ```
 
