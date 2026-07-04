@@ -59,3 +59,14 @@ def test_data_carbon(test_data_carbon_raw):
     result = tmp["resultGUI"]
 
     return ct, cst, result
+
+
+@pytest.fixture
+def test_data_oxygen(test_data_oxygen_raw):
+    tmp = test_data_oxygen_raw
+
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    result = tmp["resultGUI"]
+
+    return ct, cst, result
