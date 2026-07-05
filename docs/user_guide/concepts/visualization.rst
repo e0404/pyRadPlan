@@ -36,12 +36,12 @@ Key parameters
      - Description
    * - ``image_volume``
      - CT image (:class:`~pyRadPlan.ct.CT`, dict, or :class:`sitk.Image`). Displayed in
-       greyscale with HU windowing.
+       grayscale with HU windowing.
    * - ``cst``
      - Structure set (:class:`~pyRadPlan.cst.StructureSet` or matRad-style list). Contours
        are drawn for all VOIs.
    * - ``overlay``
-     - Dose or quantity array to display as a colour overlay. Can be a NumPy array or
+     - Dose or quantity array to display as a color overlay. Can be a NumPy array or
        :class:`sitk.Image` on either the dose grid or the CT grid.
    * - ``overlay_unit``
      - Physical unit string (e.g. ``"Gy"``, ``"Gy(RBE)"``). Used for the colorbar label and
@@ -129,5 +129,5 @@ Tips
   that call ``plt.savefig()`` manually).
 - ``overlay`` can be any quantity array returned by ``dij.compute_result_ct_grid()``, not just
   ``"physical_dose"`` — e.g. ``result["rbe_x_dose"]`` or ``result["let_dose"]``.
-- Structure colours are assigned automatically but can be customized by setting ``voi.color``
+- Structure colors are assigned automatically but can be customized by setting ``voi.color``
   on individual VOI objects.

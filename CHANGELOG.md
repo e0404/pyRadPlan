@@ -8,15 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- GUI: File menu collecting all data I/O (load/import/export)
+- GUI: resizable, collapsible main-window panels via splitters
+- GUI: workflow staleness indicators that flag outdated dose influence / results
+- GUI: objective count in the objectives widget header
+- GUI: AI buttons to suggest VOI objectives and beam angles via a reusable AI task dialog
+- GUI: persistent log console panel (bottom-left) fed by Python's logging system, with a level filter and colored warnings/errors — messages are visible even without a terminal
+- GUI: "Log Panel" toggle in the View menu
+- GUI: VOI list tooltips showing the structure's metadata (type, α_x, β_x, α/β, overlap priority)
+- GUI: clicking a VOI name opens a popup to edit type, α_x, β_x and overlap priority (validated against the VOI model); toggling visibility remains on the checkbox
+- GUI: VOI list can be grouped by overlap priority (one group per priority level) instead of by type via a new dropdown
+- GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
+- `ai_agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
 
 ### Changed
 
+- GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
 - VOIs now connect to grids (3D or 4D)
 - VOIs validate from more formats formats (given the context)
+- GUI: shared worker-thread, adaptive spin box and number-list helpers consolidated in `pyRadPlan.gui.widgets._base`
+- GUI: viewer caches derived CT/quantity/mask arrays, optimization plots redraw rate-limited, and spin boxes commit on focus-out instead of per keystroke (performance)
+- GUI: colors picked in the VOI list are written back to `voi.visible_color`, so custom colors survive list rebuilds (e.g. grouping changes)
+- `ai_agents.generate_voi_objectives` no longer mutates the passed structure set; it returns an updated copy
+- `pyRadPlanGUI` console script now uses a dedicated `pyRadPlan.gui.main()` CLI entry point; `gui()` no longer reads `sys.argv`
+- `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
+- GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
+- docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
+
+### Fixed
+
+- GUI: DKFZ logo pinned to the top-left of the banner in wide windows
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+- GUI: "Save / Keep Result" silently skipped every snake_case quantity (e.g. `physical_dose`), so snapshots lost the dose
+- GUI: re-optimizing no longer overwrites the fresh per-beam dose with the previous run's (`physical_dose_beam` matched the snapshot carry-forward prefix)
+- GUI: closing the main window during a computation aborted the whole process (running QThread destroyed); now asks and stops the worker
+- GUI: a failed AI objectives request wiped all existing objectives on the live structure set
+- GUI: closing the AI task dialog while a request was running froze the GUI until the request finished
+- GUI: the workflow "Import Dose" button was only enabled once a result existed; it now only requires a CT (like the File menu)
+- GUI: plan widget crashed its workspace sync (silently) when `pln.prop_dose_calc["dose_grid"]` held a `Grid` instance or `None`
+- GUI: the viewer kept the previous patient's VOIs/masks/images when the workspace was cleared or lost its structure set
+- GUI: widget refresh failures are now shown in the main-window status bar instead of only being logged
+- GUI: config forms show a generic JSON editor for unsupported field types instead of hiding them
+- Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 
 ## [0.4.1] - 2026-06-16
 

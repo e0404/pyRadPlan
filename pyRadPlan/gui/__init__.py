@@ -5,7 +5,7 @@ and analyzing radiotherapy plans and quantity distributions.
 """
 
 try:
-    from .apps import gui, launch_viewer, analysis_viewer
+    from .apps import gui, launch_viewer, analysis_viewer, main
 
     GUI_AVAILABLE = True
 except ImportError as _exc:
@@ -18,12 +18,13 @@ except ImportError as _exc:
             "Install them with: pip install 'pyRadPlan[gui]'"
         ) from _import_error
 
-    gui = launch_viewer = analysis_viewer = _missing_gui
+    gui = launch_viewer = analysis_viewer = main = _missing_gui
 
 
 __all__ = [
     "gui",
     "launch_viewer",
     "analysis_viewer",
+    "main",
     "GUI_AVAILABLE",
 ]

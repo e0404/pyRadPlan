@@ -103,7 +103,7 @@ def show_analysis(
         fallback_label = cfg.get("labels", cfg.get("label", ""))
         overlay_labels = {q: fallback_label for q in quantities} if fallback_label else {}
 
-    # Normalise masks to a plain dict[str, np.ndarray]
+    # Normalize masks to a plain dict[str, np.ndarray]
     plain_masks: dict[str, np.ndarray] = {}
     if isinstance(masks, dict):
         if "vois" in masks and isinstance(masks["vois"], list):

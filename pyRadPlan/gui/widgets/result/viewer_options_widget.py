@@ -6,7 +6,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -33,17 +32,14 @@ class ViewerOptionsWidget(QWidget):
         self._updating_from_preset = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        opts_group = QGroupBox("Viewer Options")
-        opts_layout = QVBoxLayout()
-        opts_group.setLayout(opts_layout)
-        layout.addWidget(opts_group)
-
-        self._build_colormap_row(opts_layout)
-        self._build_ct_window_controls(opts_layout)
-        self._build_range_controls(opts_layout)
-        self._build_opacity_reset(opts_layout)
+        self._build_colormap_row(layout)
+        self._build_ct_window_controls(layout)
+        self._build_range_controls(layout)
+        self._build_opacity_reset(layout)
+        layout.addStretch()
 
     def _build_colormap_row(self, layout: QVBoxLayout) -> None:
         """Add colormap mode toggle and colormap combo to layout."""
@@ -63,7 +59,7 @@ class ViewerOptionsWidget(QWidget):
                 "magma",
                 "plasma",
                 "inferno",
-                "grey",
+                "gray",
                 "bone",
                 "seismic",
                 "coolwarm",

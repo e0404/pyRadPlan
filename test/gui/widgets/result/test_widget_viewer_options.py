@@ -21,11 +21,11 @@ def test_viewer_options_sync_ui(qapp):
 
     # Sync for CT
     widget.sync_ui(
-        mode="ct", data_range=(-1000.0, 3000.0), window_level=(40.0, 400.0), colormap="grey"
+        mode="ct", data_range=(-1000.0, 3000.0), window_level=(40.0, 400.0), colormap="gray"
     )
     assert widget.wc_spin.value() == 40.0
     assert widget.ww_spin.value() == 400.0
-    assert widget.cmap_combo.currentText() == "grey"
+    assert widget.cmap_combo.currentText() == "gray"
     assert widget.ct_preset_combo.isEnabled()
 
 
@@ -59,7 +59,7 @@ def test_viewer_options_signals(qapp):
 
 def test_viewer_options_presets(qapp):
     widget = ViewerOptionsWidget()
-    widget.sync_ui(mode="ct", data_range=(-1000, 1000), window_level=None, colormap="grey")
+    widget.sync_ui(mode="ct", data_range=(-1000, 1000), window_level=None, colormap="gray")
 
     widget.ct_preset_combo.setCurrentText("Lung")
     # Lung preset: -600, 1500
