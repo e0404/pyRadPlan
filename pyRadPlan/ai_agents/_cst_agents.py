@@ -6,8 +6,43 @@ from pydantic_ai import Agent
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.optimization.objectives import get_objectives_union
 from pyRadPlan.plan._plans import Plan
-from ._settings import AiSettings
+from ._settings import AiSettings, load_ai_env
 from ._usage import log_run_usage
+
+
+OBJECTIVES_SYSTEM_PROMPT = """
+        You are a radiotherapy treatment planning assistant.
+        Given a treatment site and a list of Volumes of Interest (VOIs), suggest typical
+        optimization objectives following standard clinical practice.
+
+        The available objective types and the meaning of their parameters are fully
+        described by the output schema. All dosimetric parameter values must be given as
+        dose per fraction. If no prescribed dose is given, prescribe 2 Gy per fraction
+        to the target. Assign a priority (weight) to every objective and leave the
+        'quantity' field at its default.
+        """
+
+
+def cst_context_summary(pln: Plan, cst: StructureSet) -> dict:
+    """Return a JSON-serialisable summary of *cst*/*pln* for an LLM data context.
+
+    Only metadata (VOI names, types and existing objective counts) is included;
+    the voxel masks and any other numpy arrays held on the VOIs are deliberately
+    left out so they are never serialised or sent to the model.
+    """
+    return {
+        "radiation_mode": pln.radiation_mode,
+        "prescribed_dose_gy": getattr(pln, "prescribed_dose", None),
+        "num_of_fractions": pln.num_of_fractions,
+        "vois": [
+            {
+                "name": voi.name,
+                "type": voi.voi_type,
+                "num_existing_objectives": len(voi.objectives or []),
+            }
+            for voi in cst.vois
+        ],
+    }
 
 
 def _create_output_model(voi_names: tuple[str, ...]) -> type[BaseModel]:
@@ -82,28 +117,24 @@ def generate_voi_objectives(
     Returns
     -------
     StructureSet
-        The updated structure set with generated objectives.
+        A new structure set with generated objectives.  The input *cst* is not
+        modified, so a failing model call never destroys existing objectives.
     """
 
-    if clear_existing:
-        for voi in cst.vois:
-            voi.objectives = []
+    # Work on copied VOIs with fresh objectives lists (masks stay shared) so
+    # the caller's structure set is untouched until the run has succeeded.
+    vois = [
+        voi.model_copy(update={"objectives": [] if clear_existing else list(voi.objectives or [])})
+        for voi in cst.vois
+    ]
+    cst = cst.model_copy(update={"vois": vois})
 
+    load_ai_env()
     effective_model = model or AiSettings().model
 
     output_model = _create_output_model(tuple(voi.name for voi in cst.vois))
 
-    system_prompt = """
-        You are a radiotherapy treatment planning assistant.
-        Given a treatment site and a list of Volumes of Interest (VOIs), suggest typical
-        optimization objectives following standard clinical practice.
-
-        The available objective types and the meaning of their parameters are fully
-        described by the output schema. All dosimetric parameter values must be given as
-        dose per fraction. If no prescribed dose is given, prescribe 2 Gy per fraction
-        to the target. Assign a priority (weight) to every objective and leave the
-        'quantity' field at its default.
-        """
+    system_prompt = OBJECTIVES_SYSTEM_PROMPT
 
     voi_list_str = "\n".join(f"- {voi.name} (Type: {voi.voi_type})" for voi in cst.vois)
 

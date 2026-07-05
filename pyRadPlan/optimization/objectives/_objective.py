@@ -149,6 +149,23 @@ class Objective(PyRadPlanBaseModel):
                 # Cache the resampled value
                 self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
 
+    def _image_reference(self, param_name: str, values: Array) -> Array:
+        """Get cached image reference aligned to the namespace and device of *values*.
+
+        Preprocessing builds the cache with numpy (image references live in numpy /
+        SimpleITK), while *values* carry the optimization backend (e.g. cupy or
+        torch). The first evaluation converts the cached array once and re-caches
+        it, so subsequent iterations only pay the namespace/device check.
+        """
+        ref = self._resampled_image_reference_cache[param_name]
+        xp = array_api_compat.array_namespace(values)
+        if array_api_compat.array_namespace(ref) is not xp or array_api_compat.device(
+            ref
+        ) != array_api_compat.device(values):
+            ref = xp.asarray(to_numpy(ref), device=array_api_compat.device(values))
+            self._resampled_image_reference_cache[param_name] = ref
+        return ref
+
     @abstractmethod
     def compute_objective(self, values):
         """Compute the objective function."""

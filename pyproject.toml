@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 exclude = ["matRad","build"]
 
 [tool.setuptools.package-data]
-pyRadPlan = ["data/**/*"]
+pyRadPlan = ["data/**/*", "gui/assets/**/*"]
 
 [project]
 name = "pyRadPlan"
@@ -74,6 +74,9 @@ gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
 dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+
+[project.scripts]
+pyRadPlanGUI = "pyRadPlan.gui:main"
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"

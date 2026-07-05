@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
 from pyRadPlan.plan import Plan, validate_pln
-from ._settings import AiSettings
+from ._settings import AiSettings, load_ai_env
 from ._usage import log_run_usage
 
 Angle = Annotated[float, Field(ge=0.0, lt=360.0)]
@@ -29,6 +29,17 @@ class BeamSetup(BaseModel):
         if len(self.couch_angles) != len(self.gantry_angles):
             raise ValueError("couch_angles must have the same length as gantry_angles")
         return self
+
+
+def beam_angles_system_prompt(radiation_mode: str) -> str:
+    """Return the system prompt used to suggest a beam setup for *radiation_mode*."""
+    return f"""
+        You are a radiotherapy treatment planning assistant.
+        Given a treatment site, suggest a typical beam setup (gantry and couch angles)
+        used for photon IMRT or proton IMPT.
+        The radiation mode is {radiation_mode}.
+        You may respect the additional context provided by the user.
+        """
 
 
 def generate_beam_angles(
@@ -58,15 +69,10 @@ def generate_beam_angles(
     Plan
         The updated treatment plan with generated beam angles.
     """
+    load_ai_env()
     effective_model = model or AiSettings().model
 
-    prompt = f"""
-        You are a radiotherapy treatment planning assistant.
-        Given a treatment site, suggest a typical beam setup (gantry and couch angles)
-        used for photon IMRT or proton IMPT.
-        The radiation mode is {pln.radiation_mode}.
-        You may respect the additional context provided by the user.
-        """
+    prompt = beam_angles_system_prompt(pln.radiation_mode)
 
     agent = Agent(effective_model, output_type=BeamSetup, system_prompt=prompt)
 
