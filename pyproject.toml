@@ -73,7 +73,7 @@ octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"
@@ -154,6 +154,42 @@ exclude = [
   "matRad",
   "test" ]
 extend-ignore = ["E203","E701","F722"]
+
+[tool.liccheck]
+level = "STANDARD"
+dependencies = true
+authorized_licenses = [
+  "bsd",
+  "new bsd",
+  "bsd license",
+  "new bsd license",
+  "simplified bsd",
+  "3-clause bsd",
+  "bsd-3-clause",
+  "bsd-2-clause",
+  "apache",
+  "apache 2.0",
+  "apache-2.0",
+  "apache software",
+  "apache software license",
+  "mit",
+  "mit license",
+  "mit and apache-2.0",
+  "mit-cmu",
+  "cmu license (mit-cmu)",
+  "isc",
+  "isc license",
+  "isc license (iscl)",
+  "python software foundation",
+  "python software foundation license",
+  "psf-2.0",
+  "mozilla public license 2.0 (mpl 2.0)",
+  "mpl-2.0",
+  "the unlicense (unlicense)",
+  "unlicense",
+  "historical permission notice and disclaimer (hpnd)",
+  "zlib",
+]
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*"
