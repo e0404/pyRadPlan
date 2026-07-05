@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the viewer kept the previous patient's VOIs/masks/images when the workspace was cleared or lost its structure set
 - GUI: widget refresh failures are now shown in the main-window status bar instead of only being logged
 - GUI: config forms show a generic JSON editor for unsupported field types instead of hiding them
+- GUI: the plan widget's iso-center field stayed at "0 0 0" in "Auto." mode; it now previews the automatic isocenter (target center of mass), matching the viewer
+- GUI: the optimization status window could open so far down that the Pause/Stop buttons were off-screen; it now opens centered over the main window, clamped to the screen
+- GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
 

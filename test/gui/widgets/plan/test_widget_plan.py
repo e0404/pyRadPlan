@@ -150,6 +150,43 @@ def test_iso_center_restored_from_pln(qapp):
     assert widget._chk_iso_auto.isChecked()
 
 
+def test_auto_iso_center_shown_after_data_load(qapp, tg119):
+    ct, cst = tg119
+    widget, ws = _make_widget()
+    ws.set_many(ct=ct, cst=cst)
+
+    assert widget._chk_iso_auto.isChecked()
+    assert not widget._txt_iso.isEnabled()
+    shown = [float(t) for t in widget._txt_iso.text().split()]
+    assert shown == pytest.approx(cst.target_center_of_mass(), rel=1e-4)
+
+
+def test_toggling_auto_refills_iso_center(qapp, tg119):
+    ct, cst = tg119
+    widget, ws = _make_widget()
+    ws.set_many(ct=ct, cst=cst)
+
+    widget._chk_iso_auto.setChecked(False)
+    widget._txt_iso.setText("1 2 3")
+    widget._chk_iso_auto.setChecked(True)
+
+    shown = [float(t) for t in widget._txt_iso.text().split()]
+    assert shown == pytest.approx(cst.target_center_of_mass(), rel=1e-4)
+
+
+def test_default_plan_auto_applied_on_data_load(qapp, tg119):
+    ct, cst = tg119
+    widget, ws = _make_widget()
+    assert ws.pln is None
+
+    ws.set_many(ct=ct, cst=cst)
+
+    assert isinstance(ws.pln, PhotonPlan)
+    # the form matches the applied plan, so no pending-apply highlight remains
+    assert widget._btn_apply.text() == "Apply"
+    assert widget._lbl_status.text() == "Default plan applied."
+
+
 def test_invalid_iso_center_rejected(qapp):
     widget, ws = _make_widget()
     widget._chk_iso_auto.setChecked(False)

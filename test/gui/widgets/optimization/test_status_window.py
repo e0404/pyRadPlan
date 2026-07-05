@@ -51,6 +51,18 @@ def test_buttons_drive_bound_control(qapp):
     assert not win._btn_stop.isEnabled()
 
 
+def test_window_placed_fully_on_screen(qapp):
+    win = OptimizationStatusWidget()
+    win.show()
+    qapp.processEvents()
+    try:
+        available = win.screen().availableGeometry()
+        # The whole window (incl. the Pause/Stop row at the bottom) is visible.
+        assert available.contains(win.frameGeometry())
+    finally:
+        win.close()
+
+
 def test_finalize_disables_controls(qapp):
     win = OptimizationStatusWidget()
     win.bind_control(ComputeControl())
