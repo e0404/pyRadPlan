@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: widget refresh failures are now shown in the main-window status bar instead of only being logged
 - GUI: config forms show a generic JSON editor for unsupported field types instead of hiding them
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
+- VHEE now has target points for matRad export
 
 ## [0.4.1] - 2026-06-16
 
