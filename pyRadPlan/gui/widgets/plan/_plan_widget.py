@@ -218,7 +218,7 @@ class PlanWidget(WorkspaceWidget):
         self._chk_iso_auto.setToolTip(
             "If checked, the isocenter is computed automatically from the target structures"
         )
-        self._chk_iso_auto.toggled.connect(lambda checked: self._txt_iso.setEnabled(not checked))
+        self._chk_iso_auto.toggled.connect(self._on_iso_auto_toggled)
 
         iso_row = QHBoxLayout()
         iso_row.setContentsMargins(0, 0, 0, 0)
@@ -420,11 +420,30 @@ class PlanWidget(WorkspaceWidget):
         finally:
             self._syncing = False
         self._mark_clean()
+        if self._ws.pln is None and self._ws.has("ct", "cst"):
+            self._apply_default_plan()
+
+    def _apply_default_plan(self) -> None:
+        """Apply the form defaults as the initial plan once patient data is loaded.
+
+        If the defaults do not validate, the form is flagged as modified instead
+        so the user sees that the plan still needs to be applied.
+        """
+        try:
+            pln = self._build_plan()
+        except Exception as exc:  # noqa: BLE001 - surface, never crash
+            self._set_status(f"Plan not applied — {type(exc).__name__}: {exc}", error=True)
+            self._set_global_modified(True)
+            return
+        with self.hold_updates():
+            self._ws.pln = pln
+        self._set_status("Default plan applied.")
 
     def _sync_from_workspace(self) -> None:
         pln = self._ws.pln
         if pln is None:
             self._btn_ct_grid.setEnabled(self._ws.ct is not None)
+            self._update_auto_iso_center()
             return
 
         self._cmb_radiation.blockSignals(True)
@@ -489,6 +508,7 @@ class PlanWidget(WorkspaceWidget):
     def _restore_iso_center(self, iso_center) -> None:
         if iso_center is None:
             self._chk_iso_auto.setChecked(True)
+            self._update_auto_iso_center()
             return
         iso = np.atleast_2d(np.asarray(iso_center, dtype=float))
         if len(np.unique(iso, axis=0)) == 1:
@@ -496,8 +516,9 @@ class PlanWidget(WorkspaceWidget):
             self._chk_iso_auto.setChecked(False)
         else:
             # per-beam iso centers cannot be edited here; fall back to auto
-            self._txt_iso.setText("multiple iso centers")
+            # (setChecked first so the toggle's auto-fill cannot overwrite the note)
             self._chk_iso_auto.setChecked(True)
+            self._txt_iso.setText("multiple iso centers")
 
     @staticmethod
     def _format_angles(angles) -> str:
@@ -507,6 +528,28 @@ class PlanWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
     # Field callbacks
     # ------------------------------------------------------------------
+
+    def _on_iso_auto_toggled(self, checked: bool) -> None:
+        self._txt_iso.setEnabled(not checked)
+        if checked:
+            self._update_auto_iso_center()
+
+    def _update_auto_iso_center(self) -> None:
+        """Show the automatic isocenter (target center of mass) in the iso field.
+
+        Mirrors what the stf generators compute when no explicit iso center is
+        set, so the disabled field previews the value that will actually be used.
+        """
+        if not self._chk_iso_auto.isChecked():
+            return
+        cst = self._ws.cst
+        if cst is None:
+            return
+        try:
+            iso = cst.target_center_of_mass()
+        except Exception:  # noqa: BLE001 - e.g. no target structures defined
+            return
+        self._txt_iso.setText(self._format_angles(iso))
 
     def _update_beam_count(self) -> None:
         try:

@@ -48,6 +48,9 @@ class OptimizationStatusWidget(QWidget):
         super().__init__(parent)
         self.setWindowTitle("Optimization Status")
         self.setWindowFlag(Qt.Window, True)
+        self.resize(600, 420)
+        #: Whether the window has been positioned once (on first show).
+        self._placed = False
 
         self._control: Optional[ComputeControl] = None
         # key -> {"curve", "xs", "ys"}
@@ -87,6 +90,30 @@ class OptimizationStatusWidget(QWidget):
         controls.addWidget(self._btn_stop)
         controls.addStretch()
         root.addLayout(controls)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        """Center the window over the host window on first show, kept on-screen.
+
+        Without an explicit position Qt may place the window so far down that
+        the Pause/Stop controls end up below the visible screen area.
+        """
+        super().showEvent(event)
+        if self._placed:
+            return
+        self._placed = True
+
+        host = self.parentWidget()
+        frame = self.frameGeometry()
+        if host is not None:
+            frame.moveCenter(host.window().frameGeometry().center())
+        screen = self.screen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            frame.moveBottom(min(frame.bottom(), available.bottom()))
+            frame.moveRight(min(frame.right(), available.right()))
+            frame.moveTop(max(frame.top(), available.top()))
+            frame.moveLeft(max(frame.left(), available.left()))
+        self.move(frame.topLeft())
 
     def configure_metrics(self, specs: Sequence[tuple]) -> None:
         """(Re)build the plot grid from ``(metric_key, axis_title[, log_y])`` *specs*.

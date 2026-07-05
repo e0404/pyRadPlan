@@ -43,9 +43,9 @@ def test_shared_workspace_drives_all_widgets(qapp, test_data_photons):
 
     assert win._viewer.quantity_widget._ct is not None
     assert len(win._viewer.vois_widget._voi_checkboxes) == len(cst.vois)
-    # ct+cst but no pln yet -> workflow prompts to configure a plan
-    assert "no data loaded" not in win.workflow_widget._lbl_status.text().lower()
-    assert "plan" in win.workflow_widget._lbl_status.text().lower()
+    # loading ct+cst auto-applies the plan widget's defaults as the initial plan
+    assert ws.pln is not None
+    assert "dose influence" in win.workflow_widget._lbl_status.text().lower()
 
 
 def test_single_menu_bar_with_expected_menus(qapp):
