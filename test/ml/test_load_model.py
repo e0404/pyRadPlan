@@ -30,3 +30,20 @@ def test_dummy_model_forward_pass(dummy_model_dir):
 def test_trust_remote_code_disabled_raises(dummy_model_dir):
     with pytest.raises(ValueError):
         load_model(local_dir=dummy_model_dir, trust_remote_code=False)
+
+
+def test_name_resolves_to_hf_org_repo_id(dummy_model_dir, monkeypatch):
+    from pathlib import Path
+
+    from pyRadPlan.ml import _load_model, get_ml_settings
+
+    captured = {}
+
+    def fake_resolve(**kwargs):
+        captured.update(kwargs)
+        return Path(dummy_model_dir)
+
+    monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
+
+    load_model("dosecalc-x")
+    assert captured["repo_id"] == f"{get_ml_settings().hf_org}/dosecalc-x"
