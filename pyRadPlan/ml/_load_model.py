@@ -13,7 +13,6 @@ from typing import Any, Optional
 
 from ._hub import resolve_model_dir
 from ._preprocessor import BasePreprocessor
-from ._factory import get_model_spec, resolve_repo_id
 from ._settings import get_ml_settings
 
 logger = logging.getLogger(__name__)
@@ -129,9 +128,8 @@ def load_model(
     Parameters
     ----------
     name : str, optional
-        Friendly name of a registered model (see
-        :func:`~pyRadPlan.ml.list_models`). Resolves ``repo_id`` from the
-        registry and :attr:`MlSettings.hf_org`.
+        Friendly model name, resolved to the repository id
+        ``"<hf_org>/<name>"`` using :attr:`MlSettings.hf_org`.
     repo_id : str, optional
         Explicit HuggingFace repository id, overriding the registry lookup.
     revision : str, optional
@@ -165,10 +163,8 @@ def load_model(
     if trust_remote_code is None:
         trust_remote_code = cfg.trust_remote_code
 
-    if name is not None:
-        spec = get_model_spec(name, offline=offline)
-        if repo_id is None:
-            repo_id = resolve_repo_id(spec, cfg.hf_org)
+    if name is not None and repo_id is None:
+        repo_id = f"{cfg.hf_org}/{name}"
 
     model_dir = resolve_model_dir(
         repo_id=repo_id,

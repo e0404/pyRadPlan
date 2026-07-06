@@ -6,25 +6,24 @@ directory, with version dedup and offline support.
 ## Quick start
 
 ```python
-from pyRadPlan.ml import load_model, list_models
+from pyRadPlan.ml import load_model, list_local_models
 
 # From a local directory (works fully offline):
 model, preprocessor = load_model(local_dir="path/to/model_folder")
 
-# From a registered model on HuggingFace (org comes from MlSettings.hf_org):
+# By friendly name on HuggingFace (resolves to <hf_org>/<name>):
 model, preprocessor = load_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
 
 # Explicit repository:
 model, preprocessor = load_model(repo_id="my-org/my-repo")
 
-print(list_models())              # discovered locally + on the Hub
-print(list_models(offline=True))  # only models already on disk
+print(list_local_models())  # models available on disk (no network)
 ```
 
-`list_models` is dynamic: it discovers locally downloaded models (with every
-version on disk) plus, when online, models published on the Hub under
-`MlSettings.hf_org` (latest version only). The modality is derived from the
-repository name (`dosecalc-*` / `outcome-*`). Each model lives in its own
+`list_local_models` lists the models present under
+`MlSettings.local_models_dir`; it performs no network access. The modality is
+derived from the repository name (`dosecalc-*` / `outcome-*`), so you can filter
+with `list_local_models(Modality.DOSE_CALC)`. Each model lives in its own
 repository and is listed under the repository name.
 
 ## Configuration

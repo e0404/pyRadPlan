@@ -18,8 +18,8 @@ class MlSettings(BaseSettings):
     ----------
     hf_org : str
         HuggingFace namespace/organization the model repositories live under.
-        Combined with a :class:`~pyRadPlan.ml.ModelSpec` to form the full
-        ``"<org>/<repo>"`` repository id.
+        Combined with a friendly model name to form the full ``"<org>/<repo>"``
+        repository id.
     local_models_dir : Optional[Path]
         Base directory for local models, read from the
         ``PYRADPLAN_HUGGINGFACE_PATH`` environment variable. When set, models

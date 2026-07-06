@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from dotenv import load_dotenv
 
-from pyRadPlan.ml import get_ml_settings, list_models, load_model, Modality
+from pyRadPlan.ml import get_ml_settings, list_local_models, load_model, Modality
 
 # %%
 # Load environment variables (e.g. PYRADPLAN_HUGGINGFACE_PATH) from a .env file
@@ -47,33 +47,19 @@ print(f"Device:             {settings.device}")
 """
 ## Available models
 
-`list_models` discovers models dynamically: locally downloaded models (with all
-versions available on disk) and, when online, models published on the HuggingFace
-Hub under `MlSettings.hf_org` (most recent version only). Each model lives in its
-own repository; the modality is derived from the repository name (`dosecalc-*` /
-`outcome-*`).
+`list_local_models` reports the models available on disk under
+`MlSettings.local_models_dir` (no network access). The modality is derived from
+the repository name (`dosecalc-*` / `outcome-*`).
 """
 
-
 # %%
-def _fmt(spec):
-    local = f"local={list(spec.local_versions)}" if spec.is_local else "local=-"
-    remote = f"hub={spec.remote_version}" if spec.is_remote else "hub=-"
-    return f"  {spec.name}  ({local}, {remote})"
-
-
 print("Dose calculation models:")
-for spec in list_models(Modality.DOSE_CALC):
-    print(_fmt(spec))
+for name in list_local_models(Modality.DOSE_CALC):
+    print(f"  {name}")
 
 print("\nOutcome models:")
-for spec in list_models(Modality.OUTCOME):
-    print(_fmt(spec))
-
-# Offline: only models already on disk (no network access)
-print("\nAvailable offline:")
-for spec in list_models(offline=True):
-    print(_fmt(spec))
+for name in list_local_models(Modality.OUTCOME):
+    print(f"  {name}")
 
 # %% [markdown]
 """
@@ -115,14 +101,15 @@ print(f"Model output:              {prediction.squeeze().item():.4f}")
 """
 ## Load from the HuggingFace Hub
 
-Once the model repositories are published, you can load a registered model by its
-friendly name. Set `PYRADPLAN_ML_HF_ORG` to the hosting organization and,
-optionally, `PYRADPLAN_HUGGINGFACE_PATH` to keep a local copy. Pin a `revision`
-(tag/branch/commit) for reproducible, version-checked downloads.
+Once the model repositories are published, you can load a model by its friendly
+name, which resolves to `<hf_org>/<name>`. Set `PYRADPLAN_ML_HF_ORG` to the
+hosting organization and, optionally, `PYRADPLAN_HUGGINGFACE_PATH` to keep a
+local copy. Pin a `revision` (tag/branch/commit) for reproducible,
+version-checked downloads.
 """
 
 # %%
 model, preprocessor = load_model("outcome-ORPDenseNet-tg119")  # , revision="v1.0.0")
-# Or fully explicit (bypassing the registry):
+# Or with an explicit repository id:
 model, preprocessor = load_model(repo_id="my-org/dosecalc-bayes-protons")
 pass
