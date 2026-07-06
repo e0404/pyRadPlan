@@ -55,7 +55,7 @@ class MlSettings(BaseSettings):
         extra="ignore",
     )
 
-    hf_org: str = "FlorianPigged"
+    hf_org: str = "DKFZ-RadOpt"
     local_models_dir: Optional[Path] = Field(
         default=None, validation_alias="PYRADPLAN_HUGGINGFACE_PATH"
     )
