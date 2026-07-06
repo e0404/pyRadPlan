@@ -112,7 +112,7 @@ class PlanningProblem(ABC):
         )
         default_quantities = {
             "photons": "physical_dose",
-            "protons": "constant_rbe_x_dose" if use_rbe else "physical_dose",
+            "protons": "rbe_x_dose" if use_rbe else "physical_dose",
             "helium": "rbe_x_dose" if use_rbe else "physical_dose",
             "carbon": "rbe_x_dose" if use_rbe else "physical_dose",
             "oxygen": "rbe_x_dose" if use_rbe else "physical_dose",

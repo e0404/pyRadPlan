@@ -67,6 +67,7 @@ class QuantityResolver:
 
         self._resolving.add(identifier)
         try:
+            cls = self._resolve_implementation(cls)
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
             inst = cls(self._dij, mode=mode, dependencies=deps)
@@ -79,6 +80,22 @@ class QuantityResolver:
     def resolve(self, identifiers: Iterable[str]) -> list[FluenceDependentQuantity]:
         """Resolve every identifier and return them in input order."""
         return [self.get(i) for i in identifiers]
+
+    def _resolve_implementation(
+        self, cls: type[FluenceDependentQuantity]
+    ) -> type[FluenceDependentQuantity]:
+        """Let a class pick its own concrete implementation, if it supports it.
+
+        Classes that can be computed in more than one way (e.g. ``RBExDose``)
+        expose a ``resolve_implementation(dij) -> type`` classmethod. If
+        present, it is used to swap ``cls`` for the concrete subclass that
+        should actually be instantiated, based on what's available on the
+        dij. Classes without the hook are returned unchanged.
+        """
+        hook = getattr(cls, "resolve_implementation", None)
+        if hook is None:
+            return cls
+        return hook(self._dij) or cls
 
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:

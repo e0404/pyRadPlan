@@ -8,7 +8,6 @@ from ._sqrt_beta_dose import SqrtBetaDose
 from ._effect import Effect
 from ._rbe_x_dose import RBExDose
 from ._let import DoseWeightedLET
-from ._constant_rbe_x_dose import ConstantRbeXDose
 
 QUANTITIES = {
     Dose.identifier: Dose,
@@ -18,7 +17,6 @@ QUANTITIES = {
     AlphaDose.identifier: AlphaDose,
     SqrtBetaDose.identifier: SqrtBetaDose,
     DoseWeightedLET.identifier: DoseWeightedLET,
-    ConstantRbeXDose.identifier: ConstantRbeXDose,
 }
 
 
@@ -65,7 +63,6 @@ __all__ = [
     "AlphaDose",
     "SqrtBetaDose",
     "DoseWeightedLET",
-    "ConstantRbeXDose",
     "get_available_quantities",
     "get_quantity",
     "QUANTITIES",

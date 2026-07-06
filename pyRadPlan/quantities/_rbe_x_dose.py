@@ -1,3 +1,20 @@
+"""RBE-weighted dose quantity.
+
+RBExDose can be derived from physical dose in two different ways:
+
+1. `RBExDoseFromAlphaBeta` -- via the linear-quadratic effect model, using
+   dose-averaged alpha/beta parameters (alphax, betax) from the dij.
+2. `RBExDoseFromConstantRBE` -- as a constant factor times physical dose
+   (RBExDose = rbe * dose), e.g. the classic "RBE = 1.1" proton convention.
+
+`RBExDose` is the abstract base class shared by both. It carries the
+common metadata (unit, identifier, name) and defines the interface that
+subclasses must implement. A small factory (`RBExDose.create`) is provided
+to pick the right subclass based on what the dij provides.
+"""
+
+from abc import ABC, abstractmethod
+
 import pint
 
 from ..core.xp_utils.typing import Array
@@ -6,13 +23,54 @@ from pyRadPlan.quantities._base import FluenceDependentQuantity
 ureg = pint.UnitRegistry()
 
 
-class RBExDose(FluenceDependentQuantity):
-    """RBE-weighted dose computed from the linear-quadratic effect."""
+class RBExDose(FluenceDependentQuantity, ABC):
+    """RBE-weighted dose (abstract base).
+
+    Concrete behavior (how the quantity and its chain derivative are
+    computed) is provided by subclasses:
+
+    - `RBExDoseFromAlphaBeta`
+    - `RBExDoseFromConstantRBE`
+    """
 
     unit = ureg.gray
     dim = 1
     identifier = "rbe_x_dose"
     name = "RBExDose"
+
+    @abstractmethod
+    def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
+        """Compute RBExDose for a single scenario."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _compute_chain_derivative_single_scenario(
+        self, d_quantity: Array, scenario_index: int
+    ) -> Array:
+        """Backpropagate a gradient w.r.t. RBExDose through this quantity."""
+        raise NotImplementedError
+
+    @classmethod
+    def resolve_implementation(cls, dij) -> type["RBExDose"]:
+        """Pick the concrete RBExDose subclass based on what the dij provides.
+
+        Used both by :meth:`create` for manual construction, and by
+        ``QuantityResolver`` when it builds the dependency graph
+        automatically (see resolver.py's ``_resolve_implementation``).
+        """
+        has_alpha_beta = (
+            getattr(dij, "alpha_dose", None) is not None
+            and getattr(dij, "sqrt_beta_dose", None) is not None
+        )
+
+        if has_alpha_beta:
+            return RBExDoseFromAlphaBeta
+        return RBExDoseFromConstantRBE
+
+
+class RBExDoseFromAlphaBeta(RBExDose):
+    """RBExDose computed from the linear-quadratic effect model."""
+
     required_dependencies = ("effect",)
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
@@ -35,7 +93,9 @@ class RBExDose(FluenceDependentQuantity):
         rbe_x_dose[ix] = xp.sqrt(gamma[ix] ** 2 + effect_slice[ix] / betax[ix]) - gamma[ix]
         return rbe_x_dose
 
-    def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
+    def _compute_chain_derivative_single_scenario(
+        self, d_quantity: Array, scenario_index: int
+    ) -> Array:
         # TODO: correct handling of ct scenarios
         xp = self.array_backend
         dtype_xp = self._dtype
@@ -61,4 +121,29 @@ class RBExDose(FluenceDependentQuantity):
         fgrad = xp.reshape(fgrad, (1, -1))
         return self._deps["effect"]._compute_chain_derivative_single_scenario(
             fgrad, scenario_index
+        )
+
+
+class RBExDoseFromConstantRBE(RBExDose):
+    """RBExDose computed as a constant RBE factor times physical dose.
+
+    RBExDose = rbe * dose, so the chain derivative is just a scalar
+    multiple of the dose's own chain derivative.
+    """
+
+    required_dependencies = ("physical_dose",)
+
+    def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
+        return self.array_backend.asarray(
+            self._dij.rbe * self._dij.physical_dose.flat[scenario_index] @ self._w_cache,
+            copy=False,
+        )
+
+    def _compute_chain_derivative_single_scenario(
+        self, d_quantity: Array, scenario_index: int
+    ) -> Array:
+        # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
+        return self.array_backend.asarray(
+            self._dij.rbe * self._dij.physical_dose.flat[scenario_index].__rmatmul__(d_quantity),
+            copy=False,
         )

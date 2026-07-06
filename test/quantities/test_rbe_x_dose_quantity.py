@@ -6,7 +6,8 @@ from scipy.sparse import csc_array
 
 from pyRadPlan import dose
 from pyRadPlan.dij import Dij
-from pyRadPlan.quantities import RBExDose, FluenceDependentQuantity
+from pyRadPlan.quantities import FluenceDependentQuantity
+from pyRadPlan.quantities._rbe_x_dose import RBExDoseFromAlphaBeta, RBExDoseFromConstantRBE
 
 
 @pytest.fixture
@@ -37,6 +38,30 @@ def sample_base_dij_dict():
 
 
 @pytest.fixture
+def sample_base_dij_constant_rbe_dict():
+    dij_dict = {
+        "ct_grid": {
+            "resolution": {"x": 1.5, "y": 1.5, "z": 1.5},
+            "dimensions": (10, 10, 10),
+            "num_of_voxels": 1000,
+        },
+        "dose_grid": {
+            "resolution": {"x": 3.0, "y": 3.0, "z": 3.0},
+            "dimensions": (5, 5, 5),
+            "num_of_voxels": 125,
+        },
+        "num_of_beams": 1,
+        "total_num_of_bixels": 10,
+        "physical_dose": np.empty((1, 1, 1), dtype=object),
+        "bixel_num": np.arange(10),
+        "ray_num": np.arange(10),
+        "beam_num": np.zeros((10,), dtype=np.int64),
+        "rbe": 1.1,
+    }
+    return dij_dict
+
+
+@pytest.fixture
 def sample_dij_dense(sample_base_dij_dict):
     sample_base_dij_dict["alpha_dose"].flat[0] = np.ones((125, 10), dtype=np.float32)
     sample_base_dij_dict["sqrt_beta_dose"].flat[0] = np.ones((125, 10), dtype=np.float32)
@@ -57,8 +82,27 @@ def sample_dij_sparse(sample_base_dij_dict):
     return dij
 
 
-def test_RBExDose_constructor(sample_dij_dense):
-    rbe_x_dose = RBExDose(sample_dij_dense)
+@pytest.fixture
+def sample_dij_dense_constant_rbe(sample_base_dij_constant_rbe_dict):
+    sample_base_dij_constant_rbe_dict["physical_dose"].flat[0] = np.ones(
+        (125, 10), dtype=np.float32
+    )
+    dij = Dij.model_validate(sample_base_dij_constant_rbe_dict)
+    return dij
+
+
+@pytest.fixture
+def sample_dij_sparse_constant_rbe(sample_base_dij_constant_rbe_dict):
+    dense_mat = np.ones((125, 10), dtype=np.float32)
+    dense_mat[:100] = 0
+    np.random.shuffle(dense_mat)
+    sample_base_dij_constant_rbe_dict["physical_dose"].flat[0] = csc_array(dense_mat)
+    dij = Dij.model_validate(sample_base_dij_constant_rbe_dict)
+    return dij
+
+
+def test_RBExDoseFromAlphaBeta_constructor(sample_dij_dense):
+    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_dense)
     assert isinstance(rbe_x_dose, FluenceDependentQuantity)
     assert rbe_x_dose.mode == "indirect"
     assert rbe_x_dose.scenarios == [0]
@@ -71,8 +115,8 @@ def test_RBExDose_constructor(sample_dij_dense):
     assert "effect" in rbe_x_dose.dependencies
 
 
-def test_RBExDose_dense(sample_dij_dense):
-    rbe_x_dose = RBExDose(sample_dij_dense)
+def test_RBExDoseFromAlphaBeta_dense(sample_dij_dense):
+    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_dense)
 
     fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = rbe_x_dose(fluence)
@@ -109,8 +153,8 @@ def test_RBExDose_dense(sample_dij_dense):
     assert np.allclose(ret_deriv.flat[0], calc_derivative)
 
 
-def test_RBExDose_sparse(sample_dij_sparse):
-    rbe_x_dose = RBExDose(sample_dij_sparse)
+def test_RBExDoseFromAlphaBeta_sparse(sample_dij_sparse):
+    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_sparse)
 
     fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = rbe_x_dose(fluence)
@@ -144,3 +188,67 @@ def test_RBExDose_sparse(sample_dij_sparse):
     assert ret_deriv.dtype == sample_dij_sparse.physical_dose.dtype
     assert ret_deriv.shape == sample_dij_sparse.physical_dose.shape
     assert np.allclose(ret_deriv.flat[0], calc_derivative)
+
+
+def test_RBExDoseFromConstantRBE_constructor(sample_dij_dense_constant_rbe):
+    const_rbe = RBExDoseFromConstantRBE(sample_dij_dense_constant_rbe)
+    assert isinstance(const_rbe, FluenceDependentQuantity)
+    assert const_rbe.mode == "indirect"
+    assert const_rbe.scenarios == [0]
+    assert const_rbe._dij == sample_dij_dense_constant_rbe.to_namespace(xp)
+    assert const_rbe.dim == 1
+    assert format(const_rbe.unit, "~") == "Gy"
+    assert const_rbe.identifier == "rbe_x_dose"
+    assert const_rbe.name == "RBExDose"
+
+
+def test_RBExDoseFromConstantRBE_dense(sample_dij_dense_constant_rbe):
+    const_rbe = RBExDoseFromConstantRBE(sample_dij_dense_constant_rbe)
+    rbe = 1.1
+
+    fluence = xp.arange(10, dtype=xp.float32)
+    ret_callable = const_rbe(fluence)
+    assert np.array_equal(const_rbe._w_cache, fluence)
+    ret_compute = const_rbe.compute(fluence)
+
+    # assert isinstance(ret_callable, type(fluence))
+    assert ret_callable.dtype == sample_dij_dense_constant_rbe.physical_dose.dtype
+    assert ret_callable.shape == sample_dij_dense_constant_rbe.physical_dose.shape
+
+    dij_mat = sample_dij_dense_constant_rbe.physical_dose.flat[0]
+    assert np.allclose(ret_callable.flat[0], rbe * dij_mat @ fluence)
+    assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
+
+    ret_deriv = const_rbe.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
+    assert np.array_equal(const_rbe._w_grad_cache, fluence)
+    assert np.array_equal(const_rbe._qgrad_cache.flat[0], ret_deriv.flat[0])
+    # assert isinstance(ret_deriv, np.ndarray)
+    assert ret_deriv.dtype == sample_dij_dense_constant_rbe.physical_dose.dtype
+    assert ret_deriv.shape == sample_dij_dense_constant_rbe.physical_dose.shape
+    assert np.allclose(ret_deriv.flat[0], rbe * dij_mat.T @ np.ones(125, dtype=np.float32))
+
+
+def test_RBExDoseFromConstantRBE_sparse(sample_dij_sparse_constant_rbe):
+    const_rbe = RBExDoseFromConstantRBE(sample_dij_sparse_constant_rbe)
+    rbe = 1.1
+
+    fluence = xp.arange(10, dtype=xp.float32)
+    ret_callable = const_rbe(fluence)
+    assert np.array_equal(const_rbe._w_cache, fluence)
+    ret_compute = const_rbe.compute(fluence)
+
+    assert isinstance(ret_callable, np.ndarray)
+    assert ret_callable.dtype == sample_dij_sparse_constant_rbe.physical_dose.dtype
+    assert ret_callable.shape == sample_dij_sparse_constant_rbe.physical_dose.shape
+
+    dij_mat = sample_dij_sparse_constant_rbe.physical_dose.flat[0]
+    assert np.allclose(ret_callable.flat[0], rbe * dij_mat @ fluence)
+    assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
+
+    ret_deriv = const_rbe.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
+    assert np.array_equal(const_rbe._w_grad_cache, fluence)
+    assert np.array_equal(const_rbe._qgrad_cache.flat[0], ret_deriv.flat[0])
+    assert isinstance(ret_deriv, np.ndarray)
+    assert ret_deriv.dtype == sample_dij_sparse_constant_rbe.physical_dose.dtype
+    assert ret_deriv.shape == sample_dij_sparse_constant_rbe.physical_dose.shape
+    assert np.allclose(ret_deriv.flat[0], rbe * dij_mat.T @ np.ones(125, dtype=np.float32))
