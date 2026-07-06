@@ -338,7 +338,7 @@ class StructureSet(PyRadPlanBaseModel):
         scenario : int or {"any", "each"}, default ``"any"``
             - ``"any"`` (default): single ndarray of the OR-union of indices
               across all scenarios. For a 3D CT this is identical to the
-              legacy behaviour.
+              legacy behavior.
             - ``"each"``: per-scenario indices. Single ndarray for a 3D CT,
               ``list[np.ndarray]`` of length :attr:`num_of_scenarios` for 4D.
             - ``int``: single ndarray of indices for that specific scenario.
@@ -517,8 +517,8 @@ class StructureSet(PyRadPlanBaseModel):
         ----------
         scenario : int, optional
             Scenario index in ``[0, num_of_scenarios)``. Defaults to ``0``,
-            which preserves the legacy 3D behaviour and the prior 4D
-            behaviour of implicitly using scenario 0.
+            which preserves the legacy 3D behavior and the prior 4D
+            behavior of implicitly using scenario 0.
 
         Returns
         -------

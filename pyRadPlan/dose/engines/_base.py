@@ -12,14 +12,14 @@ else:
 
 import warnings
 import time
-from typing import ClassVar, Union
+from typing import Any, ClassVar, Optional, Union
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
 import numpy as np
 from pydantic import ValidationError
 
-from pyRadPlan.core import Grid
+from pyRadPlan.core import ConfigurableAlgorithm, Grid, ProgressReporter
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.resample import resample_numpy_array
 from pyRadPlan.ct import CT, resample_ct
@@ -29,7 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
-from pyRadPlan.bio_models import get_bio_model, BiologicalModelBase
+from pyRadPlan.bio_models import get_bio_model
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # from dose.calcDoseInit import init_dose_calc
 
 
-class DoseEngineBase(ABC):
+class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     """
     Abstract Interface for all dose engines.
 
@@ -75,20 +75,19 @@ class DoseEngineBase(ABC):
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
 
-    mult_scen: Union[str, ScenarioModel]
-    bio_model: Union[str, BiologicalModelBase]
-    dose_grid: Union[Grid, dict]
+    mult_scen: Union[str, ScenarioModel] = "nomScen"
+    bio_model: Optional[Union[str, dict]] = None
+    dose_grid: Optional[Union[Grid, dict]] = None
 
-    select_voxels_in_scenarios: bool
+    select_voxels_in_scenarios: Optional[bool] = None
+
+    # selection of where to calculate / store dose, empty by default
+    voxel_sub_ix: Optional[Any] = None
 
     # Public properties
     def __init__(self, pln: Union[Plan, dict] = None):
-        # Assign default parameters from Matrad_Config or manually
-        self.mult_scen = "nomScen"
-        self.select_voxels_in_scenarios = None
-        self.voxel_sub_ix = None  # selection of where to calculate / store dose, empty by default
-        self.dose_grid = None
-        self.bio_model = "none"
+        # Assign default parameters declared as class-level annotations
+        self._init_config_defaults()
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
@@ -110,7 +109,6 @@ class DoseEngineBase(ABC):
         self._robust_voxels_on_grid = None  # voxels to be computed in robustness scenarios
 
         # Protected properties with private get access
-        self._last_progress_update = None
         self._calc_dose_direct = False
 
         self.xp = choose_array_api_namespace()
@@ -168,21 +166,11 @@ class DoseEngineBase(ABC):
         else:
             prop_dict = {}
 
-        fields = prop_dict.keys()
-
-        # Set up warning message
-        if warn_when_property_changed:
-            warning_msg = "Property in Dose Engine overwritten from pln.propDoseCalc"
-        else:
-            warning_msg = None
-
-        for field in fields:
-            if not hasattr(self, field):
-                warnings.warn('Property "{}" not found in Dose Engine!'.format(field))
-            elif warn_when_property_changed and warning_msg:
-                logger.warning(warning_msg + f": {field}")
-
-            setattr(self, field, prop_dict[field])
+        self.apply_config(
+            prop_dict,
+            warn_on_overwrite=warn_when_property_changed,
+            overwrite_source="pln.propDoseCalc",
+        )
 
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
@@ -609,9 +597,6 @@ class DoseEngineBase(ABC):
 
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
-
-    def _progress_update(self, pos, total):
-        raise NotImplementedError
 
     # Private and abstract methods
 

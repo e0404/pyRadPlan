@@ -102,4 +102,10 @@ def validate_scenario_model(
     return create_scenario_model(model_def, ct)
 
 
-__all__ = ["ScenarioModel", "NominalScenario", "create_scenario_model"]
+__all__ = [
+    "ScenarioModel",
+    "NominalScenario",
+    "create_scenario_model",
+    "available_scenario_models",
+    "validate_scenario_model",
+]

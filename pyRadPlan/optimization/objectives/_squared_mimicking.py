@@ -40,10 +40,10 @@ class SquaredMimicking(Objective):
     ]
 
     def compute_objective(self, values: Array) -> Array:
-        d_ref = self._resampled_image_reference_cache["d_ref"]
+        d_ref = self._image_reference("d_ref", values)
         deviation = values - d_ref
         return (deviation @ deviation) / array_api_compat.size(values)
 
     def compute_gradient(self, values: Array) -> Array:
-        d_ref = self._resampled_image_reference_cache["d_ref"]
+        d_ref = self._image_reference("d_ref", values)
         return 2.0 * (values - d_ref) / array_api_compat.size(values)
