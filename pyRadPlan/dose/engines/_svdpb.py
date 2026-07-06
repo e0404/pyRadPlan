@@ -1,9 +1,10 @@
-from typing import TypedDict, ClassVar, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
 
 import numpy as np
 import array_api_compat
+from pydantic import Field
 
 from scipy import fft
 from scipy.interpolate import RegularGridInterpolator
@@ -20,7 +21,7 @@ from ._base_pencilbeam import PencilBeamEngineAbstract
 logger = logging.getLogger(__name__)
 
 
-class DijSamplingConfig(TypedDict):
+class DijSamplingConfig(TypedDict, total=False):
     """Properties for Dij sampling configuration."""
 
     rel_dose_threshold: float
@@ -66,25 +67,22 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     _dij_guarantee_canonical: ClassVar[bool] = True
     _dij_guarantee_nonzero: ClassVar[bool] = True
 
-    use_custom_primary_photon_fluence: bool
-    kernel_cutoff: float
-    random_seed: int
-    int_conv_resolution: float = 0.5
+    use_custom_primary_photon_fluence: bool = False
+    kernel_cutoff: Annotated[float, Field(gt=0.0, description="Lateral kernel cutoff [mm]")] = (
+        np.inf
+    )
+    random_seed: int = 0
+    int_conv_resolution: Annotated[
+        float, Field(gt=0.0, description="Intensity convolution resolution [mm]")
+    ] = 0.5
+    force_penumbra: Annotated[Optional[float], Field(gt=0.0)] = None
+    force_uniform_fluence: bool = False
     enable_dij_sampling: bool = True
-    dij_sampling: DijSamplingConfig
+    dij_sampling: DijSamplingConfig = DijSamplingConfig(
+        rel_dose_threshold=0.01, lat_cut_off=20, type="radius", delta_rad_depth=5
+    )
 
-    def __init__(self, pln: PhotonPlan):
-        self.use_custom_primary_photon_fluence = False
-        self.kernel_cutoff = np.inf
-        self.random_seed = 0
-        self.int_conv_resolution = 0.5
-        self.force_penumbra = None
-        self.force_uniform_fluence = False
-        self.enable_dij_sampling = True
-        self.dij_sampling = DijSamplingConfig(
-            rel_dose_threshold=0.01, lat_cut_off=20, type="radius", delta_rad_depth=5
-        )
-
+    def __init__(self, pln: PhotonPlan = None):
         super().__init__(pln)
 
     def _init_dose_calc(self, ct, cst, stf) -> dict[str, Any]:

@@ -1,7 +1,45 @@
-from typing import List, Optional
+from typing import Annotated, Optional
+
+from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
+
 from pyRadPlan.plan import Plan, validate_pln
-from ._settings import AiSettings
+from ._settings import AiSettings, load_ai_env
+from ._usage import log_run_usage
+
+Angle = Annotated[float, Field(ge=0.0, lt=360.0)]
+
+
+class BeamSetup(BaseModel):
+    """Beam setup as matching lists of gantry and couch angles."""
+
+    gantry_angles: list[Angle] = Field(description="Gantry angles in degrees [0, 360).")
+    couch_angles: list[Angle] = Field(
+        default_factory=list,
+        description=(
+            "Couch angles in degrees [0, 360), one per gantry angle. "
+            "Omit or use 0 for coplanar beams."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _match_couch_angles(self):
+        if not self.couch_angles:
+            self.couch_angles = [0.0] * len(self.gantry_angles)
+        if len(self.couch_angles) != len(self.gantry_angles):
+            raise ValueError("couch_angles must have the same length as gantry_angles")
+        return self
+
+
+def beam_angles_system_prompt(radiation_mode: str) -> str:
+    """Return the system prompt used to suggest a beam setup for *radiation_mode*."""
+    return f"""
+        You are a radiotherapy treatment planning assistant.
+        Given a treatment site, suggest a typical beam setup (gantry and couch angles)
+        used for photon IMRT or proton IMPT.
+        The radiation mode is {radiation_mode}.
+        You may respect the additional context provided by the user.
+        """
 
 
 def generate_beam_angles(
@@ -31,27 +69,23 @@ def generate_beam_angles(
     Plan
         The updated treatment plan with generated beam angles.
     """
+    load_ai_env()
     effective_model = model or AiSettings().model
 
-    prompt = f"""
-        You are a radiotherapy treatment planning assistant.
-        Given a treatment site, suggest typical gantry angles (in degrees)
-        used for photon IMRT or proton IMPT beam setups.
-        The radiation mode is {pln.radiation_mode}.
-        You may respect the additional context provided by the user.
-        In any case: Return only a Python list of floats.
-        """
+    prompt = beam_angles_system_prompt(pln.radiation_mode)
 
-    agent = Agent(effective_model, output_type=List[float], system_prompt=prompt)
+    agent = Agent(effective_model, output_type=BeamSetup, system_prompt=prompt)
 
-    gantry_angles = agent.run_sync(
+    result = agent.run_sync(
         user_prompt=f"Treatment site: {treatment_site}, Additional context: {additional_context or 'None given'}"
-    ).output
+    )
+    log_run_usage(result, effective_model, operation="generate_beam_angles")
+    beam_setup = result.output
 
     if pln.prop_stf is None:
         pln.prop_stf = {}
 
-    pln.prop_stf["gantry_angles"] = gantry_angles
-    pln.prop_stf["couch_angles"] = [0.0] * len(gantry_angles)
+    pln.prop_stf["gantry_angles"] = beam_setup.gantry_angles
+    pln.prop_stf["couch_angles"] = beam_setup.couch_angles
 
     return validate_pln(pln)

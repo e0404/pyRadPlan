@@ -33,7 +33,7 @@ class Beam(PyRadPlanBaseModel):
     bixel_width :
         The width of the bixels in (mm).
     radiation_mode :
-        The radiation mode of the beam (e.g. photon, proton, carbon).
+        The radiation mode of the beam (e.g. photon, proton, carbon, oxygen).
     machine :
         The machine used for the beam. (e.g. 'Generic')
     sad :

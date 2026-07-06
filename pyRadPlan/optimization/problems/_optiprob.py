@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Union, ClassVar
+from typing import Any, Union, ClassVar
 import warnings
 import logging
 
@@ -18,13 +18,13 @@ from pyRadPlan.quantities import RTQuantity, QuantityResolver
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
-from ...core import xp_utils
+from ...core import ProgressReporter, xp_utils
 
 
 logger = logging.getLogger(__name__)
 
 
-class PlanningProblem(ABC):
+class PlanningProblem(ProgressReporter, ABC):
     """
     Abstract class for all planning problems.
 
@@ -87,6 +87,8 @@ class PlanningProblem(ABC):
     _array_backend: ArrayNamespace
 
     def __init__(self, pln: Union[Plan, dict] = None):
+        super().__init__()
+
         self._scenario_model = None
 
         self.solver = "ipopt"
@@ -275,7 +277,22 @@ class PlanningProblem(ABC):
         # set solver options
         self.solver = get_solver(self.solver)
 
+        # Let the solver push status (and honour pause/stop) through this problem,
+        # which is the top-level workflow step observed by callers (e.g. the GUI).
+        self.solver.status_callback = self._emit_solver_status
+
         # initial point
+
+    def _emit_solver_status(self, message: str = "", **data: Any) -> bool:
+        """Forward arbitrary solver status upward and report whether to continue.
+
+        Generic on purpose: the problem does not assume *how* the solver produced the
+        status (iterative or not).  It emits a :class:`~pyRadPlan.core.StatusReport`
+        with whatever *data* the solver supplied and returns the cooperative
+        pause/stop decision from :meth:`~pyRadPlan.core.ProgressReporter.checkpoint`.
+        """
+        self.report_status(message=message, **data)
+        return self.checkpoint()
 
     def solve(
         self,

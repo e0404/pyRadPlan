@@ -1,19 +1,19 @@
 """Base class for pencil beam dose calculation algorithms."""
 
 from abc import abstractmethod
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, Optional
 import warnings
 import logging
 import time
-from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 import SimpleITK as sitk
 import numpy as np
+from pydantic import Field
 from scipy import sparse
 import array_api_compat
 
-from pyRadPlan.core import resample_image, np2sitk
+from pyRadPlan.core import AlgorithmParameterMetadata, resample_image, np2sitk
 from pyRadPlan.ct import CT, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation
@@ -96,15 +96,26 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         Warns about deprecated engine properties.
     """
 
-    keep_rad_depth_cubes: bool
-    geometric_lateral_cutoff: float
-    dosimetric_lateral_cutoff: float
-    ssd_density_threshold: float
-    use_given_eq_density_cube: bool
-    ignore_outside_densities: bool
-    trace_on_dose_grid: bool
-    cube_wed: sitk.Image
-    hlut: np.ndarray
+    keep_rad_depth_cubes: bool = False
+    geometric_lateral_cutoff: Annotated[
+        float, Field(gt=0.0, description="Lateral geometric cut-off [mm]")
+    ] = 50.0
+    dosimetric_lateral_cutoff: Annotated[
+        float, Field(gt=0.0, le=1.0, description="Relative dosimetric cut-off")
+    ] = 0.9950
+    ssd_density_threshold: Annotated[
+        float, Field(gt=0.0, description="Density threshold for SSD computation")
+    ] = 0.0500
+    use_given_eq_density_cube: bool = False
+    ignore_outside_densities: bool = True
+    trace_on_dose_grid: bool = True
+    assumed_sparsity: Annotated[float, Field(gt=0.0, le=1.0)] = 5e-4
+    cube_wed: Annotated[
+        Optional[sitk.Image], AlgorithmParameterMetadata(configurable=False, kind="data")
+    ] = None
+    hlut: Annotated[
+        Optional[np.ndarray], AlgorithmParameterMetadata(configurable=False, kind="data")
+    ] = None
 
     # Every derived engine must declare both flags.
     _dij_guarantee_canonical: ClassVar[bool]
@@ -116,17 +127,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     entries into the dose influence matrix"""
 
     def __init__(self, pln=None):
-        self.keep_rad_depth_cubes = False
-        self.geometric_lateral_cutoff: float = 50
-        self.dosimetric_lateral_cutoff: float = 0.9950
-        self.ssd_density_threshold: float = 0.0500
-        self.use_given_eq_density_cube: bool = False
-        self.ignore_outside_densities: bool = True
-        self.trace_on_dose_grid: bool = True
-        self.cube_wed = None
-        self.hlut = None
-        self.assumed_sparsity = 5e-4
-
         self._computed_quantities = []
         self._effective_lateral_cutoff = None
         self._num_of_bixels_container = None
@@ -198,7 +198,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
             # Loop over all beams
             with logging_redirect_tqdm():
-                for i in tqdm(range(dij["num_of_beams"]), desc="Beam", unit="b", leave=False):
+                for i in self.track(range(dij["num_of_beams"]), name="Beam", unit="b"):
                     # Initialize Beam Geometry
                     t = time.time()
                     curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
@@ -207,8 +207,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     # Keep tabs on bixels computed in this beam
                     bixel_beam_counter = 0
                     # Ray calculation
-                    for j in tqdm(
-                        range(curr_beam["beam"]["num_of_rays"]), desc="Ray", unit="r", leave=False
+                    for j in self.track(
+                        range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
                     ):
                         # Initialize Ray Geometry
                         curr_ray = self._init_ray(curr_beam, j)

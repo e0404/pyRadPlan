@@ -13,9 +13,64 @@ from pyRadPlan.ct._ct import CT
 from .windows._result_win import _launch_result_window
 
 
-def gui() -> None:
-    """Launch the main GUI application."""
-    raise NotImplementedError("Main GUI application is not yet implemented.")
+def main(argv: Optional[list[str]] = None) -> None:
+    """Command-line entry point for the ``pyRadPlanGUI`` console script.
+
+    Parses *argv* (defaults to ``sys.argv``) and launches :func:`gui`.  Kept
+    separate from :func:`gui` so programmatic calls never touch the host
+    process's command line (e.g. Jupyter's ``-f kernel.json``).
+    """
+    import argparse  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(
+        prog="pyRadPlanGUI",
+        description="Launch the pyRadPlan main GUI.",
+    )
+    parser.add_argument(
+        "patient",
+        nargs="?",
+        default=None,
+        help="Path to a patient dataset to load on startup (matRad *.mat file).",
+    )
+    gui(parser.parse_args(argv).patient)
+
+
+def gui(patient: Optional[str] = None) -> None:
+    """Launch the main GUI application (matRad-style main window).
+
+    Parameters
+    ----------
+    patient:
+        Optional path to a patient dataset to load on startup. Currently only
+        matRad ``*.mat`` files are supported. When ``None`` (the default), the
+        GUI starts with an empty workspace.
+    """
+    workspace = None
+    if patient is not None:
+        # Imports deferred: only needed when a patient file is actually given.
+        import os  # noqa: PLC0415
+
+        from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
+        from pyRadPlan.io import matfile  # noqa: PLC0415
+        from pyRadPlan.io._patient_loader import validate_matrad_patient  # noqa: PLC0415
+
+        if not os.path.isfile(patient):
+            raise FileNotFoundError(f"Patient file not found: {patient}")
+        if os.path.splitext(patient)[1].lower() != ".mat":
+            raise ValueError(
+                f"Unsupported patient file format: {patient}. "
+                "Only matRad *.mat files are currently supported."
+            )
+
+        mdict = matfile.load(patient)
+        data = validate_matrad_patient(mdict)
+        workspace = WorkspaceManager.instance()
+        workspace.set_many(**{k: v for k, v in data.items() if v is not None})
+
+    # Deferred: avoids pulling in the full Qt main-window stack at package import time.
+    from .windows._main_win import launch_main_window  # noqa: PLC0415
+
+    launch_main_window(workspace)
 
 
 def launch_viewer(
