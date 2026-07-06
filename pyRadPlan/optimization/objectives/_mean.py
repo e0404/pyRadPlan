@@ -38,7 +38,7 @@ class MeanDose(Objective):
         Literal["linear", "quadratic"],
         Field(
             default="quadratic",
-            alias="f_\{diff\}",
+            alias="f_{diff}",
             description="Difference function penalizing deviation from the reference mean dose.",
         ),
         ParameterMetadata(kind=["linear", "quadratic"]),

@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Literal
 
 from pydantic import (
     Field,
@@ -21,7 +21,7 @@ class ChargedEnergySpectrumGaussian(ChargedEnergySpectrum):
     energy and a relative spread in percent.
     """
 
-    type: Final[str] = "gaussian"
+    type: Literal["gaussian"] = "gaussian"
 
     mean: float = Field(ge=0.0)
     sigma: float = Field(

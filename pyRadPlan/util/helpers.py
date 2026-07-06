@@ -133,9 +133,9 @@ def models2recarray(
             model.model_dump(by_alias=by_alias, context=serialization_context) for model in models
         ]
 
-    model_fields = models[0].model_fields | models[0].model_computed_fields
-    model_field_types = get_type_hints(models[0].__class__)
-    for cfield in models[0].model_computed_fields:
+    model_fields = first_model_type.model_fields | first_model_type.model_computed_fields
+    model_field_types = get_type_hints(first_model_type)
+    for cfield in first_model_type.model_computed_fields:
         model_field_types.update({cfield: model_fields[cfield].return_type})
 
     # Debug
