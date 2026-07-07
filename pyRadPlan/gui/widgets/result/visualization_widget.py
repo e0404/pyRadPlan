@@ -6,7 +6,8 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QGroupBox,
+    QGridLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QDialogButtonBox,
 )
+
+from .._base import parse_number_list
 
 
 class VisualizationWidget(QWidget):
@@ -33,69 +36,87 @@ class VisualizationWidget(QWidget):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        vis_group = QGroupBox("Visualization")
-        vis_layout = QVBoxLayout()
-        vis_group.setLayout(vis_layout)
-        layout.addWidget(vis_group)
+        self._build_toggles(layout)
+        self._build_quantity_row(layout)
+        self._build_buttons(layout)
 
-        # Checkboxes
+        layout.addStretch(1)
+
+    def _build_toggles(self, parent_layout: QVBoxLayout) -> None:
+        """Create overlay/plot toggles in a compact 2-column grid."""
         self.use_ct_checkbox = QCheckBox("CT")
         self.use_ct_checkbox.setChecked(True)
         self.use_ct_checkbox.stateChanged.connect(
             lambda s: self.overlay_toggled.emit("CT", bool(s))
         )
-        vis_layout.addWidget(self.use_ct_checkbox)
 
         self.use_cst_checkbox = QCheckBox("CST")
         self.use_cst_checkbox.setChecked(True)
         self.use_cst_checkbox.stateChanged.connect(
             lambda s: self.overlay_toggled.emit("CST", bool(s))
         )
-        vis_layout.addWidget(self.use_cst_checkbox)
 
         self.use_quantity_checkbox = QCheckBox("Quantity")
         self.use_quantity_checkbox.setChecked(True)
         self.use_quantity_checkbox.stateChanged.connect(
             lambda s: self.overlay_toggled.emit("quantity", bool(s))
         )
-        vis_layout.addWidget(self.use_quantity_checkbox)
 
         self.isolines_checkbox = QCheckBox("Isolines")
         self.isolines_checkbox.stateChanged.connect(lambda s: self.isolines_toggled.emit(bool(s)))
-        vis_layout.addWidget(self.isolines_checkbox)
 
         self.isocenter_checkbox = QCheckBox("Isocenter")
         self.isocenter_checkbox.stateChanged.connect(
             lambda s: self.isocenter_toggled.emit(bool(s))
         )
-        vis_layout.addWidget(self.isocenter_checkbox)
 
-        # Quantity Selector
-        vis_layout.addWidget(QLabel("Overlay Quantity:"))
+        check_grid = QGridLayout()
+        check_grid.setContentsMargins(0, 0, 0, 0)
+        check_grid.setHorizontalSpacing(8)
+        check_grid.setVerticalSpacing(2)
+        check_grid.addWidget(self.use_ct_checkbox, 0, 0)
+        check_grid.addWidget(self.use_cst_checkbox, 0, 1)
+        check_grid.addWidget(self.use_quantity_checkbox, 1, 0)
+        check_grid.addWidget(self.isolines_checkbox, 1, 1)
+        check_grid.addWidget(self.isocenter_checkbox, 2, 0)
+        parent_layout.addLayout(check_grid)
+
+    def _build_quantity_row(self, parent_layout: QVBoxLayout) -> None:
+        """Create the overlay-quantity selector on a single row."""
+        quantity_row = QHBoxLayout()
+        quantity_row.setContentsMargins(0, 0, 0, 0)
+        quantity_row.setSpacing(4)
+        quantity_row.addWidget(QLabel("Overlay Quantity:"))
         self.quantity_selector = QComboBox()
         self.quantity_selector.currentTextChanged.connect(self.quantity_changed)
-        vis_layout.addWidget(self.quantity_selector)
+        quantity_row.addWidget(self.quantity_selector, 1)
+        parent_layout.addLayout(quantity_row)
 
-        # Buttons
+    def _build_buttons(self, parent_layout: QVBoxLayout) -> None:
+        """Create the isolines/recenter button row and the DVH button."""
         self.set_isolines_btn = QPushButton("Set Isolines")
         self.set_isolines_btn.setToolTip("Set custom isoline levels (e.g. 30 50 95)")
         self.set_isolines_btn.clicked.connect(self._on_set_isolines)
-        vis_layout.addWidget(self.set_isolines_btn)
 
         self.recenter_btn = QPushButton("Recenter")
         self.recenter_btn.setToolTip("Recenter view to isocenter")
         self.recenter_btn.clicked.connect(self.recenter_requested)
-        vis_layout.addWidget(self.recenter_btn)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(4)
+        btn_row.addWidget(self.set_isolines_btn)
+        btn_row.addWidget(self.recenter_btn)
+        parent_layout.addLayout(btn_row)
 
         self.dvh_btn = QPushButton("Show DVH / QI")
         self.dvh_btn.setToolTip("Show DVH and QI analysis window")
         self.dvh_btn.setEnabled(True)
         self.dvh_btn.clicked.connect(self.show_analysis_requested)
-        vis_layout.addWidget(self.dvh_btn)
-
-        layout.addStretch(1)
+        parent_layout.addWidget(self.dvh_btn)
 
     def update_quantity_selector(self, quantities: list[str], active: str | None = None) -> None:
         """Update the quantity selector items."""
@@ -137,7 +158,7 @@ class VisualizationWidget(QWidget):
             text = line_edit.text()
             if text:
                 try:
-                    levels = [float(x) for x in text.split()]
+                    levels = parse_number_list(text)
                     self.isolines_set.emit(levels)
                 except ValueError:
                     pass

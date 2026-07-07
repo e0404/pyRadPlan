@@ -132,6 +132,13 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
 
             ray["beamlets"] = beamlets
 
+            ray["target_point"] = (
+                2 * (ray["ray_pos"] - beam["source_point"]) + beam["source_point"]
+            )
+            ray["target_point_bev"] = (
+                2 * (ray["ray_pos_bev"] - beam["source_point_bev"]) + beam["source_point_bev"]
+            )
+
         # Validate rays - remove any empty rays
         rays = [ray for ray in rays if len(ray["beamlets"]) > 0]
 

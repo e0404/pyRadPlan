@@ -70,8 +70,10 @@ class Objective(PyRadPlanBaseModel):
 
     Attributes
     ----------
-    name : ClassVar[str]
-        Name of the objective function.
+    name : str
+        Name of the objective function. Concrete objectives narrow this to a
+        ``Literal`` with a default, which makes it usable as a discriminator in
+        tagged unions and for round-tripping serialized objectives.
     has_hessian : ClassVar[bool]
         Whether the objective function has a Hessian implementation.
     priority : float
@@ -80,10 +82,18 @@ class Objective(PyRadPlanBaseModel):
         The quantity this objective is connected to (e.g. 'physical_dose', 'RBExDose').
     """
 
-    name: ClassVar[str]
+    name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
-    priority: float = Field(default=1.0, ge=0.0, alias="penalty")
-    quantity: str = Field(default="physical_dose")
+    priority: float = Field(
+        default=1.0,
+        ge=0.0,
+        alias="penalty",
+        description="Weight/priority of the objective in the optimization problem.",
+    )
+    quantity: str = Field(
+        default="physical_dose",
+        description="Quantity the objective is evaluated on (e.g. 'physical_dose').",
+    )
 
     _resampled_image_reference_cache: dict[str, Array] = PrivateAttr(default_factory=dict)
 
@@ -138,6 +148,23 @@ class Objective(PyRadPlanBaseModel):
 
                 # Cache the resampled value
                 self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
+
+    def _image_reference(self, param_name: str, values: Array) -> Array:
+        """Get cached image reference aligned to the namespace and device of *values*.
+
+        Preprocessing builds the cache with numpy (image references live in numpy /
+        SimpleITK), while *values* carry the optimization backend (e.g. cupy or
+        torch). The first evaluation converts the cached array once and re-caches
+        it, so subsequent iterations only pay the namespace/device check.
+        """
+        ref = self._resampled_image_reference_cache[param_name]
+        xp = array_api_compat.array_namespace(values)
+        if array_api_compat.array_namespace(ref) is not xp or array_api_compat.device(
+            ref
+        ) != array_api_compat.device(values):
+            ref = xp.asarray(to_numpy(ref), device=array_api_compat.device(values))
+            self._resampled_image_reference_cache[param_name] = ref
+        return ref
 
     @abstractmethod
     def compute_objective(self, values):
@@ -223,7 +250,7 @@ class Objective(PyRadPlanBaseModel):
             if len(params) != len(param_names):
                 logger.warning(
                     "Objective '%s' expects %d parameters, but %d were provided.",
-                    cls.name,
+                    cls.model_fields["name"].default,
                     len(param_names),
                     len(params),
                 )

@@ -87,6 +87,24 @@ def test_data_carbon(test_data_carbon_raw):
     return pln, ct, cst, stf, dij_matRad, result
 
 
+@pytest.fixture
+def test_data_oxygen(test_data_oxygen_raw):
+    tmp = test_data_oxygen_raw
+
+    pln = validate_pln(tmp["pln"])
+    pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
+    pln.prop_dose_calc["lateral_model"] = "single"
+
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    dij_matRad = validate_dij(tmp["dij"])
+    stf = validate_stf(tmp["stf"])
+
+    result = tmp["resultGUI"]
+
+    return pln, ct, cst, stf, dij_matRad, result
+
+
 def test_validate_protons(test_data_protons):
     pln_p, ct_p, cst_p, stf_p, dij_p, result_p = test_data_protons
     assert isinstance(pln_p, IonPlan)
@@ -115,6 +133,16 @@ def test_validate_carbon(test_data_carbon):
     assert isinstance(stf_c, SteeringInformation)
     assert isinstance(dij_c, Dij)
     assert isinstance(result_c, Dict)
+
+
+def test_validate_oxygen(test_data_oxygen):
+    pln_o, ct_o, cst_o, stf_o, dij_o, result_o = test_data_oxygen
+    assert isinstance(pln_o, IonPlan)
+    assert isinstance(ct_o, CT)
+    assert isinstance(cst_o, StructureSet)
+    assert isinstance(stf_o, SteeringInformation)
+    assert isinstance(dij_o, Dij)
+    assert isinstance(result_o, Dict)
 
 
 def test_validate_photons(test_data_photons):
