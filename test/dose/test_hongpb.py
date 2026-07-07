@@ -64,7 +64,7 @@ def test_oxygen_cd_forward(test_data_oxygen):
     pln, ct, cst, stf, dij, result = test_data_oxygen
 
     result_py = calc_dose_forward(ct, cst, stf, pln)
-    result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    result_py = sitk.GetArrayFromImage(result_py.physical_dose.values)
 
     result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
     # only comparing to 1e-4 since matRad rounds to 4 digits
