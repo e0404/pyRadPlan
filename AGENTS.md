@@ -50,6 +50,7 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 - [ ] Coverage not reduced
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] Branch targets `develop` (not `main`)
+- [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
 
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
@@ -70,3 +71,4 @@ If you add documentation, you can run multiple builds of the documentation and i
 - Be careful with physical units, coordinate systems, voxel ordering, and SimpleITK image metadata.
 - Prefer focused tests for geometry, dose, and serialization changes because regressions can be subtle.
 - Treat dose engine changes as high-risk and validate against existing fixtures where possible.
+- The GUI (`pyRadPlan/gui/`) binds directly to the pydantic data models and to algorithm calling APIs: widgets read/write model fields (e.g. `VOI` metadata, objectives, plan properties) and invoke dose engines, stf generators, and optimizers through their public interfaces. When changing a data structure or an algorithm's calling API, search `pyRadPlan/gui/` for usages, update the affected widgets, and run the GUI tests (`pytest test/gui`).

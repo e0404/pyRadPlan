@@ -22,9 +22,10 @@ from pyRadPlan import (
     calc_dose_influence,
     fluence_optimization,
     load_tg119,
+    plot_slice,
     xp_utils,
 )
-from pyRadPlan.gui import launch_viewer
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
@@ -63,8 +64,11 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-launch_viewer(ct, cst, result)
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
+    plot_slice(ct, cst, result["physical_dose"], view_slice)

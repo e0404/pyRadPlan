@@ -116,9 +116,23 @@ class OptimizerIpopt(NonLinearOptimizer):
 
         return xp_utils.from_numpy(xp, x), status
 
-    def _callback(self, *cb_args):  # Ipopt provides many args; we only need cancel flag
-        # Optional: could inspect cb_args[1] for iter_count, cb_args[2] for obj_value, etc.
-        if self._keyboard_listener.stop_event.is_set():
+    def _callback(self, *cb_args):
+        # Ipopt's intermediate callback args:
+        # (alg_mod, iter_count, obj_value, inf_pr, inf_du, mu, d_norm,
+        #  regularization_size, alpha_du, alpha_pr, ls_trials)
+        data = {}
+        if len(cb_args) >= 10:
+            data = {
+                "iteration": int(cb_args[1]),
+                "objective": float(cb_args[2]),
+                "constraint_violation": float(cb_args[3]),
+                "dual_inf": float(cb_args[4]),
+                "step": float(cb_args[9]),
+            }
+        message = f"iteration {data['iteration']}" if data else ""
+
+        cont = self._emit_status(message=message, **data)
+        if not cont or self._keyboard_listener.stop_event.is_set():
             return False  # abort
         return True  # continue
 

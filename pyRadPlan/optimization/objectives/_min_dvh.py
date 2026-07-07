@@ -1,6 +1,6 @@
 """Minimum DVH objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -24,11 +24,22 @@ class MinDVH(Objective):
         min. relative volume [%]
     """
 
-    name = "Min DVH"
+    name: Literal["Min DVH"] = "Min DVH"
 
-    d: Annotated[float, Field(default=30.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d: Annotated[
+        float,
+        Field(default=30.0, ge=0.0, description="Dose point of the DVH constraint."),
+        ParameterMetadata(kind="reference"),
+    ]
     v_min: Annotated[
-        float, Field(default=95.0, ge=0.0, le=100.0), ParameterMetadata(kind="relative_volume")
+        float,
+        Field(
+            default=95.0,
+            ge=0.0,
+            le=100.0,
+            description="Minimum relative volume [%] that should receive at least dose d.",
+        ),
+        ParameterMetadata(kind="relative_volume"),
     ]
 
     def compute_objective(self, values: Array) -> Array:

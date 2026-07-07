@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Literal
 
 from pydantic import (
     Field,
@@ -9,7 +9,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 class ChargedBeamEmittance(PyRadPlanBaseModel):
     """Emittance data for charged particle accelerator."""
 
-    type: Final[str] = "bigaussian"
+    type: Literal["bigaussian"] = "bigaussian"
 
     sigma_x: float = Field(alias="sigmaX", ge=0.0)
     sigma_y: float = Field(alias="sigmaY", ge=0.0)
