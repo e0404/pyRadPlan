@@ -57,7 +57,7 @@ model, preprocessor = load_model(
 )
 # Or with an explicit repository id:
 model, preprocessor = load_model(
-    repo_id="pyRadPlan/pyRadPlan-outcome-ORPDenseNet-Xerostomia",
+    repo_id="DKFZ-RadOpt/pyRadPlan-outcome-ORPDenseNet-tg119",
     revision="v0.1",
     device="cuda",
     offline=False,
