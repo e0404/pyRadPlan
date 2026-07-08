@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ai_agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+- `pyRadPlan.ml` module: HuggingFace-based ML model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a friendly name (resolved to `<hf_org>/<name>`), with version dedup, offline support and logging. `list_local_models()` lists the models available on disk under `MlSettings.local_models_dir` (no network), optionally filtered by modality derived from the repo name. Includes a `BasePreprocessor` contract, an example model under `data/ml_models/example_model`, and a `model_config.template.json`. Install extras via `pip install pyRadPlan[ml]`.
 
 ### Changed
 
