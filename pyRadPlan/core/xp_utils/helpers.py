@@ -205,6 +205,17 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     elif array_api_compat.is_torch_namespace(xp) and torch is not None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+    elif array_api_compat.is_numpy_namespace(xp) or array_api_compat.is_array_api_strict_namespace(
+        xp
+    ):
+        # Skip for numpy
+        return
+    else:
+        warnings.warn(
+            "Free GPU memory helper for namespace '{}' is not implemented or supported.".format(
+                xp.__name__
+            )
+        )
 
 
 def record_event(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> Optional[object]:
@@ -305,7 +316,7 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Optional[str] = N
 
 def to_namespace(
     xp_new: Union[ArrayNamespace, str],
-    arr: Union[Array, list, tuple],
+    arr: Array,
     *,
     copy: Optional[bool] = None,
     keep_sparse_compat: bool = True,

@@ -77,12 +77,6 @@ try:
     import torch
 except ImportError:
     torch = None
-try:
-    from cupyx.scipy.interpolate import RegularGridInterpolator as CupyRegularGridInterpolator
-except ModuleNotFoundError:
-    CupyRegularGridInterpolator = None
-
-from scipy.interpolate import RegularGridInterpolator as NumpyRegularGridInterpolator
 
 
 # %%
@@ -622,7 +616,7 @@ def batched_interp3d(
     if array_api_compat.is_numpy_namespace(xp):
         if is_batched:
             interps = [
-                NumpyRegularGridInterpolator(
+                scipy.interpolate.RegularGridInterpolator(
                     points,
                     values[b],
                     method=method,
@@ -632,7 +626,7 @@ def batched_interp3d(
                 for b in range(values.shape[0])
             ]
             return _BatchedInterpolator(interps, xp)
-        return NumpyRegularGridInterpolator(
+        return scipy.interpolate.RegularGridInterpolator(
             points,
             values,
             method=method,
@@ -646,7 +640,7 @@ def batched_interp3d(
         values_np = to_numpy(values)
         if is_batched:
             interps = [
-                NumpyRegularGridInterpolator(
+                scipy.interpolate.RegularGridInterpolator(
                     points_np,
                     values_np[b],
                     method=method,
@@ -656,7 +650,7 @@ def batched_interp3d(
                 for b in range(values_np.shape[0])
             ]
             return _BatchedInterpolator(interps, np)
-        return NumpyRegularGridInterpolator(
+        return scipy.interpolate.RegularGridInterpolator(
             points_np,
             values_np,
             method=method,
@@ -667,7 +661,7 @@ def batched_interp3d(
     if array_api_compat.is_cupy_namespace(xp):
         if is_batched:
             interps = [
-                CupyRegularGridInterpolator(
+                cupyx.scipy.interpolate.RegularGridInterpolator(
                     points,
                     values[b],
                     method=method,
@@ -677,7 +671,7 @@ def batched_interp3d(
                 for b in range(values.shape[0])
             ]
             return _BatchedInterpolator(interps, xp)
-        return CupyRegularGridInterpolator(
+        return cupyx.scipy.interpolate.RegularGridInterpolator(
             points, values, method=method, bounds_error=bounds_error, fill_value=float(fill_value)
         )
 

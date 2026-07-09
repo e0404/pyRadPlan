@@ -177,5 +177,4 @@ pyRadPlan/optimization/solvers/IpoptMUMPS
 .idea
 token.txt
 
-pyRadPlan/data/ai_models
 Datasets/

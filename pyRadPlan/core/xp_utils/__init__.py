@@ -7,11 +7,6 @@ try:
     from numba import cuda as numba_cuda
 except ImportError:
     numba_cuda = None
-
-try:
-    import numba.cuda as numba_cuda
-except ImportError:
-    numba_cuda = None
 from typing import Optional, Union
 
 try:

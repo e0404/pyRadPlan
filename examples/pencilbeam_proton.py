@@ -28,12 +28,9 @@ from pyRadPlan import (
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
-# Choose GPU if grid dimensions are ~ 250,250,150 or larger
-# Fallback to CPU for simple debugging runs
-# This value is experimental and may depend on your hardware
-xp_utils.PREFER_GPU = True  # or False for CPU-only
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"  # torch
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "torch"  # cupy (standard)
+
+xp_utils.PREFER_GPU = True
+xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -46,7 +43,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
-pln.prop_dose_calc = {"dose_grid": {"resolution": (2.0, 2.0, 2.0)}}
+pln.prop_dose_calc = {"dose_grid": ct.grid}
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
