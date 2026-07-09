@@ -6,7 +6,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 
 class RangeShifter(PyRadPlanBaseModel):
     """
-    A class representing a range shifter.
+    Class representing a range shifter.
 
     This class extends Pydantic's BaseModel and provides functionality to
     handle the range shifter information, including properties like id, equivalent thickness,

@@ -1,60 +1,54 @@
-Machines
+machines
 ========
 
-Base classes
-------------
+.. currentmodule:: pyRadPlan.machines.base
 
-.. autoclass:: pyRadPlan.machines.Machine
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+    :toctree: generated/machines/
 
-.. autoclass:: pyRadPlan.machines.ExternalBeamMachine
-   :members:
-   :undoc-members:
-   :show-inheritance:
+    Machine
+    ExternalBeamMachine
+    InternalBeamMachine
+    register_machine
 
-Photons
--------
 
-.. autoclass:: pyRadPlan.machines.PhotonLINAC
-   :members:
-   :undoc-members:
-   :show-inheritance:
+Beam limiting devices
+---------------------
 
-.. autoclass:: pyRadPlan.machines.PhotonSVDKernel
-    :members:
-    :undoc-members:
-    :show-inheritance:
+.. autosummary::
+    :toctree: generated/machines/
 
-Ions
-----
+    BeamLimitingDevice
+    MLC
+    Jaw
 
-.. autoclass:: pyRadPlan.machines.IonAccelerator
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
-.. autoclass:: pyRadPlan.machines.IonPencilBeamKernel
-    :members:
-    :undoc-members:
-    :show-inheritance:
+machines.photons
+----------------
 
-.. autoclass:: pyRadPlan.machines.LateralCutOff
-    :members:
-    :undoc-members:
-    :show-inheritance:
+.. toctree::
+   :maxdepth: 2
 
-.. autoclass:: pyRadPlan.machines._ions.IonBeamFocus
-    :members:
-    :undoc-members:
-    :show-inheritance:
+   machines_photons
 
+
+machines.particles
+------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   machines_particles
+
+
+.. currentmodule:: pyRadPlan.machines
 
 Loading and validating
 ----------------------
+.. autosummary::
+    :toctree: generated/machines/
 
-.. autofunction:: pyRadPlan.machines.load_machine
-.. autofunction:: pyRadPlan.machines.load_machine_from_mat
-.. autofunction:: pyRadPlan.machines.load_from_name
-.. autofunction:: pyRadPlan.machines.validate_machine
+    load_machine
+    load_machine_from_mat
+    load_from_name
+    validate_machine

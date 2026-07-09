@@ -52,7 +52,7 @@ DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
 
 class VOI(PyRadPlanBaseModel, ABC):
     """
-    Represents a Volume of Interest (VOI).
+    Base class representing a Volume of Interest (VOI).
 
     Parameters
     ----------
@@ -847,7 +847,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
 class OAR(VOI):
     """
-    Represents an organ at risk (OAR).
+    Class representing an organ at risk (OAR).
 
     Attributes
     ----------
@@ -890,7 +890,7 @@ class OAR(VOI):
 
 class Target(VOI):
     """
-    Represents a target VOI.
+    Class representing a target VOI.
 
     Attributes
     ----------
@@ -933,7 +933,7 @@ class Target(VOI):
 
 class HelperVOI(VOI):
     """
-    Represents a helper VOI.
+    Class representing a helper VOI.
 
     Attributes
     ----------
@@ -975,7 +975,7 @@ class HelperVOI(VOI):
 
 class ExternalVOI(VOI):
     """
-    Represents an external contour limiting voxels to be considered for planning (EXTERNAL).
+    Class representing an external contour limiting voxels to be considered for planning (EXTERNAL).
 
     Attributes
     ----------
@@ -1059,7 +1059,7 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
 
 def validate_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
     """
-    Validate and create a VOI object.
+    Validate a VOI object.
 
     Synonym to create_voi but should be used in validation context.
 

@@ -46,7 +46,15 @@ from .helpers import (
     to_namespace,
 )
 
-from .typing import Array, ArrayNamespace
+from .typing import (
+    Array,
+    ArrayNamespace,
+)
+
+from .compat import (
+    quantile,
+    interp1d,
+)
 
 
 # Check if GPU is available
@@ -219,7 +227,6 @@ __all__ = [
     "jax_gpu_available",
     "get_current_stream",
     "create_stream",
-    "record_event",
     "synchronize",
     "free_gpu_memory",
     "elapsed_time",
@@ -228,4 +235,7 @@ __all__ = [
     "to_namespace",
     "Array",
     "ArrayNamespace",
+    "quantile",
+    "interp1d",
+    "record_event",
 ]

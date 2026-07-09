@@ -24,13 +24,19 @@ release = __version__
 
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.viewcode",
-    "sphinx.ext.napoleon",
     "numpydoc",
     "sphinx_autodoc_typehints",
     "sphinxcontrib.autodoc_pydantic",
     "sphinx_design",
 ]
+
+autosummary_generate = True
+
+
+jupytext_formats = "ipynb,py:percent"  # tells it to treat .py as notebooks
+# nb_execution_mode = "cache"
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
@@ -56,3 +62,6 @@ numpydoc_class_members_toctree = False
 
 # disable show json as it otherwises crashes the documentation building at the moment
 autodoc_pydantic_model_show_json = False
+
+# disable config summaries for inner classes
+autodoc_pydantic_model_show_config_summary = False

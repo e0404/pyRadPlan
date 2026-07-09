@@ -1,18 +1,23 @@
 ct
-====================
+===
 
-Module contents
----------------
+.. currentmodule:: pyRadPlan.ct
 
-.. autoclass:: pyRadPlan.ct.CT
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+   :toctree: generated/ct
 
-.. autofunction:: pyRadPlan.ct.create_ct
+   CT
+   default_hlut
+   resample_ct
 
-.. autofunction:: pyRadPlan.ct.validate_ct
 
-.. autofunction:: pyRadPlan.ct.ct_from_file
 
-.. autofunction:: pyRadPlan.ct.default_hlut
+Creating and validating
+-----------------------
+
+.. autosummary::
+   :toctree: generated/ct/
+
+   create_ct
+   validate_ct
+   ct_from_file

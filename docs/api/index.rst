@@ -1,11 +1,10 @@
 .. _api_documentation:
 
-api documentation
-===================
+Api documentation
+=================
 
 .. toctree::
    :maxdepth: 1
-   :caption: Api documentation:
 
    settings
    ct
@@ -13,13 +12,15 @@ api documentation
    cst
    pln
    dij
+   dose
    optimization
    machines
+   raytracer
+   scenarios
+   geometry
+   quantities
+   analysis
    core
    util
    io
-   raytracer
-   scenarios
-   dose.engines
-   dose
-   geometry
+   ai_agents
