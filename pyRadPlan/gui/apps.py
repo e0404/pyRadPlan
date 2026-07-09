@@ -30,7 +30,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         "patient",
         nargs="?",
         default=None,
-        help="Path to a patient dataset to load on startup (matRad *.mat file).",
+        help="Patient dataset to load on startup: a path to a matRad *.mat file "
+        "or the shorthand name of a bundled phantom (e.g. TG119).",
     )
     gui(parser.parse_args(argv).patient)
 
@@ -41,9 +42,10 @@ def gui(patient: Optional[str] = None) -> None:
     Parameters
     ----------
     patient:
-        Optional path to a patient dataset to load on startup. Currently only
-        matRad ``*.mat`` files are supported. When ``None`` (the default), the
-        GUI starts with an empty workspace.
+        Optional patient dataset to load on startup: a path to a matRad
+        ``*.mat`` file or the shorthand name of a bundled phantom (e.g.
+        ``"TG119"``, see :func:`pyRadPlan.io.available_phantoms`). When
+        ``None`` (the default), the GUI starts with an empty workspace.
     """
     workspace = None
     if patient is not None:
@@ -52,10 +54,16 @@ def gui(patient: Optional[str] = None) -> None:
 
         from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
         from pyRadPlan.io import matfile  # noqa: PLC0415
-        from pyRadPlan.io._patient_loader import validate_matrad_patient  # noqa: PLC0415
+        from pyRadPlan.io._patient_loader import (  # noqa: PLC0415
+            resolve_phantom,
+            validate_matrad_patient,
+        )
 
         if not os.path.isfile(patient):
-            raise FileNotFoundError(f"Patient file not found: {patient}")
+            try:
+                patient = str(resolve_phantom(patient))
+            except ValueError as exc:
+                raise FileNotFoundError(f"Patient file not found: {patient}. {exc}") from None
         if os.path.splitext(patient)[1].lower() != ".mat":
             raise ValueError(
                 f"Unsupported patient file format: {patient}. "

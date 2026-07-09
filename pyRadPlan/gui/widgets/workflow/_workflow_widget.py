@@ -512,6 +512,33 @@ class WorkflowWidget(WorkspaceWidget):
         """Prompt for and import a DICOM data set (not yet implemented)."""
         self._on_load_dicom()
 
+    def load_patient_file(self, filepath: str, description: Optional[str] = None) -> None:
+        """Load a matRad ``*.mat`` patient file in a background thread.
+
+        Parameters
+        ----------
+        filepath:
+            Path to the ``*.mat`` file.
+        description:
+            Optional display name (e.g. a phantom name) shown in the busy
+            status instead of the generic "patient data".
+        """
+
+        def _load() -> dict:
+            # Deferred: only needed inside the worker thread, not at widget construction.
+            from pyRadPlan.io import matfile  # noqa: PLC0415
+            from pyRadPlan.io._patient_loader import validate_matrad_patient  # noqa: PLC0415
+
+            mdict = matfile.load(filepath)
+            return validate_matrad_patient(mdict)
+
+        def _on_success(data: dict) -> None:
+            self._ws.clear()
+            self._ws.set_many(**{k: v for k, v in data.items() if v is not None})
+
+        busy_text = f"Loading {description}…" if description else "Loading patient data…"
+        self._run_in_thread(_load, on_success=_on_success, busy_text=busy_text)
+
     def import_dose(self) -> None:
         """Prompt for and import dose cube(s) into the current result."""
         self._on_import_dose()
@@ -530,20 +557,7 @@ class WorkflowWidget(WorkspaceWidget):
         )
         if not filepath:
             return
-
-        def _load() -> dict:
-            # Deferred: only needed inside the worker thread, not at widget construction.
-            from pyRadPlan.io import matfile  # noqa: PLC0415
-            from pyRadPlan.io._patient_loader import validate_matrad_patient  # noqa: PLC0415
-
-            mdict = matfile.load(filepath)
-            return validate_matrad_patient(mdict)
-
-        def _on_success(data: dict) -> None:
-            self._ws.clear()
-            self._ws.set_many(**{k: v for k, v in data.items() if v is not None})
-
-        self._run_in_thread(_load, on_success=_on_success, busy_text="Loading patient data…")
+        self.load_patient_file(filepath)
 
     def _on_load_dicom(self) -> None:
         QMessageBox.information(self, "DICOM Import", "DICOM import is not yet implemented.")

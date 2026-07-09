@@ -9,7 +9,7 @@ else:
 
 from pyRadPlan.io._matlab_file_handler import MatlabFileHandler
 import pyRadPlan.io.matfile as matfile
-from pyRadPlan.io import load_patient, load_tg119
+from pyRadPlan.io import available_phantoms, load_patient, load_tg119, resolve_phantom
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
@@ -77,3 +77,20 @@ def test_load_file_extradata(tg119_path):
 def test_load_invalid_file():
     with pytest.raises(FileNotFoundError):
         _, _ = load_patient("unsupported_file.txt")
+
+
+def test_available_phantoms(tg119_path):
+    phantoms = available_phantoms()
+
+    assert "TG119" in phantoms
+    assert str(phantoms["TG119"]) == str(tg119_path)
+
+
+def test_resolve_phantom_case_and_extension_insensitive(tg119_path):
+    for name in ("TG119", "tg119", "TG119.mat", "tg119.MAT"):
+        assert str(resolve_phantom(name)) == str(tg119_path)
+
+
+def test_resolve_phantom_unknown_lists_available():
+    with pytest.raises(ValueError, match="TG119"):
+        resolve_phantom("does_not_exist")

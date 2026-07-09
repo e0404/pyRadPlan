@@ -7,6 +7,7 @@ api documentation
    :maxdepth: 1
    :caption: Api documentation:
 
+   settings
    ct
    stf
    cst

@@ -58,6 +58,9 @@ class ConfigFormWidget(QWidget):
     initial:
         Initial values (e.g. the current ``pln.prop_dose_calc`` entries).
         Invalid entries are dropped with a log message.
+    exclude:
+        Field names to leave out of the form (e.g. nested sub-configurations
+        that are edited elsewhere).
     parent:
         Optional Qt parent widget.
     """
@@ -71,10 +74,12 @@ class ConfigFormWidget(QWidget):
         self,
         model_cls: type[AlgorithmConfig],
         initial: Optional[Mapping[str, Any]] = None,
+        exclude: Optional[set[str]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._model_cls = model_cls
+        self._exclude = set(exclude or ())
         self._draft = self._validate_initial(model_cls, dict(initial or {}))
         self._editors: dict[str, QWidget] = {}
 
@@ -83,6 +88,8 @@ class ConfigFormWidget(QWidget):
         form.setVerticalSpacing(4)
 
         for name, info in model_cls.model_fields.items():
+            if name in self._exclude:
+                continue
             editor = self._create_editor(name, info)
             if editor is None:
                 continue
@@ -127,7 +134,11 @@ class ConfigFormWidget(QWidget):
 
     def values(self) -> dict[str, Any]:
         """Get the entries that were set initially or edited by the user."""
-        return {name: getattr(self._draft, name) for name in self._draft.model_fields_set}
+        return {
+            name: getattr(self._draft, name)
+            for name in self._draft.model_fields_set
+            if name not in self._exclude
+        }
 
     # ------------------------------------------------------------------
     # Editor construction
@@ -146,7 +157,7 @@ class ConfigFormWidget(QWidget):
         if meta is not None and not meta.configurable:
             return None
 
-        annotation, _ = _unwrap_optional(info.annotation)
+        annotation, optional = _unwrap_optional(info.annotation)
         value = getattr(self._draft, name)
         origin = get_origin(annotation)
 
@@ -160,7 +171,7 @@ class ConfigFormWidget(QWidget):
         elif origin is Literal:
             editor = self._make_choice_editor(name, value, get_args(annotation))
         elif annotation is str:
-            editor = self._make_str_editor(name, value)
+            editor = self._make_str_editor(name, value, optional)
         elif origin is list and get_args(annotation) and get_args(annotation)[0] in (int, float):
             editor = self._make_list_editor(name, value, get_args(annotation)[0])
         else:
@@ -212,9 +223,12 @@ class ConfigFormWidget(QWidget):
         combo.currentTextChanged.connect(lambda text: self._set_value(name, text))
         return combo
 
-    def _make_str_editor(self, name: str, value: Any) -> QLineEdit:
+    def _make_str_editor(self, name: str, value: Any, optional: bool = False) -> QLineEdit:
         edit = QLineEdit(str(value) if value is not None else "")
-        edit.editingFinished.connect(lambda: self._set_value(name, edit.text()))
+        if optional:
+            edit.editingFinished.connect(lambda: self._set_value(name, edit.text() or None))
+        else:
+            edit.editingFinished.connect(lambda: self._set_value(name, edit.text()))
         return edit
 
     def _make_list_editor(self, name: str, value: Any, item_type: type) -> QLineEdit:

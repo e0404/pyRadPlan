@@ -50,6 +50,9 @@ class FileMenu(QMenu):
         self._act_load_dicom.triggered.connect(self._wf.load_dicom)
         self._act_load_dicom.setEnabled(False)
 
+        self._menu_phantoms = self.addMenu("Load Bundled Phantom")
+        self._populate_phantom_menu()
+
         self.addSeparator()
         self._act_import_dose = self.addAction("Import Dose…")
         self._act_import_dose.triggered.connect(self._wf.import_dose)
@@ -70,6 +73,19 @@ class FileMenu(QMenu):
 
         self._ws.workspace_changed.connect(self._refresh)
         self._refresh([])
+
+    def _populate_phantom_menu(self) -> None:
+        """Fill the phantom submenu with the data sets bundled in the package."""
+        # Deferred: pulls in the pyRadPlan.io validation stack.
+        from pyRadPlan.io import available_phantoms  # noqa: PLC0415
+
+        phantoms = available_phantoms()
+        for name, path in phantoms.items():
+            action = self._menu_phantoms.addAction(name)
+            action.triggered.connect(
+                lambda checked=False, p=str(path), n=name: self._wf.load_patient_file(p, n)
+            )
+        self._menu_phantoms.setEnabled(bool(phantoms))
 
     def _refresh(self, _changed_keys: list) -> None:
         # Dose cubes are imported into the current result and matched against the

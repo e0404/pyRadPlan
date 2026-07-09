@@ -27,6 +27,7 @@ Use the documentation, docstrings or examples for a detailed overview.
 from importlib.metadata import version, PackageNotFoundError
 import logging
 
+from ._settings import PyRadPlanSettings, XpSettings, settings
 from .plan._plans import Plan, validate_pln, IonPlan, PhotonPlan
 from .ct._ct import CT, validate_ct
 from .cst._cst import StructureSet, validate_cst
@@ -50,6 +51,9 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "__version__",
+    "settings",
+    "PyRadPlanSettings",
+    "XpSettings",
     "xp_utils",
     "Plan",
     "IonPlan",

@@ -18,14 +18,14 @@ from pyRadPlan import (
     generate_stf,
     load_tg119,
     plot_slice,
-    xp_utils,
+    settings,
 )
 from pyRadPlan.analysis import DVHCollection, QICollection, DX, VX, Mean
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 # Prefer GPU when available, fall back to numpy on CPU
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 

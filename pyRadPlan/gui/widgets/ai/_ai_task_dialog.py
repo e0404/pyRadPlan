@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.ai_agents import pop_last_run_usage
+
 from .._base import Worker
 
 #: Keeps detached (still-running) worker threads alive until they finish, so
@@ -157,6 +159,7 @@ class AiTaskDialog(QDialog):
 
         self._set_running(True)
         self._set_status(f"Querying {model}…")
+        pop_last_run_usage()  # discard usage left over from an earlier/detached run
 
         self._worker = Worker(self._task.run, model, site, context)
         self._thread = QThread(self)
@@ -176,7 +179,11 @@ class AiTaskDialog(QDialog):
             self._set_status(f"Failed to apply result: {exc}", error=True)
             return
         self._set_running(False)
-        self._set_status(self._task.summarize(result))
+        status = self._task.summarize(result)
+        usage = pop_last_run_usage()
+        if usage:
+            status = f"{status}\n{usage}"
+        self._set_status(status)
 
     @Slot(object)
     def _on_error(self, exc: object) -> None:

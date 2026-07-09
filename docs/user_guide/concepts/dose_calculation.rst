@@ -121,14 +121,17 @@ Backend-agnostic computation
 
 Dose engine and quantity code use the
 `Python Array API standard <https://data-apis.org/array-api/latest/>`_ where practical. The
-preferred compute backend is configured through :mod:`pyRadPlan.core.xp_utils`:
+preferred compute backend is the ``xp`` sub-configuration of the global
+:data:`pyRadPlan.settings` and can be set via environment variables
+(``PYRADPLAN_XP_PREFER_GPU``, ``PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND``), a ``.env`` file, or
+at runtime:
 
 .. code-block:: python
 
-    from pyRadPlan import xp_utils
+    from pyRadPlan import settings
 
-    xp_utils.PREFER_GPU = True
-    xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
+    settings.xp.prefer_gpu = True
+    settings.xp.preferred_gpu_array_backend = "cupy"
     dij = calc_dose_influence(ct, cst, stf, pln)
 
 The ``Dij`` object can also convert its influence matrices explicitly with

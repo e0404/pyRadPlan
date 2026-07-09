@@ -1,9 +1,13 @@
-"""Pydantic settings for the ai_agents module."""
+"""Pydantic settings for the ai_agents module.
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+:class:`AiSettings` is defined in :mod:`pyRadPlan._settings` as part of the
+global pyRadPlan configuration and re-exported here for backward
+compatibility.
+"""
 
-#: ``.env`` file consulted both by :class:`AiSettings` and :func:`load_ai_env`.
-ENV_FILE = ".env"
+from .._settings import ENV_FILE, AiSettings
+
+__all__ = ["ENV_FILE", "AiSettings", "load_ai_env"]
 
 
 def load_ai_env(override: bool = False) -> None:
@@ -27,36 +31,3 @@ def load_ai_env(override: bool = False) -> None:
     path = find_dotenv(ENV_FILE, usecwd=True)
     if path:
         load_dotenv(path, override=override)
-
-
-class AiSettings(BaseSettings):
-    """Global defaults for pyRadPlan AI agents.
-
-    Values are read from environment variables prefixed with ``PYRADPLAN_AI_``
-    (e.g. ``PYRADPLAN_AI_MODEL``) or from a ``.env`` file in the working
-    directory.
-
-    API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``,
-    etc.) are read directly by *pydantic-ai* from the environment — they do
-    not need to be set here.
-
-    Examples
-    --------
-    Configure via environment variable::
-
-        export PYRADPLAN_AI_MODEL=gpt-4o-mini
-
-    Or override per call::
-
-        ai_agents.generate_beam_angles(pln, "prostate", model="claude-opus-4-6")
-    """
-
-    model_config = SettingsConfigDict(
-        env_prefix="PYRADPLAN_AI_",
-        env_file=ENV_FILE,
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    model: str = "claude-sonnet-4-5"
-    display_usage: bool = True
