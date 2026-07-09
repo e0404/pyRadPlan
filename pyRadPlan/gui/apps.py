@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
-
-import numpy as np
-import SimpleITK as sitk
+from typing import Mapping, Optional, Union
 
 from pyRadPlan.cst._cst import StructureSet
 from pyRadPlan.ct._ct import CT
-from pyRadPlan.result import PlanResult
+from pyRadPlan.result import PlanResult, validate_result
 
 from .windows._result_win import _launch_result_window
 
@@ -65,6 +62,8 @@ def gui(patient: Optional[str] = None) -> None:
 
         mdict = matfile.load(patient)
         data = validate_matrad_patient(mdict)
+        if data.get("result") is not None:
+            data["result"] = validate_result(data["result"])
         workspace = WorkspaceManager.instance()
         workspace.set_many(**{k: v for k, v in data.items() if v is not None})
 
@@ -77,7 +76,7 @@ def gui(patient: Optional[str] = None) -> None:
 def launch_viewer(
     ct: CT,
     cst: StructureSet = None,
-    result: Optional[Union[PlanResult, dict, np.ndarray, sitk.Image]] = None,
+    result: Optional[Union[PlanResult, Mapping]] = None,
 ) -> None:
     """Launch the quantity viewer with optional CT background and VOI contours.
 
@@ -88,7 +87,8 @@ def launch_viewer(
     cst:
         StructureSet object providing VOIs for contour display.
     result:
-        PlanResult, dict, or single image/array.
+        A :class:`~pyRadPlan.result.PlanResult` or a mapping of named quantities.
+        Bare arrays/images are not accepted.
     """
 
     # TODO: Maybe remove this fallback if imports are possible
@@ -96,9 +96,6 @@ def launch_viewer(
         raise NotImplementedError(
             "Launching viewer without CT, CST, and result is not supported yet."
         )
-
-    if isinstance(result, (np.ndarray, sitk.Image)):
-        result = {"quantity": result}
 
     _launch_result_window(ct=ct, cst=cst, result=result)
 

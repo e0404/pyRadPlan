@@ -17,6 +17,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.widgets import ViewingWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan import validate_ct, validate_cst
+from pyRadPlan.result import validate_result
 
 
 class QuantityWindow(QMainWindow):
@@ -105,6 +106,7 @@ def _launch_result_window(ct: CT, cst: StructureSet, result: dict | None = None)
 
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct)
+    result = validate_result(result) if result is not None else None
 
     workspace = WorkspaceManager()
     win = QuantityWindow(workspace)
@@ -122,4 +124,4 @@ if __name__ == "__main__":
     _ct, _cst = load_tg119()
     sigma = 0.40
     quantity = sitk.GetArrayFromImage(_ct.cube_hu) * 0.001
-    _launch_result_window(_ct, _cst, result=quantity)
+    _launch_result_window(_ct, _cst, result={"physical_dose": quantity})

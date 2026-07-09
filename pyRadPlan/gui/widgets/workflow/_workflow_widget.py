@@ -26,6 +26,7 @@ from pyRadPlan.core import ComputeControl, ProgressReport, StatusReport
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
+from pyRadPlan.result import PlanResult, create_result
 from .._base import WorkspaceWidget, Worker
 
 
@@ -237,14 +238,39 @@ class WorkflowWidget(WorkspaceWidget):
         any path (File menu, another widget, ``ws.clear()``), not just this
         widget's own load handler.
         """
-        result = self._ws.result or {}
+        keys = self._result_quantity_keys(self._ws.result)
         self._saved_tags = [
-            tag for tag in self._saved_tags if any(key.endswith(f"_{tag}") for key in result)
+            tag for tag in self._saved_tags if any(key.endswith(f"_{tag}") for key in keys)
         ]
 
     def _is_tagged(self, key: str) -> bool:
         """Whether *key* is a snapshot key created by :meth:`_on_save_result`."""
         return any(key.endswith(f"_{tag}") for tag in self._saved_tags)
+
+    @staticmethod
+    def _result_quantity_keys(result: Optional[PlanResult]) -> list[str]:
+        """All quantity names in *result* (whole-volume and per-beam)."""
+        if result is None:
+            return []
+        return list(result.stored_quantities) + list(result.stored_beam_quantities)
+
+    def _carry_forward_extras(self, new_result: PlanResult, prev: Optional[PlanResult]) -> None:
+        """Copy tagged snapshots and imported doses from *prev* into *new_result*.
+
+        Freshly computed quantities take precedence; only extra keys not already
+        present (saved snapshots and imported doses) are carried over.
+        """
+        if prev is None:
+            return
+        for key in prev.stored_quantities:
+            if (
+                self._is_tagged(key) or key.startswith("import_")
+            ) and key not in new_result.quantities:
+                new_result.add_quantity(key, prev.quantities[key])
+        for key in prev.stored_beam_quantities:
+            carry = self._is_tagged(key) or key.startswith("import_")
+            if carry and key not in new_result.beam_quantities:
+                new_result.add_beam_quantity(key, prev.beam_quantities[key])
 
     def _update_staleness(self, changed_keys: list) -> None:
         """Flag downstream products as outdated when an upstream object changes.
@@ -585,27 +611,28 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         ct = self._ws.ct
-        result: dict[str, Any] = dict(self._ws.result or {})
+        result: Optional[PlanResult] = self._ws.result
         errors: list[str] = []
 
         try:
             # Deferred: SimpleITK is only needed for this dose-import path.
             import SimpleITK as sitk  # noqa: PLC0415
 
-            ct_shape = sitk.GetArrayFromImage(ct.cube_hu).shape if ct is not None else None
+            ct_size = ct.cube_hu.GetSize() if ct is not None else None
         except Exception as exc:  # noqa: BLE001
             self._show_error(exc, "Import Dose")
             return
 
+        imported: dict[str, Any] = {}
         for fp in filepaths:
             name = os.path.splitext(os.path.basename(fp))[0]
             try:
-                cube = sitk.GetArrayFromImage(sitk.ReadImage(fp))
-                if ct_shape is not None and cube.shape != ct_shape:
-                    errors.append(f"{name}: shape {cube.shape} does not match CT {ct_shape}")
+                image = sitk.ReadImage(fp)
+                if ct_size is not None and image.GetSize() != ct_size:
+                    errors.append(f"{name}: size {image.GetSize()} does not match CT {ct_size}")
                     continue
                 key = "import_" + re.sub(r"\W+", "_", name).strip("_")
-                result[key] = cube
+                imported[key] = image
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{name}: {exc}")
 
@@ -616,6 +643,14 @@ class WorkflowWidget(WorkspaceWidget):
                 "Some files could not be imported:\n" + "\n".join(errors),
             )
 
+        if not imported:
+            return
+
+        if result is None:
+            result = create_result(imported)
+        else:
+            for key, image in imported.items():
+                result.add_quantity(key, image)
         self._ws.result = result
 
     # ------------------------------------------------------------------
@@ -630,26 +665,20 @@ class WorkflowWidget(WorkspaceWidget):
             self._ws.dij,
             self._ws.pln,
         )
-        prev_result: dict[str, Any] = dict(self._ws.result or {})
+        prev_result: Optional[PlanResult] = self._ws.result
 
-        def _compute() -> tuple:
+        def _compute() -> PlanResult:
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
-            weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights)
-            return weights, result
+            # ``fluence_optimization`` already computes the CT-grid result and
+            # returns a PlanResult (with the beamlet weights in ``result.fluence``).
+            return fluence_optimization(ct, cst, stf, dij, pln)
 
-        def _on_success(data: tuple) -> None:
-            weights, result = data
-            result["w"] = weights
-            # Carry forward named snapshots and imported doses from a previous
-            # run.  Matching by saved tag (not key prefix) keeps untagged keys
-            # of the fresh result (e.g. "physical_dose_beam") from being
-            # overwritten with stale data.
-            for key, val in prev_result.items():
-                if self._is_tagged(key) or key.startswith("import_"):
-                    result.setdefault(key, val)
+        def _on_success(result: PlanResult) -> None:
+            # Carry forward saved snapshots and imported doses from a previous run;
+            # the freshly optimized quantities take precedence.
+            self._carry_forward_extras(result, prev_result)
             self._ws.result = result
 
         # Live status window + cooperative pause/stop control for this optimization.
@@ -680,8 +709,8 @@ class WorkflowWidget(WorkspaceWidget):
 
     def _on_recalc_dose(self) -> None:
         ct, cst, stf, pln = self._ws.ct, self._ws.cst, self._ws.stf, self._ws.pln
-        prev_result: dict[str, Any] = dict(self._ws.result or {})
-        weights = prev_result.get("w")
+        prev_result: Optional[PlanResult] = self._ws.result
+        weights = prev_result.fluence if prev_result is not None else None
 
         if weights is None:
             QMessageBox.warning(
@@ -691,17 +720,16 @@ class WorkflowWidget(WorkspaceWidget):
             )
             return
 
-        def _compute() -> dict:
+        def _compute() -> PlanResult:
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
 
             new_dij = calc_dose_forward(ct, cst, stf, pln, weights)
             return new_dij.compute_result_ct_grid(weights)
 
-        def _on_success(new_result: dict) -> None:
-            result = dict(prev_result)
-            result.update(new_result)
-            self._ws.result = result
+        def _on_success(new_result: PlanResult) -> None:
+            self._carry_forward_extras(new_result, prev_result)
+            self._ws.result = new_result
 
         self._run_in_thread(_compute, on_success=_on_success, busy_text="Recalculating dose…")
 
@@ -726,12 +754,18 @@ class WorkflowWidget(WorkspaceWidget):
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
 
-        result: dict[str, Any] = dict(self._ws.result or {})
-        # Snapshot the current active quantities: every key that is not itself
-        # a snapshot from an earlier save (reusing a tag overwrites it).
-        for key in list(result):
+        result: Optional[PlanResult] = self._ws.result
+        if result is None:
+            return
+        # Snapshot the current active quantities under a tagged name; keys that are
+        # themselves snapshots from an earlier save are skipped (reusing a tag
+        # overwrites the previous snapshot via add_quantity).
+        for key in list(result.stored_quantities):
             if not self._is_tagged(key):
-                result[f"{key}_{tag}"] = result[key]
+                result.add_quantity(f"{key}_{tag}", result.quantities[key])
+        for key in list(result.stored_beam_quantities):
+            if not self._is_tagged(key):
+                result.add_beam_quantity(f"{key}_{tag}", result.beam_quantities[key])
 
         if tag not in self._saved_tags:
             self._saved_tags.append(tag)

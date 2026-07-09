@@ -119,6 +119,19 @@ class PlanResult(PyRadPlanBaseModel):
         """Return the list of stored beam quantities."""
         return list(self.beam_quantities.keys()) if self.beam_quantities else []
 
+    def to_display_dict(self) -> Dict[str, Any]:
+        """Return quantities as slice-viewer-ready arrays."""
+
+        def _arr(qd: QuantityDistribution) -> np.ndarray:
+            return np.transpose(sitk.GetArrayFromImage(qd.values), (0, 2, 1))
+
+        out: Dict[str, Any] = {}
+        for name, qd in self.quantities.items():
+            out[name] = _arr(qd)
+        for name, qds in self.beam_quantities.items():
+            out[f"{name}_beam"] = [_arr(qd) for qd in qds]
+        return out
+
     @property
     def beam(self):
         if not hasattr(self, "_beam_accessor") or self._beam_accessor is None:
@@ -370,7 +383,7 @@ class PlanResult(PyRadPlanBaseModel):
         if "beamQuantities" in export and isinstance(export["beamQuantities"], dict):
             export.update(export.pop("beamQuantities"))
         # Remove keys with None values from the export dictionary
-        # (savemat cant handle "None")
+        # (savemat can't handle "None")
         export = {key: value for key, value in export.items() if value is not None}
         return export
 
@@ -390,7 +403,7 @@ def create_result(
     fluence : Union[dict[str, Any], PlanResult, None]
         The fluence cube
     info : dict[str, Any], optional
-        Additional information about the result. Passed on e.g. the optimier
+        Additional information about the result. Passed on e.g. the optimizer
     used_solver : str, optional
         The solver used for the calculation.
     **kwargs
@@ -406,13 +419,15 @@ def create_result(
     >>> result = create_result(custum_quantity_name=sample_image, custom_beam_quantity_name=[sample_image, sample_image])
     >>> result = create_result({"physical_dose": Union[dict, Array]}, info={"key": "value"}...)
     """
+    if isinstance(data, PlanResult):
+        return data
+
+    # Reject non-dict inputs (bare arrays/images) explicitly. Checked before the
+    # truthiness test below because ``if <ndarray>:`` raises an ambiguous-truth error.
+    if data is not None and not isinstance(data, dict):
+        raise TypeError(f"Expected dict or PlanResult, got {type(data).__name__}")
+
     if data:
-        if isinstance(data, PlanResult):
-            return data
-
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected dict or PlanResult, got {type(data).__name__}")
-
         # Merge additional key-value pairs (like info) into the dictionary.
         data.update(kwargs)
 
@@ -443,7 +458,7 @@ def validate_result(data: Union[dict[str, Any], PlanResult, None] = None, **kwar
     fluence : Union[dict[str, Any], PlanResult, None]
         The fluence cube
     info : dict[str, Any], optional
-        Additional information about the result. Passed on e.g. the optimier
+        Additional information about the result. Passed on e.g. the optimizer
     used_solver : str, optional
         The solver used for the calculation.
     **kwargs
