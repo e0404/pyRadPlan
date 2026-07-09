@@ -18,7 +18,7 @@ from .._beam_cutoff import LateralCutOff
 
 
 class ParticlePencilBeamKernel(PyRadPlanBaseModel):
-    """Data Model for a single Charged Pencil Beam Kernel."""
+    """Base Data Model for a single Charged Pencil Beam Kernel."""
 
     energy: np.float64
     range: Optional[np.float64] = None

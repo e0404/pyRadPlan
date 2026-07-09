@@ -19,7 +19,7 @@ from pyRadPlan.util.helpers import models2recarray
 
 class Beam(PyRadPlanBaseModel):
     """
-    A class representing a single beam.
+    Class representing a single beam.
 
     This class extends PyRadPlanBaseModel (Pydantic) and provides functionality to
     handle the steering information, including properties like gantry angle, couch angle, etc.

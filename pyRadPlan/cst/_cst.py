@@ -19,7 +19,7 @@ from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 
 
 class StructureSet(PyRadPlanBaseModel):
-    """Represents a Structure Set for a Patient."""
+    """Class representing a Structure Set for a Patient."""
 
     vois: list[VOI] = Field(init=False, description="List of VOIs in the Structure Set")
     ct_image: CT = Field(init=False, description="Reference to the CT Image")
@@ -784,7 +784,7 @@ def validate_cst(
     **kwargs,
 ) -> StructureSet:
     """
-    Validate StructureSet.
+    Validate a StructureSet.
 
     Parameters
     ----------

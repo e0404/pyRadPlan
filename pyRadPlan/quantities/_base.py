@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class RTQuantity(ABC):
+    # TODO: missing description
     name: ClassVar[str]
     identifier: ClassVar[str]
     unit: ClassVar[pint.Unit]

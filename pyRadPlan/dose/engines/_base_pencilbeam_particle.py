@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     """
-    Abstract interface for Particle Pencil-Beam dose calculation.
+    Abstract class representing a Particle Pencil Beam Engine.
 
     This class extends PencilBeamEngineAbstract by adding infrastructure for particles spots and
     quantities like LET and biological dose for variable RBE calculations.

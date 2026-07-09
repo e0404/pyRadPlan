@@ -23,7 +23,9 @@ from ._progress import (
 )
 
 __all__ = [
+    "PyRadPlanBaseModel",
     "PyRadPlanError",
+    "Grid",
     "np2sitk",
     "resample_image",
     "resample_numpy_array",

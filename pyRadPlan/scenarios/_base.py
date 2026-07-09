@@ -31,7 +31,7 @@ from pyRadPlan.ct import validate_ct
 
 
 class ScenarioModel(PyRadPlanBaseModel):
-    """Abstract base class for scenario models.
+    """Base class representing a scenario model.
 
     Attributes
     ----------

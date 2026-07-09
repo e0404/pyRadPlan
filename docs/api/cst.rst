@@ -1,52 +1,34 @@
 cst
-=====================
+===
 
-cst
----------------
+.. currentmodule:: pyRadPlan.cst
 
-.. autoclass:: pyRadPlan.cst.StructureSet
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+   :toctree: generated/cst/
 
-.. autofunction:: pyRadPlan.cst.create_cst
+   StructureSet
 
-.. autofunction:: pyRadPlan.cst.validate_cst
 
 VOI
 ---
 
-.. autoclass:: pyRadPlan.cst.VOI
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+   :toctree: generated/cst/voi/
 
-.. autoclass:: pyRadPlan.cst.OAR
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
+   VOI
+   OAR
+   Target
+   HelperVOI
+   ExternalVOI
 
-.. autoclass:: pyRadPlan.cst.Target
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
 
-.. autoclass:: pyRadPlan.cst.HelperVOI
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
+Creating and validating
+-----------------------
 
-.. autoclass:: pyRadPlan.cst.ExternalVOI
-   :members:
-   :inherited-members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+   :toctree: generated/cst/
 
-.. automethod:: pyRadPlan.cst.create_voi
-
-.. autofunction:: pyRadPlan.cst.validate_voi
+   create_cst
+   validate_cst
+   create_voi
+   validate_voi
