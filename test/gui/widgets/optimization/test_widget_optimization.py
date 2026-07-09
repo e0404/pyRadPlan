@@ -221,6 +221,7 @@ def _image_reference_combos(widget):
 def mimicking_workspace(qapp, tg119):
     """Workspace with a Squared Mimicking objective and one result dose."""
     import SimpleITK as sitk
+    from pyRadPlan.result import create_result
 
     ct, cst = tg119
     ws = WorkspaceManager()
@@ -232,7 +233,7 @@ def mimicking_workspace(qapp, tg119):
     ]
 
     ref = sitk.Image([4, 4, 4], sitk.sitkFloat32)
-    ws.set_many(ct=ct, cst=cst, result={"physical_dose": ref})
+    ws.set_many(ct=ct, cst=cst, result=create_result({"physical_dose": ref}))
     return ws, widget, voi_idx, ref
 
 
@@ -263,21 +264,20 @@ def test_image_reference_selection_writes_through(mimicking_workspace):
     assert not any(label.startswith("Custom") for label in labels)
 
 
-def test_image_reference_accepts_imported_numpy_dose(mimicking_workspace):
-    import numpy as np
-
-    ws, widget, voi_idx, ref = mimicking_workspace
+def test_image_reference_accepts_imported_dose(mimicking_workspace):
     import SimpleITK as sitk
 
-    cube = sitk.GetArrayFromImage(ws.ct.cube_hu).astype(float)
-    ws.result = {**ws.result, "import_measured": cube}
+    ws, widget, voi_idx, ref = mimicking_workspace
+
+    measured = sitk.Cast(ws.ct.cube_hu, sitk.sitkFloat32)
+    ws.result.add_quantity("import_measured", measured)
+    ws.result = ws.result  # re-emit so the objectives editor rebuilds its dropdowns
 
     cmb = _image_reference_combos(widget)[0]
     cmb.setCurrentIndex(cmb.findText("import_measured"))
 
     d_ref = _objectives(ws.cst.vois[voi_idx])[-1].d_ref
-    assert isinstance(d_ref, tuple)
-    assert d_ref[0] is cube
+    assert d_ref is ws.result.quantities["import_measured"].values
 
 
 def test_objectives_normalized_to_instances(qapp, tg119):

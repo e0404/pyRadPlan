@@ -1,4 +1,6 @@
 import pytest
+import SimpleITK as sitk
+from pyRadPlan.result import create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
@@ -91,8 +93,13 @@ def test_plan_change_marks_downstream_stale(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
 
+    def _result():
+        return create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+
     # Loading everything at once leaves the products current, not stale.
-    ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
+    )
     assert not w._dij_stale and not w._result_stale
 
     # Changing the plan invalidates the dose influence and the result.
@@ -105,5 +112,5 @@ def test_plan_change_marks_downstream_stale(qapp):
     assert not w._dij_stale and w._result_stale
 
     # Re-optimizing clears the result flag.
-    ws.result = {"w": 1}
+    ws.result = _result()
     assert not w._result_stale

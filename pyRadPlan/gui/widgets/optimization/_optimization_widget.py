@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-import numpy as np
 import SimpleITK as sitk
 
 from PySide6.QtCore import Qt
@@ -327,20 +326,19 @@ class OptimizationWidget(WorkspaceWidget):
         return cmb
 
     def _reference_dose_options(self) -> list[tuple[str, Any]]:
-        """Workspace result entries convertible to an image-reference value.
+        """Workspace result quantities usable as an image-reference value.
 
-        Result images come out of ``Dij.compute_result_ct_grid`` as
-        ``sitk.Image`` and are used directly; imported cubes are numpy arrays
-        on the CT grid and are paired with the CT grid.  Weight vectors and
-        per-beam lists are skipped.
+        Each whole-volume quantity in the :class:`~pyRadPlan.result.PlanResult`
+        (optimized doses, imported doses and saved snapshots) is exposed as a
+        ``sitk.Image`` reference.  Per-beam quantities and beamlet weights are not
+        offered as references.
         """
         options: list[tuple[str, Any]] = []
-        ct = self._ws.ct
-        for key, val in (self._ws.result or {}).items():
-            if isinstance(val, sitk.Image):
-                options.append((key, val))
-            elif isinstance(val, np.ndarray) and val.ndim == 3 and ct is not None:
-                options.append((key, (val, ct.grid)))
+        result = self._ws.result
+        if result is None:
+            return options
+        for name in result.stored_quantities:
+            options.append((name, result.quantities[name].values))
         return options
 
     @staticmethod

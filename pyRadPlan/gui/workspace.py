@@ -132,7 +132,7 @@ class WorkspaceManager(QObject):
 
     @property
     def result(self):
-        """The optimization/forward-dose result dict, or ``None``."""
+        """The optimization/forward-dose result (``PlanResult`` or dict), or ``None``."""
         return self._get("result")
 
     @result.setter

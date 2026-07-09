@@ -22,6 +22,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.windows._analysis_win import show_analysis
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import PlanResult
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
@@ -34,56 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 # --- Data derivation helpers (workspace objects -> viewer-ready arrays) -------
-
-
-def _process_result(result: dict | np.ndarray | sitk.Image | None) -> dict | np.ndarray | None:
-    """Convert a workspace ``result`` into viewer-ready (transposed) arrays."""
-    if result is None:
-        return None
-    if isinstance(result, dict):
-        return _process_dict_result(result)
-    return _process_raw_result(result)
-
-
-def _process_dict_result(result_dict: dict) -> dict:
-    """Convert each 3-D value in a result dict into a transposed array (or list)."""
-    quantities_dict: dict = {}
-    for k, v in result_dict.items():
-        if isinstance(v, sitk.Image):
-            arr = sitk.GetArrayFromImage(v)
-            if arr.ndim == 3:
-                quantities_dict[k] = np.transpose(arr, (0, 2, 1))
-        elif isinstance(v, np.ndarray) and v.ndim == 3:
-            quantities_dict[k] = np.transpose(v, (0, 2, 1))
-        elif isinstance(v, list):
-            processed = _process_list_quantity(v)
-            if processed:
-                quantities_dict[k] = processed
-    return quantities_dict
-
-
-def _process_list_quantity(items: list) -> list:
-    """Transpose each 3-D array in a list of images/arrays."""
-    processed = []
-    for item in items:
-        if isinstance(item, sitk.Image):
-            arr = sitk.GetArrayFromImage(item)
-        elif isinstance(item, np.ndarray):
-            arr = item
-        else:
-            continue
-        if arr.ndim == 3:
-            processed.append(np.transpose(arr, (0, 2, 1)))
-    return processed
-
-
-def _process_raw_result(result: object) -> np.ndarray:
-    """Convert a single raw image or array to a transposed numpy array."""
-    if isinstance(result, sitk.Image):
-        result_arr = sitk.GetArrayFromImage(result)
-    else:
-        result_arr = np.asarray(result)
-    return np.transpose(result_arr, (0, 2, 1))
 
 
 def _build_overlay_meta(
@@ -194,7 +145,7 @@ class ViewingWidget(WorkspaceWidget):
         # notification would block the GUI thread with large memcopies.
         self._ct_cache: Optional[tuple[object, np.ndarray]] = None
         self._mask_cache: dict[str, tuple[object, np.ndarray]] = {}
-        self._quantity_cache: dict[str, tuple[object, object]] = {}
+        self._result_cache: Optional[tuple[object, dict]] = None
 
         # Create and wire the four sub-widgets.  Whether they are arranged here
         # (standalone use) or placed individually by a host window (e.g. the
@@ -293,7 +244,7 @@ class ViewingWidget(WorkspaceWidget):
     def _clear_data(self) -> None:
         self._has_data = False
         self._ct_cache = None
-        self._quantity_cache.clear()
+        self._result_cache = None
         self._mask_cache.clear()
         self._vois = []
         self.vois_widget.set_vois([])
@@ -308,33 +259,24 @@ class ViewingWidget(WorkspaceWidget):
         self._ct_cache = (ct.cube_hu, ct_arr)
         return ct_arr
 
-    def _process_result_cached(self, result) -> dict | np.ndarray | None:
-        """Like :func:`_process_result`, reusing per-key conversions by identity.
+    def _display_arrays(self, result: PlanResult | None) -> dict | None:
+        """Viewer-ready arrays for *result*, cached by result-object identity.
 
-        Result dicts routinely share value objects across updates (snapshots,
-        carried-forward keys), so unchanged cubes are not converted again.
+        The stored :class:`~pyRadPlan.result.PlanResult` is replaced (not mutated)
+        on every optimization/recalculation/snapshot, so caching on identity avoids
+        re-transposing the quantities when the workspace re-emits without a change.
         """
-        if not isinstance(result, dict):
-            self._quantity_cache.clear()
-            return _process_result(result)
-        cache: dict[str, tuple[object, object]] = {}
-        processed: dict = {}
-        for key, value in result.items():
-            cached = self._quantity_cache.get(key)
-            if cached is not None and cached[0] is value:
-                cache[key] = cached
-            else:
-                single = _process_dict_result({key: value})
-                if key not in single:
-                    continue
-                cache[key] = (value, single[key])
-            processed[key] = cache[key][1]
-        self._quantity_cache = cache
-        return processed
+        if result is None:
+            return None
+        if self._result_cache is not None and self._result_cache[0] is result:
+            return self._result_cache[1]
+        data = result.to_display_dict()
+        self._result_cache = (result, data)
+        return data
 
     def _apply_ct_and_result(self, ct: CT, cst, result) -> None:
         ct_arr = self._ct_array(ct)
-        quantity_data = self._process_result_cached(result)
+        quantity_data = self._display_arrays(result)
         overlay_units, overlay_labels = _build_overlay_meta(quantity_data)
         isocenter_vox = _compute_isocenter_vox(ct, cst)
 

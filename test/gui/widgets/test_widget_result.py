@@ -4,12 +4,18 @@ import SimpleITK as sitk
 
 from pyRadPlan.gui.widgets._result_widget import ViewingWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import create_result
 
 
 def _make_workspace(ct, cst, result=None):
     ws = WorkspaceManager()
     ws.set_many(ct=ct, cst=cst, result=result)
     return ws
+
+
+def _result_for(ct):
+    """A minimal validated PlanResult on the CT grid for viewer tests."""
+    return create_result({"physical_dose": sitk.Cast(ct.cube_hu, sitk.sitkFloat32)})
 
 
 def test_viewing_widget_init(qapp):
@@ -24,7 +30,8 @@ def test_viewing_widget_init(qapp):
 def test_viewing_widget_reacts_to_workspace(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    # The result overlay is not asserted here; only CT/VOIs/colours are checked.
+    ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
 
     # CT was derived from the workspace and pushed to the renderer
@@ -70,11 +77,10 @@ def test_viewing_widget_set_plane(qapp, test_data_photons):
     assert widget.quantity_widget._plane == "Sagittal"
 
 
-def test_viewing_widget_raw_array_result(qapp, test_data_photons):
+def test_viewing_widget_single_quantity_result(qapp, test_data_photons):
     ct, cst, _ = test_data_photons
-    raw = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
 
-    ws = _make_workspace(ct, cst, raw)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
 
     assert widget.quantity_widget._active_quantity_name is not None
@@ -84,7 +90,7 @@ def test_viewing_widget_raw_array_result(qapp, test_data_photons):
 def test_viewing_widget_clears_on_workspace_clear(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
     assert widget.quantity_widget._ct is not None
     assert len(widget.vois_widget._voi_checkboxes) == len(cst.vois)
