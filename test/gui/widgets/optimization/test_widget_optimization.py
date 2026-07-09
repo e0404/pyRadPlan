@@ -164,14 +164,16 @@ def test_invalid_param_is_ignored(qapp, tg119):
     assert after == pytest.approx(before)
 
 
-def test_ai_button_requires_cst_and_pln(qapp, tg119):
+def test_ai_button_requires_cst_and_pln(qapp, tg119, monkeypatch):
+    # Pretend AI is usable so the cst/pln gating is exercised even on machines
+    # without pydantic-ai or provider API keys.
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.optimization._optimization_widget.ai_disabled_reason",
+        lambda: None,
+    )
     ct, cst = tg119
     ws = WorkspaceManager()
     widget = OptimizationWidget(workspace=ws)
-
-    if not widget._ai_available:
-        assert not widget._btn_ai.isEnabled()
-        return
 
     # cst but no pln -> still disabled
     ws.set_many(ct=ct, cst=cst)
@@ -181,6 +183,23 @@ def test_ai_button_requires_cst_and_pln(qapp, tg119):
 
     ws.pln = PhotonPlan()
     assert widget._btn_ai.isEnabled()
+
+
+def test_ai_button_disabled_with_reason(qapp, tg119, monkeypatch):
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.optimization._optimization_widget.ai_disabled_reason",
+        lambda: "no model",
+    )
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+
+    from pyRadPlan.plan import PhotonPlan
+
+    ws.set_many(ct=ct, cst=cst)
+    ws.pln = PhotonPlan()
+    assert not widget._btn_ai.isEnabled()
+    assert widget._btn_ai.toolTip() == "no model"
 
 
 def test_change_quantity_writes_through(qapp, tg119):
@@ -278,6 +297,74 @@ def test_image_reference_accepts_imported_numpy_dose(mimicking_workspace):
     d_ref = _objectives(ws.cst.vois[voi_idx])[-1].d_ref
     assert isinstance(d_ref, tuple)
     assert d_ref[0] is cube
+
+
+def _tg119_dose_image(ct):
+    import numpy as np
+    import SimpleITK as sitk
+
+    dose_array = np.zeros(ct.size[::-1])
+    dose_array[60:80, 80:120, 80:120] = 1.0
+    dose = sitk.GetImageFromArray(dose_array)
+    dose.SetSpacing((ct.resolution["x"], ct.resolution["y"], ct.resolution["z"]))
+    dose.SetOrigin(tuple(ct.origin))
+    dose.SetDirection(tuple(ct.direction[i] for i in range(9)))
+    return dose
+
+
+def test_prompt_qi_adaptation_skipped_without_result(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    qis, accepted = widget._prompt_qi_adaptation(ws.cst)
+    assert qis is None
+    assert accepted
+
+
+def test_prompt_qi_adaptation_computes_collection(qapp, tg119, monkeypatch):
+    from pyRadPlan.analysis import QICollection
+    from pyRadPlan.gui.widgets.optimization import _optimization_widget as mod
+
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst, result={"physical_dose": _tg119_dose_image(ct)})
+
+    monkeypatch.setattr(
+        mod.QInputDialog,
+        "getItem",
+        staticmethod(lambda *a, **k: ("Adapt using QIs from 'physical_dose'", True)),
+    )
+
+    qis, accepted = widget._prompt_qi_adaptation(ws.cst)
+    assert accepted
+    assert isinstance(qis, QICollection)
+    assert all(voi.name in qis for voi in ws.cst.vois)
+
+
+def test_prompt_qi_adaptation_cancel_and_decline(qapp, tg119, monkeypatch):
+    from pyRadPlan.gui.widgets.optimization import _optimization_widget as mod
+
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst, result={"physical_dose": _tg119_dose_image(ct)})
+
+    monkeypatch.setattr(mod.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("", False)))
+    qis, accepted = widget._prompt_qi_adaptation(ws.cst)
+    assert qis is None
+    assert not accepted
+
+    monkeypatch.setattr(
+        mod.QInputDialog,
+        "getItem",
+        staticmethod(lambda *a, **k: ("No — suggest new objectives", True)),
+    )
+    qis, accepted = widget._prompt_qi_adaptation(ws.cst)
+    assert qis is None
+    assert accepted
 
 
 def test_objectives_normalized_to_instances(qapp, tg119):

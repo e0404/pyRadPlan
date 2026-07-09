@@ -1017,6 +1017,63 @@ class TestCreateGridFromMask:
         np.testing.assert_array_equal(grid.direction, expected_direction)
 
 
+def test_voi_geometry_computed_fields():
+    from pyRadPlan.ct import create_ct
+
+    img = sitk.Image(20, 20, 20, sitk.sitkInt16)
+    img.SetSpacing((2.0, 2.0, 2.0))
+    img.SetOrigin((-20.0, -20.0, -20.0))
+    ct = create_ct(cube_hu=img)
+
+    # 2x2x10 voxel rod elongated along z (numpy order is (z, y, x))
+    mask = np.zeros((20, 20, 20), dtype=np.uint8)
+    mask[5:15, 9:11, 9:11] = 1
+    voi = create_voi(voi_type="TARGET", name="rod", ct_image=ct, mask=mask)
+
+    # voxel centers: x/y in {-2, 0}, z in {-10, ..., 8} -> mean -1 on every axis
+    assert voi.center_of_mass == pytest.approx((-1.0, -1.0, -1.0), abs=1e-6)
+
+    axes = voi.principal_axes
+    assert len(axes) == 3
+    # first (dominant) axis points along the rod, i.e. z
+    assert abs(axes[0][2]) == pytest.approx(1.0, abs=1e-6)
+    for axis in axes:
+        assert np.linalg.norm(axis) == pytest.approx(1.0, abs=1e-6)
+
+    shape = voi.shape_parameters
+    assert shape["volume"] == pytest.approx(2 * 2 * 10 * 8.0)
+    assert shape["bounding_box_size"] == pytest.approx((4.0, 4.0, 20.0))
+    diameters = shape["equivalent_ellipsoid_diameters"]
+    assert diameters[0] >= diameters[1] >= diameters[2]
+    assert shape["elongation"] >= 1.0
+    assert shape["flatness"] >= 1.0
+
+
+def test_voi_geometry_empty_mask():
+    mask = np.zeros((5, 5, 5), dtype=np.uint8)
+    voi = create_voi(voi_type="TARGET", name="empty", mask=mask)
+    assert voi.center_of_mass is None
+    assert voi.principal_axes is None
+    assert voi.shape_parameters is None
+
+
+def test_voi_geometry_4d_uses_nominal_scenario(generic_input_4d):
+    name, ct, mask, _, _ = generic_input_4d
+    voi = create_voi(voi_type="TARGET", name=name, ct_image=ct, mask=mask)
+    assert voi.center_of_mass is not None
+    assert len(voi.center_of_mass) == 3
+    assert voi.shape_parameters is not None
+
+
+def test_voi_geometry_in_model_dump(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = create_voi(voi_type="TARGET", name=name, ct_image=ct, mask=mask)
+    dumped = voi.model_dump()
+    assert dumped["center_of_mass"] == voi.center_of_mass
+    assert dumped["principal_axes"] == voi.principal_axes
+    assert dumped["shape_parameters"] == voi.shape_parameters
+
+
 @pytest.mark.parametrize(
     "color_in, color_expected",
     [

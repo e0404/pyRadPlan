@@ -473,6 +473,97 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         return 1
 
+    def _nominal_mask_3d(self) -> sitk.Image:
+        """Return the 3D mask of the nominal (first) scenario."""
+        if self.mask.GetDimension() == 4:
+            return self.mask[:, :, :, 0]
+        return self.mask
+
+    def _label_shape_statistics(self) -> Optional[sitk.LabelShapeStatisticsImageFilter]:
+        """Run a shape statistics filter on the nominal mask (None if the mask is empty)."""
+        stats = sitk.LabelShapeStatisticsImageFilter()
+        stats.Execute(self._nominal_mask_3d() != 0)
+        if not stats.HasLabel(1):
+            return None
+        return stats
+
+    @computed_field
+    @property
+    def center_of_mass(self) -> Optional[tuple[float, float, float]]:
+        """
+        Return the center of mass in world (x, y, z) coordinates (nominal scenario).
+
+        Coordinates are physical LPS coordinates in the grid's units (typically mm).
+
+        Returns
+        -------
+        tuple[float, float, float] or None
+            The center of mass, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        return tuple(float(c) for c in stats.GetCentroid(1))
+
+    @computed_field
+    @property
+    def principal_axes(self) -> Optional[tuple[tuple[float, float, float], ...]]:
+        """
+        Return the principal axes of the VOI (nominal scenario).
+
+        Unit vectors in world (x, y, z) coordinates, ordered by descending spatial
+        extent: the first axis points along the VOI's largest elongation. The sign
+        of each axis is arbitrary.
+
+        Returns
+        -------
+        tuple of tuple[float, float, float], or None
+            Three principal axis unit vectors, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        # ITK orders principal moments ascending; reverse to descending extent.
+        axes = np.asarray(stats.GetPrincipalAxes(1)).reshape(3, 3)[::-1]
+        return tuple(tuple(float(c) for c in axis) for axis in axes)
+
+    @computed_field
+    @property
+    def shape_parameters(self) -> Optional[dict[str, Any]]:
+        """
+        Return scalar shape descriptors of the VOI (nominal scenario).
+
+        All lengths are in the grid's units (typically mm):
+
+        - ``volume``: volume of the VOI (units cubed).
+        - ``bounding_box_size``: extent of the axis-aligned bounding box (x, y, z).
+        - ``equivalent_ellipsoid_diameters``: diameters of the volume-equivalent
+          ellipsoid, ordered like :attr:`principal_axes` (largest first).
+        - ``elongation``, ``flatness``: ITK shape ratios (>= 1); larger values
+          mean a more elongated / flatter shape.
+
+        Returns
+        -------
+        dict or None
+            The shape descriptors, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        spacing = self._nominal_mask_3d().GetSpacing()
+        bbox = stats.GetBoundingBox(1)
+        return {
+            "volume": float(stats.GetPhysicalSize(1)),
+            "bounding_box_size": tuple(
+                float(n * s) for n, s in zip(bbox[3:], spacing, strict=True)
+            ),
+            "equivalent_ellipsoid_diameters": tuple(
+                float(d) for d in reversed(stats.GetEquivalentEllipsoidDiameter(1))
+            ),
+            "elongation": float(stats.GetElongation(1)),
+            "flatness": float(stats.GetFlatness(1)),
+        }
+
     def get_indices(self, order: str = "sitk") -> np.ndarray:
         """
         Return linear voxel indices into the full mask cube.

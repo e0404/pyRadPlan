@@ -151,12 +151,12 @@ can be switched without modifying any algorithm code:
 
 .. code-block:: python
 
-    from pyRadPlan import xp_utils
+    from pyRadPlan import settings
 
-    xp_utils.PREFER_GPU = False
-    xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
-    xp_utils.PREFER_GPU = True
-    xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
+    settings.xp.prefer_gpu = False
+    settings.xp.preferred_cpu_array_backend = "numpy"
+    settings.xp.prefer_gpu = True
+    settings.xp.preferred_gpu_array_backend = "cupy"
 
 The quantity resolver chooses the current preferred namespace through
 :func:`pyRadPlan.core.xp_utils.choose_array_api_namespace` and converts ``Dij`` matrices into

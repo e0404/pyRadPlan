@@ -86,6 +86,15 @@ def test_file_menu_import_dose_tracks_ct(qapp, test_data_photons):
     assert fm._act_import_dose.isEnabled()
 
 
+def test_file_menu_lists_bundled_phantoms(qapp):
+    win = MainWindow(WorkspaceManager())
+
+    fm = win._file_menu
+    assert fm._menu_phantoms.isEnabled()
+    labels = [a.text() for a in fm._menu_phantoms.actions()]
+    assert "TG119" in labels
+
+
 def test_compact_font_is_smaller(qapp):
     win = MainWindow(WorkspaceManager())
     default = qapp.font().pointSizeF()
@@ -93,30 +102,65 @@ def test_compact_font_is_smaller(qapp):
         assert win.font().pointSizeF() < default
 
 
-def test_settings_menu_applies_ai_settings_to_env(qapp, monkeypatch):
-    pytest.importorskip("pydantic_ai")
-    win = MainWindow(WorkspaceManager())
-    menu = win._settings_menu
+def test_settings_dialog_shows_subconfig_tabs(qapp):
+    from pyRadPlan.gui.menus._settings import SettingsDialog
 
-    # Stub the dialog so the test doesn't open a modal window.
-    class _FakeDialog:
-        def __init__(self, *a, **k):
-            pass
+    dialog = SettingsDialog()
+    titles = [dialog._tabs.tabText(i) for i in range(dialog._tabs.count())]
+    # All top-level fields are sub-configurations, so there is no General tab.
+    assert dialog._general_form is None
+    assert "General" not in titles
+    assert "XP (Backend)" in titles
+    assert "AI" in titles
+    assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
+    assert "preferred_gpu_array_backend" in dialog._sub_forms["xp"]._editors
+    assert "model" in dialog._sub_forms["ai"]._editors
 
-        def exec(self):
-            from PySide6.QtWidgets import QDialog
 
-            return QDialog.DialogCode.Accepted
+def test_settings_dialog_single_section(qapp):
+    from pyRadPlan.gui.menus._settings import SettingsDialog
 
-        def values(self):
-            return {"model": "test-model", "display_usage": False}
+    dialog = SettingsDialog(section="xp")
+    assert dialog._tabs is None
+    assert dialog.windowTitle() == "XP (Backend) Settings"
+    assert list(dialog._sub_forms) == ["xp"]
+    assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
 
-    monkeypatch.setattr("pyRadPlan.gui.widgets.ConfigFormDialog", _FakeDialog)
+    with pytest.raises(ValueError):
+        SettingsDialog(section="nope")
+
+
+def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
+    from pyRadPlan._settings import get_settings
+    from pyRadPlan.gui.menus._settings import SettingsDialog
+
+    settings = get_settings()
+    orig_prefer_gpu = settings.xp.prefer_gpu
+    orig_ai_model = settings.ai.model
+    monkeypatch.delenv("PYRADPLAN_XP_PREFER_GPU", raising=False)
     monkeypatch.delenv("PYRADPLAN_AI_MODEL", raising=False)
 
-    menu._edit_ai_settings()
+    try:
+        dialog = SettingsDialog()
+        dialog._sub_forms["xp"]._set_value("prefer_gpu", False)
+        dialog._sub_forms["ai"]._set_value("model", "test-model")
+        dialog.apply()
 
-    assert os.environ["PYRADPLAN_AI_MODEL"] == "test-model"
+        assert settings.xp.prefer_gpu is False
+        assert os.environ["PYRADPLAN_XP_PREFER_GPU"] == "False"
+        assert settings.ai.model == "test-model"
+        assert os.environ["PYRADPLAN_AI_MODEL"] == "test-model"
+    finally:
+        os.environ.pop("PYRADPLAN_XP_PREFER_GPU", None)
+        os.environ.pop("PYRADPLAN_AI_MODEL", None)
+        settings.xp.prefer_gpu = orig_prefer_gpu
+        settings.ai.model = orig_ai_model
+
+
+def test_settings_menu_has_quick_links_and_preferences(qapp):
+    win = MainWindow(WorkspaceManager())
+    labels = [a.text() for a in win._settings_menu.actions() if a.text()]
+    assert labels == ["XP (Backend)…", "AI…", "Preferences…"]
 
 
 def test_inputs_locked_while_busy(qapp):
