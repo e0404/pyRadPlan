@@ -171,7 +171,7 @@ class FieldShape(Beamlet):
             if len(grid_resolution) != 1:
                 raise ValueError("Grid must have uniform spacing")
             # TODO: field_width = #intervals not #points ?
-            grid_field_width = float((len(grid) - 1) * grid_resolution)
+            grid_field_width = float((len(grid) - 1) * grid_resolution[0])
             if field_width is not None:
                 if not np.isclose(grid_field_width, field_width):
                     raise ValueError(
