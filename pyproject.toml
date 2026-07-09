@@ -195,11 +195,6 @@ authorized_licenses = [
   "zlib",
 ]
 
-[tool.liccheck.authorized_packages]
-# regex reports a compound license string (Apache-2.0 AND CNRI-Python) that
-# liccheck can't match against authorized_licenses; both are permissive.
-regex = "*"
-
 [tool.codespell]
 skip = "./matRad,*/matRad/*"
 ignore-words-list = "coo"
