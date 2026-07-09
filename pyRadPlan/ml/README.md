@@ -33,8 +33,8 @@ repository and is listed under the repository name.
 
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
-| `hf_org` | `PYRADPLAN_ML_HF_ORG` | `pyRadPlan` | HuggingFace org/namespace for registered repos |
-| `local_models_dir` | `PYRADPLAN_HUGGINGFACE_PATH` | `None` | Base dir for local models; default `local_dir` is `<path>/<repo>` |
+| `hf_org` | `PYRADPLAN_ML_HF_ORG` | `DKFZ-RadOpt` | HuggingFace org/namespace for registered repos |
+| `local_models_dir` | `PYRADPLAN_HUGGINGFACE_PATH` | `pyRadPlan/data/ml_models` | Base dir for local models; default `local_dir` is `<path>/<repo>`. A model already present here is used without touching the network; otherwise it's downloaded here. Set to `""` to disable and use the HuggingFace cache instead. |
 | `cache_dir` | `PYRADPLAN_ML_CACHE_DIR` | HF default | HuggingFace cache directory |
 | `offline` | `PYRADPLAN_ML_OFFLINE` | `False` | Force `local_files_only` |
 | `trust_remote_code` | `PYRADPLAN_ML_TRUST_REMOTE_CODE` | `True` | Allow executing shipped model code |

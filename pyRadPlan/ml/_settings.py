@@ -22,9 +22,13 @@ class MlSettings(BaseSettings):
         repository id.
     local_models_dir : Optional[Path]
         Base directory for local models, read from the
-        ``PYRADPLAN_HUGGINGFACE_PATH`` environment variable. When set, models
-        are downloaded into / loaded from ``"<local_models_dir>/<repo>"`` and it
-        is used as the default ``local_dir``.
+        ``PYRADPLAN_HUGGINGFACE_PATH`` environment variable. Defaults to
+        ``pyRadPlan/data/ml_models``. Models are downloaded into / loaded from
+        ``"<local_models_dir>/<repo>"``: if a valid model already exists there,
+        it is used directly (no network access); otherwise it is downloaded
+        from the Hub into that same directory so subsequent loads are local.
+        Set to an empty string to disable (falls back to the HuggingFace
+        cache).
     cache_dir : Optional[Path]
         Override for the HuggingFace cache directory. ``None`` uses the default
         HuggingFace cache location (or ``HF_HOME``).
@@ -56,8 +60,10 @@ class MlSettings(BaseSettings):
     )
 
     hf_org: str = "DKFZ-RadOpt"
+    # TODO: Move to a directory next to pyradplan, e.g. /user_data/
     local_models_dir: Optional[Path] = Field(
-        default=None, validation_alias="PYRADPLAN_HUGGINGFACE_PATH"
+        default_factory=lambda: Path(__file__).resolve().parent.parent / "data" / "ml_models",
+        validation_alias="PYRADPLAN_HUGGINGFACE_PATH",
     )
     cache_dir: Optional[Path] = None
     offline: bool = False

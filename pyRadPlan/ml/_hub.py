@@ -2,13 +2,19 @@
 
 These helpers centralize three concerns the rest of the package relies on:
 
-* **Local directories** — a model may simply live on disk (e.g. shipped under
-  ``pyRadPlan/data/ml_models``); no network is touched.
+* **HuggingFace-first resolution** — when a ``repo_id`` is given and we're not
+  offline, HuggingFace is checked first so a newer version there is always
+  picked up, even when a local copy already exists under ``local_dir`` (e.g.
+  ``pyRadPlan/data/ml_models``). A valid local copy is only used as a
+  *fallback* when HuggingFace can't be reached or the repo doesn't exist there
+  — which is what lets a purely local, never-published model keep working.
 * **Version dedup** — when downloading into a ``local_dir``, a small
-  ``.pyradplan_model.json`` records the resolved ``repo_id``/``revision`` so the
-  same version is not downloaded twice.
-* **Offline operation** — downloads transparently fall back to cached/local
-  files when the network is unavailable or :class:`MlSettings.offline` is set.
+  ``.pyradplan_model.json`` records the resolved ``repo_id``/``revision`` so a
+  pinned revision that's already present locally skips the network entirely.
+* **Offline operation** — with :class:`MlSettings.offline` set (or
+  ``offline=True``), no network is attempted at all; a valid local copy is
+  used directly, otherwise the HuggingFace cache is checked
+  (``local_files_only=True``).
 """
 
 import json
@@ -110,28 +116,58 @@ def _download(
     cache_dir: Optional[Path],
     local_dir: Optional[Path],
     offline: bool,
+    local_fallback: Optional[Path],
 ) -> Path:
-    """Run ``snapshot_download`` with an offline fallback."""
+    """Resolve a model from HuggingFace, checking it before any local fallback.
+
+    When online, HuggingFace is always queried first — so a newer version there
+    is picked up even if ``local_fallback`` (an already-valid local model
+    directory) exists. ``local_fallback`` is only used if that check fails
+    (network issue, repo not found, ...), which lets a purely local model that
+    was never pushed to HuggingFace keep working. If neither succeeds, the
+    HuggingFace cache is tried as a last resort (``local_files_only=True``).
+    """
     kwargs = {
         "repo_id": repo_id,
         "revision": revision,
         "cache_dir": str(cache_dir) if cache_dir else None,
         "local_dir": str(local_dir) if local_dir else None,
     }
-    try:
-        return Path(snapshot_download(local_files_only=offline, **kwargs))
-    except Exception as exc:
-        if offline:
+
+    def _snapshot(local_files_only: bool) -> Path:
+        path = Path(snapshot_download(local_files_only=local_files_only, **kwargs))
+        if local_dir is not None:
+            _write_metadata(path, repo_id, revision)
+        return path
+
+    if offline:
+        if local_fallback is not None:
+            return local_fallback
+        try:
+            return _snapshot(local_files_only=True)
+        except Exception as exc:
             raise FileNotFoundError(
                 f"Model '{repo_id}' is not available locally and offline mode is enabled."
             ) from exc
+
+    try:
+        return _snapshot(local_files_only=False)
+    except Exception as exc:
+        if local_fallback is not None:
+            logger.info(
+                "Could not reach HuggingFace for '%s' (%s); using local copy at %s.",
+                repo_id,
+                exc,
+                local_fallback,
+            )
+            return local_fallback
         logger.warning(
             "Could not download model '%s' (%s). Falling back to cached files.",
             repo_id,
             exc,
         )
         try:
-            return Path(snapshot_download(local_files_only=True, **kwargs))
+            return _snapshot(local_files_only=True)
         except Exception as exc2:
             raise FileNotFoundError(
                 f"Could not download model '{repo_id}' and no cached copy was found."
@@ -146,7 +182,18 @@ def resolve_model_dir(
     offline: Optional[bool] = None,
     cache_dir: Optional[Union[str, Path]] = None,
 ) -> Path:
-    """Resolve a model directory, downloading from HuggingFace if necessary.
+    """Resolve a model directory, preferring HuggingFace over any local copy.
+
+    When ``repo_id`` is given and we're not offline, HuggingFace is always checked
+    first — even if a valid model already sits at ``local_dir`` — so a newer
+    version there is picked up automatically. The local copy is only used as a
+    fallback when that check fails (offline, network issue, or the repo doesn't
+    exist on HuggingFace at all), which is what lets a custom model that was
+    never pushed to HuggingFace keep working from ``local_dir`` alone.
+
+    The one exception is a *pinned* ``revision`` that's already present locally
+    (recorded via the version-dedup metadata): since that exact revision can't
+    change, it's used directly without touching the network.
 
     Parameters
     ----------
@@ -157,7 +204,7 @@ def resolve_model_dir(
         Git revision (tag, branch or commit) to download. Used for version
         dedup against ``local_dir`` metadata.
     local_dir : str or Path, optional
-        A directory to use directly (if it already holds the model) or to
+        A directory to use as a fallback (if it already holds the model) or to
         download into. Enables offline use and version tracking. When omitted
         and :attr:`MlSettings.local_models_dir` (``PYRADPLAN_HUGGINGFACE_PATH``)
         is set, it defaults to ``"<local_models_dir>/<repo>"``.
@@ -190,40 +237,35 @@ def resolve_model_dir(
         local_dir = cfg.local_models_dir / repo_id.split("/")[-1]
         logger.info("Using configured local models base, local_dir=%s.", local_dir)
 
-    if local_dir is not None:
-        local_dir = Path(local_dir)
-        target = local_dir
+    target = Path(local_dir) if local_dir is not None else None
+    local_valid = target is not None and is_valid_model_dir(target)
 
-        if is_valid_model_dir(target) and (
-            repo_id is None or revision is None or _metadata_matches(target, repo_id, revision)
-        ):
+    if repo_id is None:
+        if local_valid:
             logger.info("Using existing local model at %s.", target)
             return target
-
-        if repo_id is None:
+        if target is not None:
             raise FileNotFoundError(
                 f"Local model directory '{target}' is missing required files "
                 f"{REQUIRED_FILES} and no repo_id was given to download it."
             )
-
-    if repo_id is None:
         raise ValueError(
             "Provide either a valid 'local_dir' containing the model files or a 'repo_id'."
         )
 
+    if local_valid and revision is not None and _metadata_matches(target, repo_id, revision):
+        logger.info("Using existing local model at %s (pinned revision already present).", target)
+        return target
+
     snapshot_download = _import_snapshot_download()
 
     logger.info("Resolving model '%s' (revision=%s, offline=%s).", repo_id, revision, offline)
-    snapshot = _download(
+    return _download(
         snapshot_download,
         repo_id=repo_id,
         revision=revision,
         cache_dir=cache_dir,
-        local_dir=Path(local_dir) if local_dir is not None else None,
+        local_dir=target,
         offline=offline,
+        local_fallback=target if local_valid else None,
     )
-
-    if local_dir is not None:
-        _write_metadata(snapshot, repo_id, revision)
-
-    return snapshot

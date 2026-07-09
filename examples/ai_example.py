@@ -13,6 +13,7 @@ from pyRadPlan import (
     plot_slice,
     xp_utils,
     load_tg119,
+    fluence_optimization,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -32,8 +33,8 @@ pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
 pln.prop_dose_calc = {
     "dose_grid": {"resolution": [2.0, 2.0, 2.0]},
-    "engine": "AI",
-    "model": "ConvLSTM",
+    "engine": "AIBeamlet",
+    "model": "pyRadPlan-dosecalc-Det-proton-lung",
 }
 pln.prop_stf = {
     "gantry_angles": [90, 270],
@@ -51,13 +52,13 @@ cst.vois[2].objectives = [
     MeanDose(priority=1.0, d_ref=0.0),
     SquaredOverdosing(priority=10.0, d_max=2.0),
 ]  # BODY
-fluence = np.ones(dij.total_num_of_bixels)  # fluence_optimization(ct, cst, stf, dij, pln)
+fluence = fluence_optimization(ct, cst, stf, dij, pln)
 result = dij.compute_result_ct_grid(fluence)
 
 view_slice = int(np.round(ct.size[2] / 2))
 
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
     view_slice=view_slice,

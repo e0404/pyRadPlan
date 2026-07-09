@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
 - `pyRadPlan.ml` module: HuggingFace-based ML model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a friendly name (resolved to `<hf_org>/<name>`), with version dedup, offline support and logging. `list_local_models()` lists the models available on disk under `MlSettings.local_models_dir` (no network), optionally filtered by modality derived from the repo name. Includes a `BasePreprocessor` contract, an example model under `data/ml_models/example_model`, and a `model_config.template.json`. Install extras via `pip install pyRadPlan[ml]`.
+- `AIBeamletEngine` ("AIBeamlet"): AI-driven pencil-beam dose engine selected via `pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<name>"}`. Loads the model + its preprocessor through `pyRadPlan.ml.load_model`; per-model sampling-grid/quantities/training metadata lives under `metadata.dose_calc` in the model's `model_config.json`. Multi-output models (e.g. dose+physical_dose_var, dose+LET) are supported by having `preprocessor.postprocess()` return a `{quantity_name: array}` dict. Dose-calc model preprocessors define their own `predict(model, model_input)` (called after `preprocess`), always returning a `{quantity_name: array}` dict.
+- `batched_interp3d` added to support interpoaltion needs of the AIBeamlet engine. Allows for 3d interpoaltion of batched volumes and returns a instance of the interpolator to allow for one-time construction with multiple calls.
 
 ### Changed
 

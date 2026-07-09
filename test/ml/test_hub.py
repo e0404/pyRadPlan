@@ -85,20 +85,47 @@ def test_no_local_dir_no_repo_id_raises():
         resolve_model_dir()
 
 
-def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
+def test_local_models_dir_used_as_fallback_when_hf_unreachable(tmp_path, monkeypatch):
+    """A present local model is only used once HuggingFace can't be reached."""
     model_dir = tmp_path / "repo"
     _make_model_dir(model_dir)
 
     cfg = _hub.get_ml_settings()
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
 
-    def _boom():
-        raise AssertionError("a present local model must not trigger a download")
+    calls = []
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", _boom)
+    def fake_snapshot(**kwargs):
+        calls.append(kwargs["local_files_only"])
+        raise RuntimeError("repo not found on HuggingFace")
+
+    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
 
     out = resolve_model_dir(repo_id="org/repo")
     assert Path(out) == model_dir
+    # HuggingFace is checked first; the local copy is used as a fallback
+    # directly, without a second (offline) snapshot_download call.
+    assert calls == [False]
+
+
+def test_huggingface_preferred_over_valid_local_dir(tmp_path, monkeypatch):
+    """When HuggingFace is reachable, it wins even if a valid local copy exists."""
+    model_dir = tmp_path / "repo"
+    _make_model_dir(model_dir)
+    remote_dir = tmp_path / "remote"
+    _make_model_dir(remote_dir)
+
+    cfg = _hub.get_ml_settings()
+    monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
+
+    def fake_snapshot(**kwargs):
+        assert kwargs["local_files_only"] is False
+        return str(remote_dir)
+
+    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+
+    out = resolve_model_dir(repo_id="org/repo")
+    assert Path(out) == remote_dir
 
 
 def test_empty_huggingface_path_is_treated_as_unset(monkeypatch):

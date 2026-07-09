@@ -186,9 +186,10 @@ def load_model(
 
     model_cls = getattr(model_module, config["model_name"])
     model = model_cls(**config.get("model_params", {}))
+
+    _load_weights(model, model_dir / "weights.safetensors", "cpu")
     if hasattr(model, "to"):
         model.to(device)
-    _load_weights(model, model_dir / "weights.safetensors", device)
     if hasattr(model, "eval"):
         model.eval()
 

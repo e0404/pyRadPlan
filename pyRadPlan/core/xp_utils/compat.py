@@ -594,18 +594,44 @@ if torch is not None:
             return res
 
 
-def interp3d(
+class _BatchedInterpolator:
+    """Wraps B independent interpolators so non-batched backends can handle (B, D, H, W) values."""
+
+    def __init__(self, interpolators, xp):
+        self._interps = interpolators
+        self._xp = xp
+
+    def __call__(self, xi):
+        results = [interp(xi) for interp in self._interps]
+        return self._xp.stack(results, axis=0)
+
+
+def batched_interp3d(
     points, values, method="linear", bounds_error=True, fill_value=np.nan
 ) -> Union[Array, Sequence[Array], dict[Any, Array]]:
     """
-    Array API Conform 3D interpolation.
+    Array API conform batched 3D interpolation.
 
     """
     # points is a tuple/list of grid vectors; expand it so array_namespace
     # sees actual array objects instead of the container itself.
     xp = array_api_compat.array_namespace(values, *points)
 
+    is_batched = values.ndim == len(points) + 1
+
     if array_api_compat.is_numpy_namespace(xp):
+        if is_batched:
+            interps = [
+                NumpyRegularGridInterpolator(
+                    points,
+                    values[b],
+                    method=method,
+                    bounds_error=bounds_error,
+                    fill_value=float(fill_value),
+                )
+                for b in range(values.shape[0])
+            ]
+            return _BatchedInterpolator(interps, xp)
         return NumpyRegularGridInterpolator(
             points,
             values,
@@ -618,6 +644,18 @@ def interp3d(
         # Treat strict Array API tensors by converting to numpy underneath
         points_np = tuple(to_numpy(p) for p in points)
         values_np = to_numpy(values)
+        if is_batched:
+            interps = [
+                NumpyRegularGridInterpolator(
+                    points_np,
+                    values_np[b],
+                    method=method,
+                    bounds_error=bounds_error,
+                    fill_value=float(fill_value),
+                )
+                for b in range(values_np.shape[0])
+            ]
+            return _BatchedInterpolator(interps, np)
         return NumpyRegularGridInterpolator(
             points_np,
             values_np,
@@ -627,6 +665,18 @@ def interp3d(
         )
 
     if array_api_compat.is_cupy_namespace(xp):
+        if is_batched:
+            interps = [
+                CupyRegularGridInterpolator(
+                    points,
+                    values[b],
+                    method=method,
+                    bounds_error=bounds_error,
+                    fill_value=float(fill_value),
+                )
+                for b in range(values.shape[0])
+            ]
+            return _BatchedInterpolator(interps, xp)
         return CupyRegularGridInterpolator(
             points, values, method=method, bounds_error=bounds_error, fill_value=float(fill_value)
         )
@@ -660,8 +710,10 @@ def array_meshgrid(
 
     elif array_api_compat.is_numpy_namespace(xp):
         output = np.meshgrid(*arrays, indexing=indexing)
+
     elif array_api_compat.is_array_api_strict_namespace(xp):
         output = xp.meshgrid(*arrays, indexing=indexing)
+
     else:
         raise NotImplementedError("array_meshgrid not supported for this Backend")
 
