@@ -24,7 +24,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from pyRadPlan.ai_models import get_ai_model_settings, list_local_models, load_model, Modality
+from pyRadPlan import settings
+from pyRadPlan.ai_models import list_local_models, load_model, Modality
 
 # %%
 # Load environment variables (e.g. PYRADPLAN_HUGGINGFACE_PATH) from a .env file
@@ -35,12 +36,12 @@ logging.basicConfig(level=logging.INFO)
 # Quiet the per-request HTTP chatter from the HuggingFace client
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Inspect effective settings
-settings = get_ai_model_settings()
-print(f"HuggingFace org:    {settings.hf_org}")
-print(f"Local models dir:   {settings.local_models_dir}")
-print(f"Offline:            {settings.offline}")
-print(f"Device:             {settings.device}")
+# Inspect effective settings (the `ai_models` sub-configuration of pyRadPlan.settings)
+ai_models = settings.ai_models
+print(f"HuggingFace org:    {ai_models.hf_org}")
+print(f"Local models dir:   {ai_models.local_models_dir}")
+print(f"Offline:            {ai_models.offline}")
+print(f"Device:             {ai_models.device}")
 
 # %% [markdown]
 """

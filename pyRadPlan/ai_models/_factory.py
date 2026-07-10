@@ -13,8 +13,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from pyRadPlan._settings import get_settings
+
 from ._hub import is_valid_model_dir
-from ._settings import get_ai_model_settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def list_local_models(modality: Optional[Modality] = None) -> list[str]:
     list[str]
         Sorted model repository names available on disk.
     """
-    cfg = get_ai_model_settings()
+    cfg = get_settings().ai_models
     names: set[str] = set()
 
     base = cfg.local_models_dir

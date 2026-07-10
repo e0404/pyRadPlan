@@ -11,9 +11,10 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from pyRadPlan._settings import get_settings
+
 from ._hub import resolve_model_dir
 from ._preprocessor import BasePreprocessor
-from ._settings import get_ai_model_settings
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def load_model(
         If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
         nor a usable ``local_dir`` is provided.
     """
-    cfg = get_ai_model_settings()
+    cfg = get_settings().ai_models
     if device is None:
         device = cfg.device
     if trust_remote_code is None:

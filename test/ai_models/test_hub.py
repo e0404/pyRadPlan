@@ -89,7 +89,7 @@ def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
     model_dir = tmp_path / "repo"
     _make_model_dir(model_dir)
 
-    cfg = _hub.get_ai_model_settings()
+    cfg = _hub.get_settings().ai_models
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
 
     def _boom():
@@ -118,20 +118,19 @@ def test_local_models_dir_defaults_under_data_root(tmp_path, monkeypatch):
 
 def test_settings_are_the_global_ai_models_subconfig():
     import pyRadPlan
-    from pyRadPlan.ai_models import AiModelSettings, get_ai_model_settings
+    from pyRadPlan.ai_models import AiModelSettings
 
-    cfg = get_ai_model_settings()
+    cfg = pyRadPlan.settings.ai_models
     assert isinstance(cfg, AiModelSettings)
-    assert cfg is pyRadPlan.settings.ai_models
 
 
 def test_runtime_mutation_is_observed():
     import pyRadPlan
-    from pyRadPlan.ai_models import get_ai_model_settings
 
     original = pyRadPlan.settings.ai_models.device
     try:
+        # a value set on the singleton is seen by the hub, which reads it at call time
         pyRadPlan.settings.ai_models.device = "cuda"
-        assert get_ai_model_settings().device == "cuda"
+        assert _hub.get_settings().ai_models.device == "cuda"
     finally:
         pyRadPlan.settings.ai_models.device = original

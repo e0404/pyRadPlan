@@ -19,7 +19,7 @@ def test_list_local_models(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "outcome-tg119")
     (tmp_path / "not-a-model").mkdir()  # missing the contract files
 
-    cfg = _factory.get_ai_model_settings()
+    cfg = _factory.get_settings().ai_models
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     monkeypatch.setattr(_factory, "_scan_hf_cache", lambda cfg: set())
 
@@ -29,7 +29,7 @@ def test_list_local_models(tmp_path, monkeypatch):
 
 
 def test_list_local_models_unset_dir_is_empty(monkeypatch):
-    cfg = _factory.get_ai_model_settings()
+    cfg = _factory.get_settings().ai_models
     monkeypatch.setattr(cfg, "local_models_dir", None)
     monkeypatch.setattr(_factory, "_scan_hf_cache", lambda cfg: set())
     assert list_local_models() == []
@@ -38,7 +38,7 @@ def test_list_local_models_unset_dir_is_empty(monkeypatch):
 def test_list_local_models_includes_hf_cache(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "dosecalc-local")
 
-    cfg = _factory.get_ai_model_settings()
+    cfg = _factory.get_settings().ai_models
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     # a model that only exists in the HuggingFace cache (dedup + merge)
     monkeypatch.setattr(

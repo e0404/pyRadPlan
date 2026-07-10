@@ -5,7 +5,7 @@ local directory, with version dedup and offline support. See ``README.md`` for
 the model-repository contract.
 """
 
-from ._settings import AiModelSettings, get_ai_model_settings
+from ._settings import AiModelSettings
 from ._preprocessor import BasePreprocessor
 from ._factory import (
     Modality,
@@ -17,7 +17,6 @@ from ._load_model import load_model
 
 __all__ = [
     "AiModelSettings",
-    "get_ai_model_settings",
     "BasePreprocessor",
     "Modality",
     "list_local_models",

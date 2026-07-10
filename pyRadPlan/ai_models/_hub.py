@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
-from ._settings import get_ai_model_settings
+from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ def resolve_model_dir(
     FileNotFoundError
         If the model can be neither found locally nor downloaded.
     """
-    cfg = get_ai_model_settings()
+    cfg = get_settings().ai_models
     if offline is None:
         offline = cfg.offline
     if cache_dir is None:
