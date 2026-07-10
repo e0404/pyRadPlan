@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pyRadPlan.ml import _hub, is_valid_model_dir, resolve_model_dir
+from pyRadPlan.ai_models import _hub, is_valid_model_dir, resolve_model_dir
 
 
 def _make_model_dir(path: Path, metadata: dict | None = None) -> None:
@@ -89,7 +89,7 @@ def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
     model_dir = tmp_path / "repo"
     _make_model_dir(model_dir)
 
-    cfg = _hub.get_ml_settings()
+    cfg = _hub.get_ai_model_settings()
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
 
     def _boom():
@@ -102,7 +102,15 @@ def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
 
 
 def test_empty_huggingface_path_is_treated_as_unset(monkeypatch):
-    from pyRadPlan.ml import MlSettings
+    from pyRadPlan.ai_models import AiModelSettings
 
     monkeypatch.setenv("PYRADPLAN_HUGGINGFACE_PATH", "")
-    assert MlSettings().local_models_dir is None
+    assert AiModelSettings().local_models_dir is None
+
+
+def test_local_models_dir_defaults_under_data_root(tmp_path, monkeypatch):
+    from pyRadPlan.ai_models import AiModelSettings
+
+    monkeypatch.delenv("PYRADPLAN_HUGGINGFACE_PATH", raising=False)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
+    assert AiModelSettings().local_models_dir == tmp_path / "ai_models"

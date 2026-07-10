@@ -1,9 +1,9 @@
-"""Listing of locally available pyRadPlan ML models.
+"""Listing of locally available pyRadPlan AI models.
 
 :func:`list_local_models` reports the model repositories present on disk, both
-under :attr:`MlSettings.local_models_dir` and in the HuggingFace cache (where
+under :attr:`AiModelSettings.local_models_dir` and in the HuggingFace cache (where
 downloaded models land by default). A directory counts as a model when it holds
-the full model contract (see :data:`pyRadPlan.ml._hub.REQUIRED_FILES`). It
+the full model contract (see :data:`pyRadPlan.ai_models._hub.REQUIRED_FILES`). It
 touches no network. A model's :class:`Modality` is derived from its
 repository-name prefix (``dosecalc-*`` / ``outcome-*``).
 """
@@ -14,13 +14,13 @@ from pathlib import Path
 from typing import Optional
 
 from ._hub import is_valid_model_dir
-from ._settings import get_ml_settings
+from ._settings import get_ai_model_settings
 
 logger = logging.getLogger(__name__)
 
 
 class Modality(str, Enum):
-    """Supported ML model modalities."""
+    """Supported AI model modalities."""
 
     DOSE_CALC = "dose_calc"
     OUTCOME = "outcome"
@@ -39,7 +39,7 @@ def modality_from_name(name: str) -> Optional[Modality]:
 def list_local_models(modality: Optional[Modality] = None) -> list[str]:
     """List names of models available locally, optionally filtered by modality.
 
-    Scans both :attr:`MlSettings.local_models_dir` and the HuggingFace cache for
+    Scans both :attr:`AiModelSettings.local_models_dir` and the HuggingFace cache for
     directories that hold the full model contract. No network access is
     performed.
 
@@ -53,7 +53,7 @@ def list_local_models(modality: Optional[Modality] = None) -> list[str]:
     list[str]
         Sorted model repository names available on disk.
     """
-    cfg = get_ml_settings()
+    cfg = get_ai_model_settings()
     names: set[str] = set()
 
     base = cfg.local_models_dir

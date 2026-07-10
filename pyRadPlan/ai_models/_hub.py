@@ -3,12 +3,12 @@
 These helpers centralize three concerns the rest of the package relies on:
 
 * **Local directories** — a model may simply live on disk (e.g. shipped under
-  ``pyRadPlan/data/ml_models``); no network is touched.
+  ``pyRadPlan/data/ai_models``); no network is touched.
 * **Version dedup** — when downloading into a ``local_dir``, a small
   ``.pyradplan_model.json`` records the resolved ``repo_id``/``revision`` so the
   same version is not downloaded twice.
 * **Offline operation** — downloads transparently fall back to cached/local
-  files when the network is unavailable or :class:`MlSettings.offline` is set.
+  files when the network is unavailable or :class:`AiModelSettings.offline` is set.
 """
 
 import json
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
-from ._settings import get_ml_settings
+from ._settings import get_ai_model_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ METADATA_FILENAME = ".pyradplan_model.json"
 
 _INSTALL_HINT = (
     "huggingface_hub is required to download models. "
-    "Install the optional dependencies with: pip install pyRadPlan[ml]"
+    "Install the optional dependencies with: pip install pyRadPlan[ai]"
 )
 
 
@@ -159,13 +159,13 @@ def resolve_model_dir(
     local_dir : str or Path, optional
         A directory to use directly (if it already holds the model) or to
         download into. Enables offline use and version tracking. When omitted
-        and :attr:`MlSettings.local_models_dir` (``PYRADPLAN_HUGGINGFACE_PATH``)
+        and :attr:`AiModelSettings.local_models_dir` (``PYRADPLAN_HUGGINGFACE_PATH``)
         is set, it defaults to ``"<local_models_dir>/<repo>"``.
     offline : bool, optional
-        Force offline mode. Defaults to :attr:`MlSettings.offline`.
+        Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
     cache_dir : str or Path, optional
         Override the HuggingFace cache directory. Defaults to
-        :attr:`MlSettings.cache_dir`.
+        :attr:`AiModelSettings.cache_dir`.
 
     Returns
     -------
@@ -179,7 +179,7 @@ def resolve_model_dir(
     FileNotFoundError
         If the model can be neither found locally nor downloaded.
     """
-    cfg = get_ml_settings()
+    cfg = get_ai_model_settings()
     if offline is None:
         offline = cfg.offline
     if cache_dir is None:

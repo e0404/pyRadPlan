@@ -1,4 +1,4 @@
-"""Generic loader for pyRadPlan ML models.
+"""Generic loader for pyRadPlan AI models.
 
 Instantiation is driven entirely by ``model_config.json``:
 """
@@ -13,13 +13,13 @@ from typing import Any, Optional
 
 from ._hub import resolve_model_dir
 from ._preprocessor import BasePreprocessor
-from ._settings import get_ml_settings
+from ._settings import get_ai_model_settings
 
 logger = logging.getLogger(__name__)
 
 _SAFETENSORS_HINT = (
     "safetensors is required to load model weights. "
-    "Install the optional dependencies with: pip install pyRadPlan[ml]"
+    "Install the optional dependencies with: pip install pyRadPlan[ai]"
 )
 
 # Modules a model folder may expose, importable by name during loading.
@@ -129,7 +129,7 @@ def load_model(
     ----------
     name : str, optional
         Friendly model name, resolved to the repository id
-        ``"<hf_org>/<name>"`` using :attr:`MlSettings.hf_org`.
+        ``"<hf_org>/<name>"`` using :attr:`AiModelSettings.hf_org`.
     repo_id : str, optional
         Explicit HuggingFace repository id, overriding the registry lookup.
     revision : str, optional
@@ -138,12 +138,12 @@ def load_model(
         Load directly from (or download into) this directory. Required for
         offline use without a prior download.
     offline : bool, optional
-        Force offline mode. Defaults to :attr:`MlSettings.offline`.
+        Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
     device : str, optional
-        Device to place the model on. Defaults to :attr:`MlSettings.device`.
+        Device to place the model on. Defaults to :attr:`AiModelSettings.device`.
     trust_remote_code : bool, optional
         Allow executing the Python shipped with the model. Defaults to
-        :attr:`MlSettings.trust_remote_code`. Loading fails if this is
+        :attr:`AiModelSettings.trust_remote_code`. Loading fails if this is
         ``False``.
 
     Returns
@@ -157,7 +157,7 @@ def load_model(
         If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
         nor a usable ``local_dir`` is provided.
     """
-    cfg = get_ml_settings()
+    cfg = get_ai_model_settings()
     if device is None:
         device = cfg.device
     if trust_remote_code is None:
@@ -177,7 +177,7 @@ def load_model(
         raise ValueError(
             f"Loading the model in '{model_dir}' executes code shipped with the model "
             "(model.py, preprocessor.py). Pass trust_remote_code=True "
-            "(or set PYRADPLAN_ML_TRUST_REMOTE_CODE=1) only for sources you trust."
+            "(or set PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1) only for sources you trust."
         )
 
     config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))

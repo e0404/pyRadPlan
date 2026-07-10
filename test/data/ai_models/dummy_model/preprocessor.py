@@ -1,9 +1,9 @@
-"""Dummy preprocessor for pyRadPlan.ml local-load tests."""
+"""Dummy preprocessor for pyRadPlan.ai_models local-load tests."""
 
 import numpy as np
 import torch
 
-from pyRadPlan.ml import BasePreprocessor
+from pyRadPlan.ai_models import BasePreprocessor
 
 
 class DummyPreprocessor(BasePreprocessor):
