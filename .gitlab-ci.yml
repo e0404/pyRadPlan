@@ -204,12 +204,7 @@ docs:
     script:
         #- if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install sphinx
-        - pip install sphinx-autodoc-typehints
-        - pip install autodoc_pydantic
-        - pip install sphinx-design
-        - pip install pydata-sphinx-theme
-        - pip install numpydoc
+        - pip install -r docs/requirements.txt
         - sphinx-build docs .doc
     artifacts:
         when: always

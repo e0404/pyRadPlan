@@ -19,7 +19,7 @@ from pyRadPlan.util.helpers import models2recarray
 
 class Beam(PyRadPlanBaseModel):
     """
-    A class representing a single beam.
+    Class representing a single beam.
 
     This class extends PyRadPlanBaseModel (Pydantic) and provides functionality to
     handle the steering information, including properties like gantry angle, couch angle, etc.
@@ -33,7 +33,7 @@ class Beam(PyRadPlanBaseModel):
     bixel_width :
         The width of the bixels in (mm).
     radiation_mode :
-        The radiation mode of the beam (e.g. photon, proton, carbon).
+        The radiation mode of the beam (e.g. photon, proton, carbon, oxygen).
     machine :
         The machine used for the beam. (e.g. 'Generic')
     sad :

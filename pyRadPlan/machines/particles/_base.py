@@ -30,9 +30,9 @@ class ParticleAccelerator(ExternalBeamMachine):
         The source-to-axis (-isocenter) distance of the machine
     """
 
-    radiation_mode: Annotated[str, StringConstraints(pattern="^(protons|helium|carbon|vhee)$")] = (
-        Field(default="protons", validate_default=True)
-    )
+    radiation_mode: Annotated[
+        str, StringConstraints(pattern="^(protons|helium|carbon|oxygen|vhee)$")
+    ] = Field(default="protons", validate_default=True)
 
     sad: float = Field(ge=0.0, description="Source-to-axis distance", alias="SAD")
     bams_to_iso_dist: float = Field(

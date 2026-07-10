@@ -21,7 +21,7 @@ def create_scenario_model(
     ct: Optional[Union[CT, dict]] = None,
 ) -> ScenarioModel:
     """
-    Return a scenario model object.
+    Create a scenario model object.
 
     Parameters
     ----------
@@ -73,7 +73,7 @@ def validate_scenario_model(
     model_def: Union[ScenarioModel, Union[str, dict]], ct: Union[CT, dict] = None
 ) -> ScenarioModel:
     """
-    Validate a scenario model input and returns a scenario model object.
+    Validate a scenario model object.
 
     Parameters
     ----------
@@ -102,4 +102,10 @@ def validate_scenario_model(
     return create_scenario_model(model_def, ct)
 
 
-__all__ = ["ScenarioModel", "NominalScenario", "create_scenario_model"]
+__all__ = [
+    "ScenarioModel",
+    "NominalScenario",
+    "create_scenario_model",
+    "available_scenario_models",
+    "validate_scenario_model",
+]

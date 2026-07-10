@@ -4,7 +4,7 @@ import numpy as np
 
 import SimpleITK as sitk
 
-from pyRadPlan.core import np2sitk
+from pyRadPlan.core import np2sitk, ProgressReporter
 from pyRadPlan.stf._exceptions import GeometryError
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.ct import validate_ct, CT
@@ -16,7 +16,7 @@ from pyRadPlan.machines import Machine, load_from_name, validate_machine
 from abc import ABC, abstractmethod
 
 
-class StfGeneratorBase(ABC):
+class StfGeneratorBase(ProgressReporter, ABC):
     """Base class for steering information generators."""
 
     # Class constants
@@ -45,6 +45,8 @@ class StfGeneratorBase(ABC):
 
     # Initialization method for non-constant properties
     def __init__(self, pln=None):
+        super().__init__()  # initialize the ProgressReporter mixin state
+
         # Defaults
         self.vis_mode: int = 0  # Visualization Options
         self.add_margin: bool = (

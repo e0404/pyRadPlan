@@ -2,7 +2,6 @@ import math
 from typing import Union
 import numpy as np
 from numpy.typing import ArrayLike
-from tqdm import tqdm
 
 from pyRadPlan.geometry import lps
 from pyRadPlan.plan import Plan
@@ -173,7 +172,7 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
 
         stf = []
 
-        for i in tqdm(range(self.num_of_beams), desc="Beam", unit="b", leave=False):
+        for i in self.track(range(self.num_of_beams), name="Beam", unit="b"):
             beam = {}
 
             # Correct for iso center position. With this correction isocenter is (0, 0, 0) [mm]
@@ -252,7 +251,7 @@ class StfGeneratorSingleBixel(StfGeneratorExternalBeam):
 
         stf = []
 
-        for i in tqdm(range(self.num_of_beams), desc="Beam", unit="b", leave=False):
+        for i in self.track(range(self.num_of_beams), name="Beam", unit="b"):
             beam = {}
 
             # Save meta information for treatment plan

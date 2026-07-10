@@ -325,7 +325,6 @@ def test_qicollection_with_empty_voi(cst, dose, tmp_path):
     empty_voi = VOI(
         name="EmptyStructure",
         mask=empty_mask,
-        ct_image=cst.vois[0].ct_image,
         voi_type="OAR",
     )
 

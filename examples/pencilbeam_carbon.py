@@ -26,6 +26,7 @@ from pyRadPlan import (
 )
 
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 
 logging.basicConfig(level=logging.INFO)
 
@@ -67,8 +68,12 @@ fluence = fluence_optimization(ct, cst, stf, dij, pln)
 result = dij.compute_result_ct_grid(fluence)
 
 # %%
-# Choose slices to visualize
-view_slice = [int(np.round(ct.size[2] / 2))]
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose slices to visualize
+    view_slice = [int(np.round(ct.size[2] / 2))]
 
 # Visualize the results
 # Use plot_multiple_slices to visualize the biological effect and physical dose

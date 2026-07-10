@@ -31,7 +31,7 @@ from pyRadPlan.ct import validate_ct
 
 
 class ScenarioModel(PyRadPlanBaseModel):
-    """Abstract base class for scenario models.
+    """Base class representing a scenario model.
 
     Attributes
     ----------
@@ -182,13 +182,13 @@ class ScenarioModel(PyRadPlanBaseModel):
 
     @computed_field
     @property
-    def rel_range_shift(self) -> float:
+    def rel_range_shift(self) -> NDArray[Shape["1-*"], float]:
         """Relative range shift value."""
         return self._rel_range_shift
 
     @computed_field
     @property
-    def abs_range_shift(self) -> float:
+    def abs_range_shift(self) -> NDArray[Shape["1-*"], float]:
         """Absolute range shift value."""
         return self._abs_range_shift
 

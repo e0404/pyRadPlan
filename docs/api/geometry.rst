@@ -1,14 +1,11 @@
-pyRadPlan.geometry package
-==========================
+geometry
+========
 
-Submodules
-----------
+.. currentmodule:: pyRadPlan.geometry
 
-pyRadPlan.geometry.lps module
------------------------------
+.. autosummary::
+    :toctree: generated/geometry/lps/
 
-.. autofunction:: pyRadPlan.geometry.get_gantry_rotation_matrix
-
-.. autofunction:: pyRadPlan.geometry.get_couch_rotation_matrix
-
-.. autofunction:: pyRadPlan.geometry.get_beam_rotation_matrix
+    get_gantry_rotation_matrix
+    get_couch_rotation_matrix
+    get_beam_rotation_matrix

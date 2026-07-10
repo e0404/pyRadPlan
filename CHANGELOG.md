@@ -10,6 +10,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `pyRadPlan.ml` module: HuggingFace-based ML model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a friendly name (resolved to `<hf_org>/<name>`), with version dedup, offline support and logging. `list_local_models()` lists the models available on disk under `MlSettings.local_models_dir` (no network), optionally filtered by modality derived from the repo name. Includes a `BasePreprocessor` contract, an example model under `data/ml_models/example_model`, and a `model_config.template.json`. Install extras via `pip install pyRadPlan[ml]`.
+- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
+- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
+- Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
+
+- GUI: File menu collecting all data I/O (load/import/export)
+- GUI: "Load Bundled Phantom" submenu in the File menu listing the phantoms shipped in `pyRadPlan/data/phantoms`
+- `pyRadPlanGUI` accepts a bundled phantom shorthand instead of a file path (e.g. `pyRadPlanGUI TG119`, case-insensitive)
+- `pyRadPlan.io.available_phantoms()`, `resolve_phantom()` and `load_phantom()` to discover and load bundled phantoms by name
+- GUI: resizable, collapsible main-window panels via splitters
+- GUI: workflow staleness indicators that flag outdated dose influence / results
+- GUI: objective count in the objectives widget header
+- GUI: AI buttons to suggest VOI objectives and beam angles via a reusable AI task dialog
+- GUI: when a result dose exists, the objectives AI button offers to adapt the current objectives using quality indicators computed from a selectable result dose
+- `VOI.center_of_mass`, `VOI.principal_axes` and `VOI.shape_parameters` computed fields describing the structure's geometry (nominal scenario, world LPS coordinates)
+- `ai_agents.generate_beam_angles` accepts an optional structure set; its per-VOI geometry (via new `cst_geometry_summary()`) is sent to the model, so beam directions can respect the patient anatomy (used by the GUI when a structure set is loaded)
+- `ai_agents.generate_voi_objectives` accepts an optional `QICollection` (`qis=`) to adapt the existing objectives based on quality indicators from a previous optimization run instead of suggesting fresh ones
+- GUI: persistent log console panel (bottom-left) fed by Python's logging system, with a level filter and colored warnings/errors — messages are visible even without a terminal
+- GUI: "Log Panel" toggle in the View menu
+- GUI: VOI list tooltips showing the structure's metadata (type, α_x, β_x, α/β, overlap priority)
+- GUI: clicking a VOI name opens a popup to edit type, α_x, β_x and overlap priority (validated against the VOI model); toggling visibility remains on the checkbox
+- GUI: VOI list can be grouped by overlap priority (one group per priority level) instead of by type via a new dropdown
+- GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
+- `ai_agents.available_models()` to discover usable models from configured API keys
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+- pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+
+### Changed
+
+- GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
+- launch_viewer calls to multiple examples with fallback to plot_slice
+- grids now have a 4D representation (x,y,z,t)
+- VOIs now connect to grids (3D or 4D)
+- VOIs validate from more formats formats (given the context)
+- GUI: shared worker-thread, adaptive spin box and number-list helpers consolidated in `pyRadPlan.gui.widgets._base`
+- GUI: viewer caches derived CT/quantity/mask arrays, optimization plots redraw rate-limited, and spin boxes commit on focus-out instead of per keystroke (performance)
+- GUI: colors picked in the VOI list are written back to `voi.visible_color`, so custom colors survive list rebuilds (e.g. grouping changes)
+- `ai_agents.generate_voi_objectives` no longer mutates the passed structure set; it returns an updated copy
+- `pyRadPlanGUI` console script now uses a dedicated `pyRadPlan.gui.main()` CLI entry point; `gui()` no longer reads `sys.argv`
+- `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
+- GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
+- docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
+
+### Deprecated
+
+- `xp_utils.PREFER_GPU`, `xp_utils.PREFERRED_CPU_ARRAY_BACKEND` and `xp_utils.PREFERRED_GPU_ARRAY_BACKEND`: reads and writes still work but emit a `DeprecationWarning`; use `pyRadPlan.settings.xp` instead
+
+### Fixed
+
+- GUI: DKFZ logo pinned to the top-left of the banner in wide windows
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+- GUI: "Save / Keep Result" silently skipped every snake_case quantity (e.g. `physical_dose`), so snapshots lost the dose
+- GUI: re-optimizing no longer overwrites the fresh per-beam dose with the previous run's (`physical_dose_beam` matched the snapshot carry-forward prefix)
+- GUI: closing the main window during a computation aborted the whole process (running QThread destroyed); now asks and stops the worker
+- GUI: a failed AI objectives request wiped all existing objectives on the live structure set
+- GUI: closing the AI task dialog while a request was running froze the GUI until the request finished
+- GUI: the workflow "Import Dose" button was only enabled once a result existed; it now only requires a CT (like the File menu)
+- GUI: plan widget crashed its workspace sync (silently) when `pln.prop_dose_calc["dose_grid"]` held a `Grid` instance or `None`
+- GUI: the viewer kept the previous patient's VOIs/masks/images when the workspace was cleared or lost its structure set
+- GUI: widget refresh failures are now shown in the main-window status bar instead of only being logged
+- GUI: config forms show a generic JSON editor for unsupported field types instead of hiding them
+- GUI: the plan widget's iso-center field stayed at "0 0 0" in "Auto." mode; it now previews the automatic isocenter (target center of mass), matching the viewer
+- GUI: the optimization status window could open so far down that the Pause/Stop buttons were off-screen; it now opens centered over the main window, clamped to the screen
+- GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
+- Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
+- VHEE now has target points for matRad export
+- Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
 
 ## [0.4.1] - 2026-06-16
 

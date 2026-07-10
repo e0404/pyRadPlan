@@ -18,7 +18,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 
 
 def _smooth_step(coord: NDArray, edge: float, dx: float) -> NDArray:
-    """Linear ramp centred on *edge* with transition width *dx*.
+    """Linear ramp centered on *edge* with transition width *dx*.
 
     Returns 0 for ``coord <= edge - dx/2``, 1 for ``coord >= edge + dx/2``,
     and a linear interpolation in between
