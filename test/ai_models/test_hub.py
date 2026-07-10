@@ -114,3 +114,24 @@ def test_local_models_dir_defaults_under_data_root(tmp_path, monkeypatch):
     monkeypatch.delenv("PYRADPLAN_HUGGINGFACE_PATH", raising=False)
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
     assert AiModelSettings().local_models_dir == tmp_path / "ai_models"
+
+
+def test_settings_are_the_global_ai_models_subconfig():
+    import pyRadPlan
+    from pyRadPlan.ai_models import AiModelSettings, get_ai_model_settings
+
+    cfg = get_ai_model_settings()
+    assert isinstance(cfg, AiModelSettings)
+    assert cfg is pyRadPlan.settings.ai_models
+
+
+def test_runtime_mutation_is_observed():
+    import pyRadPlan
+    from pyRadPlan.ai_models import get_ai_model_settings
+
+    original = pyRadPlan.settings.ai_models.device
+    try:
+        pyRadPlan.settings.ai_models.device = "cuda"
+        assert get_ai_model_settings().device == "cuda"
+    finally:
+        pyRadPlan.settings.ai_models.device = original
