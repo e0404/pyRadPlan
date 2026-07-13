@@ -134,15 +134,24 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Un
     xp : Optional[ArrayNamespace], optional
         The array namespace. If None, the preferred backend is used.
     gpu_index : int, optional
-        GPU device index to use when a GPU backend is selected. Default is 0.
-        Pass ``1``, ``2``, etc. for multi-GPU setups.
+        GPU device index used for CUDA backends. Ignored when the selected backend is MPS.
+        Default is 0. Pass ``1``, ``2``, etc. for multi-GPU setups.
     """
     if xp is None:
         xp = choose_array_api_namespace()
 
     if PREFER_GPU:
-        if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
-            return f"cuda:{gpu_index}"
+        if array_api_compat.is_torch_namespace(xp):
+            if (
+                torch is not None
+                and hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+            ):
+                return "mps"
+
+            elif pytorch_gpu_available():
+                return f"cuda:{gpu_index}"
+
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
             return str(gpu_index)
 

@@ -137,6 +137,19 @@ def test_choose_device_torch_multi_gpu():
     assert choose_device(xp, gpu_index=1) == "cuda:1"
 
 
+@pytest.mark.skipif(
+    not (HAS_TORCH and hasattr(torch.backends, "mps")),
+    reason="PyTorch MPS backend unavailable",
+)
+def test_choose_device_torch_mps(monkeypatch):
+    import array_api_compat.torch as xp
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    assert choose_device(xp) == "mps"
+
+
 @pytest.mark.skipif(not (HAS_CUPY and CUPY_CUDA_AVAILABLE), reason="CuPy GPU not available")
 def test_choose_device_cupy():
     """Test choose_device with cupy namespace."""
