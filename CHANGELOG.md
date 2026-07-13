@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.1] - 2026-06-16
 
+
 ### Added
 
 - multiple corresponding units for given quantities in the GUI
+- support for Apple Metal Performance Shaders (MPS) devices when using the PyTorch backend
+
+
 
 ### Fixed
 
