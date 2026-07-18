@@ -193,8 +193,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         Returns
         -------
-        Dij
-            The dose information
+        dict
+            The computed result quantities on the CT grid (see
+            ``Dij.compute_result_ct_grid``), already weighted by ``w``.
 
         Notes
         -----
@@ -225,7 +226,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                         bixel_num += 1
 
         # Run dose calculation (direct flag is on)
-        dij = self._calc_dose(ct, cst, stf)
+        dij = self._init_dose_calc(ct, cst, stf)
+        dij = self._calc_dose(ct, cst, stf, dij)
+        dij = self._finalize_dose_timed(dij)
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
@@ -266,7 +269,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         time_start = time.time()
         self._calc_dose_direct = False
-        dij = self._calc_dose(ct, cst, stf)
+        dij = self._init_dose_calc(ct, cst, stf)
+        dij = self._calc_dose(ct, cst, stf, dij)
+        dij = self._finalize_dose_timed(dij)
         time_elapsed = time.time() - time_start
         logger.info("Dose influence matrix calculation done in %.2f seconds.", time_elapsed)
 
@@ -592,10 +597,23 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
 
+    def _finalize_dose_timed(self, dij: dict) -> Dij:
+        """Call `_finalize_dose`, logging how long it took."""
+        logger.info("Finalizing dose calculation...")
+        t_start = time.time()
+        dij = self._finalize_dose(dij)
+        logger.info("Done in %f seconds.", time.time() - t_start)
+        return dij
+
     # Private and abstract methods
 
     @abstractmethod
-    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> Dij:
+    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
+        """Perform the actual (inner) dose calculation.
+
+        Called by the base class between `_init_dose_calc` and `_finalize_dose`,
+        which subclasses no longer need to invoke themselves.
+        """
         raise NotImplementedError("Method '_calc_dose' must be implemented.")
 
     # static methods

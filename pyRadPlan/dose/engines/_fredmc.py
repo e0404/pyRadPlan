@@ -637,7 +637,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         return fred_iso
 
-    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> Dij:
+    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
         """
         Perform the dose calculation using the FRED engine.
 
@@ -649,13 +649,14 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             The structure set containing the contours and VOIs.
         stf : SteeringInformation
             The steering information for the beams.
+        dij : dict
+            The dose influence matrix dictionary, as prepared by `_init_dose_calc`.
 
         Returns
         -------
-        Dij
+        dict
             The dose influence matrix containing the calculated dose.
         """
-        dij = self._init_dose_calc(ct, cst, stf)
         counter = 0
         self.dose_cube = None
         self.fred_order = None
@@ -685,12 +686,6 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             dij = self._process_dose_cube(dij)
 
         self._check_saving_options()
-
-        logger.info("Finalizing dose calculation...")
-        t_start = time.time()
-        dij = self._finalize_dose(dij)
-        t_end = time.time()
-        logger.info("Done in %f seconds.", t_end - t_start)
 
         return dij
 

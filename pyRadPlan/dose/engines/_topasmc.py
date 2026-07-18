@@ -471,7 +471,7 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             except Exception as e:
                 logger.warning(f"An unexpected error occurred: {e}")
 
-    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> Dij:
+    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
         """
         Perform the dose calculation using the TOPAS engine.
 
@@ -483,14 +483,14 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             The structure set containing the contours and VOIs.
         stf : SteeringInformation
             The steering information for the beams.
+        dij : dict
+            The dose influence matrix dictionary, as prepared by `_init_dose_calc`.
 
         Returns
         -------
-        Dij
+        dict
             The dose influence matrix containing the calculated dose.
         """
-        dij = self._init_dose_calc(ct, cst, stf)
-
         w = [beamlet.weight for beam in stf.beams for ray in beam.rays for beamlet in ray.beamlets]
         self.scaling_factor = self.scaling_factor * sum(w)
 
@@ -611,7 +611,6 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             for q_name in self._computed_quantities:
                 dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
 
-        dij = self._finalize_dose(dij)
         return dij
 
     def _read_output_files(self, num_beams: int) -> list[np.ndarray]:

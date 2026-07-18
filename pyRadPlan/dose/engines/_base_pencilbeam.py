@@ -141,7 +141,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     def _compute_bixel(self, curr_ray, k):
         raise NotImplementedError("Method _compute_bixel must be implemented in derived class.")
 
-    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation):
+    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict):
         """
         Calculate the dose using the pencil beam method.
 
@@ -153,15 +153,14 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             The structure set object.
         stf : SteeringInformation
             The steering information object.
+        dij : dict
+            The dose influence matrix dictionary, as prepared by `_init_dose_calc`.
 
         Returns
         -------
         dict
             The dose influence matrix dictionary.
         """
-
-        # Initialize
-        dij = self._init_dose_calc(ct, cst, stf)
 
         xp = self.xp
         device = self.device
@@ -265,13 +264,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                     # Force GPU memory cleanup
                     free_gpu_memory(self.xp)
-
-        # Finalize dose calculation
-        logger.info("Finalizing dose calculation...")
-        t_start = time.time()
-        dij = self._finalize_dose(dij)
-        t_end = time.time()
-        logger.info("Done in %f seconds.", t_end - t_start)
 
         return dij
 

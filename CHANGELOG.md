@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PhotonPyRadMCEngine` (`engine: "pyRadMC"`): photon Monte Carlo dose engine adapter for [pyRadMC](https://github.com/pyRadMC) (GPU-accelerated via NVIDIA warp, with a pure-python reference backend), computing beamlet-resolved dose influence matrices in Gy/history including per-entry variance (`physical_dose_var`); pyRadMC is an optional dependency (`pyradmc` extra; install locally in editable mode until published)
+- `PhotonLINAC.mc_beam_model`: Monte Carlo beam model block on the photon machine — primary spectrum per nominal energy (Ali & Rogers analytic parameterization, histogram, or monoenergetic), focal spot size, and beam-limiting device geometry (jaw pairs, MLC incl. leaf-end design); defaults describe the Siemens PRIMUS the 'Generic' machine is based on, with the MLC mid-plane anchored at the machine's `scd`
+- pyRadMC engine: opt-in treatment-head pre-solve forward path (`forward_mode: "head_presolve"`) building a conformal static jaw/MLC aperture from the machine beam model, including collimator transmission and scatter (uniform fields only); Dij calculation deliberately stays uncollimated (plain divergent beamlet source)
+- pyRadMC engine: multi-device Dij calculation — `warp_devices` spreads the work over several warp devices, either by sharding each beam's beamlet groups (`beam_scheduling: "sharded"`, default; finer balancing, slow devices self-limit) or by running whole beams concurrently one-beam-per-device (`beam_scheduling: "beam_per_device"`; run-to-run reproducible even on mixed device sets); `concurrent_batches` additionally overlaps statistical batches on one CUDA device (bitwise inert)
+
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
@@ -50,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
 - GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
 - docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
+- Dose engines: `DoseEngineBase.calc_dose_influence`/`calc_dose_forward` now call `_init_dose_calc` and `_finalize_dose` themselves around the abstract `_calc_dose` hook, instead of every concrete engine bookending its own `_calc_dose` with those calls; `_calc_dose(ct, cst, stf, dij)` now takes the already-initialized `dij` and returns it unfinalized (all built-in engines updated: pencil-beam, pyRadMC, FRED-MC, TOPAS-MC)
 
 ### Deprecated
 
@@ -72,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the plan widget's iso-center field stayed at "0 0 0" in "Auto." mode; it now previews the automatic isocenter (target center of mass), matching the viewer
 - GUI: the optimization status window could open so far down that the Pause/Stop buttons were off-screen; it now opens centered over the main window, clamped to the screen
 - GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
+- GUI: "Recalculate Dose" crashed (`compute_result_ct_grid` called on a dict) — `calc_dose_forward` already returns the computed result dict, not a `Dij`
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
 - Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)

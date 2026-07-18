@@ -709,8 +709,7 @@ class WorkflowWidget(WorkspaceWidget):
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
 
-            new_dij = calc_dose_forward(ct, cst, stf, pln, weights)
-            return new_dij.compute_result_ct_grid(weights)
+            return calc_dose_forward(ct, cst, stf, pln, weights)
 
         def _on_success(new_result: dict) -> None:
             result = dict(prev_result)

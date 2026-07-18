@@ -37,7 +37,7 @@ class DummyDoseEngine(DoseEngineBase):
         super().__init__(pln)
         self._fake_dij = fake_dij
 
-    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> dict:
+    def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
         return self._fake_dij
 
 
