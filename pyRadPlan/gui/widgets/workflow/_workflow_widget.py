@@ -70,6 +70,11 @@ class WorkflowWidget(WorkspaceWidget):
         self._pending_success: Optional[Callable] = None
         self._saved_tags: list[str] = []
         self._opt_status_win: Optional[OptimizationStatusWidget] = None
+        # Whether the currently-running background task is the optimizer, so
+        # that a StatusReport from some other task (e.g. a dose engine) doesn't
+        # get mistaken for optimizer progress (see _on_status_report).
+        self._is_optimizing = False
+        self._busy_label = ""
         # matRad-style staleness: a downstream product (dij/result) is "stale"
         # once an upstream object it was computed from changes.
         self._dij_stale = False
@@ -337,6 +342,7 @@ class WorkflowWidget(WorkspaceWidget):
         on_success: Optional[Callable] = None,
         busy_text: Optional[str] = None,
         control: Optional[ComputeControl] = None,
+        is_optimization: bool = False,
         **kwargs: Any,
     ) -> None:
         """Execute *fn* in a QThread.
@@ -345,12 +351,19 @@ class WorkflowWidget(WorkspaceWidget):
         an error dialog on failure.  *busy_text* is shown in the status label
         while the computation runs.  *control* (if given) is installed so the
         computation can be cooperatively paused/stopped from the GUI thread.
+        *is_optimization* marks this task as the optimizer run, so that any
+        :class:`StatusReport` it emits is routed to the optimization status
+        window and phrased as "Optimizing" (see :meth:`_on_status_report`);
+        other tasks (e.g. a dose engine reporting per-batch status) show their
+        own *busy_text* as the phrase instead.
         """
         if self.is_busy:
             QMessageBox.warning(self, "Busy", "A computation is already in progress.")
             return
 
         self._pending_success = on_success
+        self._is_optimizing = is_optimization
+        self._busy_label = (busy_text or "").rstrip(" .…")
         # Every task gets a control so shutdown() can always request a stop.
         self._control = control if control is not None else ComputeControl()
         self._worker = Worker(
@@ -481,16 +494,20 @@ class WorkflowWidget(WorkspaceWidget):
 
     def _on_status_report(self, report: StatusReport) -> None:
         """Route a metric/status report to the status window and status line."""
-        data = dict(report.data)
-        if report.message:
-            data.setdefault("message", report.message)
         summary = report.message
-        if self._opt_status_win is not None:
+        # Only the optimizer's own run feeds the optimization metrics window and
+        # gets the "Optimizing" phrasing; a status report from any other task
+        # (e.g. a dose engine's per-batch progress) uses its own busy label.
+        if self._is_optimizing and self._opt_status_win is not None:
+            data = dict(report.data)
+            if report.message:
+                data.setdefault("message", report.message)
             summary = self._opt_status_win.update_from_report(data)
         # Keep the busy bar pulsing; show the per-iteration summary in the status line.
         if self._progress.maximum() != 0:
             self._progress.setRange(0, 0)
-        self._lbl_status.setText(f"Optimizing · {summary}" if summary else "Optimizing…")
+        label = "Optimizing" if self._is_optimizing else (self._busy_label or "Working")
+        self._lbl_status.setText(f"{label} · {summary}" if summary else f"{label}…")
 
     def _show_error(self, exc: object, title: str = "Error") -> None:
         QMessageBox.critical(self, title, f"{type(exc).__name__}: {exc}")
@@ -675,6 +692,7 @@ class WorkflowWidget(WorkspaceWidget):
             on_success=_on_success,
             busy_text="Optimizing fluence…",
             control=control,
+            is_optimization=True,
         )
 
     def _open_optimization_status_window(self, control: ComputeControl) -> None:

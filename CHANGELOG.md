@@ -79,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the optimization status window could open so far down that the Pause/Stop buttons were off-screen; it now opens centered over the main window, clamped to the screen
 - GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
 - GUI: "Recalculate Dose" crashed (`compute_result_ct_grid` called on a dict) — `calc_dose_forward` already returns the computed result dict, not a `Dij`
+- GUI: a dose engine's own status reports (e.g. pyRadMC's per-batch progress) were mistaken for optimizer progress — the workflow status line said "Optimizing" and fed the optimization metrics window, instead of showing the dose calculation's own status, whenever a `StatusReport` arrived from any task other than the optimizer
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
 - Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)

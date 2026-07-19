@@ -69,6 +69,7 @@ def test_nested_fraction_advances_with_outer_level(qapp):
 
 def test_status_report_drives_busy_bar_and_status(qapp):
     w = WorkflowWidget(WorkspaceManager())
+    w._is_optimizing = True  # only the optimizer's own run gets this phrasing
     w._progress.setRange(0, 10)
     w._progress.setValue(3)
 
@@ -79,6 +80,22 @@ def test_status_report_drives_busy_bar_and_status(qapp):
     # ...and surfaces the per-iteration summary in the status line.
     assert "Optimizing" in w._lbl_status.text()
     assert "iter 1" in w._lbl_status.text()
+
+
+def test_status_report_from_non_optimizer_task_keeps_its_own_label(qapp):
+    # A dose engine (e.g. pyRadMC) also reports StatusReports for per-batch
+    # progress; it must not be mistaken for the optimizer, even if the
+    # optimization status window is still around from an earlier run.
+    w = WorkflowWidget(WorkspaceManager())
+    w._run_in_thread(lambda: None, busy_text="Calculating dose influence…")
+    w._on_compute_report(StatusReport(message="Beam 1/2: 500/1000 histories"))
+
+    assert "Optimizing" not in w._lbl_status.text()
+    assert "Calculating dose influence" in w._lbl_status.text()
+    assert "Beam 1/2: 500/1000 histories" in w._lbl_status.text()
+    if w._thread is not None:
+        w._thread.wait(2000)
+    qapp.processEvents()
 
 
 def test_indeterminate_progress_sets_busy_range(qapp):
