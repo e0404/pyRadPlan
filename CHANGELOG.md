@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
+- Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
 
 ## [0.4.1] - 2026-06-16
 
