@@ -20,7 +20,6 @@ from pyRadPlan import (
     PhotonPlan,
     generate_stf,
     calc_dose_influence,
-    fluence_optimization,
     plot_slice,
     load_tg119,
 )
@@ -44,6 +43,12 @@ pln.prop_stf = {
     "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
     "couch_angles": np.zeros((num_of_beams,)),
 }
+pln.prop_dose_calc = {
+    "engine": "pyRadMC",
+    "num_histories_per_beamlet": 100_000,
+    "correlated": False,
+    "dose_grid": {"resolution": (3.0, 3.0, 3.0)},
+}
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
 
@@ -60,8 +65,9 @@ cst.vois[2].objectives = [
 ]  # BODY
 
 # Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
+# fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
+fluence = np.ones((dij.total_num_of_bixels,), dtype=np.float32)
 # Compute the result on the CT grid
 result = dij.compute_result_ct_grid(fluence)
 
