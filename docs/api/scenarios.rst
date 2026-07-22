@@ -1,24 +1,21 @@
-pyRadPlan.scenarios
-===========================
+scenarios
+=========
 
-Base class
----------------
+.. currentmodule:: pyRadPlan.scenarios
 
-.. autoclass:: pyRadPlan.scenarios.ScenarioModel
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+    :toctree: generated/scenarios/
 
-
-
-.. autoclass:: pyRadPlan.scenarios.NominalScenario
-   :members:
-   :undoc-members:
-   :show-inheritance:
+    ScenarioModel
+    NominalScenario
+    available_scenario_models
 
 
-Helper functions
+Creating and validating
+-----------------------
 
-.. autofunction:: pyRadPlan.scenarios.available_scenario_models
-.. autofunction:: pyRadPlan.scenarios.create_scenario_model
-.. autofunction:: pyRadPlan.scenarios.validate_scenario_model
+.. autosummary::
+    :toctree: generated/scenarios/
+
+    create_scenario_model
+    validate_scenario_model

@@ -28,10 +28,10 @@ from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.visualization import plot_slice
 from pyRadPlan.io import load_patient
 
-from pyRadPlan import xp_utils
+from pyRadPlan import settings
 
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
-xp_utils.PREFER_GPU = True
+settings.xp.preferred_gpu_array_backend = "cupy"
+settings.xp.prefer_gpu = True
 
 # Configure the Logger to show you debug information
 logging.basicConfig(level=logging.INFO)

@@ -1,37 +1,22 @@
-pyRadPlan.io package
-====================
+io
+===
 
-Submodules
-----------
+.. currentmodule:: pyRadPlan.io
 
-pyRadPlan.io.matLabFileHandler module
--------------------------------------
+.. autosummary::
+   :toctree: generated/io/
 
-.. automodule:: pyRadPlan.io.matLabFileHandler
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   MatlabFileHandler
+   load_patient
+   load_tg119
+   validate_matrad_patient
 
-pyRadPlan.io.matRad module
---------------------------
 
-.. automodule:: pyRadPlan.io.matRad
-   :members:
-   :undoc-members:
-   :show-inheritance:
+matfile
+-------
 
-pyRadPlan.io.readHLUT module
-----------------------------
+.. autosummary::
+   :toctree: generated/io/
 
-.. automodule:: pyRadPlan.io.readHLUT
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: pyRadPlan.io
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   matfile.save
+   matfile.load

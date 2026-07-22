@@ -45,20 +45,23 @@ class OptimizerSciPy(NonLinearOptimizer):
         }
 
         self.method = "L-BFGS-B"
-        self.display = True
+
         self._iter_count = 0
 
         super().__init__()
 
-    def _callback(self, xk: np.ndarray, xp=None):
-        if self._keyboard_listener.stop_event.is_set():
+    def _callback(self, intermediate_result):
+        # scipy passes either the current iterate (ndarray) or, for solvers that
+        # support it, an OptimizeResult carrying the objective value (`.fun`).
+        self._iter_count += 1
+        data = {"iteration": self._iter_count}
+        fun = getattr(intermediate_result, "fun", None)
+        if fun is not None:
+            data["objective"] = float(fun)
+
+        cont = self._emit_status(message=f"iteration {self._iter_count}", **data)
+        if not cont or self._keyboard_listener.stop_event.is_set():
             raise StopIteration("Optimization cancelled by user")
-        if self.display:
-            self._iter_count += 1
-            if xp is not None:
-                xk = xp_utils.from_numpy(xp, xk)
-            f_val = float(self.objective(xk))
-            logger.info("Iteration %d: f = %g", self._iter_count, f_val)
 
     def _solve_problem(self, x0: Array) -> tuple[Array, dict]:
         """
@@ -104,7 +107,7 @@ class OptimizerSciPy(NonLinearOptimizer):
             # hess=self.hessian,
             tol=self.abs_obj_tol,
             bounds=bounds,
-            callback=lambda xk: self._callback(xk, xp=xp),
+            callback=self._callback,
             options=self.options,
         )
 

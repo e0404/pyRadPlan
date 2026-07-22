@@ -1,26 +1,10 @@
-pyRadPlan.raytracer package
-===========================
+raytracer
+=========
 
-Base class
-----------
+.. currentmodule:: pyRadPlan.raytracer
 
-.. autoclass:: pyRadPlan.raytracer.RayTracerBase
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+    :toctree: generated/raytracer/
 
-Siddon Ray Tracer
------------------
-
-.. autoclass:: pyRadPlan.raytracer.RayTracerSiddon
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
-Helper functions
-----------------
-
-.. autofunction:: pyRadPlan.raytracer._perf.fast_spatial_circle_lookup
-.. autofunction:: pyRadPlan.raytracer._perf._fast_compute_plane_alphas
-.. autofunction:: pyRadPlan.raytracer._perf._fast_compute_all_alphas
+    RayTracerBase
+    RayTracerSiddon

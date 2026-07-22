@@ -20,7 +20,7 @@ from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_s
 
 class Plan(PyRadPlanBaseModel, ABC):
     """
-    Abstract base class for a treatment plan using PyRadPlanBaseModel.
+    Base class representing a treatment plan.
 
     Attributes
     ----------
@@ -145,7 +145,7 @@ class Plan(PyRadPlanBaseModel, ABC):
 
 class PhotonPlan(Plan):
     """
-    Class for a photon treatment plan.
+    Class representing a photon treatment plan.
 
     Attributes
     ----------
@@ -187,7 +187,7 @@ class PhotonPlan(Plan):
 
 class IonPlan(Plan):
     """
-    Class for an ion treatment plan.
+    Class representing an ion treatment plan.
 
     Attributes
     ----------
@@ -292,7 +292,7 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
 
 def validate_pln(plan: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan:
     """
-    Validate and create a Plan object.
+    Validate a Plan object.
 
     Synonym to create_pln but should be used in validation context.
 
@@ -314,25 +314,3 @@ def validate_pln(plan: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Pl
         If the radiation mode is unknown or empty.
     """
     return create_pln(plan, **kwargs)
-
-
-if __name__ == "__main__":
-    scen = create_scenario_model("nomScen")
-    scen_dict_camel = scen.to_matrad()
-    scen_dict_snake = scen.to_dict()
-
-    pln_dict_camel = {
-        "radiationMode": "photons",  # either photons / protons / carbon
-        "machine": "Generic",
-        "numOfFractions": 30,
-        "prescribedDose": 60.0,
-        "propStf": {},
-        # dose calculation settings
-        "propDoseCalc": {},
-        # optimization settings
-        "propOpt": {},
-        "propSeq": {},
-        "multScen": scen_dict_camel,
-    }
-
-    pln = create_pln(pln_dict_camel)

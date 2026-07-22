@@ -47,15 +47,36 @@ conflicts with other projects.
 Standard installation (PyPI)
 -----------------------------
 
-The simplest way to install pyRadPlan is from the Python Package Index:
+The recommended way to install pyRadPlan is from the Python Package Index, including
+the graphical user interface:
+
+.. code-block:: bash
+
+   pip install "pyRadPlan[gui]"
+
+This pulls in all mandatory dependencies — NumPy, SciPy, SimpleITK, pydantic,
+pydantic-ai, and everything else needed to run a full treatment planning workflow on
+the CPU with the NumPy backend — plus PySide6 and pyqtgraph for the interactive
+matRad-style GUI.  It also provides the ``pyRadPlanGUI`` command:
+
+.. code-block:: bash
+
+   pyRadPlanGUI                    # start with an empty workspace
+   pyRadPlanGUI path/to/TG119.mat  # load a matRad patient file on startup
+
+Headless installation
+~~~~~~~~~~~~~~~~~~~~~
+
+On servers, compute clusters, CI runners, or in containers you typically neither need
+the GUI nor want the sizable Qt runtime it ships with.  Omit the extra to install
+the scripting/API core only:
 
 .. code-block:: bash
 
    pip install pyRadPlan
 
-This pulls in all mandatory dependencies, including NumPy, SciPy, SimpleITK, pydantic,
-pydantic-ai, and everything else needed to run a full treatment planning workflow on
-the CPU with the NumPy backend.
+The GUI degrades gracefully: ``import pyRadPlan`` works as usual, and calling a GUI
+entry point without the extra raises an ``ImportError`` explaining how to install it.
 
 ----
 
@@ -98,7 +119,9 @@ by appending them in brackets, e.g. ``pip install pyRadPlan[dev,gui]``.
      - Development, testing, and documentation builds
    * - ``[gui]``
      - PySide6 ≥ 6.0.1, pyqtgraph ≥ 0.12.0
-     - Interactive Qt-based visualisation widgets
+     - The matRad-style main GUI and interactive visualization widgets — recommended
+       for all desktop installs (see :ref:`installation` above); skip on headless
+       systems
    * - ``[numba]``
      - numba ≥ 0.61.0
      - JIT-compiled acceleration of selected CPU code paths

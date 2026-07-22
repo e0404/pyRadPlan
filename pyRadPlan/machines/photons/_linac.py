@@ -16,7 +16,7 @@ from ._svd_kernel import PhotonSVDKernel
 
 class PhotonLINAC(ExternalBeamMachine):
     """
-    Base Class for Photon LINAC-like Machines.
+    Machine Model for Photon LINAC-like Machines.
 
     Defines minimum meta-data a photon LINAC machine must hold
     Provides multiple data storage formats, currently supported

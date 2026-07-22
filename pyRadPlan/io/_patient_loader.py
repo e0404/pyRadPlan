@@ -19,6 +19,83 @@ from . import matfile
 logger = logging.getLogger(__name__)
 
 
+def available_phantoms() -> dict[str, os.PathLike]:
+    """
+    List the patient phantoms bundled with pyRadPlan.
+
+    Enumerates the ``*.mat`` files shipped in ``pyRadPlan.data.phantoms``.
+
+    Returns
+    -------
+    dict[str, os.PathLike]
+        Mapping of phantom shorthand names (the file stem, e.g. ``"TG119"``)
+        to their package-resource paths, sorted by name.
+    """
+    files = resources.files("pyRadPlan.data.phantoms")
+    phantoms = {
+        entry.name[: -len(".mat")]: entry
+        for entry in files.iterdir()
+        if entry.is_file() and entry.name.lower().endswith(".mat")
+    }
+    return dict(sorted(phantoms.items()))
+
+
+def resolve_phantom(name: str) -> os.PathLike:
+    """
+    Resolve a phantom shorthand name to its bundled data file.
+
+    Matching is case-insensitive and tolerates a trailing ``.mat``.
+
+    Parameters
+    ----------
+    name : str
+        Shorthand name of a bundled phantom, e.g. ``"TG119"``.
+
+    Returns
+    -------
+    os.PathLike
+        Package-resource path of the phantom file.
+
+    Raises
+    ------
+    ValueError
+        If no bundled phantom matches *name*.
+    """
+    phantoms = available_phantoms()
+    stem = name[: -len(".mat")] if name.lower().endswith(".mat") else name
+    for phantom_name, path in phantoms.items():
+        if phantom_name.lower() == stem.lower():
+            return path
+    raise ValueError(
+        f"Unknown phantom {name!r}. Available phantoms: {', '.join(phantoms) or 'none'}"
+    )
+
+
+def load_phantom(
+    name: str,
+    extra_plan_data: Optional[dict] = None,
+    extra_data: Optional[dict] = None,
+) -> tuple[CT, StructureSet]:
+    """
+    Load a bundled phantom by its shorthand name.
+
+    Parameters
+    ----------
+    name : str
+        Shorthand name of a bundled phantom (see :func:`available_phantoms`).
+    extra_plan_data : Optional[dict]
+        Filled with additional plan data structures found in the file.
+    extra_data : Optional[dict]
+        Filled with any remaining raw data from the file.
+
+    Returns
+    -------
+    tuple[CT, StructureSet]
+        The CT and StructureSet objects.
+    """
+    return load_patient(resolve_phantom(name), extra_plan_data, extra_data)
+
+
 def load_tg119() -> tuple[CT, StructureSet]:
     """
     Load the included TG119 phantom.
@@ -31,8 +108,7 @@ def load_tg119() -> tuple[CT, StructureSet]:
     tuple[CT, StructureSet]
         The CT and StructureSet objects.
     """
-    phantom_data_str = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
-    return load_patient(phantom_data_str)
+    return load_phantom("TG119")
 
 
 def load_patient(

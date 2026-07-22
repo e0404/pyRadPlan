@@ -8,16 +8,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- New `GlobalVOI` type for VOIs spanning the entire CT grid. Bypasses overlap priorities by default and is excluded from the dose calculation mask in the dose engine.
-- `StructureSet.add_global_voi()` convenience method to add a grid-spanning `GlobalVOI` with optional objectives.
-- `apply_overlap` field on `VOI` controlling per-VOI overlap behavior: `True` (default, masked by higher-priority VOIs), `False` (contributes to the overlap mask but is not itself masked), `None` (skipped from overlap handling entirely).
+
+- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
+- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
+- Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
+
+- GUI: File menu collecting all data I/O (load/import/export)
+- GUI: "Load Bundled Phantom" submenu in the File menu listing the phantoms shipped in `pyRadPlan/data/phantoms`
+- `pyRadPlanGUI` accepts a bundled phantom shorthand instead of a file path (e.g. `pyRadPlanGUI TG119`, case-insensitive)
+- `pyRadPlan.io.available_phantoms()`, `resolve_phantom()` and `load_phantom()` to discover and load bundled phantoms by name
+- GUI: resizable, collapsible main-window panels via splitters
+- GUI: workflow staleness indicators that flag outdated dose influence / results
+- GUI: objective count in the objectives widget header
+- GUI: AI buttons to suggest VOI objectives and beam angles via a reusable AI task dialog
+- GUI: when a result dose exists, the objectives AI button offers to adapt the current objectives using quality indicators computed from a selectable result dose
+- `VOI.center_of_mass`, `VOI.principal_axes` and `VOI.shape_parameters` computed fields describing the structure's geometry (nominal scenario, world LPS coordinates)
+- `ai_agents.generate_beam_angles` accepts an optional structure set; its per-VOI geometry (via new `cst_geometry_summary()`) is sent to the model, so beam directions can respect the patient anatomy (used by the GUI when a structure set is loaded)
+- `ai_agents.generate_voi_objectives` accepts an optional `QICollection` (`qis=`) to adapt the existing objectives based on quality indicators from a previous optimization run instead of suggesting fresh ones
+- GUI: persistent log console panel (bottom-left) fed by Python's logging system, with a level filter and colored warnings/errors — messages are visible even without a terminal
+- GUI: "Log Panel" toggle in the View menu
+- GUI: VOI list tooltips showing the structure's metadata (type, α_x, β_x, α/β, overlap priority)
+- GUI: clicking a VOI name opens a popup to edit type, α_x, β_x and overlap priority (validated against the VOI model); toggling visibility remains on the checkbox
+- GUI: VOI list can be grouped by overlap priority (one group per priority level) instead of by type via a new dropdown
+- GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
+- `ai_agents.available_models()` to discover usable models from configured API keys
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+- pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
 
 ### Changed
-- `StructureSet.apply_overlap_priorities()` now honors the `apply_overlap` flag on each VOI.
+
+- GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
+- launch_viewer calls to multiple examples with fallback to plot_slice
+- grids now have a 4D representation (x,y,z,t)
+- VOIs now connect to grids (3D or 4D)
+- VOIs validate from more formats formats (given the context)
+- GUI: shared worker-thread, adaptive spin box and number-list helpers consolidated in `pyRadPlan.gui.widgets._base`
+- GUI: viewer caches derived CT/quantity/mask arrays, optimization plots redraw rate-limited, and spin boxes commit on focus-out instead of per keystroke (performance)
+- GUI: colors picked in the VOI list are written back to `voi.visible_color`, so custom colors survive list rebuilds (e.g. grouping changes)
+- `ai_agents.generate_voi_objectives` no longer mutates the passed structure set; it returns an updated copy
+- `pyRadPlanGUI` console script now uses a dedicated `pyRadPlan.gui.main()` CLI entry point; `gui()` no longer reads `sys.argv`
+- `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
+- GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
+- docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
+
+### Deprecated
+
+- `xp_utils.PREFER_GPU`, `xp_utils.PREFERRED_CPU_ARRAY_BACKEND` and `xp_utils.PREFERRED_GPU_ARRAY_BACKEND`: reads and writes still work but emit a `DeprecationWarning`; use `pyRadPlan.settings.xp` instead
+
+### Fixed
+
+- GUI: DKFZ logo pinned to the top-left of the banner in wide windows
+- global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
+- GUI: "Save / Keep Result" silently skipped every snake_case quantity (e.g. `physical_dose`), so snapshots lost the dose
+- GUI: re-optimizing no longer overwrites the fresh per-beam dose with the previous run's (`physical_dose_beam` matched the snapshot carry-forward prefix)
+- GUI: closing the main window during a computation aborted the whole process (running QThread destroyed); now asks and stops the worker
+- GUI: a failed AI objectives request wiped all existing objectives on the live structure set
+- GUI: closing the AI task dialog while a request was running froze the GUI until the request finished
+- GUI: the workflow "Import Dose" button was only enabled once a result existed; it now only requires a CT (like the File menu)
+- GUI: plan widget crashed its workspace sync (silently) when `pln.prop_dose_calc["dose_grid"]` held a `Grid` instance or `None`
+- GUI: the viewer kept the previous patient's VOIs/masks/images when the workspace was cleared or lost its structure set
+- GUI: widget refresh failures are now shown in the main-window status bar instead of only being logged
+- GUI: config forms show a generic JSON editor for unsupported field types instead of hiding them
+- GUI: the plan widget's iso-center field stayed at "0 0 0" in "Auto." mode; it now previews the automatic isocenter (target center of mass), matching the viewer
+- GUI: the optimization status window could open so far down that the Pause/Stop buttons were off-screen; it now opens centered over the main window, clamped to the screen
+- GUI: loading patient data left the workspace without a plan while the plan widget looked applied; the form defaults are now auto-applied as the initial plan on data load (falling back to the "modified" highlight if they don't validate)
+- Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
+- VHEE now has target points for matRad export
+- Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
+
+## [0.4.1] - 2026-06-16
+
+### Added
+
+- multiple corresponding units for given quantities in the GUI
+- AI agents now log token usage and estimated cost (USD) after each run; toggle via `AiSettings.display_usage` (`PYRADPLAN_AI_DISPLAY_USAGE`)
+- `get_objectives_union()` exposing all registered objectives as a discriminated union, used to give the AI agent the exact objective schema
+
+### Changed
+- VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
+
+### Fixed
+
+- missing keys in init_beam not being skipped
+- hotfix for deprecated numpy.matrix in to_namespace()
 
 ## [0.4.0] - 2026-05-17
 
 ### Added
+
 - `pyRadPlan.ai_agents` module: LLM-powered treatment planning helpers built on `pydantic-ai`
 - `generate_beam_angles(pln, treatment_site)` — queries an LLM to suggest gantry and couch angles for a given treatment site and radiation mode, and writes them into `pln.prop_stf`
 - `generate_voi_objectives(pln, cst, treatment_site)` — queries an LLM to propose optimization objectives for each VOI in a `StructureSet` and attaches validated objective instances directly to the VOIs
@@ -58,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `visible_color` field validator on `VOI` accepting named color strings, float 0–1 arrays, and int 0–255 tuples
 
 ### Changed
+
 - Pencil beam dose calculation now applies the lateral cutoff mask before computation rather than after, and keeps Dij assembly on the CPU (size limited) while the rest of the calculation runs on GPU
 - Per-beam dose/LET/effect computation in `Dij.compute_beam_dose()` now slices intensities by beam (faster matmul) instead of multiplying by a beam mask, and is fully Array API namespace aware
 - Siddon raytracer now picks up the engine's device and allocates plane/coordinate arrays directly on that device
@@ -69,6 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Proton pencil-beam example updated to use the new dose viewer widget
 
 ### Fixed
+
 - `resample_image` now falls back to linear interpolation when BSpline is requested but the image has fewer than 4 voxels in any dimension, preventing intermittent NaN values from the BSpline prefilter on small grids
 - CuPy issue in LPS coordinate handling (gantry/couch rotation matrices now built via `xp.stack` with the correct device/dtype)
 - SVD pencil beam engine updated to match changes in the base pencil beam engine
@@ -79,10 +159,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `to_namespace()` raises `TypeError` for scalar / list / tuple inputs instead of failing on the sparse-array check
 - `StructureSet` now calls `set_colors()` during validation so every VOI always has a color assigned
 - property .size raising an error in dij.py when torch is used. Switching to array_api_compat.size()
--
+
 ## [0.3.5] - 2026-05-12
 
 ### Changed
+
 - transmission mask in beam limiting devices now uses edge smoothing to account for finite grid size
 
 ### Fixed
@@ -92,6 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2026-05-05
 
 ### Added
+
 - dose engines now have private flags `_dij_guarantee_canonical` and `_dij_guarantee_nonzero` to guarantee sparse dij structure before finalization
 - Issue and Pull/Merge Request templates
 - default pre-commit hooks for line endings, case conflicts, merge conflicts, etc. Also added codespell, CITATION.cff verifyer and toml check
@@ -102,6 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `extrapolate` option to `resample_image` to choose the extrapolator. Default is to use a nearest neighbor extrapolator, but individual values can beprovided as well.
 
 ### Changed
+
 - New version of photons_Generic.mat basedata file can now be provided, allowing a "version" field alongside "meta" and "data" files within the machine struct. Version 2 requires correct kernel normalization (without implying a spacing in the convolution integral). photons_Generic.mat has been updated to version 2 with correct kernel normalization.
 - Photon dose calculation now does not rely on hardcoded convolution resolution integral normalization of machine kernels. Assumes that old kernels use hardcoded factor of 4 for 0.5 mm resolution (1/0.5^2).
 - Sparse structure now uses one shared index structure across dijs if possible
@@ -110,19 +193,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_slice()`/`plot_multiple_slices()` parameter `ct` renamed to `image_volume` and `ct_window` renamed to `image_window`
 
 ### Deprecated
+
 - `ct` and `ct_window` arguments to `plot_slice()`/`plot_multiple_slices()` still work as aliases for `image_volume` and `image_window` but emit a `DeprecationWarning`
 
 ### Fixed
+
 - CI Release Workflow now tests correctly on release commits without an [Unreleased] section in the Changelog.
 - CI Release Workflow now fetches tags correctly and supplies the correct release body from the tag message
 
 ## [0.3.3] - 2026-04-14
 
 ### Added
+
 - Automatic Release workflow on GitHub reading CHANGELOG.md and tag message
 - Benchmark Folder with initial Raytracer benchmark that can be run with pytest-benchmark
 
 ### Changed
+
 - Changelog now follows thee Keep A Changelog conventions
 
 ### Fixed
@@ -253,7 +340,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/e0404/pyRadPlan/compare/v0.3.3...v0.3.4

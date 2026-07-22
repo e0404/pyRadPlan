@@ -489,7 +489,7 @@ def _convert_scipy_sparse_for_namespace(
     """Convert a scipy sparse matrix to be compatible with a new array namespace."""
 
     if not keep_sparse_compat:
-        return to_namespace(xp_new, sparray.todense(), device=device)
+        return to_namespace(xp_new, sparray.toarray(), device=device)
 
     fmt = sparray.format
     # For now, we always go the coo route
@@ -557,7 +557,7 @@ def _convert_cupy_sparse_for_namespace(
         return sparray  # No conversion needed
 
     if not keep_sparse_compat:
-        return to_namespace(xp_new, sparray.todense(), device=device)
+        return to_namespace(xp_new, sparray.toarray(), device=device)
 
     if array_api_compat.is_numpy_namespace(
         xp_new

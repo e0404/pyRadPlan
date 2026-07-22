@@ -12,7 +12,12 @@ from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
 from .model._cnn import OutcomeCNN
 
-from ._factory import get_available_objectives, get_objective, register_objective
+from ._factory import (
+    get_available_objectives,
+    get_objective,
+    get_objectives_union,
+    register_objective,
+)
 
 register_objective(SquaredDeviation)
 register_objective(SquaredMimicking)
@@ -39,5 +44,6 @@ __all__ = [
     "OutcomeCNN",
     "get_available_objectives",
     "get_objective",
+    "get_objectives_union",
     "register_objective",
 ]

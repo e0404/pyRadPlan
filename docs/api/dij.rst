@@ -1,11 +1,20 @@
-Dij
-====
+dij
+===
 
-.. autoclass:: pyRadPlan.dij.Dij
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. currentmodule:: pyRadPlan.dij
 
-.. autofunction:: pyRadPlan.dij.create_dij
+.. autosummary::
+   :toctree: generated/dij/
 
-.. autofunction:: pyRadPlan.dij.validate_dij
+   Dij
+   compose_beam_dijs
+
+
+Creating and validating
+-----------------------
+
+.. autosummary::
+   :toctree: generated/dij/
+
+   create_dij
+   validate_dij
