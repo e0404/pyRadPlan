@@ -43,7 +43,7 @@ import numpy as np
 from pydantic import Field
 from scipy import sparse
 
-from ...core import Grid
+from ...core import Grid, ProgressHandle
 from ...ct import CT
 from ...cst import StructureSet
 from ...geometry import lps
@@ -63,6 +63,17 @@ _MM_PER_CM = 10.0
 # Compiled tabulated cross-section data, keyed by (e_max, pcut, ecut). Compiling
 # from the EPICS libraries parses ~120 MB of text; reuse within the process.
 _TABULATED_DATA_CACHE: dict[tuple, Any] = {}
+
+# Validated (msc_model, step_energy_fraction) pairs for pyRadMC's electron
+# transport. The two are coupled and only these pairings are validated
+# (R50/detour, PDD gamma, cross-backend chi2), so the engine exposes them as
+# one preset: under 'gaussian' longer substeps are re-bound by an internal
+# angular validity cap and buy nothing; under 'gs' the cap is lifted and the
+# longer substep is part of the validated configuration.
+_MSC_PRESETS: dict[str, dict[str, Any]] = {
+    "gaussian": {"msc_model": "gaussian", "step_energy_fraction": 0.05},
+    "gs": {"msc_model": "gs", "step_energy_fraction": 0.20},
+}
 
 
 def transport_grid_from_ct(ct: CT, water_only: bool = False):
@@ -623,6 +634,22 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         machine-specific output calibration is not modelled yet.
     transport_electrons : bool
         Transport secondary electrons (disable only for testing).
+    msc_preset : str
+        Electron multiple-scattering preset, selecting one of pyRadMC's
+        validated ``(msc_model, step_energy_fraction)`` pairs. 'gaussian'
+        (default) is the shipped Gaussian small-angle model with electron
+        substeps capped at 5% of the CSDA range. 'gs' samples exact
+        Goudsmit-Saunderson deflections with 20% substeps - an accuracy
+        option for the large-angle scattering tail and penumbra (~+0.3% dose
+        vs the default on a 6 MV spectral thorax benchmark; ~1.17x GPU
+        open-field runtime, Dij nearly unchanged). The pair is validated as
+        a whole and the step fraction is deliberately not exposed
+        separately: under 'gaussian' longer substeps are re-bound by an
+        internal angular cap, under 'gs' that cap is lifted. The first 'gs'
+        run per machine builds a deflection-table grid (~30-45 s, one time,
+        persisted to ``~/.cache/pyRadMC/gs-grid``); later processes load it
+        in ~40 ms. 'gs' keeps the engine's reproducibility guarantees
+        (bit-identical per device, Dij group-size invariant).
     beamlet_group_size : int, optional
         Beamlets scored concurrently into one dense device buffer per device
         (memory/occupancy knob, result-invariant). None (default) lets pyRadMC
@@ -663,6 +690,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
     dij_truncation: Optional[float] = None
     num_particles_per_mu: float = 1e9
     transport_electrons: bool = True
+    msc_preset: Literal["gaussian", "gs"] = "gaussian"
     beamlet_group_size: Optional[int] = None
 
     def __init__(self, pln=None):
@@ -778,8 +806,12 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
             return "sharded"
         return "beam_per_device"
 
-    def _progress_callback(
-        self, beam_index: int, num_beams: int
+    def _progress_callback(  # noqa: PLR0913
+        self,
+        beam_index: int,
+        num_beams: int,
+        total_histories: int,
+        history_handle: Optional[ProgressHandle] = None,
     ) -> Callable[["ProgressEvent"], None]:
         """Build a pyRadMC ``progress`` callback that reports beam-scoped status.
 
@@ -792,10 +824,18 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         instead of going through ``self.track``/``self.progress``: those push
         onto the engine's single shared progress stack (fine for the other
         engines' single-threaded beam/ray loops, but not safe to share across
-        the concurrent per-device worker threads here). Each beam gets its own
-        bar (``position=beam_index`` keeps concurrent bars from overwriting
-        each other), and the GUI is unaffected since it only ever consumes the
-        ``report_status`` call below.
+        the concurrent per-device worker threads here).
+
+        ``history_handle``, if given, is advanced from ticks so the GUI/console
+        progress bar tracks per-beam history progress instead of just pulsing
+        while busy - like the pencil-beam engines' Ray level nested under
+        Beam. The caller must open it from an enclosing
+        ``with self.progress("History", total=total_histories)`` scoped to
+        this beam's run, and only when that beam runs alone in the calling
+        thread (sequential scheduling); the concurrent
+        ``beam_scheduling='beam_per_device'`` worker threads must never touch
+        the shared stack and stay on ``report_status`` alone (the GUI still
+        shows a busy bar for those, via the enclosing Beam level).
         """
         bar = None
         if self.console_progress:
@@ -805,6 +845,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                 bar = tqdm(
                     desc=f"Beam {beam_index + 1}/{num_beams}",
                     unit="h",
+                    total=total_histories,
                     leave=False,
                     position=beam_index,
                 )
@@ -813,12 +854,13 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
 
         def _on_progress(event: "ProgressEvent") -> None:
             if bar is not None:
-                if bar.total is None:
-                    bar.total = event.histories_total
                 bar.n = event.histories_done
                 bar.refresh()
                 if event.histories_done >= event.histories_total:
                     bar.close()
+
+            if history_handle is not None:
+                history_handle.update(event.histories_done)
 
             self.report_status(
                 f"Beam {beam_index + 1}/{num_beams}: {event.histories_done}/"
@@ -916,7 +958,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
             DIJ_TRUNCATION_RELATIVE if self.dij_truncation is None else self.dij_truncation
         )
 
-        kwargs = {}
+        kwargs = dict(_MSC_PRESETS[self.msc_preset])
         if self.backend == "warp":
             kwargs["beamlet_group_size"] = self.beamlet_group_size
             if devices:
@@ -1057,6 +1099,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
             scoring_grid=scoring_grid,
             scoring_mode=self.scoring_mode,
             progress=progress,
+            **_MSC_PRESETS[self.msc_preset],
         )
 
         weights = self._forward_weights(beam)
@@ -1104,7 +1147,9 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                 self.seed + b,
                 scoring_grid,
                 devices=[devices[b % len(devices)]],
-                progress=self._progress_callback(b, len(beams)),
+                progress=self._progress_callback(
+                    b, len(beams), n_histories * beam.total_number_of_bixels
+                ),
             )
 
         with ThreadPoolExecutor(max_workers=len(devices)) as pool:
@@ -1154,30 +1199,37 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                         )
                         * self.n_batches
                     )
-                    dose_col, var_col = self._forward_presolve_column(
-                        engine,
-                        beam,
-                        stack,
-                        aperture,
-                        n_presolve,
-                        self.seed + b,
-                        scoring_grid,
-                        cross_sections,
-                        progress=self._progress_callback(b, len(stf.beams)),
-                    )
+                    with self.progress("History", total=n_presolve) as handle:
+                        dose_col, var_col = self._forward_presolve_column(
+                            engine,
+                            beam,
+                            stack,
+                            aperture,
+                            n_presolve,
+                            self.seed + b,
+                            scoring_grid,
+                            cross_sections,
+                            progress=self._progress_callback(
+                                b, len(stf.beams), n_presolve, history_handle=handle
+                            ),
+                        )
                     dose_blocks.append(sparse.csc_array(dose_col.reshape(-1, 1)))
                     var_blocks.append(sparse.csc_array(var_col.reshape(-1, 1)))
                     continue
 
-            dose, variance = self._run_beam_dij(
-                engine,
-                beam,
-                n_histories,
-                self.seed + b,
-                scoring_grid,
-                devices=devices,
-                progress=self._progress_callback(b, len(stf.beams)),
-            )
+            total_beam_histories = n_histories * beam.total_number_of_bixels
+            with self.progress("History", total=total_beam_histories) as handle:
+                dose, variance = self._run_beam_dij(
+                    engine,
+                    beam,
+                    n_histories,
+                    self.seed + b,
+                    scoring_grid,
+                    devices=devices,
+                    progress=self._progress_callback(
+                        b, len(stf.beams), total_beam_histories, history_handle=handle
+                    ),
+                )
 
             if self._calc_dose_direct:
                 weights = self._forward_weights(beam)
@@ -1192,6 +1244,13 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
     def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
         if self.mult_scen.tot_num_scen != 1:
             raise ValueError("pyRadMC engine currently only supports the nominal scenario.")
+
+        # apply_config assigns raw values that failed validation; refuse them
+        # here, before any grid or cross-section work
+        if self.msc_preset not in _MSC_PRESETS:
+            raise ValueError(
+                f"unknown msc_preset {self.msc_preset!r}; expected one of {sorted(_MSC_PRESETS)}"
+            )
 
         dij["num_of_particles_per_mu"] = np.full(
             self._num_of_columns_dij, self.num_particles_per_mu
@@ -1221,6 +1280,14 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         e_max = 1.2 * max(self._spectrum_for_beam(beam).max_energy for beam in stf.beams)
         cross_sections = self._make_cross_sections(transport_grid, e_max)
         engine = self._make_engine(transport_grid, cross_sections)
+
+        if self.msc_preset == "gs" and self.transport_electrons:
+            logger.info(
+                "Goudsmit-Saunderson electron scattering selected (msc_preset='gs', "
+                "step_energy_fraction=0.20). The first GS run on this machine builds a "
+                "deflection-table grid once (~30-45 s, persisted to "
+                "~/.cache/pyRadMC/gs-grid); later runs load it in ~40 ms."
+            )
 
         n_histories = self._histories_per_beamlet(dij["total_num_of_bixels"])
         logger.info(

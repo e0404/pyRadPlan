@@ -52,19 +52,25 @@ ct, cst = load_tg119()
 
 # %%
 pln = PhotonPlan(radiation_mode="photons", machine="Generic")
+num_of_beams = 5
 pln.prop_stf = {
-    "gantry_angles": [0, 90, 180, 270],
-    "couch_angles": [0, 0, 0, 0],
-    "bixel_width": 10.0,
+    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
+    "couch_angles": np.zeros((num_of_beams,)),
+    "bixel_width": 5.0,
 }
 pln.prop_dose_calc = {
     "engine": "pyRadMC",
     "backend": "warp",  # 'warp' (GPU if available, else CPU) or 'ref' (slow CPU oracle)
-    "num_histories_per_beamlet": 1e4,  # increase for smoother dose
+    "num_histories_per_beamlet": 1e6,  # increase for smoother dose
+    "num_batches": 10,
+    "concurrent_batches": 1,
     "seed": 20260715,
-    "dose_grid": {"resolution": {"x": 5.0, "y": 5.0, "z": 5.0}},
-    # "spectrum_beam": "varian-6mv",  # named-spectrum override of the machine model
+    "correlated": False,
+    "dose_grid": {"resolution": {"x": 3.0, "y": 3.0, "z": 3.0}},
+    "spectrum_beam": "siemens-6mv",  # named-spectrum override of the machine model
     # "forward_mode": "head_presolve",  # forward dose via the treatment-head pre-solve
+    "msc_preset": "gs",  # exact large-angle electron scattering (Goudsmit-Saunderson);
+    # first run builds a table grid once (~30-45 s, cached on disk)
 }
 
 pln.prop_opt = {"solver": "scipy"}

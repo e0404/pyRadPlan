@@ -107,7 +107,54 @@ def test_concurrency_config_defaults(photon_pln):
     assert engine.warp_devices is None
     assert engine.beam_scheduling == "sharded"
     assert engine.concurrent_batches == 1
-    assert engine.beamlet_group_size == 32
+    assert engine.beamlet_group_size is None
+
+
+def test_msc_preset_default_and_validation(water_ct, water_cst, photon_stf, photon_pln):
+    engine = get_engine(photon_pln)
+    assert engine.msc_preset == "gaussian"
+
+    photon_pln.prop_dose_calc["msc_preset"] = "gs"
+    engine = get_engine(photon_pln)
+    assert engine.msc_preset == "gs"
+
+    # apply_config warns on a failed value but assigns it raw; the engine then
+    # refuses it before any grid or cross-section work
+    photon_pln.prop_dose_calc["msc_preset"] = "molière"
+    with pytest.warns(UserWarning, match="msc_preset"):
+        engine = get_engine(photon_pln)
+    with pytest.raises(ValueError, match="msc_preset"):
+        engine.calc_dose_influence(water_ct, water_cst, photon_stf)
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [
+        ("gaussian", {"msc_model": "gaussian", "step_energy_fraction": 0.05}),
+        ("gs", {"msc_model": "gs", "step_energy_fraction": 0.20}),
+    ],
+)
+def test_msc_preset_plumbed_to_run_dij(
+    water_ct, water_cst, photon_stf, photon_pln, monkeypatch, preset, expected
+):
+    """The preset arrives at pyRadMC as the coupled (model, step) pair."""
+    from pyRadMC.backends.ref.engine import ReferenceEngine
+
+    photon_pln.prop_dose_calc["msc_preset"] = preset
+    engine = get_engine(photon_pln)
+
+    captured = []
+    original = ReferenceEngine.run_dij
+
+    def spy(self, *args, **kwargs):
+        captured.append({key: kwargs[key] for key in ("msc_model", "step_energy_fraction")})
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ReferenceEngine, "run_dij", spy)
+    engine.calc_dose_influence(water_ct, water_cst, photon_stf)
+
+    assert len(captured) == len(photon_stf.beams)
+    assert all(entry == expected for entry in captured)
 
 
 def test_beam_scheduling_resolution(photon_pln):
