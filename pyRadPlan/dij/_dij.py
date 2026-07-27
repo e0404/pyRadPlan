@@ -34,6 +34,7 @@ from ..core.xp_utils.helpers import _rebuild_scipy_csc_in_namespace
 InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
 InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,8 +86,8 @@ class Dij(PyRadPlanBaseModel):
     ray_num: Annotated[NDArray, Field(default=None)]
     beam_num: Annotated[NDArray, Field(default=None)]
 
-    alphax: Annotated[Optional[NDArray], Field(default=None)]
-    betax: Annotated[Optional[NDArray], Field(default=None)]
+    alphax: Annotated[Optional[Array], Field(default=None)]
+    betax: Annotated[Optional[Array], Field(default=None)]
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
@@ -644,9 +645,9 @@ class Dij(PyRadPlanBaseModel):
                     )
 
         if self.alphax is not None:
-            dij_copy.alphax = to_namespace(xp_new, self.alphax)
+            dij_copy.alphax = xp_new.asarray(self.alphax)
         if self.betax is not None:
-            dij_copy.betax = to_namespace(xp_new, self.betax)
+            dij_copy.betax = xp_new.asarray(self.betax)
         name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")
