@@ -53,7 +53,13 @@ A minimal script is very similar to matRad's example [`matRad.m`](https://github
 ```python
 from importlib import resources
 import pymatreader
-from pyRadPlan import load_patient, IonPlan, generate_stf, calc_dose_influence, fluence_optimization
+from pyRadPlan import (
+    load_patient,
+    IonPlan,
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+)
 
 #  Read patient from provided TG119.mat file and validate data
 tg119_path = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
@@ -93,6 +99,7 @@ Instead of using above top-level workflow functions and a central plan configura
 ```python
 ...
 from pyRadPlan.stf import StfGeneratorIMPT
+
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 
@@ -104,7 +111,7 @@ pln = IonPlan(radiation_mode="protons", machine="Generic")
 stf_gen = StfGeneratorIMPT()
 stf_gen.gantry_angles = [90, 270]
 stf_gen.couch_angles = [0, 0]
-stf = stf_gen.generate(ct,cst)
+stf = stf_gen.generate(ct, cst)
 ```
 
 If you are interested in helping with development, get in touch, read the contributing guidelines, and the developer note below.
