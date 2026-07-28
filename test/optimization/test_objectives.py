@@ -10,6 +10,12 @@ from pyRadPlan.optimization.objectives import (
     MeanDose,
     MinDVH,
     MaxDVH,
+    NTCPPOLO,
+    HellingerPOLO,
+    SquaredDeviationPOLO,
+    InverseKLDPOLO,
+    LogSumExpConvPOLO,
+    HellingerConvPOLO,
     get_available_objectives,
     get_objective,
 )
@@ -377,3 +383,47 @@ def test_MaxDVH_compute_gradient():
     grad_expected2 = xp.ones(100) * 0.4
     assert xp.all(max_dvh.compute_gradient(dose) == grad_expected)
     assert xp.all(max_dvh.compute_gradient(dose_2) == grad_expected2)
+
+
+def test_polo_objectives():
+    vals = np.array([0.1, 0.2, 0.05], dtype=np.float64)
+
+    # NTCPPOLO
+    ntcp_obj = NTCPPOLO()
+    assert ntcp_obj.quantity == "polo"
+    res_ntcp = ntcp_obj.compute_objective(vals)
+    grad_ntcp = ntcp_obj.compute_gradient(vals)
+    assert np.isclose(res_ntcp, 0.316)
+    assert np.allclose(grad_ntcp, [0.76, 0.855, 0.72])
+
+    # HellingerPOLO
+    h_obj = HellingerPOLO()
+    assert h_obj.quantity == "polo"
+    assert h_obj.compute_objective(vals) == np.sum(vals)
+    assert np.all(h_obj.compute_gradient(vals) == 1.0)
+
+    # SquaredDeviationPOLO
+    sd_obj = SquaredDeviationPOLO(polo_ref=0.0)
+    assert sd_obj.quantity == "polo"
+    assert np.isclose(sd_obj.compute_objective(vals), np.mean(vals**2))
+    assert np.allclose(sd_obj.compute_gradient(vals), 2.0 * vals / len(vals))
+
+    # InverseKLDPOLO
+    ikld_obj = InverseKLDPOLO()
+    assert ikld_obj.quantity == "polo"
+    assert np.isclose(
+        ikld_obj.compute_objective(vals),
+        -np.sum((1.0 - vals) * np.log(1.0 - vals)),
+    )
+    assert np.allclose(ikld_obj.compute_gradient(vals), 1.0 + np.log(1.0 - vals))
+
+    # LogSumExpConvPOLO
+    lse_obj = LogSumExpConvPOLO()
+    assert lse_obj.quantity == "linear_polo"
+    assert np.isscalar(lse_obj.compute_objective(vals))
+
+    # HellingerConvPOLO
+    hconv_obj = HellingerConvPOLO()
+    assert hconv_obj.quantity == "linear_polo"
+    assert hconv_obj.compute_objective(vals) == np.sum(vals)
+    assert np.all(hconv_obj.compute_gradient(vals) == 1.0)

@@ -10,6 +10,12 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
+from ._ntcp_polo import NTCPPOLO
+from ._hellinger_polo import HellingerPOLO
+from ._squared_dev_polo import SquaredDeviationPOLO
+from ._inverse_kld_polo import InverseKLDPOLO
+from ._logsumexp_convpolo import LogSumExpConvPOLO
+from ._hellinger_convpolo import HellingerConvPOLO
 
 from ._factory import (
     get_available_objectives,
@@ -27,6 +33,12 @@ register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
 register_objective(DoseUniformity)
+register_objective(NTCPPOLO)
+register_objective(HellingerPOLO)
+register_objective(SquaredDeviationPOLO)
+register_objective(InverseKLDPOLO)
+register_objective(LogSumExpConvPOLO)
+register_objective(HellingerConvPOLO)
 
 __all__ = [
     "Objective",
@@ -39,6 +51,12 @@ __all__ = [
     "SquaredMimicking",
     "SquaredOverdosing",
     "SquaredUnderdosing",
+    "NTCPPOLO",
+    "HellingerPOLO",
+    "SquaredDeviationPOLO",
+    "InverseKLDPOLO",
+    "LogSumExpConvPOLO",
+    "HellingerConvPOLO",
     "get_available_objectives",
     "get_objective",
     "get_objectives_union",

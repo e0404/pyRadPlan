@@ -87,6 +87,7 @@ class Dij(PyRadPlanBaseModel):
 
     alphax: Annotated[Optional[Array], Field(default=None)]
     betax: Annotated[Optional[Array], Field(default=None)]
+    binary_risk_mask: Annotated[Optional[Array], Field(default=None)]
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
@@ -453,6 +454,14 @@ class Dij(PyRadPlanBaseModel):
 
                 out["rbe_x_dose_beam"].append(rbe_x_dose_beam)
                 out["rbe_beam"].append(rbe_beam)
+
+        if getattr(self, "binary_risk_mask", None) is not None:
+            from pyRadPlan.quantities import POLO, LinearPOLO
+
+            polo_qty = POLO(self, self.binary_risk_mask)
+            out["polo"] = polo_qty.compute(intensity).flat[scenario_index]
+            lin_polo_qty = LinearPOLO(self, self.binary_risk_mask)
+            out["linear_polo"] = lin_polo_qty.compute(intensity).flat[scenario_index]
 
         return out
 
