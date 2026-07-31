@@ -102,6 +102,9 @@ cst.vois[3].objectives = [ntcp_obj]
 opt_info_native = {}
 fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
+# Save NTCP history from the native (monitor-only) optimization
+ntcp_history_native = list(ntcp_obj.ntcp_history)
+
 
 # # Compute the result on the CT grid
 result = dij.compute_result_ct_grid(fluence)
@@ -116,3 +119,17 @@ plot_slice(
     cst=cst,
     overlay=diff,
 )
+
+# %% [markdown]
+# NTCP history: CNN-guided (active gradients) vs native (monitor-only) optimization.
+# %%
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots()
+ax.plot(range(1, len(ntcp_history_active) + 1), ntcp_history_active, label="CNN-guided")
+ax.plot(range(1, len(ntcp_history_native) + 1), ntcp_history_native, label="native (monitor)")
+ax.set_xlabel("Objective evaluation")
+ax.set_ylabel("NTCP")
+ax.set_title("NTCP history during optimization")
+ax.legend()
+plt.show()
