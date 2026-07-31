@@ -1,42 +1,52 @@
 """CNN-based outcome objective (NTCP / TCP).
 
-Uses a pre-trained CNN loaded via the model importer to predict an outcome
-probability and compute gradients w.r.t. dose for use in optimisation.
-All model-specific parameters (dimensions, spacing, normalisation, input
-ordering) are read from the JSON config shipped with the model weights.
+Uses a pre-trained CNN loaded via :func:`pyRadPlan.ai_models.load_model` to
+predict an outcome probability and compute its gradient w.r.t. dose for use in
+optimisation. All model-specific behaviour (grid geometry, cropping, CT/mask
+resampling, dose normalisation, differentiable interpolation) lives in the
+preprocessor that ships *with* the model on HuggingFace, so this objective stays
+thin and backend-agnostic (numpy / cupy / torch via ``xp_utils``).
+
+The shipped preprocessor is expected to expose:
+
+- ``configure(ct, cst, cst_masks=None, device=None)`` — one-time CT/mask setup.
+- ``set_dose_grid(grid)`` — precompute dose<->model sampling coordinates.
+- ``preprocess(dose, requires_grad=False)`` — model inputs, called as
+  ``model(*inputs)``; with ``requires_grad`` the model-grid dose is the autograd
+  leaf.
+- ``postprocess(outputs)`` — map the model output to a scalar probability.
+- ``gradient_to_dose_grid()`` — map ``dose_leaf.grad`` back onto the dose grid.
 
 Example
 -------
 >>> ntcp_obj = OutcomeCNN(
 ...     priority=10000.0,
-...     model="densenet_example",
+...     model="pyRadPlan-outcome-ORPDenseNet-tg119",  # HF name, local dir, or (model, preprocessor)
 ...     mode="NTCP",
 ...     warmup_iterations=5,
 ...     ct=ct,
 ...     cst=cst,
-...     pln=pln,
-...     cst_masks=["parotid_lt", "parotid_rt"],
+...     cst_masks=["Core"],
 ... )
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, Literal, Optional
+from pathlib import Path
+from typing import Any, ClassVar, Literal, Optional
 import logging
 
 import array_api_compat
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 try:
     import torch
 except ImportError:
     torch = None  # type: ignore
 
-from pyRadPlan.core import Grid
 from pyRadPlan.core import xp_utils
+from pyRadPlan.ai_models import load_model
 from pyRadPlan.optimization.objectives._objective import Objective
-from pyRadPlan.data.ml_models.pytorch_model_importer import load_model
-from .preprocessor._outcome_cnn_preprocessor import OutcomeCnnPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -46,44 +56,49 @@ class OutcomeCNN(Objective):
 
     Parameters
     ----------
-    model : str
-        Name of the model folder (e.g. ``"densenet_example"``).
+    model : str or tuple
+        Model identifier passed to :func:`pyRadPlan.ai_models.load_model`: a
+        HuggingFace model name, a local directory path, or a preloaded
+        ``(model, preprocessor)`` tuple used directly.
     mode : ``"NTCP"`` or ``"TCP"``
-        ``"NTCP"`` minimises the predicted probability;
-        ``"TCP"`` maximises it (i.e. minimises the negative).
+        ``"NTCP"`` minimises the predicted probability; ``"TCP"`` maximises it
+        (i.e. minimises the negative).
     monitor_only : bool
         When *True* the objective returns 0 to the optimiser (and a zero
         gradient) but still logs the predicted probability.
     warmup_iterations : int
-        Number of gradient evaluations before the CNN gradient is
-        activated.  During warmup the probability is logged but a zero
-        gradient is returned.
+        Number of gradient evaluations before the CNN gradient is activated.
+        During warmup the probability is logged but a zero gradient is returned.
     cst_masks : list[str], optional
-        VOI names for the mask channels.  If the config sets
-        ``collapse: true`` the masks are collapsed into one channel;
-        otherwise the ordering matters.
+        VOI names for the mask channels. Ordering matters unless the model's
+        config collapses the masks into a single channel.
+    debug_plots : str, optional
+        Directory to save per-iteration gradient debug plots (requires
+        matplotlib).
     """
 
     # -- Objective metadata --
-    name: ClassVar[str] = "Outcome CNN"
+    name: Literal["Outcome CNN"] = "Outcome CNN"
     has_hessian: ClassVar[bool] = False
 
     # -- User-facing fields --
-    model: str = Field(description="Model folder name")
+    model: str = Field(description="Model name, local directory, or preloaded objects.")
     mode: Literal["NTCP", "TCP"] = Field(default="NTCP")
     monitor_only: bool = Field(default=False)
     warmup_iterations: int = Field(default=0, ge=0)
     cst_masks: Optional[list[str]] = Field(default=None)
+    debug_plots: Optional[str] = Field(
+        default=None, description="Directory to save gradient debug plots."
+    )
+    ntcp_history: list[float] = Field(default_factory=list)
 
     # -- Internal state (excluded from serialisation) --
     nn_model: Any = Field(default=None, exclude=True)
-    loaded_config: Dict[str, Any] = Field(default_factory=dict, exclude=True)
-    preprocessor: Optional[OutcomeCnnPreprocessor] = Field(default=None, exclude=True)
+    preprocessor: Any = Field(default=None, exclude=True)
     iteration_count: int = Field(default=0, exclude=True)
-    ntcp_history: list[float] = Field(default_factory=list)
-    debug_grad_dir: Optional[str] = Field(
-        default=None, description="Directory to save gradient debug plots"
-    )
+
+    _dose_dims: Optional[tuple] = PrivateAttr(default=None)
+    _debug_index: int = PrivateAttr(default=0)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -93,84 +108,72 @@ class OutcomeCNN(Objective):
 
     @model_validator(mode="before")
     @classmethod
-    def _init_model_and_preprocessor(cls, data: Any) -> Any:
-        """Load model + config and prepare the preprocessor."""
+    def _init(cls, data: Any) -> Any:
+        """Load model + preprocessor and configure it with CT / structures."""
+        if not isinstance(data, dict):
+            return data
         if torch is None:
             raise RuntimeError("PyTorch is required for OutcomeCNN.")
 
-        # Skip if already initialised (copy / re-validation)
+        # Already initialised (copy / re-validation).
         if data.get("preprocessor") is not None:
             return data
 
-        # Pop non-field init arguments
         ct = data.pop("ct", None)
         cst = data.pop("cst", None)
-        pln = data.pop("pln", None)
-        data.pop("stf", None)  # reserved for future use
+        data.pop("stf", None)  # accepted for convenience, not used
+        data.pop("pln", None)  # dose grid is resolved via the optimizer hook
 
+        # Without planning data we cannot configure the preprocessor (e.g.
+        # deserialisation). Leave it uninitialised; _check_ready() guards use.
         if ct is None or cst is None:
-            return data  # partial init (e.g. deserialisation)
+            return data
 
-        model_name = data.get("model", "densenet_example")
-        mode = data.get("mode", "NTCP")
-        cst_masks = data.get("cst_masks")
+        spec = data.get("model")
+        nn_model, preprocessor = cls._resolve_model(spec)
+        if not isinstance(spec, str):
+            # Preloaded objects — keep the serialised field a plain string.
+            data["model"] = "<preloaded>"
 
-        # TODO: Better NTCP as default.
-        # Category derived from mode
-        category = "ntcp" if mode == "NTCP" else "tcp"
-
-        # Load CNN + JSON config via the model importer
-        nn_model, config = load_model(model_name, category=category)
         device = next(nn_model.parameters()).device
+        preprocessor.configure(ct, cst, cst_masks=data.get("cst_masks"), device=device)
 
         data["nn_model"] = nn_model
-        data["loaded_config"] = config
-
-        # Build preprocessor from config
-        preprocessor = OutcomeCnnPreprocessor(config=config, device=device)
-        preprocessor.prepare(ct, cst, cst_masks=cst_masks)
-
-        # Align dose grid with the one the optimizer will use
-        dose_grid = cls._resolve_dose_grid(pln, ct)
-        if dose_grid is not None:
-            preprocessor.set_dose_grid(dose_grid)
-
         data["preprocessor"] = preprocessor
-
         return data
 
-    # TODO: This here can be done better. pln is not properly validated so
-    # this here needs to be done
     @staticmethod
-    def _resolve_dose_grid(pln: Any, ct: Any) -> Optional[Grid]:
-        """Derive the dose-calc grid from ``pln.prop_dose_calc`` (mirrors the engine)."""
-        if pln is None:
-            return None
-        prop = getattr(pln, "prop_dose_calc", None) or {}
-        spec = prop.get("dose_grid") if isinstance(prop, dict) else None
-        if spec is None:
-            return None
-        if isinstance(spec, Grid):
-            return spec
-        try:
-            return Grid.model_validate(spec)
-        except Exception:
-            resolution = spec["resolution"] if isinstance(spec, dict) else spec
-            return ct.grid.resample(resolution)
+    def _resolve_model(spec: Any) -> tuple[Any, Any]:
+        """Resolve ``model`` into an ``(nn_model, preprocessor)`` pair."""
+        if isinstance(spec, (tuple, list)) and len(spec) == 2 and hasattr(spec[0], "forward"):
+            return spec[0], spec[1]
+        if isinstance(spec, str):
+            if Path(spec).is_dir():
+                return load_model(local_dir=spec)
+            return load_model(name=spec)
+        raise TypeError(
+            "OutcomeCNN 'model' must be a model name, a local directory path, "
+            "or a preloaded (model, preprocessor) tuple."
+        )
 
     # ------------------------------------------------------------------
     # Objective interface
     # ------------------------------------------------------------------
 
-    def compute_objective(self, dose_values) -> float:
-        """Compute the outcome probability.
+    def preprocess_image_reference_parameters(self, target_grid, index_list=None) -> None:
+        """Wire the optimisation dose grid into the preprocessor.
 
-        Returns
-        -------
-        float
-            Probability (NTCP) or its negative (TCP).
-            Returns ``0.0`` when *monitor_only* is active.
+        Called once by the planning problem for every objective with
+        ``target_grid=dij.dose_grid``; this is where the CNN objective learns the
+        grid its dose vector lives on.
         """
+        super().preprocess_image_reference_parameters(target_grid, index_list)
+        if self.preprocessor is not None:
+            self.preprocessor.set_dose_grid(target_grid)
+            self._dose_dims = tuple(int(d) for d in target_grid.dimensions)
+
+    def compute_objective(self, dose_values) -> float:
+        """Compute the outcome probability (0.0 when *monitor_only*)."""
         self._check_ready()
 
         prob = self._forward_no_grad(dose_values)
@@ -178,58 +181,44 @@ class OutcomeCNN(Objective):
 
         if self.monitor_only:
             return 0.0
-
         return -prob if self.mode == "TCP" else prob
 
     def compute_gradient(self, dose_values):
         """Compute the gradient of the outcome probability w.r.t. dose.
 
-        Returns
-        -------
-        Array
-            1-D gradient array (Fortran order) matching ``dose_values``, in
-            the same array namespace as the input.
+        Returns a 1-D array matching ``dose_values`` in the same array namespace
+        and device as the input.
         """
         self._check_ready()
 
         xp = array_api_compat.array_namespace(dose_values)
         self.iteration_count += 1
+        n = array_api_compat.size(dose_values)
 
-        # monitor_only: objective already logged probability, just return zeros
         if self.monitor_only:
-            return xp.zeros(array_api_compat.size(dose_values), dtype=xp.float32)
+            return xp.zeros(n, dtype=xp.float32)
 
-        # Warmup: probability already logged by compute_objective, return zero gradient
         if self.iteration_count <= self.warmup_iterations:
             if self.iteration_count == self.warmup_iterations:
                 logger.info(
                     "Outcome CNN warmup complete after %d iterations. Activating gradient.",
                     self.warmup_iterations,
                 )
-            return xp.zeros(array_api_compat.size(dose_values), dtype=xp.float32)
+            return xp.zeros(n, dtype=xp.float32)
 
-        # Build input with gradient tracking on dose
-        dose_model, ct_tensor, mask_tensor, dose_leaf = self.preprocessor.build_input_tensor(
-            dose_values, requires_grad=True
-        )
-
-        # Forward pass — separate args so model correctly identifies dose vs ct/mask
-        logit = self.nn_model(dose_model, mask_tensor, ct_tensor)
-        prob = torch.sigmoid(logit).sum()
-
-        # Backward pass — gradient flows through grid_sample to dose_leaf
+        inputs = self.preprocessor.preprocess(dose_values, requires_grad=True)
+        out = self.nn_model(*inputs)
+        prob = self.preprocessor.postprocess(out)
         prob.backward()
 
-        # dose_leaf is (Z, Y, X); C-order flatten equals Fortran-order flatten of (X, Y, Z)
-        grad = dose_leaf.grad.detach().contiguous().to(dtype=torch.float32)
-
+        grad = self.preprocessor.gradient_to_dose_grid()
         if self.mode == "TCP":
             grad = -grad
 
-        if self.debug_grad_dir is not None:
+        if self.debug_plots is not None:
             self._save_grad_plot(grad)
 
-        return xp_utils.to_namespace(xp, grad.reshape(-1))
+        return xp_utils.to_namespace(xp, grad)
 
     # ------------------------------------------------------------------
     # Utility
@@ -241,10 +230,11 @@ class OutcomeCNN(Objective):
             return {"ntcp_history": list(self.ntcp_history)}
         return {}
 
-    def set_dose_grid(self, dose_grid: Grid) -> None:
+    def set_dose_grid(self, dose_grid) -> None:
         """Update the dose grid (recomputes sampling coordinates)."""
         self._check_ready()
         self.preprocessor.set_dose_grid(dose_grid)
+        self._dose_dims = tuple(int(d) for d in dose_grid.dimensions)
 
     def reset_history(self) -> None:
         """Clear history and iteration counter."""
@@ -265,9 +255,36 @@ class OutcomeCNN(Objective):
 
     def _forward_no_grad(self, dose_values) -> float:
         """Run a forward pass without gradient tracking."""
-        dose_model, ct_tensor, mask_tensor = self.preprocessor.build_input_tensor(
-            dose_values, requires_grad=False
-        )
+        inputs = self.preprocessor.preprocess(dose_values, requires_grad=False)
         with torch.no_grad():
-            logit = self.nn_model(dose_model, mask_tensor, ct_tensor)
-            return torch.sigmoid(logit.view(-1)[0]).item()
+            out = self.nn_model(*inputs)
+            return float(self.preprocessor.postprocess(out).item())
+
+    def _save_grad_plot(self, grad) -> None:
+        """Save a mid-axial slice of the dose-grid gradient to ``debug_plots``."""
+        try:
+            import matplotlib  # noqa: PLC0415
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt  # noqa: PLC0415
+        except ImportError:
+            logger.warning("matplotlib not available; skipping debug_plots.")
+            return
+
+        if self._dose_dims is None:
+            logger.warning("Dose grid dimensions unknown; skipping debug plot.")
+            return
+
+        grad_np = xp_utils.to_numpy(grad).reshape(self._dose_dims, order="F")
+        z = grad_np.shape[2] // 2
+
+        out_dir = Path(self.debug_plots)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        fig, ax = plt.subplots()
+        im = ax.imshow(grad_np[:, :, z].T, origin="lower")
+        fig.colorbar(im, ax=ax)
+        ax.set_title(f"NTCP gradient (iter {self.iteration_count}, z={z})")
+        fig.savefig(out_dir / f"grad_{self._debug_index:04d}.png", dpi=100)
+        plt.close(fig)
+        self._debug_index += 1

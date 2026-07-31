@@ -1,4 +1,10 @@
-"""Tests for OutcomeCNN objective and OutcomeCnnPreprocessor."""
+"""Tests for the OutcomeCNN objective.
+
+The preprocessor now ships *with* the model (from HuggingFace), so these tests
+use a tiny self-contained torch model and a dummy preprocessor implementing the
+outcome contract, and patch ``load_model`` to return them. No repo models are
+required.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-import SimpleITK as sitk
 
 try:
     import torch
@@ -22,360 +27,150 @@ if _HAS_TORCH:
     # Limit torch threads to avoid Windows + CUDA-built torch crashes in pytest
     torch.set_num_threads(1)
 
-    from pyRadPlan.optimization.objectives.model.preprocessor._outcome_cnn_preprocessor import (
-        OutcomeCnnPreprocessor,
-    )
+    from pyRadPlan.ai_models import BasePreprocessor
 
+_CNN_MODULE = "pyRadPlan.optimization.objectives.model._cnn"
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-# Minimal JSON config matching the densenet_example structure
+# Minimal preprocessing config (the dummy preprocessor barely uses it).
 DUMMY_CONFIG = {
-    "model_name": "DummyModel",
-    "model_preprocessing": {
-        "modality": {
-            "dose": {"extract": False, "normalization_value": 70.0},
-            "ct": {"window": [-1000, 1000]},
-            "mask": {"collaps": True},
-        },
-        "input_dimensions": [8, 8, 4],
-        "input_spacing": [3.0, 3.0, 6.0],
-        "center": "target",
-    },
-    "model_input": {
-        "type_order": ["dose", "ct", "mask"],
-    },
-    "model_params": {},
+    "input_dimensions": [8, 8, 4],
+    "input_spacing": [3.0, 3.0, 6.0],
+    "center": "target",
+    "type_order": ["dose"],
+    "modality": {"dose": {"normalization_value": 70.0}},
 }
 
 
-def _make_sitk_image(size=(20, 20, 10), spacing=(2.0, 2.0, 4.0), origin=(0.0, 0.0, 0.0)):
-    """Create a SimpleITK image filled with a constant HU value."""
-    arr = np.zeros(size[::-1], dtype=np.float32)  # (Z, Y, X)
-    img = sitk.GetImageFromArray(arr)
-    img.SetSpacing(spacing)
-    img.SetOrigin(origin)
-    img.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
-    return img
-
-
-def _make_mask_image(size=(20, 20, 10), spacing=(2.0, 2.0, 4.0), origin=(0.0, 0.0, 0.0)):
-    """Create a binary mask with a small sphere in the centre."""
-    arr = np.zeros(size[::-1], dtype=np.uint8)
-    cz, cy, cx = arr.shape[0] // 2, arr.shape[1] // 2, arr.shape[2] // 2
-    arr[cz - 1 : cz + 2, cy - 1 : cy + 2, cx - 1 : cx + 2] = 1
-    img = sitk.GetImageFromArray(arr)
-    img.SetSpacing(spacing)
-    img.SetOrigin(origin)
-    img.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
-    return img
-
-
-class FakeVOI:
-    """Minimal VOI-like object for testing."""
-
-    def __init__(self, name, mask):
-        self.name = name
-        self.mask = mask
+# ---------------------------------------------------------------------------
+# Fakes / dummies
+# ---------------------------------------------------------------------------
 
 
 class FakeGrid:
-    """Minimal Grid-like object for testing."""
+    """Minimal Grid-like object exposing what set_dose_grid needs."""
 
-    def __init__(self, dimensions, origin, resolution_vector, direction):
+    def __init__(self, dimensions, origin=(0.0, 0.0, 0.0), resolution_vector=(3.0, 3.0, 6.0)):
         self.dimensions = dimensions
         self.origin = np.array(origin)
         self.resolution_vector = np.array(resolution_vector)
-        self.direction = np.array(direction).reshape(3, 3)
+        self.direction = np.eye(3)
 
 
 class FakeCT:
-    def __init__(self, cube_hu, grid):
-        self.cube_hu = cube_hu
+    def __init__(self, grid):
         self.grid = grid
 
 
 class FakeCST:
-    def __init__(self, vois, target_com):
-        self.vois = vois
-        self._target_com = target_com
+    def __init__(self, target_com=(12.0, 12.0, 12.0)):
+        self.vois = []
+        self._target_com = np.array(target_com)
 
     def target_center_of_mass(self):
         return self._target_com
 
 
-@pytest.fixture
-def ct_and_cst():
-    """Create matching fake CT and CST objects."""
-    size = (20, 20, 10)
-    spacing = (2.0, 2.0, 4.0)
-    origin = (0.0, 0.0, 0.0)
-
-    ct_img = _make_sitk_image(size, spacing, origin)
-    mask_a = _make_mask_image(size, spacing, origin)
-    mask_b = _make_mask_image(size, spacing, origin)
-
-    grid = FakeGrid(
-        dimensions=size,
-        origin=origin,
-        resolution_vector=spacing,
-        direction=[1, 0, 0, 0, 1, 0, 0, 0, 1],
-    )
-    ct = FakeCT(ct_img, grid)
-
-    vois = [
-        FakeVOI("parotid_lt", mask_a),
-        FakeVOI("parotid_rt", mask_b),
-        FakeVOI("TARGET", _make_mask_image(size, spacing, origin)),
-    ]
-    # Target COM near the centre of the image
-    target_com = np.array(
-        [
-            origin[0] + spacing[0] * size[0] / 2,
-            origin[1] + spacing[1] * size[1] / 2,
-            origin[2] + spacing[2] * size[2] / 2,
-        ]
-    )
-    cst = FakeCST(vois, target_com)
-
-    return ct, cst
-
-
-@pytest.fixture
-def preprocessor(ct_and_cst):
-    """Return a prepared preprocessor."""
-    ct, cst = ct_and_cst
-    pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-    pp.prepare(ct, cst, cst_masks=["parotid_lt", "parotid_rt"])
-    return pp
-
-
 if _HAS_TORCH:
 
-    class DummyCNN(torch.nn.Module):
-        """Trivial CNN that accepts a single concatenated input tensor."""
+    class DummyNet(torch.nn.Module):
+        """Trivial model: a single logit that depends linearly on the input.
 
-        def __init__(self, in_channels=3):
+        Uses the mean and a small weight so the logit stays in a range where the
+        sigmoid gradient does not underflow to zero.
+        """
+
+        def __init__(self):
             super().__init__()
-            self.pool = torch.nn.AdaptiveAvgPool3d(1)
-            self.fc = torch.nn.Linear(in_channels, 1)
+            self.w = torch.nn.Parameter(torch.tensor([0.01]))
 
-        def forward(self, x):
-            # x: (B, C, Z, Y, X)
-            pooled = self.pool(x).view(x.size(0), -1)
-            return self.fc(pooled)
+        def forward(self, dose):
+            return dose.reshape(-1).mean() * self.w
+
+    class DummyOutcomePreprocessor(BasePreprocessor):
+        """Dummy preprocessor implementing the outcome contract.
+
+        The "model grid" equals the dose grid, so preprocessing is just a
+        namespace-agnostic conversion of the flat dose vector to a torch leaf.
+        """
+
+        def __init__(self, config=None):
+            super().__init__(config)
+            self.device = torch.device("cpu")
+            self._dims = None
+            self._dose_leaf = None
+
+        def configure(self, ct, cst, cst_masks=None, device=None):
+            self.device = torch.device(device) if device is not None else torch.device("cpu")
+
+        def set_dose_grid(self, dose_grid):
+            self._dims = tuple(int(d) for d in dose_grid.dimensions)
+
+        def preprocess(self, inputs, requires_grad=False):
+            from pyRadPlan.core import xp_utils
+
+            t = xp_utils.to_namespace(torch, inputs).to(dtype=torch.float32).reshape(-1)
+            if requires_grad:
+                t = t.detach().clone().requires_grad_(True)
+                self._dose_leaf = t
+            else:
+                self._dose_leaf = None
+            return (t,)
+
+        def postprocess(self, outputs):
+            return torch.sigmoid(outputs).sum()
+
+        @property
+        def dose_leaf(self):
+            return self._dose_leaf
+
+        def gradient_to_dose_grid(self):
+            return self._dose_leaf.grad.detach().reshape(-1).to(torch.float32)
 
 
-# ---------------------------------------------------------------------------
-# Preprocessor tests
-# ---------------------------------------------------------------------------
+N_VOXELS = 8 * 8 * 4
 
 
-@requires_torch
-class TestOutcomeCnnPreprocessor:
-    def test_init_parses_config(self):
-        pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-        assert pp.input_dimensions == (8, 8, 4)
-        assert pp.input_spacing == (3.0, 3.0, 6.0)
-        assert pp.type_order == ["dose", "ct", "mask"]
-        assert pp.dose_config["normalization_value"] == 70.0
+@pytest.fixture
+def ct_and_cst():
+    grid = FakeGrid(dimensions=(8, 8, 4))
+    return FakeCT(grid), FakeCST()
 
-    def test_physical_extent_default(self):
-        """When input_physical_extent is absent, it equals spacing * dim."""
-        pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-        expected = (8 * 3.0, 8 * 3.0, 4 * 6.0)
-        assert pp.input_physical_extent == expected
 
-    def test_prepare_creates_tensors(self, ct_and_cst):
-        ct, cst = ct_and_cst
-        pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-        pp.prepare(ct, cst, cst_masks=["parotid_lt", "parotid_rt"])
+def _make_obj(ct, cst, **overrides):
+    """Build an OutcomeCNN with patched load_model returning dummies."""
+    dummy_model = DummyNet()
+    dummy_model.eval()
+    dummy_pp = DummyOutcomePreprocessor(DUMMY_CONFIG)
 
-        assert pp._ct_tensor is not None
-        assert pp._mask_tensor is not None
-        assert pp._grid_sample_coords is not None
+    with patch(f"{_CNN_MODULE}.load_model", return_value=(dummy_model, dummy_pp)):
+        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
 
-    def test_ct_tensor_shape(self, preprocessor):
-        # (1, 1, Z, Y, X) — Z=4, Y=8, X=8 from input_dimensions
-        assert preprocessor._ct_tensor.shape == (1, 1, 4, 8, 8)
+        params = dict(priority=100.0, model="dummy", mode="NTCP", ct=ct, cst=cst)
+        params.update(overrides)
+        obj = OutcomeCNN(**params)
 
-    def test_ct_normalized_to_01(self, preprocessor):
-        """CT values should be in [0, 1] after window normalization."""
-        ct_vals = preprocessor._ct_tensor
-        assert ct_vals.min() >= 0.0
-        assert ct_vals.max() <= 1.0
+    # Wire the dose grid the same way the optimizer would.
+    obj.preprocess_image_reference_parameters(target_grid=FakeGrid(dimensions=(8, 8, 4)))
+    return obj
 
-    def test_mask_tensor_shape_collapsed(self, preprocessor):
-        # collaps=True → 1 channel even though 2 masks provided
-        assert preprocessor._mask_tensor.shape == (1, 1, 4, 8, 8)
 
-    def test_mask_no_collapse(self, ct_and_cst):
-        """When collaps=False, each mask is a separate channel."""
-        config = {
-            **DUMMY_CONFIG,
-            "model_preprocessing": {
-                **DUMMY_CONFIG["model_preprocessing"],
-                "modality": {
-                    **DUMMY_CONFIG["model_preprocessing"]["modality"],
-                    "mask": {"collaps": False},
-                },
-            },
-        }
-        ct, cst = ct_and_cst
-        pp = OutcomeCnnPreprocessor(config=config, device=torch.device("cpu"))
-        pp.prepare(ct, cst, cst_masks=["parotid_lt", "parotid_rt"])
-        assert pp._mask_tensor.shape == (1, 2, 4, 8, 8)
+@pytest.fixture
+def outcome_obj(ct_and_cst):
+    ct, cst = ct_and_cst
+    return _make_obj(ct, cst, warmup_iterations=2)
 
-    def test_grid_sample_coords_shape(self, preprocessor):
-        # (1, mZ, mY, mX, 3) with mZ=4, mY=8, mX=8
-        assert preprocessor._grid_sample_coords.shape == (1, 4, 8, 8, 3)
 
-    def test_build_input_no_grad(self, preprocessor):
-        dose_size = preprocessor._dose_grid["size"]
-        n_voxels = dose_size[0] * dose_size[1] * dose_size[2]
-        dose = np.random.rand(n_voxels).astype(np.float32)
-
-        tensor = preprocessor.build_input_tensor(dose, requires_grad=False)
-        assert isinstance(tensor, torch.Tensor)
-        # 3 channels: dose(1) + ct(1) + mask(1)
-        assert tensor.shape == (1, 3, 4, 8, 8)
-
-    def test_build_input_with_grad(self, preprocessor):
-        dose_size = preprocessor._dose_grid["size"]
-        n_voxels = dose_size[0] * dose_size[1] * dose_size[2]
-        dose = np.random.rand(n_voxels).astype(np.float32)
-
-        result = preprocessor.build_input_tensor(dose, requires_grad=True)
-        assert isinstance(result, tuple)
-        input_tensor, dose_leaf = result
-        assert input_tensor.shape == (1, 3, 4, 8, 8)
-        assert dose_leaf.requires_grad is True
-
-    def test_dose_normalization(self, preprocessor):
-        """Dose channel should be divided by normalization_value (70)."""
-        dose_size = preprocessor._dose_grid["size"]
-        n_voxels = dose_size[0] * dose_size[1] * dose_size[2]
-        dose = np.full(n_voxels, 70.0, dtype=np.float32)
-
-        tensor = preprocessor.build_input_tensor(dose, requires_grad=False)
-        # After normalisation by 70, non-zero resampled dose should be ~1.0
-        dose_channel = tensor[0, 0]  # (Z, Y, X)
-        # At least some values should be close to 1.0 (those inside the grid)
-        assert dose_channel.max().item() <= 1.1
-        assert dose_channel.max().item() > 0.5  # not all zeros
-
-    def test_dose_extraction(self, ct_and_cst):
-        """When extract=True, dose is masked element-wise."""
-        config = {
-            **DUMMY_CONFIG,
-            "model_preprocessing": {
-                **DUMMY_CONFIG["model_preprocessing"],
-                "modality": {
-                    **DUMMY_CONFIG["model_preprocessing"]["modality"],
-                    "dose": {"extract": True, "normalization_value": 70.0},
-                },
-            },
-        }
-        ct, cst = ct_and_cst
-        pp = OutcomeCnnPreprocessor(config=config, device=torch.device("cpu"))
-        pp.prepare(ct, cst, cst_masks=["parotid_lt"])
-
-        n = pp._dose_grid["size"][0] * pp._dose_grid["size"][1] * pp._dose_grid["size"][2]
-        dose = np.full(n, 70.0, dtype=np.float32)
-        tensor = pp.build_input_tensor(dose)
-
-        dose_channel = tensor[0, 0]
-        mask_channel = tensor[0, 2]  # mask is third in type_order
-
-        # Where mask is zero, dose should be zero
-        zero_mask = mask_channel == 0
-        assert torch.all(dose_channel[zero_mask] == 0.0)
-
-    def test_gradient_flows_through_grid_sample(self, preprocessor):
-        """Backward pass through grid_sample gives non-zero gradient on dose_leaf."""
-        dose_size = preprocessor._dose_grid["size"]
-        n_voxels = dose_size[0] * dose_size[1] * dose_size[2]
-        dose = np.random.rand(n_voxels).astype(np.float32) * 70.0
-
-        input_tensor, dose_leaf = preprocessor.build_input_tensor(dose, requires_grad=True)
-
-        # Simulate model: just sum the dose channel
-        loss = input_tensor[:, 0].sum()
-        loss.backward()
-
-        assert dose_leaf.grad is not None
-        assert dose_leaf.grad.shape == dose_leaf.shape
-        # At least some gradients should be non-zero
-        assert dose_leaf.grad.abs().sum().item() > 0
-
-    def test_set_dose_grid(self, preprocessor):
-        """set_dose_grid recomputes coordinates for a different grid."""
-        new_grid = FakeGrid(
-            dimensions=(10, 10, 5),
-            origin=(1.0, 1.0, 1.0),
-            resolution_vector=(3.0, 3.0, 6.0),
-            direction=[1, 0, 0, 0, 1, 0, 0, 0, 1],
-        )
-        preprocessor.set_dose_grid(new_grid)
-        assert preprocessor._dose_grid["size"] == (10, 10, 5)
-        assert preprocessor._grid_sample_coords is not None
-
-    def test_3d_dose_input(self, preprocessor):
-        """build_input_tensor should accept 3D (X, Y, Z) dose arrays."""
-        dx, dy, dz = preprocessor._dose_grid["size"]
-        dose_3d = np.random.rand(dx, dy, dz).astype(np.float32)
-        tensor = preprocessor.build_input_tensor(dose_3d)
-        assert tensor.shape == (1, 3, 4, 8, 8)
-
-    def test_unknown_voi_raises(self, ct_and_cst):
-        ct, cst = ct_and_cst
-        pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-        with pytest.raises(ValueError, match="not found"):
-            pp.prepare(ct, cst, cst_masks=["nonexistent_voi"])
-
-    def test_not_prepared_raises(self):
-        pp = OutcomeCnnPreprocessor(config=DUMMY_CONFIG, device=torch.device("cpu"))
-        dose = np.zeros(100, dtype=np.float32)
-        with pytest.raises(RuntimeError, match="not prepared"):
-            pp.build_input_tensor(dose)
+def _dose():
+    return np.random.rand(N_VOXELS).astype(np.float32) * 50.0
 
 
 # ---------------------------------------------------------------------------
-# OutcomeCNN objective tests
+# Tests
 # ---------------------------------------------------------------------------
 
 
 @requires_torch
 class TestOutcomeCNN:
-    """Tests for the OutcomeCNN objective.
-
-    These tests patch the model importer to avoid needing real model weights.
-    """
-
-    @pytest.fixture
-    def outcome_obj(self, ct_and_cst):
-        ct, cst = ct_and_cst
-        dummy_model = DummyCNN(in_channels=3)
-        dummy_model.eval()
-
-        with patch("pyRadPlan.optimization.objectives.model._cnn.load_model") as mock_load:
-            mock_load.return_value = (dummy_model, DUMMY_CONFIG)
-            from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
-
-            obj = OutcomeCNN(
-                priority=100.0,
-                model="dummy",
-                mode="NTCP",
-                warmup_iterations=2,
-                ct=ct,
-                cst=cst,
-                stf=None,
-                cst_masks=["parotid_lt", "parotid_rt"],
-            )
-        return obj
-
     def test_construction(self, outcome_obj):
         assert outcome_obj.model == "dummy"
         assert outcome_obj.mode == "NTCP"
@@ -383,162 +178,116 @@ class TestOutcomeCNN:
         assert outcome_obj.nn_model is not None
         assert outcome_obj.preprocessor is not None
 
+    def test_preloaded_model_tuple(self, ct_and_cst):
+        """model= accepts a preloaded (model, preprocessor) tuple (no load_model)."""
+        ct, cst = ct_and_cst
+        dummy_model = DummyNet()
+        dummy_pp = DummyOutcomePreprocessor(DUMMY_CONFIG)
+
+        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+
+        obj = OutcomeCNN(
+            priority=1.0,
+            model=(dummy_model, dummy_pp),
+            mode="NTCP",
+            ct=ct,
+            cst=cst,
+        )
+        obj.set_dose_grid(FakeGrid(dimensions=(8, 8, 4)))
+        assert obj.model == "<preloaded>"
+        assert obj.nn_model is dummy_model
+        assert obj.preprocessor is dummy_pp
+        assert isinstance(obj.compute_objective(_dose()), float)
+
     def test_compute_objective_returns_float(self, outcome_obj):
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-        val = outcome_obj.compute_objective(dose)
+        val = outcome_obj.compute_objective(_dose())
         assert isinstance(val, float)
         assert 0.0 <= val <= 1.0
 
-    def test_compute_objective_monitor_only(self, ct_and_cst):
+    def test_monitor_only_objective_is_zero(self, ct_and_cst):
         ct, cst = ct_and_cst
-        dummy_model = DummyCNN(in_channels=3)
-        dummy_model.eval()
+        obj = _make_obj(ct, cst, monitor_only=True)
+        assert obj.compute_objective(_dose()) == 0.0
+        # ...but the probability is still logged.
+        assert len(obj.ntcp_history) == 1
 
-        with patch("pyRadPlan.optimization.objectives.model._cnn.load_model") as mock_load:
-            mock_load.return_value = (dummy_model, DUMMY_CONFIG)
-            from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
-
-            obj = OutcomeCNN(
-                priority=100.0,
-                model="dummy",
-                mode="NTCP",
-                monitor_only=True,
-                ct=ct,
-                cst=cst,
-                cst_masks=["parotid_lt"],
-            )
-
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-        assert obj.compute_objective(dose) == 0.0
-
-    def test_compute_gradient_shape(self, outcome_obj):
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-
-        # First 2 calls are warmup → zeros
-        grad1 = outcome_obj.compute_gradient(dose)
-        assert grad1.shape == (n,)
-        assert np.all(grad1 == 0.0)
-
-        grad2 = outcome_obj.compute_gradient(dose)
-        assert np.all(grad2 == 0.0)
-
-        # Third call: warmup over → real gradient
-        grad3 = outcome_obj.compute_gradient(dose)
-        assert grad3.shape == (n,)
-        assert grad3.dtype == np.float32
+    def test_monitor_only_gradient_is_zero(self, ct_and_cst):
+        ct, cst = ct_and_cst
+        obj = _make_obj(ct, cst, monitor_only=True)
+        grad = obj.compute_gradient(_dose())
+        assert np.all(grad == 0.0)
 
     def test_warmup_then_active_gradient(self, outcome_obj):
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
+        dose = _dose()
 
-        # Exhaust warmup
-        for _ in range(2):
-            outcome_obj.compute_gradient(dose)
+        # First 2 calls are warmup -> zeros.
+        grad1 = outcome_obj.compute_gradient(dose)
+        assert grad1.shape == (N_VOXELS,)
+        assert np.all(grad1 == 0.0)
+        assert np.all(outcome_obj.compute_gradient(dose) == 0.0)
 
-        # Now gradient should be non-trivial
-        grad = outcome_obj.compute_gradient(dose)
-        # At least some gradient values should be non-zero
-        assert np.any(grad != 0.0)
+        # Third call: warmup over -> real, non-zero gradient.
+        grad3 = outcome_obj.compute_gradient(dose)
+        assert grad3.shape == (N_VOXELS,)
+        assert grad3.dtype == np.float32
+        assert np.any(grad3 != 0.0)
 
-    def test_ntcp_history(self, outcome_obj):
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
+    def test_gradient_namespace_matches_input(self, ct_and_cst):
+        """Gradient comes back in the same namespace as the dose input."""
+        import array_api_compat
 
+        ct, cst = ct_and_cst
+        obj = _make_obj(ct, cst, warmup_iterations=0)
+        dose = _dose()
+        grad = obj.compute_gradient(dose)
+        assert array_api_compat.is_numpy_array(grad)
+
+    def test_tcp_mode_negates(self, ct_and_cst):
+        ct, cst = ct_and_cst
+        obj_ntcp = _make_obj(ct, cst, warmup_iterations=0, mode="NTCP")
+        obj_tcp = _make_obj(ct, cst, warmup_iterations=0, mode="TCP")
+
+        dose = _dose()
+        assert obj_tcp.compute_objective(dose) == pytest.approx(
+            -obj_ntcp.compute_objective(dose), abs=1e-6
+        )
+
+        grad_ntcp = obj_ntcp.compute_gradient(dose)
+        grad_tcp = obj_tcp.compute_gradient(dose)
+        np.testing.assert_allclose(grad_tcp, -grad_ntcp, atol=1e-6)
+
+    def test_ntcp_history_and_reset(self, outcome_obj):
+        dose = _dose()
         for _ in range(3):
-            outcome_obj.compute_gradient(dose)
+            outcome_obj.compute_objective(dose)
 
         hist = outcome_obj.get_ntcp_history()
         assert len(hist) == 3
         assert all(isinstance(v, float) for v in hist)
 
-    def test_reset_history(self, outcome_obj):
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-        outcome_obj.compute_gradient(dose)
-
         outcome_obj.reset_history()
         assert outcome_obj.ntcp_history == []
         assert outcome_obj.iteration_count == 0
 
-    def test_tcp_mode_negates(self, ct_and_cst):
-        """TCP mode should negate objective and gradient."""
+    def test_report_info(self, outcome_obj):
+        assert outcome_obj.report_info() == {}
+        outcome_obj.compute_objective(_dose())
+        assert "ntcp_history" in outcome_obj.report_info()
+
+    def test_dose_grid_wiring(self, ct_and_cst):
+        """preprocess_image_reference_parameters feeds the dose grid to the preprocessor."""
         ct, cst = ct_and_cst
-        dummy_model = DummyCNN(in_channels=3)
-        dummy_model.eval()
-
-        with patch("pyRadPlan.optimization.objectives.model._cnn.load_model") as mock_load:
-            mock_load.return_value = (dummy_model, DUMMY_CONFIG)
-            from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
-
-            obj_ntcp = OutcomeCNN(
-                priority=1.0,
-                model="dummy",
-                mode="NTCP",
-                ct=ct,
-                cst=cst,
-                cst_masks=["parotid_lt"],
-            )
-            obj_tcp = OutcomeCNN(
-                priority=1.0,
-                model="dummy",
-                mode="TCP",
-                ct=ct,
-                cst=cst,
-                cst_masks=["parotid_lt"],
-            )
-
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-
-        val_ntcp = obj_ntcp.compute_objective(dose)
-        val_tcp = obj_tcp.compute_objective(dose)
-        assert val_tcp == pytest.approx(-val_ntcp, abs=1e-6)
-
-    def test_monitor_only_gradient_is_zero(self, ct_and_cst):
-        ct, cst = ct_and_cst
-        dummy_model = DummyCNN(in_channels=3)
-        dummy_model.eval()
-
-        with patch("pyRadPlan.optimization.objectives.model._cnn.load_model") as mock_load:
-            mock_load.return_value = (dummy_model, DUMMY_CONFIG)
-            from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
-
-            obj = OutcomeCNN(
-                priority=1.0,
-                model="dummy",
-                mode="NTCP",
-                monitor_only=True,
-                ct=ct,
-                cst=cst,
-                cst_masks=["parotid_lt"],
-            )
-
-        n = 20 * 20 * 10
-        dose = np.random.rand(n).astype(np.float32) * 50
-        grad = obj.compute_gradient(dose)
-        assert np.all(grad == 0.0)
-        # But history should still be logged
-        assert len(obj.ntcp_history) == 1
-
-    def test_set_dose_grid(self, outcome_obj):
-        new_grid = FakeGrid(
-            dimensions=(10, 10, 5),
-            origin=(0.0, 0.0, 0.0),
-            resolution_vector=(3.0, 3.0, 6.0),
-            direction=[1, 0, 0, 0, 1, 0, 0, 0, 1],
-        )
-        outcome_obj.set_dose_grid(new_grid)
-        assert outcome_obj.preprocessor._dose_grid["size"] == (10, 10, 5)
+        obj = _make_obj(ct, cst)
+        obj.preprocess_image_reference_parameters(target_grid=FakeGrid(dimensions=(10, 10, 5)))
+        assert obj.preprocessor._dims == (10, 10, 5)
+        assert obj._dose_dims == (10, 10, 5)
 
     def test_not_initialised_raises(self):
         """Constructing without ct/cst then calling compute should raise."""
-        with patch("pyRadPlan.optimization.objectives.model._cnn.load_model"):
+        with patch(f"{_CNN_MODULE}.load_model"):
             from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
 
             obj = OutcomeCNN(model="dummy", mode="NTCP")
 
         with pytest.raises(RuntimeError, match="not initialised"):
-            obj.compute_objective(np.zeros(100, dtype=np.float32))
+            obj.compute_objective(np.zeros(N_VOXELS, dtype=np.float32))

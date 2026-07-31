@@ -67,21 +67,21 @@ stf = generate_stf(ct, cst, pln)
 # Optimization
 # Configure CNN-based NTCP objective for an OAR
 
-# Create the CNN objective (channels order for the model: [ct, dose, mask])
-# Keep handle to the CNN objective to access NTCP history after optimization
+# Keep handle to the CNN objective to access NTCP history after optimization.
+# `model` accepts a HuggingFace name, a local model directory, or a preloaded
+# (model, preprocessor) tuple. A matching HF repo must exist for the name below.
 ntcp_obj = OutcomeCNN(
     priority=150000.0,
-    model="densenet_xerostomia_photons",  # name to identify the folder with json pt and py
-    mode="NTCP",  # used to identify the folder with json pt and py
+    model="pyRadPlan-outcome-densenet-xerostomia-photons",
+    mode="NTCP",
     warmup_iterations=5,
     ct=ct,  # needed as model input
     cst=cst,  # needed as model input
-    pln=pln,  # needed for dose grid info
     cst_masks=[
         "Parotid_LT",
         "Parotid_RT",
-    ],  # if json is not "collapse":True, this order is important!
-    debug_grad_dir="debug_grads",
+    ],  # channel order matters unless the model collapses masks
+    debug_plots="debug_grads",
 )
 
 cst.vois[0].objectives = [  # PAROTID_LT

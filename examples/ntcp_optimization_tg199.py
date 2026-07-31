@@ -62,14 +62,13 @@ stf = generate_stf(ct, cst, pln)
 # Keep handle to the CNN objective to access NTCP history after optimization
 ntcp_obj = OutcomeCNN(
     priority=10000.0,
-    model="densenet_tg119_protons",  # name to identify the folder with json pt and py
-    mode="NTCP",  # used to identify the folder with json pt and py
+    model="pyRadPlan-outcome-ORPDenseNet-tg119",  # HF name, local dir, or (model, preprocessor)
+    mode="NTCP",
     warmup_iterations=5,
     ct=ct,
     cst=cst,
-    stf=stf,
-    cst_masks=["Core"],  # if json is not "collaps":True, this order is important!
-    # debug_grad_dir="debug_grads",
+    cst_masks=["Core"],  # channel order matters unless the model collapses masks
+    # debug_plots="debug_grads",
 )
 
 cst.vois[0].objectives = [
