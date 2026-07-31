@@ -39,7 +39,7 @@ def _nested_model_fields(model_cls: type[BaseModel]) -> dict[str, type[BaseModel
 
 
 #: Display names for sub-configuration sections (fallback: `_tab_title`).
-_SECTION_TITLES = {"xp": "XP (Backend)", "ai": "AI"}
+_SECTION_TITLES = {"xp": "XP (Backend)", "ai": "AI", "ai_models": "AI Models"}
 
 
 def _tab_title(field_name: str) -> str:

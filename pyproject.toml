@@ -72,6 +72,7 @@ matlab = ["matlabengine"]
 octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
+ai     = ["huggingface_hub", "safetensors"] # keep huggingface_hub even tho its covered by pydantic-ai for now
 
 dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 
@@ -178,6 +179,8 @@ authorized_licenses = [
   "mit",
   "mit license",
   "mit and apache-2.0",
+  "mpl-2.0 and mit",
+  "apache-2.0 and cnri-python",
   "mit-cmu",
   "cmu license (mit-cmu)",
   "isc",
