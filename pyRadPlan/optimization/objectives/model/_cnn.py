@@ -37,6 +37,7 @@ from typing import Any, ClassVar, Literal, Optional
 import logging
 
 import array_api_compat
+import numpy as np
 from pydantic import Field, PrivateAttr, model_validator
 
 try:
@@ -216,7 +217,7 @@ class OutcomeCNN(Objective):
             grad = -grad
 
         if self.debug_plots is not None:
-            self._save_grad_plot(grad)
+            self._save_grad_plot()
 
         return xp_utils.to_namespace(xp, grad)
 
@@ -260,8 +261,8 @@ class OutcomeCNN(Objective):
             out = self.nn_model(*inputs)
             return float(self.preprocessor.postprocess(out).item())
 
-    def _save_grad_plot(self, grad) -> None:
-        """Save a mid-axial slice of the dose-grid gradient to ``debug_plots``."""
+    def _save_grad_plot(self) -> None:
+        """Save a diverging heatmap of the *model-input* dose gradient."""
         try:
             import matplotlib  # noqa: PLC0415
 
@@ -271,20 +272,39 @@ class OutcomeCNN(Objective):
             logger.warning("matplotlib not available; skipping debug_plots.")
             return
 
-        if self._dose_dims is None:
-            logger.warning("Dose grid dimensions unknown; skipping debug plot.")
+        leaf = self.preprocessor.dose_leaf
+        if leaf.grad is None:
+            logger.warning("No gradient on the model-input leaf; skipping debug plot.")
             return
 
-        grad_np = xp_utils.to_numpy(grad).reshape(self._dose_dims, order="F")
-        z = grad_np.shape[2] // 2
+        grad = xp_utils.to_numpy(leaf.grad).squeeze()  # (mZ, mY, mX)
+        mask = xp_utils.to_numpy(self.preprocessor.mask_tensor)[0].max(axis=0)  # (mZ, mY, mX)
+
+        if self.mode == "TCP":
+            grad = -grad
+
+        # Axial slice with the most mask (fallback: strongest gradient).
+        if mask.any():
+            z = int(mask.sum(axis=(1, 2)).argmax())
+        else:
+            z = int(np.abs(grad).sum(axis=(1, 2)).argmax())
+
+        grad_slice = grad[z]  # (mY, mX)
+        mask_slice = mask[z]
+        amax = float(np.abs(grad_slice).max()) or 1.0  # symmetric range -> 0 is white
 
         out_dir = Path(self.debug_plots)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         fig, ax = plt.subplots()
-        im = ax.imshow(grad_np[:, :, z].T, origin="lower")
-        fig.colorbar(im, ax=ax)
-        ax.set_title(f"NTCP gradient (iter {self.iteration_count}, z={z})")
-        fig.savefig(out_dir / f"grad_{self._debug_index:04d}.png", dpi=100)
+        im = ax.imshow(grad_slice, cmap="bwr", vmin=-amax, vmax=amax, origin="lower")
+        fig.colorbar(im, ax=ax, label="gradient")
+        if mask_slice.any():
+            ax.contour(mask_slice, levels=[0.5], colors="k", linewidths=0.8)
+        my, mx = grad_slice.shape
+        ax.set_title(f"Model-input dose gradient (iter {self.iteration_count}, z={z}, {mx}x{my})")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        fig.savefig(out_dir / f"grad_{self._debug_index:04d}.png", dpi=120)
         plt.close(fig)
         self._debug_index += 1
