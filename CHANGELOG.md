@@ -14,9 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
 
 - GUI: File menu collecting all data I/O (load/import/export)
-- GUI: "Load Bundled Phantom" submenu in the File menu listing the phantoms shipped in `pyRadPlan/data/phantoms`
-- `pyRadPlanGUI` accepts a bundled phantom shorthand instead of a file path (e.g. `pyRadPlanGUI TG119`, case-insensitive)
-- `pyRadPlan.io.available_phantoms()`, `resolve_phantom()` and `load_phantom()` to discover and load bundled phantoms by name
 - GUI: resizable, collapsible main-window panels via splitters
 - GUI: workflow staleness indicators that flag outdated dose influence / results
 - GUI: objective count in the objectives widget header
@@ -34,6 +31,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ai_agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+- VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
+- IO: New extensible import/export framework in `pyRadPlan.io` with a layered design:
+  `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`,
+  `npz/`, `pickle/` and `sitk_based/` (NIfTI/NRRD/MetaImage)
+- IO: Top-level I/O API: `load_data(path)` (loads everything found into a dict: ct, cst, dose, ...)
+  and `save_data(ct=..., cst=..., dose=..., file_name=..., format=...)` with a smart default
+  format (`.mat`) and per-object file naming when no `file_name` is given
+- IO: Per-format low-level handlers (`MatlabHandler`, `DicomHandler`, `NpzHandler`) exposing
+  `load_ct`/`load_cst`/`load_dose`/`load_patient`/`load_data` and `save`; the individual
+  `*Importer`/`*Exporter` classes live in the backend submodules (e.g. `pyRadPlan.io.dicom`)
+- IO: DICOM import for CT series, RTSTRUCT, SEG and RTDOSE (orientation-aware, SimpleITK-backed),
+  and DICOM export for CT series, RTSTRUCT, SEG and RTDOSE. Structures export as RTSTRUCT by
+  default; pass `DicomExporter(path, structure_format="seg")` to export as SEG instead
+- IO: NumPy `.npz` backend (`NpzImporter`/`NpzExporter`/`NpzHandler`) for fast single-file
+  import/export of ct, cst and dose (VOIs stored as linear indices; geometry/metadata as JSON)
+- IO: SimpleITK-based backends under `pyRadPlan.io.sitk_based` — NIfTI (`NiftiHandler`, `.nii`/`.nii.gz`),
+  NRRD (`NrrdHandler`, `.nrrd`) and MetaImage (`MetaImageHandler`, `.mha`/`.mhd`) — sharing common
+  base classes. A patient maps to a folder (`ct`, `dose`, and a label-map `cst` + JSON sidecar;
+  NRRD/MetaImage also embed 3D-Slicer/`pyradplan_*` metadata). A single image file is read as a CT.
+- IO: Pickle backend (`PickleHandler`, `.pkl`/`.pickle`) for fast, full-fidelity single-file
+  import/export of ct, cst, dose and arbitrary extras. (Unpickling executes code; load only trusted files.)
+- IO: `load_binary_patient(ct_file, structure_paths, selections=...)` imports a *foreign* folder:
+  a CT from an arbitrarily named image file (values taken as HU) plus one binary mask file per
+  structure (mixed formats allowed); masks on a different grid are nearest-neighbor resampled onto
+  the CT. VOI names come from file stems, types from a name heuristic; per-file `selections` can
+  rename/re-type/ignore masks. Helpers `list_image_files`, `masks_to_cst`, `mask_file_to_voi`,
+  `read_ct_image` in `pyRadPlan.io.sitk_based`
+- IO: `DicomImporter` can enumerate its source (`list_ct_series()`, `list_structure_sets()`,
+  `list_doses()`) and load selectively (`load_ct(series_uid=...)`, `load_cst(struct_file=...)`,
+  `load_dose(dose_file=...)`)
+- GUI: "Load Folder" now routes to an import dialog: DICOM folders open a series/structure/dose
+  selection dialog; folders of image files open a binary import dialog with a CT file field and an
+  editable structure review table (name + TARGET/OAR/EXTERNAL/IGNORED type per mask)
+- GUI: loading a single bare image file (NIfTI/NRRD/MetaImage) asks what it represents: CT as a
+  new patient (clears the workspace), CT replacing only the current one (mismatched grids clear
+  the dependent structures/dose influence/results after a warning), structure(s) added to the
+  structure set (binary mask or multi-label label map incl. sidecar/embedded metadata; name
+  clashes get a numeric suffix), or a dose added to the result collection under a chosen name
+  (resampled onto the CT grid if needed). The dialog preselects the likely option from the pixel
+  data (`infer_image_kind`: unsigned integers -> structures, negative values -> CT in HU,
+  non-negative floats -> dose)
+- IO: `image_file_to_vois(ct, path)` reads a structure image file into VOIs — a single binary
+  mask becomes one VOI, a multi-label image becomes one VOI per label (using a JSON sidecar or
+  embedded `pyradplan_*` metadata for names/types when present)
+- `ParticleFredMCEngine.execution_timeout` (seconds, default `None` = wait indefinitely): aborts a
+  FRED run that exceeds the timeout, killing the whole FRED process tree (e.g. when the GPU is
+  occupied by another process)
 
 ### Changed
 
@@ -50,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
 - GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
 - docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
+- IO: Refactored the `pyRadPlan.io` package around the new framework. `load_patient`, `load_tg119`
+  and `validate_matrad_patient` remain available; the legacy `MatlabFileHandler` and top-level
+  `matfile` module were removed (low-level `.mat` read/write lives in `pyRadPlan.io.matlab`)
 
 ### Deprecated
 
@@ -57,6 +104,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
+  it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
+- IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it
+  now raises (a single image file holds one image — use a directory for both)
+- IO: `DicomHandler` ignored its `structure_format` argument (SEG export via the handler)
+- IO: exported RTSTRUCT files now reference the CT series/slices (`RTReferencedStudy` →
+  `RTReferencedSeries` → `ContourImageSequence`), so third-party viewers associate the structures
+  with the CT instead of relying on the frame-of-reference UID alone
+- IO: exported DICOM SEG files are now conformant `BINARY` segmentations (1-bit packed frames
+  instead of 8-bit pixels)
+- GUI: exporting a result quantity stored as a raw matRad array wrote it mis-oriented ((y,x,z) was
+  not transposed to (z,y,x)); saving a single quantity now also honors the chosen image format
+  instead of falling back to `.mat` for extension-less file names
 - GUI: DKFZ logo pinned to the top-left of the banner in wide windows
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - GUI: "Save / Keep Result" silently skipped every snake_case quantity (e.g. `physical_dose`), so snapshots lost the dose
@@ -83,9 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - multiple corresponding units for given quantities in the GUI
 - AI agents now log token usage and estimated cost (USD) after each run; toggle via `AiSettings.display_usage` (`PYRADPLAN_AI_DISPLAY_USAGE`)
 - `get_objectives_union()` exposing all registered objectives as a discriminated union, used to give the AI agent the exact objective schema
-
-### Changed
-- VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
 
 ### Fixed
 

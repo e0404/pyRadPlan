@@ -256,8 +256,17 @@ class StructureSet(PyRadPlanBaseModel):
         for i, voi in enumerate(self.vois):
             voi_list = voi.to_matrad(context=context)
             voi_list[0] = i
-            # TODO: set objectives here
-            voi_list[5] = {}
+            # Populate the objectives cell (matRad's cst{i,6}) from the VOI's objectives.
+            # Passthrough placeholders (e.g. empty dicts from imports) have no to_matrad.
+            objectives = []
+            for objective in voi.objectives:
+                exported = getattr(objective, "to_matrad", None)
+                if exported is None:
+                    continue
+                serialized = exported(context=context)
+                if serialized is not None:
+                    objectives.append(serialized)
+            voi_list[5] = objectives
 
             export_cell_list.append(voi_list)
 
