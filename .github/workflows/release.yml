@@ -52,15 +52,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Write release notes file
+        env:
+          ANNOTATION: ${{ steps.tag_annotation.outputs.annotation }}
+          CHANGES: ${{ steps.changelog.outputs.changes }}
         run: |
           {
-            if [[ -n "${{ steps.tag_annotation.outputs.annotation }}" ]]; then
-              echo "${{ steps.tag_annotation.outputs.annotation }}"
+            if [[ -n "$ANNOTATION" ]]; then
+              echo "$ANNOTATION"
               echo ""
               echo "---"
               echo ""
             fi
-            echo "${{ steps.changelog.outputs.changes }}"
+            echo "$CHANGES"
           } > RELEASE_NOTES.md
 
       - name: Upload release notes as artifact
