@@ -1090,3 +1090,70 @@ def test_voi_visible_color_validator(generic_input_3d, color_in, color_expected)
     kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
     voi = create_voi(**kwargs, visible_color=color_in)
     assert voi.visible_color == color_expected
+
+
+def test_voi_objectives_from_matrad_object_array(generic_input_3d):
+    """A matRad cell array of objectives (numpy object array) validates per entry.
+
+    VOIs with more than one objective arrived as a numpy object array;
+    """
+    from pyRadPlan.optimization.objectives import Objective  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    o1 = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    o2 = {
+        "className": "DoseObjectives.matRad_SquaredDeviation",
+        "parameters": [50.0],
+        "penalty": 80.0,
+    }
+    obj_array = np.empty(2, dtype=object)
+    obj_array[0], obj_array[1] = o1, o2
+
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=obj_array)
+    assert len(voi.objectives) == 2
+    assert all(isinstance(o, Objective) for o in voi.objectives)
+    assert [o.name for o in voi.objectives] == ["Squared Overdosing", "Squared Deviation"]
+    assert [o.priority for o in voi.objectives] == [100.0, 80.0]
+    assert [o.parameters for o in voi.objectives] == [[30.0], [50.0]]
+
+
+def test_voi_objectives_from_wrapped_object_array(generic_input_3d):
+    """The ``[object_array]`` shape produced by the cst matRad importer also flattens."""
+    from pyRadPlan.optimization.objectives import Objective  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    o1 = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    o2 = {
+        "className": "DoseObjectives.matRad_SquaredDeviation",
+        "parameters": [50.0],
+        "penalty": 80.0,
+    }
+    obj_array = np.empty(2, dtype=object)
+    obj_array[0], obj_array[1] = o1, o2
+
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=[obj_array])
+    assert len(voi.objectives) == 2
+    assert all(isinstance(o, Objective) for o in voi.objectives)
+
+
+def test_voi_single_objective_dict_still_works(generic_input_3d):
+    """A single objective dict (the TG119 shape) is unaffected by the flattening."""
+    from pyRadPlan.optimization.objectives import SquaredOverdosing  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    obj = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=obj)
+    assert len(voi.objectives) == 1
+    assert isinstance(voi.objectives[0], SquaredOverdosing)

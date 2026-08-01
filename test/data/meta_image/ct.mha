@@ -1,0 +1,23 @@
+ObjectType = Image
+NDims = 3
+BinaryData = True
+BinaryDataByteOrderMSB = False
+CompressedData = True
+CompressedDataSize = 126
+TransformMatrix = 1 0 0 0 1 0 0 0 1
+Offset = -75 -150 -25
+CenterOfRotation = 0 0 0
+AnatomicalOrientation = RAI
+ElementSpacing = 10 15 5
+ITK_InputFilterName = NrrdImageIO
+ITK_original_direction = 1 0 0 0 1 0 0 0 1
+ITK_original_spacing = 10 15 5
+NRRD_kinds[0] = domain
+NRRD_kinds[1] = domain
+NRRD_kinds[2] = domain
+NRRD_space = left-posterior-superior
+DimSize = 15 20 10
+ElementType = MET_SHORT
+ElementDataFile = LOCAL
+x^í’1
+À0ûŒüÿJƒ„ÉRCá.cˆQÎZ÷â`àw×–7Ëö’[ãLW“6šãLWöEƒÿ*“NaRÁ†B¯º¡LmLº¥9œi*Ÿ¦0YÉµA¯ŠÜUÂNnfzUäî¨vr3Ó«"wG•°“›yÒ+Şbà‹;qÀ]

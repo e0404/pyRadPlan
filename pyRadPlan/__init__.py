@@ -37,7 +37,7 @@ from .dose._calc_dose import calc_dose_influence, calc_dose_forward
 from .optimization._fluence_optimization import fluence_optimization
 from .analysis._dvh import DVH, DVHCollection
 from .visualization import plot_slice, plot_multiple_slices
-from .io import load_patient, load_tg119
+from .io import load_patient, load_data, save_data, load_binary_patient, load_tg119
 from .core import xp_utils
 
 try:
@@ -74,5 +74,8 @@ __all__ = [
     "plot_slice",
     "plot_multiple_slices",
     "load_patient",
+    "load_data",
+    "save_data",
+    "load_binary_patient",
     "load_tg119",
 ]
