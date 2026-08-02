@@ -58,27 +58,8 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # %% [markdown]
-# To use the POLO model, we attach a binary clinical risk mask ($R_i \in \{0, 1\}$) to the influence matrix.
-# In clinical practice, this mask indicates voxels within $\le 4\text{ mm}$ distance to the ventricular system ($R_i = 1$).
-# For our TG119 surrogate phantom, we designate the central OAR ('Core') as the clinical risk structure ($R_i = 1$).
-# %%
-import SimpleITK as sitk
-from pyRadPlan.core.resample import resample_image
-
-oar_mask = cst.vois[0].mask
-risk_mask_img = resample_image(
-    oar_mask,
-    target_grid=dij.dose_grid,
-    interpolator=sitk.sitkNearestNeighbor,
-    extrapolate=False,
-)
-
-# Attach flattened binary risk mask to dij (auto-detected by POLO quantity during optimization)
-dij.binary_risk_mask = sitk.GetArrayViewFromImage(risk_mask_img).flatten()
-
-# %% [markdown]
-# When defining the objective functions and parameters, we add the POLO objective (e.g., `NTCPPOLO` or `LogSumExpConvPOLO`).
-# This penalizes distal high-LET deposition in high-dose regions overlapping our clinical risk mask.
+# When defining objective functions, we add the POLO objective (`NTCPPOLO`).
+# For our TG119 surrogate phantom, we pass `risk_voi_name="Core"` to designate the central OAR ('Core') as the periventricular risk structure.
 # %%
 # OAR ('Core' - simulating the ventricular risk structure)
 cst.vois[0].objectives = [
@@ -86,25 +67,50 @@ cst.vois[0].objectives = [
 ]
 # Target ('OuterTarget' - prescribed to 50.0 Gy cumulative course dose)
 cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=50.0)]
-# BODY
+
+# BODY (Evaluate general max dose over standard BODY)
 cst.vois[2].objectives = [
     MeanDose(priority=1.0, d_ref=0.0),
     SquaredOverdosing(priority=10.0, d_max=33.0),
-    NTCPPOLO(priority=100.0),  # Evaluate POLO NTCP over the entire normal brain (BODY)
 ]
+
+# Create 'BODY_minus_Target' VOI to prevent POLO from penalizing dose inside the tumor
+import SimpleITK as sitk
+from pyRadPlan.cst import VOI
+
+body_mask = next(v.mask for v in cst.vois if v.name == "BODY")
+target_mask = next(v.mask for v in cst.vois if v.name == "OuterTarget")
+
+# Subtract target mask from body mask
+body_minus_target_mask = sitk.MaskNegated(body_mask, target_mask)
+
+bmt_voi = VOI(
+    name="BODY_minus_Target",
+    voi_type="OAR",
+    mask=body_minus_target_mask,
+    grid=cst.vois[2].grid,
+    objectives=[NTCPPOLO(priority=100.0, risk_voi_name="Core")],
+)
+cst.vois.append(bmt_voi)
 
 # %% [markdown]
 # We calculate the optimized fluence and compute the resulting physical dose and POLO probability map.
 # %%
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
-# Compute the result
+# Compute standard physical result (without POLO quantity)
 result = dij.compute_result_ct_grid(fluence)
 
-# Explicitly compute total NTCP for reporting
-polo_qty = POLO(dij, dij.binary_risk_mask)
-polo_flat = polo_qty.compute(fluence).flat[0]
-total_ntcp = 1.0 - np.prod(1.0 - np.clip(polo_flat, 0.0, 1.0 - 1e-12))
+# Attach risk mask to polo_qty for result calculation (it evaluates POLO quantity on all voxels)
+polo_qty = POLO(dij, cst=cst, risk_voi_name="Core")
+result["polo_full"] = polo_qty.compute_ct_grid(fluence)
+
+# Manually zero out voxels outside of BODY_minus_Target
+# so the exported 3D image accurately reflects the optimized VOI.
+result["polo_masked"] = sitk.Mask(result["polo_full"], sitk.Cast(bmt_voi.mask, sitk.sitkUInt8))
+
+# Compute total NTCP for reporting (masked to the evaluation VOI)
+total_ntcp = polo_qty.compute_total_ntcp(fluence, mask=bmt_voi.mask)
 logging.info(f"Optimized Plan Total POLO NTCP: {total_ntcp:.4%}")
 
 # %% [markdown]
@@ -124,9 +130,18 @@ else:
         overlay=result["physical_dose"],
         view_slice=view_slice,
     )
+
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["polo"],
+        overlay=result["polo_full"],
         view_slice=view_slice,
+        overlay_cmap="inferno",
+    )
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["polo_masked"],
+        view_slice=view_slice,
+        overlay_cmap="inferno",
     )

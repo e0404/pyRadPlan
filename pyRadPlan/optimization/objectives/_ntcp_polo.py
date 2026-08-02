@@ -15,11 +15,18 @@ class NTCPPOLO(Objective):
 
     Evaluates the Normal Tissue Complication Probability (NTCP) based on the
     Probability of Lesion Origin (POLO) map.
+
+    For model formulation and paper references, see :class:`pyRadPlan.quantities.POLO`
+    (Ortkamp et al., Med Phys 2026, DOI: 10.1002/mp.70395).
     """
 
     name: Literal["NTCP POLO"] = "NTCP POLO"
     quantity: str = Field(
         default="polo", description="Quantity the objective is evaluated on (e.g. 'polo')."
+    )
+    risk_voi_name: str = Field(
+        default="Ventricles_4mm",
+        description="Name of the periventricular risk structure in CST (<= 4mm).",
     )
 
     def compute_objective(self, values: Array) -> Array:

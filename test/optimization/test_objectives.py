@@ -36,6 +36,12 @@ def test_objective_availability():
     assert "Mean Dose" in available_objectives
     assert "Min DVH" in available_objectives
     assert "Max DVH" in available_objectives
+    assert "NTCP POLO" in available_objectives
+    assert "Hellinger POLO" in available_objectives
+    assert "Squared Deviation POLO" in available_objectives
+    assert "Inverse KLD POLO" in available_objectives
+    assert "LogSumExp ConvPOLO" in available_objectives
+    assert "Hellinger ConvPOLO" in available_objectives
 
 
 def test_get_objective_str():

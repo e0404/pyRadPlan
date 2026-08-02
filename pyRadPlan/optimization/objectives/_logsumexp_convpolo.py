@@ -15,12 +15,19 @@ class LogSumExpConvPOLO(Objective):
 
     A convexified POLO objective using the Log-Sum-Exp approximation
     of the maximum function on the linear predictor (eta).
+
+    For model formulation and paper references, see :class:`pyRadPlan.quantities.POLO`
+    (Ortkamp et al., Med Phys 2026, DOI: 10.1002/mp.70395).
     """
 
     name: Literal["LogSumExp ConvPOLO"] = "LogSumExp ConvPOLO"
     quantity: str = Field(
         default="linear_polo",
         description="Quantity the objective is evaluated on (must be linear_polo or similar eta).",
+    )
+    risk_voi_name: str = Field(
+        default="Ventricles_4mm",
+        description="Name of the periventricular risk structure in CST (<= 4mm).",
     )
 
     def compute_objective(self, values: Array) -> Array:

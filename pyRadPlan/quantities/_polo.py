@@ -12,7 +12,16 @@ class POLO(FluenceDependentQuantity):
     Probability of Lesion Origin (POLO) model quantity.
 
     Predicts the probability of lesion origin based on Physical Dose, LETxDose,
-    and a binary risk factor mask.
+    and a binary risk factor mask (periventricular fringe <= 4mm).
+
+    References
+    ----------
+    .. [1] Bahn, E., Bauer, J., Harrabi, S. B., et al. (2020). Late contrast enhancing brain lesions
+           in proton-treated patients with low-grade glioma. Int J Radiat Oncol Biol Phys, 107(3),
+           571–578. https://doi.org/10.1016/j.ijrobp.2020.03.013
+    .. [2] Ortkamp, T., Sallem, H., Harrabi, S., Frank, M., Jäkel, O., Bauer, J., & Wahl, N. (2026).
+           Direct optimization of the probability of lesion origin in proton treatment planning for
+           low-grade glioma patients. Medical Physics, 53, e70395. https://doi.org/10.1002/mp.70395
     """
 
     required_dependencies = ("physical_dose", "let_dose")
@@ -25,6 +34,8 @@ class POLO(FluenceDependentQuantity):
         self,
         dij,
         binary_risk_mask: Optional[Array] = None,
+        cst=None,
+        risk_voi_name: str = "Ventricles_4mm",
         mode=None,
         dependencies=None,
         scenarios=None,
@@ -34,30 +45,47 @@ class POLO(FluenceDependentQuantity):
 
         Args:
             dij: Dose influence matrix object.
-            binary_risk_mask: Array of shape (n_voxels,) containing 1 for risk
-                              voxels (e.g., near ventricles) and 0 otherwise.
+            binary_risk_mask: Optional array of shape (n_voxels,) containing 1 for risk voxels.
+            cst: Optional Clinical Structure Set object to extract the risk mask from.
+            risk_voi_name: VOI name in CST for the periventricular risk structure (default: 'Ventricles_4mm').
             mode: Compute mode.
             dependencies: Dictionary of dependency quantity objects.
             scenarios: Scenario indices.
         """
         super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
+        self.risk_voi_name = risk_voi_name
+
+        if binary_risk_mask is None and cst is not None:
+            # Look up requested risk VOI in CST
+            for voi in getattr(cst, "vois", []):
+                if voi.name == risk_voi_name:
+                    binary_risk_mask = voi.mask
+                    break
+
         if binary_risk_mask is None:
             binary_risk_mask = getattr(dij, "binary_risk_mask", None)
+
         if hasattr(binary_risk_mask, "mask") or hasattr(binary_risk_mask, "GetSize"):
             import SimpleITK as sitk
             from pyRadPlan.core.resample import resample_image
 
             img = binary_risk_mask.mask if hasattr(binary_risk_mask, "mask") else binary_risk_mask
             resampled = resample_image(
-                img, dij.dose_grid, default_pixel_value=0.0, interpolator=sitk.sitkNearestNeighbor
+                img,
+                target_grid=dij.dose_grid,
+                extrapolate=0.0,
+                interpolator=sitk.sitkNearestNeighbor,
             )
             binary_risk_mask = sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
+
         if binary_risk_mask is None:
-            binary_risk_mask = self.array_backend.zeros((dij.total_voxels,), dtype=self._dtype)
+            num_vox = getattr(dij, "num_of_voxels", getattr(dij, "total_voxels", 0))
+            binary_risk_mask = self.array_backend.zeros((num_vox,), dtype=self._dtype)
+
         self.binary_risk_mask = self.array_backend.asarray(binary_risk_mask, dtype=self._dtype)
 
         # Calculate volume correction factor k = v_new / v_old
-        # v_old is 0.6 * 0.6 * 3.0 = 1.08 mm^3 (from the original paper fit)
+        # v_old is 0.6 * 0.6 * 3.0 = 1.08 mm^3 (from the original paper ([1]) fit)
         v_old = 1.08
         res = self._dij.dose_grid.resolution
         v_new = res["x"] * res["y"] * res["z"]
@@ -107,3 +135,43 @@ class POLO(FluenceDependentQuantity):
         )
 
         return chain_d + chain_d_x_ld
+
+    def compute_total_ntcp(
+        self, fluence: Array, mask: Optional[Array] = None, scenario_index: int = 0
+    ) -> float:
+        """
+        Compute the total Normal Tissue Complication Probability (NTCP).
+
+        Args:
+            fluence: The optimized fluence array.
+            mask: Optional binary mask (as a SimpleITK image or 1D boolean array) to restrict the evaluation.
+                  If provided as a SimpleITK image, it will be resampled to the dose grid.
+            scenario_index: Scenario index to compute the NTCP for (default: 0).
+
+        Returns
+        -------
+            The total NTCP as a float.
+        """
+        import numpy as np
+
+        polo_flat = self.compute(fluence).flat[scenario_index]
+
+        if mask is not None:
+            if hasattr(mask, "GetSize"):
+                import SimpleITK as sitk
+                from pyRadPlan.core.resample import resample_image
+
+                resampled = resample_image(
+                    mask,
+                    target_grid=self._dij.dose_grid,
+                    interpolator=sitk.sitkNearestNeighbor,
+                    extrapolate=0.0,
+                )
+                mask_idx = sitk.GetArrayFromImage(resampled).astype(bool).ravel()
+            else:
+                mask_idx = np.asarray(mask, dtype=bool).ravel()
+
+            polo_flat = polo_flat[mask_idx]
+
+        polo_flat_np = np.asarray(polo_flat)
+        return float(1.0 - np.prod(1.0 - np.clip(polo_flat_np, 0.0, 1.0 - 1e-12)))

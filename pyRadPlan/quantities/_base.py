@@ -231,6 +231,58 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self._qgrad_cache
 
+    def compute_dose_grid(self, fluence: Array) -> "sitk.Image":
+        """
+        Compute the quantity and return it as a SimpleITK image on the dose grid.
+
+        Parameters
+        ----------
+        fluence : Array
+            Fluence vector.
+
+        Returns
+        -------
+        sitk.Image
+            The quantity as a SimpleITK image on the dose grid.
+        """
+        import numpy as np
+        import SimpleITK as sitk
+
+        q_arr = np.asarray(self.compute(fluence).flat[0])
+        q_img = sitk.GetImageFromArray(q_arr.reshape(self._dij.dose_grid.dimensions[::-1]))
+        q_img.SetOrigin(self._dij.dose_grid.origin)
+        q_img.SetSpacing(self._dij.dose_grid.resolution_vector)
+        q_img.SetDirection(self._dij.dose_grid.direction.ravel())
+
+        return q_img
+
+    def compute_ct_grid(self, fluence: Array) -> "sitk.Image":
+        """
+        Compute the quantity and return it as a SimpleITK image on the CT grid.
+
+        Parameters
+        ----------
+        fluence : Array
+            Fluence vector.
+
+        Returns
+        -------
+        sitk.Image
+            The quantity as a SimpleITK image on the CT grid.
+        """
+        import SimpleITK as sitk
+
+        q_img = self.compute_dose_grid(fluence)
+
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetOutputDirection(self._dij.ct_grid.direction.ravel())
+        resampler.SetOutputOrigin(self._dij.ct_grid.origin)
+        resampler.SetOutputSpacing(self._dij.ct_grid.resolution_vector)
+        resampler.SetSize(self._dij.ct_grid.dimensions)
+
+        return resampler.Execute(q_img)
+
     def _compute_quantity_cache(self):
         """Compute the quantity from the fluence and write it into the cache."""
 

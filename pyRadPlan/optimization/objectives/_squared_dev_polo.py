@@ -14,11 +14,18 @@ class SquaredDeviationPOLO(Objective):
     Squared Deviation POLO objective.
 
     Penalizes squared deviation of POLO probabilities from a reference value.
+
+    For model formulation and paper references, see :class:`pyRadPlan.quantities.POLO`
+    (Ortkamp et al., Med Phys 2026, DOI: 10.1002/mp.70395).
     """
 
     name: Literal["Squared Deviation POLO"] = "Squared Deviation POLO"
     quantity: str = Field(
         default="polo", description="Quantity the objective is evaluated on (e.g. 'polo')."
+    )
+    risk_voi_name: str = Field(
+        default="Ventricles_4mm",
+        description="Name of the periventricular risk structure in CST (<= 4mm).",
     )
     polo_ref: float = Field(
         default=0.0, ge=0.0, le=1.0, description="Reference POLO probability threshold."
