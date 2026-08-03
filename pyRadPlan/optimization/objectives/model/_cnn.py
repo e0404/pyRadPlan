@@ -32,6 +32,7 @@ Example
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Optional
 import logging
@@ -39,6 +40,7 @@ import logging
 import array_api_compat
 import numpy as np
 from pydantic import Field, PrivateAttr, model_validator
+from pydantic_core import PydanticUndefined
 
 try:
     import torch
@@ -100,6 +102,11 @@ class OutcomeCNN(Objective):
 
     _dose_dims: Optional[tuple] = PrivateAttr(default=None)
     _debug_index: int = PrivateAttr(default=0)
+    # Mapping of the (VOI-restricted) optimization vector onto the full dose grid.
+    _dose_index: Any = PrivateAttr(default=None)  # int indices of the objective's VOI (numpy)
+    _dose_n: Optional[int] = PrivateAttr(default=None)  # number of dose-grid voxels
+    _dose_index_xp: Any = PrivateAttr(default=None)  # cached index in the active namespace
+    _dose_index_key: Any = PrivateAttr(default=None)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -157,6 +164,45 @@ class OutcomeCNN(Objective):
             "or a preloaded (model, preprocessor) tuple."
         )
 
+    def __deepcopy__(self, memo=None):
+        """Deep-copy without copying the loaded model / preprocessor.
+
+        The optimizer deep-copies the whole ``cst`` (e.g. in
+        ``apply_overlap_priorities``). The torch model and the preprocessor hold
+        modules and autograd-graph tensors that are wasteful (and, for non-leaf
+        tensors, impossible) to ``deepcopy``. They are read-only runtime handles,
+        so the copy shares them; transient index caches are reset.
+        """
+        if memo is None:
+            memo = {}
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+
+        shared = {"nn_model", "preprocessor"}
+        new_dict = {
+            k: (v if k in shared else copy.deepcopy(v, memo)) for k, v in self.__dict__.items()
+        }
+        object.__setattr__(new, "__dict__", new_dict)
+        object.__setattr__(new, "__pydantic_fields_set__", set(self.__pydantic_fields_set__))
+        object.__setattr__(
+            new,
+            "__pydantic_extra__",
+            None
+            if self.__pydantic_extra__ is None
+            else copy.deepcopy(self.__pydantic_extra__, memo),
+        )
+        if self.__pydantic_private__ is None:
+            object.__setattr__(new, "__pydantic_private__", None)
+        else:
+            reset = {"_dose_index_xp", "_dose_index_key"}
+            private = {
+                k: (None if k in reset else copy.deepcopy(v, memo))
+                for k, v in self.__pydantic_private__.items()
+                if v is not PydanticUndefined
+            }
+            object.__setattr__(new, "__pydantic_private__", private)
+        return new
+
     # ------------------------------------------------------------------
     # Objective interface
     # ------------------------------------------------------------------
@@ -172,12 +218,20 @@ class OutcomeCNN(Objective):
         if self.preprocessor is not None:
             self.preprocessor.set_dose_grid(target_grid)
             self._dose_dims = tuple(int(d) for d in target_grid.dimensions)
+            self._dose_n = int(np.prod(self._dose_dims))
+            # The optimizer hands us only the voxels inside this objective's VOI
+            # (index_list); remember them so we can scatter onto the full dose grid
+            # the CNN needs and gather the gradient back.
+            self._dose_index = None if index_list is None else np.asarray(index_list)
+            self._dose_index_xp = None
+            self._dose_index_key = None
 
     def compute_objective(self, dose_values) -> float:
         """Compute the outcome probability (0.0 when *monitor_only*)."""
         self._check_ready()
 
-        prob = self._forward_no_grad(dose_values)
+        xp = array_api_compat.array_namespace(dose_values)
+        prob = self._forward_no_grad(self._to_full_grid(dose_values, xp))
         self.ntcp_history.append(prob)
 
         if self.monitor_only:
@@ -207,7 +261,9 @@ class OutcomeCNN(Objective):
                 )
             return xp.zeros(n, dtype=xp.float32)
 
-        inputs = self.preprocessor.preprocess(dose_values, requires_grad=True)
+        inputs = self.preprocessor.preprocess(
+            self._to_full_grid(dose_values, xp), requires_grad=True
+        )
         out = self.nn_model(*inputs)
         prob = self.preprocessor.postprocess(out)
         prob.backward()
@@ -219,7 +275,9 @@ class OutcomeCNN(Objective):
         if self.debug_plots is not None:
             self._save_grad_plot()
 
-        return xp_utils.to_namespace(xp, grad)
+        # gradient_to_dose_grid returns the full dose grid; restrict back to the
+        # objective's VOI voxels so it matches the optimizer's input vector.
+        return self._from_full_grid(xp_utils.to_namespace(xp, grad), dose_values, xp)
 
     # ------------------------------------------------------------------
     # Utility
@@ -248,11 +306,50 @@ class OutcomeCNN(Objective):
 
     # ------------------------------------------------------------------
     # Private helpers
+    # These are needed for future work where soomeone passes e.g. only the
+    # VOI dose (not the full dose grid via GlobalVoi)
     # ------------------------------------------------------------------
 
     def _check_ready(self) -> None:
         if self.preprocessor is None or self.nn_model is None:
             raise RuntimeError("OutcomeCNN not initialised — provide ct and cst at construction.")
+
+    def _needs_scatter(self, dose_values) -> bool:
+        """Whether ``dose_values`` is a VOI subset that must be scattered to the full grid."""
+        return (
+            self._dose_index is not None
+            and self._dose_n is not None
+            and array_api_compat.size(dose_values) != self._dose_n
+        )
+
+    def _index_on(self, dose_values, xp):
+        """VOI indices in the namespace/device of ``dose_values`` (cached).
+
+        The cache key is the namespace *name* and device string (never the module
+        object itself, which would break ``model_copy(deep=True)`` on the objective).
+        """
+        device = array_api_compat.device(dose_values)
+        key = (getattr(xp, "__name__", str(xp)), str(device))
+        if self._dose_index_key != key:
+            self._dose_index_xp = xp.asarray(self._dose_index, device=device)
+            self._dose_index_key = key
+        return self._dose_index_xp
+
+    def _to_full_grid(self, dose_values, xp):
+        """Scatter VOI-restricted dose onto the full dose grid (zeros elsewhere)."""
+        if not self._needs_scatter(dose_values):
+            return dose_values
+        full = xp.zeros(
+            self._dose_n, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
+        )
+        full[self._index_on(dose_values, xp)] = dose_values
+        return full
+
+    def _from_full_grid(self, grad_full, dose_values, xp):
+        """Gather a full-grid gradient back to the objective's VOI voxels."""
+        if not self._needs_scatter(dose_values):
+            return grad_full
+        return grad_full[self._index_on(dose_values, xp)]
 
     def _forward_no_grad(self, dose_values) -> float:
         """Run a forward pass without gradient tracking."""
@@ -272,12 +369,16 @@ class OutcomeCNN(Objective):
             logger.warning("matplotlib not available; skipping debug_plots.")
             return
 
-        leaf = self.preprocessor.dose_leaf
-        if leaf.grad is None:
-            logger.warning("No gradient on the model-input leaf; skipping debug plot.")
+        # Prefer the dedicated model-input gradient; fall back to the leaf grad for
+        # preprocessors whose autograd leaf is itself the model-grid dose.
+        model_grad = getattr(self.preprocessor, "model_input_grad", None)
+        if model_grad is None:
+            model_grad = self.preprocessor.dose_leaf.grad
+        if model_grad is None:
+            logger.warning("No model-input gradient available; skipping debug plot.")
             return
 
-        grad = xp_utils.to_numpy(leaf.grad).squeeze()  # (mZ, mY, mX)
+        grad = xp_utils.to_numpy(model_grad).squeeze()  # (mZ, mY, mX)
         mask = xp_utils.to_numpy(self.preprocessor.mask_tensor)[0].max(axis=0)  # (mZ, mY, mX)
 
         if self.mode == "TCP":
