@@ -43,54 +43,48 @@ class FileMenu(QMenu):
         self._ws = workspace
         self._wf = workflow_widget
 
-        self._act_load_mat = self.addAction("Load Patient (.mat)…")
-        self._act_load_mat.triggered.connect(self._wf.load_mat)
+        self._act_load_file = self.addAction("Load File…")
+        self._act_load_file.triggered.connect(self._wf.load_file)
 
-        self._act_load_dicom = self.addAction("Load DICOM…")
-        self._act_load_dicom.triggered.connect(self._wf.load_dicom)
-        self._act_load_dicom.setEnabled(False)
-
-        self._menu_phantoms = self.addMenu("Load Bundled Phantom")
-        self._populate_phantom_menu()
+        self._act_load_folder = self.addAction("Load Folder…")
+        self._act_load_folder.setToolTip(
+            "Import a folder of DICOM data, or a folder of image files "
+            "(CT + binary structure masks)"
+        )
+        self._act_load_folder.triggered.connect(self._wf.load_folder)
 
         self.addSeparator()
-        self._act_import_dose = self.addAction("Import Dose…")
-        self._act_import_dose.triggered.connect(self._wf.import_dose)
+        self._act_save_plan = self.addAction("Save Plan…")
+        self._act_save_plan.triggered.connect(self._wf.save_plan)
+        self._act_save_dij = self.addAction("Save Dij…")
+        self._act_save_dij.triggered.connect(self._wf.save_dij)
+        self._act_save_cst = self.addAction("Save CST…")
+        self._act_save_cst.setToolTip("Includes the structures' objectives")
+        self._act_save_cst.triggered.connect(self._wf.save_cst)
+        self._act_save_result = self.addAction("Save Result…")
+        self._act_save_result.triggered.connect(self._wf.save_result)
 
         self.addSeparator()
         self._act_save = self.addAction("Save Workspace…")
-        self._act_save.setEnabled(False)  # not yet implemented
-        self._act_export_bin = self.addAction("Export Binary…")
-        self._act_export_bin.triggered.connect(self._wf.export_binary)
-        self._act_export_bin.setEnabled(False)
-        self._act_export_dicom = self.addAction("Export DICOM…")
-        self._act_export_dicom.triggered.connect(self._wf.export_dicom)
-        self._act_export_dicom.setEnabled(False)
+        self._act_save.triggered.connect(self._wf.save_workspace)
 
         self.addSeparator()
         self._act_exit = self.addAction("Exit")
         self._act_exit.triggered.connect(self._on_exit)
 
+        # Tooltips show even for disabled actions.
+        self.setToolTipsVisible(True)
+
         self._ws.workspace_changed.connect(self._refresh)
         self._refresh([])
 
-    def _populate_phantom_menu(self) -> None:
-        """Fill the phantom submenu with the data sets bundled in the package."""
-        # Deferred: pulls in the pyRadPlan.io validation stack.
-        from pyRadPlan.io import available_phantoms  # noqa: PLC0415
-
-        phantoms = available_phantoms()
-        for name, path in phantoms.items():
-            action = self._menu_phantoms.addAction(name)
-            action.triggered.connect(
-                lambda checked=False, p=str(path), n=name: self._wf.load_patient_file(p, n)
-            )
-        self._menu_phantoms.setEnabled(bool(phantoms))
-
     def _refresh(self, _changed_keys: list) -> None:
-        # Dose cubes are imported into the current result and matched against the
-        # CT grid, so a CT must be present.
-        self._act_import_dose.setEnabled(self._ws.has("ct"))
+        # Each save action needs its object present; Save Workspace anchors on the CT.
+        self._act_save_plan.setEnabled(self._ws.has("pln"))
+        self._act_save_dij.setEnabled(self._ws.has("dij"))
+        self._act_save_cst.setEnabled(self._ws.has("cst"))
+        self._act_save_result.setEnabled(self._ws.has("result"))
+        self._act_save.setEnabled(self._ws.has("ct"))
 
     def _on_exit(self) -> None:
         window = self.window()

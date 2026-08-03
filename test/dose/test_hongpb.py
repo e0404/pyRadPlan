@@ -22,7 +22,7 @@ def test_protons_cd_forward(test_data_protons):
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
 
-    result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
+    result_matRad_rot = np.transpose(result["physicalDose"], (2, 0, 1))
     # only comparing to 1e-4 since matRad rounds to 4 digits
     assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
 
@@ -44,7 +44,7 @@ def test_helium_cd_forward(test_data_helium):
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
 
-    result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
+    result_matRad_rot = np.transpose(result["physicalDose"], (2, 0, 1))
     # only comparing to 1e-4 since matRad rounds to 4 digits
     assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
 
@@ -55,7 +55,7 @@ def test_carbon_cd_forward(test_data_carbon):
     result_py = calc_dose_forward(ct, cst, stf, pln)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
 
-    result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
+    result_matRad_rot = np.transpose(result["physicalDose"], (2, 0, 1))
     # only comparing to 1e-4 since matRad rounds to 4 digits
     assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
 
@@ -66,7 +66,7 @@ def test_oxygen_cd_forward(test_data_oxygen):
     result_py = calc_dose_forward(ct, cst, stf, pln)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
 
-    result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
+    result_matRad_rot = np.transpose(result["physicalDose"], (2, 0, 1))
     # only comparing to 1e-4 since matRad rounds to 4 digits
     assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
 

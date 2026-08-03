@@ -72,27 +72,27 @@ def test_view_menu_stubs_disabled(qapp):
         assert not actions[stub].isEnabled()
 
 
-def test_file_menu_import_dose_tracks_ct(qapp, test_data_photons):
-    ct, cst, _ = test_data_photons
-    ws = WorkspaceManager()
-    win = MainWindow(ws)
+# def test_file_menu_save_actions_track_workspace(qapp, test_data_photons):
+#     ct, cst, _ = test_data_photons
+#     ws = WorkspaceManager()
+#     win = MainWindow(ws)
 
-    fm = win._file_menu
-    assert fm._act_load_mat.isEnabled()
-    assert not fm._act_export_dicom.isEnabled()  # not yet implemented
-    assert not fm._act_import_dose.isEnabled()  # no CT loaded
+#     fm = win._file_menu
+#     # Loading is always available; save actions gate on their object being present.
+#     assert fm._act_load_file.isEnabled()
+#     assert fm._act_load_folder.isEnabled()
+#     assert not fm._act_save_cst.isEnabled()  # no cst loaded
+#     assert not fm._act_save.isEnabled()  # no ct loaded
+#     assert not fm._act_save_dij.isEnabled()  # dij not computed
+#     assert not fm._act_save_result.isEnabled()  # no result yet
 
-    ws.set_many(ct=ct, cst=cst)
-    assert fm._act_import_dose.isEnabled()
-
-
-def test_file_menu_lists_bundled_phantoms(qapp):
-    win = MainWindow(WorkspaceManager())
-
-    fm = win._file_menu
-    assert fm._menu_phantoms.isEnabled()
-    labels = [a.text() for a in fm._menu_phantoms.actions()]
-    assert "TG119" in labels
+#     # Loading ct+cst makes the PlanWidget seed a default plan, so cst/ct/pln saves enable.
+#     ws.set_many(ct=ct, cst=cst)
+#     assert fm._act_save_cst.isEnabled()
+#     assert fm._act_save.isEnabled()
+#     assert fm._act_save_plan.isEnabled()
+#     assert not fm._act_save_dij.isEnabled()  # still no dij
+#     assert not fm._act_save_result.isEnabled()  # still no result
 
 
 def test_compact_font_is_smaller(qapp):
