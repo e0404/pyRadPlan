@@ -66,6 +66,32 @@ def test_get_objective_from_matrad_tg119(tg119_raw):
     assert obj2.d_ref == obj_mat_2["parameters"]
 
 
+def test_get_objective_matrad_dict_not_mutated():
+    """Validating a matRad objective struct must not consume its ``parameters``."""
+    desc = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    first = get_objective(desc)
+    second = get_objective(desc)  # must not raise
+    assert isinstance(first, SquaredOverdosing) and isinstance(second, SquaredOverdosing)
+    assert first.priority == second.priority == 100.0
+    assert first.d_max == second.d_max == 30.0
+    assert desc["parameters"] == [30.0]  # caller's input untouched
+
+
+def test_get_objective_numpy_struct_scalar():
+    """A scipy-loaded numpy structured scalar validates like a dict."""
+    desc = np.array(
+        [("DoseObjectives.matRad_SquaredOverdosing", 30.0, 100.0)],
+        dtype=[("className", "O"), ("parameters", "O"), ("penalty", "O")],
+    )[0]
+    obj = get_objective({name: desc[name] for name in desc.dtype.names})
+    assert isinstance(obj, SquaredOverdosing)
+    assert obj.priority == 100.0
+
+
 def test_DoseUniformity_constructor():
     doseUni = DoseUniformity()
     assert doseUni.name == "Dose Uniformity"

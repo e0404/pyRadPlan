@@ -28,7 +28,7 @@ from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.scenarios import available_scenario_models
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
-from ..ai import AI_MISSING_TIP, ai_available
+from ..ai import ai_disabled_reason
 
 _ION_MODES = list(IonPlan.available_radiation_modes)
 _RADIATION_MODES = ["photons", *_ION_MODES]
@@ -69,7 +69,8 @@ class PlanWidget(WorkspaceWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(workspace, parent)
-        self._ai_available = ai_available()
+        #: Tooltip explaining why AI features are disabled, or None if usable.
+        self._ai_disabled_reason = ai_disabled_reason()
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
@@ -189,9 +190,9 @@ class PlanWidget(WorkspaceWidget):
 
         self._btn_ai_beams = QPushButton("✨ AI")
         self._btn_ai_beams.clicked.connect(self._on_ai_beam_angles)
-        self._btn_ai_beams.setEnabled(self._ai_available)
+        self._btn_ai_beams.setEnabled(self._ai_disabled_reason is None)
         self._btn_ai_beams.setToolTip(
-            "Suggest gantry/couch angles using an LLM" if self._ai_available else AI_MISSING_TIP
+            self._ai_disabled_reason or "Suggest gantry/couch angles using an LLM"
         )
 
         gantry_row = QHBoxLayout()
@@ -600,9 +601,12 @@ class PlanWidget(WorkspaceWidget):
         from pyRadPlan.ai_agents import (  # noqa: PLC0415
             available_models,
             beam_angles_system_prompt,
+            cst_geometry_summary,
             generate_beam_angles,
         )
         from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+
+        cst = self._ws.cst
 
         def _run(model: str, site: str, context: str):
             return generate_beam_angles(
@@ -610,6 +614,7 @@ class PlanWidget(WorkspaceWidget):
                 treatment_site=site or "unspecified",
                 additional_context=context or None,
                 model=model,
+                cst=cst,
             )
 
         def _apply(new_pln) -> None:
@@ -632,9 +637,11 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine.currentText() or "Generic",
             "num_of_fractions": int(self._spn_fractions.value()),
         }
+        if cst is not None:
+            context["structure_set_geometry"] = cst_geometry_summary(cst)
         task = AiTask(
             title="Suggest beam angles (AI)",
-            system_prompt=beam_angles_system_prompt(radiation_mode),
+            system_prompt=beam_angles_system_prompt(radiation_mode, with_geometry=cst is not None),
             context_text=json.dumps(context, indent=2, default=str),
             run=_run,
             apply=_apply,

@@ -1,6 +1,5 @@
 import pytest
-import importlib
-import sys
+from pyRadPlan._settings import get_settings
 from pyRadPlan.core.xp_utils import (
     cupy_available,
     pytorch_available,
@@ -8,9 +7,6 @@ from pyRadPlan.core.xp_utils import (
     numba_cuda_available,
     choose_array_api_namespace,
     choose_device,
-    PREFER_GPU,
-    PREFERRED_GPU_ARRAY_BACKEND,
-    PREFERRED_CPU_ARRAY_BACKEND,
 )
 import array_api_compat
 
@@ -73,13 +69,18 @@ def test_choose_array_api_namespace_defaults():
     """Test choose_array_api_namespace with default arguments."""
     xp = choose_array_api_namespace()
 
-    if PREFER_GPU and PREFERRED_GPU_ARRAY_BACKEND == "cupy" and cupy_available():
+    settings = get_settings().xp
+    if settings.prefer_gpu and settings.preferred_gpu_array_backend == "cupy" and cupy_available():
         assert "cupy" in xp.__name__
-    elif PREFER_GPU and PREFERRED_GPU_ARRAY_BACKEND == "torch" and pytorch_gpu_available():
+    elif (
+        settings.prefer_gpu
+        and settings.preferred_gpu_array_backend == "torch"
+        and pytorch_gpu_available()
+    ):
         assert "torch" in xp.__name__
     else:
         # It seems array_api_compat.numpy might be aliased or implemented via array_api_strict in some envs?
-        # Or maybe PREFERRED_CPU_ARRAY_BACKEND is different.
+        # Or maybe preferred_cpu_array_backend is different.
         assert "numpy" in xp.__name__ or "array_api_strict" in xp.__name__
 
 

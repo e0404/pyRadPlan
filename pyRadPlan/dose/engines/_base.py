@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     """
-    Abstract Interface for all dose engines.
+    Base class representing a dose engine.
 
     All dose engines should inherit from this class.
 

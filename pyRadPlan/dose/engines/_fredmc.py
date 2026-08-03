@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Union, cast
+from typing import Any, Optional, Union, cast
 import time
 import textwrap
 from pathlib import Path
@@ -72,6 +72,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
     save_output: Union[os.PathLike, bool]
     use_output: Union[os.PathLike, bool]
     print_output: bool
+    execution_timeout: Optional[float]
 
     scorers: list[str]
     source_model: str
@@ -98,6 +99,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.scaling_factor = 1e6
         self.fred_version = "3.70.0"
         self.print_output = False
+        # Seconds before the FRED subprocess is aborted; None waits indefinitely.
+        self.execution_timeout = None
 
         self.fred_cmd = "fred"
         self.fred_dir = Path(os.environ.get("FREDDIR", ""))
@@ -1127,14 +1130,13 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 f'{self.fred_cmd} -f fred.inp -o "{output_path}" -i "{self._inp_dir}" {no_gpu}'
             )
             logger.info("FRED command: %s", execute_cmd)
-            subprocess.run(
-                execute_cmd,
-                cwd=self._inp_dir,
-                env=os.environ.copy(),
-                shell=True,
-                check=True,
-                capture_output=not self.print_output,
+            self._run_fred_process(execute_cmd)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "FRED did not finish within execution_timeout=%s s (GPU busy or hung?).",
+                self.execution_timeout,
             )
+            raise SystemExit("Aborting... FRED execution timed out")
         except subprocess.CalledProcessError as e:
             stdout_msg = e.stdout.decode(errors="ignore") if e.stdout else ""
             stderr_msg = e.stderr.decode(errors="ignore") if e.stderr else ""
@@ -1154,6 +1156,57 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         else:
             t_end = time.time()
             logger.info("Done in %f seconds.", t_end - t_start)
+
+    def _run_fred_process(self, execute_cmd: str) -> None:
+        """Run the FRED command, enforcing ``execution_timeout`` on the process tree.
+
+        ``fred`` is a wrapper (a ``.BAT`` on Windows) run through the shell, so a
+        plain ``subprocess.run(timeout=...)`` would only kill the wrapper and leave
+        the actual ``Fred.x`` simulation occupying the GPU. On timeout the whole
+        process tree is terminated instead.
+
+        Raises
+        ------
+        subprocess.TimeoutExpired
+            If FRED does not finish within ``execution_timeout`` seconds.
+        subprocess.CalledProcessError
+            If FRED exits with a non-zero return code.
+        """
+        capture = subprocess.PIPE if not self.print_output else None
+        popen_kwargs: dict[str, Any] = {}
+        if os.name != "nt":
+            # New session so the shell and all its children share a process group.
+            popen_kwargs["start_new_session"] = True
+
+        process = subprocess.Popen(  # noqa: S602 - command assembled from engine config
+            execute_cmd,
+            cwd=self._inp_dir,
+            env=os.environ.copy(),
+            shell=True,
+            stdout=capture,
+            stderr=capture,
+            **popen_kwargs,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=self.execution_timeout)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    check=False,
+                )
+            else:
+                import signal  # noqa: PLC0415
+
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            process.wait()
+            raise
+
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                process.returncode, execute_cmd, output=stdout, stderr=stderr
+            )
 
     def _init_dose_calc(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> None:
         dij = super()._init_dose_calc(ct, cst, stf)

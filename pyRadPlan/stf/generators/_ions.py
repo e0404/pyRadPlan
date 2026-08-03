@@ -73,7 +73,7 @@ class StfGeneratorIonRayBixel(StfGeneratorExternalBeamRayBixel):
 
 
 class StfGeneratorIonSingleSpot(StfGeneratorIonRayBixel):
-    """Class representing a Ion Single Spot Geometry Stf Generator.
+    """Class representing an Ion Single Spot Geometry Stf Generator.
 
     Attributes
     ----------
