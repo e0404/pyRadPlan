@@ -21,7 +21,7 @@ from pyRadPlan import (
 )
 
 from pyRadPlan.gui.apps import launch_viewer
-from pyRadPlan.io._patient_loader import load_patient
+from pyRadPlan.io import load_patient
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
     SquaredOverdosing,
