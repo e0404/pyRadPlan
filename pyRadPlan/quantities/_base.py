@@ -231,7 +231,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self._qgrad_cache
 
-    def compute_dose_grid(self, fluence: Array) -> "sitk.Image":
+    def compute_dose_grid(self, fluence: Array, scenario_index: int = 0) -> "sitk.Image":
         """
         Compute the quantity and return it as a SimpleITK image on the dose grid.
 
@@ -239,24 +239,26 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         ----------
         fluence : Array
             Fluence vector.
+        scenario_index : int
+            The scenario index to compute the quantity for (default: 0).
 
         Returns
         -------
         sitk.Image
             The quantity as a SimpleITK image on the dose grid.
         """
-        import numpy as np
+        from pyRadPlan.core.xp_utils import to_numpy
         import SimpleITK as sitk
 
-        q_arr = np.asarray(self.compute(fluence).flat[0])
+        q_arr = to_numpy(self.compute(fluence).flat[scenario_index])
         q_img = sitk.GetImageFromArray(q_arr.reshape(self._dij.dose_grid.dimensions[::-1]))
-        q_img.SetOrigin(self._dij.dose_grid.origin)
-        q_img.SetSpacing(self._dij.dose_grid.resolution_vector)
-        q_img.SetDirection(self._dij.dose_grid.direction.ravel())
+        q_img.SetOrigin(tuple(self._dij.dose_grid.origin.tolist()))
+        q_img.SetSpacing(tuple(self._dij.dose_grid.resolution_vector.tolist()))
+        q_img.SetDirection(tuple(self._dij.dose_grid.direction.ravel().tolist()))
 
         return q_img
 
-    def compute_ct_grid(self, fluence: Array) -> "sitk.Image":
+    def compute_ct_grid(self, fluence: Array, scenario_index: int = 0) -> "sitk.Image":
         """
         Compute the quantity and return it as a SimpleITK image on the CT grid.
 
@@ -264,6 +266,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         ----------
         fluence : Array
             Fluence vector.
+        scenario_index : int
+            The scenario index to compute the quantity for (default: 0).
 
         Returns
         -------
@@ -272,14 +276,14 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         """
         import SimpleITK as sitk
 
-        q_img = self.compute_dose_grid(fluence)
+        q_img = self.compute_dose_grid(fluence, scenario_index=scenario_index)
 
         resampler = sitk.ResampleImageFilter()
         resampler.SetInterpolator(sitk.sitkLinear)
-        resampler.SetOutputDirection(self._dij.ct_grid.direction.ravel())
-        resampler.SetOutputOrigin(self._dij.ct_grid.origin)
-        resampler.SetOutputSpacing(self._dij.ct_grid.resolution_vector)
-        resampler.SetSize(self._dij.ct_grid.dimensions)
+        resampler.SetOutputDirection(tuple(self._dij.ct_grid.direction.ravel().tolist()))
+        resampler.SetOutputOrigin(tuple(self._dij.ct_grid.origin.tolist()))
+        resampler.SetOutputSpacing(tuple(self._dij.ct_grid.resolution_vector.tolist()))
+        resampler.SetSize(tuple(self._dij.ct_grid.dimensions))
 
         return resampler.Execute(q_img)
 

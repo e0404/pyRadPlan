@@ -97,15 +97,11 @@ class LinearPOLO(FluenceDependentQuantity):
         # Gradient of eta w.r.t let_dose is 0.018
         grad_d_x_ld = d_quantity * 0.018
 
-        chain_d = (
-            self._deps["physical_dose"]
-            .compute_chain_derivative(grad_d, self._w_cache)
-            .flat[scenario_index]
+        chain_d = self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
+            grad_d, scenario_index
         )
-        chain_d_x_ld = (
-            self._deps["let_dose"]
-            .compute_chain_derivative(grad_d_x_ld, self._w_cache)
-            .flat[scenario_index]
+        chain_d_x_ld = self._deps["let_dose"]._compute_chain_derivative_single_scenario(
+            grad_d_x_ld, scenario_index
         )
 
         return chain_d + chain_d_x_ld

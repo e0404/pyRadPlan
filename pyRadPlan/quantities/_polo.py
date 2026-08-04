@@ -113,33 +113,33 @@ class POLO(FluenceDependentQuantity):
         p = 1.0 / (1.0 + self.array_backend.exp(-eta))
 
         # Volume correction
-        return 1.0 - (1.0 - p) ** self.k
+        return -self.array_backend.expm1(self.k * self.array_backend.log1p(-p))
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
-        d = self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index]
-        d_x_ld = self._deps["let_dose"].compute(self._w_cache).flat[scenario_index]
+        d = self.array_backend.asarray(
+            self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index],
+            dtype=self._dtype,
+        )
+        d_x_ld = self.array_backend.asarray(
+            self._deps["let_dose"].compute(self._w_cache).flat[scenario_index], dtype=self._dtype
+        )
 
         eta = -26.3 + 0.19 * d + 0.018 * d_x_ld + 1.19 * self.binary_risk_mask
         p = 1.0 / (1.0 + self.array_backend.exp(-eta))
 
         # Numerically stable gradient of volume-scaled probability with respect to eta:
-        # d/deta (1 - (1-p)^k) = k * (1-p)^(k-1) * p * (1-p) = k * p * (1-p)^k
-        dp_k_deta = self.k * p * ((1.0 - p) ** self.k)
+        dp_k_deta = self.k * p * self.array_backend.exp(self.k * self.array_backend.log1p(-p))
 
         # Chain rule back to linear components
         grad_d = d_quantity * dp_k_deta * 0.19
         grad_d_x_ld = d_quantity * dp_k_deta * 0.018
 
         # Delegate to dependencies to push gradient all the way back to fluence (w)
-        chain_d = (
-            self._deps["physical_dose"]
-            .compute_chain_derivative(grad_d, self._w_cache)
-            .flat[scenario_index]
+        chain_d = self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
+            grad_d, scenario_index
         )
-        chain_d_x_ld = (
-            self._deps["let_dose"]
-            .compute_chain_derivative(grad_d_x_ld, self._w_cache)
-            .flat[scenario_index]
+        chain_d_x_ld = self._deps["let_dose"]._compute_chain_derivative_single_scenario(
+            grad_d_x_ld, scenario_index
         )
 
         return chain_d + chain_d_x_ld

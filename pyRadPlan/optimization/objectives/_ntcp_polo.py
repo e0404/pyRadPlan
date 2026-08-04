@@ -33,10 +33,10 @@ class NTCPPOLO(Objective):
         xp = array_api_compat.array_namespace(values)
         # Clip to avoid completely hitting 1.0 which makes the product exactly 0 (use 1e-6 for float32 compatibility)
         vals = xp.clip(values, 0.0, 1.0 - 1e-6)
-        return 1.0 - xp.prod(1.0 - vals)
+        return 1.0 - xp.exp(xp.sum(xp.log1p(-vals)))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
         vals = xp.clip(values, 0.0, 1.0 - 1e-6)
-        prod_val = xp.prod(1.0 - vals)
+        prod_val = xp.exp(xp.sum(xp.log1p(-vals)))
         return prod_val / (1.0 - vals)
