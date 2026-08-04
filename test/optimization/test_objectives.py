@@ -12,8 +12,6 @@ from pyRadPlan.optimization.objectives import (
     MaxDVH,
     NTCPPOLO,
     HellingerPOLO,
-    SquaredDeviationPOLO,
-    InverseKLDPOLO,
     LogSumExpConvPOLO,
     HellingerConvPOLO,
     get_available_objectives,
@@ -38,8 +36,6 @@ def test_objective_availability():
     assert "Max DVH" in available_objectives
     assert "NTCP POLO" in available_objectives
     assert "Hellinger POLO" in available_objectives
-    assert "Squared Deviation POLO" in available_objectives
-    assert "Inverse KLD POLO" in available_objectives
     assert "LogSumExp ConvPOLO" in available_objectives
     assert "Hellinger ConvPOLO" in available_objectives
 
@@ -407,21 +403,6 @@ def test_polo_objectives():
     assert h_obj.quantity == "polo"
     assert h_obj.compute_objective(vals) == np.sum(vals)
     assert np.all(h_obj.compute_gradient(vals) == 1.0)
-
-    # SquaredDeviationPOLO
-    sd_obj = SquaredDeviationPOLO(polo_ref=0.0)
-    assert sd_obj.quantity == "polo"
-    assert np.isclose(sd_obj.compute_objective(vals), np.mean(vals**2))
-    assert np.allclose(sd_obj.compute_gradient(vals), 2.0 * vals / len(vals))
-
-    # InverseKLDPOLO
-    ikld_obj = InverseKLDPOLO()
-    assert ikld_obj.quantity == "polo"
-    assert np.isclose(
-        ikld_obj.compute_objective(vals),
-        -np.sum((1.0 - vals) * np.log(1.0 - vals)),
-    )
-    assert np.allclose(ikld_obj.compute_gradient(vals), 1.0 + np.log(1.0 - vals))
 
     # LogSumExpConvPOLO
     lse_obj = LogSumExpConvPOLO()

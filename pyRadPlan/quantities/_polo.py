@@ -57,7 +57,8 @@ class POLO(FluenceDependentQuantity):
 
         if binary_risk_mask is None and cst is not None:
             # Look up requested risk VOI in CST
-            for voi in getattr(cst, "vois", []):
+            vois = cst.vois if hasattr(cst, "vois") else (cst if isinstance(cst, list) else [])
+            for voi in vois:
                 if voi.name == risk_voi_name:
                     binary_risk_mask = voi.mask
                     break
@@ -79,6 +80,13 @@ class POLO(FluenceDependentQuantity):
             binary_risk_mask = sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
 
         if binary_risk_mask is None:
+            if risk_voi_name is not None:
+                raise ValueError(
+                    f"POLO risk VOI '{risk_voi_name}' not found in CST and no binary_risk_mask provided. "
+                    "The POLO model was originally fitted using a 'Ventricles_4mm' risk mask. "
+                    "If you intentionally want to evaluate POLO without the periventricular risk component, "
+                    "explicitly set `risk_voi_name=None`."
+                )
             num_vox = getattr(dij, "num_of_voxels", getattr(dij, "total_voxels", 0))
             binary_risk_mask = self.array_backend.zeros((num_vox,), dtype=self._dtype)
 
@@ -174,4 +182,4 @@ class POLO(FluenceDependentQuantity):
             polo_flat = polo_flat[mask_idx]
 
         polo_flat_np = np.asarray(polo_flat)
-        return float(1.0 - np.prod(1.0 - np.clip(polo_flat_np, 0.0, 1.0 - 1e-12)))
+        return float(1.0 - np.exp(np.sum(np.log1p(-np.clip(polo_flat_np, 0.0, 1.0 - 1e-6)))))

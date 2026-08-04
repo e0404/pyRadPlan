@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Probability of Lesion Origin (POLO) biological risk model: `POLO` and `LinearPOLO` quantities, `NTCPPOLO`, `HellingerPOLO`, `SquaredDeviationPOLO`, `InverseKLDPOLO`, `LogSumExpConvPOLO`, and `HellingerConvPOLO` objectives, and TG119 example script (`pencilbeam_proton_polo.py`)
+- Probability of Lesion Origin (POLO) biological risk model: `POLO` and `LinearPOLO` quantities, `NTCPPOLO`, `HellingerPOLO`, `LogSumExpConvPOLO`, and `HellingerConvPOLO` objectives, and TG119 example script (`pencilbeam_proton_polo.py`)
 
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment

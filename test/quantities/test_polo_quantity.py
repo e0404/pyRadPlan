@@ -39,9 +39,7 @@ def sample_dij_dense(sample_base_dij_dict):
 
 
 def test_polo_quantity_initialization_and_compute(sample_dij_dense):
-    resolver = QuantityResolver(sample_dij_dense)
-    resolver.resolve(["polo"])
-    polo = resolver.instances["polo"]
+    polo = POLO(sample_dij_dense, risk_voi_name=None)
 
     risk_mask = np.zeros(125, dtype=bool)
     risk_mask[:10] = True
@@ -57,9 +55,7 @@ def test_polo_quantity_initialization_and_compute(sample_dij_dense):
 
 
 def test_linear_polo_quantity_compute(sample_dij_dense):
-    resolver = QuantityResolver(sample_dij_dense)
-    resolver.resolve(["linear_polo"])
-    lin_polo = resolver.instances["linear_polo"]
+    lin_polo = LinearPOLO(sample_dij_dense, risk_voi_name=None)
 
     risk_mask = np.zeros(125, dtype=bool)
     risk_mask[:10] = True

@@ -12,8 +12,6 @@ from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
 from ._ntcp_polo import NTCPPOLO
 from ._hellinger_polo import HellingerPOLO
-from ._squared_dev_polo import SquaredDeviationPOLO
-from ._inverse_kld_polo import InverseKLDPOLO
 from ._logsumexp_convpolo import LogSumExpConvPOLO
 from ._hellinger_convpolo import HellingerConvPOLO
 
@@ -35,8 +33,6 @@ register_objective(MaxDVH)
 register_objective(DoseUniformity)
 register_objective(NTCPPOLO)
 register_objective(HellingerPOLO)
-register_objective(SquaredDeviationPOLO)
-register_objective(InverseKLDPOLO)
 register_objective(LogSumExpConvPOLO)
 register_objective(HellingerConvPOLO)
 
@@ -53,8 +49,6 @@ __all__ = [
     "SquaredUnderdosing",
     "NTCPPOLO",
     "HellingerPOLO",
-    "SquaredDeviationPOLO",
-    "InverseKLDPOLO",
     "LogSumExpConvPOLO",
     "HellingerConvPOLO",
     "get_available_objectives",
