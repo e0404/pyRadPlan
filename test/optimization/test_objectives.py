@@ -414,3 +414,20 @@ def test_polo_objectives():
     assert hconv_obj.quantity == "linear_polo"
     assert hconv_obj.compute_objective(vals) == np.sum(vals)
     assert np.all(hconv_obj.compute_gradient(vals) == 1.0)
+
+
+def test_polo_objectives_custom_quantity_preservation():
+    from pyRadPlan.optimization.objectives import Objective, SquaredDeviation
+
+    sq_dev = SquaredDeviation()
+    assert sq_dev.quantity == Objective.model_fields["quantity"].default  # "physical_dose"
+
+    ntcp = NTCPPOLO()
+    assert ntcp.quantity != Objective.model_fields["quantity"].default  # "polo" != "physical_dose"
+    assert ntcp.quantity == "polo"
+
+    lse = LogSumExpConvPOLO()
+    assert (
+        lse.quantity != Objective.model_fields["quantity"].default
+    )  # "linear_polo" != "physical_dose"
+    assert lse.quantity == "linear_polo"

@@ -212,7 +212,8 @@ class PlanningProblem(ProgressReporter, ABC):
 
             if self.convert_dose_objectives:
                 for obj in objs:
-                    obj.quantity = default_quantity
+                    if obj.quantity == Objective.model_fields["quantity"].default:
+                        obj.quantity = default_quantity
 
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
@@ -244,9 +245,18 @@ class PlanningProblem(ProgressReporter, ABC):
         quantity_ids = list(set(quantity_ids))
 
         # Resolve all requested quantities (plus their transitive dependencies) through a
-        # shared resolver so that any quantity referenced by multiple roots is instantiated
-        # exactly once.
-        resolver = QuantityResolver(self._dij)
+        # shared resolver using dynamic dependency injection (via signature inspection).
+        context = {
+            "cst": self._cst,
+            "ct": self._ct,
+            "pln": getattr(self, "_pln", None),
+            "stf": getattr(self, "_stf", None),
+        }
+        resolver = QuantityResolver(
+            self._dij,
+            context=context,
+            objective_list=self._objective_list,
+        )
         resolver.resolve(quantity_ids)
         self._quantities = list(resolver.instances.values())
 

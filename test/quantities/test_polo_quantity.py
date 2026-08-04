@@ -84,4 +84,4 @@ def test_polo_quantity_cst_lookup(sample_dij_dense):
 
     polo = POLO(sample_dij_dense, cst=cst, risk_voi_name="Ventricles_4mm")
     assert polo.risk_voi_name == "Ventricles_4mm"
-    assert np.array_equal(polo.binary_risk_mask, risk_mask)
+    assert np.array_equal(polo.binary_risk_mask, risk_mask.astype(float))

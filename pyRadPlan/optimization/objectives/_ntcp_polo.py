@@ -16,6 +16,12 @@ class NTCPPOLO(Objective):
     Evaluates the Normal Tissue Complication Probability (NTCP) based on the
     Probability of Lesion Origin (POLO) map.
 
+    .. note::
+       In float32 precision across large evaluation volumes, the product term
+       exp(sum(log(1-p))) can underflow to 0.0, causing vanishing gradients.
+       If optimization stalls, consider using :class:`HellingerPOLO` or
+       :class:`LogSumExpConvPOLO` as alternative objectives.
+
     For model formulation and paper references, see :class:`pyRadPlan.quantities.POLO`
     (Ortkamp et al., Med Phys 2026, DOI: 10.1002/mp.70395).
     """

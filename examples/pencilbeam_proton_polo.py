@@ -1,8 +1,13 @@
 # %% [markdown]
-"""# Example for using POLO (Probability of Lesion Origin) as quantity during optimization."""
+"""# Example for using POLO (Probability of Lesion Origin) NTCP Model during optimization."""
 # %% [markdown]
-# This example demonstrates how pyRadPlan handles the Probability of Lesion Origin (POLO) model
-# during proton fluence optimization to reduce radiation-induced contrast-enhancing brain lesions (CEBLs).
+# This example demonstrates how pyRadPlan handles Normal Tissue Complication Probability (NTCP) modeling
+# using the Probability of Lesion Origin (POLO) model during proton fluence optimization to reduce
+# radiation-induced contrast-enhancing brain lesions (CEBLs).
+#
+# References:
+# - Bahn, E., Bauer, J., Harrabi, S. B., et al. (2020). Late contrast enhancing brain lesions in proton-treated patients with low-grade glioma. IJROBP, 107(3), 571–578. DOI: 10.1016/j.ijrobp.2020.03.013
+# - Ortkamp, T., Sallem, H., Harrabi, S., et al. (2026). Direct optimization of the probability of lesion origin in proton treatment planning for low-grade glioma patients. Med Phys, 53, e70395. DOI: 10.1002/mp.70395
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:

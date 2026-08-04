@@ -12,7 +12,9 @@ class POLO(FluenceDependentQuantity):
     Probability of Lesion Origin (POLO) model quantity.
 
     Predicts the probability of lesion origin based on Physical Dose, LETxDose,
-    and a binary risk factor mask (periventricular fringe <= 4mm).
+    and a binary risk factor mask (periventricular fringe <= 4mm), automatically
+    scaled by grid voxel volume ratio k = v_new / 1.08 mm^3 relative to the reference
+    fit grid (0.6 x 0.6 x 3.0 mm^3).
 
     References
     ----------
