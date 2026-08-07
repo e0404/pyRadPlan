@@ -47,7 +47,7 @@ lint:
     script:
         # - if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - return_code=0
         - ruff check --output-format grouped || return_code=$(($return_code + $?))
         - ruff check --exit-zero --output-format grouped --output-file ruff.txt
@@ -72,7 +72,7 @@ format:
         policy: pull
     script:
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - ruff format --check
 
 codespell:

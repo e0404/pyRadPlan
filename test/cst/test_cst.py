@@ -4,7 +4,7 @@ import pytest
 import SimpleITK as sitk
 import numpy as np
 
-import pyRadPlan.io.matfile as matfile
+from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.ct import create_ct
 
 
@@ -82,6 +82,44 @@ def test_cst_to_matrad(matrad_import, tmpdir):
 
     assert isinstance(tmp, dict)
     assert isinstance(tmp["cst"], list)
+
+
+def test_cst_to_matrad_objectives_roundtrip(tmpdir):
+    """Objectives attached to VOIs survive a matRad ``.mat`` round-trip."""
+    from pyRadPlan.optimization.objectives import (
+        SquaredDeviation,
+        SquaredOverdosing,
+        get_objective,
+    )
+
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0, 3.0]), 1, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0, 6.0]), 2, []],
+        ],
+        ct=ct,
+    )
+    cst.vois[0].objectives = [SquaredDeviation(d_ref=55.0, penalty=800.0)]
+    cst.vois[1].objectives = [SquaredOverdosing(d_ref=30.0, penalty=200.0)]
+
+    matrad_list = cst.to_matrad()
+    # Objectives are serialized into the matRad objectives cell (index 5).
+    assert matrad_list[0][5][0]["className"] == "DoseObjectives.matRad_SquaredDeviation"
+    assert matrad_list[1][5][0]["className"] == "DoseObjectives.matRad_SquaredOverdosing"
+
+    tmp_mat_path = os.path.join(tmpdir, "cst_obj.mat")
+    matfile.save(tmp_mat_path, {"cst": matrad_list})
+    loaded = matfile.load(tmp_mat_path)
+
+    # Each VOI's objective cell reconstructs into the original objective.
+    reconstructed = [get_objective(row[5]) for row in loaded["cst"]]
+    assert reconstructed[0].name == "Squared Deviation"
+    assert float(reconstructed[0].priority) == 800.0
+    assert float(np.ravel(reconstructed[0].parameters)[0]) == 55.0
+    assert reconstructed[1].name == "Squared Overdosing"
+    assert float(reconstructed[1].priority) == 200.0
+    assert float(np.ravel(reconstructed[1].parameters)[0]) == 30.0
 
 
 def test_cst_target_voxels(generic_input_3d):

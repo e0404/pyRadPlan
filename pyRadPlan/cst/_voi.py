@@ -118,14 +118,27 @@ class VOI(PyRadPlanBaseModel, ABC):
         # deferred import to avoid circular import issues
         from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
 
-        if not isinstance(v, list):
-            v = [v]
+        # matRad stores a VOI's objectives as a cell array, which pymatreader/scipy
+        # return as a numpy object array (or a structured scalar for a single one).
+        # Flatten those into individual objective definitions before dispatching.
+        def _flatten(value: Any) -> list:
+            if isinstance(value, np.ndarray):
+                return [item for element in value.ravel().tolist() for item in _flatten(element)]
+            if isinstance(value, list):
+                return [item for element in value for item in _flatten(element)]
+            return [value]
+
+        def _coerce(entry: Any) -> Any:
+            # Convert a numpy structured/void scalar (scipy struct) into a dict.
+            if isinstance(entry, np.void) and entry.dtype.names:
+                return {name: entry[name] for name in entry.dtype.names}
+            return entry
 
         return [
             get_objective(entry)
             if isinstance(entry, dict) and ("name" in entry or "className" in entry)
             else entry
-            for entry in v
+            for entry in (_coerce(e) for e in _flatten(v))
         ]
 
     @model_validator(mode="before")
