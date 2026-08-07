@@ -3,7 +3,6 @@
 import logging
 from typing import ClassVar, Optional
 
-import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan.ct import validate_ct, CT
@@ -11,6 +10,7 @@ from pyRadPlan.cst import validate_cst, StructureSet
 from pyRadPlan.stf import validate_stf
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.dij import validate_dij
+from pyRadPlan.result import PlanResult, validate_result
 
 from ..base import BaseImporter
 from . import _matfile
@@ -60,26 +60,23 @@ def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = T
 
     result = mdict.get("resultGUI", None)
     if result is not None:
-        # TODO: validation as soon as result structure is implemented
-        patient_dict["result"] = result
-        if remove_matrad_structures:
-            mdict.pop("resultGUI")
+        try:
+            patient_dict["result"] = validate_result(result)
+            if remove_matrad_structures:
+                mdict.pop("resultGUI")
+        except ValueError:
+            logger.warning("resultGUI present but could not be validated.")
 
     return patient_dict
 
 
-def _result_dose_to_sitk(result: dict, ct: CT) -> Optional[sitk.Image]:
-    """Extract a physical dose cube from a matRad resultGUI dict as a SimpleITK image."""
-    if not isinstance(result, dict):
+def _result_dose_to_sitk(result: Optional[PlanResult], ct: CT) -> Optional[sitk.Image]:
+    """Extract the physical dose of a plan result as a SimpleITK image."""
+    if result is None or "physical_dose" not in result:
         return None
 
-    cube = result.get("physicalDose", result.get("physical_dose", None))
-    if cube is None:
-        return None
-
-    cube = np.asarray(cube, dtype=float)
-    # matRad cubes are stored as (y, x, z); SimpleITK expects (z, y, x).
-    dose_image = sitk.GetImageFromArray(np.transpose(cube, (2, 0, 1)))
+    # The result model already converted the matRad cube into image geometry.
+    dose_image = result["physical_dose"].values
     if dose_image.GetSize() == ct.cube_hu.GetSize():
         dose_image.CopyInformation(ct.cube_hu)
     return dose_image
@@ -118,21 +115,25 @@ class MatlabImporter(BaseImporter):
         return validate_cst(cst, ct)
 
     def load_dose(self) -> Optional[sitk.Image]:
+        return _result_dose_to_sitk(self.load_result(), self.load_ct())
+
+    def load_result(self) -> Optional[PlanResult]:
         result = self.mdict.get("resultGUI", None)
         if result is None:
             return None
-        return _result_dose_to_sitk(result, self.load_ct())
+        return validate_result(result)
 
     def load_data(self) -> dict:
         # Operate on a copy so the cached dictionary is not consumed.
         mdict = dict(self.mdict)
         patient_dict = validate_matrad_patient(mdict, remove_matrad_structures=True)
 
-        result = patient_dict.pop("result", None)
+        # Expose the result's physical dose as "dose" as well, for consumers that
+        # only handle a single image. Needs the CT to align the image geometry.
+        result = patient_dict.get("result")
         if result is not None and "ct" in patient_dict:
             dose = _result_dose_to_sitk(result, patient_dict["ct"])
             if dose is not None:
                 patient_dict["dose"] = dose
-            patient_dict["result"] = result
 
         return patient_dict

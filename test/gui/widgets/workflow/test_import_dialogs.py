@@ -11,6 +11,7 @@ from pyRadPlan.gui.widgets.workflow._dicom_import_dialog import DicomImportDialo
 from pyRadPlan.gui.widgets.workflow._workflow_widget import _folder_has_images
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import PlanResult
 
 DICOM_DIR = Path(__file__).parents[4] / "test" / "data" / "dicom"
 
@@ -184,4 +185,5 @@ def test_merge_loaded_data_wraps_dose_into_result(qapp):
 
     w._merge_loaded_data({"ct": object(), "dose": dose})
     assert ws.has("ct")
-    assert isinstance(ws.result, dict) and "physical_dose" in ws.result
+    assert isinstance(ws.result, PlanResult)
+    assert "physical_dose" in ws.result

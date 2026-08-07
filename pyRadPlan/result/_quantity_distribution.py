@@ -18,7 +18,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
     """
     A class representing the result of a dose calculation.
 
-    This class is used to store and do further sequencing/analysis of the dose valuess.
+    This class is used to store and do further sequencing/analysis of the dose values.
     """
 
     values: Annotated[sitk.Image, Field(init=False)]  # ,alias="values")]
@@ -142,7 +142,7 @@ class QuantityDistribution(PyRadPlanBaseModel):
     def _validate_sitk_format(cls, data: dict) -> None:
         """Validate that values is a SimpleITK image."""
         if not isinstance(data["values"], sitk.Image):
-            raise ValueError(f"Unsupported format of HU values: {type(data['values'])}")
+            raise ValueError(f"Unsupported format of quantity values: {type(data['values'])}")
 
     @classmethod
     def _apply_image_properties(cls, data: dict, values: sitk.Image) -> None:
@@ -384,9 +384,15 @@ def create_distribution(
     QuantityDistribution
         A QuantityDistribution object created from the input data or keyword arguments.
     """
+    if isinstance(data, QuantityDistribution):
+        return data
+
+    # Arrays and images are validated before the truthiness test below, because
+    # ``if <ndarray>:`` raises an ambiguous-truth error.
+    if isinstance(data, (sitk.Image, np.ndarray)):
+        return QuantityDistribution.model_validate(data)
+
     if data:
-        if isinstance(data, QuantityDistribution):
-            return data
         return QuantityDistribution.model_validate(data)
     return QuantityDistribution(**kwargs)
 

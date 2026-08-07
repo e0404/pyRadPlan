@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import QuantityDistribution
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,9 @@ class DVH(PyRadPlanBaseModel):
         """
 
         # manage quantity
+        if isinstance(quantity, QuantityDistribution):
+            # Unwrap a stored plan-result quantity to its image
+            quantity = quantity.values
         if isinstance(quantity, sitk.Image):
             # Convert SimpleITK image to numpy array
             quantity = sitk.GetArrayFromImage(quantity)

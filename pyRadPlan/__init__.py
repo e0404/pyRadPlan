@@ -33,7 +33,7 @@ from .ct._ct import CT, validate_ct
 from .cst._cst import StructureSet, validate_cst
 from .stf._generate_stf import generate_stf
 from .stf import SteeringInformation, validate_stf
-from .result._result import validate_result
+from .result import PlanResult, create_result, validate_result
 from .dose._calc_dose import calc_dose_influence, calc_dose_forward
 from .optimization._fluence_optimization import fluence_optimization
 from .analysis._dvh import DVH, DVHCollection
@@ -72,6 +72,8 @@ __all__ = [
     "DVHCollection",
     "SteeringInformation",
     "validate_stf",
+    "PlanResult",
+    "create_result",
     "validate_result",
     "plot_slice",
     "plot_multiple_slices",

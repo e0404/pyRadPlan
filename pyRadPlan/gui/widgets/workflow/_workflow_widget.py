@@ -66,6 +66,43 @@ def _unique_name(name: str, taken: set) -> str:
     return f"{name}_{i}"
 
 
+#: Prefix marking a quantity that was imported rather than computed. Imported
+#: quantities survive a re-optimization (see ``_carry_forward_extras``).
+IMPORT_PREFIX = "import_"
+
+
+def _result_with(
+    result: Optional[PlanResult],
+    quantities: Optional[dict] = None,
+    beam_quantities: Optional[dict] = None,
+) -> PlanResult:
+    """Return a copy of *result* with the given quantities added or replaced.
+
+    A new object is returned rather than updating *result* in place, because the
+    viewer caches its display arrays on the identity of the result object.
+    """
+    from pyRadPlan.result import create_result, validate_distribution  # noqa: PLC0415
+
+    update: dict[str, Any] = {}
+    if quantities:
+        update["quantities"] = {
+            **(result.quantities if result is not None else {}),
+            **{key: validate_distribution(v) for key, v in quantities.items()},
+        }
+    if beam_quantities:
+        update["beam_quantities"] = {
+            **(result.beam_quantities if result is not None else {}),
+            **{
+                key: [validate_distribution(v) for v in values]
+                for key, values in beam_quantities.items()
+            },
+        }
+
+    if result is None:
+        return create_result({**(quantities or {}), **(beam_quantities or {})})
+    return result.model_copy(update=update)
+
+
 def _folder_has_images(directory: str) -> bool:
     """Return True if the folder (or an immediate subfolder) holds SimpleITK images."""
     from pyRadPlan.io import list_image_files  # noqa: PLC0415
@@ -354,11 +391,11 @@ class WorkflowWidget(WorkspaceWidget):
             return
         for key in prev.stored_quantities:
             if (
-                self._is_tagged(key) or key.startswith("import_")
+                self._is_tagged(key) or key.startswith(IMPORT_PREFIX)
             ) and key not in new_result.quantities:
                 new_result.add_quantity(key, prev.quantities[key])
         for key in prev.stored_beam_quantities:
-            carry = self._is_tagged(key) or key.startswith("import_")
+            carry = self._is_tagged(key) or key.startswith(IMPORT_PREFIX)
             if carry and key not in new_result.beam_quantities:
                 new_result.add_beam_quantity(key, prev.beam_quantities[key])
 
@@ -688,7 +725,7 @@ class WorkflowWidget(WorkspaceWidget):
             )
             payload.pop("cst")
         if "result" not in payload and data.get("dose") is not None:
-            # sitk.Image values are rendered directly by the result widget.
+            # The workspace validates this into a PlanResult on the way in.
             payload["result"] = {"physical_dose": data["dose"]}
         if payload:
             self._ws.set_many(**payload)
@@ -789,10 +826,11 @@ class WorkflowWidget(WorkspaceWidget):
                 return image
 
             def _on_success(image: Any) -> None:
-                result = dict(self._ws.result or {})
-                key = _unique_name(sel["name"], set(result))
-                result[key] = image
-                self._ws.result = result
+                result = self._ws.result
+                key = _unique_name(
+                    f"{IMPORT_PREFIX}{sel['name']}", set(self._result_quantity_keys(result))
+                )
+                self._ws.result = _result_with(result, quantities={key: image})
 
             self._run_in_thread(_load, on_success=_on_success, busy_text="Importing dose…")
 
@@ -1025,65 +1063,43 @@ class WorkflowWidget(WorkspaceWidget):
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
 
-        result: dict[str, Any] = dict(self._ws.result or {})
+        result: Optional[PlanResult] = self._ws.result
+        if result is None:
+            QMessageBox.warning(self, "Save Result", "No result available to save.")
+            return
+
         # Snapshot the current active quantities: every key that is not itself
         # a snapshot from an earlier save (reusing a tag overwrites it).
-        for key in list(result):
-            if not self._is_tagged(key):
-                result[f"{key}_{tag}"] = result[key]
+        snapshots = {
+            f"{key}_{tag}": result.quantities[key]
+            for key in result.stored_quantities
+            if not self._is_tagged(key)
+        }
+        beam_snapshots = {
+            f"{key}_{tag}": result.beam_quantities[key]
+            for key in result.stored_beam_quantities
+            if not self._is_tagged(key)
+        }
 
         if tag not in self._saved_tags:
             self._saved_tags.append(tag)
-        self._ws.result = result
+        self._ws.result = _result_with(result, snapshots, beam_snapshots)
         self._update_status()
 
     # ------------------------------------------------------------------
     # Saving / export callbacks
     # ------------------------------------------------------------------
 
-    def _result_to_dose_image(self, result: Optional[dict], ct: Any) -> Optional[Any]:
-        """Extract a physical-dose ``sitk.Image`` from the current result, if any.
+    @staticmethod
+    def _result_to_dose_image(result: Optional[PlanResult]) -> Optional[Any]:
+        """Return the physical dose of *result* as a ``sitk.Image``, if present.
 
         Returns *None* (rather than raising) when no usable dose is present, so
         saving still succeeds with just the CT and structures.
         """
-        if not isinstance(result, dict) or ct is None:
+        if result is None or "physical_dose" not in result:
             return None
-        dose = result.get("physical_dose")
-        if dose is None:
-            return None
-
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
-
-        if isinstance(dose, sitk.Image):
-            return dose
-        arr = np.asarray(dose)
-        if arr.ndim != 3:
-            return None
-        # A raw 3-D array here comes from an imported matRad resultGUI, stored as
-        # (y, x, z); SimpleITK expects (z, y, x) (matching the matlab importer).
-        image = sitk.GetImageFromArray(np.transpose(arr, (2, 0, 1)))
-        if image.GetSize() == ct.cube_hu.GetSize():
-            image.CopyInformation(ct.cube_hu)
-        return image
-
-    def _quantity_to_image(self, value: Any, ct: Any) -> Optional[Any]:
-        """Convert a result quantity into a CT-aligned ``sitk.Image`` (or *None*)."""
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
-
-        if isinstance(value, sitk.Image):
-            return value
-        arr = np.asarray(value)
-        if arr.ndim != 3:
-            return None
-        # A raw 3-D array here comes from an imported matRad resultGUI, stored as
-        # (y, x, z); SimpleITK expects (z, y, x) (matching the matlab importer).
-        image = sitk.GetImageFromArray(np.transpose(arr, (2, 0, 1)))
-        if ct is not None and image.GetSize() == ct.cube_hu.GetSize():
-            image.CopyInformation(ct.cube_hu)
-        return image
+        return result["physical_dose"].values
 
     @staticmethod
     def _image_format_from_filter(selected: str) -> tuple[str, str]:
@@ -1118,7 +1134,7 @@ class WorkflowWidget(WorkspaceWidget):
         dij = ws.dij
         if dij is not None:
             objects["dij"] = dij
-        dose = self._result_to_dose_image(ws.result, ws.ct)
+        dose = self._result_to_dose_image(ws.result)
         if dose is not None:
             objects["dose"] = dose
         objects = {k: v for k, v in objects.items() if v is not None}
@@ -1232,20 +1248,13 @@ class WorkflowWidget(WorkspaceWidget):
         self._run_save(_save, "Saving CST…", "Save CST")
 
     def _on_save_result_to_disk(self) -> None:  # noqa: PLR0911 - guard-heavy dialog flow
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
-
-        result = self._ws.result
-        if not isinstance(result, dict) or not result:
+        result: Optional[PlanResult] = self._ws.result
+        if result is None:
             QMessageBox.warning(self, "Save Result", "No result available to save.")
             return
 
-        # Offer only scalar image quantities (skip beamlet weights and per-beam lists).
-        keys = [
-            k
-            for k, v in result.items()
-            if isinstance(v, sitk.Image) or (isinstance(v, np.ndarray) and v.ndim == 3)
-        ]
+        # Offer only whole-volume quantities (skip beamlet weights and per-beam lists).
+        keys = result.stored_quantities
         if not keys:
             QMessageBox.warning(
                 self, "Save Result", "The result has no exportable image quantities."
@@ -1259,16 +1268,9 @@ class WorkflowWidget(WorkspaceWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        ct = self._ws.ct
-        images = {}
-        for key in dialog.selected_quantities():
-            image = self._quantity_to_image(result[key], ct)
-            if image is not None:
-                images[key] = image
+        images = {key: result[key].values for key in dialog.selected_quantities()}
         if not images:
-            QMessageBox.warning(
-                self, "Save Result", "Selected quantities could not be converted to images."
-            )
+            QMessageBox.warning(self, "Save Result", "No quantities were selected.")
             return
 
         if len(images) == 1:

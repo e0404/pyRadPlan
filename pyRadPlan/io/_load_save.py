@@ -15,6 +15,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 from .matlab import validate_matrad_patient
 from ._factory import (
@@ -134,19 +135,23 @@ def load_data(path: os.PathLike) -> dict:
     return importer.load_data()
 
 
-def _collect_objects(data, ct, cst, dose, extra) -> dict:
+def _collect_objects(  # noqa: PLR0913 - mirrors save_data's convenience arguments
+    data, ct, cst, dose, result, extra
+) -> dict:
     """Gather the named objects to save into a single dict."""
     objects: dict = {}
     if data is not None:
         if not isinstance(data, dict):
             raise TypeError("'data' must be a dict of named objects.")
         objects.update(data)
-    for key, value in (("ct", ct), ("cst", cst), ("dose", dose)):
+    for key, value in (("ct", ct), ("cst", cst), ("dose", dose), ("result", result)):
         if value is not None:
             objects[key] = value
     objects.update({k: v for k, v in extra.items() if v is not None})
     if not objects:
-        raise ValueError("Nothing to save: provide ct, cst, dose, extra objects or a data dict.")
+        raise ValueError(
+            "Nothing to save: provide ct, cst, dose, result, extra objects or a data dict."
+        )
     return objects
 
 
@@ -172,6 +177,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     ct: Optional[CT] = None,
     cst: Optional[StructureSet] = None,
     dose: Optional[sitk.Image] = None,
+    result: Optional[PlanResult] = None,
     **extra,
 ) -> Union[str, list[str]]:
     """
@@ -194,6 +200,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         Convenience keyword arguments for the most common objects.
     dose : sitk.Image, optional
         A dose distribution to save.
+    result : PlanResult, optional
+        A plan result to save. Formats that store only a single dose image fall
+        back to its physical dose.
     **extra
         Further named objects passed through to the exporter.
 
@@ -202,7 +211,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     str or list[str]
         The path(s) written.
     """
-    objects = _collect_objects(data, ct, cst, dose, extra)
+    objects = _collect_objects(data, ct, cst, dose, result, extra)
     fmt = _resolve_format(file_name, format)
 
     ext = default_extension(fmt)

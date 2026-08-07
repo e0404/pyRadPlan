@@ -1,9 +1,10 @@
 import pytest
 import SimpleITK as sitk
-from pyRadPlan.result import create_result
+from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+from pyRadPlan.gui.widgets.workflow._workflow_widget import IMPORT_PREFIX, _result_with
 from pyRadPlan.gui.workspace import WorkspaceManager
 
 
@@ -188,3 +189,73 @@ def test_cst_export_all_formats_write_loadable_masks(qapp, tmp_path):
     seg = str(tmp_path / "dcm_seg")
     DicomExporter(seg, structure_format="seg").save(cst=cst)
     assert len(DicomHandler(seg).load_cst().vois) == n
+
+
+def _dose_image(value=1.0):
+    image = sitk.Image([4, 4, 2], sitk.sitkFloat32)
+    image += value
+    return image
+
+
+def test_workspace_validates_a_result_dict(qapp):
+    """A dict assigned to ws.result becomes a PlanResult for every consumer."""
+    ws = WorkspaceManager()
+
+    ws.result = {"physical_dose": _dose_image()}
+    assert isinstance(ws.result, PlanResult)
+    assert "physical_dose" in ws.result
+
+    ws.set_many(result={"physical_dose": _dose_image()})
+    assert isinstance(ws.result, PlanResult)
+
+    ws.result = None
+    assert ws.result is None
+
+
+def test_save_result_snapshots_quantities(qapp, monkeypatch):
+    """Save/Keep Result tags a copy of the current quantities onto the result."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.result = create_result(
+        {"physical_dose": _dose_image(), "physical_dose_beam": [_dose_image()]}
+    )
+    original = ws.result
+
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QInputDialog.getText",
+        lambda *a, **k: ("run1", True),
+    )
+    w._on_save_result()
+
+    assert isinstance(ws.result, PlanResult)
+    # The snapshot is added; a new object is stored so the viewer refreshes.
+    assert ws.result is not original
+    assert sorted(ws.result.stored_quantities) == ["physical_dose", "physical_dose_run1"]
+    assert sorted(ws.result.stored_beam_quantities) == ["physical_dose", "physical_dose_run1"]
+    assert w._is_tagged("physical_dose_run1")
+
+    # Snapshots survive a re-optimization, the fresh quantities take precedence.
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    w._carry_forward_extras(fresh, ws.result)
+    assert sorted(fresh.stored_quantities) == ["physical_dose", "physical_dose_run1"]
+
+
+def test_imported_dose_is_carried_forward(qapp):
+    """An imported quantity is prefixed so it survives the next optimization."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    imported = _result_with(None, quantities={f"{IMPORT_PREFIX}ct_dose": _dose_image()})
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    w._carry_forward_extras(fresh, imported)
+
+    assert f"{IMPORT_PREFIX}ct_dose" in fresh
+
+
+def test_result_to_dose_image_reads_the_model(qapp):
+    """Saving a workspace picks the physical dose out of the PlanResult."""
+    assert WorkflowWidget._result_to_dose_image(None) is None
+    assert WorkflowWidget._result_to_dose_image(create_result({"let": _dose_image()})) is None
+
+    result = create_result({"physical_dose": _dose_image()})
+    assert WorkflowWidget._result_to_dose_image(result) is result["physical_dose"].values

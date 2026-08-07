@@ -43,4 +43,6 @@ def fluence_optimization(
     fluence, _result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
     result = dij.compute_result_ct_grid(fluence)
     result.info = _result_info
+    # solve() resolves the solver from its identifier, so read it back afterwards.
+    result.used_optimizer = getattr(planning_prob.solver, "short_name", str(planning_prob.solver))
     return result

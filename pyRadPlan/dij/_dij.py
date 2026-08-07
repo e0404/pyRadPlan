@@ -399,23 +399,6 @@ class Dij(PyRadPlanBaseModel):
             let_dose = let_mat @ intensity
             out["let"] = xp.zeros_like(let_dose)
             out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
-            # calculation of beamwise let
-            out["let_beam"] = []
-            for i in range(self.num_of_beams):
-                beam_mask = (self.beam_num == i).astype(bool)
-                let_dose_matrix = self.let_dose.flat[scenario_index][:, beam_mask]
-                let_dose_beam = let_dose_matrix @ intensity[beam_mask]
-
-                phys_dose_beam = out["physical_dose_beam"][i]
-
-                let_beam = np.zeros_like(let_dose_beam)
-                if np.max(phys_dose_beam) > 0:
-                    indices_beam = phys_dose_beam > 0.05 * np.max(phys_dose_beam)
-                    let_beam[indices_beam] = (
-                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
-                    )
-
-                out["let_beam"].append(let_beam)
 
             let_dose_beams = [let_mat[:, idx] @ intensity[idx] for idx in beam_indices]
             out["let_beam"] = []
@@ -555,13 +538,6 @@ class Dij(PyRadPlanBaseModel):
                 # handle the collective of all beams
                 out[key] = resampler.Execute(value)
 
-            if isinstance(value, list):
-                #  handle every single beam information
-                for i in range(len(value)):
-                    out[key][i] = resampler.Execute(value[i])
-            else:
-                # handle the collective of all beams
-                out[key] = resampler.Execute(value)
         return create_result(out, fluence=intensities)
 
     def to_namespace(

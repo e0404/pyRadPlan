@@ -1,17 +1,20 @@
 """
-Module for handling the result of calc_dose_forward and calc_dose_influence.
+Module for handling the result of a treatment plan computation.
 
 Defines a result pydantic model and factories.
 """
 
-from typing import List, Any, Union, Dict
+from collections.abc import Mapping
+from typing import List, Any, Optional, Union, Dict
 import numpy as np
 import logging
 
 from pydantic import (
     Field,
+    PrivateAttr,
     model_validator,
     field_serializer,
+    field_validator,
     SerializationInfo,
     ValidationInfo,
 )
@@ -25,7 +28,7 @@ from pyRadPlan.result._sequence import Sequence
 logger = logging.getLogger(__name__)
 
 
-class BeamAccessor:
+class BeamAccessor(Mapping):
     """
     A class to access beam quantities in a PlanResult object.
 
@@ -36,9 +39,12 @@ class BeamAccessor:
         self.beam_quantities = beam_quantities
 
     def __getattr__(self, attr):
-        if attr in self.beam_quantities:
-            return self.beam_quantities[attr]
-        raise AttributeError(f"'BeamAccessor' object has no attribute '{attr}'")
+        # Only reached for names that are not real attributes, so the internal
+        # ``beam_quantities`` lookup below cannot recurse.
+        try:
+            return self.__dict__["beam_quantities"][attr]
+        except KeyError:
+            raise AttributeError(f"'BeamAccessor' object has no attribute '{attr}'") from None
 
     def __getitem__(self, key):
         return self.beam_quantities[key]
@@ -48,15 +54,6 @@ class BeamAccessor:
 
     def __len__(self):
         return len(self.beam_quantities)
-
-    def keys(self):
-        return self.beam_quantities.keys()
-
-    def items(self):
-        return self.beam_quantities.items()
-
-    def values(self):
-        return self.beam_quantities.values()
 
 
 class PlanResult(PyRadPlanBaseModel):
@@ -71,10 +68,10 @@ class PlanResult(PyRadPlanBaseModel):
         The fluence array (weights).
     info : dict[str, Any]
         The information given by the solver.
-    used_solver : str
-        The solver used for the calculation.
-    MU : np.ndarray
-        The monitor units array.
+    used_optimizer : Union[str, dict[str, Any]]
+        The optimizer used for the calculation.
+    mu : np.ndarray
+        The monitor units array. Reserved: not computed yet.
     quantities : Dict[str, QuantityDistribution]
         A dictionary of quantities, where the key is the quantity name and the value is a QuantityDistribution object.
         Quantities are called by their name, e.g. physical_dose, let, etc.
@@ -101,13 +98,28 @@ class PlanResult(PyRadPlanBaseModel):
     quantities: Dict[str, QuantityDistribution] = Field(default_factory=dict)
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
 
-    fluence: np.ndarray = Field(default=None)
-    mu: np.ndarray | None = Field(default=None, alias="MU")
+    # "w" is matRad's name for the beamlet weights.
+    fluence: Optional[np.ndarray] = Field(default=None, alias="w")
+    mu: Optional[np.ndarray] = Field(default=None, alias="MU")
 
     info: dict[str, Any] = Field(default_factory=dict)
     used_optimizer: Union[str, dict[str, Any]] = Field(default="")
 
-    sequence: Sequence = Field(default=None, alias="sequencing")
+    sequence: Optional[Sequence] = Field(default=None, alias="sequencing")
+
+    _beam_accessor: Optional[BeamAccessor] = PrivateAttr(default=None)
+
+    @field_validator("info", "used_optimizer", mode="before")
+    @classmethod
+    def _coerce_empty(cls, v: Any, info: ValidationInfo) -> Any:
+        """Coerce empty MATLAB values back to this field's default.
+
+        A ``.mat`` round-trip turns an empty dict or string into ``None`` or an
+        empty array; accept those so a saved result re-validates.
+        """
+        if v is None or (hasattr(v, "__len__") and len(v) == 0):
+            return {} if info.field_name == "info" else ""
+        return v
 
     @property
     def stored_quantities(self) -> List[str]:
@@ -133,9 +145,10 @@ class PlanResult(PyRadPlanBaseModel):
         return out
 
     @property
-    def beam(self):
-        if not hasattr(self, "_beam_accessor") or self._beam_accessor is None:
-            object.__setattr__(self, "_beam_accessor", BeamAccessor(self.beam_quantities))
+    def beam(self) -> BeamAccessor:
+        """Per-beam quantities, accessible as ``result.beam.physical_dose[i]``."""
+        if self._beam_accessor is None:
+            self._beam_accessor = BeamAccessor(self.beam_quantities)
         return self._beam_accessor
 
     @classmethod
@@ -143,31 +156,36 @@ class PlanResult(PyRadPlanBaseModel):
         """Handle data coming from matRad by grouping beam quantities."""
         # If the data is from matRad, we need to handle the beam quantities differently.
         # The keys are usually named with a "_beam" suffix.
-        if "sequencing" in data:
-            data["sequence"] = data.pop("sequencing")
-        else:
-            data["sequence"] = {}
-        for key, value in list(data.items()):
+        # A new dictionary is built rather than mutating the input, because the
+        # source is often a cached matRad mdict that the caller keeps using, and
+        # because rewriting keys in place would reshuffle the quantity order.
+        data = dict(data)
+        sequence = dict(data.pop("sequencing", {}))
+        out: dict[str, Any] = {}
+
+        # Per-beam keys are collected with their beam number so that the beam order
+        # follows the number in the key rather than the key order of the source file.
+        beam_groups: dict[str, list[tuple[int, Any]]] = {}
+
+        for key, value in data.items():
             if key in ["w", "wUnsequenced"]:
-                data["fluence"] = value
-                data.pop(key)
+                out["fluence"] = value
             elif "_beam" in key:
-                prefix, _, _ = key.partition("_beam")
-                if to_snake(prefix) + "_beam" in data:
-                    data[to_snake(prefix) + "_beam"].append(value)
-                else:
-                    data[to_snake(prefix) + "_beam"] = [value]
-                # Remove the original key
-                data.pop(key)
+                prefix, _, number = key.partition("_beam")
+                group = beam_groups.setdefault(to_snake(prefix) + "_beam", [])
+                group.append((int(number) if number.isdigit() else len(group), value))
             elif key in ["w_sequenced", "wSequenced"]:
-                data["sequence"]["fluence"] = value
-                data.pop(key)
+                sequence["fluence"] = value
             elif key in ["apertureInfo", "aperture_info"]:
-                data["sequence"]["aperture_info"] = data.pop(key)
-            elif not to_snake(key) == key:
-                data[to_snake(key)] = value
-                data.pop(key)
-        return data
+                sequence["aperture_info"] = value
+            else:
+                out[to_snake(key)] = value
+
+        for key, group in beam_groups.items():
+            out[key] = [value for _, value in sorted(group, key=lambda entry: entry[0])]
+
+        out["sequence"] = sequence
+        return out
 
     @model_validator(mode="before")
     @classmethod
@@ -177,67 +195,60 @@ class PlanResult(PyRadPlanBaseModel):
         if info.context and info.context.get("from_matRad"):
             data = cls._process_matrad_data(data, info)
 
-        if isinstance(data, dict):
-            # This here is necessary because of dynamic keys
-            fields = cls.model_fields
-            static_field_names = {n for n in fields if n not in {"quantities", "beam_quantities"}}
-            static_aliases = {
-                f.alias
-                for f in fields.values()
-                if f.alias and f.alias not in {"quantities", "beam_quantities"}
-            }
-            static_keys = static_field_names.union(static_aliases)
-
-            # Place dynamic values into temporary public keys.
-            quantities_tmp = {}
-            beam_quantities_tmp = {}
-            for key, value in list(data.items()):
-                if key in static_keys:
-                    continue
-                if key == "quantities":
-                    quantities_tmp.update(value)
-                    data.pop(key)
-                    continue
-                elif key == "beam_quantities":
-                    beam_quantities_tmp.update(value)
-                    data.pop(key)
-                    continue
-
-                if not isinstance(value, list):
-                    if isinstance(value, dict) and (
-                        all(isinstance(value[v], QuantityDistribution) for v in value.keys())
-                        or all(
-                            isinstance(value[v], list)
-                            and all(isinstance(w, QuantityDistribution) for w in value[v])
-                            for v in value.keys()
-                        )
-                    ):
-                        continue
-                    # The Cubes have to be validated because validation does not work via private attributes.
-                    quantities_tmp[key] = QuantityDistribution.model_validate(
-                        value, context=info.context
-                    )
-                else:
-                    new_key = key.replace("_beam", "") if "_beam" in key else key
-                    beam_quantities_tmp[new_key] = [
-                        QuantityDistribution.model_validate(v, context=info.context) for v in value
-                    ]
-                    # Remove the key
-                data.pop(key)
-            data["quantities"] = quantities_tmp
-            data["beam_quantities"] = beam_quantities_tmp
-
+        if not isinstance(data, dict):
             return data
+
+        # Copy so that the caller's dictionary survives validation unchanged.
+        data = dict(data)
+
+        # This here is necessary because of dynamic keys
+        fields = cls.model_fields
+        static_field_names = {n for n in fields if n not in {"quantities", "beam_quantities"}}
+        static_aliases = {
+            f.alias
+            for f in fields.values()
+            if f.alias and f.alias not in {"quantities", "beam_quantities"}
+        }
+        static_keys = static_field_names.union(static_aliases)
+
+        # Place dynamic values into temporary public keys.
+        quantities_tmp = {}
+        beam_quantities_tmp = {}
+        for key, value in list(data.items()):
+            if key in static_keys:
+                continue
+            if key == "quantities":
+                quantities_tmp.update(value)
+            elif key == "beam_quantities":
+                beam_quantities_tmp.update(value)
+            elif isinstance(value, list):
+                beam_quantities_tmp[key.replace("_beam", "")] = [
+                    QuantityDistribution.model_validate(v, context=info.context) for v in value
+                ]
+            else:
+                # The Cubes have to be validated here because dynamic keys are not fields.
+                quantities_tmp[key] = QuantityDistribution.model_validate(
+                    value, context=info.context
+                )
+            data.pop(key)
+
+        data["quantities"] = quantities_tmp
+        data["beam_quantities"] = beam_quantities_tmp
 
         return data
 
     def __getattr__(self, item):
-        quantities = object.__getattribute__(self, "quantities")
-        if item in quantities:
+        # Stored quantities are reachable as attributes (result.physical_dose).
+        # Everything else falls back to pydantic, which resolves private
+        # attributes and raises a proper AttributeError for unknown names.
+        quantities = self.__dict__.get("quantities")
+        if quantities is not None and item in quantities:
             return quantities[item]
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{item}'")
+        return super().__getattr__(item)
 
     def __setattr__(self, name, value):
+        # Rebinding the containers would bypass validation of their entries.
+        # Their contents remain mutable through add_quantity/add_beam_quantity.
         if name == "quantities":
             raise AttributeError(
                 "Direct modification of 'quantities' is not allowed. Use add_quantity() instead."
@@ -247,6 +258,14 @@ class PlanResult(PyRadPlanBaseModel):
                 "Direct modification of 'beam_quantities' is not allowed. Use add_beam_quantity() instead."
             )
         super().__setattr__(name, value)
+
+    def __getitem__(self, key: str) -> QuantityDistribution:
+        """Return a stored quantity by name."""
+        return self.quantities[key]
+
+    def __contains__(self, key: str) -> bool:
+        """Whether a quantity of that name is stored."""
+        return key in self.quantities
 
     def add_quantity(
         self, key: str = None, value: Union[dict, QuantityDistribution] = None, **kwargs
@@ -356,11 +375,6 @@ class PlanResult(PyRadPlanBaseModel):
                 return dict_tmp
             return None
         return v
-
-    def analyse_plan(self) -> None:
-        """Perform analysis on the plan."""
-        # TODO
-        pass
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         """

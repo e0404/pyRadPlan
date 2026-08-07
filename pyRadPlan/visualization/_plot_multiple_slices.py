@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pint
 import re
 from pyRadPlan import CT, StructureSet
+from pyRadPlan.result import QuantityDistribution
 from pyRadPlan.visualization._plot_slice import _apply_deprecated_aliases, plot_slice
 
 # Initialize Units
@@ -33,7 +34,7 @@ class PlotMultipleSlicesKwargs(TypedDict, total=False):
 def plot_multiple_slices(
     image_volume: Optional[Union[CT, dict, sitk.Image]] = None,
     cst: Optional[Union[StructureSet, dict, list]] = None,
-    overlays: Optional[Union[sitk.Image, np.ndarray]] = None,
+    overlays: Optional[Union[QuantityDistribution, sitk.Image, np.ndarray]] = None,
     view_slice: Optional[Union[list[int], np.ndarray, int]] = None,
     *,
     ct: Optional[Union[CT, dict, sitk.Image]] = None,
