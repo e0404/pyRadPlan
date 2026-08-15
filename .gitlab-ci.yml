@@ -19,7 +19,7 @@ build-matrix:
     stage: build
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
@@ -106,7 +106,7 @@ tests-matrix:
     stage: test
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
