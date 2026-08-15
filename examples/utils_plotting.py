@@ -1,7 +1,7 @@
 # %% [markdown]
 """# Multiple examples on how to use the visualization tools provided by pyRadPlan."""
 # %% [markdown]
-# This example demonstrates the usage of `plot_slice()`, `plot_distributions()` and `plot_3d()`.
+# This example demonstrates the usage of `plot_slice()` and `plot_multiple_slices()`.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
@@ -64,7 +64,7 @@ plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"])
 # ## Visualze more abstract settings using `plot_slice()` <br>
 
 # `plot_slice()` has multiple tweakable parameters:
-# - **ct**: The CT data to visualize
+# - **image_volume**: The CT data to visualize
 # - **cst**: The structure set to visualize (optional)
 # - **overlay**: The quantity to visualize
 # - **view_slice**: Which slice to visualize (default: middle slice)
@@ -75,14 +75,14 @@ plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"])
 # - **save_filename**: If provided, saves the plot to a file
 # - **show_plot**: Whether to show the plot (default: True)
 # - **use_global_max**: If True, uses the global maximum of the overlay for scaling (default: False)
-# - **ax**: If provided, plots on the given axes (useful for subplots) - use of 'plot_distributions()' is recommended
+# - **ax**: If provided, plots on the given axes (useful for subplots) - use of 'plot_multiple_slices()' is recommended
 # %%
 # Feel free to change the parameters to see how they affect the plot.
 plot_slice(
     image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
-    view_slice=64,  # Visualize slice 10
+    view_slice=64,  # Visualize slice 64
     plane="coronal",  # axial, coronal or sagittal
     overlay_alpha=0.5,  # Transparency of the overlay
     overlay_unit="Gy",  # Gy, dimensionless, etc.
@@ -94,11 +94,11 @@ plot_slice(
 )
 
 # %% [markdown]
-# ### Visualizing multiple overlays/quantities with `plot_distributions()`
+# ### Visualizing multiple overlays/quantities with `plot_multiple_slices()`
 # This function might be useful in cases you want to compare multiple overlays/quantities/beams side by side.
 
-# `plot_distributions()` has similar parameters to `plot_slice()`:
-# - **ct**:  The CT data to visualize
+# `plot_multiple_slices()` has similar parameters to `plot_slice()`:
+# - **image_volume**:  The CT data to visualize
 # - **cst**:  The structure set to visualize (optional)
 # - **overlays**:  List of overlay images to visualize
 # - **view_slice**:  Which slices to visualize (default: middle slice)
