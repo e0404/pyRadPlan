@@ -1,14 +1,14 @@
 # %% [markdown]
-"""# Example for carbon dose calculation using pencilbeam engine."""
+"""# Example for oxygen dose calculation using pencilbeam engine."""
 # %% [markdown]
-# This example demonstrates how to use the pyRadPlan library to perform carbon ion dose calculations with biological effect modeling.
+# This example demonstrates how to use the pyRadPlan library to perform oxygen ion dose calculations with biological effect modeling.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/pencilbeam_carbon.py
+# jupytext --to notebook path/to/this/file/pencilbeam_oxygen.py
 
 # %%
 # Import necessary libraries
@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 ct, cst = load_tg119()
 
 # %% [markdown]
-# In this section, we create a carbon ion therapy plan with biological effect calculation.
+# In this section, we create an oxygen ion therapy plan with biological effect calculation.
 # %%
 # Create a plan object
 pln = IonPlan(radiation_mode="oxygen", machine="Generic")
@@ -75,21 +75,21 @@ else:
     # Choose slices to visualize
     view_slice = [int(np.round(ct.size[2] / 2))]
 
-# Visualize the results
-# Use plot_multiple_slices to visualize the biological effect and physical dose
-# use plot_slice() for single distributions
-plot_multiple_slices(
-    image_volume=ct,
-    cst=cst,
-    overlays=[result["physical_dose"], result["rbe_x_dose"]],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit=[
-        "Gy",
-        "Gy",
-    ],
-    overlay_titles=["Physical Dose", "RBE x Dose"],
-    show_plot=True,
-)
+    # Visualize the results
+    # Use plot_multiple_slices to visualize the biological effect and physical dose
+    # use plot_slice() for single distributions
+    plot_multiple_slices(
+        image_volume=ct,
+        cst=cst,
+        overlays=[result["physical_dose"], result["rbe_x_dose"]],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit=[
+            "Gy",
+            "Gy",
+        ],
+        overlay_titles=["Physical Dose", "RBE x Dose"],
+        show_plot=True,
+    )
 
 # %%

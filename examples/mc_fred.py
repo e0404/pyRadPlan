@@ -10,7 +10,8 @@
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/proton_MC_FRED.py
+# jupytext --to notebook path/to/this/file/mc_fred.py
+# ```
 
 # %%
 # Import necessary libraries
@@ -110,9 +111,6 @@ else:
     # Choose a slice to visualize
     view_slice = int(np.round(ct.size[2] / 2))
     plot_slice(ct, cst, result_opt["physical_dose"], view_slice)
-
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
 
 # %% [markdown]
 # You can also run calc_dose_forward (direct dose calculation) without optimization.

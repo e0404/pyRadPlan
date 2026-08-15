@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IO: Refactored the `pyRadPlan.io` package around the new framework. `load_patient`, `load_tg119`
   and `validate_matrad_patient` remain available; the legacy `MatlabFileHandler` and top-level
   `matfile` module were removed (low-level `.mat` read/write lives in `pyRadPlan.io.matlab`)
+- examples: `proton_mc_topas.py` replaced by `mc_topas.py` with added result viewer
+- examples: `utils_matrad.py` uses `pyRadPlan.io` (`MatlabHandler`, `save_data`) instead of `pymatreader` / `scipy.io.savemat`
 
 ### Deprecated
 
@@ -135,6 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
 - Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
+- examples: crashing plot block in `pencilbeam_carbon.py` and broken `.mat` unpacking in `utils_matrad.py`, deprecated `plot_slice(ct=...)` calls, missing jupytext cell markers in `pencilbeam_vhee.py`, plus stale docstrings, engine names and file references
 
 ## [0.4.1] - 2026-06-16
 
