@@ -49,8 +49,3 @@ def load_from_name(radiation_mode: str, machine_name: str) -> Machine:
                 return load_machine(filename.as_posix())
 
     raise FileNotFoundError("Could not find the following machine file:", composed_filename)
-
-
-if __name__ == "__main__":
-    machine = load_from_name(radiation_mode="photons", machine_name="Generic")
-    print(machine)

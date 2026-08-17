@@ -179,15 +179,12 @@ The script ``examples/utils_ai_agents.py`` shows a complete workflow:
     dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
     plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
 
-Settings reference
-------------------
-
-.. autoclass:: pyRadPlan.ai_agents.AiSettings
-   :members:
-
 API reference
 -------------
 
-.. autofunction:: pyRadPlan.ai_agents.generate_beam_angles
+The full API for the ``ai_agents`` module, including the settings class and helper
+functions, is documented in the :doc:`API reference </api/ai_agents>`:
 
-.. autofunction:: pyRadPlan.ai_agents.generate_voi_objectives
+* :class:`~pyRadPlan.ai_agents.AiSettings`
+* :func:`~pyRadPlan.ai_agents.generate_beam_angles`
+* :func:`~pyRadPlan.ai_agents.generate_voi_objectives`

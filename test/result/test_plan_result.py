@@ -140,11 +140,36 @@ def test_to_matrad_dict(sample_image):
     assert "physicalDose" in matrad_dict
     assert "let" in matrad_dict
     assert "info" in matrad_dict
+    # matRad calls the beamlet weights "w".
+    assert "w" in matrad_dict
     assert matrad_dict["physicalDose"].shape == (100, 100, 50)
     assert matrad_dict["let"].shape == (100, 100, 50)
     assert matrad_dict["physicalDose_beam1"].shape == (100, 100, 50)
 
     # savemat("output.mat", matrad_dict)
+
+
+def test_to_matrad_roundtrip(sample_image):
+    """A result exported for matRad validates back into an equivalent result."""
+    result = create_result(
+        physical_dose=sample_image,
+        let=sample_image,
+        fluence=np.arange(5.0),
+        physical_dose_beam=[sample_image, sample_image],
+        used_optimizer="ipopt",
+    )
+
+    reimported = validate_result(result.to_matrad())
+
+    assert reimported.stored_quantities == ["physical_dose", "let"]
+    assert reimported.stored_beam_quantities == ["physical_dose"]
+    assert len(reimported.beam.physical_dose) == 2
+    assert reimported.used_optimizer == "ipopt"
+    np.testing.assert_allclose(reimported.fluence, np.arange(5.0))
+    np.testing.assert_allclose(
+        sitk.GetArrayFromImage(reimported.physical_dose.values),
+        sitk.GetArrayFromImage(result.physical_dose.values),
+    )
 
 
 def test_matrad_import(test_data_photons_raw):
@@ -163,6 +188,45 @@ def test_matrad_import(test_data_photons_raw):
     assert isinstance(result.beam.physical_dose[1].values, sitk.Image)
     assert result.beam.physical_dose[0].size == (10, 20, 10)
     assert result.beam.physical_dose[1].size == (10, 20, 10)
+
+
+def test_matrad_import_orders_beams_by_number(sample_image):
+    """Per-beam quantities follow the beam number, not the key order of the file."""
+    array = sitk.GetArrayFromImage(sample_image)
+    matrad_dict = {"physicalDose": array}
+    # Deliberately shuffled, and past beam 9 so lexical ordering would differ.
+    for beam in [3, 11, 1, 12, 2, 10]:
+        matrad_dict[f"physicalDose_beam{beam}"] = np.full_like(array, float(beam))
+
+    result = validate_result(matrad_dict)
+
+    first_values = [sitk.GetArrayFromImage(qd.values).flat[0] for qd in result.beam.physical_dose]
+    assert first_values == [1.0, 2.0, 3.0, 10.0, 11.0, 12.0]
+
+
+def test_validation_does_not_consume_input(sample_image):
+    """The caller's dictionary must survive validation unchanged."""
+    data = {"physical_dose": sample_image, "info": {"iterations": 3}}
+    snapshot = dict(data)
+
+    validate_result(data)
+
+    assert data == snapshot
+
+
+def test_result_item_access(sample_image):
+    """Quantities are reachable by name as well as by attribute."""
+    result = create_result(
+        physical_dose=sample_image, physical_dose_beam=[sample_image, sample_image]
+    )
+
+    assert result["physical_dose"] is result.physical_dose
+    assert "physical_dose" in result
+    assert "let" not in result
+    assert "physical_dose" in result.beam
+    assert result.beam.get("let") is None
+    with pytest.raises(KeyError):
+        result["let"]
 
 
 def test_validated_result(sample_image):

@@ -1,6 +1,5 @@
 """Provides functionality for handling treatment plan results."""
 
-from ._aperture_info import ApertureInfo
 from ._quantity_distribution import (
     QuantityDistribution,
     create_distribution,
@@ -14,7 +13,6 @@ from ._result import (
 from ._sequence import Sequence
 
 __all__ = [
-    "ApertureInfo",
     "PlanResult",
     "QuantityDistribution",
     "Sequence",

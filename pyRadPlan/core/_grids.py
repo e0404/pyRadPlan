@@ -3,7 +3,6 @@ from typing_extensions import Self
 from pydantic import (
     Field,
     field_validator,
-    model_validator,
     computed_field,
     model_validator,
 )
@@ -422,17 +421,3 @@ class Grid(PyRadPlanBaseModel):
             origin=new_origin,
             direction=self.direction,
         )
-
-
-if __name__ == "__main__":
-    # Example usage
-    try:
-        grid_dict = {
-            "resolution": {"x": 1, "y": 1, "z": 1},
-            "dimensions": (10, 10, 10),
-        }
-
-        grid_information = Grid.model_validate(grid_dict)
-        print(grid_information.to_matrad())
-    except Exception as e:
-        print("Error creating grid from dose_information:", e)

@@ -24,7 +24,7 @@ from pyRadPlan import (
     fluence_optimization,
     plot_slice,
     load_tg119,
-    xp_utils,
+    settings,
 )
 
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
@@ -36,8 +36,8 @@ from pyRadPlan.optimization.objectives import (
 )
 
 
-xp_utils.PREFER_GPU = False
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = False
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%

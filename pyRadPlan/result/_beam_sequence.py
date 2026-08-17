@@ -1,6 +1,6 @@
 """Sequenced beam object."""
 
-from typing import Any
+from typing import Any, Optional
 from numpy.typing import NDArray
 import logging
 import numpy as np
@@ -24,20 +24,20 @@ class BeamSequence(PyRadPlanBaseModel):
     shapes_weight: NDArray
     bixel_ix: list[int]
     fluence: NDArray
-    leaf_pair_pos: list[float] = Field(default=None)
-    is_active_leaf_pair: list[bool] = Field(default=None)
-    bixel_ind_map: NDArray = Field(default=None)
-    pos_of_corner_bixel: list[float] = Field(default=None)
-    mlc_window: list[float] = Field(alias="MLCWindow", default=None)
-    lim_l: list[float] = Field(default=None)
-    lim_r: list[float] = Field(default=None)
-    central_leaf_pair: float = Field(default=None)
-    left_leaf_pos: list[NDArray] = Field(default=None)
-    right_leaf_pos: list[NDArray] = Field(default=None)
-    weight: list[float] = Field(default=None)
-    shape_map: list[NDArray] = Field(default=None)
-    vector_offset: list[int] = Field(default=None)
-    num_of_active_leaf_pairs: int = Field(default=None)
+    leaf_pair_pos: Optional[list[float]] = Field(default=None)
+    is_active_leaf_pair: Optional[list[bool]] = Field(default=None)
+    bixel_ind_map: Optional[NDArray] = Field(default=None)
+    pos_of_corner_bixel: Optional[list[float]] = Field(default=None)
+    mlc_window: Optional[list[float]] = Field(alias="MLCWindow", default=None)
+    lim_l: Optional[list[float]] = Field(default=None)
+    lim_r: Optional[list[float]] = Field(default=None)
+    central_leaf_pair: Optional[float] = Field(default=None)
+    left_leaf_pos: Optional[list[NDArray]] = Field(default=None)
+    right_leaf_pos: Optional[list[NDArray]] = Field(default=None)
+    weight: Optional[list[float]] = Field(default=None)
+    shape_map: Optional[list[NDArray]] = Field(default=None)
+    vector_offset: Optional[list[int]] = Field(default=None)
+    num_of_active_leaf_pairs: Optional[int] = Field(default=None)
 
     @computed_field
     @property
@@ -108,11 +108,19 @@ class BeamSequence(PyRadPlanBaseModel):
 
         return data
 
-    @field_validator("shapes", "fluence", mode="before")
+    # shapes are binary aperture masks, so uint8 is lossless and compact
+    @field_validator("shapes", mode="before")
     @classmethod
     def _to_uint8(cls, v):
         arr = np.asarray(v)
         return arr.astype(np.uint8)
+
+    # fluence carries continuous weights and must not be rounded or wrapped
+    @field_validator("fluence", mode="before")
+    @classmethod
+    def _to_float(cls, v):
+        arr = np.asarray(v)
+        return arr.astype(float)
 
     # ensure shapes_weight always 1D float
     @field_validator("shapes_weight", mode="before")
@@ -120,12 +128,3 @@ class BeamSequence(PyRadPlanBaseModel):
     def _to_float1d(cls, v):
         arr = np.asarray(v)
         return arr.astype(float).reshape(-1)
-
-    # ensure sum_shapes, if present, always float
-    @field_validator("sum_shapes", mode="before")
-    @classmethod
-    def _sum_to_float(cls, v):
-        if v is None:
-            return None
-        arr = np.asarray(v)
-        return arr.astype(float)

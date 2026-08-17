@@ -1,9 +1,10 @@
 import pytest
 import SimpleITK as sitk
-from pyRadPlan.result import create_result
+from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+from pyRadPlan.gui.widgets.workflow._workflow_widget import IMPORT_PREFIX, _result_with
 from pyRadPlan.gui.workspace import WorkspaceManager
 
 
@@ -114,3 +115,147 @@ def test_plan_change_marks_downstream_stale(qapp):
     # Re-optimizing clears the result flag.
     ws.result = _result()
     assert not w._result_stale
+
+
+def test_cst_export_options_resolve_against_registry(qapp):
+    """Every offered CST export format has a registered exporter.
+
+    Guards the GUI's "Save CST" against a stale format key (e.g. the MetaImage
+    exporter registers as ``"meta"``, not ``"metaimage"``).
+    """
+    from pyRadPlan.io import get_available_formats
+
+    available = get_available_formats()
+    options = WorkflowWidget._cst_export_options()
+    keys = [fmt for _label, fmt, *_ in options]
+
+    assert all(fmt in available for fmt in keys), keys
+    # The container formats that preserve objectives, plus the image and both
+    # DICOM structure representations, are all offered.
+    assert {"mat", "pickle", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
+    dicom_structs = {struct for _l, fmt, struct, *_ in options if fmt == "dcm"}
+    assert dicom_structs == {"rtstruct", "seg"}
+    # Only mat/pickle advertise objective preservation.
+    keeps = {fmt for _l, fmt, _s, _d, keep in options if keep}
+    assert keeps == {"mat", "pickle"}
+
+
+def test_cst_export_all_formats_write_loadable_masks(qapp, tmp_path):
+    """The backends behind "Save CST" write every format and reload the masks."""
+    import os
+
+    from pyRadPlan.io import (
+        load_tg119,
+        save_data,
+        MatlabHandler,
+        PickleHandler,
+        NpzHandler,
+        NiftiHandler,
+        NrrdHandler,
+        MetaImageHandler,
+        DicomHandler,
+    )
+    from pyRadPlan.io.dicom import DicomExporter
+
+    ct, cst = load_tg119()
+    n = len(cst.vois)
+
+    # Container single-file formats (cst-only; mat needs the ct to reconstruct masks).
+    for fmt, ext, handler in [
+        ("mat", ".mat", MatlabHandler),
+        ("pickle", ".pkl", PickleHandler),
+        ("npz", ".npz", NpzHandler),
+    ]:
+        path = str(tmp_path / f"cst{ext}")
+        save_data(file_name=path, format=fmt, cst=cst)
+        assert os.path.exists(path)
+        assert len(handler(path).load_cst(ct).vois) == n
+
+    # Directory label-map formats.
+    for fmt, handler in [
+        ("nifti", NiftiHandler),
+        ("nrrd", NrrdHandler),
+        ("meta", MetaImageHandler),
+    ]:
+        folder = str(tmp_path / fmt)
+        save_data(file_name=folder, format=fmt, cst=cst)
+        assert len(handler(folder).load_cst().vois) == n
+
+    # DICOM RTSTRUCT and SEG.
+    rt = str(tmp_path / "dcm_rt")
+    save_data(file_name=rt, format="dcm", cst=cst)
+    assert len(DicomHandler(rt).load_cst().vois) == n
+
+    seg = str(tmp_path / "dcm_seg")
+    DicomExporter(seg, structure_format="seg").save(cst=cst)
+    assert len(DicomHandler(seg).load_cst().vois) == n
+
+
+def _dose_image(value=1.0):
+    image = sitk.Image([4, 4, 2], sitk.sitkFloat32)
+    image += value
+    return image
+
+
+def test_workspace_validates_a_result_dict(qapp):
+    """A dict assigned to ws.result becomes a PlanResult for every consumer."""
+    ws = WorkspaceManager()
+
+    ws.result = {"physical_dose": _dose_image()}
+    assert isinstance(ws.result, PlanResult)
+    assert "physical_dose" in ws.result
+
+    ws.set_many(result={"physical_dose": _dose_image()})
+    assert isinstance(ws.result, PlanResult)
+
+    ws.result = None
+    assert ws.result is None
+
+
+def test_save_result_snapshots_quantities(qapp, monkeypatch):
+    """Save/Keep Result tags a copy of the current quantities onto the result."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.result = create_result(
+        {"physical_dose": _dose_image(), "physical_dose_beam": [_dose_image()]}
+    )
+    original = ws.result
+
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QInputDialog.getText",
+        lambda *a, **k: ("run1", True),
+    )
+    w._on_save_result()
+
+    assert isinstance(ws.result, PlanResult)
+    # The snapshot is added; a new object is stored so the viewer refreshes.
+    assert ws.result is not original
+    assert sorted(ws.result.stored_quantities) == ["physical_dose", "physical_dose_run1"]
+    assert sorted(ws.result.stored_beam_quantities) == ["physical_dose", "physical_dose_run1"]
+    assert w._is_tagged("physical_dose_run1")
+
+    # Snapshots survive a re-optimization, the fresh quantities take precedence.
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    w._carry_forward_extras(fresh, ws.result)
+    assert sorted(fresh.stored_quantities) == ["physical_dose", "physical_dose_run1"]
+
+
+def test_imported_dose_is_carried_forward(qapp):
+    """An imported quantity is prefixed so it survives the next optimization."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    imported = _result_with(None, quantities={f"{IMPORT_PREFIX}ct_dose": _dose_image()})
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    w._carry_forward_extras(fresh, imported)
+
+    assert f"{IMPORT_PREFIX}ct_dose" in fresh
+
+
+def test_result_to_dose_image_reads_the_model(qapp):
+    """Saving a workspace picks the physical dose out of the PlanResult."""
+    assert WorkflowWidget._result_to_dose_image(None) is None
+    assert WorkflowWidget._result_to_dose_image(create_result({"let": _dose_image()})) is None
+
+    result = create_result({"physical_dose": _dose_image()})
+    assert WorkflowWidget._result_to_dose_image(result) is result["physical_dose"].values

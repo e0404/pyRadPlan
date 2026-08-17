@@ -12,13 +12,16 @@ from pydantic import Field, field_serializer, field_validator
 
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import QuantityDistribution
 from pyRadPlan.analysis._dvh import ureg
 
-DoseLike = Union[sitk.Image, NDArray]
+DoseLike = Union[QuantityDistribution, sitk.Image, NDArray]
 MaskLike = Union[sitk.Image, NDArray]
 
 
 def _to_array(x: DoseLike) -> np.ndarray:
+    if isinstance(x, QuantityDistribution):
+        x = x.values
     return sitk.GetArrayFromImage(x) if isinstance(x, sitk.Image) else np.asarray(x)
 
 
@@ -33,6 +36,9 @@ def _validate_single_scenario(arr: np.ndarray, name: str) -> None:
 
 def _validate_sitk_compatibility(quantity: DoseLike, mask: Optional[MaskLike]) -> None:
     """Validate SimpleITK dimensions and spatial metadata before masking."""
+    if isinstance(quantity, QuantityDistribution):
+        quantity = quantity.values
+
     if isinstance(quantity, sitk.Image) and quantity.GetDimension() != 3:
         raise ValueError("QI computation supports one 3D SimpleITK quantity at a time.")
 

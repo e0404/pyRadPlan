@@ -45,8 +45,25 @@ class WorkspaceManager(QObject):
     # Generic read / write
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _coerce(key: str, value: Any) -> Any:
+        """Validate *value* into the model the rest of the GUI expects for *key*.
+
+        Only ``result`` is coerced: it is written from many places (optimization,
+        dose import, matRad files) that would otherwise leave a bare dict behind,
+        and every consumer treats it as a
+        :class:`~pyRadPlan.result.PlanResult`.
+        """
+        if key != "result" or value is None:
+            return value
+
+        # Deferred: keeps the result model out of GUI module import time.
+        from pyRadPlan.result import validate_result  # noqa: PLC0415
+
+        return validate_result(value)
+
     def _set(self, key: str, value: Any) -> None:
-        self._data[key] = value
+        self._data[key] = self._coerce(key, value)
         self.workspace_changed.emit([key])
 
     def _get(self, key: str) -> Any:
@@ -56,7 +73,7 @@ class WorkspaceManager(QObject):
         """Set multiple pipeline objects and emit a single *workspace_changed*."""
         changed = [k for k in kwargs if k in self._KEYS]
         for k in changed:
-            self._data[k] = kwargs[k]
+            self._data[k] = self._coerce(k, kwargs[k])
         if changed:
             self.workspace_changed.emit(changed)
 
@@ -132,7 +149,11 @@ class WorkspaceManager(QObject):
 
     @property
     def result(self):
-        """The optimization/forward-dose result (``PlanResult`` or dict), or ``None``."""
+        """The optimization/forward-dose result as a ``PlanResult``, or ``None``.
+
+        Assigning a dict of named quantities is allowed; it is validated into a
+        ``PlanResult`` on the way in.
+        """
         return self._get("result")
 
     @result.setter
