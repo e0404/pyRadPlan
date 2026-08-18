@@ -8,7 +8,7 @@
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/proton_let.py
+# jupytext --to notebook path/to/this/file/pencilbeam_proton_let.py
 
 # %%
 # Import necessary libraries

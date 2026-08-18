@@ -23,14 +23,14 @@ from pyRadPlan import (
     fluence_optimization,
     load_tg119,
     plot_slice,
-    xp_utils,
+    settings,
 )
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%

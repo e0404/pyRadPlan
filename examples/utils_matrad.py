@@ -13,19 +13,19 @@
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/matrad_import_export.py
+# jupytext --to notebook path/to/this/file/utils_matrad.py
 # %%
 # some imports
 from importlib import resources
-from scipy.io import savemat
-import pymatreader
 
 from pyRadPlan import (
     load_tg119,
     load_patient,
+    save_data,
     validate_cst,
     validate_ct,
 )
+from pyRadPlan.io import MatlabHandler, validate_matrad_patient
 
 # %% [markdown]
 # CT-image (CT) and Structure Set (CST):
@@ -39,37 +39,55 @@ tg119_path = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
 ct, cst = load_patient(tg119_path)
 
 # %%
-# Of course you can load them separately too:
-tg119_path = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
-
-# Read .mat files via pymatreader:
-ct_mat, cst_mat = pymatreader.read_mat(tg119_path)
+# Of course you can load them separately too. `MatlabHandler` is the low-level handler
+# bundling the matRad importer and exporter for one .mat file:
+handler = MatlabHandler(tg119_path)
 
 # Load CT data
-ct = validate_ct(ct_mat)
+ct = handler.load_ct()
 
-# Load CST data
-cst = validate_cst(cst_mat)
+# Load CST data (the CT provides the reference geometry for the VOI masks)
+cst = handler.load_cst(ct)
 
 # %%
-# Export the data to matRad format:
+# The handler also exposes the raw matRad dictionary, so you can validate the structures
+# yourself or reach data that pyRadPlan does not model yet:
+print("Contents of the .mat file:", [k for k in handler.mdict if not k.startswith("__")])
+
+ct = validate_ct(handler.mdict["ct"])
+cst = validate_cst(handler.mdict["cst"], ct)
+
+# `validate_matrad_patient` does that for a whole matRad workspace at once (ct, cst, pln,
+# stf, dij, resultGUI) and returns a dict of the validated objects:
+patient = validate_matrad_patient(dict(handler.mdict))
+print("Validated structures:", list(patient))
+
+# %%
+# Export the data to matRad format. Every pyRadPlan structure provides `to_matrad()`:
 ct_mat = ct.to_matrad()
 cst_mat = cst.to_matrad()
 
-# Save them as .mat files:
-savemat("ct.mat", {"ct": ct_mat})
-savemat("cst.mat", {"cst": cst_mat})
+# %%
+# To write a matRad-readable file, use `save_data()`. It calls `to_matrad()` for you and
+# collects everything into a single .mat file:
+save_data(ct=ct, cst=cst, file_name="patient.mat")
+
+# The handler is bound to its own path and does the same:
+MatlabHandler("patient_from_handler.mat").save(ct=ct, cst=cst)
 
 # %% [markdown]
-# The latter works also for all the other pyRadPlan data structures:
+# The same holds for all the other pyRadPlan data structures. To pull them out of a
+# matRad workspace, hand `load_patient` a dict via `extra_plan_data`:
 
-# ```bash
-# pln_mat = pymatreader.read_mat(path/to/file_pln)
-# pln = validate_pln(pln_mat)
-# pln_exp = pln.to_matrad()
+# ```python
+# extra = {}
+# ct, cst = load_patient("path/to/matRad_workspace.mat", extra_plan_data=extra)
+# pln, stf, dij = extra["pln"], extra["stf"], extra["dij"]
+#
+# # ... and back to matRad:
+# pln_mat = pln.to_matrad()
+# stf_mat = stf.to_matrad()
+# ```
 
-# stf_mat = pymatreader.read_mat(path/to/file_stf)
-# stf = validate_stf(stf_mat)
-# stf_exp = stf.to_matrad()
 # %% [markdown]
 # You get the idea :). Same can be applied to dij and result!

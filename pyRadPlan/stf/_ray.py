@@ -33,7 +33,7 @@ from pyRadPlan.core.xp_utils import to_numpy
 
 class Ray(PyRadPlanBaseModel):
     """
-    A class representing a single ray.
+    Class representing a single ray.
 
     This class extends PyRadPlanBaseModel (pydantic) and provides functionality to
     handle the ray information, including properties like ray positions, energy, focus index, etc.

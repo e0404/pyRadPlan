@@ -23,23 +23,29 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
 def available_models() -> list[str]:
     """Return suggested model names for which an API key is configured.
 
-    The configured default (:attr:`AiSettings.model`) is always listed first so a
-    sensible option is preselected even when no environment key matches a known
-    provider.
+    The configured default (:attr:`AiSettings.model`) is listed first so a
+    sensible option is preselected.  When no provider API key is configured at
+    all, an empty list is returned — including the default, since it could not
+    be used either.
 
     Returns
     -------
     list of str
-        Suggested model identifiers, without duplicates.
+        Suggested model identifiers, without duplicates. Empty if no provider
+        API key is configured.
     """
     load_ai_env()
     models: list[str] = []
-    default = AiSettings().model
-    if default:
-        models.append(default)
     for env_var, names in _PROVIDER_MODELS.items():
         if os.environ.get(env_var):
             for name in names:
                 if name not in models:
                     models.append(name)
+    if not models:
+        return []
+    default = AiSettings().model
+    if default:
+        if default in models:
+            models.remove(default)
+        models.insert(0, default)
     return models

@@ -27,7 +27,9 @@ def test_constructs_with_empty_workspace(qapp):
 
 def test_ai_beam_button_enabled_matches_availability(qapp):
     widget, _ = _make_widget()
-    assert widget._btn_ai_beams.isEnabled() == widget._ai_available
+    assert widget._btn_ai_beams.isEnabled() == (widget._ai_disabled_reason is None)
+    if widget._ai_disabled_reason is not None:
+        assert widget._btn_ai_beams.toolTip() == widget._ai_disabled_reason
 
 
 def test_do_update_populates_fields_photon(qapp):

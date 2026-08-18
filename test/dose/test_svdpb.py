@@ -2,6 +2,7 @@ import SimpleITK as sitk
 import numpy as np
 
 from pyRadPlan.dose import calc_dose_forward
+from pyRadPlan.visualization._plot_slice import plot_slice
 
 
 # TODO: PhotonEngine does not yet have sub-sampling.
@@ -14,10 +15,9 @@ def test_photons(test_data_photons):
 
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    result_matRad = np.transpose(result["physicalDose"], (2, 0, 1))
 
-    result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
-
-    # assert np.allclose(result_py, result_matRad_rot, atol=1e-4)
+    assert np.allclose(result_py, result_matRad, atol=1e-2)
 
     # Keeping this for debugging:
     # plot_slice(

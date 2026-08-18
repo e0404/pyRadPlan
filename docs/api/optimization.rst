@@ -1,28 +1,36 @@
 optimization
 ============
-pyRadPlan.optimization
-======================
 
-.. automodule:: pyRadPlan.optimization
-    :members:
-    :undoc-members:
-    :show-inheritance:
+.. currentmodule:: pyRadPlan.optimization
+
+.. autosummary::
+   :toctree: generated/optimization/
+
+    fluence_optimization
 
 
-Components
-==========
+optimization.objectives
+-----------------------
 
-.. automodule:: pyRadPlan.optimization.components
-    :members:
-    :undoc-members:
-    :show-inheritance:
+.. toctree::
+   :maxdepth: 2
 
-.. automodule:: pyRadPlan.optimization.projections
-    :members:
-    :undoc-members:
-    :show-inheritance:
+   optimization_objectives
 
-.. automodule:: pyRadPlan.optimization.solvers
-    :members:
-    :undoc-members:
-    :show-inheritance:
+
+optimization.problems
+---------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   optimization_problems
+
+
+optimization.solvers
+---------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   optimization_solvers

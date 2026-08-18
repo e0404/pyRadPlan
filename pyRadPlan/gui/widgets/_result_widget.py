@@ -32,6 +32,25 @@ from .result.vois_widget import VOIsWidget
 
 logger = logging.getLogger(__name__)
 
+#: Human-readable label and unit for each known result quantity key. Shared with the
+#: Save-Result dialog so quantity checkboxes and overlays use the same names.
+QUANTITY_META: dict[str, tuple[str, str]] = {
+    "physical_dose": ("Dose", "Gy"),
+    "physical_dose_beam": ("Dose", "Gy"),
+    "let": ("LET", "keV/µm"),
+    "let_beam": ("LET", "keV/µm"),
+    "effect": ("Effect", ""),
+    "effect_beam": ("Effect", ""),
+    "rbe_x_dose": ("RBE-weighted Dose", "Gy (RBE)"),
+    "rbe_x_dose_beam": ("RBE-weighted Dose", "Gy (RBE)"),
+    "alpha_dose": ("Alpha Dose", "Gy"),
+    "alpha_dose_beam": ("Alpha Dose", "Gy"),
+    "sqrt_beta_dose": ("Sqrt(Beta) Dose", "Gy½"),
+    "sqrt_beta_dose_beam": ("Sqrt(Beta) Dose", "Gy½"),
+    "let_dose": ("LET·Dose", "Gy·keV/µm"),
+    "let_dose_beam": ("LET·Dose", "Gy·keV/µm"),
+}
+
 
 # --- Data derivation helpers (workspace objects -> viewer-ready arrays) -------
 
@@ -90,29 +109,13 @@ def _build_overlay_meta(
     quantity_data: dict | np.ndarray | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build overlay unit and label dicts from the processed quantity data."""
-    quantity_meta: dict[str, tuple[str, str]] = {
-        "physical_dose": ("Dose", "Gy"),
-        "physical_dose_beam": ("Dose", "Gy"),
-        "let": ("LET", "keV/µm"),
-        "let_beam": ("LET", "keV/µm"),
-        "effect": ("Effect", ""),
-        "effect_beam": ("Effect", ""),
-        "rbe_x_dose": ("RBE-weighted Dose", "Gy (RBE)"),
-        "rbe_x_dose_beam": ("RBE-weighted Dose", "Gy (RBE)"),
-        "alpha_dose": ("Alpha Dose", "Gy"),
-        "alpha_dose_beam": ("Alpha Dose", "Gy"),
-        "sqrt_beta_dose": ("Sqrt(Beta) Dose", "Gy\u00bd"),
-        "sqrt_beta_dose_beam": ("Sqrt(Beta) Dose", "Gy\u00bd"),
-        "let_dose": ("LET\u00b7Dose", "Gy\u00b7keV/\u00b5m"),
-        "let_dose_beam": ("LET\u00b7Dose", "Gy\u00b7keV/\u00b5m"),
-    }
 
     overlay_units: dict[str, str] = {}
     overlay_labels: dict[str, str] = {}
     if isinstance(quantity_data, dict):
         for k, v in quantity_data.items():
             base = k.split()[0] if " " in k else k
-            qname, unit = quantity_meta.get(base, ("Quantity", ""))
+            qname, unit = QUANTITY_META.get(base, ("Quantity", ""))
             if isinstance(v, list):
                 for i in range(len(v)):
                     expanded = f"{k} {i}"

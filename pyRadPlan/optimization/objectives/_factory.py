@@ -2,7 +2,7 @@
 
 import warnings
 import logging
-from typing import Annotated, Any, Union, Type
+from typing import Annotated, Any, Optional, Union, Type
 
 from pydantic import Field
 
@@ -17,6 +17,9 @@ __matrad_name_map__ = {
     "DoseObjectives.matRad_MinDVH": "Min DVH",
     "DoseObjectives.matRad_MaxDVH": "Max DVH",
 }
+
+#: Inverse of ``__matrad_name_map__`` (pyRadPlan objective name -> matRad className).
+__matrad_class_map__ = {name: class_name for class_name, name in __matrad_name_map__.items()}
 
 OBJECTIVES = {}
 
@@ -83,6 +86,25 @@ def get_objectives_union(exclude_image_references: bool = False) -> Any:
     if len(obj_classes) == 1:
         return obj_classes[0]
     return Annotated[Union[tuple(obj_classes)], Field(discriminator="name")]
+
+
+def get_matrad_class_name(objective: Union[str, Objective]) -> Optional[str]:
+    """
+    Return the matRad className for an objective, or ``None`` if it has no equivalent.
+
+    Parameters
+    ----------
+    objective : Union[str, Objective]
+        An objective instance or its pyRadPlan name.
+
+    Returns
+    -------
+    Optional[str]
+        The matRad className (e.g. ``"DoseObjectives.matRad_MeanDose"``) or ``None``
+        when the objective cannot be represented in matRad.
+    """
+    name = objective.name if isinstance(objective, Objective) else objective
+    return __matrad_class_map__.get(name)
 
 
 def get_objective(objective_desc: Union[str, dict, Objective]):

@@ -16,7 +16,7 @@ from pyRadPlan.core import PyRadPlanBaseModel
 
 
 class PhotonSVDKernel(PyRadPlanBaseModel):
-    """Kernel data for photon beams.
+    """Class representing a single photon beam kernel.
 
     Attributes
     ----------

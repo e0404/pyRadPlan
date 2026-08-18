@@ -17,7 +17,7 @@ from pyRadPlan.util.helpers import models2recarray
 
 class SteeringInformation(PyRadPlanBaseModel):
     """
-    A class representing the Steering Information (stf).
+    Class representing the Steering Information (stf).
 
     This class extends PyRadPlanBaseModel (based on pydantic) and provides functionality to
     handle single beams, including their properties.

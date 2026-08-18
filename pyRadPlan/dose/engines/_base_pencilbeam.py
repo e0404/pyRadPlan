@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 class PencilBeamEngineAbstract(DoseEngineBase):
     """
-    An abstract class representing the Pencil Beam Engine.
+    Abstract class representing a Pencil Beam Engine.
 
     This class extends DoseEngineBase and provides the foundational structure for implementing a
     pencil beam dose calculation engine. It includes methods for initializing dose calculations,

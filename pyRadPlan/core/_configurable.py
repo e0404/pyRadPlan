@@ -169,7 +169,7 @@ class ConfigurableAlgorithm:
                 isinstance(klass, type) and issubclass(klass, ConfigurableAlgorithm)
             ):
                 continue
-            for name, raw_annotation in vars(klass).get("__annotations__", {}).items():
+            for name, raw_annotation in inspect.get_annotations(klass).items():
                 if name.startswith("_") or name in names:
                     continue
                 if _is_classvar(hints.get(name, raw_annotation)):

@@ -107,3 +107,77 @@ def test_plan_change_marks_downstream_stale(qapp):
     # Re-optimizing clears the result flag.
     ws.result = {"w": 1}
     assert not w._result_stale
+
+
+def test_cst_export_options_resolve_against_registry(qapp):
+    """Every offered CST export format has a registered exporter.
+
+    Guards the GUI's "Save CST" against a stale format key (e.g. the MetaImage
+    exporter registers as ``"meta"``, not ``"metaimage"``).
+    """
+    from pyRadPlan.io import get_available_formats
+
+    available = get_available_formats()
+    options = WorkflowWidget._cst_export_options()
+    keys = [fmt for _label, fmt, *_ in options]
+
+    assert all(fmt in available for fmt in keys), keys
+    # The container formats that preserve objectives, plus the image and both
+    # DICOM structure representations, are all offered.
+    assert {"mat", "pickle", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
+    dicom_structs = {struct for _l, fmt, struct, *_ in options if fmt == "dcm"}
+    assert dicom_structs == {"rtstruct", "seg"}
+    # Only mat/pickle advertise objective preservation.
+    keeps = {fmt for _l, fmt, _s, _d, keep in options if keep}
+    assert keeps == {"mat", "pickle"}
+
+
+def test_cst_export_all_formats_write_loadable_masks(qapp, tmp_path):
+    """The backends behind "Save CST" write every format and reload the masks."""
+    import os
+
+    from pyRadPlan.io import (
+        load_tg119,
+        save_data,
+        MatlabHandler,
+        PickleHandler,
+        NpzHandler,
+        NiftiHandler,
+        NrrdHandler,
+        MetaImageHandler,
+        DicomHandler,
+    )
+    from pyRadPlan.io.dicom import DicomExporter
+
+    ct, cst = load_tg119()
+    n = len(cst.vois)
+
+    # Container single-file formats (cst-only; mat needs the ct to reconstruct masks).
+    for fmt, ext, handler in [
+        ("mat", ".mat", MatlabHandler),
+        ("pickle", ".pkl", PickleHandler),
+        ("npz", ".npz", NpzHandler),
+    ]:
+        path = str(tmp_path / f"cst{ext}")
+        save_data(file_name=path, format=fmt, cst=cst)
+        assert os.path.exists(path)
+        assert len(handler(path).load_cst(ct).vois) == n
+
+    # Directory label-map formats.
+    for fmt, handler in [
+        ("nifti", NiftiHandler),
+        ("nrrd", NrrdHandler),
+        ("meta", MetaImageHandler),
+    ]:
+        folder = str(tmp_path / fmt)
+        save_data(file_name=folder, format=fmt, cst=cst)
+        assert len(handler(folder).load_cst().vois) == n
+
+    # DICOM RTSTRUCT and SEG.
+    rt = str(tmp_path / "dcm_rt")
+    save_data(file_name=rt, format="dcm", cst=cst)
+    assert len(DicomHandler(rt).load_cst().vois) == n
+
+    seg = str(tmp_path / "dcm_seg")
+    DicomExporter(seg, structure_format="seg").save(cst=cst)
+    assert len(DicomHandler(seg).load_cst().vois) == n

@@ -19,7 +19,7 @@ build-matrix:
     stage: build
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
@@ -47,7 +47,7 @@ lint:
     script:
         # - if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - return_code=0
         - ruff check --output-format grouped || return_code=$(($return_code + $?))
         - ruff check --exit-zero --output-format grouped --output-file ruff.txt
@@ -72,7 +72,7 @@ format:
         policy: pull
     script:
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - ruff format --check
 
 codespell:
@@ -106,7 +106,7 @@ tests-matrix:
     stage: test
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
@@ -204,12 +204,7 @@ docs:
     script:
         #- if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install sphinx
-        - pip install sphinx-autodoc-typehints
-        - pip install autodoc_pydantic
-        - pip install sphinx-design
-        - pip install pydata-sphinx-theme
-        - pip install numpydoc
+        - pip install -r docs/requirements.txt
         - sphinx-build docs .doc
     artifacts:
         when: always
