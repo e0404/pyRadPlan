@@ -134,6 +134,7 @@ class EmptyModel(BiologicalModelBase):
         "protons",
         "helium",
         "carbon",
+        "oxygen",
         "VHEE",
     ]  # Compatible with all common modalities
     default_report_quantity = "physical_dose"  # Suggested quantity for display and planning

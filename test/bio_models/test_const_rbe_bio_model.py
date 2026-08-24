@@ -35,6 +35,7 @@ def test_ConstantRBEModel_constructor():
         "protons",
         "helium",
         "carbon",
+        "oxygen",
         "VHEE",
     ]
 

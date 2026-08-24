@@ -28,6 +28,7 @@ class ConstantRBEModel(BiologicalModelBase):
         "protons",
         "helium",
         "carbon",
+        "oxygen",
         "VHEE",
     ]  # Compatible with all common modalities
     default_report_quantity = "RBExDose"  # Suggested quantity for display and planning

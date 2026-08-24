@@ -73,7 +73,7 @@ class TabulatedRBEModel(LQModel):
     required_quantities = [
         "physical_dose",
     ]  # Requires physical dose and LET information
-    possible_radiation_modes = ["protons", "helium", "carbon"]
+    possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
     fragments_to_include = None  # To be set based on the specific model and tables used
     fragments_q_table_ix = None  # To be set based on the specific model and tables used
     fragments_sp_table_ix = None  # To be set based on the specific model and tables used

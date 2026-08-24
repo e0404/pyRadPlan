@@ -45,7 +45,7 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             sigma_sq = kernels["sigma_multi"] ** 2 + bixel["sigma_ini_sq"]
             weight = kernels["weight_multi"]
             w = weight.reshape(len(weight), -1)  # (n,1) or (n,m)
-            weights_full = xp.column_stack((1 - w.sum(axis=1), w))
+            weights_full = xp.column_stack((1 - w.sum(axis=0), w.T))
             lateral = xp.sum(
                 weights_full
                 * xp.exp(-bixel["radial_dist_sq"] / (2 * sigma_sq)).T

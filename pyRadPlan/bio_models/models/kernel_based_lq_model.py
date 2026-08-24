@@ -51,6 +51,7 @@ class KernelBasedLQModel(LQModel):
         "protons",
         "helium",
         "carbon",
+        "oxygen",
     ]  # Compatible with common ion modalities
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:

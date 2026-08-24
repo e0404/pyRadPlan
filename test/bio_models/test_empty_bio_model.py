@@ -34,6 +34,7 @@ def test_EmptyModel_constructor():
         "protons",
         "helium",
         "carbon",
+        "oxygen",
         "VHEE",
     ]
 
