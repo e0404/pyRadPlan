@@ -1,7 +1,6 @@
-"""Plan analysis example with QI and DVH."""
-
 # %% [markdown]
-# # Plan analysis example
+"""# Plan analysis example with QI and DVH."""
+# %% [markdown]
 #
 # This notebook-style script shows how to compute and visualize Quality Indicators (QI)
 # and Dose-Volume Histograms (DVHs) for a simple proton plan.
@@ -18,14 +17,14 @@ from pyRadPlan import (
     generate_stf,
     load_tg119,
     plot_slice,
-    xp_utils,
+    settings,
 )
 from pyRadPlan.analysis import DVHCollection, QICollection, DX, VX, Mean
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 # Prefer GPU when available, fall back to numpy on CPU
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 
@@ -95,7 +94,7 @@ dvh_collection.plot(structures=[target_name, oar_name], line_width=2, plot_legen
 # %%
 view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=result["physical_dose"],
     view_slice=view_slice,

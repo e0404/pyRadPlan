@@ -11,9 +11,9 @@ else:
     from importlib import resources  # Standard from Python 3.9+
 from pyRadPlan.dose.engines._fredmc import read_sparse_dij_bin_v21
 
-from pyRadPlan import xp_utils
+from pyRadPlan import settings
 
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "array_api_strict"
+settings.xp.preferred_gpu_array_backend = "array_api_strict"
 
 
 collect_ignore_glob = [] if importlib.util.find_spec("PySide6") is not None else ["gui/**/*.py"]

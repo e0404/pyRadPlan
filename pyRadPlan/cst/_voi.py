@@ -52,7 +52,7 @@ DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
 
 class VOI(PyRadPlanBaseModel, ABC):
     """
-    Represents a Volume of Interest (VOI).
+    Base class representing a Volume of Interest (VOI).
 
     Parameters
     ----------
@@ -118,14 +118,27 @@ class VOI(PyRadPlanBaseModel, ABC):
         # deferred import to avoid circular import issues
         from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
 
-        if not isinstance(v, list):
-            v = [v]
+        # matRad stores a VOI's objectives as a cell array, which pymatreader/scipy
+        # return as a numpy object array (or a structured scalar for a single one).
+        # Flatten those into individual objective definitions before dispatching.
+        def _flatten(value: Any) -> list:
+            if isinstance(value, np.ndarray):
+                return [item for element in value.ravel().tolist() for item in _flatten(element)]
+            if isinstance(value, list):
+                return [item for element in value for item in _flatten(element)]
+            return [value]
+
+        def _coerce(entry: Any) -> Any:
+            # Convert a numpy structured/void scalar (scipy struct) into a dict.
+            if isinstance(entry, np.void) and entry.dtype.names:
+                return {name: entry[name] for name in entry.dtype.names}
+            return entry
 
         return [
             get_objective(entry)
             if isinstance(entry, dict) and ("name" in entry or "className" in entry)
             else entry
-            for entry in v
+            for entry in (_coerce(e) for e in _flatten(v))
         ]
 
     @model_validator(mode="before")
@@ -473,6 +486,97 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         return 1
 
+    def _nominal_mask_3d(self) -> sitk.Image:
+        """Return the 3D mask of the nominal (first) scenario."""
+        if self.mask.GetDimension() == 4:
+            return self.mask[:, :, :, 0]
+        return self.mask
+
+    def _label_shape_statistics(self) -> Optional[sitk.LabelShapeStatisticsImageFilter]:
+        """Run a shape statistics filter on the nominal mask (None if the mask is empty)."""
+        stats = sitk.LabelShapeStatisticsImageFilter()
+        stats.Execute(self._nominal_mask_3d() != 0)
+        if not stats.HasLabel(1):
+            return None
+        return stats
+
+    @computed_field
+    @property
+    def center_of_mass(self) -> Optional[tuple[float, float, float]]:
+        """
+        Return the center of mass in world (x, y, z) coordinates (nominal scenario).
+
+        Coordinates are physical LPS coordinates in the grid's units (typically mm).
+
+        Returns
+        -------
+        tuple[float, float, float] or None
+            The center of mass, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        return tuple(float(c) for c in stats.GetCentroid(1))
+
+    @computed_field
+    @property
+    def principal_axes(self) -> Optional[tuple[tuple[float, float, float], ...]]:
+        """
+        Return the principal axes of the VOI (nominal scenario).
+
+        Unit vectors in world (x, y, z) coordinates, ordered by descending spatial
+        extent: the first axis points along the VOI's largest elongation. The sign
+        of each axis is arbitrary.
+
+        Returns
+        -------
+        tuple of tuple[float, float, float], or None
+            Three principal axis unit vectors, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        # ITK orders principal moments ascending; reverse to descending extent.
+        axes = np.asarray(stats.GetPrincipalAxes(1)).reshape(3, 3)[::-1]
+        return tuple(tuple(float(c) for c in axis) for axis in axes)
+
+    @computed_field
+    @property
+    def shape_parameters(self) -> Optional[dict[str, Any]]:
+        """
+        Return scalar shape descriptors of the VOI (nominal scenario).
+
+        All lengths are in the grid's units (typically mm):
+
+        - ``volume``: volume of the VOI (units cubed).
+        - ``bounding_box_size``: extent of the axis-aligned bounding box (x, y, z).
+        - ``equivalent_ellipsoid_diameters``: diameters of the volume-equivalent
+          ellipsoid, ordered like :attr:`principal_axes` (largest first).
+        - ``elongation``, ``flatness``: ITK shape ratios (>= 1); larger values
+          mean a more elongated / flatter shape.
+
+        Returns
+        -------
+        dict or None
+            The shape descriptors, or None for an empty mask.
+        """
+        stats = self._label_shape_statistics()
+        if stats is None:
+            return None
+        spacing = self._nominal_mask_3d().GetSpacing()
+        bbox = stats.GetBoundingBox(1)
+        return {
+            "volume": float(stats.GetPhysicalSize(1)),
+            "bounding_box_size": tuple(
+                float(n * s) for n, s in zip(bbox[3:], spacing, strict=True)
+            ),
+            "equivalent_ellipsoid_diameters": tuple(
+                float(d) for d in reversed(stats.GetEquivalentEllipsoidDiameter(1))
+            ),
+            "elongation": float(stats.GetElongation(1)),
+            "flatness": float(stats.GetFlatness(1)),
+        }
+
     def get_indices(self, order: str = "sitk") -> np.ndarray:
         """
         Return linear voxel indices into the full mask cube.
@@ -756,7 +860,7 @@ class VOI(PyRadPlanBaseModel, ABC):
 
 class OAR(VOI):
     """
-    Represents an organ at risk (OAR).
+    Class representing an organ at risk (OAR).
 
     Attributes
     ----------
@@ -799,7 +903,7 @@ class OAR(VOI):
 
 class Target(VOI):
     """
-    Represents a target VOI.
+    Class representing a target VOI.
 
     Attributes
     ----------
@@ -842,7 +946,7 @@ class Target(VOI):
 
 class HelperVOI(VOI):
     """
-    Represents a helper VOI.
+    Class representing a helper VOI.
 
     Attributes
     ----------
@@ -884,7 +988,7 @@ class HelperVOI(VOI):
 
 class ExternalVOI(VOI):
     """
-    Represents an external contour limiting voxels to be considered for planning (EXTERNAL).
+    Class representing an external contour limiting voxels to be considered for planning (EXTERNAL).
 
     Attributes
     ----------
@@ -968,7 +1072,7 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
 
 def validate_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
     """
-    Validate and create a VOI object.
+    Validate a VOI object.
 
     Synonym to create_voi but should be used in validation context.
 

@@ -34,7 +34,7 @@ class DijSamplingConfig(TypedDict, total=False):
 
 class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     """
-    Implementation of a pencil beam dose calculation engine for photons.
+    Class representing a pencil beam dose calculation engine for photons.
 
     The implementation is based on the Singular-value decomposition (SVD)
     method by Bortfeld, Schlegel & Rhein (1993).

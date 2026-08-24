@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -38,7 +39,7 @@ from pyRadPlan.optimization.objectives import (
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
 from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
-from ..ai import AI_MISSING_TIP, ai_available
+from ..ai import ai_disabled_reason
 
 
 #: Default objective name picked for a freshly added objective, per VOI type.
@@ -88,7 +89,6 @@ class OptimizationWidget(WorkspaceWidget):
     ) -> None:
         super().__init__(workspace, parent)
         self._available = list(get_available_objectives().keys())
-        self._ai_available = ai_available()
         self._setup_ui()
         self.initialize()
 
@@ -154,16 +154,22 @@ class OptimizationWidget(WorkspaceWidget):
         self._update_ai_button()
 
     def _update_ai_button(self) -> None:
-        ready = self._ai_available and self._ws.cst is not None and self._ws.pln is not None
+        # Re-checked on every workspace update so a provider key added to the
+        # environment (or .env) mid-session enables the button.
+        ai_blocked = ai_disabled_reason()
+        ready = ai_blocked is None and self._ws.cst is not None and self._ws.pln is not None
         self._btn_ai.setEnabled(ready)
-        if not self._ai_available:
-            self._btn_ai.setToolTip(AI_MISSING_TIP)
+        if ai_blocked:
+            self._btn_ai.setToolTip(ai_blocked)
         elif self._ws.cst is None:
             self._btn_ai.setToolTip("Load a structure set first")
         elif self._ws.pln is None:
             self._btn_ai.setToolTip("Configure a plan first")
         else:
-            self._btn_ai.setToolTip("Suggest objectives for all VOIs using an LLM")
+            tip = "Suggest objectives for all VOIs using an LLM"
+            if self._reference_dose_options():
+                tip += "; result doses can provide QIs to adapt the current objectives"
+            self._btn_ai.setToolTip(tip)
 
     def _rebuild_voi_combo(self, cst) -> None:
         previous = self._cmb_voi.currentData()
@@ -391,12 +397,16 @@ class OptimizationWidget(WorkspaceWidget):
 
         # Deferred: keeps the optional ai_agents stack out of widget construction.
         from pyRadPlan.ai_agents import (  # noqa: PLC0415
-            OBJECTIVES_SYSTEM_PROMPT,
             available_models,
             cst_context_summary,
             generate_voi_objectives,
+            objectives_system_prompt,
         )
         from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+
+        qis, accepted = self._prompt_qi_adaptation(cst)
+        if not accepted:
+            return
 
         def _run(model: str, site: str, context: str):
             return generate_voi_objectives(
@@ -405,6 +415,7 @@ class OptimizationWidget(WorkspaceWidget):
                 treatment_site=site or "unspecified",
                 additional_context=context or None,
                 model=model,
+                qis=qis,
             )
 
         def _apply(new_cst) -> None:
@@ -415,14 +426,56 @@ class OptimizationWidget(WorkspaceWidget):
             return f"Applied — {total} objective(s) suggested."
 
         task = AiTask(
-            title="Suggest objectives (AI)",
-            system_prompt=OBJECTIVES_SYSTEM_PROMPT,
-            context_text=json.dumps(cst_context_summary(pln, cst), indent=2, default=str),
+            title="Adapt objectives (AI)" if qis is not None else "Suggest objectives (AI)",
+            system_prompt=objectives_system_prompt(adapt=qis is not None),
+            context_text=json.dumps(cst_context_summary(pln, cst, qis=qis), indent=2, default=str),
             run=_run,
             apply=_apply,
             summarize=_summarize,
         )
         AiTaskDialog(task, available_models(), parent=self).exec()
+
+    def _prompt_qi_adaptation(self, cst) -> tuple[Any, bool]:
+        """Optionally build a QI collection from a result dose for objective adaptation.
+
+        When the workspace holds result doses and the structure set carries
+        objectives, the user is asked whether the AI should adapt the current
+        objectives using quality indicators computed from one of those doses.
+        Returns ``(qis, accepted)``; ``accepted`` is False when the user
+        cancelled the prompt (aborting the whole AI task).
+        """
+        options = self._reference_dose_options()
+        if not options or not any(self._iter_objectives(voi) for voi in cst.vois):
+            return None, True
+
+        from pyRadPlan.analysis import QICollection  # noqa: PLC0415
+
+        choices = ["No — suggest new objectives"] + [
+            f"Adapt using QIs from '{label}'" for label, _ in options
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Use quality indicators?",
+            "A result dose is available. Adapt the current objectives using\n"
+            "quality indicators computed from it, or suggest new objectives?",
+            choices,
+            0,
+            False,
+        )
+        if not ok:
+            return None, False
+        idx = choices.index(choice) - 1
+        if idx < 0:
+            return None, True
+
+        label, dose = options[idx]
+        if isinstance(dose, tuple):
+            dose = dose[0]
+        try:
+            return QICollection.from_structure_set(cst, dose), True
+        except (ValueError, TypeError) as exc:
+            self._set_status(f"Could not compute QIs from '{label}': {exc}")
+            return None, True
 
     def _on_remove_objective(self, voi_idx: int, obj_idx: int) -> None:
         cst = self._ws.cst
