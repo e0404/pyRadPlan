@@ -31,7 +31,7 @@ def test_KernelBasedLQModel_constructor():
     assert isinstance(kernel_lq_model, BiologicalModelBase)
     assert kernel_lq_model.model == "kernel_based_lq"
     assert kernel_lq_model.required_quantities == ["physical_dose", "alpha", "beta"]
-    assert kernel_lq_model.possible_radiation_modes == ["protons", "helium", "carbon"]
+    assert kernel_lq_model.possible_radiation_modes == ["protons", "helium", "carbon", "oxygen"]
     assert kernel_lq_model.kernel_quantities == ["alpha", "beta"]
 
 
