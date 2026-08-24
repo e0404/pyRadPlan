@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pyRadPlan.ai_models` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a friendly name (resolved to `<hf_org>/<name>`), with version dedup, offline support and logging. `list_local_models()` lists the models available on disk under `AiModelSettings.local_models_dir` (no network), optionally filtered by modality derived from the repo name. Includes a `BasePreprocessor` contract, an example model under `data/ai_models/example_model`, and a `model_config.template.json`. Settings are exposed as the `ai_models` sub-configuration of `pyRadPlan.settings` (`settings.ai_models`), read from `PYRADPLAN_AI_MODELS_*` environment variables. Install extras via `pip install pyRadPlan[ai]`.
+- `pyRadPlan.core.get_data_dir()` / `get_data_subdir()`: a single writable data root for pyRadPlan (default `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Downloaded AI models default to `<data_dir>/ai_models`; the location is reserved for future downloaded datasets (patients, phantoms, machines).
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
-- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
+- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI", "AI Models") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
 
 - GUI: File menu collecting all data I/O (load/import/export)
@@ -140,7 +142,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ipopt intermediate-callback guard admitted arities it then indexed past (`>= 3` vs. index 9)
 - VHEE now has target points for matRad export
 - Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
-- examples: crashing plot block in `pencilbeam_carbon.py` and broken `.mat` unpacking in `utils_matrad.py`, deprecated `plot_slice(ct=...)` calls, missing jupytext cell markers in `pencilbeam_vhee.py`, plus stale docstrings, engine names and file references
 
 ## [0.4.1] - 2026-06-16
 

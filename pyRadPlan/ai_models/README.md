@@ -1,12 +1,12 @@
-# `pyRadPlan.ml` — ML model handling
+# `pyRadPlan.ai_models` — AI model handling
 
-Loads ML models and their preprocessors from the HuggingFace Hub or a local
+Loads AI models and their preprocessors from the HuggingFace Hub or a local
 directory, with version dedup and offline support.
 
 ## Quick start
 
 ```python
-from pyRadPlan.ml import load_model, list_local_models
+from pyRadPlan.ai_models import load_model, list_local_models
 
 # From a local directory (works fully offline):
 model, preprocessor = load_model(local_dir="path/to/model_folder")
@@ -21,24 +21,27 @@ print(list_local_models())  # models available on disk (no network)
 ```
 
 `list_local_models` lists the models present under
-`MlSettings.local_models_dir`; it performs no network access. The modality is
-derived from the repository name (`dosecalc-*` / `outcome-*`), so you can filter
-with `list_local_models(Modality.DOSE_CALC)`. Each model lives in its own
+`AiModelSettings.local_models_dir`; it performs no network access. The modality
+is derived from the repository name (`dosecalc-*` / `outcome-*`), so you can
+filter with `list_local_models(Modality.DOSE_CALC)`. Each model lives in its own
 repository and is listed under the repository name.
 
 ## Configuration
 
-`MlSettings` reads environment variables prefixed with `PYRADPLAN_ML_`
-(or a `.env` file):
+`AiModelSettings` reads environment variables prefixed with
+`PYRADPLAN_AI_MODELS_` (or a `.env` file):
 
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
-| `hf_org` | `PYRADPLAN_ML_HF_ORG` | `DKFZ-RadOpt` | HuggingFace org/namespace for registered repos |
-| `local_models_dir` | `PYRADPLAN_HUGGINGFACE_PATH` | `pyRadPlan/data/ml_models` | Base dir for local models; default `local_dir` is `<path>/<repo>`. A model already present here is used without touching the network; otherwise it's downloaded here. Set to `""` to disable and use the HuggingFace cache instead. |
-| `cache_dir` | `PYRADPLAN_ML_CACHE_DIR` | HF default | HuggingFace cache directory |
-| `offline` | `PYRADPLAN_ML_OFFLINE` | `False` | Force `local_files_only` |
-| `trust_remote_code` | `PYRADPLAN_ML_TRUST_REMOTE_CODE` | `True` | Allow executing shipped model code |
-| `device` | `PYRADPLAN_ML_DEVICE` | `cpu` | Device the model is moved to |
+| `hf_org` | `PYRADPLAN_AI_MODELS_HF_ORG` | `DKFZ-RadOpt` | HuggingFace org/namespace for registered repos |
+| `local_models_dir` | `PYRADPLAN_HUGGINGFACE_PATH` | `<data_dir>/ai_models` | Base dir for local models; default `local_dir` is `<path>/<repo>`. Empty string uses the HF cache only |
+| `cache_dir` | `PYRADPLAN_AI_MODELS_CACHE_DIR` | HF default | HuggingFace cache directory |
+| `offline` | `PYRADPLAN_AI_MODELS_OFFLINE` | `False` | Force `local_files_only` |
+| `trust_remote_code` | `PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE` | `True` | Allow executing shipped model code |
+| `device` | `PYRADPLAN_AI_MODELS_DEVICE` | `cpu` | Device the model is moved to |
+
+The data root (`<data_dir>`) defaults to `~/.pyradplan` and can be relocated with
+the `PYRADPLAN_DATA_DIR` environment variable (see `pyRadPlan.core.get_data_dir`).
 
 ## Model-repository contract
 
@@ -48,7 +51,7 @@ exactly these files:
 ```
 <model folder>/
   model.py             # nn.Module class definition(s)
-  preprocessor.py      # subclass of pyRadPlan.ml.BasePreprocessor
+  preprocessor.py      # subclass of pyRadPlan.ai_models.BasePreprocessor
   weights.safetensors  # state_dict saved with safetensors
   model_config.json    # declarative config (see model_config.template.json)
 ```
@@ -76,8 +79,8 @@ loader-consumed keys; everything else is free-form metadata the loader ignores:
 ```
 
 A working reference implementation ships in
-`pyRadPlan/data/ml_models/example_model/`. The annotated config template is
-`pyRadPlan/data/ml_models/model_config.template.json`.
+`pyRadPlan/data/ai_models/example_model/`. The annotated config template is
+`pyRadPlan/data/ai_models/model_config.template.json`.
 
 > **Security note:** `load_model` executes `model.py` and `preprocessor.py`
 > from the model repository. This is gated behind `trust_remote_code`

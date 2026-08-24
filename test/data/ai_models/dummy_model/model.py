@@ -1,4 +1,4 @@
-"""Dummy model for pyRadPlan.ml local-load tests.
+"""Dummy model for pyRadPlan.ai_models local-load tests.
 
 A tiny 3D CNN mapping a multi-channel volume to a scalar. It exists only to
 exercise the loading machinery against a real (committed) model directory.

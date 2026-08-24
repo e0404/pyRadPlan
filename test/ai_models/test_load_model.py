@@ -4,7 +4,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("safetensors")
 
-from pyRadPlan.ml import BasePreprocessor, load_model  # noqa: E402
+from pyRadPlan.ai_models import BasePreprocessor, load_model  # noqa: E402
 
 
 def test_load_dummy_model_returns_model_and_preprocessor(dummy_model_dir):
@@ -35,7 +35,7 @@ def test_trust_remote_code_disabled_raises(dummy_model_dir):
 def test_name_resolves_to_hf_org_repo_id(dummy_model_dir, monkeypatch):
     from pathlib import Path
 
-    from pyRadPlan.ml import _load_model, get_ml_settings
+    from pyRadPlan.ai_models import _load_model
 
     captured = {}
 
@@ -46,4 +46,4 @@ def test_name_resolves_to_hf_org_repo_id(dummy_model_dir, monkeypatch):
     monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
 
     load_model("dosecalc-x")
-    assert captured["repo_id"] == f"{get_ml_settings().hf_org}/dosecalc-x"
+    assert captured["repo_id"] == f"{_load_model.get_settings().ai_models.hf_org}/dosecalc-x"

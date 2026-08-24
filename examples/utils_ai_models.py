@@ -1,18 +1,20 @@
 # %% [markdown]
 """
-# Loading ML Models in pyRadPlan.
+# Loading AI Models in pyRadPlan.
 
 This example shows how to load a model and its preprocessor with the
-`pyRadPlan.ml` subsystem. Models follow a fixed repository contract
+`pyRadPlan.ai_models` subsystem. Models follow a fixed repository contract
 (`model.py`, `preprocessor.py`, `weights.safetensors`, `model_config.json`) and
 can be loaded either from a local directory or from the HuggingFace Hub.
 
 ## Prerequisites
 
-1. The optional ML dependencies installed: `pip install pyRadPlan[ml]`
+1. The optional AI dependencies installed: `pip install pyRadPlan[ai]`
    (plus a `torch` build matching your platform/CUDA).
-2. Optionally, set a base directory for local models via the
-   `PYRADPLAN_HUGGINGFACE_PATH` environment variable (or a `.env` file).
+2. By default, local models live under `<data_dir>/ai_models` (the data root
+   defaults to `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Override
+   just the models base with the `PYRADPLAN_HUGGINGFACE_PATH` environment
+   variable (or a `.env` file).
 
 ## Setup
 """
@@ -22,7 +24,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from pyRadPlan.ml import get_ml_settings, list_local_models, load_model, Modality
+from pyRadPlan import settings
+from pyRadPlan.ai_models import list_local_models, load_model, Modality
 
 # %%
 # Load environment variables (e.g. PYRADPLAN_HUGGINGFACE_PATH) from a .env file
@@ -33,19 +36,19 @@ logging.basicConfig(level=logging.INFO)
 # Quiet the per-request HTTP chatter from the HuggingFace client
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Inspect effective settings
-settings = get_ml_settings()
-print(f"HuggingFace org:    {settings.hf_org}")
-print(f"Local models dir:   {settings.local_models_dir}")
-print(f"Offline:            {settings.offline}")
-print(f"Device:             {settings.device}")
+# Inspect effective settings (the `ai_models` sub-configuration of pyRadPlan.settings)
+ai_models = settings.ai_models
+print(f"HuggingFace org:    {ai_models.hf_org}")
+print(f"Local models dir:   {ai_models.local_models_dir}")
+print(f"Offline:            {ai_models.offline}")
+print(f"Device:             {ai_models.device}")
 
 # %% [markdown]
 """
 ## Load from the HuggingFace Hub
 
 Once the model repositories are published, you can load a model by its friendly
-name, which resolves to `<hf_org>/<name>`. Set `PYRADPLAN_ML_HF_ORG` to the
+name, which resolves to `<hf_org>/<name>`. Set `PYRADPLAN_AI_MODELS_HF_ORG` to the
 hosting organization and, optionally, `PYRADPLAN_HUGGINGFACE_PATH` to keep a
 local copy. Pin a `revision` (tag/branch/commit) for reproducible,
 version-checked downloads.

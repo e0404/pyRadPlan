@@ -5,13 +5,13 @@ These helpers centralize three concerns the rest of the package relies on:
 * **HuggingFace-first resolution** — when a ``repo_id`` is given and we're not
   offline, HuggingFace is checked first so a newer version there is always
   picked up, even when a local copy already exists under ``local_dir`` (e.g.
-  ``pyRadPlan/data/ml_models``). A valid local copy is only used as a
+  ``pyRadPlan/data/ai_models``). A valid local copy is only used as a
   *fallback* when HuggingFace can't be reached or the repo doesn't exist there
   — which is what lets a purely local, never-published model keep working.
 * **Version dedup** — when downloading into a ``local_dir``, a small
   ``.pyradplan_model.json`` records the resolved ``repo_id``/``revision`` so a
   pinned revision that's already present locally skips the network entirely.
-* **Offline operation** — with :class:`MlSettings.offline` set (or
+* **Offline operation** — with :class:`AiModelSettings.offline` set (or
   ``offline=True``), no network is attempted at all; a valid local copy is
   used directly, otherwise the HuggingFace cache is checked
   (``local_files_only=True``).
@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
-from ._settings import get_ml_settings
+from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ METADATA_FILENAME = ".pyradplan_model.json"
 
 _INSTALL_HINT = (
     "huggingface_hub is required to download models. "
-    "Install the optional dependencies with: pip install pyRadPlan[ml]"
+    "Install the optional dependencies with: pip install pyRadPlan[ai]"
 )
 
 
@@ -206,13 +206,13 @@ def resolve_model_dir(
     local_dir : str or Path, optional
         A directory to use as a fallback (if it already holds the model) or to
         download into. Enables offline use and version tracking. When omitted
-        and :attr:`MlSettings.local_models_dir` (``PYRADPLAN_HUGGINGFACE_PATH``)
+        and :attr:`AiModelSettings.local_models_dir` (``PYRADPLAN_HUGGINGFACE_PATH``)
         is set, it defaults to ``"<local_models_dir>/<repo>"``.
     offline : bool, optional
-        Force offline mode. Defaults to :attr:`MlSettings.offline`.
+        Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
     cache_dir : str or Path, optional
         Override the HuggingFace cache directory. Defaults to
-        :attr:`MlSettings.cache_dir`.
+        :attr:`AiModelSettings.cache_dir`.
 
     Returns
     -------
@@ -226,7 +226,7 @@ def resolve_model_dir(
     FileNotFoundError
         If the model can be neither found locally nor downloaded.
     """
-    cfg = get_ml_settings()
+    cfg = get_settings().ai_models
     if offline is None:
         offline = cfg.offline
     if cache_dir is None:
