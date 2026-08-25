@@ -196,7 +196,7 @@ authorized_licenses = [
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*"
-ignore-words-list = ["coo", "HEL"]
+ignore-words-list = "coo,HEL"
 
 [tool.pydocstringformatter]
 write = true
