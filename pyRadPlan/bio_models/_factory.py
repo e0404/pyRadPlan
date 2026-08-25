@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import warnings
 from typing import List
-from pyRadPlan.bio_models._base import BiologicalModelBase
+from pyRadPlan.bio_models._base import BiologicalModel
 
 BIO_MODELS = {}
 
@@ -15,14 +15,14 @@ This module maintains a global registry of available biological models and
 provides utilities for registering, querying, and instantiating them.
 
 The registry maps model names (and their aliases) to their corresponding
-:class:`~pyRadPlan.bio_models._base.BiologicalModelBase` subclasses. Models
+:class:`~pyRadPlan.bio_models._base.BiologicalModel` subclasses. Models
 are registered via :func:`register_model` and can be retrieved by name using
 :func:`get_bio_model`. Only models compatible with a given radiation mode and
 the quantities provided by the dose engine are considered available.
 
 Registry
 --------
-BIO_MODELS : dict[str, type[BiologicalModelBase]]
+BIO_MODELS : dict[str, type[BiologicalModel]]
     Global mapping of model name / alias strings to model classes. Populated
     at import time as models are registered with :func:`register_model`.
 
@@ -39,7 +39,7 @@ get_bio_model
 """
 
 
-def register_model(model_cls: BiologicalModelBase) -> None:
+def register_model(model_cls: BiologicalModel) -> None:
     """
     Register a new model.
 
@@ -48,8 +48,8 @@ def register_model(model_cls: BiologicalModelBase) -> None:
     model_cls : type
         A Biological Model class.
     """
-    if not issubclass(model_cls, BiologicalModelBase):
-        raise ValueError("Model must be a subclass of BiologicalModelBase.")
+    if not issubclass(model_cls, BiologicalModel):
+        raise ValueError("Model must be a subclass of BiologicalModel.")
 
     if model_cls.model is None:
         raise ValueError("Model must have a 'model' attribute.")
@@ -67,7 +67,7 @@ def register_model(model_cls: BiologicalModelBase) -> None:
 def get_available_models(
     radiation_mode: str,
     provided_quantities: List[str],
-) -> dict[str, type[BiologicalModelBase]]:
+) -> dict[str, type[BiologicalModel]]:
     """
     Return all registered models given the radiaiton mode and provided quantities.
     """
@@ -84,7 +84,7 @@ def get_available_models(
 
 def get_bio_model(
     model_id: str, radiation_mode: str, provided_quantities: List[str]
-) -> BiologicalModelBase:
+) -> BiologicalModel:
     """
     Instantiate a biological model by name.
 

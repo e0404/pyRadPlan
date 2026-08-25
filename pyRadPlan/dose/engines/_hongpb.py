@@ -1,7 +1,6 @@
 from typing import ClassVar
 import array_api_compat
 
-from pyRadPlan.bio_models import LQModel
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
 
 
@@ -82,11 +81,9 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
         if self.calc_bio_dose:
-            bixel = self.bio_model.calc_biological_quantities_for_bixel(bixel, kernels)
-            if isinstance(self.bio_model, LQModel):
-                # Multiple with dose
-                bixel["alpha_dose"] = bixel["physical_dose"] * bixel["alpha"]
-                bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(bixel["beta"])
+            alpha, beta = self._bio_evaluator.bixel_alpha_beta(bixel, kernels)
+            bixel["alpha_dose"] = bixel["physical_dose"] * alpha
+            bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(beta)
 
     @staticmethod
     def is_available(pln, machine):

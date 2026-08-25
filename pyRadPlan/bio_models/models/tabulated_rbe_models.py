@@ -1,384 +1,277 @@
 """Tabulated RBE models based on pre-computed lookup tables."""
 
+import sys
 import warnings
+from abc import abstractmethod
+from typing import Any, Optional
 
-import array_api_compat
 import numpy as np
 from pymatreader import read_mat
-from typing import Any
-from abc import abstractmethod
-from ...core.xp_utils.typing import Array
-from ...core.xp_utils.compat import interp1d as array_interp
 
-import sys
+from pyRadPlan.bio_models._evaluator import BioModelEvaluator, TabulatedSpectrumEvaluator
+from .lq_models import LQModel
 
 if sys.version_info < (3, 10):
     import importlib_resources as resources  # Backport for older versions
 else:
-    from importlib import resources  # Standard from Python 3.9+
-
-from .lq_models import LQModel
+    from importlib import resources
 
 
 class TabulatedRBEModel(LQModel):
     """
     Abstract base class for RBE models driven by pre-computed lookup tables.
 
-    This family of models interpolates alpha and beta (or related quantities) from tabulated
-    data stored in mat files bundled with pyRadPlan. Two tables are
-    always required:
+    Two tables are required: a **quantity table** (e.g. alpha/beta vs. energy per fragment
+    species, loaded by the concrete subclass via :meth:`load_quantity_table`) and a
+    **stopping power table** (dE/dx vs. energy per fragment species, loaded by
+    :meth:`load_sp_table`). The model itself only holds the tables and the pure
+    dose-averaging math; the per-machine pre-computation over fluence spectra happens in
+    :class:`~pyRadPlan.bio_models.TabulatedSpectrumEvaluator`.
 
-    - A **quantity table** (e.g. alpha/beta vs. energy per fragment species),
-      loaded by the concrete subclass via `load_quantity_table`.
-    - A **stopping power table** (dE/dx vs. energy per fragment species),
-      loaded by `load_sp_table` from ``pyRadPlan.data.SPtables``.
-
-    Fragment species present in the quantity table must be a subset of those
-    in the stopping power table; a :exc:`ValueError` is raised at construction
-    if this constraint is violated.
-
-    Class Attributes
-    ----------------
-    possible_radiation_modes : list[str]
-        ``["protons", "helium", "carbon"]``
-    fragments_to_include : list or None
-        Fragment (A, Z) pairs to use. ``None`` or ``"all"`` includes every
-        fragment in the quantity table.
-    fragments_q_table_ix : list[int] or None
-        Row indices into the quantity table for the selected fragments.
-        Populated by load_fragments.
-    fragments_sp_table_ix : list[int] or None
-        Row indices into the stopping power table corresponding to each
-        selected fragment. Populated by load_fragments`.
-    fragments_kernel_ix : list[int] or None
-        Indices into the kernel fluence spectrum fragments. Populated by
-        set_kernel_fragments` at dose-calculation time.
-    quantities_in_table : list[str] or None
-        Names of quantity columns present in the loaded quantity table
-        (e.g. ``["alpha", "beta"]``). Set by the concrete subclass.
-    required_quantities : list[str] or None
-        Quantity names that must be supplied by the machine file / dose engine.
-        Overrides the parent class attribute; set by the concrete subclass.
-    quantity_transforms : dict[str, str] or None
-        Optional element-wise array transforms to apply when reading a
-        quantity from the table (e.g. ``{"beta": "sqrt"}`` applies
-        ``xp.sqrt`` before returning). ``None`` means no transform.
+    Tables are computed with NumPy: they are machine data, not per-bixel arrays.
 
     Parameters
     ----------
     sp_table_name : str
         Filename of the stopping power table inside ``pyRadPlan.data.SPtables``.
-        Defaults to ``"SPtable.mat"``. Can be overridden by subclasses.
+    fragments_to_include : array-like of (A, Z) rows or None
+        Fragment species to use. ``None`` includes every charged fragment present in the
+        kernel spectra that both tables know.
 
+    Class Attributes
+    ----------------
+    quantities_in_table : list[str]
+        Names of the quantity columns in the loaded table (e.g. ``["alpha", "beta"]``).
+    quantities_in_kernel : list[str]
+        Names of the dose-averaged arrays produced per kernel (e.g. ``["alpha", "sqrt_beta"]``).
+    quantity_transforms : dict[str, str | None]
+        Element-wise transform applied to a table quantity before averaging
+        (e.g. ``{"beta": "sqrt"}``).
     """
 
-    required_quantities = [
-        "physical_dose",
-    ]  # Requires physical dose and LET information
     possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
-    fragments_to_include = None  # To be set based on the specific model and tables used
-    fragments_q_table_ix = None  # To be set based on the specific model and tables used
-    fragments_sp_table_ix = None  # To be set based on the specific model and tables used
-    fragments_kernel_ix = None  # To be set based on the specific model and tables used
+    quantities_in_table: list[str] = []
+    quantities_in_kernel: list[str] = []
+    quantity_transforms: dict[str, Optional[str]] = {}
 
-    quantities_in_table = None
-    required_quantities = None  # input in machine file
-    quantity_transforms = None
+    _folder_name_quantity_tables = resources.files("pyRadPlan.data.RBEtables")
+    _folder_name_sp_tables = resources.files("pyRadPlan.data.SPtables")
 
-    _folder_name_quantity_tables = resources.files(
-        "pyRadPlan.data.RBEtables"
-    )  # Folder where RBE tables are stored
-    _folder_name_sp_tables = resources.files(
-        "pyRadPlan.data.SPtables"
-    )  # Folder where stopping power tables are stored
-
-    _sp_table = None
-    _q_table = None
-
-    def __init__(self):
-        super().__init__()
-        # should be overwritten with pln params, in genereall some parameters are coming that need to be overwritten
-        self.sp_table_name = "SPtable.mat"
+    def __init__(self, sp_table_name: str = "SPtable.mat", fragments_to_include: Any = None):
+        self.sp_table_name = sp_table_name
+        self.fragments_to_include = (
+            None if fragments_to_include is None else np.asarray(fragments_to_include, float)
+        )
         self._sp_table = self.load_sp_table()
-        self._q_table = self.load_quantity_table()  # could maybe also be a z* table or so
+        self._q_table = self.load_quantity_table()
 
-    def load_fragments(self, kernel):
-        """
-        Validate fragment consistency and build index mappings between tables.
+    def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
+        return TabulatedSpectrumEvaluator(self, machine, voxel_params)
 
-        """
-        if self.fragments_to_include is None or isinstance(self.fragments_to_include, str):
-            self.fragments_to_include = np.array(
-                [
-                    [
-                        k.A for k in kernel.fluence_spectrum.fragments if k.Z > 0
-                    ],  # electrons are -1
-                    [k.Z for k in kernel.fluence_spectrum.fragments if k.Z > 0],
-                ]
-            ).T
-            self.fragments_kernel_ix = list(range(self.fragments_to_include.shape[0]))
-        else:  # given as A,Z values in matrix
-            all_fragments = np.array(
-                [
-                    [k.A for k in kernel.fluence_spectrum.fragments if k.Z > 0],
-                    [k.Z for k in kernel.fluence_spectrum.fragments if k.Z > 0],
-                ]
-            ).T
-            self.fragments_kernel_ix = np.where(
-                (all_fragments[:, None] == self.fragments_to_include).all(axis=2).any(axis=1)
-            )[0]
-        self.fragments_sp_table_ix = []
-        self.fragments_q_table_ix = []
-        keep = []
-        for i, fragment in enumerate(self.fragments_to_include):
-            idx_sp = np.where(self._sp_table["fragments_AZ"][:, 1] == fragment[1])[0]
-            idx_q = np.where(self._q_table["fragments_AZ"][:, 1] == fragment[1])[0]
-            if idx_sp.shape[0] == 0 or idx_q.shape[0] == 0:
-                warnings.warn(
-                    f"Fragment {fragment} is not present in the SP or quantity table "
-                    f"(SP fragments: {self._sp_table['fragments_AZ'].tolist()}); skipping it."
-                )
-                continue
-            keep.append(i)
-            self.fragments_sp_table_ix.append(int(idx_sp[0]))
-            self.fragments_q_table_ix.append(int(idx_q[0]))
-        self.fragments_to_include = self.fragments_to_include[keep]
-        self.fragments_kernel_ix = [self.fragments_kernel_ix[i] for i in keep]
-        # Check that all selected fragments are present in both tables
-        if not np.array_equal(
-            self._sp_table["fragments_AZ"][self.fragments_sp_table_ix, :],
-            self._q_table["fragments_AZ"][self.fragments_q_table_ix, :],
-        ):
-            raise ValueError(
-                "Selected fragments are not consistent between the SP table and the quantity table."
-            )
+    # ------------------------------------------------------------------ tables
+    @property
+    def table_alpha_x(self) -> np.ndarray:
+        """Reference alpha_x per tissue class of the quantity table, shape (n_classes,)."""
+        return np.atleast_1d(np.asarray(self._q_table["alpha_x"], dtype=float))
+
+    @property
+    def table_beta_x(self) -> np.ndarray:
+        """Reference beta_x per tissue class of the quantity table, shape (n_classes,)."""
+        return np.atleast_1d(np.asarray(self._q_table["beta_x"], dtype=float))
 
     def load_sp_table(self) -> dict:
-        """
-        Load and parse the stopping power table from disk.
-
-        Reads the ``.mat`` file at ``pyRadPlan.data.SPtables/<sp_table_name>``
-        and returns a normalised dict with consistent key names and explicit
-        unit annotations.
-
-        Returns
-        -------
-            dict: A dictionary containing the stopping power table data.
-        """
-        sp_table_path = self._folder_name_sp_tables / self.sp_table_name
-        data = read_mat(sp_table_path)
+        """Load the stopping power table (``energies`` in MeV/u, ``dE_dx`` in keV/um)."""
+        data = read_mat(self._folder_name_sp_tables / self.sp_table_name)
         sp_table = {}
         sp_table["fragments_AZ"] = np.column_stack(
             (data["SPtable"]["data"]["A"], data["SPtable"]["data"]["Z"])
         )
         sp_table["dE_dx"] = np.array(data["SPtable"]["data"]["dEdx"])
         sp_table["energies"] = np.array(data["SPtable"]["data"]["energies"])
-        sp_table["units"] = {}
-        sp_table["units"]["energies"] = "MeV/nucleon"
-        sp_table["units"]["dE_dx"] = "keV/um"
+        sp_table["units"] = {"energies": "MeV/nucleon", "dE_dx": "keV/um"}
         return sp_table
-
-    def get_tissue_information(self, _, v_alpha_x: Any, v_beta_x: Any) -> Any:
-        """
-        Build a per-voxel tissue-index array by matching reference alpha/beta pairs.
-
-        TODO: can this be generalized with the kernel based model? It is currently duplicated in both models, but it is not specific to either of them.
-        ALso here more checks for the nucelous or other tissue parameters can be added in the future if needed.
-        """
-        return self.match_tissue_classes(
-            v_alpha_x, v_beta_x, self.table_alpha_x, self.table_beta_x
-        )
-
-    @property
-    def table_alpha_x(self) -> np.ndarray:
-        """Reference alpha_x per tissue class of the loaded quantity table, shape (n_classes,)."""
-        return np.atleast_1d(np.asarray(self._q_table["alpha_x"], dtype=float))
-
-    @property
-    def table_beta_x(self) -> np.ndarray:
-        """Reference beta_x per tissue class of the loaded quantity table, shape (n_classes,)."""
-        return np.atleast_1d(np.asarray(self._q_table["beta_x"], dtype=float))
-
-    def get_quantity(self, q_table: dict, qty: str, xp) -> Array:
-        """
-        Read a single quantity row from the quantity table.
-
-        Hereby any configured transform (e.g. sqrt) is applied before returning the value.
-        """
-        raw = q_table[qty]
-        transform = self.quantity_transforms.get(qty)
-        return getattr(xp, transform)(raw) if transform else raw
-
-    def interpolate_in_energies(self, kernel: dict) -> tuple[dict, dict]:
-        """
-        Interpolate the quantity and stopping power tables onto the kernel's
-        energy grid.
-        """
-        xp = array_api_compat.array_namespace(kernel.fluence_spectrum.fragments[0].energy)
-        energies = xp.stack(
-            [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
-        )  # energies for which the kernel table has values
-        # interppolate dEdx
-        sp_table = {}
-        sp_interp = xp.full(energies.shape, 0.0)
-        new_energies = xp.full(energies.shape, 0.0)
-        for i, ix in enumerate(self.fragments_sp_table_ix):
-            sp_interp[i, :] = array_interp(
-                energies[i, :],
-                self._sp_table["energies"][ix, :],
-                self._sp_table["dE_dx"][ix, :],
-            )
-            new_energies[i, :] = energies[i, :]
-        sp_table["dE_dx"] = sp_interp
-        sp_table["energies"] = new_energies
-        q_table = {}
-        # interpolate quantity table values -> (n_classes, n_fragments, n_energies)
-        for qty in self.quantities_in_table:
-            table_values = self._q_table[qty]
-            if table_values.ndim == 2:  # single tissue class
-                table_values = table_values[None, :, :]
-            qty_interp = xp.full((table_values.shape[0],) + energies.shape, 0.0)
-            new_energies = xp.full(energies.shape, 0.0)
-            for c in range(table_values.shape[0]):
-                for i, ix in enumerate(self.fragments_q_table_ix):
-                    qty_interp[c, i, :] = array_interp(
-                        energies[i, :],
-                        self._q_table["energies"][ix, :],
-                        table_values[c, ix, :],
-                    )
-                    new_energies[i, :] = energies[i, :]
-            q_table[qty] = qty_interp
-        q_table["energies"] = new_energies
-        return q_table, sp_table
-
-    def compute_kernel_quantities(self, kernel: dict, v_tissue_index: Any) -> dict:
-        """
-        Compute dose-averaged biological quantities for a pencil-beam kernel.
-        """
-        [q_table, sp_table] = self.interpolate_in_energies(kernel)
-        xp = array_api_compat.array_namespace(kernel.depths)
-
-        n_depths = len(kernel.depths)
-        n_tissue = self.table_alpha_x.shape[0]
-        # Stack energy arrays
-        kernel_spectra_energies = xp.stack(
-            [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
-        )  # (n_fragments, n_energies)
-
-        q_energies = q_table["energies"][:]
-        sp_energies = sp_table["energies"][:]
-
-        if not xp.all(q_energies == sp_energies):
-            raise ValueError(
-                f"Energies in Quantity table and SP table do not match. "
-                f"Q energies: {q_energies}, SP energies: {sp_energies}."
-            )
-        if not xp.all(kernel_spectra_energies == q_energies):
-            raise ValueError(
-                f"Energies in kernel spectra and Quantity table do not match. "
-                f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
-            )
-
-        # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
-        sp = sp_table["dE_dx"][:, :, xp.newaxis]
-        quantitys = {}
-        for iqty, qty in enumerate(self.quantities_in_kernel):
-            # (n_classes, n_fragments, n_energies, 1)
-            values = self.get_quantity(q_table, self.quantities_in_table[iqty], xp)
-            if values.shape[0] not in (1, n_tissue):
-                raise ValueError(
-                    f"Quantity table '{qty}' has {values.shape[0]} tissue classes, expected "
-                    f"1 or {n_tissue}."
-                )
-            quantitys[qty] = values[:, :, :, xp.newaxis]
-
-        # fluence_spectra: (n_fragments, n_energies, n_depths)
-        fluence_spectra = xp.stack(
-            [
-                kernel.fluence_spectrum.fragments[f].fluence_spectrum
-                for f in self.fragments_kernel_ix
-            ]
-        )
-        # Dose-weighted sums over energies and fragments -> (n_depths,) / (n_classes, n_depths)
-        denominator = xp.sum(sp * fluence_spectra, axis=(0, 1))
-        valid = denominator > 0
-        safe_denominator = xp.where(valid, denominator, 1.0)
-        for qty in self.quantities_in_kernel:
-            numerator = xp.sum(quantitys[qty] * sp * fluence_spectra, axis=(1, 2))
-            averaged = xp.where(valid, numerator / safe_denominator, 0.0)  # (n_classes, n_depths)
-            kernel.quantities[qty] = xp.broadcast_to(averaged.T, (n_depths, n_tissue))
-
-        return kernel
-
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """Calculate the biological quantities for a bixel."""
-        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
-        return bixel
 
     @abstractmethod
     def load_quantity_table(self) -> dict:
+        """Load the quantity table (``.mat``) into a dict with ``fragments_AZ``, ``energies``,
+        the quantity columns and the reference ``alpha_x`` / ``beta_x`` per tissue class.
         """
-        Load the quantity table from the specified file. The table is expected to be in a .mat format and should contain the necessary data for quantity calculations.
+
+    # ---------------------------------------------------------------- fragments
+    def select_fragments(self, fluence_spectrum: Any) -> dict[str, Any]:
+        """
+        Select the fragment species to include and map them onto both tables.
+
+        Parameters
+        ----------
+        fluence_spectrum : ChargedBeamFragmentSpectrum
+            Spectrum of one kernel; all kernels of a machine share the same species.
 
         Returns
         -------
-            dict: A dictionary containing the quantity table data.
+        dict
+            ``fragments_AZ`` (n, 2), ``kernel_ix``, ``sp_table_ix``, ``q_table_ix`` — index
+            lists of the selected fragments into the kernel spectrum and both tables.
         """
-        pass
+        charged = [(i, f) for i, f in enumerate(fluence_spectrum.fragments) if f.Z > 0]
+        available = np.asarray([[f.A, f.Z] for _, f in charged], dtype=float).reshape(-1, 2)
+
+        if self.fragments_to_include is None:
+            requested = available
+        else:
+            requested = np.asarray(self.fragments_to_include, dtype=float).reshape(-1, 2)
+
+        selected = {"fragments_AZ": [], "kernel_ix": [], "sp_table_ix": [], "q_table_ix": []}
+        for fragment in requested:
+            in_kernel = np.flatnonzero((available == fragment).all(axis=1))
+            idx_sp = np.flatnonzero(self._sp_table["fragments_AZ"][:, 1] == fragment[1])
+            idx_q = np.flatnonzero(self._q_table["fragments_AZ"][:, 1] == fragment[1])
+            if in_kernel.size == 0 or idx_sp.size == 0 or idx_q.size == 0:
+                warnings.warn(
+                    f"Fragment (A, Z)={fragment.tolist()} is not present in the kernel spectra, "
+                    f"the SP table or the quantity table; skipping it."
+                )
+                continue
+            selected["fragments_AZ"].append(fragment)
+            selected["kernel_ix"].append(charged[in_kernel[0]][0])
+            selected["sp_table_ix"].append(int(idx_sp[0]))
+            selected["q_table_ix"].append(int(idx_q[0]))
+
+        if not selected["kernel_ix"]:
+            raise ValueError("No fragment of the kernel spectra is covered by the RBE tables.")
+        selected["fragments_AZ"] = np.asarray(selected["fragments_AZ"], dtype=float)
+        if not np.array_equal(
+            self._sp_table["fragments_AZ"][selected["sp_table_ix"], 1],
+            self._q_table["fragments_AZ"][selected["q_table_ix"], 1],
+        ):
+            raise ValueError(
+                "Selected fragments are not consistent between the SP table and the quantity table."
+            )
+        return selected
+
+    # ------------------------------------------------------------ dose average
+    def _table_quantity(self, name: str) -> np.ndarray:
+        """Quantity table column as ``(n_classes, n_fragments, n_energies)``."""
+        values = np.asarray(self._q_table[name], dtype=float)
+        if values.ndim == 2:  # single tissue class
+            values = values[None, :, :]
+        return values
+
+    def interpolate_in_energies(
+        self, energies: np.ndarray, fragments: dict[str, Any]
+    ) -> tuple[dict, dict]:
+        """
+        Interpolate both tables onto per-fragment energy grids.
+
+        Parameters
+        ----------
+        energies : ndarray, shape (n_fragments, n_energies)
+            Target energies per selected fragment (MeV/u).
+
+        Returns
+        -------
+        (q_table, sp_table)
+            ``q_table[qty]`` of shape (n_classes, n_fragments, n_energies);
+            ``sp_table["dE_dx"]`` of shape (n_fragments, n_energies).
+        """
+        sp_interp = np.zeros(energies.shape)
+        for i, ix in enumerate(fragments["sp_table_ix"]):
+            sp_interp[i] = np.interp(
+                energies[i], self._sp_table["energies"][ix], self._sp_table["dE_dx"][ix]
+            )
+        sp_table = {"dE_dx": sp_interp, "energies": energies}
+
+        q_table = {"energies": energies}
+        for qty in self.quantities_in_table:
+            table_values = self._table_quantity(qty)
+            qty_interp = np.zeros((table_values.shape[0],) + energies.shape)
+            for c in range(table_values.shape[0]):
+                for i, ix in enumerate(fragments["q_table_ix"]):
+                    qty_interp[c, i] = np.interp(
+                        energies[i], self._q_table["energies"][ix], table_values[c, ix]
+                    )
+            q_table[qty] = qty_interp
+        return q_table, sp_table
+
+    def get_quantity(self, q_table: dict, qty: str) -> np.ndarray:
+        """Read a quantity from an interpolated table, applying its configured transform."""
+        transform = self.quantity_transforms.get(qty)
+        raw = q_table[qty]
+        return getattr(np, transform)(raw) if transform else raw
+
+    def dose_average(self, kernel: Any, fragments: dict[str, Any]) -> dict[str, np.ndarray]:
+        """
+        Dose-averaged kernel quantities for one pencil-beam kernel.
+
+        Parameters
+        ----------
+        kernel : ParticlePencilBeamKernel
+            Kernel with a fragment fluence spectrum.
+        fragments : dict
+            Output of :meth:`select_fragments`.
+
+        Returns
+        -------
+        dict[str, ndarray]
+            One ``(n_classes, n_depths)`` array per entry of ``quantities_in_kernel``.
+        """
+        spectrum = kernel.fluence_spectrum.fragments
+        energies = np.stack([spectrum[i].energy for i in fragments["kernel_ix"]])
+        q_table, sp_table = self.interpolate_in_energies(energies, fragments)
+
+        # (n_fragments, n_energies, 1) against fluence (n_fragments, n_energies, n_depths)
+        sp = sp_table["dE_dx"][:, :, None]
+        fluence = np.stack([spectrum[i].fluence_spectrum for i in fragments["kernel_ix"]])
+        n_classes = self.table_alpha_x.shape[0]
+
+        denominator = np.sum(sp * fluence, axis=(0, 1))  # (n_depths,)
+        valid = denominator > 0
+        safe_denominator = np.where(valid, denominator, 1.0)
+
+        result = {}
+        for qty_kernel, qty_table in zip(self.quantities_in_kernel, self.quantities_in_table):
+            values = self.get_quantity(q_table, qty_table)  # (n_cls, n_frag, n_e)
+            if values.shape[0] not in (1, n_classes):
+                raise ValueError(
+                    f"Quantity table '{qty_table}' has {values.shape[0]} tissue classes, "
+                    f"expected 1 or {n_classes}."
+                )
+            numerator = np.sum(values[:, :, :, None] * sp * fluence, axis=(1, 2))
+            averaged = np.where(valid, numerator / safe_denominator, 0.0)
+            result[qty_kernel] = np.broadcast_to(averaged, (n_classes, len(kernel.depths))).copy()
+        return result
 
 
 class TabulatedAlphaBetaModel(TabulatedRBEModel):
     """
     Tabulated LQ model using dose-averaged alpha and sqrt(beta) kernels.
 
-    Looks up pre-computed alpha and sqrt(beta) values from a RBE
-    table and accumulates dose-averaged quantities over the pencil-beam
-    fluence spectrum.
-
-    Class Attributes
-    ----------------
-    model : str
-        ``"dose_average_alpha_beta``"
-    quantities_in_table : list[str]
-        ``["alpha", "beta"]`` — columns read from the ``.mat`` quantity table.
-    quantities_in_kernel : list[str]
-        ``["alpha", "sqrt_beta"]`` — names used in ``kernel.quantities``.
-    required_quantities : list[str]
-        ``["fluence"]`` — the machine file must supply fluence spectra.
-    quantity_transforms : dict
-        ``{"beta": "sqrt"}`` — beta is stored as sqrt(beta) in the kernel to
-        allow dose-weighted averaging; squared back to beta at bixel level.
+    Looks up alpha and beta per fragment and energy from an RBE table, dose-averages them
+    over the pencil-beam fluence spectrum (beta as sqrt(beta), squared back per voxel).
 
     Parameters
     ----------
     quantity_table_name : str
         Filename of the RBE table inside ``pyRadPlan.data.RBEtables``.
-        Defaults to ``"RBEtable_LEMI_Scholz06_AX01_BX005.mat"``.
     """
 
     model = "dose_average_alpha_beta"
     quantities_in_table = ["alpha", "beta"]
     quantities_in_kernel = ["alpha", "sqrt_beta"]
-    required_quantities = ["fluence"]  # input in machine file
-    quantity_transforms = {
-        "alpha": None,
-        "beta": "sqrt",
-    }
+    required_quantities = ["fluence"]
+    quantity_transforms = {"alpha": None, "beta": "sqrt"}
 
-    def __init__(self):
-        self.quantity_table_name = "RBEtable_LEMI_Scholz06_AX01_BX005.mat"
-        super().__init__()
+    def __init__(
+        self,
+        quantity_table_name: str = "RBEtable_LEMI_Scholz06_AX01_BX005.mat",
+        sp_table_name: str = "SPtable.mat",
+        fragments_to_include: Any = None,
+    ):
+        self.quantity_table_name = quantity_table_name
+        super().__init__(sp_table_name=sp_table_name, fragments_to_include=fragments_to_include)
 
     def load_quantity_table(self) -> dict:
-        """
-        Load the quantity table from the specified file. The table is expected to be in a .mat format and should contain the necessary data for quantity calculations.
-
-        Returns
-        -------
-            dict: A dictionary containing the quantity table data.
-        """
-        _table_path = self._folder_name_quantity_tables / self.quantity_table_name
-        data = read_mat(_table_path)
+        data = read_mat(self._folder_name_quantity_tables / self.quantity_table_name)
         quantity_table = {}
         quantity_table["alpha_x"] = data["RBEtable"]["meta"]["modelParameters"]["alphaX"]
         quantity_table["beta_x"] = data["RBEtable"]["meta"]["modelParameters"]["betaX"]
@@ -389,20 +282,8 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
         quantity_table["energies"] = np.array(data["RBEtable"]["data"]["energies"])
         quantity_table["alpha"] = np.array(data["RBEtable"]["data"]["alpha"])
         quantity_table["beta"] = np.array(data["RBEtable"]["data"]["beta"])
-        quantity_table["units"] = {}
-        quantity_table["units"]["energies"] = "MeV/nucleon"
-        quantity_table["units"]["alpha"] = "1/Gy"
-        quantity_table["units"]["beta"] = "1/Gy^2"
+        quantity_table["units"] = {"energies": "MeV/nucleon", "alpha": "1/Gy", "beta": "1/Gy^2"}
         return quantity_table
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """Calculate the biological quantities for a bixel."""
-        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
-        # here we do calculation from the quantity to the alpha and beta value from the LQ model, here simple **2 for beta
-        xp = array_api_compat.array_namespace(bixel["rad_depths"])
-        # kernels["alpha"/"sqrt_beta"] have shape (n_voxels, n_tissue_classes)
-        tissue_ix = xp.astype(xp.asarray(bixel["v_tissue_index"]), xp.int64)
-        voxel_ix = xp.arange(tissue_ix.shape[0])
-        bixel["alpha"] = kernels["alpha"][voxel_ix, tissue_ix]
-        bixel["beta"] = kernels["sqrt_beta"][voxel_ix, tissue_ix] ** 2
-        return bixel
+    def alpha_beta_from_kernel_rows(self, rows: dict[str, Any]) -> tuple[Any, Any]:
+        return rows["alpha"], rows["sqrt_beta"] ** 2

@@ -1,32 +1,11 @@
 import pytest
 
-import array_api_strict as xp
-
-
-from pyRadPlan.bio_models._base import EmptyModel, BiologicalModelBase
-
-
-@pytest.fixture
-def sample_bixel():
-    bixel_dict = {
-        "rad_depths": xp.asarray([0.0, 1.0, 2.0]),
-    }
-    return bixel_dict
-
-
-@pytest.fixture
-def sample_kernel():
-    kernel_dict = {
-        "let": xp.asarray([0.0, 1.0, 2.0]),
-        "alpha": xp.asarray([0.0, 1.0, 2.0]),
-        "beta": xp.asarray([0.0, 1.0, 2.0]),
-    }
-    return kernel_dict
+from pyRadPlan.bio_models import BiologicalModel, EmptyModel, ParametricEvaluator
 
 
 def test_EmptyModel_constructor():
     empty_model = EmptyModel()
-    assert isinstance(empty_model, BiologicalModelBase)
+    assert isinstance(empty_model, BiologicalModel)
     assert empty_model.model == "none"
     assert empty_model.required_quantities == []
     assert empty_model.possible_radiation_modes == [
@@ -37,11 +16,15 @@ def test_EmptyModel_constructor():
         "oxygen",
         "VHEE",
     ]
+    assert empty_model.provides_alpha_beta is False
+    assert empty_model.requires_let is False
+    assert empty_model.default_report_quantity == "physical_dose"
 
 
-def test_EmptyModel_calc_biological_quantities_for_bixel(sample_bixel, sample_kernel):
-    empty_model = EmptyModel()
-    bixel = sample_bixel
-    kernels = sample_kernel
-    result = empty_model.calc_biological_quantities_for_bixel(bixel, kernels)
-    assert result == bixel
+def test_EmptyModel_evaluator():
+    evaluator = EmptyModel().evaluator(machine=None, voxel_params={})
+    assert isinstance(evaluator, ParametricEvaluator)
+    assert evaluator.dij_scalars() == {}
+    assert evaluator.kernel_quantities({"alpha": 1}) == {}
+    with pytest.raises(NotImplementedError):
+        evaluator.bixel_alpha_beta({}, {})

@@ -1,62 +1,37 @@
 """Constant relative biological effectiveness (RBE) model."""
 
-from pyRadPlan.bio_models._base import BiologicalModelBase
+from typing import Any
+
+from pyRadPlan.bio_models._base import BiologicalModel
+from pyRadPlan.bio_models._evaluator import BioModelEvaluator, ParametricEvaluator
 
 
-class ConstantRBEModel(BiologicalModelBase):
+class ConstantRBEModel(BiologicalModel):
     """
-    Biological model applying a single, user-configurable RBE to all bixels.
+    Biological model applying a single, spatially uniform RBE.
 
-    The relative biological effectiveness (RBE) is assumed to be spatially
-    uniform and independent of dose, LET, or tissue type. Alpha and beta
-    values are scaled from their reference (photon) counterparts by the
-    constant RBE, making the model compatible with RBE-weighted optimisation
-    frameworks that operate on alpha/beta directly.
+    RBE-weighted dose is ``rbe * physical_dose``; no LQ parameters are produced. The
+    constant is stored on the dij (``dij.rbe``) so that quantities and results can be
+    derived from the physical dose influence matrix alone.
 
     Parameters
     ----------
     rbe : float, optional
-        Constant RBE factor applied to all bixels. Defaults to ``1.1``,
-        the clinically adopted value for proton therapy.
-
+        Constant RBE factor. Defaults to ``1.1``, the clinically adopted proton value.
     """
 
     model = "constant_rbe"
-    required_quantities = ["physical_dose"]  # Requires physical dose information
-    possible_radiation_modes = [
-        "photons",
-        "protons",
-        "helium",
-        "carbon",
-        "oxygen",
-        "VHEE",
-    ]  # Compatible with all common modalities
-    default_report_quantity = "RBExDose"  # Suggested quantity for display and planning
+    required_quantities = ["physical_dose"]
+    possible_radiation_modes = ["photons", "protons", "helium", "carbon", "oxygen", "VHEE"]
+    default_report_quantity = "rbe_x_dose"
 
-    def __init__(self):
-        self.rbe = 1.1  # Default RBE value, can be overridden by user input
-        super().__init__()
+    def __init__(self, rbe: float = 1.1):
+        if rbe <= 0:
+            raise ValueError("Constant RBE must be positive.")
+        self.rbe = float(rbe)
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """
-        Calculate the RBE-weighted dose for a given bixel using the constant RBE value.
+    def dij_scalars(self) -> dict[str, Any]:
+        return {"rbe": self.rbe}
 
-        Parameters
-        ----------
-        bixel:
-            A data structure representing a bixel, which should contain at least
-            the physical dose information.
-        kernels:
-            A dictionary containing the kernel values, including LET.
-
-        Returns
-        -------
-        dict[str, float]
-            A dictionary containing the RBE-weighted dose calculated as:
-            RBE-weighted dose = physical dose * constant RBE value.
-        """
-        bixel["alpha"] = self.rbe * bixel["v_alpha_x"]
-        bixel["beta"] = (
-            self.rbe**2 * bixel["v_beta_x"]
-        )  # do i want this, not necessary for the constant RBE model, but would then work with the current RBE optimization
-        return bixel
+    def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
+        return ParametricEvaluator(self)

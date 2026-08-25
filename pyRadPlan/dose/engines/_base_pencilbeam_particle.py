@@ -2,7 +2,7 @@
 
 import warnings
 from abc import abstractmethod
-from typing import cast, ClassVar, Literal, Any
+from typing import cast, ClassVar, Literal, Any, Optional
 import logging
 import time
 from copy import deepcopy
@@ -19,13 +19,7 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import (
-    ConstantRBEModel,
-    LETBasedLQModel,
-    LQModel,
-    KernelBasedLQModel,
-    TabulatedRBEModel,
-)
+from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -70,10 +64,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def __init__(self, pln):
         # Protected properties with public get access
-        self._v_tissue_index = None  # Stores tissue indices available in the matRad base data
-        self._v_alpha_x = None  # Stores Photon Alpha
-        self._v_beta_x = None  # Stores Photon Beta
-        self._bio_kernel_quantities = None  # Stores the names of the required kernel quantities for the biological model (e.g. alpha, beta for LQ models)
+        self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
+        self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
+        self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
 
         self._kernel_cache = {}
 
@@ -286,25 +279,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self.calc_let:
             used_kernels["let"] = kernel["let"]
 
-        # bioDose
-        if isinstance(self.bio_model, KernelBasedLQModel):
-            for quantity in self._bio_kernel_quantities:
-                used_kernels[quantity] = kernel[quantity]
+        # Biological model kernels (1-D or (n_tissue_classes, n_depths) arrays)
+        if self.calc_bio_dose:
+            used_kernels.update(self._bio_evaluator.kernel_quantities(kernel))
+
         # Interpolate all fields in X
-        kernel_interp = array_interp(bixel["rad_depths"], depths, used_kernels)
-
-        if isinstance(self.bio_model, TabulatedRBEModel):
-            xp = array_api_compat.array_namespace(bixel["rad_depths"])
-            for quantity in self.bio_model.quantities_in_kernel:
-                kernel_interp[quantity] = xp.zeros(
-                    (bixel["rad_depths"].shape[0], kernel["quantities"][quantity].shape[1])
-                )
-                for i in range(kernel["quantities"][quantity].shape[1]):  # for all tissue classes
-                    kernel_interp[quantity][:, i] = array_interp(
-                        bixel["rad_depths"], depths, kernel["quantities"][quantity][:, i]
-                    )
-
-        return kernel_interp
+        return array_interp(bixel["rad_depths"], depths, used_kernels)
 
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
         kernel = curr_bixel["kernel"]  # cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
@@ -389,7 +369,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
 
         if self.calc_bio_dose:
-            curr_bixel["v_tissue_index"] = curr_ray["v_tissue_index"][curr_ix]
             curr_bixel["v_alpha_x"] = curr_ray["v_alpha_x"][curr_ix]
             curr_bixel["v_beta_x"] = curr_ray["v_beta_x"][curr_ix]
 
@@ -438,24 +417,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 
-        # biology: alpha/beta influence matrices are only computed for LQ-type models
-        self.calc_bio_dose = isinstance(self.bio_model, LQModel)
-        if isinstance(self.bio_model, ConstantRBEModel):
-            dij["rbe"] = self.bio_model.rbe
+        # Biology: the model decides whether alpha/beta matrices and LET are needed
+        dij = self._init_bio_model(dij)
 
-        # Load biologicla base data if needed
-        if self.calc_bio_dose:
-            dij = self._load_biological_kernel(cst, dij)  # TODO: Not fully implemented yet
-            # allocate alpha and beta dose container and sparse matrices in the dij struct,
-            # for more information see corresponding method
-            dij = self._allocate_bio_dose_container(dij)  # TODO: Not fully implemented yet
-            # initialize the tabulate rbe model by pre interpolating the fluence spectrum and tables to thesame energies
-            if isinstance(self.bio_model, TabulatedRBEModel):
-                self.bio_model.load_fragments(self._machine.pb_kernels[self._machine.energies[0]])
-                for pb_energy in self._machine.energies:
-                    self._machine.pb_kernels[pb_energy] = self.bio_model.compute_kernel_quantities(
-                        self._machine.pb_kernels[pb_energy], self._v_tissue_index
-                    )
         # Allocate LET container and let sparse matrix in dij struct
         if self.calc_let:
             if self._machine.has_let_kernel:
@@ -545,41 +509,41 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         return beam_info
 
-    def _load_biological_kernel(self, _cst: StructureSet, dij: dict[str, Any]):
+    def _init_bio_model(self, dij: dict[str, Any]) -> dict[str, Any]:
         """
-        Load / organize biological kernel data from the machine.
+        Create the biological model evaluator for this dose calculation.
 
-        Stores information in the dose influence matrix dictionary.
+        Sets ``calc_bio_dose`` / ``calc_let`` from the model, stores the model's scalar
+        contributions on the dij and allocates the alpha/beta influence containers.
 
         Parameters
         ----------
-        _cst : StructureSet
-            The structure set object.
         dij : dict
-            The dose influence matrix dictionary.
+            The dose influence matrix dictionary (with ``alphax`` / ``betax`` set).
 
         Returns
         -------
         dict
-            The updated dose influence matrix dictionary with biological information.
+            The updated dose influence matrix dictionary.
         """
+        if not isinstance(self.bio_model, BiologicalModel):
+            self.calc_bio_dose = False
+            self._bio_evaluator = None
+            return dij
 
-        # here ct scenarios
         self._v_alpha_x = self.xp.asarray(dij["alphax"])
         self._v_beta_x = self.xp.asarray(dij["betax"])
-        self._v_tissue_index = self.xp.zeros(self._v_alpha_x.shape)
 
-        if isinstance(self.bio_model, KernelBasedLQModel):  # these models dont exist yet
-            self._bio_kernel_quantities = self.bio_model.kernel_quantities
-        if isinstance(self.bio_model, TabulatedRBEModel) or isinstance(
-            self.bio_model, KernelBasedLQModel
-        ):
-            self._v_tissue_index = self.bio_model.get_tissue_information(
-                self._machine, self._v_alpha_x, self._v_beta_x
-            )
+        self._bio_evaluator = self.bio_model.evaluator(
+            self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
+        )
+        dij.update(self._bio_evaluator.dij_scalars())
 
-        if isinstance(self.bio_model, LETBasedLQModel):
+        self.calc_bio_dose = self.bio_model.provides_alpha_beta
+        if self.bio_model.requires_let:
             self.calc_let = True
+        if self.calc_bio_dose:
+            dij = self._allocate_bio_dose_container(dij)
         return dij
 
     def _allocate_bio_dose_container(self, dij: dict[str, Any]):
@@ -857,7 +821,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                     ],  # TODO: check if this result is correct (rounded but may be right)
                     "rad_depths": (current_depth + base_kernel.offset)
                     * np.ones_like(radial_dist_sq),
-                    "v_tissue_index": np.zeros((len(radial_dist_sq),)),
                     "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq),)),
                     "v_beta_x": 0.05 * np.ones((len(radial_dist_sq),)),
                     "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
@@ -919,24 +882,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         else:
             ray["rad_depth_offset"] = 0
 
-        # Just use tissue classes of voxels found by ray tracer
-        # TODO: not tested. ad ct scenarios with multiple valid coords
-
+        # Reference LQ parameters of the voxels found by the ray tracer, per CT scenario
+        # TODO: multi-scenario support (ray["ix"] currently only carries the first CT scenario)
         if self.calc_bio_dose:
-            ray["v_tissue_index"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
             for s in range(self.mult_scen.num_of_ct_scen):
-                len_ix = ray["ix"][0].size
-                ray["v_tissue_index"][s] = xp.reshape(
-                    xp.take(self._v_tissue_index, ray["ix"][0], axis=0), (len_ix,)
-                )
-                ray["v_alpha_x"][s] = xp.reshape(
-                    xp.take(self._v_alpha_x, ray["ix"][0], axis=0), (len_ix,)
-                )
-                ray["v_beta_x"][s] = xp.reshape(
-                    xp.take(self._v_beta_x, ray["ix"][0], axis=0), (len_ix,)
-                )
+                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x[:, s], ray["ix"][0], axis=0)
+                ray["v_beta_x"][s] = xp.take(self._v_beta_x[:, s], ray["ix"][0], axis=0)
 
         return ray
 
@@ -947,7 +900,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ct_scen = self.mult_scen.linear_mask[0][scen_idx]
 
         if self.calc_bio_dose:
-            scen_ray["v_tissue_index"] = ray["v_tissue_index"][ct_scen]
             scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
             scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
 

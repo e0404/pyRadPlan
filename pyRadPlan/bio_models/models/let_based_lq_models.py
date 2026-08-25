@@ -1,205 +1,172 @@
 """LET-based Linear-Quadratic (LQ) models."""
 
-import array_api_compat
-from .lq_models import LQModel
 from abc import abstractmethod
 from typing import Any
+
+import array_api_compat
+
+from pyRadPlan.bio_models._evaluator import BioModelEvaluator, ParametricEvaluator
+from .lq_models import LQModel
 
 
 class LETBasedLQModel(LQModel):
     """
     Abstract base class for LQ models whose RBE depends on linear energy transfer (LET).
 
-    Extends :class:`LQModel` by requiring LET data from the dose engine in
-    addition to physical dose. Concrete subclasses implement the specific
-    relationship between LET and the radiobiological parameters alpha and beta.
-
-    Class Attributes
-    ----------------
-    required_quantities : list[str]
-        ``["physical_dose", "let"]``
-    default_report_quantity : str
-        ``"rbe_x_dose"``
+    Requires LET kernels from the dose engine in addition to physical dose.
     """
 
-    required_quantities = ["physical_dose", "let"]  # Requires physical dose and LET information
-    default_report_quantity = "rbe_x_dose"  # Suggested quantity for display and planning
+    required_quantities = ["physical_dose", "let"]
+    requires_let = True
+
+    def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
+        return ParametricEvaluator(self)
 
 
 class RBEMinMax(LETBasedLQModel):
     """
-    Abstract base class for LET-based LQ models parameterised by RBEmin and RBEmax.
+    Abstract base class for LET-based LQ models parameterised by RBEmin and RBEmax:
 
-    alpha = RBE_max * alpha_x
+    alpha = RBE_max * alpha_x,  beta = RBE_min^2 * beta_x
 
-    beta  = RBE_min^2 * beta_x
-
-    where alpha_x and beta_x are the reference photon
-    radiosensitivity coefficients for each voxel. Concrete subclasses provide
-    the model-specific expressions for RBE_min and RBE_max as functions of LET and alpha_x/beta_x.
+    Concrete subclasses provide :meth:`rbe_min_max` as a function of LET and the
+    reference photon parameters.
     """
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """Calculate biological quantities for a bixel."""
-        bixel["v_abr_x"] = bixel["v_alpha_x"] / bixel["v_beta_x"]
-        bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
-        [rbe_min, rbe_max] = self._get_rbe_min_max(bixel, kernels)
-        bixel["alpha"] = rbe_max * bixel["v_alpha_x"]
-        bixel["beta"] = rbe_min**2 * bixel["v_beta_x"]
-        return bixel
+    def alpha_beta(self, alpha_x: Any, beta_x: Any, kernels: dict[str, Any]) -> tuple[Any, Any]:
+        rbe_min, rbe_max = self.rbe_min_max(kernels["let"], alpha_x, beta_x)
+        return rbe_max * alpha_x, rbe_min**2 * beta_x
 
     @abstractmethod
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[Any, Any]:
-        """
-        Return (rbe_min, rbe_max) arrays of shape (n_depths).
-
-        Must be implemented by concrete subclasses.
-        """
+    def rbe_min_max(self, let: Any, alpha_x: Any, beta_x: Any) -> tuple[Any, Any]:
+        """Return (rbe_min, rbe_max), each scalar or of shape ``(n_voxels,)``."""
 
 
 class Wedenberg(RBEMinMax):
     """
-    Wedenberg model, which is a specific implementation of the linear-quadratic
-    model that incorporates LET dependence.
-
-    (https://www.ncbi.nlm.nih.gov/pubmed/22909391) (accessed on 21/7/2023)
+    Wedenberg model (https://www.ncbi.nlm.nih.gov/pubmed/22909391).
     """
 
     model = "WED"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self):
-        self.p0_WED = 1
-        self.p1_WED = 0.434
-        self.p2_WED = 1
-        super().__init__()
+    def __init__(self, p0: float = 1.0, p1: float = 0.434, p2: float = 1.0):
+        self.p0_WED = p0
+        self.p1_WED = p1
+        self.p2_WED = p2
 
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
-        let = kernels["let"]
-        rbe_max = self.p0_WED + (self.p1_WED * let) / bixel["v_abr_x"]
+    def rbe_min_max(self, let, alpha_x, beta_x):
+        rbe_max = self.p0_WED + (self.p1_WED * let) / (alpha_x / beta_x)
         rbe_min = self.p2_WED
         return rbe_min, rbe_max
 
 
 class MCNamara(RBEMinMax):
     """
-    McNamara model, which is a specific implementation of the linear-quadratic
-    model that incorporates LET dependence.
-
-    https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4634882/) (accessed on 21/7/2023)
+    McNamara model (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4634882/).
     """
 
     model = "MCN"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self):
-        self.p0_MCN = 0.999064
-        self.p1_MCN = 0.35605
-        self.p2_MCN = 1.1012
-        self.p3_MCN = -0.0038703
-        super().__init__()
+    def __init__(
+        self,
+        p0: float = 0.999064,
+        p1: float = 0.35605,
+        p2: float = 1.1012,
+        p3: float = -0.0038703,
+    ):
+        self.p0_MCN = p0
+        self.p1_MCN = p1
+        self.p2_MCN = p2
+        self.p3_MCN = p3
 
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
-        xp = array_api_compat.array_namespace(kernels["let"])
-        let = kernels["let"]
-        rbe_max = self.p0_MCN + ((self.p1_MCN * let) / bixel["v_abr_x"])
-        rbe_min = self.p2_MCN + (self.p3_MCN * xp.sqrt(bixel["v_abr_x"]) * let)
+    def rbe_min_max(self, let, alpha_x, beta_x):
+        xp = array_api_compat.array_namespace(let)
+        abr = alpha_x / beta_x
+        rbe_max = self.p0_MCN + (self.p1_MCN * let) / abr
+        rbe_min = self.p2_MCN + self.p3_MCN * xp.sqrt(abr) * let
         return rbe_min, rbe_max
 
 
 class Carabe(RBEMinMax):
     """
-    Carabe model, which is a specific implementation of the linear-quadratic
-    model that incorporates LET dependence.
-
-    (https://www.tandfonline.com/doi/full/10.1080/09553000601087176?journalCode=irab20)% (accessed on 21/7/2023)
+    Carabe model
+    (https://www.tandfonline.com/doi/full/10.1080/09553000601087176?journalCode=irab20).
     """
 
     model = "CAR"
     possible_radiation_modes = ["protons"]
 
-    def __init__(self):
-        self.p0_CAR = 0.843
-        self.p1_CAR = 0.154
-        self.p2_CAR = 2.686
-        self.p3_CAR = 1.09
-        self.p4_CAR = 0.006
-        super().__init__()
+    def __init__(
+        self,
+        p0: float = 0.843,
+        p1: float = 0.154,
+        p2: float = 2.686,
+        p3: float = 1.09,
+        p4: float = 0.006,
+    ):
+        self.p0_CAR = p0
+        self.p1_CAR = p1
+        self.p2_CAR = p2
+        self.p3_CAR = p3
+        self.p4_CAR = p4
 
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
-        let = kernels["let"]
-        rbe_max = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / bixel["v_abr_x"]) * let
-        rbe_min = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / bixel["v_abr_x"]) * let
+    def rbe_min_max(self, let, alpha_x, beta_x):
+        abr = alpha_x / beta_x
+        rbe_max = self.p0_CAR + ((self.p1_CAR * self.p2_CAR) / abr) * let
+        rbe_min = self.p3_CAR + ((self.p4_CAR * self.p2_CAR) / abr) * let
         return rbe_min, rbe_max
 
 
 class HeliumMairani(RBEMinMax):
     """
-    Mairani model for helium ions, which is a specific implementation of the linear-quadratic
-    model that incorporates LET dependence.
-
-    https://iopscience.iop.org/article/10.1088/0031-9155/61/2/888
+    Mairani model for helium ions (https://iopscience.iop.org/article/10.1088/0031-9155/61/2/888).
     """
 
     model = "HEL"
     possible_radiation_modes = ["helium"]
 
-    def __init__(self):
-        self.p0_HEL = 1.36938e-1
-        self.p1_HEL = 9.73154e-3
-        self.p2_HEL = 1.51998e-2
-        super().__init__()
+    def __init__(self, p0: float = 1.36938e-1, p1: float = 9.73154e-3, p2: float = 1.51998e-2):
+        self.p0_HEL = p0
+        self.p1_HEL = p1
+        self.p2_HEL = p2
 
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
-        xp = array_api_compat.array_namespace(kernels["let"])
-        let = kernels["let"]
+    def rbe_min_max(self, let, alpha_x, beta_x):
+        xp = array_api_compat.array_namespace(let)
         f_qe = (self.p1_HEL * let**2) * xp.exp(-self.p2_HEL * let)
-        rbe_max_qe = 1 + (self.p0_HEL + 1 / bixel["v_abr_x"]) * f_qe
-
         # the linear quadratic fit yielded the best fitting result
-        rbe_max = rbe_max_qe
+        rbe_max = 1 + (self.p0_HEL + beta_x / alpha_x) * f_qe
         rbe_min = 1  # no gain in using fitted parameters over a constant value of 1
         return rbe_min, rbe_max
 
 
 class LinearScaling(RBEMinMax):
     """
-    The class implements the Linear Scaling Model.
-    according to Malte Frese.
-
-    https://www.ncbi.nlm.nih.gov/pubmed/20382482 (FITTED for head and neck patients !)
+    Linear Scaling Model according to Malte Frese
+    (https://www.ncbi.nlm.nih.gov/pubmed/20382482, fitted for head and neck patients).
     """
 
     model = "LSM"
     possible_radiation_modes = ["protons", "helium", "carbon"]
 
-    def __init__(self):
-        self.p_lamda_1_1 = 0.008
-        self.p_corrFacEntrancerbe = 0.5  # [kev/mum]
-        self.p_upperLETThreshold = 30  # [kev/mum]
-        self.p_lowerLETThreshold = 0.3  # [kev/mum]
-        super().__init__()
+    def __init__(
+        self,
+        lambda_1_1: float = 0.008,
+        corr_fac_entrance_rbe: float = 0.5,
+        upper_let_threshold: float = 30.0,
+        lower_let_threshold: float = 0.3,
+    ):
+        self.p_lamda_1_1 = lambda_1_1
+        self.p_corrFacEntrancerbe = corr_fac_entrance_rbe  # [keV/um]
+        self.p_upperLETThreshold = upper_let_threshold  # [keV/um]
+        self.p_lowerLETThreshold = lower_let_threshold  # [keV/um]
 
-    def _get_rbe_min_max(self, bixel: dict, kernels: dict) -> tuple[float, float]:
-        xp = array_api_compat.array_namespace(kernels["let"])
-        let = kernels["let"]
-        rbe_max = xp.full(bixel["v_alpha_x"].shape[0], 0.0)
-
-        ix = (self.p_lowerLETThreshold < let) & (let < self.p_upperLETThreshold)
-
-        alpha_0 = bixel["v_alpha_x"] - (self.p_lamda_1_1 * self.p_corrFacEntrancerbe)
-
-        rbe_max[ix] = alpha_0[ix] + self.p_lamda_1_1 * let[ix]
-
-        if int(xp.count_nonzero(ix)) < let.shape[0]:
-            rbe_max[let > self.p_upperLETThreshold] = (
-                alpha_0[let > self.p_upperLETThreshold]
-                + self.p_lamda_1_1 * self.p_upperLETThreshold
-            )
-            rbe_max[let < self.p_lowerLETThreshold] = (
-                alpha_0[let < self.p_lowerLETThreshold]
-                + self.p_lamda_1_1 * self.p_lowerLETThreshold
-            )
-        rbe_max[ix] = rbe_max[ix] / bixel["v_alpha_x"][ix]
+    def rbe_min_max(self, let, alpha_x, beta_x):
+        xp = array_api_compat.array_namespace(let)
+        let = xp.clip(let, self.p_lowerLETThreshold, self.p_upperLETThreshold)
+        alpha_0 = alpha_x - self.p_lamda_1_1 * self.p_corrFacEntrancerbe
+        alpha = alpha_0 + self.p_lamda_1_1 * let
+        rbe_max = xp.where(alpha_x > 0, alpha / xp.where(alpha_x > 0, alpha_x, 1.0), 0.0)
         rbe_min = 1
         return rbe_min, rbe_max

@@ -1,6 +1,12 @@
-"""Clinical structures and volumes of interest."""
+"""Biological models and their per-calculation evaluators."""
 
-from ._base import BiologicalModelBase, EmptyModel
+from ._base import BiologicalModel, BiologicalModelBase, EmptyModel
+from ._evaluator import (
+    BioModelEvaluator,
+    ParametricEvaluator,
+    TissueClassEvaluator,
+    TabulatedSpectrumEvaluator,
+)
 from .models.const_rbe import ConstantRBEModel
 from .models.let_based_lq_models import (
     LETBasedLQModel,
@@ -27,7 +33,12 @@ register_model(LinearScaling)
 register_model(TabulatedAlphaBetaModel)
 
 __all__ = [
+    "BiologicalModel",
     "BiologicalModelBase",
+    "BioModelEvaluator",
+    "ParametricEvaluator",
+    "TissueClassEvaluator",
+    "TabulatedSpectrumEvaluator",
     "EmptyModel",
     "ConstantRBEModel",
     "LETBasedLQModel",
@@ -41,6 +52,7 @@ __all__ = [
     "LQModel",
     "TabulatedRBEModel",
     "TabulatedAlphaBetaModel",
+    "register_model",
     "get_available_models",
     "get_bio_model",
 ]

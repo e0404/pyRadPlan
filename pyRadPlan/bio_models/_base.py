@@ -1,54 +1,67 @@
 from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
-from typing import ClassVar, Optional, List
+from typing import Any, ClassVar, Optional
 
+from ._evaluator import BioModelEvaluator, ParametricEvaluator
 
 logger = logging.getLogger(__name__)
 
 
-class BiologicalModelBase(ABC):
+class BiologicalModel(ABC):
     """
-    Abstract base class for all biological models used in dose calculation
-    and plan optimisation.
+    Abstract base class for biological models.
 
-    Subclasses must declare the following class-level attributes and implement
-    the abstract method.
+    A biological model is a lightweight, patient-agnostic bundle of parameters and pure
+    functions. Everything that depends on a particular machine or patient geometry (tissue
+    class lookup, pre-computed kernel tables, ...) lives in the
+    :class:`~pyRadPlan.bio_models.BioModelEvaluator` created by :meth:`evaluator` for one
+    dose calculation.
 
     Class Attributes
-    ---------------
+    ----------------
     model : str
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
     model_aliases : list[str]
-        Alternative names by which this model can be looked up. Defaults to an
-        empty list.
+        Alternative names by which this model can be looked up.
     required_quantities : list[str]
-        Names of the kernel quantities that must be present in the base data
-        for the model to compute alpha/beta values (e.g. ``["physical_dose", "let"]``).
+        Kernel quantities the machine data must provide (e.g. ``["physical_dose", "let"]``).
     possible_radiation_modes : list[str]
-        Radiation modalities this model supports (e.g. ``["photons", "protons"]``).
+        Radiation modalities this model supports.
     default_report_quantity : str
-        The quantity recommended for display and planning by default
-        (e.g. ``"rbe_weighted_dose"``).
+        Quantity recommended for display and planning by default.
+    provides_alpha_beta : bool
+        Whether the model yields per-voxel LQ parameters; if so, the dose engine computes
+        ``alpha_dose`` / ``sqrt_beta_dose`` influence matrices.
+    requires_let : bool
+        Whether the dose engine has to provide LET kernels to evaluate the model.
     """
 
     model: ClassVar[str]
-    model_aliases: ClassVar[list[str]] = []  # default: no aliases
-    required_quantities: ClassVar[
-        list[str]
-    ]  # kernels in base data needed for the alpha/beta calculation
-    possible_radiation_modes: ClassVar[
-        list[str]
-    ]  # radiation modalitites compatible with the model
-    default_report_quantity: ClassVar[
-        str
-    ]  # default suggested quantity to use for display and planning
+    model_aliases: ClassVar[list[str]] = []
+    required_quantities: ClassVar[list[str]] = []
+    possible_radiation_modes: ClassVar[list[str]]
+    default_report_quantity: ClassVar[str] = "physical_dose"
+    provides_alpha_beta: ClassVar[bool] = False
+    requires_let: ClassVar[bool] = False
 
     @abstractmethod
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        raise NotImplementedError(
-            "Method '_calc_biological_quantities_for_bixel' must be implemented."
-        )
+    def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
+        """
+        Create the evaluator of this model for one machine / patient geometry.
+
+        Parameters
+        ----------
+        machine
+            The (validated) machine the dose is calculated with.
+        voxel_params : dict[str, Array]
+            Per-voxel tissue parameters on the dose grid, each of shape
+            ``(num_voxels, num_ct_scenarios)``. Currently ``"alpha_x"`` and ``"beta_x"``.
+        """
+
+    def dij_scalars(self) -> dict[str, Any]:
+        """Scalar entries this model contributes to the dij (e.g. a constant RBE)."""
+        return {}
 
     def is_available(
         self,
@@ -56,21 +69,13 @@ class BiologicalModelBase(ABC):
         provided_quantities: Optional[list[str]] = None,
     ) -> tuple[bool, str]:
         """
-        Check whether this model is compatible with the given radiation mode
-        and the quantities supplied by the dose engine or machine dataset.
-
-        Parameters
-        ----------
-        radiation_mode:
-            Radiation modality string (e.g. ``"photons"``, ``"protons"``).
-        provided_quantities:
-            List of quantity names available from the dose engine or machine.
+        Check compatibility with a radiation mode and the quantities a machine provides.
 
         Returns
         -------
         (available, message)
-            ``available`` is ``True`` only when both the radiation mode and
-            all required quantities are satisfied.
+            ``available`` is ``True`` only when both the radiation mode and all required
+            quantities are satisfied.
         """
         messages: list[str] = []
 
@@ -94,7 +99,7 @@ class BiologicalModelBase(ABC):
     def validate_for(
         self,
         radiation_mode: str,
-        provided_quantities: Optional[List[str]] = None,
+        provided_quantities: Optional[list[str]] = None,
     ) -> None:
         """Raise ValueError if the model is not available for the given mode/quantities."""
         ok, msg = self.is_available(radiation_mode, provided_quantities)
@@ -102,43 +107,22 @@ class BiologicalModelBase(ABC):
             raise ValueError(f"Biological model '{self.model}' not valid: {msg}")
 
 
-class EmptyModel(BiologicalModelBase):
+# Backwards-compatible name
+BiologicalModelBase = BiologicalModel
+
+
+class EmptyModel(BiologicalModel):
     """
     Passthrough biological model that applies no biological weighting.
 
-    This model represents the absence of a biological correction: bixels are
-    returned unchanged, and the recommended reporting quantity is raw physical
-    dose. It is compatible with all common radiation modalities and requires
-    no additional kernel data beyond what the dose engine already provides.
-
-    Intended for use in purely physical dose calculations or as a neutral
-    placeholder when no radiobiological model is needed.
-
-    Class Attributes
-    ----------------
-    model : str
-        ``"none"`` — the canonical identifier for this no-op model.
-    required_quantities : list[str]
-        Empty; no extra kernel quantities are needed.
-    possible_radiation_modes : list[str]
-        Supports ``"photons"``, ``"protons"``, ``"helium"``, ``"carbon"``,
-        and ``"VHEE"``.
-    default_report_quantity : str
-        ``"physical_dose"``
+    Compatible with all modalities, requires no kernel data beyond physical dose, and
+    recommends reporting physical dose.
     """
 
     model = "none"
-    required_quantities = []  # Requires physical dose information
-    possible_radiation_modes = [
-        "photons",
-        "protons",
-        "helium",
-        "carbon",
-        "oxygen",
-        "VHEE",
-    ]  # Compatible with all common modalities
-    default_report_quantity = "physical_dose"  # Suggested quantity for display and planning
+    required_quantities = []
+    possible_radiation_modes = ["photons", "protons", "helium", "carbon", "oxygen", "VHEE"]
+    default_report_quantity = "physical_dose"
 
-    def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """No biological weighting — returns the bixel unchanged."""
-        return bixel
+    def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
+        return ParametricEvaluator(self)
