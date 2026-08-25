@@ -107,7 +107,7 @@ class TabulatedRBEModel(LQModel):
         Validate fragment consistency and build index mappings between tables.
 
         """
-        if self.fragments_to_include is None or self.fragments_to_include == "all":
+        if self.fragments_to_include is None or isinstance(self.fragments_to_include, str):
             self.fragments_to_include = np.array(
                 [
                     [
@@ -232,17 +232,21 @@ class TabulatedRBEModel(LQModel):
         sp_table["dE_dx"] = sp_interp
         sp_table["energies"] = new_energies
         q_table = {}
-        # interpolate quantity table values
+        # interpolate quantity table values -> (n_classes, n_fragments, n_energies)
         for qty in self.quantities_in_table:
-            qty_interp = xp.full(energies.shape, 0.0)
+            table_values = self._q_table[qty]
+            if table_values.ndim == 2:  # single tissue class
+                table_values = table_values[None, :, :]
+            qty_interp = xp.full((table_values.shape[0],) + energies.shape, 0.0)
             new_energies = xp.full(energies.shape, 0.0)
-            for i, ix in enumerate(self.fragments_q_table_ix):
-                qty_interp[i, :] = array_interp(
-                    energies[i, :],
-                    self._q_table["energies"][ix, :],
-                    self._q_table[qty][ix, :],
-                )
-                new_energies[i, :] = energies[i, :]
+            for c in range(table_values.shape[0]):
+                for i, ix in enumerate(self.fragments_q_table_ix):
+                    qty_interp[c, i, :] = array_interp(
+                        energies[i, :],
+                        self._q_table["energies"][ix, :],
+                        table_values[c, ix, :],
+                    )
+                    new_energies[i, :] = energies[i, :]
             q_table[qty] = qty_interp
         q_table["energies"] = new_energies
         return q_table, sp_table
@@ -275,15 +279,18 @@ class TabulatedRBEModel(LQModel):
                 f"Kernel spectra energies: {kernel_spectra_energies}, Quantity energies: {q_energies}."
             )
 
-        sp = sp_table["dE_dx"][:]
+        # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
+        sp = sp_table["dE_dx"][:, :, xp.newaxis]
         quantitys = {}
         for iqty, qty in enumerate(self.quantities_in_kernel):
-            quantitys[qty] = self.get_quantity(q_table, self.quantities_in_table[iqty], xp)
-
-        # (n_fragments, n_energies, 1) for broadcasting against fluence (n_energies, n_depths)
-        sp = sp[:, :, xp.newaxis]
-        for qty in self.quantities_in_kernel:
-            quantitys[qty] = quantitys[qty][:, :, xp.newaxis]
+            # (n_classes, n_fragments, n_energies, 1)
+            values = self.get_quantity(q_table, self.quantities_in_table[iqty], xp)
+            if values.shape[0] not in (1, n_tissue):
+                raise ValueError(
+                    f"Quantity table '{qty}' has {values.shape[0]} tissue classes, expected "
+                    f"1 or {n_tissue}."
+                )
+            quantitys[qty] = values[:, :, :, xp.newaxis]
 
         # fluence_spectra: (n_fragments, n_energies, n_depths)
         fluence_spectra = xp.stack(
@@ -292,23 +299,14 @@ class TabulatedRBEModel(LQModel):
                 for f in self.fragments_kernel_ix
             ]
         )
-        # Weighted sums over energy axis → (n_fragments, n_depths)
-        dose_per_fragment = xp.sum(sp * fluence_spectra, axis=1)
-        quantity_num_per_fragment = {}
-        for qty in self.quantities_in_kernel:
-            quantity_num_per_fragment[qty] = xp.sum(quantitys[qty] * sp * fluence_spectra, axis=1)
-
-        # Accumulate over fragments -> (n_depths,). The bundled tables carry a single
-        # (alpha_x, beta_x) class, so the result is broadcast over the tissue axis;
-        # tables with per-class quantities need to index the table by class here.
-        denominator = xp.sum(dose_per_fragment, axis=0)[:, None]
+        # Dose-weighted sums over energies and fragments -> (n_depths,) / (n_classes, n_depths)
+        denominator = xp.sum(sp * fluence_spectra, axis=(0, 1))
         valid = denominator > 0
+        safe_denominator = xp.where(valid, denominator, 1.0)
         for qty in self.quantities_in_kernel:
-            numerator = xp.sum(quantity_num_per_fragment[qty], axis=0)[:, None]
-            kernel.quantities[qty] = xp.broadcast_to(
-                xp.where(valid, numerator / xp.where(valid, denominator, 1.0), 0.0),
-                (n_depths, n_tissue),
-            )  # (n_depths, n_tissue_classes)
+            numerator = xp.sum(quantitys[qty] * sp * fluence_spectra, axis=(1, 2))
+            averaged = xp.where(valid, numerator / safe_denominator, 0.0)  # (n_classes, n_depths)
+            kernel.quantities[qty] = xp.broadcast_to(averaged.T, (n_depths, n_tissue))
 
         return kernel
 

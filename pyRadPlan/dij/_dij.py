@@ -269,11 +269,13 @@ class Dij(PyRadPlanBaseModel):
         """
         if v is None:
             return v
-        v = np.asarray(v)
+        if not hasattr(v, "ndim"):
+            v = np.asarray(v)
         # Voxel arrays carry one column per CT scenario; accept plain 1-D input
-        # (e.g. matRad-imported alphaX/betaX) as a single scenario.
+        # (e.g. matRad-imported alphaX/betaX) as a single scenario. Keep the array
+        # namespace, since this also runs on assignment in to_namespace().
         if v.ndim == 1:
-            v = v[:, None]
+            v = array_api_compat.array_namespace(v).reshape(v, (-1, 1))
         if v.ndim != 2:
             raise ValueError("Voxel arrays must have shape (num_voxels, num_ct_scenarios)")
         # Check if the voxel arrays have the correct shape

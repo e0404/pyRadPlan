@@ -85,7 +85,9 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 # Lazy import to avoid circular dependency at module import time.
                 from ._resolver import QuantityResolver  # noqa: PLC0415
 
-                resolver = QuantityResolver(self._dij, _dij_already_in_namespace=True)
+                resolver = QuantityResolver(
+                    self._dij, scenarios=self.scenarios, _dij_already_in_namespace=True
+                )
                 for dep_id in self._dep_ids_for_indirect():
                     self._deps[dep_id] = resolver.get(dep_id)
         else:

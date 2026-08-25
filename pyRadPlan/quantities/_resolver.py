@@ -26,7 +26,7 @@ class QuantityResolver:
     - If neither path is available, a ``ValueError`` is raised.
     """
 
-    def __init__(self, dij: Dij, *, _dij_already_in_namespace: bool = False):
+    def __init__(self, dij: Dij, *, scenarios=None, _dij_already_in_namespace: bool = False):
         xp = compute_backend.choose_array_api_namespace()
         device = compute_backend.choose_device(xp)
 
@@ -34,6 +34,8 @@ class QuantityResolver:
             self._dij = dij
         else:
             self._dij = dij.to_namespace(xp, device=device)
+        # Scenario indices every resolved quantity (and its dependencies) computes.
+        self._scenarios = scenarios
         self._instances: dict[str, FluenceDependentQuantity] = {}
         # In-progress identifiers used for cycle detection.
         self._resolving: set[str] = set()
@@ -70,7 +72,7 @@ class QuantityResolver:
             cls = self._resolve_implementation(cls)
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
-            inst = cls(self._dij, mode=mode, dependencies=deps)
+            inst = cls(self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios)
         finally:
             self._resolving.discard(identifier)
 

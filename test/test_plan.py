@@ -99,7 +99,7 @@ def test_create_pln_dict_photons_snake():
     # print(set(pln_dict) ^ set(pln_from_dict))
     pln_dict.pop("mult_scen")
     pln_from_dict.pop("mult_scen")
-    pln_from_dict.pop("bio_model")
+    assert pln_from_dict.pop("bio_model") == "none"
     assert pln_dict == pln_from_dict
 
 
@@ -149,12 +149,12 @@ def test_create_pln_dict_photons_camel():
 
     pln_to_dict = pln.model_dump()
     pln_to_dict.pop("mult_scen")
-    pln_to_dict.pop("bio_model")
+    assert pln_to_dict.pop("bio_model") == "none"
     assert pln_dict_snake == pln_to_dict
 
     pln_to_dict_camel = pln.to_matrad()
     pln_to_dict_camel.pop("multScen")
-    pln_to_dict_camel.pop("bioModel")
+    assert pln_to_dict_camel.pop("bioModel") == "none"
     print(set(pln_dict_camel) ^ set(pln_to_dict_camel))
     assert pln_dict_camel == pln_to_dict_camel
 
@@ -166,3 +166,19 @@ def test_plan_to_matrad():
     assert "numOfFractions" in pln
     # assert isinstance(pln["numOfFractions"],float)
     assert pln["numOfFractions"] == float(30)
+
+
+@pytest.mark.parametrize(
+    "radiation_mode, expected",
+    [("protons", "constant_rbe"), ("helium", "HEL"), ("carbon", "kernel_based_lq")],
+)
+def test_ion_plan_default_bio_model(radiation_mode, expected):
+    pln = IonPlan(radiation_mode=radiation_mode)
+    assert pln.bio_model == expected
+    assert create_pln({"radiation_mode": radiation_mode}).bio_model == expected
+
+
+def test_plan_explicit_bio_model_is_kept():
+    assert IonPlan(radiation_mode="protons", bio_model="WED").bio_model == "WED"
+    assert create_pln({"radiation_mode": "carbon", "bio_model": "LSM"}).bio_model == "LSM"
+    assert PhotonPlan().bio_model == "none"

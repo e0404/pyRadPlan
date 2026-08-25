@@ -1,4 +1,4 @@
-from typing import Any, Final, Optional
+from typing import Any, ClassVar, Optional
 import numpy as np
 from pydantic import (
     Field,
@@ -11,12 +11,13 @@ class FragmentFluence(PyRadPlanBaseModel):
     """
     Fluence data for a single fragment species.
 
-    ----
-    fluence_spectrum : (n_depths, n_energies)
-        Fluence at each depth × energy bin.
+    Attributes
+    ----------
+    fluence_spectrum : (n_energies, n_depths)
+        Fluence at each energy bin × depth.
     energy : (n_energies,)
-        Energy bin centres/edges corresponding to fluence_spectrum columns.
-    fluence_depth : (n_depths,)
+        Energy bin centres/edges corresponding to fluence_spectrum rows.
+    fluenceZ : (n_depths,)
         Fluence integrated over energy at each depth (collapsed spectrum).
     """
 
@@ -24,7 +25,7 @@ class FragmentFluence(PyRadPlanBaseModel):
     A: float = Field(..., description="Mass number. NaN  if all with that Z are aggregated.")
 
     fluence_spectrum: NDArray[Shape["1-*, 1-*"], np.float64] = Field(
-        ..., description="Fluence spectrum, shape (n_depths, n_energies)."
+        ..., description="Fluence spectrum, shape (n_energies, n_depths)."
     )
     energy: NDArray[Shape["1-*"], np.float64] = Field(
         ..., description="Energy bins, length n_energies."
@@ -39,7 +40,7 @@ class ChargedBeamFragmentSpectrum(PyRadPlanBaseModel):
     Fragment spectrum data for a charged particle beam.
     """
 
-    type: Final[str] = "fluence"
+    type: ClassVar[str] = "fluence"
 
     fragments: list[FragmentFluence] = Field(
         ..., description="Per-species fluence data, one entry per (Z, A) pair."
