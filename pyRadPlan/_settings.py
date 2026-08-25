@@ -17,7 +17,7 @@ change behavior of a running session::
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: ``.env`` file consulted by all pyRadPlan settings classes.
@@ -27,8 +27,13 @@ ENV_FILE = ".env"
 def _default_ai_models_dir() -> Path:
     """Default base directory for local AI models: ``<data_dir>/ai_models``.
 
-    Imported lazily so :mod:`pyRadPlan._settings` (loaded very early during
-    package import) carries no import-time dependency on :mod:`pyRadPlan.core`.
+    The import is deferred to keep the *textual* dependency out of this module's
+    import block, but note it still runs while :mod:`pyRadPlan._settings` is
+    being imported, because the :data:`settings` singleton below is constructed
+    at module scope. It is safe only as long as nothing reachable from
+    ``pyRadPlan/core/__init__.py`` imports :mod:`pyRadPlan._settings` back
+    (:mod:`pyRadPlan.core.xp_utils` does, but is not imported there). Keep it
+    that way, or make the singleton lazy.
     """
     from pyRadPlan.core import get_data_dir  # noqa: PLC0415
 
@@ -84,11 +89,12 @@ class AiModelSettings(BaseSettings):
         repository id.
     local_models_dir : Optional[Path]
         Base directory for local models. Defaults to ``<data_dir>/ai_models``
-        (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via the
-        ``PYRADPLAN_HUGGINGFACE_PATH`` environment variable. Models are
-        downloaded into / loaded from ``"<local_models_dir>/<repo>"`` and it is
-        used as the default ``local_dir``. Set ``PYRADPLAN_HUGGINGFACE_PATH=""``
-        to opt out and use the HuggingFace cache only.
+        (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via
+        ``PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR`` (or the legacy alias
+        ``PYRADPLAN_HUGGINGFACE_PATH``). Models are downloaded into / loaded
+        from ``"<local_models_dir>/<repo>"`` and it is used as the default
+        ``local_dir``. Set it to ``""`` to opt out and use the HuggingFace
+        cache only.
     cache_dir : Optional[Path]
         Override for the HuggingFace cache directory. ``None`` uses the default
         HuggingFace cache location (or ``HF_HOME``).
@@ -96,10 +102,12 @@ class AiModelSettings(BaseSettings):
         Force offline mode (``local_files_only``). When ``True``, no network
         access is attempted and only cached / local files are used.
     trust_remote_code : bool
-        Whether loading a model is allowed to execute the ``model.py``,
-        ``preprocessor.py`` and ``init_param.py`` shipped with the model. This
-        runs arbitrary Python from the model repository, so only enable it for
-        sources you trust.
+        Whether loading a model resolved from the HuggingFace Hub is allowed to
+        execute the ``model.py`` and ``preprocessor.py`` shipped with it. This
+        runs arbitrary Python from the model repository, so it defaults to
+        ``False`` and must be opted into per source you trust. Loading from a
+        directory passed explicitly as ``local_dir`` is exempt: that code is
+        already under the caller's control.
     device : str
         Default device the loaded model is moved to (e.g. ``"cpu"``,
         ``"cuda"``).
@@ -110,6 +118,7 @@ class AiModelSettings(BaseSettings):
 
         export PYRADPLAN_AI_MODELS_OFFLINE=1
         export PYRADPLAN_AI_MODELS_HF_ORG=my-org
+        export PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1
     """
 
     model_config = SettingsConfigDict(
@@ -123,11 +132,17 @@ class AiModelSettings(BaseSettings):
     hf_org: str = "DKFZ-RadOpt"
     local_models_dir: Optional[Path] = Field(
         default_factory=_default_ai_models_dir,
-        validation_alias="PYRADPLAN_HUGGINGFACE_PATH",
+        # The canonical, prefix-conforming name comes first so it wins over the
+        # legacy alias; both the GUI settings editor and users who guess the
+        # prefixed name write that one.
+        validation_alias=AliasChoices(
+            "PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR",
+            "PYRADPLAN_HUGGINGFACE_PATH",
+        ),
     )
     cache_dir: Optional[Path] = None
     offline: bool = False
-    trust_remote_code: bool = True
+    trust_remote_code: bool = False
     device: str = "cpu"
 
     @field_validator("local_models_dir", "cache_dir", mode="before")
