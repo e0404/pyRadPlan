@@ -1,5 +1,12 @@
 """Module for pydantic-ai agent models."""
 
+import os
+
+# pydantic-ai pulls in fastmcp -> key_value.aio, which installs a beartype import hook.
+# beartype's isinstance() probes on abc.ABC blow up once numpydantic's vendored nptyping
+# is imported, flooding stderr with BeartypeClawDecorWarning. Opt out before the import.
+os.environ.setdefault("PY_KEY_VALUE_DISABLE_BEARTYPE", "1")
+
 from ._settings import AiSettings, load_ai_env
 from ._models import available_models
 from ._usage import pop_last_run_usage

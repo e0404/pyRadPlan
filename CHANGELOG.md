@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ai_agents`: importing the module no longer floods stderr with `BeartypeClawDecorWarning`s
+  (pydantic-ai pulls in `key_value.aio`, whose beartype import hook trips over numpydantic's
+  vendored nptyping); the package's `PY_KEY_VALUE_DISABLE_BEARTYPE` opt-out is now set before
+  the import
 - IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
   it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
 - IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it
