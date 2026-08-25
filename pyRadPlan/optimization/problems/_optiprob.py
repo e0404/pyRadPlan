@@ -216,7 +216,9 @@ class PlanningProblem(ProgressReporter, ABC):
             cube_ix = voi.indices_numpy
             linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
             linear_mask[cube_ix] = True
-            objs = [get_objective(obj) for obj in valid_objectives]
+            # Copy so that quantity conversion / fraction normalization below do not
+            # alter the objectives stored in the user's StructureSet.
+            objs = [get_objective(obj).model_copy() for obj in valid_objectives]
 
             if self.convert_dose_objectives:
                 for obj in objs:

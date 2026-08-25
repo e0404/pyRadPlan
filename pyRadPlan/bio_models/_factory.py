@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import warnings
 from typing import List
-from pyRadPlan.bio_models._base import BiologicalModelBase, EmptyModel
+from pyRadPlan.bio_models._base import BiologicalModelBase
 
 BIO_MODELS = {}
 
@@ -86,24 +86,20 @@ def get_bio_model(
     model_id: str, radiation_mode: str, provided_quantities: List[str]
 ) -> BiologicalModelBase:
     """
-    Instantiate a biological model by name, with a safe fallback.
-    """
-    try:
-        class_list = get_available_models(radiation_mode, provided_quantities)
-    except RuntimeError:
-        warnings.warn(
-            "Biological Model not found, creating Empty Model!",
-            Warning,
-            stacklevel=0,
-        )
-        return EmptyModel()
+    Instantiate a biological model by name.
 
-    model_names = [info for info in class_list]
-    if model_id not in model_names:
-        warnings.warn(
-            f"Biological model '{model_id}' not found. Creating EmptyBiologicalModel.",
-            Warning,
-            stacklevel=0,
+    Raises
+    ------
+    ValueError
+        If the model is unknown, or registered but not available for the given
+        radiation mode / provided quantities.
+    """
+    if model_id not in BIO_MODELS:
+        raise ValueError(
+            f"Unknown biological model '{model_id}'. Registered models: {sorted(BIO_MODELS)}"
         )
-        return EmptyModel()
-    return class_list[model_id]()
+    available = get_available_models(radiation_mode, provided_quantities)
+    if model_id not in available:
+        _, msg = BIO_MODELS[model_id]().is_available(radiation_mode, provided_quantities)
+        raise ValueError(f"Biological model '{model_id}' not available: {msg}")
+    return available[model_id]()

@@ -1,3 +1,5 @@
+from typing import Any
+
 import array_api_compat
 
 from pyRadPlan.bio_models._base import BiologicalModelBase
@@ -23,13 +25,47 @@ class LQModel(BiologicalModelBase):
     default_report_quantity = "rbe_x_dose"  # Suggested quantity for display and planning
 
     def calc_biological_quantities_for_bixel(self, bixel: dict, kernels: dict) -> dict:
-        """
-        Initialise alpha/beta arrays to NaN and compute the alpha/beta ratio.
-
-        Subclasses call super() then fill in the actual values.
-        """
-        xp = array_api_compat.array_namespace(bixel["rad_depths"])
-        n = xp.unique_values(bixel["rad_depths"]).shape[0]
-        bixel["alpha"] = xp.full(n, xp.nan)
-        bixel["beta"] = xp.full(n, xp.nan)
+        """Subclasses fill in per-voxel ``alpha`` and ``beta`` here."""
         return bixel
+
+    @staticmethod
+    def match_tissue_classes(
+        v_alpha_x: Any, v_beta_x: Any, ref_alpha_x: Any, ref_beta_x: Any
+    ) -> Any:
+        """
+        Map per-voxel reference (alpha_x, beta_x) pairs to tissue-class indices.
+
+        Parameters
+        ----------
+        v_alpha_x, v_beta_x : Array, shape (n_voxels, n_ct_scen)
+            Reference photon LQ parameters per voxel and CT scenario.
+        ref_alpha_x, ref_beta_x : array-like, shape (n_classes,)
+            Reference pairs of the tissue classes available in the base data / table.
+
+        Returns
+        -------
+        Array, shape (n_voxels, n_ct_scen)
+            Index of the matching tissue class per voxel. Voxels with
+            ``alpha_x == beta_x == 0`` (outside any structure) get index 0.
+
+        Raises
+        ------
+        ValueError
+            If a voxel pair has no exact match in the reference classes.
+        """
+        xp = array_api_compat.array_namespace(v_alpha_x)
+        ref_alpha_x = xp.reshape(xp.asarray(ref_alpha_x, dtype=v_alpha_x.dtype), (-1,))
+        ref_beta_x = xp.reshape(xp.asarray(ref_beta_x, dtype=v_beta_x.dtype), (-1,))
+
+        # (n_voxels, n_ct_scen, n_classes) boolean match against every class
+        matches = (v_alpha_x[..., None] == ref_alpha_x) & (v_beta_x[..., None] == ref_beta_x)
+        outside = (v_alpha_x == 0) & (v_beta_x == 0)
+        unmatched = ~xp.any(matches, axis=-1) & ~outside
+        if xp.any(unmatched):
+            bad = xp.nonzero(unmatched)
+            a, b = v_alpha_x[bad[0][0], bad[1][0]], v_beta_x[bad[0][0], bad[1][0]]
+            raise ValueError(
+                f"No matching tissue class for alpha_x={float(a)}, beta_x={float(b)}. "
+                f"Available classes: alpha_x={ref_alpha_x}, beta_x={ref_beta_x}"
+            )
+        return xp.argmax(xp.astype(matches, xp.int64), axis=-1)

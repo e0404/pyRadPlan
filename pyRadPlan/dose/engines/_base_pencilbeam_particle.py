@@ -19,8 +19,13 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import ConstantRBEModel, LETBasedLQModel, KernelBasedLQModel, EmptyModel
-from pyRadPlan.bio_models.models.tabulated_rbe_models import TabulatedRBEModel
+from pyRadPlan.bio_models import (
+    ConstantRBEModel,
+    LETBasedLQModel,
+    LQModel,
+    KernelBasedLQModel,
+    TabulatedRBEModel,
+)
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -431,21 +436,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Toggles correction of small difference of current SSD to distance used
         # in generation of base data (e.g. phantom surface at isocenter)
 
-        # TODO: this is a dummy. bio_param not implemented yet...
-        self.bio_param = {"bioOpt": True}
-
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 
-        # biology
-
-        # TODO: (Comment from matlab): This is clumsy and needs to be changed with the biomodel
-        # update
-        if self.bio_param["bioOpt"]:
-            self.calc_bio_dose = True
+        # biology: alpha/beta influence matrices are only computed for LQ-type models
+        self.calc_bio_dose = isinstance(self.bio_model, LQModel)
         if isinstance(self.bio_model, ConstantRBEModel):
             dij["rbe"] = self.bio_model.rbe
-        if isinstance(self.bio_model, ConstantRBEModel) or isinstance(self.bio_model, EmptyModel):
-            self.calc_bio_dose = False
 
         # Load biologicla base data if needed
         if self.calc_bio_dose:

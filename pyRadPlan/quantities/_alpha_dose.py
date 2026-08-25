@@ -22,7 +22,7 @@ class AlphaDose(FluenceDependentQuantity):
             )
         # Indirect path: alpha_x * physical_dose
         dose = self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index]
-        return self.array_backend.asarray(self._dij.alphax[scenario_index] * dose, copy=False)
+        return self.array_backend.asarray(self._dij.alphax[:, scenario_index] * dose, copy=False)
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         if self._mode == "direct":

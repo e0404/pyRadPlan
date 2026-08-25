@@ -20,8 +20,8 @@ def sample_bixel():
 def sample_kernel():
     kernel_dict = {
         "let": xp.asarray([0.0, 1.0, 2.0]),
-        "alpha": xp.asarray([[0.0], [1.0], [2.0]]),
-        "beta": xp.asarray([[0.0], [1.0], [2.0]]),
+        "alpha": xp.asarray([[0.0, 1.0, 2.0]]),  # (n_tissue_classes, n_voxels)
+        "beta": xp.asarray([[0.0, 1.0, 2.0]]),
     }
     return kernel_dict
 
@@ -44,3 +44,32 @@ def test_KernelBasedLQModel_calc_biological_quantities_for_bixel(sample_bixel, s
     bixel["beta"] = kernels["beta"]
     assert np.allclose(np.asarray(result["alpha"]), np.asarray(bixel["alpha"]))
     assert np.allclose(np.asarray(result["beta"]), np.asarray(bixel["beta"]))
+
+
+def test_KernelBasedLQModel_mixed_tissue_classes():
+    kernel_lq_model = KernelBasedLQModel()
+    bixel = {
+        "rad_depths": xp.asarray([0.0, 1.0, 2.0, 3.0]),
+        "v_tissue_index": xp.asarray([0, 2, 0, 1]),
+        "v_alpha_x": xp.asarray([0.1, 0.5, 0.1, 0.3]),
+        "v_beta_x": xp.asarray([0.05, 0.05, 0.05, 0.05]),
+    }
+    kernels = {
+        "alpha": xp.asarray([[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0], [3.0, 3.0, 3.0, 3.0]]),
+        "beta": xp.asarray([[4.0, 4.0, 4.0, 4.0], [5.0, 5.0, 5.0, 5.0], [6.0, 6.0, 6.0, 6.0]]),
+    }
+    result = kernel_lq_model.calc_biological_quantities_for_bixel(bixel, kernels)
+    assert np.allclose(np.asarray(result["alpha"]), [1.0, 3.0, 1.0, 2.0])
+    assert np.allclose(np.asarray(result["beta"]), [4.0, 6.0, 4.0, 5.0])
+
+
+def test_KernelBasedLQModel_match_tissue_classes():
+    v_alpha_x = np.asarray([[0.1, 0.1], [0.5, 0.5], [0.0, 0.5]])
+    v_beta_x = np.asarray([[0.05, 0.05], [0.05, 0.05], [0.0, 0.05]])
+    ix = KernelBasedLQModel.match_tissue_classes(v_alpha_x, v_beta_x, [0.1, 0.5], [0.05, 0.05])
+    assert np.array_equal(ix, [[0, 0], [1, 1], [0, 1]])
+
+    with pytest.raises(ValueError, match="No matching tissue class"):
+        KernelBasedLQModel.match_tissue_classes(
+            np.asarray([[0.3]]), np.asarray([[0.05]]), [0.1], [0.05]
+        )

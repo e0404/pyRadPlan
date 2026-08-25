@@ -697,33 +697,34 @@ class StructureSet(PyRadPlanBaseModel):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
 
-        if not overlap_is_applied:
-            self.apply_overlap_priorities()
-        num_voxels = np.prod(self.vois[0].grid.dimensions)
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
+        num_voxels = np.prod(cst.ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
-        for voi in self.vois:
+        for voi in cst.vois:
             alpha[voi.indices_numpy] = voi.alpha_x
             beta[voi.indices_numpy] = voi.beta_x
 
         if resample_grid is not None:
-            original_grid = self.ct_image.grid
+            original_grid = cst.ct_image.grid
             alpha = resample_numpy_array(
                 alpha.reshape(original_grid.dimensions[::-1]),
                 reference_grid=original_grid,
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
-            alpha = np.repeat(alpha[:, None], self.ct_image.num_of_ct_scen, axis=1)
             beta = resample_numpy_array(
                 beta.reshape(original_grid.dimensions[::-1]),
                 reference_grid=original_grid,
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
-            beta = np.repeat(
-                beta[:, None], self.ct_image.num_of_ct_scen, axis=1
-            )  # TODO:add correct ct scense here
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
+        beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
         return alpha, beta
 
     def set_colors(self) -> Self:

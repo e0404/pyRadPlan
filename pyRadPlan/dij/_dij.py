@@ -13,6 +13,7 @@ from pydantic import (
     SerializationInfo,
     SerializerFunctionWrapHandler,
     ValidatorFunctionWrapHandler,
+    AliasChoices,
 )
 
 from numpydantic import NDArray, Shape
@@ -91,7 +92,9 @@ class Dij(PyRadPlanBaseModel):
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
-    rbe: Optional[float] = Field(default=None)
+    rbe: Optional[float] = Field(
+        default=None, validation_alias=AliasChoices("rbe", "RBE"), serialization_alias="RBE"
+    )
 
     @computed_field
     @property
@@ -264,8 +267,15 @@ class Dij(PyRadPlanBaseModel):
         ------
             ValueError: inconsistent voxel arrays.
         """
-        if not isinstance(v, np.ndarray) and isinstance(v, int):
-            v = np.array([v])
+        if v is None:
+            return v
+        v = np.asarray(v)
+        # Voxel arrays carry one column per CT scenario; accept plain 1-D input
+        # (e.g. matRad-imported alphaX/betaX) as a single scenario.
+        if v.ndim == 1:
+            v = v[:, None]
+        if v.ndim != 2:
+            raise ValueError("Voxel arrays must have shape (num_voxels, num_ct_scenarios)")
         # Check if the voxel arrays have the correct shape
         if info.data.get("physical_dose") is not None:
             dij_matrices = cast(np.ndarray, info.data["physical_dose"])
@@ -284,8 +294,6 @@ class Dij(PyRadPlanBaseModel):
                             "Voxel arrays shape inconsistent with number of scenarios"
                         )
 
-        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
-            v -= 1
         return v
 
     # Serialization
@@ -460,7 +468,7 @@ class Dij(PyRadPlanBaseModel):
                     np.where(mask_beam, (sqrt_beta_dose_beam / denom_beam) ** 2, 0.0)
                 )
 
-        if self.rbe is not None:
+        elif self.rbe is not None:
             out["rbe_x_dose"] = self.rbe * out["physical_dose"]
             out["rbe_x_dose_beam"] = [
                 self.rbe * dose_mat[:, idx] @ intensity[idx] for idx in beam_indices
@@ -645,9 +653,9 @@ class Dij(PyRadPlanBaseModel):
                     )
 
         if self.alphax is not None:
-            dij_copy.alphax = xp_new.asarray(self.alphax)
+            dij_copy.alphax = to_namespace(xp_new, self.alphax, device=device)
         if self.betax is not None:
-            dij_copy.betax = xp_new.asarray(self.betax)
+            dij_copy.betax = to_namespace(xp_new, self.betax, device=device)
         name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")

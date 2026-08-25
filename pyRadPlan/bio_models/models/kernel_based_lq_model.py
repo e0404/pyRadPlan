@@ -60,15 +60,11 @@ class KernelBasedLQModel(LQModel):
         """
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         xp = array_api_compat.array_namespace(bixel["rad_depths"])
-        num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
-        alpha = xp.zeros_like(bixel["rad_depths"])
-        beta = xp.zeros_like(bixel["rad_depths"])
-        for i in range(num_tissue_classes):
-            mask = bixel["v_tissue_index"] == i
-            alpha[mask] = xp.where(mask, kernels["alpha"][i, :], alpha[mask])
-            beta[mask] = xp.where(mask, kernels["beta"][i, :], beta[mask])
-        bixel["alpha"] = alpha
-        bixel["beta"] = beta
+        # kernels["alpha"/"beta"] have shape (n_tissue_classes, n_voxels)
+        tissue_ix = xp.astype(xp.asarray(bixel["v_tissue_index"]), xp.int64)
+        voxel_ix = xp.arange(tissue_ix.shape[0])
+        bixel["alpha"] = kernels["alpha"][tissue_ix, voxel_ix]
+        bixel["beta"] = kernels["beta"][tissue_ix, voxel_ix]
         return bixel
 
     def get_tissue_information(
@@ -78,42 +74,5 @@ class KernelBasedLQModel(LQModel):
         Build per-scenario tissue-index vectors.
 
         """
-        xp = array_api_compat.array_namespace(v_alpha_x)
-        num_of_ct_scen = v_alpha_x.shape[1]
-        # Initialise output arrays (one per scenario)
-        v_tissue_index = xp.zeros(v_alpha_x.shape)
-
-        machine_pairs = xp.asarray(
-            list(
-                zip(
-                    machine.pb_kernels[machine.energies[0]].alpha_x,
-                    machine.pb_kernels[machine.energies[0]].beta_x,
-                )
-            )
-        )
-        flat_alpha = xp.reshape(v_alpha_x, (-1,))
-        flat_beta = xp.reshape(v_beta_x, (-1,))
-        unique_alpha_beta_pairs = set(
-            (float(flat_alpha[i]), float(flat_beta[i])) for i in range(int(flat_alpha.shape[0]))
-        )
-        unique_alpha_beta_pairs.discard((0.0, 0.0))
-        ix_tissue = []  # tissue index for each unique alpha-beta pair
-
-        for i, (alpha_set, beta_set) in enumerate(unique_alpha_beta_pairs):
-            cst_paris = xp.asarray([alpha_set, beta_set])
-            matches = xp.all(machine_pairs == cst_paris, axis=1)
-            idx = xp.nonzero(matches)[0]
-            if idx.shape[0] != 1:
-                raise ValueError(
-                    f"No matching alpha-beta pair found in machine data for alpha={alpha_set}, beta={beta_set}"
-                )
-            ix_tissue.append(int(idx[0]))  # assign the first matching index (
-
-        for i in ix_tissue:
-            for s in range(num_of_ct_scen):
-                alpha_ref = machine.pb_kernels[machine.energies[0]].alpha_x[i].item()
-                beta_ref = machine.pb_kernels[machine.energies[0]].beta_x[i].item()
-                mask = (v_alpha_x[:, s] == alpha_ref) & (v_beta_x[:, s] == beta_ref)
-                col = v_tissue_index[:, s]
-                v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
-        return v_tissue_index
+        kernel = machine.pb_kernels[machine.energies[0]]
+        return self.match_tissue_classes(v_alpha_x, v_beta_x, kernel.alpha_x, kernel.beta_x)

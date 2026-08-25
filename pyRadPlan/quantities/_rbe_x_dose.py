@@ -9,8 +9,8 @@ RBExDose can be derived from physical dose in two different ways:
 
 `RBExDose` is the abstract base class shared by both. It carries the
 common metadata (unit, identifier, name) and defines the interface that
-subclasses must implement. A small factory (`RBExDose.create`) is provided
-to pick the right subclass based on what the dij provides.
+subclasses must implement. `RBExDose.resolve_implementation` picks the
+subclass based on what the dij provides.
 """
 
 from abc import ABC, abstractmethod
@@ -54,9 +54,8 @@ class RBExDose(FluenceDependentQuantity, ABC):
     def resolve_implementation(cls, dij) -> type["RBExDose"]:
         """Pick the concrete RBExDose subclass based on what the dij provides.
 
-        Used both by :meth:`create` for manual construction, and by
-        ``QuantityResolver`` when it builds the dependency graph
-        automatically (see resolver.py's ``_resolve_implementation``).
+        Used by ``QuantityResolver`` when it builds the dependency graph
+        (see resolver.py's ``_resolve_implementation``).
         """
         has_alpha_beta = (
             getattr(dij, "alpha_dose", None) is not None
@@ -65,7 +64,12 @@ class RBExDose(FluenceDependentQuantity, ABC):
 
         if has_alpha_beta:
             return RBExDoseFromAlphaBeta
-        return RBExDoseFromConstantRBE
+        if getattr(dij, "rbe", None) is not None:
+            return RBExDoseFromConstantRBE
+        raise ValueError(
+            "Cannot compute 'rbe_x_dose': dij provides neither alpha_dose/sqrt_beta_dose "
+            "matrices nor a constant 'rbe'."
+        )
 
 
 class RBExDoseFromAlphaBeta(RBExDose):

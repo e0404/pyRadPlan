@@ -1,5 +1,7 @@
 """Tabulated RBE models based on pre-computed lookup tables."""
 
+import warnings
+
 import array_api_compat
 import numpy as np
 from pymatreader import read_mat
@@ -127,26 +129,21 @@ class TabulatedRBEModel(LQModel):
             )[0]
         self.fragments_sp_table_ix = []
         self.fragments_q_table_ix = []
-        for fragment in self.fragments_to_include:
+        keep = []
+        for i, fragment in enumerate(self.fragments_to_include):
             idx_sp = np.where(self._sp_table["fragments_AZ"][:, 1] == fragment[1])[0]
             idx_q = np.where(self._q_table["fragments_AZ"][:, 1] == fragment[1])[0]
             if idx_sp.shape[0] == 0 or idx_q.shape[0] == 0:
-                Warning(
-                    f"Fragment {fragment} specified in fragments_to_include is not present in the SP or quantity table fragments: {self._sp_table['fragments_AZ']}  "
+                warnings.warn(
+                    f"Fragment {fragment} is not present in the SP or quantity table "
+                    f"(SP fragments: {self._sp_table['fragments_AZ'].tolist()}); skipping it."
                 )
-                self.fragments_kernel_ix = np.delete(
-                    self.fragments_kernel_ix,
-                    np.where((self.fragments_to_include == fragment).all(axis=1))[0],
-                    axis=0,
-                )
-                self.fragments_to_include = np.delete(
-                    self.fragments_to_include,
-                    np.where((self.fragments_to_include == fragment).all(axis=1))[0],
-                    axis=0,
-                )
-            else:
-                self.fragments_sp_table_ix.append(int(idx_sp[0]))
-                self.fragments_q_table_ix.append(int(idx_q[0]))
+                continue
+            keep.append(i)
+            self.fragments_sp_table_ix.append(int(idx_sp[0]))
+            self.fragments_q_table_ix.append(int(idx_q[0]))
+        self.fragments_to_include = self.fragments_to_include[keep]
+        self.fragments_kernel_ix = [self.fragments_kernel_ix[i] for i in keep]
         # Check that all selected fragments are present in both tables
         if not np.array_equal(
             self._sp_table["fragments_AZ"][self.fragments_sp_table_ix, :],
@@ -188,44 +185,19 @@ class TabulatedRBEModel(LQModel):
         TODO: can this be generalized with the kernel based model? It is currently duplicated in both models, but it is not specific to either of them.
         ALso here more checks for the nucelous or other tissue parameters can be added in the future if needed.
         """
-        xp = array_api_compat.array_namespace(v_alpha_x)
-        num_of_ct_scen = v_alpha_x.shape[1]
-        # Initialise output arrays (one per scenario)
-        v_tissue_index = xp.zeros(v_alpha_x.shape)
-        alpha_x = self._q_table["alpha_x"]
-        beta_x = self._q_table["beta_x"]
-        # normalize to 1D lists
-        if np.isscalar(alpha_x):
-            alpha_x = [alpha_x]
-        if np.isscalar(beta_x):
-            beta_x = [beta_x]
-        quantity_pairs = xp.asarray(list(zip(alpha_x, beta_x)))
-        flat_alpha = xp.reshape(v_alpha_x, (-1,))
-        flat_beta = xp.reshape(v_beta_x, (-1,))
-        unique_alpha_beta_pairs = xp.unique(xp.stack((flat_alpha, flat_beta), axis=1), axis=0)
-        unique_alpha_beta_pairs = unique_alpha_beta_pairs[
-            ~((unique_alpha_beta_pairs[:, 0] == 0) & (unique_alpha_beta_pairs[:, 1] == 0))
-        ]
-        ix_tissue = []  # tissue index for each unique alpha-beta pair
+        return self.match_tissue_classes(
+            v_alpha_x, v_beta_x, self.table_alpha_x, self.table_beta_x
+        )
 
-        for i, (alpha_set, beta_set) in enumerate(unique_alpha_beta_pairs):
-            cst_paris = xp.asarray([alpha_set, beta_set])
-            matches = xp.all(quantity_pairs == cst_paris, axis=1)
-            idx = xp.nonzero(matches)[0]
-            if idx.shape[0] != 1:
-                raise ValueError(
-                    f"No matching alpha-beta pair found in rbe table for alpha={alpha_set}, beta={beta_set}"
-                )
-            ix_tissue.append(int(idx[0]))  # assign the first matching index (
+    @property
+    def table_alpha_x(self) -> np.ndarray:
+        """Reference alpha_x per tissue class of the loaded quantity table, shape (n_classes,)."""
+        return np.atleast_1d(np.asarray(self._q_table["alpha_x"], dtype=float))
 
-        for i in ix_tissue:
-            for s in range(num_of_ct_scen):
-                mask = (v_alpha_x[:, s] == unique_alpha_beta_pairs[i][0]) & (
-                    v_beta_x[:, s] == unique_alpha_beta_pairs[i][1]
-                )
-                col = v_tissue_index[:, s]
-                v_tissue_index[:, s] = xp.where(mask, xp.asarray(i, dtype=col.dtype), col)
-        return v_tissue_index
+    @property
+    def table_beta_x(self) -> np.ndarray:
+        """Reference beta_x per tissue class of the loaded quantity table, shape (n_classes,)."""
+        return np.atleast_1d(np.asarray(self._q_table["beta_x"], dtype=float))
 
     def get_quantity(self, q_table: dict, qty: str, xp) -> Array:
         """
@@ -283,7 +255,7 @@ class TabulatedRBEModel(LQModel):
         xp = array_api_compat.array_namespace(kernel.depths)
 
         n_depths = len(kernel.depths)
-        n_tissue = xp.unique_values(v_tissue_index).shape[0]
+        n_tissue = self.table_alpha_x.shape[0]
         # Stack energy arrays
         kernel_spectra_energies = xp.stack(
             [kernel.fluence_spectrum.fragments[f_ix].energy for f_ix in self.fragments_kernel_ix]
@@ -326,27 +298,17 @@ class TabulatedRBEModel(LQModel):
         for qty in self.quantities_in_kernel:
             quantity_num_per_fragment[qty] = xp.sum(quantitys[qty] * sp * fluence_spectra, axis=1)
 
-        # Accumulate over fragments and tissue classes
-        denominator = xp.zeros((n_depths, n_tissue))
-        quantity_numerators = {
-            qty: xp.zeros((n_depths, n_tissue)) for qty in self.quantities_in_kernel
-        }
-
-        for t in range(n_tissue):
-            t_dose = xp.sum(dose_per_fragment, axis=0)
-            t_quantityt = {}
-            for qty in self.quantities_in_kernel:
-                t_quantityt[qty] = xp.sum(quantity_num_per_fragment[qty], axis=0)
-
-            denominator[:, t] = denominator[:, t] + t_dose
-            for qty in self.quantities_in_kernel:
-                quantity_numerators[qty][:, t] = quantity_numerators[qty][:, t] + t_quantityt[qty]
-
+        # Accumulate over fragments -> (n_depths,). The bundled tables carry a single
+        # (alpha_x, beta_x) class, so the result is broadcast over the tissue axis;
+        # tables with per-class quantities need to index the table by class here.
+        denominator = xp.sum(dose_per_fragment, axis=0)[:, None]
         valid = denominator > 0
-        for i, qty in enumerate(self.quantities_in_kernel):
-            kernel.quantities[qty] = xp.where(
-                valid, quantity_numerators[qty] / denominator, 0
-            )  # depths, n_tissue_classes
+        for qty in self.quantities_in_kernel:
+            numerator = xp.sum(quantity_num_per_fragment[qty], axis=0)[:, None]
+            kernel.quantities[qty] = xp.broadcast_to(
+                xp.where(valid, numerator / xp.where(valid, denominator, 1.0), 0.0),
+                (n_depths, n_tissue),
+            )  # (n_depths, n_tissue_classes)
 
         return kernel
 
@@ -440,13 +402,9 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
         bixel = super().calc_biological_quantities_for_bixel(bixel, kernels)
         # here we do calculation from the quantity to the alpha and beta value from the LQ model, here simple **2 for beta
         xp = array_api_compat.array_namespace(bixel["rad_depths"])
-        alpha = xp.zeros_like(bixel["rad_depths"])
-        sqrt_beta = xp.zeros_like(bixel["rad_depths"])
-        num_tissue_classes = xp.unique_values(xp.asarray(bixel["v_tissue_index"])).shape[0]
-        for i in range(num_tissue_classes):
-            mask = bixel["v_tissue_index"] == i
-            alpha[mask] = xp.where(mask, kernels["alpha"][:, i], alpha[mask])
-            sqrt_beta[mask] = xp.where(mask, kernels["sqrt_beta"][:, i], sqrt_beta[mask])
-        bixel["alpha"] = alpha
-        bixel["beta"] = sqrt_beta**2
+        # kernels["alpha"/"sqrt_beta"] have shape (n_voxels, n_tissue_classes)
+        tissue_ix = xp.astype(xp.asarray(bixel["v_tissue_index"]), xp.int64)
+        voxel_ix = xp.arange(tissue_ix.shape[0])
+        bixel["alpha"] = kernels["alpha"][voxel_ix, tissue_ix]
+        bixel["beta"] = kernels["sqrt_beta"][voxel_ix, tissue_ix] ** 2
         return bixel

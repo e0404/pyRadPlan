@@ -82,6 +82,13 @@ class Plan(PyRadPlanBaseModel, ABC):
         """
         raise NotImplementedError("This method should be overridden in derived classes")
 
+    @model_validator(mode="after")
+    def set_default_bio_model(self) -> "Plan":
+        """Set bio_model from default_bio_models if not explicitly provided."""
+        if self.bio_model is None:
+            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
+        return self
+
     @field_validator("mult_scen", mode="before")
     @classmethod
     def _validate_mult_scen(
@@ -206,12 +213,6 @@ class PhotonPlan(Plan):
             raise ValueError('radiation_mode for PhotonPlan must be "photons"')
         return v
 
-    @model_validator(mode="after")
-    def set_default_bio_model(self) -> "PhotonPlan":
-        """Set bio_model from default_bio_models if not explicitly provided."""
-        # default model is all ready "none" for photons, but we keep this for consistency and future extensibility
-        return self
-
 
 class IonPlan(Plan):
     """
@@ -269,13 +270,6 @@ class IonPlan(Plan):
                 f"radiation_mode for IonPlan must be one of {cls.available_radiation_modes}"
             )
         return v
-
-    @model_validator(mode="after")
-    def set_default_bio_model(self) -> "IonPlan":
-        """Set bio_model from default_bio_models if not explicitly provided."""
-        if self.bio_model is None:
-            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
-        return self
 
 
 def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan:
