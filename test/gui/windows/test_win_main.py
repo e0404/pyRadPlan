@@ -159,6 +159,31 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
         settings.ai.model = orig_ai_model
 
 
+def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path, monkeypatch):
+    """A field with a validation alias must be written under the name pydantic reads."""
+    from pyRadPlan._settings import AiModelSettings, get_settings
+    from pyRadPlan.gui.menus._settings import SettingsDialog
+
+    settings = get_settings()
+    orig = settings.ai_models.local_models_dir
+    monkeypatch.delenv("PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR", raising=False)
+    # a stale legacy value must not survive and override the new choice
+    monkeypatch.setenv("PYRADPLAN_HUGGINGFACE_PATH", str(tmp_path / "stale"))
+
+    try:
+        dialog = SettingsDialog(section="ai_models")
+        dialog._sub_forms["ai_models"]._set_value("local_models_dir", tmp_path / "chosen")
+        dialog.apply()
+
+        assert settings.ai_models.local_models_dir == tmp_path / "chosen"
+        assert "PYRADPLAN_HUGGINGFACE_PATH" not in os.environ
+        # a freshly constructed settings object must see the edit
+        assert AiModelSettings(_env_file=None).local_models_dir == tmp_path / "chosen"
+    finally:
+        os.environ.pop("PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR", None)
+        settings.ai_models.local_models_dir = orig
+
+
 def test_settings_menu_has_quick_links_and_preferences(qapp):
     win = MainWindow(WorkspaceManager())
     labels = [a.text() for a in win._settings_menu.actions() if a.text()]
