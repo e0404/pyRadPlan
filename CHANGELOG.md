@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
 - `ai_agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
-- pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+- pre-commit hook checking dependency license compliance via `licensecheck` (configured in `[tool.licensecheck]` in pyproject.toml); compatibility is derived from the project's own license instead of a hand-maintained allowlist
 - VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
 - IO: New extensible import/export framework in `pyRadPlan.io` with a layered design:
   `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`,

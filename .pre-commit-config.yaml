@@ -33,11 +33,13 @@ repos:
     rev: v0.25
     hooks:
     -   id: validate-pyproject
--   repo: https://github.com/dhatim/python-license-check
-    rev: 0.9.2
+-   repo: local
     hooks:
-    -   id: liccheck
-        args: [--no-deps]
+    -   id: licensecheck
+        name: Run Python License Checker
+        entry: licensecheck
+        # Runs from the project environment: licenses are read from the
+        # installed distributions, so an isolated hook env cannot see them.
         language: system
         files: ^pyproject\.toml$
         pass_filenames: false
