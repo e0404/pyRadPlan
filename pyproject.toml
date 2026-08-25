@@ -77,7 +77,7 @@ numba  = ["numba>=0.61.0"]
 # not pulled in: pick the build matching your platform/CUDA yourself.
 ai     = ["huggingface_hub>=0.23", "safetensors"] # keep huggingface_hub even tho its covered by pydantic-ai for now
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","licensecheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -166,8 +166,9 @@ extend-ignore = ["E203","E701","F722"]
 # Compatibility is derived from this project's own license rather than from a
 # hand-maintained allowlist, so compound licenses such as regex's
 # "Apache-2.0;; CNRI-Python" or tqdm's "MIT;; MPL-2.0" resolve on their own.
-# Scope matches the previous liccheck setup: the [project.dependencies], not
-# the optional extras (add e.g. extras = ["ai", "gui"] to widen it).
+# Scope matches the previous liccheck --no-deps setup: the declared
+# [project.dependencies], not their transitive deps and not the optional
+# extras (add e.g. extras = ["ai", "gui"] to widen it).
 zero = true
 format = "simple"
 

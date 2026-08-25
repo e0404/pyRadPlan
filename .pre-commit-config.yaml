@@ -33,16 +33,16 @@ repos:
     rev: v0.25
     hooks:
     -   id: validate-pyproject
--   repo: local
+-   repo: https://github.com/FHPythonUtils/LicenseCheck
+    rev: 2026.0.8
     hooks:
     -   id: licensecheck
-        name: Run Python License Checker
-        entry: licensecheck
-        # Runs from the project environment: licenses are read from the
-        # installed distributions, so an isolated hook env cannot see them.
-        language: system
+        # licensecheck requires Python >=3.12, while pre-commit itself may run
+        # on an older interpreter; pin the hook environment explicitly.
+        language_version: python3.12
+        # Upstream leaves this unfiltered, which runs it on every commit; the
+        # inputs are the dependencies declared in pyproject.toml.
         files: ^pyproject\.toml$
-        pass_filenames: false
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.4.2
     hooks:
