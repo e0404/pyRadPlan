@@ -111,11 +111,11 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
     assert dialog._general_form is None
     assert "General" not in titles
     assert "XP (Backend)" in titles
-    assert "AI" in titles
+    assert "AI Agents" in titles
     assert "AI Models" in titles
     assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
     assert "preferred_gpu_array_backend" in dialog._sub_forms["xp"]._editors
-    assert "model" in dialog._sub_forms["ai"]._editors
+    assert "model" in dialog._sub_forms["ai_agents"]._editors
     assert "device" in dialog._sub_forms["ai_models"]._editors
 
 
@@ -138,25 +138,28 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
 
     settings = get_settings()
     orig_prefer_gpu = settings.xp.prefer_gpu
-    orig_ai_model = settings.ai.model
+    orig_ai_model = settings.ai_agents.model
     monkeypatch.delenv("PYRADPLAN_XP_PREFER_GPU", raising=False)
-    monkeypatch.delenv("PYRADPLAN_AI_MODEL", raising=False)
+    monkeypatch.delenv("PYRADPLAN_AI_AGENTS_MODEL", raising=False)
+    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "stale-legacy-value")
 
     try:
         dialog = SettingsDialog()
         dialog._sub_forms["xp"]._set_value("prefer_gpu", False)
-        dialog._sub_forms["ai"]._set_value("model", "test-model")
+        dialog._sub_forms["ai_agents"]._set_value("model", "test-model")
         dialog.apply()
 
         assert settings.xp.prefer_gpu is False
         assert os.environ["PYRADPLAN_XP_PREFER_GPU"] == "False"
-        assert settings.ai.model == "test-model"
-        assert os.environ["PYRADPLAN_AI_MODEL"] == "test-model"
+        assert settings.ai_agents.model == "test-model"
+        assert os.environ["PYRADPLAN_AI_AGENTS_MODEL"] == "test-model"
+        # the legacy alias is cleared so it cannot override the new choice
+        assert "PYRADPLAN_AI_MODEL" not in os.environ
     finally:
         os.environ.pop("PYRADPLAN_XP_PREFER_GPU", None)
-        os.environ.pop("PYRADPLAN_AI_MODEL", None)
+        os.environ.pop("PYRADPLAN_AI_AGENTS_MODEL", None)
         settings.xp.prefer_gpu = orig_prefer_gpu
-        settings.ai.model = orig_ai_model
+        settings.ai_agents.model = orig_ai_model
 
 
 def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path, monkeypatch):
@@ -187,7 +190,7 @@ def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path
 def test_settings_menu_has_quick_links_and_preferences(qapp):
     win = MainWindow(WorkspaceManager())
     labels = [a.text() for a in win._settings_menu.actions() if a.text()]
-    assert labels == ["XP (Backend)…", "AI…", "AI Models…", "Preferences…"]
+    assert labels == ["XP (Backend)…", "AI Agents…", "AI Models…", "Preferences…"]
 
 
 def test_inputs_locked_while_busy(qapp):

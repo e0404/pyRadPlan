@@ -2,7 +2,7 @@
 
 All configuration is read from environment variables prefixed with
 ``PYRADPLAN_`` and/or a ``.env`` file in the working directory. Sub-configurations
-extend the prefix (e.g. ``PYRADPLAN_AI_`` for :class:`AiSettings`).
+extend the prefix (e.g. ``PYRADPLAN_AI_AGENTS_`` for :class:`AiSettings`).
 
 The module-level singleton :data:`settings` (also exposed as
 ``pyRadPlan.settings``) holds the runtime configuration and can be mutated to
@@ -43,9 +43,13 @@ def _default_ai_models_dir() -> Path:
 class AiSettings(BaseSettings):
     """Global defaults for pyRadPlan AI agents.
 
-    Values are read from environment variables prefixed with ``PYRADPLAN_AI_``
-    (e.g. ``PYRADPLAN_AI_MODEL``) or from a ``.env`` file in the working
-    directory.
+    Values are read from environment variables prefixed with
+    ``PYRADPLAN_AI_AGENTS_`` (e.g. ``PYRADPLAN_AI_AGENTS_MODEL``) or from a
+    ``.env`` file in the working directory. The pre-0.4.2 names
+    ``PYRADPLAN_AI_MODEL`` and ``PYRADPLAN_AI_DISPLAY_USAGE`` are still read as
+    legacy aliases; they were one character away from the unrelated
+    ``PYRADPLAN_AI_MODELS_*`` variables that configure
+    :class:`AiModelSettings`.
 
     API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``,
     etc.) are read directly by *pydantic-ai* from the environment — they do
@@ -55,7 +59,7 @@ class AiSettings(BaseSettings):
     --------
     Configure via environment variable::
 
-        export PYRADPLAN_AI_MODEL=gpt-4o-mini
+        export PYRADPLAN_AI_AGENTS_MODEL=gpt-4o-mini
 
     Or override per call::
 
@@ -63,15 +67,26 @@ class AiSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="PYRADPLAN_AI_",
+        env_prefix="PYRADPLAN_AI_AGENTS_",
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
         validate_assignment=True,
     )
 
-    model: str = "claude-sonnet-4-5"
-    display_usage: bool = True
+    # The canonical, prefix-conforming name comes first; the second entry is the
+    # name these settings shipped under up to 0.4.1.
+    model: str = Field(
+        default="claude-sonnet-4-5",
+        validation_alias=AliasChoices("PYRADPLAN_AI_AGENTS_MODEL", "PYRADPLAN_AI_MODEL"),
+    )
+    display_usage: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "PYRADPLAN_AI_AGENTS_DISPLAY_USAGE",
+            "PYRADPLAN_AI_DISPLAY_USAGE",
+        ),
+    )
 
 
 class AiModelSettings(BaseSettings):
@@ -214,11 +229,11 @@ class PyRadPlanSettings(BaseSettings):
     Values are read from environment variables prefixed with ``PYRADPLAN_``
     or from a ``.env`` file in the working directory. Sub-configurations use
     extended prefixes (e.g. ``PYRADPLAN_XP_PREFER_GPU`` configures :attr:`xp`,
-    ``PYRADPLAN_AI_MODEL`` configures :attr:`ai`,
+    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai_agents`,
     ``PYRADPLAN_AI_MODELS_DEVICE`` configures :attr:`ai_models`).
 
     Note that the AI agents read :class:`AiSettings` freshly from the
-    environment at call time, so :attr:`ai` reflects the environment at
+    environment at call time, so :attr:`ai_agents` reflects the environment at
     construction of this object rather than live agent configuration. The
     :attr:`xp` backend preferences and :attr:`ai_models` handling, in contrast,
     are read from the :data:`settings` singleton at runtime.
@@ -236,9 +251,9 @@ class PyRadPlanSettings(BaseSettings):
         default_factory=XpSettings,
         description="Array-API backend sub-configuration (PYRADPLAN_XP_* variables).",
     )
-    ai: AiSettings = Field(
+    ai_agents: AiSettings = Field(
         default_factory=AiSettings,
-        description="AI agent sub-configuration (PYRADPLAN_AI_* variables).",
+        description="AI agent sub-configuration (PYRADPLAN_AI_AGENTS_* variables).",
     )
     ai_models: AiModelSettings = Field(
         default_factory=AiModelSettings,

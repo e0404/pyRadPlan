@@ -39,7 +39,11 @@ def _nested_model_fields(model_cls: type[BaseModel]) -> dict[str, type[BaseModel
 
 
 #: Display names for sub-configuration sections (fallback: `_tab_title`).
-_SECTION_TITLES = {"xp": "XP (Backend)", "ai": "AI", "ai_models": "AI Models"}
+_SECTION_TITLES = {
+    "xp": "XP (Backend)",
+    "ai_agents": "AI Agents",
+    "ai_models": "AI Models",
+}
 
 
 def _tab_title(field_name: str) -> str:
@@ -75,7 +79,7 @@ class SettingsDialog(QDialog):
 
     Without a *section*, a tabbed editor for the full hierarchy is shown: a
     *General* tab holds the top-level fields (omitted when there are none) and
-    each nested sub-configuration (e.g. ``xp``, ``ai``) gets its own tab. With
+    each nested sub-configuration (e.g. ``xp``, ``ai_agents``) gets its own tab. With
     a *section*, only that sub-configuration's form is shown.
 
     All forms reflect the runtime settings singleton; accepted edits are
@@ -199,7 +203,7 @@ class SettingsDialog(QDialog):
 class SettingsMenu(QMenu):
     """The main window's *Settings* menu.
 
-    Offers a quick link per sub-configuration (e.g. *XP (Backend)*, *AI*)
+    Offers a quick link per sub-configuration (e.g. *XP (Backend)*, *AI Agents*)
     opening a single-section dialog, plus *Preferences* opening the full
     tabbed settings editor.
 
