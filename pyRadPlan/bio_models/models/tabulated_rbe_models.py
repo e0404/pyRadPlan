@@ -9,6 +9,7 @@ import numpy as np
 from pymatreader import read_mat
 
 from pyRadPlan.bio_models._evaluator import BioModelEvaluator, TabulatedSpectrumEvaluator
+from pyRadPlan.bio_models._tissue_lookup import make_tissue_lookup
 from .lq_models import LQModel
 
 if sys.version_info < (3, 10):
@@ -37,6 +38,8 @@ class TabulatedRBEModel(LQModel):
     fragments_to_include : array-like of (A, Z) rows or None
         Fragment species to use. ``None`` includes every charged fragment present in the
         kernel spectra that both tables know.
+    tissue_lookup : str
+        How voxel ``(alpha_x, beta_x)`` pairs select a table tissue class (``"exact"``).
 
     Class Attributes
     ----------------
@@ -57,8 +60,14 @@ class TabulatedRBEModel(LQModel):
     _folder_name_quantity_tables = resources.files("pyRadPlan.data.RBEtables")
     _folder_name_sp_tables = resources.files("pyRadPlan.data.SPtables")
 
-    def __init__(self, sp_table_name: str = "SPtable.mat", fragments_to_include: Any = None):
+    def __init__(
+        self,
+        sp_table_name: str = "SPtable.mat",
+        fragments_to_include: Any = None,
+        tissue_lookup: str = "exact",
+    ):
         self.sp_table_name = sp_table_name
+        self.tissue_lookup = tissue_lookup
         self.fragments_to_include = (
             None if fragments_to_include is None else np.asarray(fragments_to_include, float)
         )
@@ -66,7 +75,8 @@ class TabulatedRBEModel(LQModel):
         self._q_table = self.load_quantity_table()
 
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
-        return TabulatedSpectrumEvaluator(self, machine, voxel_params)
+        lookup = make_tissue_lookup(self.tissue_lookup, self.table_alpha_x, self.table_beta_x)
+        return TabulatedSpectrumEvaluator(self, machine, lookup, voxel_params)
 
     # ------------------------------------------------------------------ tables
     @property
@@ -266,9 +276,14 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
         quantity_table_name: str = "RBEtable_LEMI_Scholz06_AX01_BX005.mat",
         sp_table_name: str = "SPtable.mat",
         fragments_to_include: Any = None,
+        tissue_lookup: str = "exact",
     ):
         self.quantity_table_name = quantity_table_name
-        super().__init__(sp_table_name=sp_table_name, fragments_to_include=fragments_to_include)
+        super().__init__(
+            sp_table_name=sp_table_name,
+            fragments_to_include=fragments_to_include,
+            tissue_lookup=tissue_lookup,
+        )
 
     def load_quantity_table(self) -> dict:
         data = read_mat(self._folder_name_quantity_tables / self.quantity_table_name)

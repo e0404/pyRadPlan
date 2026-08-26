@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 import array_api_strict as xp
 
-from pyRadPlan.bio_models import BiologicalModel, KernelBasedLQModel, TissueClassEvaluator
+from pyRadPlan.bio_models import (
+    BiologicalModel,
+    ExactClassLookup,
+    KernelBasedEvaluator,
+    KernelBasedLQModel,
+)
 
 
 class _Kernel:
@@ -45,7 +50,8 @@ def test_KernelBasedLQModel_constructor():
 
 def test_KernelBasedLQModel_evaluator(machine, voxel_params):
     evaluator = KernelBasedLQModel().evaluator(machine, voxel_params)
-    assert isinstance(evaluator, TissueClassEvaluator)
+    assert isinstance(evaluator, KernelBasedEvaluator)
+    assert isinstance(evaluator.lookup, ExactClassLookup)
     assert evaluator.dij_scalars() == {}
 
     kernel = {"alpha": "A", "beta": "B", "idd": "ignored"}
@@ -76,18 +82,6 @@ def test_KernelBasedLQModel_bixel_alpha_beta_mixed_tissue_classes(machine, voxel
     assert np.allclose(np.asarray(beta), [4.0, 5.0, 4.0, 4.0])
 
 
-def test_KernelBasedLQModel_match_tissue_classes():
-    v_alpha_x = np.asarray([[0.1, 0.1], [0.5, 0.5], [0.0, 0.5]])
-    v_beta_x = np.asarray([[0.05, 0.05], [0.05, 0.05], [0.0, 0.05]])
-    ix = KernelBasedLQModel.match_tissue_classes(v_alpha_x, v_beta_x, [0.1, 0.5], [0.05, 0.05])
-    assert np.array_equal(ix, [[0, 0], [1, 1], [0, 1]])
-
-    ix_1d = KernelBasedLQModel.match_tissue_classes(
-        xp.asarray([0.5, 0.1]), xp.asarray([0.05, 0.05]), [0.1, 0.5], [0.05, 0.05]
-    )
-    assert np.array_equal(np.asarray(ix_1d), [1, 0])
-
-    with pytest.raises(ValueError, match="No matching tissue class"):
-        KernelBasedLQModel.match_tissue_classes(
-            np.asarray([[0.3]]), np.asarray([[0.05]]), [0.1], [0.05]
-        )
+def test_KernelBasedLQModel_unknown_lookup(machine, voxel_params):
+    with pytest.raises(ValueError, match="Unknown tissue lookup"):
+        KernelBasedLQModel(tissue_lookup="nearest").evaluator(machine, voxel_params)

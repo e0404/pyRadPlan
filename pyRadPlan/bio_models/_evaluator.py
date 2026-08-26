@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 import array_api_compat
 
+from ._tissue_lookup import TissueParameterLookup
+
 if TYPE_CHECKING:  # pragma: no cover
     from ._base import BiologicalModel
 
@@ -76,67 +78,76 @@ class ParametricEvaluator(BioModelEvaluator):
         return self.model.alpha_beta(bixel["v_alpha_x"], bixel["v_beta_x"], kernels)
 
 
-class TissueClassEvaluator(BioModelEvaluator):
+class KernelBasedEvaluator(BioModelEvaluator):
     """
-    Evaluator for models with pre-computed data per discrete tissue class.
+    Evaluator for models reading pre-tabulated alpha/beta kernels from the machine data.
 
-    The model's data (machine kernels or tables) exists for a finite set of reference
-    ``(alpha_x, beta_x)`` pairs. Voxels are mapped onto those classes; the class-specific
-    kernel row is gathered per voxel and converted by the model into (alpha, beta).
+    The machine kernels carry ``(n_classes, n_depths)`` arrays per tissue class; a
+    :class:`TissueParameterLookup` decides which class row each voxel uses.
 
     Parameters
     ----------
     model : BiologicalModel
-        Must implement ``match_tissue_classes`` and ``alpha_beta_from_kernel_rows``.
-    class_alpha_x, class_beta_x : array-like, shape (n_classes,)
-        Reference LQ parameters of the available tissue classes.
+        Must implement ``alpha_beta_from_kernel_rows``.
+    kernel_fields : list[str]
+        Names of the machine kernel arrays to interpolate per bixel (e.g. ``["alpha", "beta"]``).
+    lookup : TissueParameterLookup
+        Voxel parameter → tissue class mapping.
     voxel_params : dict[str, Array]
         Per-voxel parameters of the whole dose grid; validated up front so that a
         structure without matching base data fails before the dose calculation starts.
-    kernel_fields : list[str]
-        Names of the ``(n_classes, n_depths)`` kernel arrays to interpolate per bixel.
     """
 
     def __init__(
         self,
         model: "BiologicalModel",
-        class_alpha_x: Any,
-        class_beta_x: Any,
-        voxel_params: dict[str, Any],
         kernel_fields: list[str],
+        lookup: TissueParameterLookup,
+        voxel_params: dict[str, Any],
     ):
         super().__init__(model)
-        self.class_alpha_x = class_alpha_x
-        self.class_beta_x = class_beta_x
         self.kernel_fields = list(kernel_fields)
-        # Fail early with a clear message if any voxel has no matching tissue class.
-        self.model.match_tissue_classes(
-            voxel_params["alpha_x"], voxel_params["beta_x"], class_alpha_x, class_beta_x
-        )
+        self.lookup = lookup
+        self.lookup.validate(voxel_params)
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
         return {name: kernel[name] for name in self.kernel_fields}
 
     def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
-        xp = array_api_compat.array_namespace(bixel["v_alpha_x"])
-        class_ix = self.model.match_tissue_classes(
-            bixel["v_alpha_x"], bixel["v_beta_x"], self.class_alpha_x, self.class_beta_x
-        )
-        voxel_ix = xp.arange(class_ix.shape[0])
-        rows = {name: kernels[name][class_ix, voxel_ix] for name in self.kernel_fields}
+        rows = self.lookup.gather(bixel, kernels, self.kernel_fields)
         return self.model.alpha_beta_from_kernel_rows(rows)
 
 
-class TabulatedSpectrumEvaluator(TissueClassEvaluator):
+class TabulatedSpectrumEvaluator(BioModelEvaluator):
     """
-    Tissue-class evaluator whose kernel arrays are pre-computed from fluence spectra.
+    Evaluator for models whose kernels are dose-averaged from tables over fluence spectra.
 
-    On construction the model's lookup tables are dose-averaged over the fragment
-    fluence spectra of every machine energy, producing ``(n_classes, n_depths)`` arrays
-    per energy. The machine itself is left untouched.
+    On construction the model's lookup tables are dose-averaged over the fragment fluence
+    spectra of every machine energy, producing ``(n_classes, n_depths)`` arrays per energy.
+    The machine itself is left untouched. Per bixel, a :class:`TissueParameterLookup`
+    selects the class row for each voxel.
+
+    Parameters
+    ----------
+    model : TabulatedRBEModel
+    machine : ParticleAccelerator
+        Machine whose kernels carry fragment fluence spectra.
+    lookup : TissueParameterLookup
+    voxel_params : dict[str, Array]
     """
 
-    def __init__(self, model: "BiologicalModel", machine: Any, voxel_params: dict[str, Any]):
+    def __init__(
+        self,
+        model: "BiologicalModel",
+        machine: Any,
+        lookup: TissueParameterLookup,
+        voxel_params: dict[str, Any],
+    ):
+        super().__init__(model)
+        self.kernel_fields = list(model.quantities_in_kernel)
+        self.lookup = lookup
+        self.lookup.validate(voxel_params)
+
         first_kernel = machine.pb_kernels[machine.energies[0]]
         fragments = model.select_fragments(first_kernel.fluence_spectrum)
         self._tables = {
@@ -144,13 +155,6 @@ class TabulatedSpectrumEvaluator(TissueClassEvaluator):
             for energy, kernel in machine.pb_kernels.items()
         }
         self._converted: dict[float, dict[str, Any]] = {}
-        super().__init__(
-            model,
-            model.table_alpha_x,
-            model.table_beta_x,
-            voxel_params,
-            model.quantities_in_kernel,
-        )
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
         energy = float(kernel["energy"])
@@ -160,3 +164,7 @@ class TabulatedSpectrumEvaluator(TissueClassEvaluator):
                 name: xp.asarray(arr) for name, arr in self._tables[energy].items()
             }
         return self._converted[energy]
+
+    def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
+        rows = self.lookup.gather(bixel, kernels, self.kernel_fields)
+        return self.model.alpha_beta_from_kernel_rows(rows)

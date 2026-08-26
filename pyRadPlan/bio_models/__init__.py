@@ -4,9 +4,10 @@ from ._base import BiologicalModel, BiologicalModelBase, EmptyModel
 from ._evaluator import (
     BioModelEvaluator,
     ParametricEvaluator,
-    TissueClassEvaluator,
+    KernelBasedEvaluator,
     TabulatedSpectrumEvaluator,
 )
+from ._tissue_lookup import TissueParameterLookup, ExactClassLookup, make_tissue_lookup
 from .models.const_rbe import ConstantRBEModel
 from .models.let_based_lq_models import (
     LETBasedLQModel,
@@ -37,8 +38,11 @@ __all__ = [
     "BiologicalModelBase",
     "BioModelEvaluator",
     "ParametricEvaluator",
-    "TissueClassEvaluator",
+    "KernelBasedEvaluator",
     "TabulatedSpectrumEvaluator",
+    "TissueParameterLookup",
+    "ExactClassLookup",
+    "make_tissue_lookup",
     "EmptyModel",
     "ConstantRBEModel",
     "LETBasedLQModel",
