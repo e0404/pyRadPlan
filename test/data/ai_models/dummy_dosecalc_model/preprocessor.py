@@ -9,7 +9,7 @@ predictive variance of the dose channel across the ensemble.
 import array_api_compat
 import torch
 
-from pyRadPlan.ml import BasePreprocessor
+from pyRadPlan.ai_models import BasePreprocessor
 from pyRadPlan.core.xp_utils import to_namespace
 
 

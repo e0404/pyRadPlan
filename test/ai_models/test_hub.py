@@ -115,7 +115,7 @@ def test_huggingface_preferred_over_valid_local_dir(tmp_path, monkeypatch):
     remote_dir = tmp_path / "remote"
     _make_model_dir(remote_dir)
 
-    cfg = _hub.get_ml_settings()
+    cfg = _hub.get_settings().ai_models
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
 
     def fake_snapshot(**kwargs):

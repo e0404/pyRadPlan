@@ -1,4 +1,4 @@
-"""AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ml`` model contract."""
+"""AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai_models`` model contract."""
 
 import json
 import logging
@@ -23,7 +23,8 @@ from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import batched_interp3d, array_meshgrid
 from pyRadPlan.core.xp_utils import to_namespace
 from pyRadPlan.geometry import get_beam_rotation_matrix
-from pyRadPlan.ml import load_model, get_ml_settings, resolve_model_dir
+from pyRadPlan.ai_models import load_model, resolve_model_dir
+from pyRadPlan._settings import get_settings
 from pydantic import ConfigDict, Field, field_validator
 
 from ._base_pencilbeam import PencilBeamEngineAbstract
@@ -45,7 +46,7 @@ class GridParametersConfig(PyRadPlanBaseModel):
 class DoseCalcModelConfig(PyRadPlanBaseModel):
     """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
 
-    The generic :func:`pyRadPlan.ml.load_model` loader only cares about
+    The generic :func:`pyRadPlan.ai_models.load_model` loader only cares about
     ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
     covers the extra fields the AI beamlet engine needs (sampling grid, quantities
     produced, training assumptions) which live in the free-form ``metadata`` section
@@ -84,7 +85,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     - Coordinate frames: world → BEV → beamlet-local via rotation/translation from the beam.
     - Grid construction: uniform spacing in depth and lateral with configurable ranges; axis
         order is (depth, lateral, lateral) to match model conventions.
-    - Model inference: model + preprocessor loaded via `pyRadPlan.ml.load_model` from the
+    - Model inference: model + preprocessor loaded via `pyRadPlan.ai_models.load_model` from the
         friendly name in `prop_dose_calc["model"]`; backend-agnostic arrays using the
         Array API (`self.xp`).
     - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
@@ -116,7 +117,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         pln : Any, optional
             Plan-like object providing engine configuration, by default ``None``. If
             provided, engine properties are derived from it and the model named in
-            `prop_dose_calc["model"]` is loaded (via `pyRadPlan.ml.load_model`) at
+            `prop_dose_calc["model"]` is loaded (via `pyRadPlan.ai_models.load_model`) at
             dose-calc init time.
 
         Returns
@@ -124,9 +125,11 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         None
         """
         self.ray_num_free_gpu_memory = None
-        self.max_batch_size = None
+        self.max_batch_size = 32
         self.ensemble_size = None
         self._requested_model = None
+        self.assumed_sparsity = 1e-2
+        self.dose_threshold = 1e-7
 
         if pln is not None:
             pdc = getattr(pln, "prop_dose_calc", None)
@@ -619,10 +622,10 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         """
         if self.ray_num_free_gpu_memory is not None and j % self.ray_num_free_gpu_memory == 0:
             # clear torch cache to avoid memory issues
-            if torch.cuda.is_available():
+            if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        ray = beam_info["beam"]["rays"][j]
+        ray = beam_info["beam"]["rays"][j].copy()
         ray["beam_index"] = beam_info["beam_index"]
         ray["ray_index"] = j
         ray["iso_center"] = beam_info["beam"]["iso_center"]
@@ -696,7 +699,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         precomputed = []
         for i in range(B):
             vals_dose = xp.where(vdose_sub, dose_vals[i, :], 0.0)
-            nz_mask = vals_dose > 0
+            nz_mask = vals_dose > self.dose_threshold
             entry = {
                 "ix": xp.asarray(ix_mask[nz_mask], dtype=xp.int64, device=self.device),
                 "physical_dose": xp.asarray(
@@ -840,7 +843,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             )
 
         model_dir = resolve_model_dir(
-            repo_id=f"{get_ml_settings().hf_org}/{self._requested_model}"
+            repo_id=f"{get_settings().ai_models.hf_org}/{self._requested_model}"
         )
         raw_config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
         self.model_cfg = DoseCalcModelConfig.model_validate(

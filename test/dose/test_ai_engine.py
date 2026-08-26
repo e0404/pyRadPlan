@@ -13,24 +13,24 @@ from pyRadPlan.stf import validate_stf
 torch = pytest.importorskip("torch", reason="torch is required for AI engine tests.")
 pytest.importorskip("safetensors", reason="safetensors is required for AI engine tests.")
 
-from pyRadPlan.ml import get_ml_settings  # noqa: E402
+from pyRadPlan._settings import get_settings  # noqa: E402
 
 DUMMY_MODEL = "dummy_dosecalc_model"
 
 
 @pytest.fixture(autouse=True)
-def _local_ml_models_dir(monkeypatch):
+def _local_ai_models_dir(monkeypatch):
     """Resolve models from the committed test-fixture folder, without hitting HuggingFace.
 
     ``resolve_model_dir`` now checks HuggingFace first whenever a ``repo_id`` is
-    resolvable (see ``pyRadPlan.ml._hub``), only falling back to a local copy if
+    resolvable (see ``pyRadPlan.ai_models._hub``), only falling back to a local copy if
     that fails. Forcing offline mode here keeps these tests hermetic and fast,
     and avoids the fallback path re-downloading/re-writing version metadata
     next to the committed fixture.
     """
-    models_dir = Path(__file__).resolve().parents[1] / "data" / "ml_models"
-    monkeypatch.setattr(get_ml_settings(), "local_models_dir", models_dir)
-    monkeypatch.setattr(get_ml_settings(), "offline", True)
+    models_dir = Path(__file__).resolve().parents[1] / "data" / "ai_models"
+    monkeypatch.setattr(get_settings().ai_models, "local_models_dir", models_dir)
+    monkeypatch.setattr(get_settings().ai_models, "offline", True)
 
 
 def test_AIBeamletEngine_init(test_data_protons):
