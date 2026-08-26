@@ -1,6 +1,6 @@
 """Constant relative biological effectiveness (RBE) model."""
 
-from typing import Any
+from typing import Any, ClassVar
 
 from pyRadPlan.bio_models._base import BiologicalModel
 from pyRadPlan.bio_models._evaluator import BioModelEvaluator, ParametricEvaluator
@@ -21,6 +21,8 @@ class ConstantRBEModel(BiologicalModel):
     """
 
     model = "constant_rbe"
+    model_aliases: ClassVar[list[str]] = ["constRBE"]
+    matrad_name: ClassVar[str] = "constRBE"
     required_quantities = ["physical_dose"]
     possible_radiation_modes = ["photons", "protons", "helium", "carbon", "oxygen", "VHEE"]
     default_report_quantity = "rbe_x_dose"

@@ -25,6 +25,8 @@ class BiologicalModel(ABC):
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
     model_aliases : list[str]
         Alternative names by which this model can be looked up.
+    matrad_name : str or None
+        Name of the equivalent matRad model (``pln.bioModel``); ``None`` if it is ``model``.
     required_quantities : list[str]
         Kernel quantities the machine data must provide (e.g. ``["physical_dose", "let"]``).
     possible_radiation_modes : list[str]
@@ -40,6 +42,7 @@ class BiologicalModel(ABC):
 
     model: ClassVar[str]
     model_aliases: ClassVar[list[str]] = []
+    matrad_name: ClassVar[Optional[str]] = None
     required_quantities: ClassVar[list[str]] = []
     possible_radiation_modes: ClassVar[list[str]]
     default_report_quantity: ClassVar[str] = "physical_dose"
@@ -64,6 +67,10 @@ class BiologicalModel(ABC):
     def to_dict(self) -> dict[str, Any]:
         """Serialisable specification: ``{"model": <name>, **parameters}``."""
         return {"model": self.model, **self._parameters}
+
+    def to_matrad(self) -> str:
+        """Model name as used by matRad's ``pln.bioModel``."""
+        return self.matrad_name or self.model
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, BiologicalModel):

@@ -28,6 +28,7 @@ from ._factory import (
     available_bio_models,
     get_bio_model,
     create_bio_model,
+    bio_model_spec_from_matrad,
     BioModelSpec,
 )
 
@@ -70,5 +71,6 @@ __all__ = [
     "available_bio_models",
     "get_bio_model",
     "create_bio_model",
+    "bio_model_spec_from_matrad",
     "BioModelSpec",
 ]

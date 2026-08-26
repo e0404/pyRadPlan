@@ -195,7 +195,7 @@ def test_plan_bio_model_from_dict_and_instance():
     assert isinstance(pln.bio_model, ConstantRBEModel)
     assert pln.bio_model.rbe == 1.0
     assert pln.model_dump()["bio_model"] == {"model": "constant_rbe", "rbe": 1.0}
-    assert pln.to_matrad()["bioModel"] == "constant_rbe"
+    assert pln.to_matrad()["bioModel"] == "constRBE"
 
     model = Wedenberg(p1=0.5)
     pln = IonPlan(radiation_mode="protons", bio_model=model)
@@ -241,3 +241,28 @@ def test_plan_dose_convention():
 
     with pytest.raises(ValidationError):
         IonPlan(radiation_mode="protons", dose_convention="per_course")
+
+
+def test_plan_bio_model_matrad_names():
+    pln = create_pln({"radiationMode": "protons", "bioModel": "constRBE"})
+    assert isinstance(pln.bio_model, ConstantRBEModel)
+    assert pln.to_matrad()["bioModel"] == "constRBE"
+    assert (
+        create_pln({"radiationMode": "carbon", "bioModel": "LEM"}).to_matrad()["bioModel"] == "LEM"
+    )
+    assert IonPlan(radiation_mode="protons", bio_model="WED").to_matrad()["bioModel"] == "WED"
+
+
+def test_plan_bio_model_from_matrad_struct_drops_metadata():
+    struct = {
+        "model": "constRBE",
+        "RBE": 1.0,
+        "possibleRadiationModes": ["protons"],
+        "requiredQuantities": ["physicalDose"],
+    }
+    pln = create_pln({"radiationMode": "protons", "bioModel": struct})
+    assert isinstance(pln.bio_model, ConstantRBEModel)
+    assert pln.bio_model.rbe == 1.0
+
+    # the default of the radiation mode is applied for camelCase input as well
+    assert create_pln({"radiationMode": "carbon"}).bio_model.model == "kernel_based_lq"

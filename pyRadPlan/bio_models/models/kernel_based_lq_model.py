@@ -32,6 +32,7 @@ class KernelBasedLQModel(LQModel):
 
     model = "kernel_based_lq"
     model_aliases: ClassVar[list[str]] = ["LEM"]
+    matrad_name: ClassVar[str] = "LEM"
     required_quantities = ["physical_dose", "alpha", "beta"]
     possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
     kernel_quantities = ["alpha", "beta"]

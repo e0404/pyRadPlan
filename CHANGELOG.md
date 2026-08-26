@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Dij.rbe` (constant RBE) and `rbe_x_dose` derived either from LQ influence matrices or from the constant RBE; `alphax`/`betax` carry one column per CT scenario
 - GUI: biological model and dose convention selection in the plan widget
 
+- matRad interoperability of biological models: `pln.bioModel` names (`constRBE`, `LEM`) and model structs are understood on import (`bio_model_spec_from_matrad`), `Plan.to_matrad()` writes the matRad model name
 - `alpha_beta_influence_from_let` derives `alpha_dose` / `sqrt_beta_dose` matrices from physical dose and LET·dose matrices for LET-based models; the FRED engine uses it so that LET-based models yield alpha/beta influence matrices (`calc_bio_dose="auto"`); FRED stores the LET matrix under the canonical `let_dose` name
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment

@@ -19,7 +19,7 @@ from pydantic import (
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
-from pyRadPlan.bio_models import BiologicalModel, create_bio_model
+from pyRadPlan.bio_models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
@@ -125,7 +125,7 @@ class Plan(PyRadPlanBaseModel, ABC):
             return value
         context = info.context or {}
         if context.get("matRad"):
-            return value.model
+            return value.to_matrad()
         return value.to_dict()
 
     @field_validator("mult_scen", mode="before")
@@ -344,12 +344,14 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
             return data
 
         # obtain the radiation mode if we have a dictionary at our hands
+        # (camelCase keys stem from matRad structs)
         radiation_mode = data.get("radiation_mode")
-        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
-
-        # Since we also allow camelCase, try to get radiationMode if radiation_mode is not set
         if radiation_mode is None:
             radiation_mode = data.get("radiationMode")
+
+        if "bioModel" in data:
+            data["bio_model"] = bio_model_spec_from_matrad(data.pop("bioModel"))
+        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
 
         if radiation_mode == "photons":
             return PhotonPlan.model_validate(data)

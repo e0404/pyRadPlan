@@ -179,3 +179,45 @@ def get_bio_model(
     if not ok:
         raise ValueError(f"Biological model '{model.model}' not available: {msg}")
     return model
+
+
+def bio_model_spec_from_matrad(spec: Any) -> BioModelSpec:
+    """
+    Normalise a matRad ``pln.bioModel`` entry into a pyRadPlan model specification.
+
+    matRad stores either the model name or the model object as a struct whose fields include
+    the model name (``model``) next to non-parameter metadata (``possibleRadiationModes``,
+    ``requiredQuantities``, ...). Metadata fields are dropped; constructor parameters are
+    kept (camelCase keys are converted to snake_case, e.g. ``RBE`` to ``rbe``).
+
+    Parameters
+    ----------
+    spec : str, dict or BiologicalModel
+        The matRad entry. Names may be matRad names (``"constRBE"``, ``"LEM"``).
+
+    Returns
+    -------
+    str, dict or BiologicalModel
+        A specification accepted by :func:`create_bio_model`.
+    """
+    if not isinstance(spec, dict):
+        return spec
+    spec = dict(spec)
+    name = spec.pop("model", None) or spec.pop("name", None)
+    if name is None:
+        raise ValueError("A matRad bioModel struct needs a 'model' field.")
+    if name not in BIO_MODELS:
+        raise ValueError(
+            f"Unknown biological model '{name}'. Registered models: {sorted(BIO_MODELS)}"
+        )
+    accepted = set(inspect.signature(BIO_MODELS[name].__init__).parameters) - {"self"}
+    params, dropped = {}, []
+    for key, value in spec.items():
+        snake = to_snake(key) if any(c.isupper() for c in key) else key
+        if snake in accepted:
+            params[snake] = value
+        else:
+            dropped.append(key)
+    if dropped:
+        logger.info("Ignoring matRad bioModel fields %s for model '%s'.", dropped, name)
+    return {"model": name, **params}
