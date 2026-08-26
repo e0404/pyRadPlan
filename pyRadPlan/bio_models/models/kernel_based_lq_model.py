@@ -15,8 +15,8 @@ class KernelBasedLQModel(LQModel):
     class, where tissue classes are identified by their reference ``(alpha_x, beta_x)``
     pair. This is the standard workflow for heavy-ion therapy (LEM-style base data).
 
-    Class Attributes
-    ----------------
+    Attributes
+    ----------
     model : str
         ``"kernel_based_lq"`` (alias ``"LEM"``)
     required_quantities : list[str]

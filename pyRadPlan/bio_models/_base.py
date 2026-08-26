@@ -19,8 +19,8 @@ class BiologicalModel(ABC):
     :class:`~pyRadPlan.bio_models.BioModelEvaluator` created by :meth:`evaluator` for one
     dose calculation.
 
-    Class Attributes
-    ----------------
+    Attributes
+    ----------
     model : str
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
     model_aliases : list[str]

@@ -142,6 +142,25 @@ Attaching objectives to structures
 
 Objectives are pydantic models, so they can be serialized and shared as JSON.
 
+.. _concept_dose_convention:
+
+Dose convention
+~~~~~~~~~~~~~~~
+
+Dose influence matrices describe one fraction. ``pln.dose_convention`` states how dose values
+in objectives (``d_ref``, ``d_max``, ...) and in reported results are to be read:
+
+``"per_fraction"`` (default)
+    Objective doses are fraction doses and results are reported per fraction; nothing is
+    rescaled.
+
+``"total"``
+    Objective doses refer to the whole course and are divided by ``pln.num_of_fractions``
+    when the problem is set up (the objectives in the structure set are left untouched);
+    result doses are multiplied by ``num_of_fractions``.
+
+The optimizer logs which interpretation it applies.
+
 Compute backend
 ---------------
 

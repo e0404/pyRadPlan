@@ -56,7 +56,39 @@ Additional matrices are available for biological dose calculation in particle th
      - Per-beamlet √β-dose for the LQ model.
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
-resolved during optimization.
+resolved during optimization. A constant RBE is stored as the scalar ``dij.rbe`` instead of
+matrices.
+
+Biological models and LET
+-------------------------
+
+Which of the additional matrices a particle engine computes follows from ``pln.bio_model``
+(see :ref:`concept_bio_model`) and the machine data:
+
+* ``alpha_dose`` / ``sqrt_beta_dose`` are computed when the model provides α/β
+  (LET-based, kernel-based and tabulated models).
+* ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
+  requires LET (FRED, which scores LET only on request).
+
+Both can be overridden through the engine parameters ``calc_bio_dose`` and ``calc_let``,
+which accept ``"auto"`` (default), ``True`` or ``False``:
+
+.. code-block:: python
+
+    pln.bio_model = "MCN"
+    # keep only physical dose and LET; evaluate the LET-based model later
+    pln.prop_dose_calc = {"engine": "HongPB", "calc_bio_dose": False}
+
+Setting ``calc_bio_dose=True`` without a model providing α/β raises an error; switching
+``calc_let`` off does not affect LET-based models, which still receive the LET kernels
+internally. The FRED engine derives α/β matrices from its scored LET and therefore supports
+LET-based models only.
+
+During the calculation the model is bound to the machine and the reference photon parameters
+of the voxels (``dij.alphax`` / ``dij.betax`` from the structure set) through a
+:class:`~pyRadPlan.bio_models.BioModelEvaluator`; kernel- and table-based models select the
+tissue class of each voxel by exact match of ``(alpha_x, beta_x)`` against the classes of the
+base data.
 
 Grid information
 ~~~~~~~~~~~~~~~~

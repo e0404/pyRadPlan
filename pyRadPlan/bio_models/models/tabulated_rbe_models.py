@@ -41,8 +41,8 @@ class TabulatedRBEModel(LQModel):
     tissue_lookup : str
         How voxel ``(alpha_x, beta_x)`` pairs select a table tissue class (``"exact"``).
 
-    Class Attributes
-    ----------------
+    Attributes
+    ----------
     quantities_in_table : list[str]
         Names of the quantity columns in the loaded table (e.g. ``["alpha", "beta"]``).
     quantities_in_kernel : list[str]
