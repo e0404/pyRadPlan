@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Optional
@@ -44,6 +45,37 @@ class BiologicalModel(ABC):
     default_report_quantity: ClassVar[str] = "physical_dose"
     provides_alpha_beta: ClassVar[bool] = False
     requires_let: ClassVar[bool] = False
+
+    _parameters: dict[str, Any]
+
+    def __new__(cls, *args: Any, **kwargs: Any):
+        # Remember the explicitly passed constructor arguments so that a model can be
+        # serialised back into the {"model": ..., **parameters} form accepted by the factory.
+        obj = super().__new__(cls)
+        bound = inspect.signature(cls.__init__).bind(obj, *args, **kwargs)
+        obj._parameters = {k: v for k, v in bound.arguments.items() if k != "self"}
+        return obj
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Constructor arguments this model was created with (explicitly passed ones)."""
+        return dict(self._parameters)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialisable specification: ``{"model": <name>, **parameters}``."""
+        return {"model": self.model, **self._parameters}
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BiologicalModel):
+            return NotImplemented
+        return type(self) is type(other) and _params_equal(self._parameters, other._parameters)
+
+    def __hash__(self) -> int:
+        return hash((type(self), repr(sorted(self._parameters.items()))))
+
+    def __repr__(self) -> str:
+        params = ", ".join(f"{k}={v!r}" for k, v in self._parameters.items())
+        return f"{type(self).__name__}({params})"
 
     @abstractmethod
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
@@ -105,6 +137,21 @@ class BiologicalModel(ABC):
         ok, msg = self.is_available(radiation_mode, provided_quantities)
         if not ok:
             raise ValueError(f"Biological model '{self.model}' not valid: {msg}")
+
+
+def _params_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if a.keys() != b.keys():
+        return False
+    for key in a:
+        try:
+            equal = bool(a[key] == b[key])
+        except ValueError:  # array-valued parameter
+            import numpy as np
+
+            equal = np.array_equal(a[key], b[key])
+        if not equal:
+            return False
+    return True
 
 
 # Backwards-compatible name

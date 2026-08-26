@@ -21,7 +21,13 @@ from .models.let_based_lq_models import (
 from .models.kernel_based_lq_model import KernelBasedLQModel
 from .models.lq_models import LQModel
 from .models.tabulated_rbe_models import TabulatedRBEModel, TabulatedAlphaBetaModel
-from ._factory import register_model, get_available_models, get_bio_model
+from ._factory import (
+    register_model,
+    get_available_models,
+    get_bio_model,
+    create_bio_model,
+    BioModelSpec,
+)
 
 register_model(EmptyModel)
 register_model(ConstantRBEModel)
@@ -59,4 +65,6 @@ __all__ = [
     "register_model",
     "get_available_models",
     "get_bio_model",
+    "create_bio_model",
+    "BioModelSpec",
 ]

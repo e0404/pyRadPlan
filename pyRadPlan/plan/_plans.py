@@ -5,18 +5,21 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
-from typing import Dict, Any, List, Union, ClassVar
+from typing import Dict, Any, List, Union, ClassVar, Optional
 from copy import deepcopy
 
 from pydantic import (
     Field,
     field_validator,
+    field_serializer,
+    SerializationInfo,
     ValidationError,
     model_validator,
 )
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
+from pyRadPlan.bio_models import BiologicalModel, create_bio_model
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
@@ -60,7 +63,11 @@ class Plan(PyRadPlanBaseModel, ABC):
     machine: Union[Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
-    bio_model: Union[str, Any] = Field(default=None)
+    bio_model: Optional[Any] = Field(
+        default=None,
+        description="Biological model: name, {'model': name, **parameters} or instance. "
+        "Defaults per radiation mode.",
+    )
 
     radiation_mode: str
 
@@ -83,11 +90,32 @@ class Plan(PyRadPlanBaseModel, ABC):
         raise NotImplementedError("This method should be overridden in derived classes")
 
     @model_validator(mode="after")
-    def set_default_bio_model(self) -> "Plan":
-        """Set bio_model from default_bio_models if not explicitly provided."""
-        if self.bio_model is None:
-            self.bio_model = default_bio_models.get(self.radiation_mode, "none")
+    def validate_bio_model(self) -> "Plan":
+        """
+        Resolve ``bio_model`` into a :class:`BiologicalModel` instance.
+
+        Accepts a model name, a ``{"model": name, **parameters}`` dict or an instance;
+        falls back to the per-modality default. The model must support the plan's
+        radiation mode; availability against the machine data is checked by the dose
+        engine.
+        """
+        spec = self.bio_model
+        if spec is None:
+            spec = default_bio_models.get(self.radiation_mode, "none")
+        if isinstance(spec, BiologicalModel):
+            create_bio_model(spec, self.radiation_mode)  # radiation mode check only
+        else:
+            self.bio_model = create_bio_model(spec, self.radiation_mode)
         return self
+
+    @field_serializer("bio_model")
+    def _serialize_bio_model(self, value: Any, info: SerializationInfo) -> Any:
+        if not isinstance(value, BiologicalModel):
+            return value
+        context = info.context or {}
+        if context.get("matRad"):
+            return value.model
+        return value.to_dict()
 
     @field_validator("mult_scen", mode="before")
     @classmethod

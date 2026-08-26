@@ -29,7 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
-from pyRadPlan.bio_models import get_bio_model, BiologicalModel
+from pyRadPlan.bio_models import get_bio_model
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -576,12 +576,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Load machine file from base data folder
         self._machine = self.load_machine(radiation_mode, machine)
 
-        if isinstance(self.bio_model, str):
+        if self.bio_model is not None:
             self.bio_model = get_bio_model(
                 self.bio_model, radiation_mode, self._machine.provided_quantities()
             )
-        elif isinstance(self.bio_model, BiologicalModel):
-            self.bio_model.validate_for(radiation_mode, self._machine.provided_quantities())
 
         # TODO: this is currently not needed, but may be needed in the future
         # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)

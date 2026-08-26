@@ -331,7 +331,7 @@ def test_carbon_cd_influence_bio_model_unavailable(test_data_carbon):
 
 def test_carbon_cd_influence_bio_model_unknown(test_data_carbon):
     pln, ct, cst, stf, dij, result = test_data_carbon
-    pln.bio_model = "does_not_exist"
 
+    # the plan validates the model name on assignment already
     with pytest.raises(ValueError, match="Unknown biological model"):
-        calc_dose_influence(ct, cst, stf, pln)
+        pln.bio_model = "does_not_exist"

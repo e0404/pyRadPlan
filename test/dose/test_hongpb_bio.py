@@ -98,6 +98,13 @@ def test_protons_constant_rbe(test_data_protons):
     assert np.allclose(rbe_x, 1.1 * phys)
 
 
+def test_protons_constant_rbe_parameter_from_plan(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = {"model": "constant_rbe", "rbe": 1.0}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.rbe == pytest.approx(1.0)
+
+
 def test_protons_bio_model_none_has_no_bio_matrices(test_data_protons):
     pln, ct, cst, stf, dij, result = test_data_protons
     pln.bio_model = "none"

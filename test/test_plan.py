@@ -1,6 +1,8 @@
 import pytest
+from pydantic import ValidationError
 from pyRadPlan.scenarios import NominalScenario
 from pyRadPlan.plan import create_pln, PhotonPlan, IonPlan
+from pyRadPlan.bio_models import BiologicalModel, ConstantRBEModel, Wedenberg
 
 
 def test_create_pln_no_args():
@@ -99,7 +101,7 @@ def test_create_pln_dict_photons_snake():
     # print(set(pln_dict) ^ set(pln_from_dict))
     pln_dict.pop("mult_scen")
     pln_from_dict.pop("mult_scen")
-    assert pln_from_dict.pop("bio_model") == "none"
+    assert pln_from_dict.pop("bio_model") == {"model": "none"}
     assert pln_dict == pln_from_dict
 
 
@@ -149,7 +151,7 @@ def test_create_pln_dict_photons_camel():
 
     pln_to_dict = pln.model_dump()
     pln_to_dict.pop("mult_scen")
-    assert pln_to_dict.pop("bio_model") == "none"
+    assert pln_to_dict.pop("bio_model") == {"model": "none"}
     assert pln_dict_snake == pln_to_dict
 
     pln_to_dict_camel = pln.to_matrad()
@@ -174,11 +176,49 @@ def test_plan_to_matrad():
 )
 def test_ion_plan_default_bio_model(radiation_mode, expected):
     pln = IonPlan(radiation_mode=radiation_mode)
-    assert pln.bio_model == expected
-    assert create_pln({"radiation_mode": radiation_mode}).bio_model == expected
+    assert isinstance(pln.bio_model, BiologicalModel)
+    assert pln.bio_model.model == expected
+    assert create_pln({"radiation_mode": radiation_mode}).bio_model.model == expected
 
 
 def test_plan_explicit_bio_model_is_kept():
-    assert IonPlan(radiation_mode="protons", bio_model="WED").bio_model == "WED"
-    assert create_pln({"radiation_mode": "carbon", "bio_model": "LSM"}).bio_model == "LSM"
-    assert PhotonPlan().bio_model == "none"
+    assert IonPlan(radiation_mode="protons", bio_model="WED").bio_model.model == "WED"
+    assert create_pln({"radiation_mode": "carbon", "bio_model": "LSM"}).bio_model.model == "LSM"
+    assert PhotonPlan().bio_model.model == "none"
+
+
+def test_plan_bio_model_from_dict_and_instance():
+    pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert isinstance(pln.bio_model, ConstantRBEModel)
+    assert pln.bio_model.rbe == 1.0
+    assert pln.model_dump()["bio_model"] == {"model": "constant_rbe", "rbe": 1.0}
+    assert pln.to_matrad()["bioModel"] == "constant_rbe"
+
+    model = Wedenberg(p1=0.5)
+    pln = IonPlan(radiation_mode="protons", bio_model=model)
+    assert pln.bio_model is model
+
+    # camelCase keys are accepted like everywhere else in the plan
+    pln = create_pln(
+        {"radiationMode": "protons", "bioModel": {"model": "constant_rbe", "rbe": 1.2}}
+    )
+    assert pln.bio_model.rbe == 1.2
+
+
+def test_plan_bio_model_assignment_is_validated():
+    pln = IonPlan(radiation_mode="protons")
+    pln.bio_model = "MCN"
+    assert pln.bio_model.model == "MCN"
+    with pytest.raises(ValidationError):
+        pln.bio_model = "HEL"  # helium only
+    with pytest.raises(ValidationError):
+        pln.bio_model = "does_not_exist"
+    with pytest.raises(ValidationError):
+        pln.bio_model = {"model": "constant_rbe", "rbee": 1.0}
+
+
+def test_plan_round_trip_keeps_bio_model_parameters():
+    pln = IonPlan(radiation_mode="carbon", bio_model={"model": "LSM", "upper_let_threshold": 20.0})
+    pln2 = create_pln(pln.model_dump())
+    assert pln2.bio_model == pln.bio_model
+    assert pln2.bio_model.p_upperLETThreshold == 20.0

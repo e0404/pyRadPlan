@@ -1,8 +1,14 @@
 from __future__ import annotations
+import inspect
 import logging
 import warnings
-from typing import List
+from typing import Any, List, Optional, Union
+
+from pydantic.alias_generators import to_snake
+
 from pyRadPlan.bio_models._base import BiologicalModel
+
+BioModelSpec = Union[str, dict[str, Any], BiologicalModel]
 
 BIO_MODELS = {}
 
@@ -82,24 +88,82 @@ def get_available_models(
     return result
 
 
-def get_bio_model(
-    model_id: str, radiation_mode: str, provided_quantities: List[str]
-) -> BiologicalModel:
+def create_bio_model(spec: BioModelSpec, radiation_mode: Optional[str] = None) -> BiologicalModel:
     """
-    Instantiate a biological model by name.
+    Create a biological model from a name, a specification dict or an instance.
+
+    Parameters
+    ----------
+    spec : str | dict | BiologicalModel
+        Model name (``"constant_rbe"``, ``"WED"``, ...), a dict ``{"model": <name>,
+        **constructor arguments}`` (camelCase keys are accepted), or an existing model.
+    radiation_mode : str, optional
+        If given, the model must support this modality.
 
     Raises
     ------
     ValueError
-        If the model is unknown, or registered but not available for the given
-        radiation mode / provided quantities.
+        Unknown model name, unknown / invalid constructor arguments, or a model that does
+        not support ``radiation_mode``.
     """
-    if model_id not in BIO_MODELS:
+    if isinstance(spec, BiologicalModel):
+        model = spec
+    else:
+        if isinstance(spec, str):
+            name, kwargs = spec, {}
+        elif isinstance(spec, dict):
+            # camelCase keys -> snake_case; leave names like 'p1' untouched
+            kwargs = {
+                (to_snake(k) if any(c.isupper() for c in k) else k): v for k, v in spec.items()
+            }
+            name = kwargs.pop("model", None) or kwargs.pop("name", None)
+            if name is None:
+                raise ValueError(
+                    "Biological model specification dict needs a 'model' entry, "
+                    f"got keys {sorted(spec)}"
+                )
+        else:
+            raise ValueError(
+                f"Cannot create a biological model from {type(spec).__name__}; "
+                "expected a name, a dict or a BiologicalModel."
+            )
+
+        if name not in BIO_MODELS:
+            raise ValueError(
+                f"Unknown biological model '{name}'. Registered models: {sorted(BIO_MODELS)}"
+            )
+        cls = BIO_MODELS[name]
+        try:
+            model = cls(**kwargs)
+        except TypeError as exc:
+            accepted = [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+            raise ValueError(
+                f"Invalid parameters for biological model '{name}': {exc}. "
+                f"Accepted parameters: {accepted}"
+            ) from exc
+
+    if radiation_mode is not None and radiation_mode not in model.possible_radiation_modes:
         raise ValueError(
-            f"Unknown biological model '{model_id}'. Registered models: {sorted(BIO_MODELS)}"
+            f"Biological model '{model.model}' does not support radiation mode "
+            f"'{radiation_mode}' (supports {model.possible_radiation_modes})."
         )
-    available = get_available_models(radiation_mode, provided_quantities)
-    if model_id not in available:
-        _, msg = BIO_MODELS[model_id]().is_available(radiation_mode, provided_quantities)
-        raise ValueError(f"Biological model '{model_id}' not available: {msg}")
-    return available[model_id]()
+    return model
+
+
+def get_bio_model(
+    spec: BioModelSpec, radiation_mode: str, provided_quantities: List[str]
+) -> BiologicalModel:
+    """
+    Create a biological model and check it against a radiation mode and machine data.
+
+    Raises
+    ------
+    ValueError
+        If the model is unknown, its parameters are invalid, or it is not available for
+        the given radiation mode / provided quantities.
+    """
+    model = create_bio_model(spec, radiation_mode)
+    ok, msg = model.is_available(radiation_mode, provided_quantities)
+    if not ok:
+        raise ValueError(f"Biological model '{model.model}' not available: {msg}")
+    return model
