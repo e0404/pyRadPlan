@@ -80,7 +80,7 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         if self._calc_let:
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
-        if self._calc_bio_dose:
+        if self._calc_bio_dose and "v_alpha_x" in bixel:
             alpha, beta = self._bio_evaluator.bixel_alpha_beta(bixel, kernels)
             bixel["alpha_dose"] = bixel["physical_dose"] * alpha
             bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(beta)

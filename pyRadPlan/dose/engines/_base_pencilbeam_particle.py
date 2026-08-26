@@ -283,8 +283,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self._use_let_kernel:
             used_kernels["let"] = kernel["let"]
 
-        # Biological model kernels (1-D or (n_tissue_classes, n_depths) arrays)
-        if self._calc_bio_dose:
+        # Biological model kernels (1-D or (n_tissue_classes, n_depths) arrays); bixels
+        # without tissue parameters (lateral cutoff calibration) only need physical dose
+        if self._calc_bio_dose and "v_alpha_x" in bixel:
             used_kernels.update(self._bio_evaluator.kernel_quantities(kernel))
 
         # Interpolate all fields in X
@@ -802,7 +803,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 if cut_off_level == 1:
                     continue
                 # Create a dummy bixel calculating radial dose distribution for the current
-                # depth
+                # depth (physical dose only: no tissue parameters, hence no bio evaluation)
                 bixel = {
                     "energy_ix": energy_ix,
                     "kernel": base_kernel.to_namespace(np),
@@ -813,8 +814,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                     ],  # TODO: check if this result is correct (rounded but may be right)
                     "rad_depths": (current_depth + base_kernel.offset)
                     * np.ones_like(radial_dist_sq),
-                    "v_alpha_x": 0.5 * np.ones((len(radial_dist_sq),)),
-                    "v_beta_x": 0.05 * np.ones((len(radial_dist_sq),)),
                     "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
                     "ix": np.arange(len(radial_dist_sq)),
                     "rad_depth_offset": 0,

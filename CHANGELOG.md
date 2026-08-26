@@ -115,6 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- particle pencil-beam lateral cutoff calibration no longer evaluates the biological model on a dummy bixel with hard-coded tissue parameters (failed for models without a (0.5, 0.05) tissue class)
 - IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
   it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
 - IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it

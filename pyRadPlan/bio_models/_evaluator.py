@@ -154,16 +154,17 @@ class TabulatedSpectrumEvaluator(BioModelEvaluator):
             float(energy): model.dose_average(kernel, fragments)
             for energy, kernel in machine.pb_kernels.items()
         }
-        self._converted: dict[float, dict[str, Any]] = {}
+        self._converted: dict[tuple, dict[str, Any]] = {}
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
-        energy = float(kernel["energy"])
-        if energy not in self._converted:
-            xp = array_api_compat.array_namespace(kernel["depths"])
-            self._converted[energy] = {
-                name: xp.asarray(arr) for name, arr in self._tables[energy].items()
+        xp = array_api_compat.array_namespace(kernel["depths"])
+        device = array_api_compat.device(kernel["depths"])
+        key = (float(kernel["energy"]), xp, device)
+        if key not in self._converted:
+            self._converted[key] = {
+                name: xp.asarray(arr, device=device) for name, arr in self._tables[key[0]].items()
             }
-        return self._converted[energy]
+        return self._converted[key]
 
     def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
         rows = self.lookup.gather(bixel, kernels, self.kernel_fields)

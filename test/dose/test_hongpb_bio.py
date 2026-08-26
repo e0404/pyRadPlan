@@ -13,6 +13,7 @@ import SimpleITK as sitk
 
 import pyRadPlan
 from pyRadPlan import calc_dose_influence
+from pyRadPlan.dose.engines._base import DoseEngineBase
 from pyRadPlan.machines import load_machine_from_mat, validate_machine
 
 
@@ -176,3 +177,54 @@ def test_carbon_kernel_based_lq_alpha_beta_matrices(test_data_carbon):
         2 * bx[valid]
     )
     assert np.allclose(np.asarray(res["rbe_x_dose"]).ravel(), expected, rtol=1e-5, atol=1e-8)
+
+
+def _attach_synthetic_spectra(machine, n_energies=20, seed=0):
+    """Give every kernel a random fragment fluence spectrum (H, C and electrons)."""
+    rng = np.random.default_rng(seed)
+    energies = np.geomspace(1.0, 400.0, n_energies)
+    for kernel in machine.pb_kernels.values():
+        n_depths = kernel.depths.shape[0]
+        spectra = [rng.random((n_energies, n_depths)) for _ in range(3)]
+        kernel.fluence_spectrum = {
+            "spectra": {
+                "Z": np.asarray([1, 6, -1]),
+                "A": np.asarray([1.0, 12.0, np.nan]),
+                "fluenceSpectrum": spectra,
+                "energyBin": [energies] * 3,
+                "fluenceDepth": [s.sum(axis=0) for s in spectra],
+            }
+        }
+
+
+def test_carbon_tabulated_alpha_beta_matrices(test_data_carbon, monkeypatch):
+    pln, ct, cst, stf, dij, result = test_data_carbon
+    machine_file = Path(pyRadPlan.__file__).parent / "data" / "machines" / "carbon_Generic.mat"
+    machine = validate_machine(load_machine_from_mat(machine_file))
+    _attach_synthetic_spectra(machine)
+    assert "fluence" in machine.provided_quantities()
+    monkeypatch.setattr(DoseEngineBase, "load_machine", staticmethod(lambda *_: machine))
+
+    pln.bio_model = "dose_average_alpha_beta"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.alpha_dose is not None and dij_py.sqrt_beta_dose is not None
+
+    e = _per_entry(dij_py)
+    assert e["alpha"].size > 0
+    assert np.all(np.isfinite(e["alpha"])) and np.all(np.isfinite(e["sqrt_beta"]))
+    assert np.all(e["alpha"] > 0) and np.all(e["sqrt_beta"] > 0)
+
+    # entries are depth-interpolated rows of the dose-averaged tables of the voxels' class
+    evaluator = pln.bio_model.evaluator(
+        machine, {"alpha_x": dij_py.alphax, "beta_x": dij_py.betax}
+    )
+    tissue = np.flatnonzero(
+        (pln.bio_model.table_alpha_x == np.unique(e["alpha_x"]))
+        & (pln.bio_model.table_beta_x == np.unique(e["beta_x"]))
+    )
+    assert tissue.size == 1
+    alphas = np.concatenate([t["alpha"][tissue[0]] for t in evaluator._tables.values()])
+    sqrt_betas = np.concatenate([t["sqrt_beta"][tissue[0]] for t in evaluator._tables.values()])
+    assert np.all(e["alpha"] >= alphas.min() - 1e-9) and np.all(e["alpha"] <= alphas.max() + 1e-9)
+    assert np.all(e["sqrt_beta"] >= sqrt_betas.min() - 1e-9)
+    assert np.all(e["sqrt_beta"] <= sqrt_betas.max() + 1e-9)
