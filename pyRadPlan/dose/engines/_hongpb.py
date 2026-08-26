@@ -77,10 +77,10 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         if xp.any(xp.isnan(bixel["physical_dose"])) or xp.any(bixel["physical_dose"] < 0):
             raise ValueError("Error in particle dose calculation.")
 
-        if self.calc_let:
+        if self._calc_let:
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             alpha, beta = self._bio_evaluator.bixel_alpha_beta(bixel, kernels)
             bixel["alpha_dose"] = bixel["physical_dose"] * alpha
             bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(beta)

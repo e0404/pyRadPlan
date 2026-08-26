@@ -105,6 +105,34 @@ def test_protons_constant_rbe_parameter_from_plan(test_data_protons):
     assert dij_py.rbe == pytest.approx(1.0)
 
 
+def test_calc_bio_dose_off_keeps_let_for_on_the_fly_models(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc = {"calc_bio_dose": False}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.alpha_dose is None
+    assert dij_py.sqrt_beta_dose is None
+    assert dij_py.let_dose is not None
+
+
+def test_calc_let_off_still_feeds_let_based_model(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc = {"calc_let": False}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.let_dose is None
+    assert dij_py.alpha_dose is not None
+    assert dij_py.alpha_dose.flat[0].count_nonzero() > 0
+
+
+def test_calc_bio_dose_true_requires_alpha_beta_model(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "constant_rbe"
+    pln.prop_dose_calc = {"calc_bio_dose": True}
+    with pytest.raises(ValueError, match="calc_bio_dose=True requires"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
 def test_protons_bio_model_none_has_no_bio_matrices(test_data_protons):
     pln, ct, cst, stf, dij, result = test_data_protons
     pln.bio_model = "none"

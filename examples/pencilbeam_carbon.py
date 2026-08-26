@@ -39,7 +39,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="carbon", machine="Generic")
 pln.prop_stf = {"bixel_width": 4}
-pln.prop_dose_calc = {"calc_bio_dose": True, "dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
+pln.prop_dose_calc = {"dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
 
 pln.prop_opt = {"solver": "scipy"}
 

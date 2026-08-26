@@ -2,7 +2,7 @@
 
 import warnings
 from abc import abstractmethod
-from typing import cast, ClassVar, Literal, Any, Optional
+from typing import cast, ClassVar, Literal, Any, Optional, Union
 import logging
 import time
 from copy import deepcopy
@@ -38,10 +38,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     Attributes
     ----------
-    calc_let : bool
-        Boolean which defines if LET should be calculated.
-    calc_bio_dose : bool
-        Boolean to query biological dose calculation.
+    calc_let : Literal["auto"] or bool
+        Whether the LET influence matrix is computed. ``"auto"`` computes it whenever the
+        machine provides LET kernels; ``False`` skips the matrix (the LET kernel is still used
+        internally if the biological model needs it).
+    calc_bio_dose : Literal["auto"] or bool
+        Whether alpha/beta influence matrices are computed. ``"auto"`` computes them whenever
+        the plan's biological model provides alpha/beta; ``False`` skips them (e.g. to evaluate
+        an LET-based model on the fly later on); ``True`` requires a model providing alpha/beta.
     air_offset_correction : bool
         Corrects WEPL for SSD difference to kernel database.
     lateral_model : Literal["auto", "single", "double", "multi", "fastest"]
@@ -53,8 +57,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         the dose drops to the requested cutoff
     """
 
-    calc_let: bool = True
-    calc_bio_dose: bool = False
+    calc_let: Union[Literal["auto"], bool] = "auto"
+    calc_bio_dose: Union[Literal["auto"], bool] = "auto"
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
     cut_off_method: Literal["integral", "relative"] = "integral"
@@ -67,6 +71,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
         self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
+        # Resolved from calc_bio_dose / calc_let, the model and the machine in _init_bio_model
+        self._calc_bio_dose = False
+        self._calc_let = False
+        self._use_let_kernel = False
 
         self._kernel_cache = {}
 
@@ -275,12 +283,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         else:
             raise ValueError("Invalid Lateral Model")
 
-        # LET
-        if self.calc_let:
+        # LET (matrix output and/or input to the biological model)
+        if self._use_let_kernel:
             used_kernels["let"] = kernel["let"]
 
         # Biological model kernels (1-D or (n_tissue_classes, n_depths) arrays)
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             used_kernels.update(self._bio_evaluator.kernel_quantities(kernel))
 
         # Interpolate all fields in X
@@ -368,7 +376,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if "lat_dists" in curr_ray:
             curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
 
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             curr_bixel["v_alpha_x"] = curr_ray["v_alpha_x"][curr_ix]
             curr_bixel["v_beta_x"] = curr_ray["v_beta_x"][curr_ix]
 
@@ -417,18 +425,11 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Omit field checks of fit_air_offset and BAMStoIsoDist as validated through machine model
 
-        # Biology: the model decides whether alpha/beta matrices and LET are needed
+        # Biology: resolves which alpha/beta and LET quantities are computed
         dij = self._init_bio_model(dij)
 
-        # Allocate LET container and let sparse matrix in dij struct
-        if self.calc_let:
-            if self._machine.has_let_kernel:
-                dij = self._allocate_let_container(dij)
-            else:
-                logger.warning(
-                    "No LET data found in machine data. LET calculation will be skipped."
-                )
-                self.calc_let = False
+        if self._calc_let:
+            dij = self._allocate_let_container(dij)
 
         self._effective_lateral_cutoff = self.geometric_lateral_cutoff
 
@@ -513,8 +514,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
         Create the biological model evaluator for this dose calculation.
 
-        Sets ``calc_bio_dose`` / ``calc_let`` from the model, stores the model's scalar
-        contributions on the dij and allocates the alpha/beta influence containers.
+        Resolves ``calc_bio_dose`` / ``calc_let`` against the model and the machine, stores the
+        model's scalar contributions on the dij and allocates the alpha/beta influence containers.
 
         Parameters
         ----------
@@ -526,23 +527,43 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             The updated dose influence matrix dictionary.
         """
-        if not isinstance(self.bio_model, BiologicalModel):
-            self.calc_bio_dose = False
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        provides_alpha_beta = model is not None and model.provides_alpha_beta
+
+        if self.calc_bio_dose == "auto":
+            self._calc_bio_dose = provides_alpha_beta
+        elif self.calc_bio_dose and not provides_alpha_beta:
+            raise ValueError(
+                "calc_bio_dose=True requires a biological model providing alpha/beta, "
+                f"but the plan's bio_model is {model!r}."
+            )
+        else:
+            self._calc_bio_dose = bool(self.calc_bio_dose)
+
+        if self.calc_let == "auto":
+            self._calc_let = self._machine.has_let_kernel
+        elif self.calc_let and not self._machine.has_let_kernel:
+            logger.warning("No LET data found in machine data. LET calculation will be skipped.")
+            self._calc_let = False
+        else:
+            self._calc_let = bool(self.calc_let)
+        self._use_let_kernel = self._calc_let or (
+            self._calc_bio_dose and model is not None and model.requires_let
+        )
+
+        if model is None:
             self._bio_evaluator = None
             return dij
 
         self._v_alpha_x = self.xp.asarray(dij["alphax"])
         self._v_beta_x = self.xp.asarray(dij["betax"])
 
-        self._bio_evaluator = self.bio_model.evaluator(
+        self._bio_evaluator = model.evaluator(
             self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
         )
         dij.update(self._bio_evaluator.dij_scalars())
 
-        self.calc_bio_dose = self.bio_model.provides_alpha_beta
-        if self.bio_model.requires_let:
-            self.calc_let = True
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             dij = self._allocate_bio_dose_container(dij)
         return dij
 
@@ -560,7 +581,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             The updated dose influence matrix dictionary with LET containers allocated.
         """
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             dij = self._allocate_quantity_matrices(dij, ["alpha_dose", "sqrt_beta_dose"])
 
         return dij
@@ -579,14 +600,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         dict
             The updated dose influence matrix dictionary with LET containers allocated.
         """
-        # Get MatRad Config instance for displaying warnings
-
-        if self._machine.has_let_kernel:
-            dij = self._allocate_quantity_matrices(dij, ["let_dose"])
-        else:
-            warnings.warn("LET not available in the machine data. LET will not be calculated.")
-
-        return dij
+        return self._allocate_quantity_matrices(dij, ["let_dose"])
 
     def _calc_lateral_particle_cut_off(self, cut_off_level, stf_element):
         # Sanity Checks
@@ -884,7 +898,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Reference LQ parameters of the voxels found by the ray tracer, per CT scenario
         # TODO: multi-scenario support (ray["ix"] currently only carries the first CT scenario)
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
             for s in range(self.mult_scen.num_of_ct_scen):
@@ -899,7 +913,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Gets number of scenario
         ct_scen = self.mult_scen.linear_mask[0][scen_idx]
 
-        if self.calc_bio_dose:
+        if self._calc_bio_dose:
             scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
             scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
 

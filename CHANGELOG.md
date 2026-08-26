@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `calc_let` and `calc_bio_dose` of the particle pencil-beam engines accept `"auto"` (new default): LET is computed whenever the machine provides it, alpha/beta influence matrices whenever `Plan.bio_model` provides them; `False` switches the matrices off explicitly (LET-based models still receive the LET kernel), `calc_bio_dose=True` without an alpha/beta-providing model raises
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
