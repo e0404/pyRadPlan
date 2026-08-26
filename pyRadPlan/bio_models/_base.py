@@ -2,7 +2,7 @@ from __future__ import annotations
 import inspect
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Optional, get_type_hints
 
 from ._evaluator import BioModelEvaluator, ParametricEvaluator
 
@@ -71,6 +71,38 @@ class BiologicalModel(ABC):
     def to_matrad(self) -> str:
         """Model name as used by matRad's ``pln.bioModel``."""
         return self.matrad_name or self.model
+
+    @classmethod
+    def config_model(cls) -> type:
+        """
+        Pydantic model of the constructor parameters (one field per parameter).
+
+        Generated lazily per class from the ``__init__`` signature; used to validate and
+        edit parameter dicts (e.g. in the GUI) analogous to
+        :meth:`~pyRadPlan.core.ConfigurableAlgorithm.config_model`.
+        """
+        if "_config_model" in cls.__dict__:
+            return cls.__dict__["_config_model"]
+
+        from pydantic import create_model
+        from pyRadPlan.core import AlgorithmConfig
+
+        try:
+            hints = get_type_hints(cls.__init__)
+        except (NameError, TypeError):
+            hints = {}
+        fields = {}
+        for name, param in inspect.signature(cls.__init__).parameters.items():
+            if name == "self" or param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+            default = ... if param.default is inspect.Parameter.empty else param.default
+            fields[name] = (hints.get(name, Any), default)
+        model = create_model(f"{cls.__name__}Config", __base__=AlgorithmConfig, **fields)
+        cls._config_model = model
+        return model
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, BiologicalModel):

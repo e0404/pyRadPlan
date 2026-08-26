@@ -30,6 +30,7 @@ from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.scenarios import available_scenario_models
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
+from ._tissue_dialog import TissueParametersDialog
 from ..ai import ai_disabled_reason
 
 _ION_MODES = list(IonPlan.available_radiation_modes)
@@ -76,6 +77,9 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Parameter overrides per biological model name (edited via the "…" button).
+        self._bio_params: dict[str, dict] = {}
+        self._bio_model_classes: dict[str, type[BiologicalModel]] = {}
         self._engines: dict[str, type] = {}
         #: True while syncing the form *from* the workspace, so programmatic
         #: widget changes don't register as user edits.
@@ -95,6 +99,7 @@ class PlanWidget(WorkspaceWidget):
             "engine": self._cmb_engine,
             "engine_props": self._btn_engine_config,
             "bio_model": self._cmb_bio_model,
+            "bio_params": self._btn_bio_config,
             "fractions": self._spn_fractions,
             "dose_convention": self._cmb_dose_convention,
             "gantry": self._txt_gantry,
@@ -268,6 +273,16 @@ class PlanWidget(WorkspaceWidget):
         #: Model instance of the workspace plan, kept so that Apply preserves its
         #: parameters as long as the selected model name is unchanged.
         self._pln_bio_model: Optional[BiologicalModel] = None
+        self._btn_bio_config = QPushButton("…")
+        self._btn_bio_config.setFixedWidth(28)
+        self._btn_bio_config.setToolTip("Edit the parameters of the selected biological model")
+        self._btn_bio_config.clicked.connect(self._on_bio_config)
+        self._cmb_bio_model.currentTextChanged.connect(self._update_bio_config_button)
+        bio_row = QHBoxLayout()
+        bio_row.setContentsMargins(0, 0, 0, 0)
+        bio_row.setSpacing(4)
+        bio_row.addWidget(self._cmb_bio_model, 1)
+        bio_row.addWidget(self._btn_bio_config)
 
         self._cmb_scenario = QComboBox()
         self._cmb_scenario.addItems(available_scenario_models())
@@ -284,10 +299,14 @@ class PlanWidget(WorkspaceWidget):
         )
 
         self._btn_tissue = QPushButton("Set tissue α/β")
-        self._set_not_implemented(self._btn_tissue, "Tissue parameter configuration")
+        self._btn_tissue.setToolTip(
+            "Edit the reference photon alpha_x / beta_x of the loaded structures"
+        )
+        self._btn_tissue.setEnabled(False)
+        self._btn_tissue.clicked.connect(self._on_tissue_parameters)
 
         grid.addWidget(QLabel("Biological model:"), 4, 0)
-        grid.addWidget(self._cmb_bio_model, 4, 1)
+        grid.addLayout(bio_row, 4, 1)
         grid.addWidget(QLabel("Scenario model:"), 4, 2)
         grid.addWidget(self._cmb_scenario, 4, 3)
 
@@ -422,6 +441,7 @@ class PlanWidget(WorkspaceWidget):
         self._bio_models_mode = radiation_mode
         models = available_bio_models(radiation_mode)
         names = [cls.model for cls in models]
+        self._bio_model_classes = {cls.model: cls for cls in models}
         self._cmb_bio_model.blockSignals(True)
         self._cmb_bio_model.clear()
         for cls in models:
@@ -438,10 +458,41 @@ class PlanWidget(WorkspaceWidget):
         else:
             self._cmb_bio_model.setCurrentText(default_bio_models.get(radiation_mode, "none"))
         self._cmb_bio_model.blockSignals(False)
+        self._update_bio_config_button()
+
+    def _update_bio_config_button(self, *_args) -> None:
+        cls = self._bio_model_classes.get(self._cmb_bio_model.currentText())
+        self._btn_bio_config.setEnabled(cls is not None and bool(cls.config_model().model_fields))
+
+    def _on_bio_config(self) -> None:
+        name = self._cmb_bio_model.currentText()
+        cls = self._bio_model_classes.get(name)
+        if cls is None:
+            return
+        dialog = ConfigFormDialog(
+            cls.config_model(),
+            initial=self._bio_params.get(name, {}),
+            title=f"Configure {name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._bio_params[name] = dialog.values()
+            self._update_dirty_state()
+
+    def _on_tissue_parameters(self) -> None:
+        cst = self._ws.cst
+        if cst is None:
+            return
+        dialog = TissueParametersDialog(cst, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.changed:
+            self._ws.cst = cst
 
     def _selected_bio_model(self) -> Any:
         """Model spec for the plan: the workspace instance if its name is still selected."""
         name = self._cmb_bio_model.currentText() or "none"
+        params = self._bio_params.get(name)
+        if params:
+            return {"model": name, **params}
         if self._pln_bio_model is not None and self._pln_bio_model.model == name:
             return self._pln_bio_model
         return name
@@ -488,6 +539,7 @@ class PlanWidget(WorkspaceWidget):
         finally:
             self._syncing = False
         self._mark_clean()
+        self._btn_tissue.setEnabled(self._ws.cst is not None)
         if self._ws.pln is None and self._ws.has("ct", "cst"):
             self._apply_default_plan()
 
@@ -526,8 +578,10 @@ class PlanWidget(WorkspaceWidget):
 
         bio_model = pln.bio_model if isinstance(pln.bio_model, BiologicalModel) else None
         self._pln_bio_model = bio_model
-        if bio_model is not None and self._cmb_bio_model.findText(bio_model.model) >= 0:
-            self._cmb_bio_model.setCurrentText(bio_model.model)
+        if bio_model is not None:
+            self._bio_params[bio_model.model] = dict(bio_model.parameters)
+            if self._cmb_bio_model.findText(bio_model.model) >= 0:
+                self._cmb_bio_model.setCurrentText(bio_model.model)
 
         machine = pln.machine if isinstance(pln.machine, str) else "Generic"
         self._cmb_machine.setEditText(machine)
@@ -829,6 +883,11 @@ class PlanWidget(WorkspaceWidget):
             "engine": engine,
             "engine_props": dict(self._engine_props.get(engine, {})),
             "bio_model": self._cmb_bio_model.currentText(),
+            "bio_params": json.dumps(
+                self._bio_params.get(self._cmb_bio_model.currentText(), {}),
+                default=str,
+                sort_keys=True,
+            ),
             "fractions": self._spn_fractions.value(),
             "dose_convention": self._cmb_dose_convention.currentData(),
             "gantry": self._safe_parse(self._txt_gantry.text()),

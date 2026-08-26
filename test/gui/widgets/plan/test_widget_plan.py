@@ -190,6 +190,55 @@ def test_dose_convention_round_trip(qapp):
     assert widget._cmb_dose_convention.currentData() == "per_fraction"
 
 
+def test_bio_model_parameters_round_trip(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("WED")
+    assert widget._btn_bio_config.isEnabled()
+    widget._bio_params["WED"] = {"p1": 0.5}
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
+    assert ws.pln.bio_model.p1_WED == 0.5
+
+    widget._cmb_bio_model.setCurrentText("none")
+    assert not widget._btn_bio_config.isEnabled()
+
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._bio_params["constant_rbe"] == {"rbe": 1.0}
+    assert widget._capture_state()["bio_params"] == '{"rbe": 1.0}'
+
+
+def test_bio_model_config_model():
+    from pyRadPlan.bio_models import ConstantRBEModel, EmptyModel, Wedenberg
+
+    assert set(Wedenberg.config_model().model_fields) == {"p0", "p1", "p2"}
+    assert Wedenberg.config_model()().p1 == 0.434
+    assert ConstantRBEModel.config_model()(rbe=1.0).rbe == 1.0
+    assert not EmptyModel.config_model().model_fields
+
+
+def test_tissue_dialog_edits_cst(qapp, test_data_protons):
+    from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
+
+    _, cst, _ = test_data_protons
+    widget, ws = _make_widget()
+    assert not widget._btn_tissue.isEnabled()
+    ws.cst = cst
+    assert widget._btn_tissue.isEnabled()
+
+    dialog = TissueParametersDialog(cst)
+    dialog.set_values(0, 0.2, 0.04)
+    dialog.accept()
+    assert dialog.changed
+    assert cst.vois[0].alpha_x == pytest.approx(0.2)
+    assert cst.vois[0].beta_x == pytest.approx(0.04)
+
+    dialog = TissueParametersDialog(cst)
+    dialog.accept()
+    assert not dialog.changed
+
+
 def test_iso_center_auto_omits_key(qapp):
     widget, ws = _make_widget()
     assert widget._chk_iso_auto.isChecked()

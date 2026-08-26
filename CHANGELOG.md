@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back; per-modality defaults (`constant_rbe` protons, `HEL` helium, `kernel_based_lq` carbon/oxygen, `none` photons)
 - `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective dose parameters and reported result doses refer to one fraction or to the total course; `Dij.compute_result_*` take `num_of_fractions` for the scaling and the optimizer logs the interpretation it applies
 - `Dij.rbe` (constant RBE) and `rbe_x_dose` derived either from LQ influence matrices or from the constant RBE; `alphax`/`betax` carry one column per CT scenario
-- GUI: biological model and dose convention selection in the plan widget
+- GUI: biological model and dose convention selection in the plan widget, a "…" dialog editing the model parameters (`BiologicalModel.config_model()`) and a "Set tissue α/β" table editing the reference photon LQ parameters of all structures
 
 - matRad interoperability of biological models: `pln.bioModel` names (`constRBE`, `LEM`) and model structs are understood on import (`bio_model_spec_from_matrad`), `Plan.to_matrad()` writes the matRad model name
 - `alpha_beta_influence_from_let` derives `alpha_dose` / `sqrt_beta_dose` matrices from physical dose and LET·dose matrices for LET-based models; the FRED engine uses it so that LET-based models yield alpha/beta influence matrices (`calc_bio_dose="auto"`); FRED stores the LET matrix under the canonical `let_dose` name
