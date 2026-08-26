@@ -71,10 +71,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
         self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
-        # Resolved from calc_bio_dose / calc_let, the model and the machine in _init_bio_model
-        self._calc_bio_dose = False
-        self._calc_let = False
-        self._use_let_kernel = False
 
         self._kernel_cache = {}
 
@@ -528,27 +524,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             The updated dose influence matrix dictionary.
         """
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        provides_alpha_beta = model is not None and model.provides_alpha_beta
-
-        if self.calc_bio_dose == "auto":
-            self._calc_bio_dose = provides_alpha_beta
-        elif self.calc_bio_dose and not provides_alpha_beta:
-            raise ValueError(
-                "calc_bio_dose=True requires a biological model providing alpha/beta, "
-                f"but the plan's bio_model is {model!r}."
-            )
-        else:
-            self._calc_bio_dose = bool(self.calc_bio_dose)
-
-        if self.calc_let == "auto":
-            self._calc_let = self._machine.has_let_kernel
-        elif self.calc_let and not self._machine.has_let_kernel:
-            logger.warning("No LET data found in machine data. LET calculation will be skipped.")
-            self._calc_let = False
-        else:
-            self._calc_let = bool(self.calc_let)
-        self._use_let_kernel = self._calc_let or (
-            self._calc_bio_dose and model is not None and model.requires_let
+        has_let = self._machine.has_let_kernel
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
+            self.calc_bio_dose, self.calc_let, let_available=has_let, let_auto=has_let
         )
 
         if model is None:

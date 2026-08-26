@@ -12,7 +12,7 @@ else:
 
 import warnings
 import time
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
@@ -29,7 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
-from pyRadPlan.bio_models import get_bio_model
+from pyRadPlan.bio_models import BiologicalModel, get_bio_model
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -174,6 +174,60 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             warn_on_overwrite=warn_when_property_changed,
             overwrite_source="pln.propDoseCalc",
         )
+
+    def _resolve_quantity_flags(
+        self,
+        calc_bio_dose: Union[Literal["auto"], bool],
+        calc_let: Union[Literal["auto"], bool],
+        *,
+        let_available: bool,
+        let_auto: bool,
+    ) -> tuple[bool, bool, bool]:
+        """
+        Resolve ``"auto"`` quantity switches against the biological model and the machine.
+
+        Parameters
+        ----------
+        calc_bio_dose : "auto" or bool
+            Requested alpha/beta influence calculation. ``"auto"`` follows the model's
+            ``provides_alpha_beta``; ``True`` without such a model raises.
+        calc_let : "auto" or bool
+            Requested LET influence calculation. ``"auto"`` resolves to ``let_auto``; ``True``
+            without LET data resolves to ``False`` with a warning.
+        let_available : bool
+            Whether the engine can produce LET at all.
+        let_auto : bool
+            Value ``calc_let="auto"`` resolves to.
+
+        Returns
+        -------
+        tuple[bool, bool, bool]
+            ``(calc_bio_dose, calc_let, use_let_kernel)``; the last one is True if LET is needed
+            either as output or as input to the biological model.
+        """
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        provides_alpha_beta = model is not None and model.provides_alpha_beta
+
+        if calc_bio_dose == "auto":
+            bio = provides_alpha_beta
+        elif calc_bio_dose and not provides_alpha_beta:
+            raise ValueError(
+                "calc_bio_dose=True requires a biological model providing alpha/beta, "
+                f"but the plan's bio_model is {model!r}."
+            )
+        else:
+            bio = bool(calc_bio_dose)
+
+        if calc_let == "auto":
+            let = let_auto and let_available
+        elif calc_let and not let_available:
+            logger.warning("No LET data found in machine data. LET calculation will be skipped.")
+            let = False
+        else:
+            let = bool(calc_let)
+
+        use_let_kernel = let or (bio and model is not None and model.requires_let)
+        return bio, let, use_let_kernel
 
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
@@ -586,6 +640,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             self.bio_model = get_bio_model(
                 self.bio_model, radiation_mode, self._machine.provided_quantities()
             )
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
 
         # TODO: this is currently not needed, but may be needed in the future
         # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)

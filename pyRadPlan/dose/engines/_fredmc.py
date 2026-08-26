@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union, cast, Literal
 import time
 import textwrap
 from pathlib import Path
@@ -34,6 +34,7 @@ import numpy as np
 import SimpleITK as sitk
 from scipy import sparse
 
+from ...bio_models import BiologicalModel
 from ...core import Grid
 from ...ct import CT, resample_ct
 from ...cst import StructureSet
@@ -60,8 +61,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
     available_versions = ["3.70.0", "3.76.0"]
 
     external_calculation: Union[str, bool]
-    calc_bio_dose: bool
-    calc_let: bool
+    calc_bio_dose: Union[Literal["auto"], bool]
+    calc_let: Union[Literal["auto"], bool]
 
     fred_version: str
     fred_cmd: str
@@ -90,8 +91,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self.external_calculation = False
 
         self.use_gpu = True
-        self.calc_let = False
-        self.calc_bio_dose = False
+        self.calc_let = "auto"
+        self.calc_bio_dose = "auto"
         self.scorers = ["Dose"]
         self.source_model = "gaussian"
         self.room_material = "Air"
@@ -908,7 +909,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             # Direct dose calculation
             dij["physical_dose"].flat[0] = sparse.csc_array(self.dose_cube.reshape(-1, 1))
 
-            if self.calc_let and self.let_cube is not None:
+            if self._calc_let and self.let_cube is not None:
                 dij["mLETd"].flat[0] = sparse.csc_array(
                     (
                         self.let_cube[self._vdose_grid] / 10,
@@ -944,7 +945,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
             dij["physical_dose"].flat[0] = self._conversion_factor * self.dose_cube
 
-            if self.calc_let and self.let_cube is not None:
+            if self._calc_let and self.let_cube is not None:
                 self.let_cube = sparse.csc_array(self.let_cube)
                 self.let_cube = self.let_cube[:, self.fred_order]
 
@@ -954,8 +955,6 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 # LETd * dose
                 dij["mLETDose"].flat[0] = dij["physical_dose"].flat[0] * dij["mLETd"].flat[0]
 
-        if self.calc_bio_dose:
-            logger.warning("Biological dose calculation is not implemented yet.")
         return dij
 
     def _check_saving_options(self) -> None:
@@ -1015,7 +1014,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             else:
                 logger.error(f"Unable to find file: {load_file_name}")
 
-            if self.calc_let:
+            if self._calc_let:
                 letd_dij_file = "Phantom.LETd.bin"
                 letd_file_name = os.path.join(dose_dij_folder, letd_dij_file)
 
@@ -1037,7 +1036,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             else:
                 logger.error(f"Unable to find file: {load_file_name}")
 
-            if self.calc_let:
+            if self._calc_let:
                 letd_dij_folder = dose_cube_folder
                 letd_cube_file_name = "Phantom.LETd.mhd"
 
@@ -1217,31 +1216,29 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 "Multiple scenarios are not supported for FRED calculations."
             )
 
-        # TODO: Add biomodel support
-        # if hasattr(self, 'bioModel') and isinstance(self.bioModel, matRad_LQLETbasedModel):
-        #     self._calc_bio_dose = True
-        # else:
-        #     self._calc_bio_dose = False
+        # TODO: alpha/beta influence matrices from LET-based models are not implemented;
+        # "auto" scores LET whenever the model needs it so that they can be evaluated later
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        if self.calc_bio_dose is True:
+            raise NotImplementedError(
+                "Biological dose calculation (calc_bio_dose=True) is not implemented for FRED."
+            )
+        if self.calc_bio_dose == "auto" and model is not None and model.provides_alpha_beta:
+            logger.warning(
+                "Biological dose calculation is not implemented for FRED; alpha/beta influence "
+                "matrices for %r are skipped (set calc_bio_dose=False to silence this).",
+                model,
+            )
+        self._calc_bio_dose, self._calc_let, _ = self._resolve_quantity_flags(
+            False,
+            self.calc_let,
+            let_available=True,
+            let_auto=model is not None and model.requires_let,
+        )
+        if model is not None:
+            dij.update(model.dij_scalars())
 
-        # # Limit RBE calculation to proton models for the time being
-        # if self._calc_bio_dose:
-        #     if self.radiation_mode == "protons":
-        #         dij = self.load_biological_data(cst, dij)
-        #         dij = self._allocate_quantity_matrices(dij, ["mAlphaDose", "mSqrtBetaDose"])
-        #         # Only considering LET-based models
-        #         self.calc_let = True
-        #     else:
-        #         logger.warning(
-        #             f"Biological dose calculation not supported for radiation modality: {self.radiation_mode}"
-        #         )
-        #         self._calc_bio_dose = False
-
-        # TODO: Handle constant RBE models
-        # if isinstance(self.bioModel, matRad_ConstantRBE):
-        #     dij["RBE"] = self.bioModel.RBE
-
-        # If LET calculation is enabled
-        if self.calc_let:
+        if self._calc_let:
             self.scorers.extend(["LETd"])
             # Allocate containers for LET*Dose and dose-weighted LET
             dij = self._allocate_quantity_matrices(dij, ["mLETDose", "mLETd"])
