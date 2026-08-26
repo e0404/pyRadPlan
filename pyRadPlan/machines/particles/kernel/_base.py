@@ -137,19 +137,28 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if v is None:
             return v
 
-        # The imported array might be transposed, weight multi can also just have  a single weight as it is  the generalize multi gaussian
-        if len(v.shape) > 1:
-            if (
-                v.shape[1] != info.data["depths"].shape[0]
-                and v.shape[0] == info.data["depths"].shape[0]
-            ):
-                v = np.ascontiguousarray(v.T)
-            elif v.shape[0] != info.data["depths"].shape[0]:
-                raise ValueError("Kernel data length does not match the depth data length.")
-        elif v.shape[0] != info.data["depths"].shape[0]:
+        # Stored as (n_components, n_depths); the imported array might be transposed.
+        # weight_multi may be 1-D (n_depths,) for a single free weight.
+        n_depths = info.data["depths"].shape[0]
+        if v.ndim > 1 and v.shape[1] != n_depths and v.shape[0] == n_depths:
+            v = np.ascontiguousarray(v.T)
+        if v.shape[-1] != n_depths:
             raise ValueError("Kernel data length does not match the depth data length.")
 
         return v
+
+    @model_validator(mode="after")
+    def validate_multi_gaussian_components(self) -> "ParticlePencilBeamKernel":
+        """The leading sigma carries the remaining weight: n_sigma == n_weights + 1."""
+        if self.sigma_multi is None or self.weight_multi is None:
+            return self
+        n_weights = 1 if self.weight_multi.ndim == 1 else self.weight_multi.shape[0]
+        if self.sigma_multi.shape[0] != n_weights + 1:
+            raise ValueError(
+                f"Multi-Gaussian kernel needs one sigma more than weights, got "
+                f"{self.sigma_multi.shape[0]} sigmas and {n_weights} weights."
+            )
+        return self
 
     @field_validator("alpha", "beta", mode="after")
     @classmethod

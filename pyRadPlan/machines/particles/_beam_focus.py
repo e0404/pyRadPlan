@@ -34,17 +34,31 @@ class ChargedBeamFocus(PyRadPlanBaseModel):
     @property
     def has_emittance(self) -> bool:
         """Check if emittance parameters are available."""
-        return self.sigma_x is not None and self.sigma_y is not None
+        return self.emittance is not None
 
     @classmethod
     def from_dict(cls, data: dict) -> "list[ChargedBeamFocus] | ChargedBeamFocus":
-        emittance = data.get("emittance", None)
+        """
+        Create a focus from a matRad ``initFocus`` entry.
 
-        if emittance is not None and len(data["dist"].shape) > 1:
-            # Return a list of ChargedBeamFocus, one per energy slice
+        Parameters
+        ----------
+        data : dict
+            Entry with ``dist``, ``sigma``, optionally ``SisFWHMAtIso`` and ``emittance``
+            (matRad field names). If ``dist`` is 2-D, each row describes one focus with its
+            own emittance row and a list of foci is returned.
+        """
+        emittance = data.get("emittance", None)
+        dist = np.asarray(data["dist"], dtype=np.float64)
+
+        if emittance is not None and dist.ndim > 1:
+            # Return a list of ChargedBeamFocus, one per row
             focuses = []
             fwhm_iso = data.get("SisFWHMAtIso", None)
-            for i in range(data["dist"].shape[0]):
+            if fwhm_iso is not None:
+                fwhm_iso = np.broadcast_to(np.asarray(fwhm_iso, dtype=float), (dist.shape[0],))
+            sigma = np.asarray(data["sigma"], dtype=np.float64)
+            for i in range(dist.shape[0]):
                 single_emittance = ChargedBeamEmittance(
                     type=data["emittance"]["type"][i],
                     sigma_x=data["emittance"]["sigmaX"][i],
@@ -56,8 +70,8 @@ class ChargedBeamFocus(PyRadPlanBaseModel):
                 )
                 focuses.append(
                     cls(
-                        dist=data["dist"][i, :],
-                        sigma=data["sigma"][i, :],
+                        dist=dist[i, :],
+                        sigma=sigma[i, :],
                         fwhm_iso=fwhm_iso[i] if fwhm_iso is not None else None,
                         emittance=single_emittance,
                     )

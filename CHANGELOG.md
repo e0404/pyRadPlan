@@ -116,6 +116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- particle pencil-beam multi-Gaussian lateral model: kernels are interpolated along depth, so the weights/sigmas are `(n_components, n_voxels)`; the model is now evaluated in that orientation with array-API calls only, and 1-D `weight_multi` (single free weight) is supported
+- `ParticlePencilBeamKernel` rejected multi-Gaussian kernels stored as `(n_components, n_depths)`; both orientations are accepted and the number of sigmas must be the number of weights plus one
+- `ChargedBeamFocus.has_emittance` raised an `AttributeError` (checked non-existent fields)
+- `ChargedBeamFocus.from_dict` handles 2-D focus tables (one focus per row); all foci of an energy are kept instead of the first list only
 - particle pencil-beam lateral cutoff calibration no longer evaluates the biological model on a dummy bixel with hard-coded tissue parameters (failed for models without a (0.5, 0.05) tissue class)
 - IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
   it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering

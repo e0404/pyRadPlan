@@ -86,11 +86,11 @@ class ParticleAccelerator(ExternalBeamMachine):
                 focus_list = [foci_entry]
             else:
                 focus_list = dl2ld(foci_entry)
-            foci[returned_data["energies"][i]] = [
-                ChargedBeamFocus.from_dict(focus) for focus in focus_list
-            ]
-            if isinstance(foci[returned_data["energies"][i]][0], list):
-                foci[returned_data["energies"][i]] = foci[returned_data["energies"][i]][0]
+            energy_foci = []
+            for focus in focus_list:
+                created = ChargedBeamFocus.from_dict(focus)
+                energy_foci.extend(created if isinstance(created, list) else [created])
+            foci[returned_data["energies"][i]] = energy_foci
 
         returned_data["foci"] = foci
 

@@ -41,15 +41,17 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             )
             lateral = (1 - kernels["weight"]) * l_narr + kernels["weight"] * l_bro
         elif self.lateral_model == "multi":
+            # Kernels are interpolated along depth: sigma_multi (m + 1, n_vox) and
+            # weight_multi (m, n_vox) or (n_vox,); the first sigma carries the remaining weight
+            radial_dist_sq = bixel["radial_dist_sq"]
             sigma_sq = kernels["sigma_multi"] ** 2 + bixel["sigma_ini_sq"]
-            weight = kernels["weight_multi"]
-            w = weight.reshape(len(weight), -1)  # (n,1) or (n,m)
-            weights_full = xp.column_stack((1 - w.sum(axis=0), w.T))
+            w = xp.reshape(kernels["weight_multi"], (-1, radial_dist_sq.shape[0]))
+            weights_full = xp.concat((1 - xp.sum(w, axis=0, keepdims=True), w), axis=0)
             lateral = xp.sum(
                 weights_full
-                * xp.exp(-bixel["radial_dist_sq"] / (2 * sigma_sq)).T
-                / (2 * xp.pi * sigma_sq.T),
-                axis=1,
+                * xp.exp(-xp.expand_dims(radial_dist_sq, axis=0) / (2 * sigma_sq))
+                / (2 * xp.pi * sigma_sq),
+                axis=0,
             )
         elif self.lateral_model == "singleXY":
             # Extract squared distances in the two lateral axes
