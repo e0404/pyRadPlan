@@ -7,6 +7,7 @@ from pyRadPlan.bio_models import (
     KernelBasedLQModel,
     TabulatedAlphaBetaModel,
     Wedenberg,
+    available_bio_models,
     create_bio_model,
     get_available_models,
     get_bio_model,
@@ -71,3 +72,11 @@ def test_get_available_models_filters():
     assert {"none", "constant_rbe"} <= set(available)
     assert "WED" not in available
     assert "WED" in get_available_models("protons", ["physical_dose", "let"])
+
+
+def test_available_bio_models_by_radiation_mode():
+    names = [cls.model for cls in available_bio_models("protons")]
+    assert names[0] == "none"
+    assert names[1:] == sorted(names[1:])
+    assert "HEL" not in names and "LEM" not in names
+    assert [cls.model for cls in available_bio_models("helium")].count("HEL") == 1

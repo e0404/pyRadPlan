@@ -24,6 +24,7 @@ from .models.tabulated_rbe_models import TabulatedRBEModel, TabulatedAlphaBetaMo
 from ._factory import (
     register_model,
     get_available_models,
+    available_bio_models,
     get_bio_model,
     create_bio_model,
     BioModelSpec,
@@ -64,6 +65,7 @@ __all__ = [
     "TabulatedAlphaBetaModel",
     "register_model",
     "get_available_models",
+    "available_bio_models",
     "get_bio_model",
     "create_bio_model",
     "BioModelSpec",

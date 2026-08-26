@@ -105,13 +105,76 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
 
 def test_placeholder_controls_disabled(qapp):
     widget, _ = _make_widget()
-    assert not widget._cmb_bio_model.isEnabled()
     assert not widget._cmb_quantity.isEnabled()
     assert not widget._btn_tissue.isEnabled()
     assert not widget._chk_sequencing.isEnabled()
     assert not widget._chk_dao.isEnabled()
     assert not widget._chk_conf3d.isEnabled()
     assert widget._cmb_quantity.count() > 0  # populated from available quantities
+
+
+def _combo_items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_bio_model_combo_follows_radiation_mode(qapp):
+    widget, _ = _make_widget()
+    assert widget._cmb_bio_model.isEnabled()
+
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+    assert "WED" not in _combo_items(widget._cmb_bio_model)
+
+    widget._cmb_radiation.setCurrentText("protons")
+    items = _combo_items(widget._cmb_bio_model)
+    assert items[0] == "none"
+    assert {"constant_rbe", "WED", "MCN", "CAR", "LSM"} <= set(items)
+    assert "HEL" not in items
+    assert "LEM" not in items  # aliases are not listed
+    assert widget._cmb_bio_model.currentText() == "constant_rbe"  # per-mode default
+
+    widget._cmb_radiation.setCurrentText("helium")
+    assert "HEL" in _combo_items(widget._cmb_bio_model)
+    assert widget._cmb_bio_model.currentText() == "HEL"
+
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "kernel_based_lq"
+
+
+def test_bio_model_selection_survives_mode_switch_when_supported(qapp):
+    widget, _ = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._cmb_bio_model.setCurrentText("LSM")
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "LSM"
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+
+
+def test_apply_writes_bio_model_to_pln(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("MCN")
+    widget._on_apply()
+    assert isinstance(ws.pln, IonPlan)
+    assert ws.pln.bio_model.model == "MCN"
+
+
+def test_do_update_restores_bio_model_and_apply_keeps_parameters(qapp):
+    widget, ws = _make_widget()
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._cmb_bio_model.currentText() == "constant_rbe"
+
+    # unchanged selection: the parametrised instance is kept on Apply
+    widget._txt_gantry.setText("0")
+    widget._on_apply()
+    assert ws.pln.bio_model.rbe == 1.0
+
+    # changing the selection replaces the model
+    widget._cmb_bio_model.setCurrentText("WED")
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
 
 
 def test_iso_center_auto_omits_key(qapp):

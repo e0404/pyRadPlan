@@ -88,6 +88,18 @@ def get_available_models(
     return result
 
 
+def available_bio_models(radiation_mode: str) -> list[type[BiologicalModel]]:
+    """
+    Registered model classes supporting a radiation mode, independent of machine data.
+
+    Canonical names only (no aliases), ``"none"`` first, then alphabetically.
+    """
+    classes = {
+        cls for cls in BIO_MODELS.values() if radiation_mode in cls.possible_radiation_modes
+    }
+    return sorted(classes, key=lambda cls: (cls.model != "none", cls.model))
+
+
 def create_bio_model(spec: BioModelSpec, radiation_mode: Optional[str] = None) -> BiologicalModel:
     """
     Create a biological model from a name, a specification dict or an instance.
