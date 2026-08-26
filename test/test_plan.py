@@ -102,6 +102,7 @@ def test_create_pln_dict_photons_snake():
     pln_dict.pop("mult_scen")
     pln_from_dict.pop("mult_scen")
     assert pln_from_dict.pop("bio_model") == {"model": "none"}
+    assert pln_from_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict == pln_from_dict
 
 
@@ -152,11 +153,13 @@ def test_create_pln_dict_photons_camel():
     pln_to_dict = pln.model_dump()
     pln_to_dict.pop("mult_scen")
     assert pln_to_dict.pop("bio_model") == {"model": "none"}
+    assert pln_to_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict_snake == pln_to_dict
 
     pln_to_dict_camel = pln.to_matrad()
     pln_to_dict_camel.pop("multScen")
     assert pln_to_dict_camel.pop("bioModel") == "none"
+    assert pln_to_dict_camel.pop("doseConvention") == "per_fraction"
     print(set(pln_dict_camel) ^ set(pln_to_dict_camel))
     assert pln_dict_camel == pln_to_dict_camel
 
@@ -222,3 +225,19 @@ def test_plan_round_trip_keeps_bio_model_parameters():
     pln2 = create_pln(pln.model_dump())
     assert pln2.bio_model == pln.bio_model
     assert pln2.bio_model.p_upperLETThreshold == 20.0
+
+
+def test_plan_dose_convention():
+    pln = IonPlan(radiation_mode="protons", num_of_fractions=30)
+    assert pln.dose_convention == "per_fraction"
+    assert pln.result_dose_factor == 1
+
+    pln = IonPlan(radiation_mode="protons", num_of_fractions=30, dose_convention="total")
+    assert pln.result_dose_factor == 30
+    assert (
+        create_pln({"radiation_mode": "protons", "doseConvention": "total"}).dose_convention
+        == "total"
+    )
+
+    with pytest.raises(ValidationError):
+        IonPlan(radiation_mode="protons", dose_convention="per_course")

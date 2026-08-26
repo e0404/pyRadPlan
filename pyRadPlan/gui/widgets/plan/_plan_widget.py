@@ -96,6 +96,7 @@ class PlanWidget(WorkspaceWidget):
             "engine_props": self._btn_engine_config,
             "bio_model": self._cmb_bio_model,
             "fractions": self._spn_fractions,
+            "dose_convention": self._cmb_dose_convention,
             "gantry": self._txt_gantry,
             "couch": self._txt_couch,
             "bixel": self._spn_bixel,
@@ -168,6 +169,21 @@ class PlanWidget(WorkspaceWidget):
         self._spn_fractions.setRange(1, 1000)
         self._spn_fractions.setValue(30)
 
+        self._cmb_dose_convention = QComboBox()
+        self._cmb_dose_convention.addItem("per fraction", "per_fraction")
+        self._cmb_dose_convention.addItem("total", "total")
+        self._cmb_dose_convention.setToolTip(
+            "Convention for dose values in objectives and results:\n"
+            "per fraction - objective doses and reported doses refer to one fraction;\n"
+            "total - objective doses are total-course doses (scaled by 1/fractions for "
+            "optimization) and reported doses are multiplied by the number of fractions."
+        )
+        fractions_row = QHBoxLayout()
+        fractions_row.setContentsMargins(0, 0, 0, 0)
+        fractions_row.addWidget(self._spn_fractions, 1)
+        fractions_row.addWidget(QLabel("Doses:"))
+        fractions_row.addWidget(self._cmb_dose_convention, 1)
+
         grid.addWidget(QLabel("Radiation mode:"), 0, 0)
         grid.addWidget(self._cmb_radiation, 0, 1)
         grid.addWidget(QLabel("Machine:"), 0, 2)
@@ -176,7 +192,7 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(QLabel("Dose engine:"), 1, 0)
         grid.addLayout(self._engine_row, 1, 1)
         grid.addWidget(QLabel("Fractions:"), 1, 2)
-        grid.addWidget(self._spn_fractions, 1, 3)
+        grid.addLayout(fractions_row, 1, 3)
 
     def _build_geometry_rows(self, grid: QGridLayout) -> None:
         self._txt_gantry = QLineEdit("0")
@@ -516,6 +532,9 @@ class PlanWidget(WorkspaceWidget):
         machine = pln.machine if isinstance(pln.machine, str) else "Generic"
         self._cmb_machine.setEditText(machine)
         self._spn_fractions.setValue(int(pln.num_of_fractions))
+        idx = self._cmb_dose_convention.findData(pln.dose_convention)
+        if idx >= 0:
+            self._cmb_dose_convention.setCurrentIndex(idx)
 
         stf = pln.prop_stf or {}
         gantry = stf.get("gantry_angles")
@@ -758,6 +777,7 @@ class PlanWidget(WorkspaceWidget):
             "radiation_mode": radiation_mode,
             "machine": self._cmb_machine.currentText() or "Generic",
             "num_of_fractions": int(self._spn_fractions.value()),
+            "dose_convention": self._cmb_dose_convention.currentData(),
             "bio_model": self._selected_bio_model(),
             "mult_scen": self._cmb_scenario.currentText(),
             "prop_stf": prop_stf,
@@ -786,6 +806,7 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_engine.currentTextChanged.connect(self._on_field_edited)
         self._cmb_bio_model.currentTextChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
+        self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
         self._txt_gantry.textChanged.connect(self._on_field_edited)
         self._txt_couch.textChanged.connect(self._on_field_edited)
         self._spn_bixel.valueChanged.connect(self._on_field_edited)
@@ -809,6 +830,7 @@ class PlanWidget(WorkspaceWidget):
             "engine_props": dict(self._engine_props.get(engine, {})),
             "bio_model": self._cmb_bio_model.currentText(),
             "fractions": self._spn_fractions.value(),
+            "dose_convention": self._cmb_dose_convention.currentData(),
             "gantry": self._safe_parse(self._txt_gantry.text()),
             "couch": self._safe_parse(self._txt_couch.text()),
             "bixel": self._spn_bixel.value(),

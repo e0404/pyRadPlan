@@ -177,6 +177,19 @@ def test_do_update_restores_bio_model_and_apply_keeps_parameters(qapp):
     assert ws.pln.bio_model.model == "WED"
 
 
+def test_dose_convention_round_trip(qapp):
+    widget, ws = _make_widget()
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+    widget._txt_gantry.setText("0")
+    widget._cmb_dose_convention.setCurrentIndex(widget._cmb_dose_convention.findData("total"))
+    widget._on_apply()
+    assert ws.pln.dose_convention == "total"
+
+    ws.pln = PhotonPlan(num_of_fractions=5, dose_convention="per_fraction")
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+
 def test_iso_center_auto_omits_key(qapp):
     widget, ws = _make_widget()
     assert widget._chk_iso_auto.isChecked()

@@ -5,7 +5,7 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
-from typing import Dict, Any, List, Union, ClassVar, Optional
+from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
 from pydantic import (
@@ -49,6 +49,11 @@ class Plan(PyRadPlanBaseModel, ABC):
         Number of fractions in the plan.
     machine : str
         Machine used for the plan.
+    dose_convention : {"per_fraction", "total"}
+        Whether objective dose parameters and reported result doses refer to one fraction
+        or to the total course. The dose influence matrix is always per fraction; with
+        ``"total"`` objectives are scaled by ``1/num_of_fractions`` for optimization and
+        results by ``num_of_fractions``.
     prescribed_dose : float
         Prescribed dose for the plan. Serves mainly as normalization value.
     radiation_mode : str
@@ -60,6 +65,12 @@ class Plan(PyRadPlanBaseModel, ABC):
     prop_dose_calc: Dict[str, Any] = Field(default_factory=dict)
     prop_seq: Dict[str, Any] = Field(default_factory=dict)
     num_of_fractions: int = Field(default=30, gt=0)
+    dose_convention: Literal["per_fraction", "total"] = Field(
+        default="per_fraction",
+        description="Convention for user-facing dose values: objective dose parameters are "
+        "interpreted and result doses reported either per fraction or for the total course "
+        "(num_of_fractions times the per-fraction dose of the influence matrix).",
+    )
     machine: Union[Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
@@ -184,6 +195,11 @@ class Plan(PyRadPlanBaseModel, ABC):
 
         # Convert camelCase to snake_case
         return {to_snake(k): v for k, v in v.items()}
+
+    @property
+    def result_dose_factor(self) -> int:
+        """Factor from per-fraction (dij) doses to reported doses under ``dose_convention``."""
+        return self.num_of_fractions if self.dose_convention == "total" else 1
 
     def to_matrad(self, context: str = "mat-file") -> Any:
         """

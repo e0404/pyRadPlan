@@ -79,6 +79,7 @@ class PlanningProblem(ProgressReporter, ABC):
     _array_backend: ArrayNamespace
 
     _num_of_fractions: int = 1
+    _dose_convention: str = "per_fraction"
 
     def __init__(self, pln: Union[Plan, dict] = None):
         super().__init__()
@@ -138,6 +139,7 @@ class PlanningProblem(ProgressReporter, ABC):
         """
 
         self._num_of_fractions = pln.num_of_fractions
+        self._dose_convention = pln.dose_convention
 
         # Set Scenario Model
         self._mult_scen = pln.mult_scen
@@ -228,8 +230,9 @@ class PlanningProblem(ProgressReporter, ABC):
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
-            for obj in objs:
-                obj.normalize_to_fraction_num(self._num_of_fractions)
+            if self._dose_convention == "total":
+                for obj in objs:
+                    obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
 
@@ -254,6 +257,16 @@ class PlanningProblem(ProgressReporter, ABC):
                 logger.error(
                     "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
                 )
+        if self._dose_convention == "total":
+            logger.info(
+                "Objective doses are interpreted as total-course doses (dose_convention='total'); "
+                "scaling reference doses by 1/%d for the per-fraction optimization.",
+                self._num_of_fractions,
+            )
+        else:
+            logger.info(
+                "Objective doses are interpreted per fraction (dose_convention='per_fraction')."
+            )
         # sanitize objectives and constraints and manage required quantities
         objectives, quantity_ids = self._collect_objectives()
         self._objective_list = objectives

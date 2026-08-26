@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Biological models (`pyRadPlan.bio_models`): constant RBE, LET-based LQ models (Wedenberg, McNamara, Carabé, Mairani helium, linear scaling), kernel-based LQ (LEM base data) and tabulated RBE models dose-averaged over fragment fluence spectra. Models are lightweight parameter objects; per-calculation state lives in a `BioModelEvaluator` created by `model.evaluator(machine, voxel_params)`; discrete tissue classes are selected through a `TissueParameterLookup` (`"exact"`)
+- `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back; per-modality defaults (`constant_rbe` protons, `HEL` helium, `kernel_based_lq` carbon/oxygen, `none` photons)
+- `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective dose parameters and reported result doses refer to one fraction or to the total course; `Dij.compute_result_*` take `num_of_fractions` for the scaling and the optimizer logs the interpretation it applies
+- `Dij.rbe` (constant RBE) and `rbe_x_dose` derived either from LQ influence matrices or from the constant RBE; `alphax`/`betax` carry one column per CT scenario
+- GUI: biological model and dose convention selection in the plan widget
+
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`

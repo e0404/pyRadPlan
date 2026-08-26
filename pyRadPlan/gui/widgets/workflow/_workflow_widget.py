@@ -917,7 +917,7 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights)
+            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -976,7 +976,7 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
 
             new_dij = calc_dose_forward(ct, cst, stf, pln, weights)
-            return new_dij.compute_result_ct_grid(weights)
+            return new_dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
 
         def _on_success(new_result: dict) -> None:
             result = dict(prev_result)

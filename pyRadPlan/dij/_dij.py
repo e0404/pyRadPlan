@@ -1,6 +1,6 @@
 """Contains the dij class as a (collection of) influence matrices."""
 
-from typing import Any, Union, Annotated, Optional, cast
+from typing import Any, Union, Annotated, Optional, cast, ClassVar
 from typing_extensions import Self
 import logging
 
@@ -368,8 +368,30 @@ class Dij(PyRadPlanBaseModel):
 
         return dij_dict
 
+    #: Result quantities that are ratios / averages and do not scale with fractions.
+    _INTENSIVE_RESULTS: ClassVar[frozenset[str]] = frozenset(
+        {"let", "rbe", "alpha", "beta", "let_beam", "rbe_beam", "alpha_beam", "beta_beam"}
+    )
+
+    @classmethod
+    def _scale_result_to_fractions(cls, out: dict[str, Any], num_of_fractions: int) -> dict:
+        """Scale per-fraction result arrays to ``num_of_fractions`` identical fractions."""
+        if num_of_fractions == 1:
+            return out
+        for key, value in out.items():
+            if key in cls._INTENSIVE_RESULTS:
+                continue
+            factor = (
+                num_of_fractions**2 if key.startswith("physical_dose_var") else num_of_fractions
+            )
+            if isinstance(value, list):
+                out[key] = [factor * v for v in value]
+            else:
+                out[key] = factor * value
+        return out
+
     def get_result_arrays_from_intensity(
-        self, intensity: np.ndarray, scenario_index: int = 0
+        self, intensity: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
     ) -> dict[str, np.ndarray]:
         """
         Compute result arrays from an intensity vector.
@@ -476,10 +498,10 @@ class Dij(PyRadPlanBaseModel):
                 self.rbe * dose_mat[:, idx] @ intensity[idx] for idx in beam_indices
             ]
 
-        return out
+        return self._scale_result_to_fractions(out, num_of_fractions)
 
     def compute_result_dose_grid(
-        self, intensities: np.ndarray, scenario_index: int = 0
+        self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
     ) -> dict[str, sitk.Image]:
         """
         Compute results on the dose grid from intensity vector.
@@ -490,6 +512,9 @@ class Dij(PyRadPlanBaseModel):
             The intensity to apply to the dose influence matrix.
         scenario_index : int
             The scenario index to apply the intensity to.
+        num_of_fractions : int
+            Report doses for this many identical fractions (1 = per-fraction dose of the
+            influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
 
         Returns
         -------
@@ -497,7 +522,9 @@ class Dij(PyRadPlanBaseModel):
             A dictionary containing the quantity images for each scenario.
         """
 
-        out = self.get_result_arrays_from_intensity(intensities, scenario_index=scenario_index)
+        out = self.get_result_arrays_from_intensity(
+            intensities, scenario_index=scenario_index, num_of_fractions=num_of_fractions
+        )
         # Create a sitk image for each scenario
 
         for key, value in out.items():
@@ -521,7 +548,7 @@ class Dij(PyRadPlanBaseModel):
         return out
 
     def compute_result_ct_grid(
-        self, intensities: np.ndarray, scenario_index: int = 0
+        self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
     ) -> dict[str, sitk.Image]:
         """
         Compute results on the CT grid from intensity vector.
@@ -532,6 +559,9 @@ class Dij(PyRadPlanBaseModel):
             The intensity to apply to the dose influence matrix.
         scenario_index : int
             The scenario index to apply the intensity to.
+        num_of_fractions : int
+            Report doses for this many identical fractions (1 = per-fraction dose of the
+            influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
 
         Returns
         -------
@@ -539,7 +569,9 @@ class Dij(PyRadPlanBaseModel):
             A dictionary containing the quantity images for each scenario.
         """
 
-        out = self.compute_result_dose_grid(intensities, scenario_index=scenario_index)
+        out = self.compute_result_dose_grid(
+            intensities, scenario_index=scenario_index, num_of_fractions=num_of_fractions
+        )
         # Create a sitk image for each scenario
 
         for key, value in out.items():

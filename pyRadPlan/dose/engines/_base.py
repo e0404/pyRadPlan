@@ -142,6 +142,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         if hasattr(pln, "mult_scen"):
             self.mult_scen = pln.mult_scen
 
+        # Reported forward-dose scaling follows the plan's dose convention
+        self._result_dose_factor = getattr(pln, "result_dose_factor", 1)
+
         # Assign Biologival Model
         if hasattr(pln, "bio_model"):
             self.bio_model = pln.bio_model  # TODO: No bio_model yet
@@ -230,7 +233,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
-        result = dij.compute_result_ct_grid(np.ones(dij.total_num_of_bixels, dtype=np.float32))
+        result = dij.compute_result_ct_grid(
+            np.ones(dij.total_num_of_bixels, dtype=np.float32),
+            num_of_fractions=self._result_dose_factor,
+        )
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)

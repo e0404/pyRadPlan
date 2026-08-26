@@ -127,3 +127,16 @@ def test_effect_scenarios_independent(two_scenario_dij):
         d = two_scenario_dij
         expected = d.alpha_dose.flat[s] @ w + (d.sqrt_beta_dose.flat[s] @ w) ** 2
         assert np.allclose(result.flat[s], expected, rtol=1e-5)
+
+
+def test_result_scaling_to_fractions(two_scenario_dij):
+    dij = two_scenario_dij
+    w = np.arange(N_BIX, dtype=np.float32)
+    per_fraction = dij.get_result_arrays_from_intensity(w)
+    total = dij.get_result_arrays_from_intensity(w, num_of_fractions=30)
+
+    for key in ("physical_dose", "effect", "rbe_x_dose", "alpha_dose", "sqrt_beta_dose"):
+        assert np.allclose(total[key], 30 * per_fraction[key])
+    for key in ("rbe", "alpha", "beta"):
+        assert np.allclose(total[key], per_fraction[key])
+    assert np.allclose(total["physical_dose_beam"][0], 30 * per_fraction["physical_dose_beam"][0])
