@@ -15,7 +15,7 @@ beam angles and optimization objectives based on the treatment site.
    - Google:     `GOOGLE_API_KEY`
    - Mistral:    `MISTRAL_API_KEY`
    If a .env file is present, the environment will be populated with python-dotenv
-3. Optionally, set the model via `PYRADPLAN_AI_MODEL` (default: `claude-sonnet-4-5`).
+3. Optionally, set the model via `PYRADPLAN_AI_AGENTS_MODEL` (default: `claude-sonnet-4-5`).
 
 ## Setup
 """
@@ -51,14 +51,14 @@ logging.basicConfig(level=logging.INFO)
 """
 ## Configuration
 
-Set the model via the environment variable `PYRADPLAN_AI_MODEL`, or pass `model=`
+Set the model via the environment variable `PYRADPLAN_AI_AGENTS_MODEL`, or pass `model=`
 explicitly to each call. Your provider API key must be set in the environment
 (e.g. `OPENAI_API_KEY`). pydantic-ai picks it up automatically.
 """
 
 # %%
-# Set the model to use (can also be set via PYRADPLAN_AI_MODEL env var)
-# os.environ["PYRADPLAN_AI_MODEL"] = "openai:gpt-5-mini"
+# Set the model to use (can also be set via PYRADPLAN_AI_AGENTS_MODEL env var)
+# os.environ["PYRADPLAN_AI_AGENTS_MODEL"] = "openai:gpt-5-mini"
 
 # Inspect effective settings
 settings = ai_agents.AiSettings()

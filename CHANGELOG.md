@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `pyRadPlan.ai_models` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a friendly name (resolved to `<hf_org>/<name>`), with version dedup, offline support and logging. `list_local_models()` lists the models available on disk under `AiModelSettings.local_models_dir` (no network), optionally filtered by modality derived from the repo name. Includes a `BasePreprocessor` contract, an example model under `data/ai_models/example_model`, and a `model_config.template.json`. Settings are exposed as the `ai_models` sub-configuration of `pyRadPlan.settings` (`settings.ai_models`), read from `PYRADPLAN_AI_MODELS_*` environment variables. Install extras via `pip install pyRadPlan[ai]`.
+- `pyRadPlan.ai_models` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a name — bare (resolved to `<hf_org>/<name>`) or a full `<org>/<repo>` id used as-is — with version dedup, offline support and logging. A pinned `revision` is reused from disk without touching the network; an unpinned request asks the Hub whether the local copy is current and falls back to it when the Hub is unreachable. Downloads are laid out as `<local_models_dir>/<org>/<repo>`, so a private fork never shares a directory with its upstream namesake. `list_local_models()` lists the models available on disk and in the HuggingFace cache (no network) as full `<org>/<repo>` ids, optionally filtered by `ModelTask` (`dose_calc`/`outcome`), read from `metadata.task` in a model's `model_config.json` and falling back to the repository-name prefix. Includes a `BasePreprocessor` contract, a `model_config.template.json` and a reference model folder under `test/data/ai_models/dummy_model`. Settings are exposed as the `ai_models` sub-configuration of `pyRadPlan.settings` (`settings.ai_models`), read from `PYRADPLAN_AI_MODELS_*` environment variables. Install extras via `pip install pyRadPlan[ai]` (plus a `torch` build matching your platform).
+- Security: loading a model resolved from the HuggingFace Hub executes the `model.py` and `preprocessor.py` it ships, so it requires an explicit opt-in — `trust_remote_code=True` or `PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1`; the setting defaults to `False`. A directory passed explicitly as `load_model(local_dir=...)` is exempt. Each model folder's code is imported under a package name unique to that folder, so several models can be loaded side by side and the classes they define stay picklable.
 - `pyRadPlan.core.get_data_dir()` / `get_data_subdir()`: a single writable data root for pyRadPlan (default `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Downloaded AI models default to `<data_dir>/ai_models`; the location is reserved for future downloaded datasets (patients, phantoms, machines).
-- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
-- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI", "AI Models") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
+- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_XP_*`, `PYRADPLAN_AI_AGENTS_*`, `PYRADPLAN_AI_MODELS_*`)
+- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI Agents", "AI Models") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
 
 - GUI: File menu collecting all data I/O (load/import/export)
@@ -32,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
 - `ai_agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
-- pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+- pre-commit hook checking dependency license compliance via `licensecheck` (configured in `[tool.licensecheck]` in pyproject.toml); compatibility is derived from the project's own license instead of a hand-maintained allowlist
 - VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
 - IO: New extensible import/export framework in `pyRadPlan.io` with a layered design:
   `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`,
@@ -83,6 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- AI agent settings moved to their own prefix: `AiSettings` now reads `PYRADPLAN_AI_AGENTS_*` (e.g. `PYRADPLAN_AI_AGENTS_MODEL`, `PYRADPLAN_AI_AGENTS_DISPLAY_USAGE`) and is exposed as `settings.ai_agents` rather than `settings.ai`, so the prefix matches the `pyRadPlan.ai_agents` module it configures and no longer sits one character away from the unrelated `PYRADPLAN_AI_MODELS_*` variables of the new `ai_models` module. The previous names `PYRADPLAN_AI_MODEL` and `PYRADPLAN_AI_DISPLAY_USAGE` are still read as legacy aliases; the canonical name wins when both are set. The GUI settings section is renamed "AI" -> "AI Agents".
+
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
@@ -108,6 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ai_agents`: importing the module no longer floods stderr with `BeartypeClawDecorWarning`s
+  (pydantic-ai pulls in `key_value.aio`, whose beartype import hook trips over numpydantic's
+  vendored nptyping); the package's `PY_KEY_VALUE_DISABLE_BEARTYPE` opt-out is now set before
+  the import
 - IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
   it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
 - IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it

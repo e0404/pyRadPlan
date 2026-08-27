@@ -7,23 +7,26 @@ the model-repository contract.
 
 from ._settings import AiModelSettings
 from ._preprocessor import BasePreprocessor
-from ._factory import (
-    Modality,
+from ._registry import (
+    ModelTask,
     list_local_models,
-    modality_from_name,
+    task_from_dir,
+    task_from_name,
 )
-from ._hub import resolve_model_dir, is_valid_model_dir
+from ._hub import resolve_model_dir, is_valid_model_dir, repo_subpath
 from ._load_model import load_model
 from ._pyanno4rt import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
     "AiModelSettings",
     "BasePreprocessor",
-    "Modality",
+    "ModelTask",
     "list_local_models",
-    "modality_from_name",
+    "task_from_dir",
+    "task_from_name",
     "resolve_model_dir",
     "is_valid_model_dir",
+    "repo_subpath",
     "load_model",
     "OutcomeFeature",
     "OutcomeModelSpec",

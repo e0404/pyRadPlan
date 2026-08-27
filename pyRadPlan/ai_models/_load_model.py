@@ -3,13 +3,16 @@
 Instantiation is driven entirely by ``model_config.json``:
 """
 
+import hashlib
 import importlib.util
 import inspect
 import json
 import logging
+import re
 import sys
+import types
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pyRadPlan._settings import get_settings
 
@@ -19,39 +22,90 @@ from ._preprocessor import BasePreprocessor
 logger = logging.getLogger(__name__)
 
 _SAFETENSORS_HINT = (
-    "safetensors is required to load model weights. "
-    "Install the optional dependencies with: pip install pyRadPlan[ai]"
+    "safetensors (and the torch build it loads into) is required to load model weights. "
+    "Install the optional dependencies with: pip install pyRadPlan[ai], plus a torch build "
+    "matching your platform (see https://pytorch.org/get-started/locally/)."
 )
 
 # Modules a model folder may expose, importable by name during loading.
 _MODEL_SUBMODULES = ("model", "preprocessor")
 
+#: Namespace the code of every loaded model repository is registered under.
+_REPO_PACKAGE = "pyRadPlan._ai_model_repos"
 
-def _exec_module(module_name: str, path: Path):
+#: Modules already loaded, keyed by resolved model directory.
+_loaded_repos: dict[Path, tuple[types.ModuleType, types.ModuleType]] = {}
+
+
+def _repo_package_name(model_dir: Path) -> str:
+    """Derive a unique, importable package name for a model directory."""
+    slug = re.sub(r"\W+", "_", model_dir.name).strip("_") or "model_repo"
+    digest = hashlib.sha256(str(model_dir).encode("utf-8")).hexdigest()[:8]
+    return f"{_REPO_PACKAGE}.{slug}_{digest}"
+
+
+def _repo_package(model_dir: Path) -> types.ModuleType:
+    """Return (creating if needed) the package module a model repo lives under."""
+    if _REPO_PACKAGE not in sys.modules:
+        namespace = types.ModuleType(_REPO_PACKAGE)
+        namespace.__doc__ = "Code of model repositories loaded by pyRadPlan.ai_models."
+        namespace.__path__ = []
+        sys.modules[_REPO_PACKAGE] = namespace
+
+    name = _repo_package_name(model_dir)
+    pkg = sys.modules.get(name)
+    if pkg is None:
+        pkg = types.ModuleType(name)
+        # Setting __path__ makes the repo's own files importable as submodules,
+        # so `from .preprocessor import X` works inside model.py.
+        pkg.__path__ = [str(model_dir)]
+        sys.modules[name] = pkg
+    return pkg
+
+
+def _exec_module(module_name: str, path: Path) -> types.ModuleType:
     """Import ``path`` as a module registered under ``module_name``."""
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load {path.name} from {path.parent}.")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
     return module
 
 
-def _load_model_modules(model_dir: Path):
+def _load_model_modules(model_dir: Path) -> tuple[types.ModuleType, types.ModuleType]:
     """Import a model folder's ``model.py`` and ``preprocessor.py``.
 
-    The model directory is placed on ``sys.path`` for the duration of the import
-    so the modules can import each other by name. ``sys.path`` and
-    ``sys.modules`` are restored afterwards so different model folders do not
-    shadow each other.
+    Each folder is registered under its own package name derived from its path
+    (``pyRadPlan._ai_model_repos.<folder>_<hash>``), so two model repositories
+    can be loaded side by side and the classes they define keep a resolvable
+    ``__module__`` -- which pickling, ``torch.save`` and ``multiprocessing``
+    workers rely on. The modules therefore stay in :data:`sys.modules`, and the
+    result is cached so a repeated load of the same folder reuses them.
+
+    The folder is additionally placed on ``sys.path`` for the duration of the
+    import so a repository importing a sibling file by bare name still works;
+    that entry, and any top-level module such an import leaks, are removed
+    afterwards.
     """
+    model_dir = model_dir.resolve()
+    cached = _loaded_repos.get(model_dir)
+    if cached is not None:
+        return cached
+
+    pkg = _repo_package(model_dir)
+
     path_str = str(model_dir)
     path_inserted = path_str not in sys.path
     if path_inserted:
         sys.path.insert(0, path_str)
 
-    # Save and clear any pre-existing modules that would collide.
+    # Save and clear any pre-existing modules a bare sibling import would collide with.
     saved = {name: sys.modules.pop(name, None) for name in _MODEL_SUBMODULES}
 
     # Avoid writing __pycache__ into the (possibly shipped/read-only) model dir.
@@ -59,9 +113,12 @@ def _load_model_modules(model_dir: Path):
     sys.dont_write_bytecode = True
 
     try:
-        model_module = _exec_module("model", model_dir / "model.py")
-        preprocessor_module = _exec_module("preprocessor", model_dir / "preprocessor.py")
-        return model_module, preprocessor_module
+        modules = tuple(
+            _exec_module(f"{pkg.__name__}.{name}", model_dir / f"{name}.py")
+            for name in _MODEL_SUBMODULES
+        )
+        for name, module in zip(_MODEL_SUBMODULES, modules):
+            setattr(pkg, name, module)
     finally:
         sys.dont_write_bytecode = dont_write_bytecode
         if path_inserted:
@@ -75,15 +132,26 @@ def _load_model_modules(model_dir: Path):
             else:
                 sys.modules[name] = mod
 
+    _loaded_repos[model_dir] = modules
+    return modules
 
-def _find_preprocessor_class(module, name: Optional[str]):
+
+def _find_preprocessor_class(module: types.ModuleType, name: Optional[str]) -> type:
     """Find the preprocessor class in ``preprocessor.py``.
 
     Uses ``name`` if given, otherwise the single :class:`BasePreprocessor`
     subclass defined in the module.
     """
     if name is not None:
-        return getattr(module, name)
+        cls = getattr(module, name, None)
+        if cls is None:
+            raise ImportError(
+                f"preprocessor.py defines no '{name}' "
+                "(named by 'preprocessor_name' in model_config.json)."
+            )
+        if not (isinstance(cls, type) and issubclass(cls, BasePreprocessor)):
+            raise TypeError(f"'{name}' in preprocessor.py is not a BasePreprocessor subclass.")
+        return cls
 
     candidates = [
         obj
@@ -105,6 +173,23 @@ def _find_preprocessor_class(module, name: Optional[str]):
     )
 
 
+def _read_config(model_dir: Path) -> dict:
+    """Read and minimally validate a model folder's ``model_config.json``."""
+    config_path = model_dir / "model_config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"'{config_path}' is not valid JSON: {exc}") from exc
+    if not isinstance(config, dict):
+        raise TypeError(f"'{config_path}' must contain a JSON object.")
+    if "model_name" not in config:
+        raise KeyError(
+            f"'{config_path}' is missing the required 'model_name' key "
+            "(the class in model.py to instantiate)."
+        )
+    return config
+
+
 def _load_weights(model: Any, weights_path: Path, device: str) -> None:
     """Load safetensors weights into ``model`` in place."""
     try:
@@ -114,12 +199,12 @@ def _load_weights(model: Any, weights_path: Path, device: str) -> None:
     st_load_model(model, str(weights_path), device=device)
 
 
-def load_model(
+def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     name: Optional[str] = None,
     *,
     repo_id: Optional[str] = None,
     revision: Optional[str] = None,
-    local_dir: Optional[str] = None,
+    local_dir: Optional[Union[str, Path]] = None,
     offline: Optional[bool] = None,
     device: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
@@ -129,13 +214,15 @@ def load_model(
     Parameters
     ----------
     name : str, optional
-        Friendly model name, resolved to the repository id
-        ``"<hf_org>/<name>"`` using :attr:`AiModelSettings.hf_org`.
+        Model name. A bare name is resolved to ``"<hf_org>/<name>"`` using
+        :attr:`AiModelSettings.hf_org`; a name that already contains a ``/`` is
+        used as the repository id as-is.
     repo_id : str, optional
         Explicit HuggingFace repository id, overriding the registry lookup.
     revision : str, optional
-        Git revision (tag/branch/commit) to load.
-    local_dir : str, optional
+        Git revision (tag/branch/commit) to load. Pinning one makes a matching
+        local copy usable without contacting the hub.
+    local_dir : str or Path, optional
         Load directly from (or download into) this directory. Required for
         offline use without a prior download.
     offline : bool, optional
@@ -144,8 +231,10 @@ def load_model(
         Device to place the model on. Defaults to :attr:`AiModelSettings.device`.
     trust_remote_code : bool, optional
         Allow executing the Python shipped with the model. Defaults to
-        :attr:`AiModelSettings.trust_remote_code`. Loading fails if this is
-        ``False``.
+        :attr:`AiModelSettings.trust_remote_code` (``False``), except for a
+        purely local load -- ``local_dir`` given without ``name``/``repo_id`` --
+        where the code is already under the caller's control and no opt-in is
+        needed. Loading fails if this resolves to ``False``.
 
     Returns
     -------
@@ -161,11 +250,24 @@ def load_model(
     cfg = get_settings().ai_models
     if device is None:
         device = cfg.device
-    if trust_remote_code is None:
-        trust_remote_code = cfg.trust_remote_code
 
     if name is not None and repo_id is None:
-        repo_id = f"{cfg.hf_org}/{name}"
+        # A name that already carries an organization is a full id; this is what
+        # list_local_models() returns, so its output feeds straight back in.
+        repo_id = name if "/" in name else f"{cfg.hf_org}/{name}"
+
+    from_hub = repo_id is not None
+    if trust_remote_code is None:
+        trust_remote_code = cfg.trust_remote_code or not from_hub
+
+    # Checked before resolving: there is no reason to download code we refuse to run.
+    if not trust_remote_code:
+        source = f"'{repo_id}'" if from_hub else f"'{local_dir}'"
+        raise ValueError(
+            f"Loading the model in {source} executes code shipped with the model "
+            "(model.py, preprocessor.py). Pass trust_remote_code=True "
+            "(or set PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1) only for sources you trust."
+        )
 
     model_dir = resolve_model_dir(
         repo_id=repo_id,
@@ -174,18 +276,16 @@ def load_model(
         offline=offline,
     )
 
-    if not trust_remote_code:
-        raise ValueError(
-            f"Loading the model in '{model_dir}' executes code shipped with the model "
-            "(model.py, preprocessor.py). Pass trust_remote_code=True "
-            "(or set PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1) only for sources you trust."
-        )
-
-    config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
-
+    config = _read_config(model_dir)
     model_module, preprocessor_module = _load_model_modules(model_dir)
 
-    model_cls = getattr(model_module, config["model_name"])
+    model_name = config["model_name"]
+    model_cls = getattr(model_module, model_name, None)
+    if model_cls is None:
+        raise AttributeError(
+            f"model.py in '{model_dir}' defines no '{model_name}' "
+            "(named by 'model_name' in model_config.json)."
+        )
     model = model_cls(**config.get("model_params", {}))
     if hasattr(model, "to"):
         model.to(device)

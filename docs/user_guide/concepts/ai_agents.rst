@@ -47,18 +47,18 @@ The module exposes two high-level helper functions and a settings class:
        :class:`~pyRadPlan.cst.StructureSet` based on the treatment site and prescribed dose.
    * - :class:`~pyRadPlan.ai_agents.AiSettings`
      - Pydantic-settings class that reads the default model name from the environment
-       variable ``PYRADPLAN_AI_MODEL`` or a ``.env`` file.
+       variable ``PYRADPLAN_AI_AGENTS_MODEL`` or a ``.env`` file.
 
 Model selection
 ---------------
 
 The default model is ``claude-sonnet-4-5``.  You can override it globally via the
-environment variable ``PYRADPLAN_AI_MODEL``, or per-call via the ``model=`` keyword:
+environment variable ``PYRADPLAN_AI_AGENTS_MODEL``, or per-call via the ``model=`` keyword:
 
 .. code-block:: python
 
     import os
-    os.environ["PYRADPLAN_AI_MODEL"] = "openai:gpt-4o-mini"
+    os.environ["PYRADPLAN_AI_AGENTS_MODEL"] = "openai:gpt-4o-mini"
 
     from pyRadPlan import ai_agents
 

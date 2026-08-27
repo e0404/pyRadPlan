@@ -1,6 +1,7 @@
 """Base class for model preprocessors.
 
-A preprocessor initiated with the corresponding .json entry.
+A preprocessor is constructed by the loader with the ``model_preprocessing``
+section of the model repository's ``model_config.json``.
 """
 
 from abc import ABC, abstractmethod
@@ -11,8 +12,9 @@ class BasePreprocessor(ABC):
     """Abstract base class for model preprocessors.
 
     Concrete preprocessors are shipped in a model repository's
-    ``preprocessor.py`` and instantiated by its ``init_param.init_preprocessor``
-    factory. Implementations must override :meth:`preprocess`.
+    ``preprocessor.py`` and instantiated by the loader with the
+    ``model_preprocessing`` section of ``model_config.json``. Implementations
+    must override :meth:`preprocess`.
 
     Parameters
     ----------

@@ -127,7 +127,7 @@ def generate_beam_angles(
         Additional clinical context or considerations to guide angle generation.
     model : str, optional
         The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
-        If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
+        If None, uses ``PYRADPLAN_AI_AGENTS_MODEL`` from the environment, falling back to
         the default defined in :class:`AiSettings`.
     cst : StructureSet, optional
         Structure set whose per-VOI geometry (centers of mass, principal axes,
