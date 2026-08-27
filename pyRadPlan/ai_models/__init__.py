@@ -14,6 +14,7 @@ from ._factory import (
 )
 from ._hub import resolve_model_dir, is_valid_model_dir
 from ._load_model import load_model
+from ._pyanno4rt import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
     "AiModelSettings",
@@ -24,4 +25,7 @@ __all__ = [
     "resolve_model_dir",
     "is_valid_model_dir",
     "load_model",
+    "OutcomeFeature",
+    "OutcomeModelSpec",
+    "load_pyanno4rt_model",
 ]

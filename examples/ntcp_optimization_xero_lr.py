@@ -1,0 +1,169 @@
+# %% [markdown]
+"""# Xerostomia NTCP optimization with a scikit-learn outcome model."""
+# %% [markdown]
+# This example steers a photon plan with a logistic-regression NTCP model trained in
+# pyanno4rt. Unlike the CNN in `ntcp_optimization_xero.py`, the model does not see dose
+# volumes: it consumes eight scalar features -- the mean dose in each parotid plus six
+# dose-independent geometry descriptors -- that the optimization chain computes itself.
+# The model therefore stays a plain scikit-learn estimator and its dose gradient is
+# analytic.
+
+# To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
+# This will create a .ipynb file in the same directory:
+
+# ```bash
+# pip install jupytext
+# jupytext --to notebook path/to/this/file/ntcp_optimization_xero_lr.py
+
+# %%
+# Import necessary libraries
+import logging
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import SimpleITK as sitk
+
+from pyRadPlan import (
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+    settings,
+)
+from pyRadPlan.cst import HelperVOI
+from pyRadPlan.gui.apps import launch_viewer
+from pyRadPlan.io import load_patient
+from pyRadPlan.optimization.objectives import (
+    OutcomeSklearn,
+    SquaredDeviation,
+    SquaredOverdosing,
+)
+from pyRadPlan.plan._plans import PhotonPlan
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
+settings.xp.preferred_gpu_array_backend = "cupy"
+logging.basicConfig(level=logging.INFO)
+
+# %%
+# Load the head-and-neck patient the model was configured for.
+ct, cst = load_patient(r"path_to_hn")
+
+cst.vois[0] = cst.vois[12]  # PAROTID_LT
+cst.vois[1] = cst.vois[13]  # PAROTID_RT
+cst.vois[2] = cst.vois[14]  # PTV63
+cst.vois[3] = cst.vois[15]  # PTV70
+cst.vois = cst.vois[:4]
+cst.create_body_seg()  # adds BODY/SKIN as vois[4]
+
+# %% [markdown]
+# Create the photon plan, mirroring the reference pyanno4rt run.
+# %%
+pln = PhotonPlan(radiation_mode="photons", machine="Generic")
+pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+num_of_beams = 8
+pln.prop_stf = {
+    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
+    "couch_angles": np.zeros((num_of_beams,)),
+}
+stf = generate_stf(ct, cst, pln)
+
+# %% [markdown]
+# Configure the NTCP objective. `model` points straight at the pyanno4rt `input.json`:
+# it carries the feature definitions, the model label and the path to `predictor.save`.
+# `segment_map` translates the model's segment names to the VOI names in this structure
+# set (names are otherwise matched case-insensitively).
+#
+# `transform=True` reproduces pyanno4rt's SALU transform, which keeps the gradient from
+# vanishing once the predicted probability saturates. Note that `priority` is *not*
+# directly comparable to pyanno4rt's `weight`, because pyanno4rt scales its features by
+# the number of fractions without re-applying that factor to the gradient.
+# %%
+PYANNO4RT_CONFIG = r"path_to_input.json"
+
+ntcp_obj = OutcomeSklearn(
+    priority=10000.0,
+    model=PYANNO4RT_CONFIG,
+    mode="NTCP",
+    transform=True,
+    ct=ct,  # geometry features are evaluated on the CT grid
+    cst=cst,  # provides the segment masks
+    segment_map={"PAROTID_LT": "Parotid_LT", "PAROTID_RT": "Parotid_RT"},
+)
+print("Model features:", ntcp_obj.feature_names)
+
+# %%
+# Conventional objectives, matching the weights of the reference plan.
+cst.vois[0].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_LT
+cst.vois[1].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_RT
+cst.vois[2].objectives = [SquaredDeviation(priority=1000.0, d_ref=63.0)]  # PTV63
+cst.vois[3].objectives = [SquaredDeviation(priority=1000.0, d_ref=70.0)]  # PTV70
+cst.vois[4].objectives = [SquaredOverdosing(priority=800.0, d_max=30.0)]  # SKIN/BODY
+
+# %%
+# Calculate the dose influence matrix ("dij")
+dij = calc_dose_influence(ct, cst, stf, pln)
+
+# %% [markdown]
+# The objective only reads a mean dose per parotid, so it is attached to a helper VOI
+# spanning both glands -- no global VOI needed. The VOI has to cover *both*, because the
+# optimizer hands the objective only the voxels inside it and everything outside is
+# zero-filled; on a single gland the other one's mean dose would silently come out as 0.
+#
+# `apply_overlap=None` keeps the union out of the overlap-priority pass, which would
+# otherwise carve the overlapping PTVs out of the glands and shrink the feature support.
+# %%
+cst.vois.append(
+    HelperVOI(
+        name="PAROTIDS",
+        ct_image=cst.ct_image,
+        mask=sitk.Or(cst.vois[0].mask, cst.vois[1].mask),
+        objectives=[ntcp_obj],
+        apply_overlap=None,
+    )
+)
+
+opt_info = {}
+fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+
+ntcp_history_active = list(ntcp_obj.ntcp_history)
+ntcp_obj.reset_history()
+
+# %% [markdown]
+# Reference run: the same problem with the NTCP objective in monitor-only mode, so it
+# reports the probability without contributing gradients. The objective is the same
+# instance the helper VOI already holds, so only the flag changes.
+# %%
+ntcp_obj.monitor_only = True
+
+opt_info_native = {}
+fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+ntcp_history_native = list(ntcp_obj.ntcp_history)
+
+print(f"NTCP model-guided: {ntcp_history_active[-1]:.2%}")
+print(f"NTCP native:       {ntcp_history_native[-1]:.2%}")
+
+# %%
+# Compute the result on the CT grid
+result = dij.compute_result_ct_grid(fluence)
+result_native = dij.compute_result_ct_grid(fluence_native)
+
+result_collective = result.copy()
+result_collective["physical_dose_native"] = result_native["physical_dose"]
+result_collective["physical_dose_diff"] = result["physical_dose"] - result_native["physical_dose"]
+
+# %% [markdown]
+# NTCP history: model-guided (active gradients) vs. native (monitor-only) optimization.
+# %%
+fig, ax = plt.subplots()
+ax.plot(range(1, len(ntcp_history_active) + 1), ntcp_history_active, label="LR-guided")
+ax.plot(range(1, len(ntcp_history_native) + 1), ntcp_history_native, label="native (monitor)")
+ax.set_xlabel("Objective evaluation")
+ax.set_ylabel("NTCP")
+ax.set_title("Xerostomia NTCP during optimization")
+ax.legend()
+plt.show()
+
+launch_viewer(ct, cst, result_collective)
