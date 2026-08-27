@@ -98,8 +98,9 @@ cst.vois[4].objectives = [SquaredOverdosing(priority=800.0, d_max=30.0)]  # SKIN
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-cst.add_global_voi()
-cst.vois[5].objectives = [ntcp_obj]
+# The CNN reads the dose over the whole patient, which SKIN/BODY already covers -- the
+# objective restricts to its VOI and scatters back onto the dose grid internally.
+cst.vois[4].objectives.append(ntcp_obj)
 opt_info = {}
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
@@ -110,7 +111,6 @@ ntcp_obj.reset_history()
 
 # Native optimization: switch CNN NTCP objective to monitor-only mode (logs but zero gradients)
 ntcp_obj.monitor_only = True
-cst.vois[5].objectives = [ntcp_obj]
 
 opt_info_native = {}
 fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
