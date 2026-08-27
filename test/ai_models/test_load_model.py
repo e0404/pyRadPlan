@@ -1,3 +1,12 @@
+"""End-to-end load of the committed dummy model.
+
+Requires torch and safetensors (the ``ai`` extra plus a torch build). The
+loader machinery itself is covered without them in
+``test_loader_machinery.py``.
+"""
+
+import sys
+
 import numpy as np
 import pytest
 
@@ -27,23 +36,19 @@ def test_dummy_model_forward_pass(dummy_model_dir):
     assert tuple(y.shape) == (1, 1)
 
 
-def test_trust_remote_code_disabled_raises(dummy_model_dir):
-    with pytest.raises(ValueError):
-        load_model(local_dir=dummy_model_dir, trust_remote_code=False)
+def test_loaded_model_survives_a_round_trip(dummy_model_dir):
+    """__module__ must stay resolvable, or pickling and torch.save break."""
+    import pickle
+
+    model, _ = load_model(local_dir=dummy_model_dir)
+
+    assert type(model).__module__ in sys.modules
+    restored = pickle.loads(pickle.dumps(model))
+    assert type(restored) is type(model)
 
 
-def test_name_resolves_to_hf_org_repo_id(dummy_model_dir, monkeypatch):
-    from pathlib import Path
-
-    from pyRadPlan.ai_models import _load_model
-
-    captured = {}
-
-    def fake_resolve(**kwargs):
-        captured.update(kwargs)
-        return Path(dummy_model_dir)
-
-    monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
-
-    load_model("dosecalc-x")
-    assert captured["repo_id"] == f"{_load_model.get_settings().ai_models.hf_org}/dosecalc-x"
+def test_weights_are_loaded_not_freshly_initialised(dummy_model_dir):
+    model, _ = load_model(local_dir=dummy_model_dir)
+    weight = model.head.weight
+    assert torch.isfinite(weight).all()
+    assert not torch.equal(weight, torch.zeros_like(weight))

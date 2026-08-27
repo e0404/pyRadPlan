@@ -24,3 +24,4 @@ Api documentation
    util
    io
    ai_agents
+   ai_models
