@@ -136,4 +136,4 @@ if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed
     launch_viewer(ct, cst, result)
 else:
-    plot_slice(ct=ct, cst=cst, overlay=result.physical_dose.values)
+    plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values)
