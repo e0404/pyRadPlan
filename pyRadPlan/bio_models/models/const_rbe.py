@@ -10,9 +10,9 @@ class ConstantRBEModel(BiologicalModel):
     """
     Biological model applying a single, spatially uniform RBE.
 
-    RBE-weighted dose is ``rbe * physical_dose``; no LQ parameters are produced. The
-    constant is stored on the dij (``dij.rbe``) so that quantities and results can be
-    derived from the physical dose influence matrix alone.
+    RBE-weighted dose is ``rbe * physical_dose``; no LQ parameters are produced. The dose
+    engine stores the model on the dij (``dij.bio_model``, exposed as ``dij.rbe``) so that
+    quantities and results are derived from the physical dose influence matrix alone.
 
     Parameters
     ----------
@@ -31,9 +31,6 @@ class ConstantRBEModel(BiologicalModel):
         if rbe <= 0:
             raise ValueError("Constant RBE must be positive.")
         self.rbe = float(rbe)
-
-    def dij_scalars(self) -> dict[str, Any]:
-        return {"rbe": self.rbe}
 
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
         return ParametricEvaluator(self)

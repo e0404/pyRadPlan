@@ -24,7 +24,6 @@ def test_EmptyModel_constructor():
 def test_EmptyModel_evaluator():
     evaluator = EmptyModel().evaluator(machine=None, voxel_params={})
     assert isinstance(evaluator, ParametricEvaluator)
-    assert evaluator.dij_scalars() == {}
     assert evaluator.kernel_quantities({"alpha": 1}) == {}
     with pytest.raises(NotImplementedError):
         evaluator.bixel_alpha_beta({}, {})

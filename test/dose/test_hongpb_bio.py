@@ -52,6 +52,8 @@ def test_protons_WED_alpha_beta_matrices(test_data_protons):
     pln, ct, cst, stf, dij, result = test_data_protons
     pln.bio_model = "WED"
     dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.bio_model == pln.bio_model
+    assert dij_py.model_dump()["bio_model"] == {"model": "WED"}
 
     def wedenberg(let, alpha_x, abr):
         return 1.0, 1.0 + 0.434 * let / abr
@@ -90,6 +92,7 @@ def test_protons_constant_rbe(test_data_protons):
     dij_py = calc_dose_influence(ct, cst, stf, pln)
 
     assert dij_py.rbe == pytest.approx(1.1)
+    assert dij_py.bio_model.model == "constant_rbe"
     assert dij_py.alpha_dose is None
     assert dij_py.sqrt_beta_dose is None
 
@@ -141,6 +144,7 @@ def test_protons_bio_model_none_has_no_bio_matrices(test_data_protons):
     assert dij_py.alpha_dose is None
     assert dij_py.sqrt_beta_dose is None
     assert dij_py.rbe is None
+    assert dij_py.bio_model.model == "none"
 
 
 def test_carbon_kernel_based_lq_alpha_beta_matrices(test_data_carbon):

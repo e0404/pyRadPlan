@@ -56,8 +56,10 @@ Additional matrices are available for biological dose calculation in particle th
      - Per-beamlet √β-dose for the LQ model.
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
-resolved during optimization. A constant RBE is stored as the scalar ``dij.rbe`` instead of
-matrices.
+resolved during optimization. The engine also stores the biological model it used as
+``dij.bio_model``; for a constant-RBE model no matrices are needed and the constant is
+available as ``dij.rbe``. The model decides how ``rbe_x_dose`` is derived (LQ inversion of
+the effect, or ``rbe * physical_dose``).
 
 Biological models and LET
 -------------------------

@@ -12,7 +12,6 @@ from pyRadPlan.quantities import (
     RBExDose,
     SqrtBetaDose,
 )
-from pyRadPlan.quantities._rbe_x_dose import RBExDoseFromAlphaBeta, RBExDoseFromConstantRBE
 
 
 @pytest.fixture
@@ -142,7 +141,7 @@ def test_resolver_resolves_transitive_dependencies(full_dij):
     resolver = QuantityResolver(full_dij)
     resolver.resolve(["rbe_x_dose"])
     keys = set(resolver.instances)
-    assert keys == {"rbe_x_dose", "effect", "alpha_dose", "sqrt_beta_dose"}
+    assert keys == {"rbe_x_dose", "effect", "alpha_dose", "sqrt_beta_dose", "physical_dose"}
     assert isinstance(resolver.instances["rbe_x_dose"], RBExDose)
     assert isinstance(resolver.instances["effect"], Effect)
     assert isinstance(resolver.instances["alpha_dose"], AlphaDose)
@@ -170,9 +169,10 @@ def test_rbe_from_const_or_alpha_beta(full_dij, full_const_rbe_dij):
     resolver = QuantityResolver(full_dij)
     rbe_from_alpha_beta = resolver.get("rbe_x_dose")
     assert isinstance(rbe_from_alpha_beta, RBExDose)
-    assert isinstance(rbe_from_alpha_beta, RBExDoseFromAlphaBeta)
+    assert rbe_from_alpha_beta.path == "effect"
 
     resolver_const_rbe = QuantityResolver(full_const_rbe_dij)
     rbe_from_const = resolver_const_rbe.get("rbe_x_dose")
     assert isinstance(rbe_from_const, RBExDose)
-    assert isinstance(rbe_from_const, RBExDoseFromConstantRBE)
+    assert rbe_from_const.path == "constant"
+    assert "effect" not in rbe_from_const.dependencies

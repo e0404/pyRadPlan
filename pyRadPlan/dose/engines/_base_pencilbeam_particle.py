@@ -540,7 +540,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._bio_evaluator = model.evaluator(
             self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
         )
-        dij.update(self._bio_evaluator.dij_scalars())
+        dij["bio_model"] = model
 
         if self._calc_bio_dose:
             dij = self._allocate_bio_dose_container(dij)

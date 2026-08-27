@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import AlphaDose, Effect
-from pyRadPlan.quantities._rbe_x_dose import RBExDoseFromAlphaBeta
+from pyRadPlan.quantities import RBExDose
 
 N_VOX = 125
 N_BIX = 10
@@ -83,7 +83,7 @@ def test_dij_rejects_scenario_mismatch():
 
 def test_rbe_x_dose_uses_scenario_column(two_scenario_dij):
     dij = two_scenario_dij
-    rbe = RBExDoseFromAlphaBeta(dij, scenarios=[0, 1])
+    rbe = RBExDose(dij, scenarios=[0, 1])
     fluence = xp.arange(N_BIX, dtype=xp.float32)
     result = rbe(fluence)
     w = np.arange(N_BIX, dtype=np.float32)

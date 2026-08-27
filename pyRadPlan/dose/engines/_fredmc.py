@@ -1245,7 +1245,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             let_auto=model is not None and model.requires_let,
         )
         if model is not None:
-            dij.update(model.dij_scalars())
+            dij["bio_model"] = model
         if self._calc_bio_dose:
             self._bio_evaluator = model.evaluator(
                 self._machine,

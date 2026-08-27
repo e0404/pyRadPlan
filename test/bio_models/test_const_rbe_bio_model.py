@@ -22,7 +22,6 @@ def test_ConstantRBEModel_constructor():
 
 
 def test_ConstantRBEModel_parameter():
-    assert ConstantRBEModel(rbe=1.0).dij_scalars() == {"rbe": 1.0}
     with pytest.raises(ValueError):
         ConstantRBEModel(rbe=0.0)
 
@@ -30,7 +29,6 @@ def test_ConstantRBEModel_parameter():
 def test_ConstantRBEModel_evaluator():
     evaluator = ConstantRBEModel().evaluator(machine=None, voxel_params={})
     assert isinstance(evaluator, ParametricEvaluator)
-    assert evaluator.dij_scalars() == {"rbe": pytest.approx(1.1)}
     assert evaluator.kernel_quantities({}) == {}
     with pytest.raises(NotImplementedError):
         evaluator.bixel_alpha_beta({}, {})

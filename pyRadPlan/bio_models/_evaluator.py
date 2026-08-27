@@ -26,10 +26,6 @@ class BioModelEvaluator(ABC):
     def __init__(self, model: "BiologicalModel"):
         self.model = model
 
-    def dij_scalars(self) -> dict[str, Any]:
-        """Scalar entries to store on the dij (e.g. ``{"rbe": 1.1}``)."""
-        return self.model.dij_scalars()
-
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
         """
         Depth-dependent arrays the engine must interpolate per bixel for this model.

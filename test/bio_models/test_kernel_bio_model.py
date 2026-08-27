@@ -52,7 +52,6 @@ def test_KernelBasedLQModel_evaluator(machine, voxel_params):
     evaluator = KernelBasedLQModel().evaluator(machine, voxel_params)
     assert isinstance(evaluator, KernelBasedEvaluator)
     assert isinstance(evaluator.lookup, ExactClassLookup)
-    assert evaluator.dij_scalars() == {}
 
     kernel = {"alpha": "A", "beta": "B", "idd": "ignored"}
     assert evaluator.kernel_quantities(kernel) == {"alpha": "A", "beta": "B"}

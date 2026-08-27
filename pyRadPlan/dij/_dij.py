@@ -13,7 +13,7 @@ from pydantic import (
     SerializationInfo,
     SerializerFunctionWrapHandler,
     ValidatorFunctionWrapHandler,
-    AliasChoices,
+    model_validator,
 )
 
 from numpydantic import NDArray, Shape
@@ -27,6 +27,7 @@ import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.bio_models import BiologicalModel, ConstantRBEModel, create_bio_model
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
@@ -92,9 +93,49 @@ class Dij(PyRadPlanBaseModel):
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
-    rbe: Optional[float] = Field(
-        default=None, validation_alias=AliasChoices("rbe", "RBE"), serialization_alias="RBE"
+    bio_model: Optional[Any] = Field(
+        default=None,
+        description="Biological model the alpha/beta influence matrices or the constant RBE "
+        "stem from: None, a {'model': name, **parameters} dict or a BiologicalModel.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_constant_rbe(cls, data: Any) -> Any:
+        """Fold a legacy scalar ``rbe`` / ``RBE`` (matRad) into a constant-RBE model."""
+        if not isinstance(data, dict) or not ({"rbe", "RBE"} & set(data)):
+            return data
+        data = dict(data)
+        values = [
+            np.asarray(data.pop(key), dtype=float).ravel() for key in ("rbe", "RBE") if key in data
+        ]
+        # matRad writes an empty / zero placeholder when no constant RBE applies
+        rbe = next((float(v[0]) for v in values if v.size == 1 and v[0] > 0), None)
+        if rbe is not None and data.get("bio_model") is None and data.get("bioModel") is None:
+            data["bio_model"] = {"model": "constant_rbe", "rbe": rbe}
+        return data
+
+    @field_validator("bio_model", mode="before")
+    @classmethod
+    def _validate_bio_model(cls, v: Any) -> Optional[BiologicalModel]:
+        if v is None:
+            return None
+        return create_bio_model(v)
+
+    @field_serializer("bio_model")
+    def _serialize_bio_model(self, value: Any, info: SerializationInfo) -> Any:
+        if not isinstance(value, BiologicalModel):
+            return value
+        if (info.context or {}).get("matRad"):
+            return None  # matRad dijs only carry the constant RBE, see to_matrad
+        return value.to_dict()
+
+    @property
+    def rbe(self) -> Optional[float]:
+        """Constant RBE of the biological model, if it is a constant-RBE model."""
+        if isinstance(self.bio_model, ConstantRBEModel):
+            return self.bio_model.rbe
+        return None
 
     @computed_field
     @property
@@ -360,6 +401,9 @@ class Dij(PyRadPlanBaseModel):
         """Convert the Dij to matRad-compatible dictionary."""
 
         dij_dict = super().to_matrad(context=context)
+        dij_dict.pop("bioModel", None)
+        if self.rbe is not None:
+            dij_dict["RBE"] = float(self.rbe)
 
         # Replace None values with np.array([0]) for savemat compatibility
         for key, value in dij_dict.items():
@@ -450,7 +494,13 @@ class Dij(PyRadPlanBaseModel):
                     )
                 out["let_beam"].append(let_beam)
 
-        if self.alpha_dose is not None and self.sqrt_beta_dose is not None:
+        # Lazy import: the quantities module depends on the dij
+        from pyRadPlan.quantities._rbe_x_dose import RBExDose, lq_inverse_dose
+
+        has_lq = self.alpha_dose is not None and self.sqrt_beta_dose is not None
+        rbe_path = RBExDose.choose_path(self, has_effect=has_lq, strict=False)
+
+        if has_lq:
             alphax = self.alphax[:, scenario_index]
             betax = self.betax[:, scenario_index]
             alpha_mat = self.alpha_dose.flat[scenario_index]
@@ -461,15 +511,11 @@ class Dij(PyRadPlanBaseModel):
 
             valid = (out["physical_dose"] > 0) & (betax > 0)
             phys = out["physical_dose"]
-            out["rbe_x_dose"] = self._compute_rbe_x_dose(out["effect"], phys, alphax, betax)
-            out["rbe"] = np.where(valid, out["rbe_x_dose"] / np.where(valid, phys, 1.0), 0.0)
             out["alpha"] = np.where(valid, out["alpha_dose"] / np.where(valid, phys, 1.0), 0.0)
             out["beta"] = np.where(
                 valid, (out["sqrt_beta_dose"] / np.where(valid, phys, 1.0)) ** 2, 0.0
             )
 
-            out["rbe_x_dose_beam"] = []
-            out["rbe_beam"] = []
             out["effect_beam"] = []
             out["alpha_beam"] = []
             out["beta_beam"] = []
@@ -478,24 +524,32 @@ class Dij(PyRadPlanBaseModel):
             for idx, phys_beam in zip(beam_indices, out["physical_dose_beam"]):
                 alpha_dose_beam = alpha_mat[:, idx] @ intensity[idx]
                 sqrt_beta_dose_beam = sqrt_beta_mat[:, idx] @ intensity[idx]
-                effect_beam = alpha_dose_beam + sqrt_beta_dose_beam**2
-                rbe_x_beam = self._compute_rbe_x_dose(effect_beam, phys_beam, alphax, betax)
                 mask_beam = phys_beam > 0
                 denom_beam = np.where(mask_beam, phys_beam, 1.0)
-                out["effect_beam"].append(effect_beam)
+                out["effect_beam"].append(alpha_dose_beam + sqrt_beta_dose_beam**2)
                 out["alpha_dose_beam"].append(alpha_dose_beam)
                 out["sqrt_beta_dose_beam"].append(sqrt_beta_dose_beam)
-                out["rbe_x_dose_beam"].append(rbe_x_beam)
-                out["rbe_beam"].append(np.where(mask_beam, rbe_x_beam / denom_beam, 0.0))
                 out["alpha_beam"].append(np.where(mask_beam, alpha_dose_beam / denom_beam, 0.0))
                 out["beta_beam"].append(
                     np.where(mask_beam, (sqrt_beta_dose_beam / denom_beam) ** 2, 0.0)
                 )
 
-        elif self.rbe is not None:
+        if rbe_path == "effect":
+            phys = out["physical_dose"]
+            valid = phys > 0
+            out["rbe_x_dose"] = lq_inverse_dose(out["effect"], alphax, betax)
+            out["rbe"] = np.where(valid, out["rbe_x_dose"] / np.where(valid, phys, 1.0), 0.0)
+            out["rbe_x_dose_beam"] = [
+                lq_inverse_dose(effect_beam, alphax, betax) for effect_beam in out["effect_beam"]
+            ]
+            out["rbe_beam"] = [
+                np.where(phys_beam > 0, rbe_x_beam / np.where(phys_beam > 0, phys_beam, 1.0), 0.0)
+                for rbe_x_beam, phys_beam in zip(out["rbe_x_dose_beam"], out["physical_dose_beam"])
+            ]
+        elif rbe_path == "constant":
             out["rbe_x_dose"] = self.rbe * out["physical_dose"]
             out["rbe_x_dose_beam"] = [
-                self.rbe * dose_mat[:, idx] @ intensity[idx] for idx in beam_indices
+                self.rbe * phys_beam for phys_beam in out["physical_dose_beam"]
             ]
 
         return self._scale_result_to_fractions(out, num_of_fractions)
@@ -695,15 +749,6 @@ class Dij(PyRadPlanBaseModel):
         logger.info(f"Converted Dij to namespace '{name}'")
 
         return dij_copy
-
-    @staticmethod
-    def _compute_rbe_x_dose(effect, phys, alphax, betax):
-        mask = (phys > 0) & (betax > 0)
-        rbe_x = np.zeros_like(effect)
-        rbe_x[mask] = (
-            np.sqrt(alphax[mask] ** 2 + 4 * betax[mask] * effect[mask]) - alphax[mask]
-        ) / (2 * betax[mask])
-        return rbe_x
 
 
 def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:

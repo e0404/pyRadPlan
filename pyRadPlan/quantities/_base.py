@@ -88,8 +88,12 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 resolver = QuantityResolver(
                     self._dij, scenarios=self.scenarios, _dij_already_in_namespace=True
                 )
-                for dep_id in self._dep_ids_for_indirect():
+                for dep_id in self.required_dependencies:
                     self._deps[dep_id] = resolver.get(dep_id)
+                for dep_id in self.optional_dependencies:
+                    dep = resolver.try_get(dep_id)
+                    if dep is not None:
+                        self._deps[dep_id] = dep
         else:
             if mode not in ("direct", "indirect"):
                 raise ValueError(f"Unknown quantity mode: {mode!r}")
@@ -131,10 +135,6 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             f"Quantity {type(self).__name__!r} cannot be computed: dij has no attribute "
             f"{self.identifier!r} and no dependencies are declared."
         )
-
-    def _dep_ids_for_indirect(self) -> tuple[str, ...]:
-        """Return identifiers that must be resolved to compute this quantity indirectly."""
-        return tuple(self.required_dependencies) + tuple(self.optional_dependencies)
 
     def _validate_dependencies(self) -> None:
         if self._mode == "indirect":

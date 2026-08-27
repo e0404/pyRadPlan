@@ -130,10 +130,6 @@ class BiologicalModel(ABC):
             ``(num_voxels, num_ct_scenarios)``. Currently ``"alpha_x"`` and ``"beta_x"``.
         """
 
-    def dij_scalars(self) -> dict[str, Any]:
-        """Scalar entries this model contributes to the dij (e.g. a constant RBE)."""
-        return {}
-
     def is_available(
         self,
         radiation_mode: str,

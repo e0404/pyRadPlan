@@ -7,7 +7,8 @@ from scipy.sparse import csc_array
 from pyRadPlan import dose
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import FluenceDependentQuantity
-from pyRadPlan.quantities._rbe_x_dose import RBExDoseFromAlphaBeta, RBExDoseFromConstantRBE
+from pyRadPlan.bio_models import ConstantRBEModel, Wedenberg
+from pyRadPlan.quantities._rbe_x_dose import RBExDose
 
 
 @pytest.fixture
@@ -101,8 +102,8 @@ def sample_dij_sparse_constant_rbe(sample_base_dij_constant_rbe_dict):
     return dij
 
 
-def test_RBExDoseFromAlphaBeta_constructor(sample_dij_dense):
-    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_dense)
+def test_RBExDose_effect_constructor(sample_dij_dense):
+    rbe_x_dose = RBExDose(sample_dij_dense)
     assert isinstance(rbe_x_dose, FluenceDependentQuantity)
     assert rbe_x_dose.mode == "indirect"
     assert rbe_x_dose.scenarios == [0]
@@ -111,12 +112,13 @@ def test_RBExDoseFromAlphaBeta_constructor(sample_dij_dense):
     assert format(rbe_x_dose.unit, "~") == "Gy"
     assert rbe_x_dose.identifier == "rbe_x_dose"
     assert rbe_x_dose.name == "RBExDose"
-    assert rbe_x_dose.required_dependencies == ("effect",)
+    assert rbe_x_dose.optional_dependencies == ("effect", "physical_dose")
     assert "effect" in rbe_x_dose.dependencies
+    assert rbe_x_dose.path == "effect"
 
 
-def test_RBExDoseFromAlphaBeta_dense(sample_dij_dense):
-    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_dense)
+def test_RBExDose_effect_dense(sample_dij_dense):
+    rbe_x_dose = RBExDose(sample_dij_dense)
 
     fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = rbe_x_dose(fluence)
@@ -153,8 +155,8 @@ def test_RBExDoseFromAlphaBeta_dense(sample_dij_dense):
     assert np.allclose(ret_deriv.flat[0], calc_derivative)
 
 
-def test_RBExDoseFromAlphaBeta_sparse(sample_dij_sparse):
-    rbe_x_dose = RBExDoseFromAlphaBeta(sample_dij_sparse)
+def test_RBExDose_effect_sparse(sample_dij_sparse):
+    rbe_x_dose = RBExDose(sample_dij_sparse)
 
     fluence = xp.arange(10, dtype=xp.float32)
     ret_callable = rbe_x_dose(fluence)
@@ -190,8 +192,8 @@ def test_RBExDoseFromAlphaBeta_sparse(sample_dij_sparse):
     assert np.allclose(ret_deriv.flat[0], calc_derivative)
 
 
-def test_RBExDoseFromConstantRBE_constructor(sample_dij_dense_constant_rbe):
-    const_rbe = RBExDoseFromConstantRBE(sample_dij_dense_constant_rbe)
+def test_RBExDose_constant_constructor(sample_dij_dense_constant_rbe):
+    const_rbe = RBExDose(sample_dij_dense_constant_rbe)
     assert isinstance(const_rbe, FluenceDependentQuantity)
     assert const_rbe.mode == "indirect"
     assert const_rbe.scenarios == [0]
@@ -200,10 +202,12 @@ def test_RBExDoseFromConstantRBE_constructor(sample_dij_dense_constant_rbe):
     assert format(const_rbe.unit, "~") == "Gy"
     assert const_rbe.identifier == "rbe_x_dose"
     assert const_rbe.name == "RBExDose"
+    assert const_rbe.path == "constant"
+    assert "effect" not in const_rbe.dependencies
 
 
-def test_RBExDoseFromConstantRBE_dense(sample_dij_dense_constant_rbe):
-    const_rbe = RBExDoseFromConstantRBE(sample_dij_dense_constant_rbe)
+def test_RBExDose_constant_dense(sample_dij_dense_constant_rbe):
+    const_rbe = RBExDose(sample_dij_dense_constant_rbe)
     rbe = 1.1
 
     fluence = xp.arange(10, dtype=xp.float32)
@@ -228,8 +232,8 @@ def test_RBExDoseFromConstantRBE_dense(sample_dij_dense_constant_rbe):
     assert np.allclose(ret_deriv.flat[0], rbe * dij_mat.T @ np.ones(125, dtype=np.float32))
 
 
-def test_RBExDoseFromConstantRBE_sparse(sample_dij_sparse_constant_rbe):
-    const_rbe = RBExDoseFromConstantRBE(sample_dij_sparse_constant_rbe)
+def test_RBExDose_constant_sparse(sample_dij_sparse_constant_rbe):
+    const_rbe = RBExDose(sample_dij_sparse_constant_rbe)
     rbe = 1.1
 
     fluence = xp.arange(10, dtype=xp.float32)
@@ -252,3 +256,60 @@ def test_RBExDoseFromConstantRBE_sparse(sample_dij_sparse_constant_rbe):
     assert ret_deriv.dtype == sample_dij_sparse_constant_rbe.physical_dose.dtype
     assert ret_deriv.shape == sample_dij_sparse_constant_rbe.physical_dose.shape
     assert np.allclose(ret_deriv.flat[0], rbe * dij_mat.T @ np.ones(125, dtype=np.float32))
+
+
+def test_dij_legacy_rbe_becomes_constant_model(
+    sample_dij_sparse_constant_rbe, sample_base_dij_constant_rbe_dict
+):
+    dij = sample_dij_sparse_constant_rbe
+    assert isinstance(dij.bio_model, ConstantRBEModel)
+    assert dij.rbe == pytest.approx(1.1)
+    assert dij.model_dump()["bio_model"] == {"model": "constant_rbe", "rbe": 1.1}
+    matrad = dij.to_matrad()
+    assert matrad["RBE"] == pytest.approx(1.1)
+    assert "bioModel" not in matrad
+
+    # the input dict is left untouched by the legacy conversion
+    assert sample_base_dij_constant_rbe_dict["rbe"] == 1.1
+    assert "bio_model" not in sample_base_dij_constant_rbe_dict
+
+    # matRad's zero placeholder means "no constant RBE"
+    del sample_base_dij_constant_rbe_dict["rbe"]
+    sample_base_dij_constant_rbe_dict["RBE"] = np.array([0])
+    assert Dij.model_validate(sample_base_dij_constant_rbe_dict).bio_model is None
+
+
+def test_dij_bio_model_spec_and_precedence(sample_dij_dense):
+    # no model: the LQ matrices decide
+    assert sample_dij_dense.bio_model is None
+    assert RBExDose(sample_dij_dense).path == "effect"
+
+    # a constant-RBE model wins over present LQ matrices
+    dij = sample_dij_dense.model_copy()
+    dij.bio_model = {"model": "constant_rbe", "rbe": 1.2}
+    assert isinstance(dij.bio_model, ConstantRBEModel) and dij.rbe == 1.2
+    rbe_x = RBExDose(dij)
+    assert rbe_x.path == "constant"
+    w = np.arange(10, dtype=np.float32)
+    assert np.allclose(
+        rbe_x(xp.asarray(w)).flat[0], 1.2 * (dij.physical_dose.flat[0] @ w), rtol=1e-6
+    )
+    result = dij.get_result_arrays_from_intensity(w)
+    assert np.allclose(result["rbe_x_dose"], 1.2 * result["physical_dose"])
+    assert "effect" in result
+
+    # an alpha/beta model without matrices cannot give RBE-weighted dose
+    dij.bio_model = Wedenberg()
+    dij.alpha_dose = None
+    dij.sqrt_beta_dose = None
+    with pytest.raises(ValueError, match="needs alpha_dose"):
+        RBExDose(dij)
+    assert "rbe_x_dose" not in dij.get_result_arrays_from_intensity(w)
+
+
+def test_dij_without_rbe_path_raises(sample_dij_dense):
+    dij = sample_dij_dense.model_copy()
+    dij.alpha_dose = None
+    dij.sqrt_beta_dose = None
+    with pytest.raises(ValueError, match="neither"):
+        RBExDose(dij)
