@@ -72,23 +72,23 @@ else:
     # Choose slices to visualize
     view_slice = [int(np.round(ct.size[2] / 2))]
 
-# Visualize the results
-# Use plot_multiple_slices to visualize the biological effect and physical dose
-# use plot_slice() for single distributions
-plot_multiple_slices(
-    image_volume=ct,
-    cst=cst,
-    overlays=[
-        result.effect.values,
-        result.physical_dose.values,
-        result.rbe_x_dose.values,
-        result.rbe.values,
-    ],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit=["1", "Gy", "Gy", "1"],
-    overlay_titles=["Biological Effect", "Physical Dose", "RBE x Dose", "RBE"],
-    show_plot=True,
-)
+    # Visualize the results
+    # Use plot_multiple_slices to visualize the biological effect and physical dose
+    # use plot_slice() for single distributions
+    plot_multiple_slices(
+        image_volume=ct,
+        cst=cst,
+        overlays=[
+            result.effect.values,
+            result.physical_dose.values,
+            result.rbe_x_dose.values,
+            result.rbe.values,
+        ],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit=["1", "Gy", "Gy", "1"],
+        overlay_titles=["Biological Effect", "Physical Dose", "RBE x Dose", "RBE"],
+        show_plot=True,
+    )
 
 # %%

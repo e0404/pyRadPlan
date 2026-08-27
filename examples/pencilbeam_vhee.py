@@ -65,6 +65,7 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 
 # %% [markdown]
 # Optimization
+# %%
 cst.vois[0].objectives = [SquaredOverdosing(priority=10.0, d_max=1.0)]  # OAR
 cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=3.0)]  # Target
 cst.vois[2].objectives = [SquaredOverdosing(priority=10.0, d_max=2.0)]  # BODY
@@ -73,6 +74,7 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
+# %%
 if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed
     launch_viewer(ct, cst, result)
