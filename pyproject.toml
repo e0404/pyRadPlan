@@ -73,7 +73,7 @@ octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -178,6 +178,8 @@ authorized_licenses = [
   "mit",
   "mit license",
   "mit and apache-2.0",
+  "mpl-2.0 and mit",
+  "apache-2.0 and cnri-python",
   "mit-cmu",
   "cmu license (mit-cmu)",
   "isc",
@@ -195,7 +197,7 @@ authorized_licenses = [
 ]
 
 [tool.codespell]
-skip = "./matRad,*/matRad/*"
+skip = "./matRad,*/matRad/*,*.ipynb"
 ignore-words-list = "coo"
 
 [tool.pydocstringformatter]
