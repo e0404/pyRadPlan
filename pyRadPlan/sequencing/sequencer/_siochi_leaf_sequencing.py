@@ -205,9 +205,9 @@ class SiochiLeafSequencer(PhotonSequencer):
             )
 
             # Map summed shapes back into a fluence vector using the computed indices.
-            sequencing["fluence"][offset : offset + num_of_rays_per_beam] = beam_sequencing[
-                "sum_shapes"
-            ].ravel(order="C")[tmp_fluence_dict["indices"]]
+            sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
+                self._project_leaf_grid_to_rays(beam_sequencing["sum_shapes"], tmp_fluence_dict)
+            )
 
             sequencing["beam"].append(beam_sequencing)
             offset += num_of_rays_per_beam

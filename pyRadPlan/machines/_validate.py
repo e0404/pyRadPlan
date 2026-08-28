@@ -24,10 +24,13 @@ def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs
 
     if isinstance(data, dict):
         meta = data.get("meta")
-        if not isinstance(meta, dict):
-            raise ValueError("Dictionary Structure of provided machine not valid!")
-        # Prefer snake_case if both present, fall back to camelCase.
-        radiation_mode = meta.get("radiation_mode") or meta.get("radiationMode") or ""
+        if isinstance(meta, dict):
+            # matRad raw .mat struct shape: {"meta": {...}, "data": {...}}
+            # Prefer snake_case if both present, fall back to camelCase.
+            radiation_mode = meta.get("radiation_mode") or meta.get("radiationMode") or ""
+        else:
+            # Flat dict (e.g. Machine.model_dump()) with fields at the top level.
+            radiation_mode = data.get("radiation_mode") or data.get("radiationMode") or ""
     else:
         # If something non-dict (but not None) was passed, it's invalid
         if data is not None:

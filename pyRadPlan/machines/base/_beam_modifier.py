@@ -110,27 +110,42 @@ class MLC(BeamLimitingDevice):
         # the number of active pairs equals the number of leaf rows in the field).
         return len(self.leaf_positions)
 
-    def is_active_leaf_pair(self, central_leaf_pair: float, bixel_width: float) -> np.ndarray:
+    def is_active_leaf_pair(self, central_leaf_pair: float) -> np.ndarray:
         """Map the field's leaf rows onto the full MLC, given beam geometry.
 
         Parameters
         ----------
         central_leaf_pair : float
             Index of the central leaf pair in the full MLC.
-        bixel_width : float
-            The bixel width (beamlet / spot spacing) in mm.
         """
         # Leaf pair positions and active leaf pairs
         top_leaf_pair_pos = self.leaf_position_boundaries[-1]
         bottom_leaf_pair_pos = self.leaf_position_boundaries[0]
-        top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / bixel_width
-        bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / bixel_width
+        top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / self.leaf_width
+        bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / self.leaf_width
         is_active_leaf_pair = np.zeros(self.number_of_elements)
         # Activate indices between top and bottom leaf pairs (casting to int)
         start_ix = int(math.floor(top_leaf_pair))
         end_ix = int(math.ceil(bottom_leaf_pair))
         is_active_leaf_pair[start_ix - 1 : end_ix] = 1
         return is_active_leaf_pair
+
+    def full_leaf_positions(self, central_leaf_pair: float) -> np.ndarray:
+        """Leaf positions across the full physical device.
+
+        Returns an ``(number_of_elements, 2)`` array with this shape's leaf
+        openings placed at their physical leaf index; leaves outside the
+        field span (unused by this shape) are closed at the center (0, 0).
+
+        Parameters
+        ----------
+        central_leaf_pair : float
+            Index of the central leaf pair in the full MLC.
+        """
+        is_active = self.is_active_leaf_pair(central_leaf_pair).astype(bool)
+        full = np.zeros((self.number_of_elements, 2))
+        full[is_active] = self.leaf_positions
+        return full
 
     @field_validator("leaf_position_boundaries", "leaf_positions", mode="before")
     @classmethod
@@ -189,18 +204,22 @@ class MLC(BeamLimitingDevice):
                     f"Leaf boundary positions need to be sorted: {self.leaf_position_boundaries}"
                 )
 
-            boundary_diffs = np.unique(np.abs(np.diff(self.leaf_position_boundaries)))
-            if len(boundary_diffs) != 1:
-                raise ValueError(
-                    f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
-                )
-            if self.leaf_width is None:
-                self.leaf_width = boundary_diffs[0]
-            elif self.leaf_width != boundary_diffs[0]:
-                raise ValueError(
-                    f"Distance between leaf boundary positions ({boundary_diffs[0]})"
-                    f" differs from given leaf_width ({self.leaf_width})"
-                )
+            if len(self.leaf_position_boundaries) > 1:
+                boundary_diffs = np.unique(np.abs(np.diff(self.leaf_position_boundaries)))
+                if len(boundary_diffs) != 1:
+                    raise ValueError(
+                        f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
+                    )
+                if self.leaf_width is None:
+                    self.leaf_width = boundary_diffs[0]
+                elif not math.isclose(self.leaf_width, boundary_diffs[0]):
+                    raise ValueError(
+                        f"Distance between leaf boundary positions ({boundary_diffs[0]})"
+                        f" differs from given leaf_width ({self.leaf_width})"
+                    )
+            # A single boundary row has no spacing to derive/cross-check a pitch
+            # from; leaf_width must already be known (set by the caller, e.g.
+            # calculate_from_shape's explicit leaf_width argument) or stays None.
 
             self.number_of_elements = max(
                 self.number_of_elements, len(self.leaf_position_boundaries)
@@ -290,6 +309,7 @@ class MLC(BeamLimitingDevice):
         bixel_width: float,
         lim_l: np.ndarray,
         lim_r: np.ndarray,
+        leaf_width: Optional[float] = None,
     ) -> Self:
         """Derive leaf boundaries and positions from a shape map and beam geometry.
 
@@ -300,15 +320,25 @@ class MLC(BeamLimitingDevice):
         min_x : float
             Physical x coordinate of the corner bixel (mm).
         z_ray_pos : np.ndarray
-            Ray z positions of the beam (mm), used for the leaf boundaries.
+            Ray z positions of the beam (mm), used for the leaf boundaries. These
+            are already leaf-row-resolved when the caller resamples onto a
+            physical MLC grid coarser than the ray/bixel grid.
         bixel_width : float
-            Bixel width / spot spacing (mm).
+            Bixel width / spot spacing (mm), used for the x-axis (leaf travel
+            direction), which is never resampled.
         lim_l, lim_r : np.ndarray
             Left/right leaf travel limits per leaf row (mm), used for the closed-leaf
             fallback and to validate the resulting positions.
+        leaf_width : float, optional
+            The true row pitch (mm) of ``z_ray_pos``. Needed to set
+            ``self.leaf_width`` correctly when there's only a single leaf row
+            (no boundary spacing to derive it from); otherwise it is derived
+            from/cross-checked against the boundary spacing as before.
         """
         # get leaf position boundaries from unique ray positions
         self.leaf_position_boundaries = np.unique(z_ray_pos)
+        if leaf_width is not None:
+            self.leaf_width = leaf_width
 
         # compute left/right leaf positions from open bixel columns in physical coordinates
         dim_z = shape_map.shape[0]

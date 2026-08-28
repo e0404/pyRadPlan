@@ -347,7 +347,6 @@ class EngelLeafSequencer(PhotonSequencer):
             )
 
             d_k = tmp_fluence_dict["d_k"]
-            d_0 = tmp_fluence_dict["d_0"]
 
             # Process shapes for the current beam
             shapes_list, shapes_weight_list = self._process_beam_shapes(d_k.copy())
@@ -357,12 +356,9 @@ class EngelLeafSequencer(PhotonSequencer):
                 shapes_list, shapes_weight_list, tmp_fluence_dict, offset, num_of_rays_per_beam
             )
 
-            # Map fluence back to weights (using linear indices)
-            flat_d0 = d_0.flatten(order="C")
+            # Map fluence back to weights
             sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
-                flat_d0[tmp_fluence_dict["indices"]]
-                / self.num_of_levels
-                * tmp_fluence_dict["cal_fac"]
+                tmp_fluence_dict["d_0_native"] / self.num_of_levels * tmp_fluence_dict["cal_fac"]
             )
 
             sequencing["beam"].append(beam_sequencing)

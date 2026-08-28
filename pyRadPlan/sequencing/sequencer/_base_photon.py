@@ -4,12 +4,12 @@ import logging
 import math
 import numpy as np
 from abc import abstractmethod
-from typing import Union
+from typing import Optional, Union
 
-from pyRadPlan.plan import Plan
+from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.result import PlanResult, ApertureInfo
 from pyRadPlan.stf import SteeringInformation, Beam
-from pyRadPlan.machines import MLC
+from pyRadPlan.machines import MLC, load_from_name, validate_machine
 from ._base import Sequencer
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,39 @@ class PhotonSequencer(Sequencer):
     def __init__(self, pln: Union[Plan, dict] = None):
         self.num_of_mlc_leaf_pairs = 80
         self.num_of_levels = 5
+        self.leaf_width: Optional[float] = None
+        self.mlc_orientation = "X"
         super().__init__(pln)
+
+        if pln is not None:
+            self._load_mlc_from_machine(pln)
+
+    def _load_mlc_from_machine(self, pln: Union[Plan, dict]) -> None:
+        """Load leaf width / leaf count / orientation from the plan's machine, if it defines one.
+
+        Falls back to the legacy defaults (``leaf_width=None``, i.e. sequence
+        directly on the ray grid, ``num_of_mlc_leaf_pairs=80``, and
+        ``mlc_orientation="X"``) whenever the machine can't be resolved or
+        doesn't define an MLC.
+        """
+        try:
+            _pln = validate_pln(pln)
+            machine = _pln.machine
+            if isinstance(machine, str):
+                machine = load_from_name(_pln.radiation_mode, machine)
+            else:
+                machine = validate_machine(machine)
+        except Exception:
+            logger.debug(
+                "Could not resolve machine for MLC restrictions; using defaults.", exc_info=True
+            )
+            return
+
+        mlc = getattr(machine, "mlc", None)
+        if mlc is not None:
+            self.leaf_width = mlc.leaf_width
+            self.num_of_mlc_leaf_pairs = mlc.number_of_elements
+            self.mlc_orientation = mlc.device_orientation
 
     @abstractmethod
     def sequence(self, result: PlanResult, stf: SteeringInformation, dij) -> PlanResult:
@@ -42,11 +74,116 @@ class PhotonSequencer(Sequencer):
         """
         pass
 
+    def _leaf_pitch(self, bixel_width: float) -> Optional[float]:
+        """Return the leaf pitch to sequence shapes on, or None to use the ray grid as-is.
+
+        None is returned both when no machine MLC is configured and when the
+        configured leaf width matches the ray/bixel width so callers skip
+        resampling entirely and sequence directly on the ray grid.
+        """
+        if self.leaf_width is None:
+            return None
+        if self.leaf_width < bixel_width and not math.isclose(self.leaf_width, bixel_width):
+            raise ValueError(
+                f"MLC leaf_width ({self.leaf_width} mm) is narrower than the ray/bixel "
+                f"width ({bixel_width} mm). The sequencer cannot resolve leaves finer "
+                "than the dose-calculation grid."
+            )
+        if math.isclose(self.leaf_width, bixel_width):
+            return None
+        return self.leaf_width
+
+    @staticmethod
+    def _leaf_grid_centers(min_z: float, max_z: float, leaf_width: float) -> np.ndarray:
+        """
+        Physical MLC leaf row centers (the "MLC grid") covering ``[min_z, max_z]``.
+
+        Leaf centers sit at integer multiples of ``leaf_width`` from
+        isocenter (leaf ``j`` at ``z = j * leaf_width``); this returns every
+        leaf row whose center is nearest to some part of the beam's native
+        ray extent.
+
+        Parameters
+        ----------
+        min_z, max_z : float
+            Physical extent (mm) of the beam's native ray grid along the
+            leaf-stack direction.
+        leaf_width : float
+            Physical leaf pitch (mm).
+
+        Returns
+        -------
+        np.ndarray
+            Ascending physical leaf-row centers (mm), length dim_z_leaf.
+        """
+        j_start, j_end = np.floor(np.array([min_z, max_z]) / leaf_width + 0.5).astype(int)
+        return np.arange(j_start, j_end + 1, dtype=float) * leaf_width
+
+    @staticmethod
+    def _interp_rows(
+        matrix: np.ndarray, src_row_z: np.ndarray, dst_row_z: np.ndarray
+    ) -> np.ndarray:
+        """
+        Linearly interpolate a matrix row-wise (stack_axis) from one z-grid to another.
+
+        Used both to resample the native ray/bixel grid down onto the
+        physical MLC leaf grid, and to project a sequenced quantity back up
+        from the leaf grid onto the native ray grid — the same operation in
+        either direction, just with ``src_row_z``/``dst_row_z`` swapped.
+        Query points outside ``src_row_z`` are clamped to the nearest edge
+        value (``numpy.interp``'s default), which only matters at a field's
+        edge, where the coarser grid can't resolve anything finer anyway.
+
+        Parameters
+        ----------
+        matrix : np.ndarray
+            ``(len(src_row_z), dim_x)`` matrix sampled at ``src_row_z``.
+        src_row_z : np.ndarray
+            Ascending physical z-coordinate of each row of ``matrix``.
+        dst_row_z : np.ndarray
+            Ascending physical z-coordinate to interpolate onto.
+
+        Returns
+        -------
+        np.ndarray
+            ``(len(dst_row_z), dim_x)`` interpolated matrix.
+        """
+        dim_x = matrix.shape[1]
+        resampled = np.empty((len(dst_row_z), dim_x))
+        for col in range(dim_x):
+            resampled[:, col] = np.interp(dst_row_z, src_row_z, matrix[:, col])
+        return resampled
+
+    @staticmethod
+    def _project_rows_to_positions(
+        matrix: np.ndarray, leaf_row_z: np.ndarray, z_ray_pos: np.ndarray, x_ind_pos: np.ndarray
+    ) -> np.ndarray:
+        """Interpolate a ``(dim_z_leaf, dim_x)`` matrix directly at each ray's own (z, column)."""
+        result = np.empty(len(z_ray_pos))
+        for col in np.unique(x_ind_pos):
+            rays_in_col = x_ind_pos == col
+            result[rays_in_col] = np.interp(z_ray_pos[rays_in_col], leaf_row_z, matrix[:, col])
+        return result
+
+    def _project_leaf_grid_to_rays(self, matrix: np.ndarray, tmp_fluence_dict: dict) -> np.ndarray:
+        """Project a quantity computed back onto each native ray.
+
+        Plain native-resolution flat gather when no MLC grid was configured
+        (``leaf_row_z`` is None), else an interpolated projection from the
+        leaf grid.
+        """
+        leaf_row_z = tmp_fluence_dict.get("leaf_row_z")
+        if leaf_row_z is None:
+            return matrix.flatten(order="C")[tmp_fluence_dict["indices"]]
+        return self._project_rows_to_positions(
+            matrix, leaf_row_z, tmp_fluence_dict["z_ray_pos"], tmp_fluence_dict["x_ind_pos"]
+        )
+
     def _inititialize_beam_fluence_matrix(
         self, beam: Beam, w_of_curr_beams: np.ndarray = None
     ) -> dict:
         """
-        Initialize the fluence matrix for a given beam.
+        Initialize the fluence/ray-map matrices for a given beam.
 
         Parameters
         ----------
@@ -60,9 +197,10 @@ class PhotonSequencer(Sequencer):
         dict
             A dictionary containing the initialized fluence matrix and related parameters.
         """
-        # Get ray positions
-        x_ray_pos = np.array([ray.ray_pos_bev[0] for ray in beam.rays])
-        z_ray_pos = np.array([ray.ray_pos_bev[2] for ray in beam.rays])
+        # Get ray positions.
+        travel_axis, stack_axis = (0, 2) if self.mlc_orientation == "X" else (2, 0)
+        x_ray_pos = np.array([ray.ray_pos_bev[travel_axis] for ray in beam.rays])
+        z_ray_pos = np.array([ray.ray_pos_bev[stack_axis] for ray in beam.rays])
 
         min_x, max_x = x_ray_pos.min(), x_ray_pos.max()
         min_z, max_z = z_ray_pos.min(), z_ray_pos.max()
@@ -71,50 +209,88 @@ class PhotonSequencer(Sequencer):
         dim_of_fluence_mx_x = int((max_x - min_x) / bixel_width + 1)
         dim_of_fluence_mx_z = int((max_z - min_z) / bixel_width + 1)
 
-        # Create fluence matrix
-        fluence_mx = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
         x_ind_pos = ((x_ray_pos - min_x) / bixel_width).astype(int)
         z_ind_pos = ((z_ray_pos - min_z) / bixel_width).astype(int)
-
-        # Compute indices:
         indices = z_ind_pos * dim_of_fluence_mx_x + x_ind_pos
-        # Create fluence_mx if w is given and called in sequener
+
+        # Bixel indices identify physical dij columns 1:1 and must stay at native
+        # ray resolution even when the ray/presence map below gets resampled
+        # onto a coarser physical leaf grid (several native rows can then
+        # share one leaf row).
+        native_indices = indices
+        native_dim_z = dim_of_fluence_mx_z
+
+        # Physical MLC leaf pitch to resample onto, if the machine defines one
+        # that differs from the ray/bixel grid; None means sequence directly
+        # on the ray grid.
+        leaf_width = self._leaf_pitch(bixel_width)
+        native_row_z = min_z + np.arange(dim_of_fluence_mx_z) * bixel_width
+
+        # Ray/presence map: always built, since lim_l/lim_r (and thus the
+        # aperture info) need it regardless of whether weights are given.
+        ray_map = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
+        ray_map.flat[indices] = 1
+
+        dim_z = dim_of_fluence_mx_z
+        row_z = native_row_z
+        leaf_row_z = None
+        if leaf_width is not None:
+            leaf_row_z = self._leaf_grid_centers(min_z, max_z, leaf_width)
+            ray_map = self._interp_rows(ray_map, native_row_z, leaf_row_z)
+            ray_map = (ray_map > 0.0).astype(float)
+            dim_z = ray_map.shape[0]
+            min_z, max_z = leaf_row_z.min(), leaf_row_z.max()
+            row_z = leaf_row_z
+
+        init_param = {
+            "ray_map": ray_map,
+            "min_x": min_x,
+            "max_x": max_x,
+            "min_z": min_z,
+            "max_z": max_z,
+            "bixel_width": bixel_width,
+            "row_z": row_z,
+            "native_indices": native_indices,
+            "native_dim_z": native_dim_z,
+            "indices": indices,
+            "dim_x": dim_of_fluence_mx_x,
+            "dim_z": dim_z,
+            "travel_axis": travel_axis,
+            "stack_axis": stack_axis,
+        }
+
         if w_of_curr_beams is not None:
+            fluence_mx = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
             for xp, zp, weight in zip(x_ind_pos, z_ind_pos, w_of_curr_beams):
                 fluence_mx[zp, xp] = weight
+
+            if leaf_row_z is not None:
+                fluence_mx = self._interp_rows(fluence_mx, native_row_z, leaf_row_z)
+
             cal_fac = np.max(fluence_mx)
             d_0 = np.round(fluence_mx / cal_fac * self.num_of_levels).astype(int)
             d_k = d_0.copy()
 
-            init_param = {
-                "fluence_mx": fluence_mx,
-                "cal_fac": cal_fac,
-                "d_0": d_0,
-                "d_k": d_k,
-            }
-        # else return ray_map
-        else:
-            # Build ray map on the fluence grid
-            ray_map = np.zeros((dim_of_fluence_mx_z, dim_of_fluence_mx_x))
-            # fill
-            ray_map.flat[indices] = 1
-            init_param = {
-                "ray_map": ray_map,
-                "min_x": min_x,
-                "max_x": max_x,
-                "min_z": min_z,
-                "max_z": max_z,
-                "bixel_width": bixel_width,
-                "x_ray_pos": x_ray_pos,
-                "z_ray_pos": z_ray_pos,
-            }
-        init_param.update(
-            {
-                "indices": indices,
-                "dim_x": dim_of_fluence_mx_x,
-                "dim_z": dim_of_fluence_mx_z,
-            }
-        )
+            # d_0 never changes during shape decomposition, so project it onto
+            # the native rays once, here, instead of the sequencing algorithms
+            # each re-interpolating it themselves at the end of sequence().
+            if leaf_row_z is not None:
+                d_0_native = self._project_rows_to_positions(d_0, leaf_row_z, z_ray_pos, x_ind_pos)
+            else:
+                d_0_native = d_0.flatten(order="C")[indices]
+
+            init_param.update(
+                {
+                    "fluence_mx": fluence_mx,
+                    "cal_fac": cal_fac,
+                    "d_0": d_0,
+                    "d_k": d_k,
+                    "d_0_native": d_0_native,
+                    "leaf_row_z": leaf_row_z,
+                    "z_ray_pos": z_ray_pos,
+                    "x_ind_pos": x_ind_pos,
+                }
+            )
 
         return init_param
 
@@ -178,22 +354,28 @@ class PhotonSequencer(Sequencer):
         info_beam = []
         bixel_width = stf.beams[0].bixel_width
         for i, beam in enumerate(stf.beams):
-            # Get x and z positions from each ray of current beam.
-            init = self._inititialize_beam_fluence_matrix(beam)
+            init = sequencing["beam"][i]["_fluence_dict"]
 
             # Initialize limits and dimensions
             lim_l, lim_r = self._compute_leaf_limits(init)
 
-            # Create bixelIndMap
-            bixel_ind_map = np.full((init["dim_z"], init["dim_x"]), np.nan)
+            # Create bixelIndMap at native ray resolution: each physical bixel/dij
+            # column needs its own unique index even when shapes below are
+            # resampled onto a coarser physical leaf grid.
+            bixel_ind_map = np.full((init["native_dim_z"], init["dim_x"]), np.nan)
             num_rays = len(beam.rays)
-            bixel_ind_map.flat[init["indices"]] = np.arange(0, num_rays) + bixel_ind_offset
+            bixel_ind_map.flat[init["native_indices"]] = np.arange(0, num_rays) + bixel_ind_offset
             bixel_ind_offset += num_rays
 
             beam_aperture = {}
             # TODO: This should in general be correct. If not, change .T
             beam_aperture["bixel_ind_map"] = bixel_ind_map.T
-            beam_aperture["pos_of_corner_bixel"] = [init["min_x"], 0, init["min_z"]]
+            # min_x/min_z are named by role (travel/stack direction), not by a
+            # fixed BEV axis, so place them at their true BEV index.
+            pos_of_corner_bixel = [0.0, 0.0, 0.0]
+            pos_of_corner_bixel[init["travel_axis"]] = init["min_x"]
+            pos_of_corner_bixel[init["stack_axis"]] = init["min_z"]
+            beam_aperture["pos_of_corner_bixel"] = pos_of_corner_bixel
 
             # Process shapes for the current beam
             # initialize per‐shape lists in beam_aperture
@@ -209,22 +391,26 @@ class PhotonSequencer(Sequencer):
             # advance the global counter once
             vector_offset += num_shapes * init["dim_z"]
 
+            # Effective row pitch shapes were computed on: the machine's physical
+            # leaf width when configured and applicable, else the ray/bixel width.
+            leaf_pitch = self._leaf_pitch(bixel_width) or bixel_width
+
             # compute all mlc in one go
             mlc_sequence = []
             for m in range(num_shapes):
                 shape_map = shapes_arr[:, :, m]
-                # TODO: differentiate between MLCX & MLCY
                 mlc = MLC(
-                    device_type="MLCX",
+                    device_type=f"MLC{self.mlc_orientation}",
                     number_of_elements=self.num_of_mlc_leaf_pairs,
                 )
                 mlc.calculate_from_shape(
                     shape_map,
                     init["min_x"],
-                    init["z_ray_pos"],
+                    init["row_z"],
                     bixel_width,
                     lim_l,
                     lim_r,
+                    leaf_width=leaf_pitch,
                 )
                 mlc_sequence.append(mlc)
             beam_aperture["mlc_sequence"] = mlc_sequence
@@ -235,7 +421,7 @@ class PhotonSequencer(Sequencer):
             beam_aperture["right_leaf_pos"] = [mlc.leaf_positions[:, 1] for mlc in mlc_sequence]
             beam_aperture["leaf_pair_pos"] = mlc_sequence[0].leaf_position_boundaries
             beam_aperture["is_active_leaf_pair"] = mlc_sequence[0].is_active_leaf_pair(
-                central_leaf_pair, bixel_width
+                central_leaf_pair
             )
             beam_aperture["num_of_active_leaf_pairs"] = mlc_sequence[0].num_of_active_leaf_pairs
             beam_aperture["central_leaf_pair"] = central_leaf_pair
@@ -378,6 +564,7 @@ class PhotonSequencer(Sequencer):
             "shapes_weight": shapes_w_arr,
             "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
             "fluence": tmp_fluence_dict["d_0"],
+            "_fluence_dict": tmp_fluence_dict,
         }
 
         # Compute the summed weighted shape for the beam

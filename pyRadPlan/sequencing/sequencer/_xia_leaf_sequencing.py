@@ -151,7 +151,6 @@ class XiaLeafSequencer(PhotonSequencer):
             )
 
             d_k = tmp_fluence_dict["d_k"]
-            d_0 = tmp_fluence_dict["d_0"]
             l_k = int(np.max(d_k))
             # l_0 = l_k
 
@@ -189,12 +188,9 @@ class XiaLeafSequencer(PhotonSequencer):
                 shapes_list, shapes_weight_list, tmp_fluence_dict, offset, num_of_rays_per_beam
             )
 
-            # Map fluence back to weights (using linear indices)
-            flat_d0 = d_0.flatten(order="C")
+            # Map fluence back to weights
             sequencing["fluence"][offset : offset + num_of_rays_per_beam] = (
-                flat_d0[tmp_fluence_dict["indices"]]
-                / self.num_of_levels
-                * tmp_fluence_dict["cal_fac"]
+                tmp_fluence_dict["d_0_native"] / self.num_of_levels * tmp_fluence_dict["cal_fac"]
             )
 
             sequencing["beam"].append(beam_sequencing)
