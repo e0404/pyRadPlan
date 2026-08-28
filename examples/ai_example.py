@@ -11,7 +11,7 @@ from pyRadPlan import (
     generate_stf,
     calc_dose_influence,
     plot_slice,
-    xp_utils,
+    settings,
     load_tg119,
     fluence_optimization,
 )
@@ -21,9 +21,9 @@ logging.basicConfig(level=logging.INFO)
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "torch"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
+settings.xp.preferred_gpu_array_backend = "torch"
 
 # Load TG119 (provided within pyRadPlan)
 ct, cst = load_tg119()

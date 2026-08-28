@@ -1,4 +1,4 @@
-"""AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai_models`` model contract."""
+"""AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai.modelhub`` model contract."""
 
 import json
 import logging
@@ -23,9 +23,9 @@ from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import batched_interp3d, array_meshgrid
 from pyRadPlan.core.xp_utils import to_namespace
 from pyRadPlan.geometry import get_beam_rotation_matrix
-from pyRadPlan.ai_models import load_model, resolve_model_dir
+from pyRadPlan.ai.modelhub import load_model, resolve_model_dir
 from pyRadPlan._settings import get_settings
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field
 
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -46,7 +46,7 @@ class GridParametersConfig(PyRadPlanBaseModel):
 class DoseCalcModelConfig(PyRadPlanBaseModel):
     """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
 
-    The generic :func:`pyRadPlan.ai_models.load_model` loader only cares about
+    The generic :func:`pyRadPlan.ai.modelhub.load_model` loader only cares about
     ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
     covers the extra fields the AI beamlet engine needs (sampling grid, quantities
     produced, training assumptions) which live in the free-form ``metadata`` section
@@ -60,13 +60,6 @@ class DoseCalcModelConfig(PyRadPlanBaseModel):
     radiation_mode: Optional[str] = None
     energy_range_mev: Optional[Tuple[float, float]] = None
     trained_machine: Optional[str] = None
-
-    @field_validator("quantities")
-    @classmethod
-    def _first_is_physical_dose(cls, v: List[str]) -> List[str]:
-        if not v or v[0] != "physical_dose":
-            raise ValueError("quantities[0] must be 'physical_dose'.")
-        return v
 
 
 class AIBeamletEngine(PencilBeamEngineAbstract):
@@ -85,7 +78,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     - Coordinate frames: world → BEV → beamlet-local via rotation/translation from the beam.
     - Grid construction: uniform spacing in depth and lateral with configurable ranges; axis
         order is (depth, lateral, lateral) to match model conventions.
-    - Model inference: model + preprocessor loaded via `pyRadPlan.ai_models.load_model` from the
+    - Model inference: model + preprocessor loaded via `pyRadPlan.ai.modelhub.load_model` from the
         friendly name in `prop_dose_calc["model"]`; backend-agnostic arrays using the
         Array API (`self.xp`).
     - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
@@ -117,7 +110,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         pln : Any, optional
             Plan-like object providing engine configuration, by default ``None``. If
             provided, engine properties are derived from it and the model named in
-            `prop_dose_calc["model"]` is loaded (via `pyRadPlan.ai_models.load_model`) at
+            `prop_dose_calc["model"]` is loaded (via `pyRadPlan.ai.modelhub.load_model`) at
             dose-calc init time.
 
         Returns
@@ -843,7 +836,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             )
 
         model_dir = resolve_model_dir(
-            repo_id=f"{get_settings().ai_models.hf_org}/{self._requested_model}"
+            repo_id=f"{get_settings().ai_modelhub.hf_org}/{self._requested_model}"
         )
         raw_config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
         self.model_cfg = DoseCalcModelConfig.model_validate(
