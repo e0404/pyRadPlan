@@ -56,6 +56,8 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
 
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. They are **never executed during a docs build or in CI**. The executed notebooks (with outputs) are committed in `docs/tutorials/examples/`; refresh them locally with `python docs/execute_examples.py` and commit the result when examples change and as part of the release recipe.
+
 ## Key Architecture Notes
 
 - Data models use **pydantic** for validation.

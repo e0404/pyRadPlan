@@ -27,6 +27,7 @@ Closes #<!-- issue number -->
 - [ ] Unit tests pass locally (`pytest test`).
 - [ ] New or changed code is covered by tests; coverage has not dropped significantly.
 - [ ] `CHANGELOG.md` has been updated in the `[UNRELEASED]` section following [Keep a Changelog](https://keepachangelog.com/) conventions.
+- [ ] If example scripts in `examples/` were added or changed: notebooks re-executed locally (`python docs/execute_examples.py`) and the updated `docs/tutorials/examples/*.ipynb` committed.
 
 ## Testing
 
