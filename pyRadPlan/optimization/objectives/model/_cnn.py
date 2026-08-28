@@ -48,7 +48,7 @@ except ImportError:
     torch = None  # type: ignore
 
 from pyRadPlan.core import xp_utils
-from pyRadPlan.ai_models import load_model
+from pyRadPlan.ai.modelhub import load_model
 from pyRadPlan.optimization.objectives._objective import Objective
 
 logger = logging.getLogger(__name__)

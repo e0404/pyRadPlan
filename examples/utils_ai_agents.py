@@ -2,7 +2,7 @@
 """
 # AI Agents for Radiotherapy Planning.
 
-This example demonstrates the usage of pydantic-ai based `ai_agents` in `pyRadPlan`
+This example demonstrates the usage of pydantic-ai based `ai.agents` in `pyRadPlan`
 to assist in treatment planning. The module uses a user-defined LLM to suggest
 beam angles and optimization objectives based on the treatment site.
 
@@ -26,13 +26,13 @@ from dotenv import load_dotenv
 from pyRadPlan import (
     IonPlan,
     load_tg119,
-    ai_agents,
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
     plot_slice,
     DVHCollection,
 )
+from pyRadPlan.ai import agents as ai_agents
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 ## These two lines are needed to allow nested event loops in Jupyter.
 ## Otherwise you will experience sync-errors when running the AI agents.
@@ -63,7 +63,6 @@ explicitly to each call. Your provider API key must be set in the environment
 # Inspect effective settings
 settings = ai_agents.AiSettings()
 print(f"Using model: {settings.model}")
-
 # %% [markdown]
 """
 ## Load Data

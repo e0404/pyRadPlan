@@ -193,7 +193,7 @@ def resolve_model_dir(
         A directory to use directly (if it already holds the model) or to
         download into. Enables offline use and version tracking. When omitted
         and :attr:`AiModelSettings.local_models_dir`
-        (``PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR``) is set, it defaults to
+        (``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``) is set, it defaults to
         ``"<local_models_dir>/<org>/<repo>"``.
     offline : bool, optional
         Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
@@ -213,7 +213,7 @@ def resolve_model_dir(
     FileNotFoundError
         If the model can be neither found locally nor downloaded.
     """
-    cfg = get_settings().ai_models
+    cfg = get_settings().ai_modelhub
     if offline is None:
         offline = cfg.offline
     if cache_dir is None:

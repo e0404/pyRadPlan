@@ -3,22 +3,22 @@ from pathlib import Path
 
 import pytest
 
-from pyRadPlan.ai_models import _hub, is_valid_model_dir, resolve_model_dir
+from pyRadPlan.ai.modelhub import _resolve, is_valid_model_dir, resolve_model_dir
 
 
 def _make_model_dir(path: Path, metadata: dict | None = None) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    for name in _hub.REQUIRED_FILES:
+    for name in _resolve.REQUIRED_FILES:
         (path / name).write_text("placeholder", encoding="utf-8")
     if metadata is not None:
-        (path / _hub.METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
+        (path / _resolve.METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
 
 
 def _no_download(monkeypatch, why: str) -> None:
     def _boom():
         raise AssertionError(why)
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", _boom)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", _boom)
 
 
 def test_is_valid_model_dir(tmp_path):
@@ -52,7 +52,7 @@ def test_different_revision_triggers_download(tmp_path, monkeypatch):
         calls.append(kwargs["revision"])
         return kwargs["local_dir"]
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     resolve_model_dir(repo_id="org/repo", revision="v2", local_dir=str(tmp_path))
     assert calls == ["v2"]
@@ -68,7 +68,7 @@ def test_unpinned_request_defers_to_hub(tmp_path, monkeypatch):
         calls.append(kwargs["repo_id"])
         return kwargs["local_dir"]
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     out = resolve_model_dir(repo_id="org/repo", local_dir=str(tmp_path))
     assert Path(out) == tmp_path
@@ -90,7 +90,7 @@ def test_unreachable_hub_falls_back_to_local_copy(tmp_path, monkeypatch, caplog)
     def fake_snapshot(**kwargs):
         raise RuntimeError("network unavailable")
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     with caplog.at_level("WARNING"):
         out = resolve_model_dir(repo_id="org/repo", local_dir=str(tmp_path))
@@ -102,7 +102,7 @@ def test_unreachable_hub_without_local_copy_raises(tmp_path, monkeypatch):
     def fake_snapshot(**kwargs):
         raise RuntimeError("network unavailable")
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     with pytest.raises(FileNotFoundError, match="network unavailable"):
         resolve_model_dir(repo_id="org/repo", local_dir=str(tmp_path / "empty"))
@@ -117,7 +117,7 @@ def test_offline_fallback_retries_local_only(tmp_path, monkeypatch):
             raise RuntimeError("network unavailable")
         return str(tmp_path)
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     out = resolve_model_dir(repo_id="org/repo")
     assert Path(out) == tmp_path
@@ -130,10 +130,10 @@ def test_metadata_written_into_local_dir(tmp_path, monkeypatch):
         _make_model_dir(target)
         return str(target)
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     out = resolve_model_dir(repo_id="org/repo", revision="v2", local_dir=str(tmp_path))
-    meta = json.loads((Path(out) / _hub.METADATA_FILENAME).read_text(encoding="utf-8"))
+    meta = json.loads((Path(out) / _resolve.METADATA_FILENAME).read_text(encoding="utf-8"))
     assert meta["repo_id"] == "org/repo"
     assert meta["revision"] == "v2"
     assert "downloaded_at" in meta
@@ -153,7 +153,7 @@ def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
     model_dir = tmp_path / "org" / "repo"
     _make_model_dir(model_dir, metadata={"repo_id": "org/repo", "revision": "v1"})
 
-    cfg = _hub.get_settings().ai_models
+    cfg = _resolve.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     _no_download(monkeypatch, "a present, pinned local model must not trigger a download")
 
@@ -163,7 +163,7 @@ def test_local_models_dir_used_as_default_base(tmp_path, monkeypatch):
 
 def test_a_fork_gets_its_own_directory(tmp_path, monkeypatch):
     """Same repo name under two orgs must not share (and clobber) one directory."""
-    cfg = _hub.get_settings().ai_models
+    cfg = _resolve.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
 
     targets = []
@@ -174,7 +174,7 @@ def test_a_fork_gets_its_own_directory(tmp_path, monkeypatch):
         _make_model_dir(target)
         return str(target)
 
-    monkeypatch.setattr(_hub, "_import_snapshot_download", lambda: fake_snapshot)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot)
 
     resolve_model_dir(repo_id="DKFZ-RadOpt/dosecalc-x", revision="v1")
     resolve_model_dir(repo_id="myfork/dosecalc-x", revision="v1")
@@ -187,7 +187,7 @@ def test_a_fork_gets_its_own_directory(tmp_path, monkeypatch):
 
 
 def test_repo_subpath_rejects_traversal():
-    from pyRadPlan.ai_models import repo_subpath
+    from pyRadPlan.ai.modelhub import repo_subpath
 
     assert repo_subpath("org/repo") == Path("org") / "repo"
     for bad in ("../evil", "org/../..", "org//repo", ""):
@@ -196,55 +196,40 @@ def test_repo_subpath_rejects_traversal():
 
 
 def test_empty_local_models_dir_is_treated_as_unset(monkeypatch):
-    from pyRadPlan.ai_models import AiModelSettings
+    from pyRadPlan.ai.modelhub import AiModelSettings
 
-    monkeypatch.setenv("PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR", "")
+    monkeypatch.setenv("PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR", "")
     assert AiModelSettings(_env_file=None).local_models_dir is None
 
 
-def test_legacy_huggingface_path_alias_still_works(tmp_path, monkeypatch):
-    from pyRadPlan.ai_models import AiModelSettings
-
-    monkeypatch.setenv("PYRADPLAN_HUGGINGFACE_PATH", str(tmp_path))
-    assert AiModelSettings(_env_file=None).local_models_dir == tmp_path
-
-
-def test_prefixed_name_wins_over_legacy_alias(tmp_path, monkeypatch):
-    from pyRadPlan.ai_models import AiModelSettings
-
-    monkeypatch.setenv("PYRADPLAN_HUGGINGFACE_PATH", str(tmp_path / "legacy"))
-    monkeypatch.setenv("PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR", str(tmp_path / "canonical"))
-    assert AiModelSettings(_env_file=None).local_models_dir == tmp_path / "canonical"
-
-
 def test_local_models_dir_defaults_under_data_root(tmp_path, monkeypatch):
-    from pyRadPlan.ai_models import AiModelSettings
+    from pyRadPlan.ai.modelhub import AiModelSettings
 
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
     assert AiModelSettings(_env_file=None).local_models_dir == tmp_path / "ai_models"
 
 
 def test_trust_remote_code_defaults_to_false():
-    from pyRadPlan.ai_models import AiModelSettings
+    from pyRadPlan.ai.modelhub import AiModelSettings
 
     assert AiModelSettings(_env_file=None).trust_remote_code is False
 
 
-def test_settings_are_the_global_ai_models_subconfig():
+def test_settings_are_the_global_ai_modelhub_subconfig():
     import pyRadPlan
-    from pyRadPlan.ai_models import AiModelSettings
+    from pyRadPlan.ai.modelhub import AiModelSettings
 
-    cfg = pyRadPlan.settings.ai_models
+    cfg = pyRadPlan.settings.ai_modelhub
     assert isinstance(cfg, AiModelSettings)
 
 
 def test_runtime_mutation_is_observed():
     import pyRadPlan
 
-    original = pyRadPlan.settings.ai_models.device
+    original = pyRadPlan.settings.ai_modelhub.device
     try:
         # a value set on the singleton is seen by the hub, which reads it at call time
-        pyRadPlan.settings.ai_models.device = "cuda"
-        assert _hub.get_settings().ai_models.device == "cuda"
+        pyRadPlan.settings.ai_modelhub.device = "cuda"
+        assert _resolve.get_settings().ai_modelhub.device == "cuda"
     finally:
-        pyRadPlan.settings.ai_models.device = original
+        pyRadPlan.settings.ai_modelhub.device = original
