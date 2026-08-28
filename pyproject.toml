@@ -73,6 +73,15 @@ octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
+# Optional compute backends. The core is array-API based (array_api_compat), so
+# these only need installing for the backend you actually intend to run on.
+torch  = ["torch>=2.0"]
+cupy   = ["cupy>=13.0"]
+jax    = ["jax>=0.4.35"]
+
+# Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
+profiling = ["line_profiler>=4.0"]
+
 dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
 
 [project.scripts]
@@ -80,6 +89,15 @@ pyRadPlanGUI = "pyRadPlan.gui:main"
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"
+
+[tool.pytest.ini_options]
+# The test suite lives in test/ only. benchmark/ holds pytest-benchmark harnesses
+# and line-profiling scripts which are run deliberately, never as part of the suite.
+testpaths = ["test"]
+# benchmark/ is deliberately NOT listed here: testpaths already keeps it out of a bare
+# `pytest` run, and its benchmark_*/profile_* filenames do not match python_files, so
+# listing it would only break `pytest benchmark/` for deliberate runs.
+norecursedirs = ["examples", "matRad", "docs", ".venv", "build", "dist"]
 
 [tool.ruff]
 line-length = 99

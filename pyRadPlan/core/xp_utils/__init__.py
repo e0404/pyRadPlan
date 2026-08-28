@@ -13,7 +13,7 @@ try:
     from numba import cuda as numba_cuda
 except ImportError:
     numba_cuda = None
-from typing import Optional, Union
+from typing import Any, Optional
 
 try:
     import torch
@@ -50,6 +50,8 @@ from .typing import (
     Array,
     ArrayNamespace,
 )
+
+from .helpers import dlpack_to_backend_device
 
 from .compat import (
     quantile,
@@ -137,12 +139,18 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
     try:
         return importlib.import_module(f"array_api_compat.{namespace}")
     except ModuleNotFoundError:
+        if namespace == "jax":
+            return importlib.import_module("jax.numpy")
         return importlib.import_module(namespace)
 
 
-def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Union[str, None]:
+def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Any:
     """
     Choose the default device for the given array namespace.
+
+    Returns the backend's native device object (``torch.device``, ``cupy.cuda.Device``,
+    ``jax.Device``) or ``None`` for namespaces without a device concept (NumPy,
+    array-api-strict), so it can be passed straight to ``xp.asarray(..., device=...)``.
 
     Parameters
     ----------
@@ -157,15 +165,36 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Un
 
     if get_settings().xp.prefer_gpu:
         if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
-            return f"cuda:{gpu_index}"
+            return dlpack_to_backend_device(xp, (2, int(gpu_index)))
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
-            return str(gpu_index)
+            return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+        if array_api_compat.is_jax_namespace(xp) and jax_gpu_available():
+            if len(jax.devices("gpu")) > gpu_index:
+                return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+            warnings.warn(
+                f"Requested GPU index {gpu_index} is out of range for available JAX devices. Defaulting to GPU index 0.",
+                UserWarning,
+            )
+            return dlpack_to_backend_device(xp, (2, 0))
+        warnings.warn(
+            f"Requested GPU device is not available on {xp.__name__}. Falling back to CPU.",
+            UserWarning,
+        )
 
-    # We need to handle array_api_strict separately, as it does not provide device info!
-    if array_api_compat.is_array_api_strict_namespace(xp):
-        return None
+    # CPU fallback, also reached when a GPU was preferred but none is available
+    if array_api_compat.is_torch_namespace(xp) and pytorch_available():
+        return dlpack_to_backend_device(xp, (1, 0))
+    if array_api_compat.is_cupy_namespace(xp) and cupy_available():
+        # CuPy is GPU-only, so the namespace choice already implies a CUDA device
+        return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+    if array_api_compat.is_jax_namespace(xp) and jax_available():
+        return dlpack_to_backend_device(xp, (1, 0))
+    if array_api_compat.is_numpy_namespace(xp) or array_api_compat.is_array_api_strict_namespace(
+        xp
+    ):
+        return dlpack_to_backend_device(xp, (1, 0))
 
-    return "cpu"
+    raise RuntimeError(f"No compatible device found for the given array namespace: {xp.__name__}")
 
 
 _DEPRECATED_SETTINGS_ALIASES = {

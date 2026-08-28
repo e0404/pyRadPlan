@@ -227,9 +227,9 @@ class RayTracerBase(ABC):
         logger.debug("Cube ray tracing took %s seconds...", t_trace_end - t_trace_start)
 
         # Now we compute which rays will respectively give the voxel value for radiological depth
-        # We don't want -1 to be counted as "valid"
-        # or else the coords[ix[valid_ix], 1] silently reads the last elemtn
-        valid_ix = ix >= 0  # & np.isfinite(ix)
+        # We don't want -1 to be counted as "valid" or else coords[ix[valid_ix], 1] silently
+        # reads the last element; indices past the end would raise instead
+        valid_ix = (ix >= 0) & (ix < coords.shape[0])
 
         scale_factor = np.zeros_like(ix, dtype=self.precision)
         scale_factor[valid_ix] = (ray_matrix_bev_y + beam.sad) / coords[ix[valid_ix], 1]

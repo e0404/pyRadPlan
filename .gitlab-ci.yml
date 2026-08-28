@@ -145,6 +145,36 @@ tests-matrix:
             - .testreports/report-${PYTHON_VERSION}.xml
     coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
 
+# Exercise the optional array-API backends on their CPU builds, once per backend as
+# the *default* namespace (PYRADPLAN_XP_*), so engines and tracers run on it too.
+# CuPy needs a GPU runner and is therefore not covered here. Marked allow_failure
+# while JAX support is still being brought up - remove that once the JAX path is green.
+tests-backends:
+    stage: test
+    image: python:3.11.9-slim-bookworm
+    parallel:
+        matrix:
+            - XP_BACKEND: ["torch", "jax"]
+    variables:
+        MATRIX_CACHE_KEY: "venv-backends-${CI_COMMIT_REF_SLUG}"
+        PYRADPLAN_XP_PREFER_GPU: "false"
+        PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND: "${XP_BACKEND}"
+    cache:
+        key: "$MATRIX_CACHE_KEY"
+        paths:
+            - .venv/
+            - .cache/pip/
+        policy: pull-push
+    script:
+        - python -m pip install --upgrade pip
+        - python -m venv .venv
+        - . .venv/bin/activate
+        - pip install --upgrade --upgrade-strategy eager -e ".[jax]"
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu
+        - pip install pytest
+        - pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q
+    allow_failure: true
+
 coverage-aggregate:
     stage: report
     image: python:3.11-slim-bookworm

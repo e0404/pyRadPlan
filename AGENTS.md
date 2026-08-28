@@ -40,6 +40,17 @@ pytest --cov=pyRadPlan        # with coverage
 
 CI runs on Python 3.10–3.13. Do not reduce existing coverage.
 
+Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
+so a bare `pytest` run never collects it — invoke it explicitly:
+
+```bash
+pytest benchmark/benchmark_interp1d.py                 # one harness ([dev])
+pytest benchmark/ -o python_files="benchmark_*.py"     # all of them
+python benchmark/profile_pencilbeam_photon_forward_lineprof.py  # line_profiler ([profiling])
+```
+
+Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance work.
+
 ## Changelog
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.

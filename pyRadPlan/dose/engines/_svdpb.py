@@ -1,21 +1,24 @@
 from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
 import random
+from functools import partial
 
 import numpy as np
 import array_api_compat
+import array_api_extra as xpx
 from pydantic import Field
 
-from scipy import fft
-from scipy.interpolate import RegularGridInterpolator
 
 from pyRadPlan.plan import PhotonPlan
 from pyRadPlan.stf import FieldShape
 
 # from pyRadPlan.stf import Beam
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
-from pyRadPlan.core.xp_utils import to_numpy
 from ._base_pencilbeam import PencilBeamEngineAbstract
+
+from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d, interpnd
+from pyRadPlan.core.xp_utils.helpers import to_namespace
+from pyRadPlan.core.xp_utils.typing import Array
 
 
 logger = logging.getLogger(__name__)
@@ -158,6 +161,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         beam_info = super()._init_beam(beam_info, ct, cst, stf, i)
 
+        # Get current backend namespace
+        xp = array_api_compat.array_namespace(beam_info["valid_coords_all"])
+
         if not field_based_dose_calc:
             field_width = beam_info["beam"]["bixel_width"]
 
@@ -166,7 +172,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
         field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
-        beam_info["f_x"], beam_info["f_z"] = np.meshgrid(field_grid, field_grid, indexing="xy")
 
         # TODO: resampling should directly change object, not create new one?
         # TODO: the model_dump here is unfortunate?
@@ -181,6 +186,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
                 stf.beams[i].rays[j].beamlets[k].mask, k=-1
             )
+
+        field_grid = xp.asarray(field_grid)
+        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="xy")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -226,53 +234,53 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             penumbra = kernel.penumbra
             logger.info("Kernel penumbra: %f mm for beam %d.", penumbra, i)
 
-        sigma_gauss = penumbra / np.sqrt(8 * np.log(2))  # [mm]
+        sigma_gauss = float(penumbra / np.sqrt(8 * np.log(2)))  # [mm]
 
         # use 5 times sigma as the limits for the gaussian convolution
         gauss_limit = np.ceil(5 * sigma_gauss / self.int_conv_resolution)
-        gauss_grid = self.int_conv_resolution * np.arange(-gauss_limit, gauss_limit)
+        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit)
 
-        gauss_filter_x, gauss_filter_z = np.meshgrid(gauss_grid, gauss_grid, indexing="xy")
+        gauss_filter_x, gauss_filter_z = array_meshgrid(gauss_grid, gauss_grid, indexing="xy")
         # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
         gauss_filter = (
             self.int_conv_resolution**2
             / (2 * np.pi * sigma_gauss**2)
-            * np.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
+            * xp.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
-        gauss_conv_size = 2 * (field_limit + gauss_limit).astype(int)
+        gauss_conv_size = int(2 * (field_limit + gauss_limit).astype(int))
 
         beam_info["gauss_conv_size"] = gauss_conv_size
         beam_info["gauss_filter"] = gauss_filter
 
         # get kernel size and distances
         kernel_limit = np.ceil(kernel_cutoff / self.int_conv_resolution)
-        kernel_grid = self.int_conv_resolution * np.arange(-kernel_limit, kernel_limit)
+        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit)
 
-        kernel_x, kernel_z = np.meshgrid(kernel_grid, kernel_grid, indexing="xy")
+        kernel_x, kernel_z = array_meshgrid(kernel_grid, kernel_grid, indexing="xy")
 
         # calculate also the total size and distance as we need this during convolution extensively
         kernel_conv_limit = field_limit + gauss_limit + kernel_limit
-        kernel_conv_grid = self.int_conv_resolution * np.arange(
+        kernel_conv_grid = self.int_conv_resolution * xp.arange(
             -kernel_conv_limit, kernel_conv_limit
         )
-        conv_mx_x, conv_mx_z = np.meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
+        conv_mx_x, conv_mx_z = array_meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
 
-        kernel_conv_size = 2 * kernel_conv_limit.astype(int)
+        kernel_conv_size = int(2 * kernel_conv_limit.astype(int))
 
+        # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:
             n = np.floor(field_width / self.int_conv_resolution).astype(int)
-            f_pre = np.ones((n, n), dtype=np.float32)
+            f_pre = xp.ones((n, n), dtype=xp.float32)
 
             if not self.use_custom_primary_photon_fluence:
-                f_pre = fft.ifft2(
-                    fft.fft2(f_pre, (gauss_conv_size, gauss_conv_size))
-                    * fft.fft2(gauss_filter, (gauss_conv_size, gauss_conv_size))
+                f_pre = _ifft2(
+                    _fft2(f_pre, (gauss_conv_size, gauss_conv_size))
+                    * _fft2(gauss_filter, (gauss_conv_size, gauss_conv_size))
                 )
-                f_pre = np.real(f_pre)
+                f_pre = xp.real(f_pre)
 
         # get index of central ray or closest to the central ray
-        xp = self.xp
         ray_pos_bev = xp.stack(
             [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
@@ -281,7 +289,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         center_ssd = beam_info["beam"]["rays"][center]["SSD"]
 
         # get correct kernel for given SSD at central ray
-        kernels_at_ssd = kernel.get_kernels_at_ssd(center_ssd)
+        kernels_at_ssd = xp.asarray(kernel.get_kernels_at_ssd(center_ssd))
 
         # Display console message
         logger.info(
@@ -289,17 +297,14 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
 
         # Get Interpolators
-        # TODO: need scipy interpolate here probably
         # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
-        kernel_mxs = np.apply_along_axis(
-            lambda x: (
-                self.int_conv_resolution**2
-                * np.interp(
-                    np.sqrt(kernel_x**2 + kernel_z**2), kernel.kernel_pos, x, left=0.0, right=0.0
-                )
-            ),
-            axis=1,
-            arr=kernels_at_ssd,
+        kernel_pos = xp.asarray(kernel.kernel_pos, dtype=kernels_at_ssd.dtype)
+        kernel_mxs = self.int_conv_resolution**2 * interp1d(
+            xp.sqrt(kernel_x**2 + kernel_z**2),
+            kernel_pos,
+            kernels_at_ssd,
+            left=0.0,
+            right=0.0,
         )
 
         beam_info["kernel"] = kernel
@@ -323,6 +328,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         call
             bixel = self.computeBixel(currRay,k)
         """
+
+        xp = self.xp
         bixel = {}
 
         kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
@@ -330,26 +337,26 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         m = kernel.m
         betas = kernel.kernel_betas
         rd = curr_ray["rad_depths"]
-        interpolators = cast(list[RegularGridInterpolator], curr_ray["kernel_interpolators"])
+        interpolators = cast(list[Callable], curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
 
-        xp = array_api_compat.array_namespace(rd)
-
         # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
-        betas = xp.reshape(xp.asarray(betas), (-1, 1))
+        device = array_api_compat.device(rd)
+        betas = xp.reshape(xp.asarray(betas, dtype=rd.dtype, device=device), (-1, 1))
         rd = xp.reshape(rd, (1, -1))
-        m_arr = xp.asarray(m, dtype=rd.dtype)
+        m_arr = xp.asarray(m, dtype=rd.dtype, device=device)
 
         dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
-        # scipy interpolators require NumPy arrays
-        iso_lat_dists_np = to_numpy(iso_lat_dists)
-        interpolated_kernels = [interp(iso_lat_dists_np) for interp in interpolators]
+        iso_lat_dists = to_namespace(xp, iso_lat_dists, device=self.device)
+        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
 
         for c, interp in enumerate(interpolated_kernels):
-            dose_component[c, :] *= xp.asarray(interp)
+            dose_component = xpx.at(dose_component, (c, slice(None))).set(
+                dose_component[c, :] * xp.asarray(interp)
+            )
 
         bixel_dose = xp.sum(dose_component, axis=0)
 
@@ -361,23 +368,32 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return bixel
 
-    def _get_kernel_interpolators(self, beam_info: dict[str], f: np.ndarray) -> list[Callable]:
+    def _get_kernel_interpolators(self, beam_info: dict[str], f: Array) -> list[Callable]:
         """Get kernel interpolator for photon dose calculation."""
+
+        xp = self.xp
 
         num_kernels = cast(PhotonSVDKernel, beam_info["kernel"]).num_kernel_components
         conv_size = beam_info["kernel_conv_size"]
-        kernel_mxs = beam_info["kernel_mxs"]
-        conv_grid = beam_info["kernel_conv_grid"]
+
+        f = to_namespace(xp, f, device=self.device)
+        kernel_mxs = to_namespace(xp, beam_info["kernel_mxs"], device=self.device)
+        conv_grid = to_namespace(xp, beam_info["kernel_conv_grid"], device=self.device)
 
         interpolators = [None] * num_kernels
         for c in range(num_kernels):
-            conv_mx = np.real(
-                fft.ifft2(
-                    fft.fft2(f, (conv_size, conv_size))
-                    * fft.fft2(kernel_mxs[c], (conv_size, conv_size))
+            conv_mx = xp.real(
+                _ifft2(
+                    _fft2(f, s=(conv_size, conv_size))
+                    * _fft2(kernel_mxs[c, ...], s=(conv_size, conv_size))
                 )
             )
-            interpolators[c] = RegularGridInterpolator((conv_grid, conv_grid), conv_mx)
+
+            # bounds_error mirrors RegularGridInterpolator's default on develop: a query
+            # outside the convolution grid means the grid was sized wrong, not extrapolation
+            interpolators[c] = partial(
+                interpnd, x=(conv_grid, conv_grid), y=conv_mx, bounds_error=True
+            )
 
         return interpolators
 
@@ -394,39 +410,45 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         ray["kernel"] = beam_info["kernel"]
 
         if self.use_custom_primary_photon_fluence or beam_info["field_based_dose_calc"]:
-            print("Calculating custom kernel interpolators for ray ", j)
+            logger.debug("Calculating custom kernel interpolators for ray %d.", j)
+            xp = self.xp
+
             if beam_info["field_based_dose_calc"]:
-                f = ray["beamlets"][0]["mask"]
                 # multiply masks of beamlets on a ray to get field mask for ray
                 # TODO: ensure matching grids? should be handled in ersampling above
-                for k, beamlet in enumerate(ray["beamlets"]):
-                    if k == 0:
-                        continue
-                    f *= ray["beamlets"][k]["mask"]
+                f = to_namespace(xp, ray["beamlets"][0]["mask"], device=self.device)
+                for beamlet in ray["beamlets"][1:]:
+                    # Not in-place: f may alias the beamlet's stored mask
+                    f = f * to_namespace(xp, beamlet["mask"], device=self.device)
             else:
                 # TODO: Not saved yet
-                f = beam_info["f_pre"]
+                f = to_namespace(xp, beam_info["f_pre"], device=self.device)
 
-            f = cast(np.ndarray, f)  # Typing
+            f_x = to_namespace(xp, beam_info["f_x"], device=self.device)
+            f_z = to_namespace(xp, beam_info["f_z"], device=self.device)
 
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
-            r = np.sqrt(
-                (beam_info["f_x"] - ray["ray_pos_bev"][0]) ** 2
-                + (beam_info["f_z"] - ray["ray_pos_bev"][2]) ** 2
+            r = xp.sqrt(
+                (f_x - float(ray["ray_pos_bev"][0])) ** 2
+                + (f_z - float(ray["ray_pos_bev"][2])) ** 2
             )
 
-            if not (f.shape == beam_info["f_x"].shape == beam_info["f_z"].shape == r.shape):
+            if not (f.shape == f_x.shape == f_z.shape == r.shape):
                 raise ValueError("Shape mismatch in kernel interpolation!")
 
             if self.force_uniform_fluence:
                 fx = f
             else:
-                fx = f * np.interp(r, primary_fluence[:, 0], primary_fluence[:, 1])
+                fx = f * interp1d(
+                    r,
+                    to_namespace(xp, primary_fluence[:, 0], device=self.device),
+                    to_namespace(xp, primary_fluence[:, 1], device=self.device),
+                )
 
             n = beam_info["gauss_conv_size"]
-            gauss_filter = beam_info["gauss_filter"]
+            gauss_filter = to_namespace(xp, beam_info["gauss_filter"], device=self.device)
 
-            fx = np.real(fft.ifft2(fft.fft2(fx, (n, n)) * fft.fft2(gauss_filter, (n, n))))
+            fx = xp.real(_ifft2(_fft2(fx, (n, n)) * _fft2(gauss_filter, (n, n))))
 
             ray["kernel_interpolators"] = self._get_kernel_interpolators(beam_info, fx)
         else:
