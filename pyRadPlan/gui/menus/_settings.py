@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -39,7 +39,11 @@ def _nested_model_fields(model_cls: type[BaseModel]) -> dict[str, type[BaseModel
 
 
 #: Display names for sub-configuration sections (fallback: `_tab_title`).
-_SECTION_TITLES = {"xp": "XP (Backend)", "ai": "AI", "ai_models": "AI Models"}
+_SECTION_TITLES = {
+    "xp": "XP (Backend)",
+    "ai_agents": "AI Agents",
+    "ai_modelhub": "AI Model Hub",
+}
 
 
 def _tab_title(field_name: str) -> str:
@@ -50,9 +54,24 @@ def _tab_title(field_name: str) -> str:
     return field_name.replace("_", " ").title()
 
 
-def _env_name(model_cls: type[BaseModel], field_name: str) -> str:
+def _env_names(model_cls: type[BaseModel], field_name: str) -> list[str]:
+    """Environment variable names a settings field is read from.
+
+    The prefixed name comes first and is the one written back; any additional
+    names declared through a ``validation_alias`` (e.g. a legacy variable) are
+    returned after it so they can be cleared, which keeps a stale alias from
+    overriding what the user just chose.
+    """
     prefix = model_cls.model_config.get("env_prefix", "")
-    return f"{prefix}{field_name}".upper()
+    names = [f"{prefix}{field_name}".upper()]
+
+    info = model_cls.model_fields[field_name]
+    alias = info.validation_alias
+    aliases = alias.choices if isinstance(alias, AliasChoices) else [alias]
+    for candidate in aliases:
+        if isinstance(candidate, str) and candidate.upper() not in names:
+            names.append(candidate.upper())
+    return names
 
 
 class SettingsDialog(QDialog):
@@ -60,7 +79,7 @@ class SettingsDialog(QDialog):
 
     Without a *section*, a tabbed editor for the full hierarchy is shown: a
     *General* tab holds the top-level fields (omitted when there are none) and
-    each nested sub-configuration (e.g. ``xp``, ``ai``) gets its own tab. With
+    each nested sub-configuration (e.g. ``xp``, ``ai_agents``) gets its own tab. With
     a *section*, only that sub-configuration's form is shown.
 
     All forms reflect the runtime settings singleton; accepted edits are
@@ -172,7 +191,9 @@ class SettingsDialog(QDialog):
     def _apply_form(model_cls: type[BaseModel], target: BaseModel, values: dict) -> None:
         for name, value in values.items():
             setattr(target, name, value)
-            env_name = _env_name(model_cls, name)
+            env_name, *stale = _env_names(model_cls, name)
+            for other in stale:
+                os.environ.pop(other, None)
             if value is None:
                 os.environ.pop(env_name, None)
             else:
@@ -182,7 +203,7 @@ class SettingsDialog(QDialog):
 class SettingsMenu(QMenu):
     """The main window's *Settings* menu.
 
-    Offers a quick link per sub-configuration (e.g. *XP (Backend)*, *AI*)
+    Offers a quick link per sub-configuration (e.g. *XP (Backend)*, *AI Agents*)
     opening a single-section dialog, plus *Preferences* opening the full
     tabbed settings editor.
 

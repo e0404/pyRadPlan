@@ -24,12 +24,12 @@ def ai_disabled_reason() -> Optional[str]:
     """Why AI features cannot run right now, or ``None`` if they can.
 
     Checks that pydantic-ai is installed and that at least one model is usable
-    (see :func:`pyRadPlan.ai_agents.available_models`); the returned string is
+    (see :func:`pyRadPlan.ai.agents.available_models`); the returned string is
     suitable as a tooltip on disabled AI buttons.
     """
     if not ai_available():
         return AI_MISSING_TIP
-    from pyRadPlan.ai_agents import available_models  # noqa: PLC0415
+    from pyRadPlan.ai.agents import available_models  # noqa: PLC0415
 
     if not available_models():
         return AI_NO_MODEL_TIP

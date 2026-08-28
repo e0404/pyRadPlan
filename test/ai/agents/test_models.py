@@ -6,13 +6,13 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
-from pyRadPlan.ai_agents import available_models
+from pyRadPlan.ai.agents import available_models
 
 
 @pytest.fixture(autouse=True)
 def _no_dotenv(monkeypatch):
     # Keep these tests hermetic: don't let a local .env leak provider keys in.
-    monkeypatch.setattr("pyRadPlan.ai_agents._models.load_ai_env", lambda *a, **k: None)
+    monkeypatch.setattr("pyRadPlan.ai.agents._models.load_ai_env", lambda *a, **k: None)
     for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         monkeypatch.delenv(env, raising=False)
 
@@ -42,7 +42,7 @@ def test_available_models_adds_provider_when_key_present(monkeypatch):
 
 
 def test_load_ai_env_populates_environment(tmp_path, monkeypatch):
-    from pyRadPlan.ai_agents import load_ai_env
+    from pyRadPlan.ai.agents import load_ai_env
 
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=from-dotenv\n", encoding="utf-8")

@@ -9,6 +9,7 @@
         "type_order": ["dose", "ct", "mask"]
     },
     "metadata": {
-        "description": "Dummy model for pyRadPlan.ai_models local-load tests."
+        "task": "outcome",
+        "description": "Dummy model for pyRadPlan.ai.modelhub local-load tests."
     }
 }

@@ -29,6 +29,8 @@ build-matrix:
         - . .venv/bin/activate
         # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite  # Uncomment if needed for numba on specific images
         - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
+        # Cached here so tests-matrix does not re-download it every pipeline.
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu || echo "torch unavailable for ${PYTHON_VERSION}"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -124,6 +126,10 @@ tests-matrix:
         - python -m venv .venv
         - . .venv/bin/activate
         - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
+        # CPU-only torch, so the ai.modelhub loader tests actually run. Tolerated
+        # to fail: torch lags new Python releases, and the tests that need it
+        # skip themselves when it is absent.
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu || echo "torch unavailable for ${PYTHON_VERSION}, ai.modelhub load tests will skip"
         - pip install coverage pytest pytest-cov
         - mkdir -p .testreports
         - PYVER_SAFE=${PYTHON_VERSION//./}
