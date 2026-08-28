@@ -13,12 +13,7 @@
 # %%
 # Import necessary libraries
 import logging
-from pyRadPlan import (
-    generate_stf,
-    calc_dose_influence,
-    fluence_optimization,
-    xp_utils,
-)
+from pyRadPlan import generate_stf, calc_dose_influence, fluence_optimization, settings
 
 from pyRadPlan.gui.apps import launch_viewer
 from pyRadPlan.io import load_patient
@@ -33,11 +28,10 @@ import os
 from pyRadPlan.plan._plans import PhotonPlan
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
+settings.xp.preferred_cpu_array_backend = "cupy"
 logging.basicConfig(level=logging.INFO)
-# os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 
 # %%
@@ -81,7 +75,7 @@ ntcp_obj = OutcomeCNN(
         "Parotid_LT",
         "Parotid_RT",
     ],  # channel order matters unless the model collapses masks
-    debug_plots="debug_grads",
+    # debug_plots="debug_grads",
 )
 
 cst.vois[0].objectives = [  # PAROTID_LT
