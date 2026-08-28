@@ -23,5 +23,4 @@ Api documentation
    core
    util
    io
-   ai_agents
-   ai_models
+   ai

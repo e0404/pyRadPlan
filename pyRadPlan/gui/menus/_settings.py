@@ -42,7 +42,7 @@ def _nested_model_fields(model_cls: type[BaseModel]) -> dict[str, type[BaseModel
 _SECTION_TITLES = {
     "xp": "XP (Backend)",
     "ai_agents": "AI Agents",
-    "ai_models": "AI Models",
+    "ai_modelhub": "AI Model Hub",
 }
 
 

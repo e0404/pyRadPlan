@@ -63,19 +63,21 @@ dependencies = [
     "tqdm>=4.0.0",
     "pint>=0.24.0",
     "jinja2",
+    "huggingface_hub>=0.23",
+    "safetensors",
 #   "cudatoolkit",
 #   "Raytrace@git+https://github.com/ryanneph/raytrace.git@master#egg=raytrace"
 ]
+
+# huggingface_hub>=0.23: snapshot_download's local_dir no longer uses symlinks, which the
+# local-model layout in pyRadPlan.ai.modelhub relies on. torch is deliberately
+# not pulled in: pick the build matching your platform/CUDA yourself.
 
 [project.optional-dependencies]
 matlab = ["matlabengine"]
 octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
-# >=0.23: snapshot_download's local_dir no longer uses symlinks, which the
-# local-model layout in pyRadPlan.ai_models relies on. torch is deliberately
-# not pulled in: pick the build matching your platform/CUDA yourself.
-ai     = ["huggingface_hub>=0.23", "safetensors"] # keep huggingface_hub even tho its covered by pydantic-ai for now
 
 dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 

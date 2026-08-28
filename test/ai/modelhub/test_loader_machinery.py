@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from pyRadPlan.ai_models import BasePreprocessor, _load_model, load_model
+from pyRadPlan.ai.modelhub import BasePreprocessor, _load_model, load_model
 
 MODEL_PY = """
 class FakeNet:
@@ -30,7 +30,7 @@ class FakeNet:
 """
 
 PREPROCESSOR_PY = """
-from pyRadPlan.ai_models import BasePreprocessor
+from pyRadPlan.ai.modelhub import BasePreprocessor
 
 
 class FakePreprocessor(BasePreprocessor):
@@ -161,7 +161,7 @@ def test_name_resolves_to_hf_org_repo_id(fake_model_dir, monkeypatch):
     monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
 
     load_model("dosecalc-x", trust_remote_code=True)
-    hf_org = _load_model.get_settings().ai_models.hf_org
+    hf_org = _load_model.get_settings().ai_modelhub.hf_org
     assert captured["repo_id"] == f"{hf_org}/dosecalc-x"
 
 

@@ -10,6 +10,6 @@
     },
     "metadata": {
         "task": "outcome",
-        "description": "Dummy model for pyRadPlan.ai_models local-load tests."
+        "description": "Dummy model for pyRadPlan.ai.modelhub local-load tests."
     }
 }

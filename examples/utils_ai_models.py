@@ -3,7 +3,7 @@
 # Loading AI Models in pyRadPlan.
 
 This example shows how to load a model and its preprocessor with the
-`pyRadPlan.ai_models` subsystem. Models follow a fixed repository contract
+`pyRadPlan.ai.modelhub` subsystem. Models follow a fixed repository contract
 (`model.py`, `preprocessor.py`, `weights.safetensors`, `model_config.json`) and
 can be loaded either from a local directory or from the HuggingFace Hub.
 
@@ -13,11 +13,11 @@ can be loaded either from a local directory or from the HuggingFace Hub.
    (plus a `torch` build matching your platform/CUDA).
 2. By default, local models live under `<data_dir>/ai_models` (the data root
    defaults to `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Override
-   just the models base with the `PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR`
+   just the models base with the `PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR`
    environment variable (or a `.env` file).
 3. Loading a model from the Hub runs Python shipped inside the repository, so it
    needs an explicit opt-in: `trust_remote_code=True`, or
-   `PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1`. Loading from a directory you point
+   `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`. Loading from a directory you point
    at yourself with `local_dir=` needs no opt-in.
 
 ## Setup
@@ -29,10 +29,10 @@ import logging
 from dotenv import load_dotenv
 
 from pyRadPlan import settings
-from pyRadPlan.ai_models import list_local_models, load_model, ModelTask
+from pyRadPlan.ai.modelhub import list_local_models, load_model, ModelTask
 
 # %%
-# Load environment variables (e.g. PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR) from a .env file
+# Load environment variables (e.g. PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR) from a .env file
 load_dotenv()
 
 # Configure logging so the loader reports what it resolves/downloads
@@ -40,22 +40,22 @@ logging.basicConfig(level=logging.INFO)
 # Quiet the per-request HTTP chatter from the HuggingFace client
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Inspect effective settings (the `ai_models` sub-configuration of pyRadPlan.settings)
-ai_models = settings.ai_models
-print(f"HuggingFace org:    {ai_models.hf_org}")
-print(f"Local models dir:   {ai_models.local_models_dir}")
-print(f"Offline:            {ai_models.offline}")
-print(f"Device:             {ai_models.device}")
-print(f"Trust remote code:  {ai_models.trust_remote_code}")
+# Inspect effective settings (the `ai_modelhub` sub-configuration of pyRadPlan.settings)
+modelhub = settings.ai_modelhub
+print(f"HuggingFace org:    {modelhub.hf_org}")
+print(f"Local models dir:   {modelhub.local_models_dir}")
+print(f"Offline:            {modelhub.offline}")
+print(f"Device:             {modelhub.device}")
+print(f"Trust remote code:  {modelhub.trust_remote_code}")
 
 # %% [markdown]
 """
 ## Load from the HuggingFace Hub
 
 Once the model repositories are published, you can load a model by its friendly
-name, which resolves to `<hf_org>/<name>`. Set `PYRADPLAN_AI_MODELS_HF_ORG` to
+name, which resolves to `<hf_org>/<name>`. Set `PYRADPLAN_AI_MODELHUB_HF_ORG` to
 the hosting organization and, optionally,
-`PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR` to keep a local copy.
+`PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR` to keep a local copy.
 
 Pin a `revision` (tag/branch/commit): it makes the download reproducible, tells
 you which code `trust_remote_code` is about to run, and lets a matching local
@@ -68,14 +68,14 @@ model, preprocessor = load_model(
     "pyRadPlan-outcome-ORPDenseNet-Xerostomia",
     revision="v0.1",
     trust_remote_code=True,
-    device=ai_models.device,
+    device=modelhub.device,
 )
 # Or with an explicit repository id:
 model, preprocessor = load_model(
     repo_id="DKFZ-RadOpt/pyRadPlan-outcome-ORPDenseNet-tg119",
     revision="v0.1",
     trust_remote_code=True,
-    device=ai_models.device,
+    device=modelhub.device,
 )
 
 # %% [markdown]
