@@ -287,9 +287,10 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
             "(named by 'model_name' in model_config.json)."
         )
     model = model_cls(**config.get("model_params", {}))
+
+    _load_weights(model, model_dir / "weights.safetensors", "cpu")
     if hasattr(model, "to"):
         model.to(device)
-    _load_weights(model, model_dir / "weights.safetensors", device)
     if hasattr(model, "eval"):
         model.eval()
 
