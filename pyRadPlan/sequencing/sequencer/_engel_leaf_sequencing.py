@@ -303,7 +303,7 @@ class EngelLeafSequencer(PhotonSequencer):
             # Update D_k by subtracting the current shape (multiplied by the weight)
             d_k = d_k - d_k_value * shape_k
 
-            # TODO: Another failsafe to ensure no negative values. Sould work without
+            # TODO: Another failsafe to ensure no negative values. Could work without
             d_k = np.maximum(0, d_k)
 
         if k >= max_iterations:
@@ -385,8 +385,9 @@ class EngelLeafSequencer(PhotonSequencer):
                 result_tmp["sequence"][key] = val
 
         # Interpolate dose
+        cubes = {}
         if dij is not None:
-            cubes = dij.compute_result_ct_grid(sequencing["fluence"])
+            cubes = dij.compute_result_ct_grid(sequencing["fluence"]).model_dump()
 
         # TODO: Currently overwriting quantities in main result. In the future might need to update sequence
         return validate_result({**cubes, **result_tmp})

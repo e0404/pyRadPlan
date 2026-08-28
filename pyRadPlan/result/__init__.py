@@ -12,7 +12,10 @@ from ._result import (
 )
 from ._sequence import Sequence
 
+from ._aperture_info import ApertureInfo
+
 __all__ = [
+    "ApertureInfo",
     "PlanResult",
     "QuantityDistribution",
     "Sequence",

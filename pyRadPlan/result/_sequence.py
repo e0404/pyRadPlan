@@ -61,7 +61,10 @@ class Sequence(PyRadPlanBaseModel):
     @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
         """Handle data coming from matRad."""
-        if data == {}:
+        # Guard against non-dict inputs (e.g. an empty matRad struct read as an
+        # ndarray by newer readers) before the truthiness test, since ``ndarray == {}``
+        # raises an ambiguous-truth ValueError.
+        if not isinstance(data, dict) or not data:
             return data
 
         # Copy so that the caller's dictionary survives validation unchanged.
