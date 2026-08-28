@@ -1,9 +1,9 @@
-.. _concept_ai_models:
+.. _concept_ai_modelhub:
 
-AI Models
-=========
+AI Model Hub
+============
 
-pyRadPlan ships an optional ``ai_models`` module that loads trained AI models -- and the
+pyRadPlan ships an optional ``ai.modelhub`` module that loads trained AI models -- and the
 preprocessor that prepares their inputs -- either from the
 `HuggingFace Hub <https://huggingface.co>`_ or from a local directory, with version dedup
 and offline support.  A model repository is self-contained: it carries its network
@@ -12,7 +12,7 @@ instantiation, so pyRadPlan needs no per-model code.
 
 .. note::
 
-   The ``ai_models`` module is an optional feature.  Install the extra dependencies
+   The ``ai.modelhub`` module is an optional feature.  Install the extra dependencies
    together with a ``torch`` build matching your platform:
 
    .. code-block:: bash
@@ -27,7 +27,7 @@ Quick start
 
 .. code-block:: python
 
-    from pyRadPlan.ai_models import load_model, list_local_models
+    from pyRadPlan.ai.modelhub import load_model, list_local_models
 
     # From a local directory (works fully offline):
     model, preprocessor = load_model(local_dir="path/to/model_folder")
@@ -45,9 +45,9 @@ Quick start
 
     print(list_local_models())  # models available on disk (no network)
 
-:func:`~pyRadPlan.ai_models.load_model` returns the model with its weights loaded, moved
+:func:`~pyRadPlan.ai.modelhub.load_model` returns the model with its weights loaded, moved
 to the configured device and set to eval mode, together with the
-:class:`~pyRadPlan.ai_models.BasePreprocessor` instance configured for it.  The
+:class:`~pyRadPlan.ai.modelhub.BasePreprocessor` instance configured for it.  The
 preprocessor brackets the model call:
 
 .. code-block:: python
@@ -62,10 +62,10 @@ pyRadPlan -- record it in the model's ``metadata`` (see
 
 .. warning::
 
-   :func:`~pyRadPlan.ai_models.load_model` executes the ``model.py`` and
+   :func:`~pyRadPlan.ai.modelhub.load_model` executes the ``model.py`` and
    ``preprocessor.py`` shipped inside the model repository.  For anything fetched from
    the Hub this is gated behind an explicit ``trust_remote_code=True`` (or
-   ``PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1``), which defaults to ``False``.  Enable it
+   ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``), which defaults to ``False``.  Enable it
    only for sources you trust, and prefer pinning a ``revision`` so you know which code
    you are running.  A directory you pass yourself as ``local_dir`` is exempt -- that
    code is already under your control.
@@ -73,10 +73,10 @@ pyRadPlan -- record it in the model's ``metadata`` (see
 Discovering local models
 ------------------------
 
-:func:`~pyRadPlan.ai_models.list_local_models` lists the models present under the
+:func:`~pyRadPlan.ai.modelhub.list_local_models` lists the models present under the
 configured ``local_models_dir`` and in the HuggingFace cache.  It performs no network
 access.  Models are reported as ``<org>/<repo>`` -- which
-:func:`~pyRadPlan.ai_models.load_model` accepts directly, so the output feeds straight
+:func:`~pyRadPlan.ai.modelhub.load_model` accepts directly, so the output feeds straight
 back in, and a private fork is never confused with its upstream namesake.
 
 A model's *task* -- what it does -- comes from ``metadata.task`` in its
@@ -85,14 +85,14 @@ A model's *task* -- what it does -- comes from ``metadata.task`` in its
 
 .. code-block:: python
 
-    from pyRadPlan.ai_models import ModelTask, list_local_models, load_model
+    from pyRadPlan.ai.modelhub import ModelTask, list_local_models, load_model
 
     for name in list_local_models(ModelTask.DOSE_CALC):
         print(name)                     # e.g. "DKFZ-RadOpt/dosecalc-..."
 
     model, preprocessor = load_model(list_local_models(ModelTask.OUTCOME)[0])
 
-The task (:class:`~pyRadPlan.ai_models.ModelTask`) is deliberately distinct from the
+The task (:class:`~pyRadPlan.ai.modelhub.ModelTask`) is deliberately distinct from the
 *modality* in the pyRadPlan sense (the radiation type, ``radiation_mode`` on a
 :class:`~pyRadPlan.plan.Plan`), which a repository records under
 ``metadata.training.modality``.
@@ -100,9 +100,9 @@ The task (:class:`~pyRadPlan.ai_models.ModelTask`) is deliberately distinct from
 Configuration
 -------------
 
-:class:`~pyRadPlan.ai_models.AiModelSettings` is the ``ai_models`` sub-configuration of
+:class:`~pyRadPlan.ai.modelhub.AiModelSettings` is the ``ai_modelhub`` sub-configuration of
 the global ``pyRadPlan.settings`` singleton (see :doc:`/api/settings`).  It reads
-environment variables prefixed with ``PYRADPLAN_AI_MODELS_`` (or a ``.env`` file in the
+environment variables prefixed with ``PYRADPLAN_AI_MODELHUB_`` (or a ``.env`` file in the
 working directory):
 
 .. list-table::
@@ -114,29 +114,29 @@ working directory):
      - Default
      - Meaning
    * - ``hf_org``
-     - ``PYRADPLAN_AI_MODELS_HF_ORG``
+     - ``PYRADPLAN_AI_MODELHUB_HF_ORG``
      - ``DKFZ-RadOpt``
      - HuggingFace org/namespace a bare model name is resolved against
    * - ``local_models_dir``
-     - ``PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR``
+     - ``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``
      - ``<data_dir>/ai_models``
      - Base directory for local models; the default ``local_dir`` is
        ``<local_models_dir>/<org>/<repo>``.  An empty string uses the HuggingFace cache
        only
    * - ``cache_dir``
-     - ``PYRADPLAN_AI_MODELS_CACHE_DIR``
+     - ``PYRADPLAN_AI_MODELHUB_CACHE_DIR``
      - HuggingFace default
      - HuggingFace cache directory
    * - ``offline``
-     - ``PYRADPLAN_AI_MODELS_OFFLINE``
+     - ``PYRADPLAN_AI_MODELHUB_OFFLINE``
      - ``False``
      - Force ``local_files_only``
    * - ``trust_remote_code``
-     - ``PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE``
+     - ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE``
      - ``False``
      - Allow executing the code shipped with a model fetched from the Hub
    * - ``device``
-     - ``PYRADPLAN_AI_MODELS_DEVICE``
+     - ``PYRADPLAN_AI_MODELHUB_DEVICE``
      - ``cpu``
      - Device the model is moved to
 
@@ -146,11 +146,8 @@ The settings can also be inspected and changed at runtime:
 
     import pyRadPlan
 
-    print(pyRadPlan.settings.ai_models.local_models_dir)
-    pyRadPlan.settings.ai_models.device = "cuda"
-
-``PYRADPLAN_HUGGINGFACE_PATH`` is still accepted as a legacy alias for
-``PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR``; the prefixed name wins if both are set.
+    print(pyRadPlan.settings.ai_modelhub.local_models_dir)
+    pyRadPlan.settings.ai_modelhub.device = "cuda"
 
 The data root (``<data_dir>``) defaults to ``~/.pyradplan`` and can be relocated with the
 ``PYRADPLAN_DATA_DIR`` environment variable (see
@@ -177,7 +174,7 @@ exactly these files:
 
     <model folder>/
       model.py             # nn.Module class definition(s)
-      preprocessor.py      # subclass of pyRadPlan.ai_models.BasePreprocessor
+      preprocessor.py      # subclass of pyRadPlan.ai.modelhub.BasePreprocessor
       weights.safetensors  # state_dict saved with safetensors
       model_config.json    # declarative config (see model_config.template.json)
 
@@ -187,13 +184,13 @@ keys; everything else is free-form metadata the loader ignores:
 
 * ``model_name`` selects the class in ``model.py``; ``model_params`` are passed to its
   constructor as keyword arguments (so keep only real constructor kwargs there).
-* The :class:`~pyRadPlan.ai_models.BasePreprocessor` subclass in ``preprocessor.py`` is
+* The :class:`~pyRadPlan.ai.modelhub.BasePreprocessor` subclass in ``preprocessor.py`` is
   constructed with ``model_preprocessing``, which configures **both** ``preprocess()``
   and ``postprocess()``.  If ``preprocessor.py`` defines more than one subclass, set
   ``preprocessor_name`` in ``model_config.json`` to disambiguate.
 * ``metadata`` is otherwise free-form and not read by the loader; use it to record how
   the model was trained and any assumptions it makes.  Only ``metadata.task`` is
-  interpreted, by :func:`~pyRadPlan.ai_models.list_local_models`.
+  interpreted, by :func:`~pyRadPlan.ai.modelhub.list_local_models`.
 
 .. code-block:: json
 
@@ -220,11 +217,11 @@ exercised by the test suite.  The annotated config template is
 API reference
 -------------
 
-The full API for the ``ai_models`` module is documented in the
-:doc:`API reference </api/ai_models>`:
+The full API for the ``ai.modelhub`` module is documented in the
+:doc:`API reference </api/ai_modelhub>`:
 
-* :func:`~pyRadPlan.ai_models.load_model`
-* :class:`~pyRadPlan.ai_models.BasePreprocessor`
-* :func:`~pyRadPlan.ai_models.list_local_models`
-* :class:`~pyRadPlan.ai_models.ModelTask`
-* :class:`~pyRadPlan.ai_models.AiModelSettings`
+* :func:`~pyRadPlan.ai.modelhub.load_model`
+* :class:`~pyRadPlan.ai.modelhub.BasePreprocessor`
+* :func:`~pyRadPlan.ai.modelhub.list_local_models`
+* :class:`~pyRadPlan.ai.modelhub.ModelTask`
+* :class:`~pyRadPlan.ai.modelhub.AiModelSettings`

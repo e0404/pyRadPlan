@@ -3,7 +3,7 @@
 :func:`list_local_models` reports the model repositories present on disk, both
 under :attr:`AiModelSettings.local_models_dir` and in the HuggingFace cache (where
 downloaded models land by default). A directory counts as a model when it holds
-the full model contract (see :data:`pyRadPlan.ai_models._hub.REQUIRED_FILES`). It
+the full model contract (see :data:`pyRadPlan.ai.modelhub._resolve.REQUIRED_FILES`). It
 touches no network.
 
 Models are reported by their full ``"<org>/<repo>"`` id, so a private fork is
@@ -22,7 +22,7 @@ from typing import Optional
 
 from pyRadPlan._settings import get_settings
 
-from ._hub import is_valid_model_dir
+from ._resolve import is_valid_model_dir
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def list_local_models(task: Optional[ModelTask] = None) -> list[str]:
     performed.
 
     Models are reported as ``"<org>/<repo>"``, which is what
-    :func:`~pyRadPlan.ai_models.load_model` accepts, so the returned names can
+    :func:`~pyRadPlan.ai.modelhub.load_model` accepts, so the returned names can
     be fed straight back in. A model placed by hand directly under
     ``local_models_dir`` (rather than in an ``<org>/`` subdirectory) has no
     organization to report and is listed under its bare folder name.
@@ -126,7 +126,7 @@ def list_local_models(task: Optional[ModelTask] = None) -> list[str]:
     list[str]
         Sorted model ids available on disk.
     """
-    cfg = get_settings().ai_models
+    cfg = get_settings().ai_modelhub
     found: dict[str, Optional[ModelTask]] = {}
 
     base = cfg.local_models_dir

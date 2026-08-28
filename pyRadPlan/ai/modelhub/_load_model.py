@@ -16,7 +16,7 @@ from typing import Any, Optional, Union
 
 from pyRadPlan._settings import get_settings
 
-from ._hub import resolve_model_dir
+from ._resolve import resolve_model_dir
 from ._preprocessor import BasePreprocessor
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def _repo_package(model_dir: Path) -> types.ModuleType:
     """Return (creating if needed) the package module a model repo lives under."""
     if _REPO_PACKAGE not in sys.modules:
         namespace = types.ModuleType(_REPO_PACKAGE)
-        namespace.__doc__ = "Code of model repositories loaded by pyRadPlan.ai_models."
+        namespace.__doc__ = "Code of model repositories loaded by pyRadPlan.ai.modelhub."
         namespace.__path__ = []
         sys.modules[_REPO_PACKAGE] = namespace
 
@@ -247,7 +247,7 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
         nor a usable ``local_dir`` is provided.
     """
-    cfg = get_settings().ai_models
+    cfg = get_settings().ai_modelhub
     if device is None:
         device = cfg.device
 
@@ -266,7 +266,7 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         raise ValueError(
             f"Loading the model in {source} executes code shipped with the model "
             "(model.py, preprocessor.py). Pass trust_remote_code=True "
-            "(or set PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1) only for sources you trust."
+            "(or set PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1) only for sources you trust."
         )
 
     model_dir = resolve_model_dir(

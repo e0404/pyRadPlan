@@ -7,12 +7,12 @@ import pytest
 pytest.importorskip("pydantic_ai")
 
 from pyRadPlan import load_tg119
-from pyRadPlan.ai_agents import (
+from pyRadPlan.ai.agents import (
     beam_angles_system_prompt,
     cst_geometry_summary,
     generate_beam_angles,
 )
-from pyRadPlan.ai_agents._plan_agents import BEAM_ANGLES_GEOMETRY_PROMPT, BeamSetup
+from pyRadPlan.ai.agents._plan_agents import BEAM_ANGLES_GEOMETRY_PROMPT, BeamSetup
 from pyRadPlan.plan import PhotonPlan
 
 
@@ -39,8 +39,8 @@ class _FakeAgent:
 
 @pytest.fixture
 def fake_agent(monkeypatch):
-    monkeypatch.setattr("pyRadPlan.ai_agents._plan_agents.Agent", _FakeAgent)
-    monkeypatch.setattr("pyRadPlan.ai_agents._plan_agents.load_ai_env", lambda *a, **k: None)
+    monkeypatch.setattr("pyRadPlan.ai.agents._plan_agents.Agent", _FakeAgent)
+    monkeypatch.setattr("pyRadPlan.ai.agents._plan_agents.load_ai_env", lambda *a, **k: None)
     return _FakeAgent
 
 

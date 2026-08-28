@@ -8,7 +8,7 @@ pytest.importorskip("pydantic_ai")
 
 from pyRadPlan import load_tg119
 from pyRadPlan.analysis import DX, Mean, QICollection, StructureQIs
-from pyRadPlan.ai_agents import (
+from pyRadPlan.ai.agents import (
     OBJECTIVES_ADAPT_PROMPT,
     OBJECTIVES_SYSTEM_PROMPT,
     cst_context_summary,
@@ -65,8 +65,8 @@ class _FakeAgent:
 
 @pytest.fixture
 def fake_agent(monkeypatch):
-    monkeypatch.setattr("pyRadPlan.ai_agents._cst_agents.Agent", _FakeAgent)
-    monkeypatch.setattr("pyRadPlan.ai_agents._cst_agents.load_ai_env", lambda *a, **k: None)
+    monkeypatch.setattr("pyRadPlan.ai.agents._cst_agents.Agent", _FakeAgent)
+    monkeypatch.setattr("pyRadPlan.ai.agents._cst_agents.load_ai_env", lambda *a, **k: None)
     return _FakeAgent
 
 

@@ -13,7 +13,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("safetensors")
 
-from pyRadPlan.ai_models import BasePreprocessor, load_model  # noqa: E402
+from pyRadPlan.ai.modelhub import BasePreprocessor, load_model  # noqa: E402
 
 
 def test_load_dummy_model_returns_model_and_preprocessor(dummy_model_dir):

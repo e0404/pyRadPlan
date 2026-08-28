@@ -1,11 +1,11 @@
-"""Pydantic settings for the ai_agents module.
+"""Pydantic settings for the ai.agents module.
 
 :class:`AiSettings` is defined in :mod:`pyRadPlan._settings` as part of the
 global pyRadPlan configuration and re-exported here for backward
 compatibility.
 """
 
-from .._settings import ENV_FILE, AiSettings
+from pyRadPlan._settings import ENV_FILE, AiSettings
 
 __all__ = ["ENV_FILE", "AiSettings", "load_ai_env"]
 
@@ -13,7 +13,7 @@ __all__ = ["ENV_FILE", "AiSettings", "load_ai_env"]
 def load_ai_env(override: bool = False) -> None:
     """Load a local ``.env`` file into ``os.environ``.
 
-    pydantic-ai and :func:`~pyRadPlan.ai_agents.available_models` read provider
+    pydantic-ai and :func:`~pyRadPlan.ai.agents.available_models` read provider
     API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, …) from the *process*
     environment.  pydantic-settings only feeds the ``.env`` into
     :class:`AiSettings` fields, so the API keys would otherwise never reach the

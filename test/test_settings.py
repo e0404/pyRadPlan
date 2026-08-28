@@ -62,12 +62,12 @@ def test_canonical_ai_env_name_wins_over_legacy(monkeypatch):
 
 
 def test_agent_and_model_settings_do_not_collide(monkeypatch):
-    """PYRADPLAN_AI_AGENTS_* and PYRADPLAN_AI_MODELS_* configure different things."""
+    """PYRADPLAN_AI_AGENTS_* and PYRADPLAN_AI_MODELHUB_* configure different things."""
     monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "an-llm")
-    monkeypatch.setenv("PYRADPLAN_AI_MODELS_DEVICE", "cuda")
+    monkeypatch.setenv("PYRADPLAN_AI_MODELHUB_DEVICE", "cuda")
     settings = PyRadPlanSettings(_env_file=None)
     assert settings.ai_agents.model == "an-llm"
-    assert settings.ai_models.device == "cuda"
+    assert settings.ai_modelhub.device == "cuda"
 
 
 def test_assignment_is_validated():

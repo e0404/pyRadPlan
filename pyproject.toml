@@ -70,7 +70,7 @@ dependencies = [
 ]
 
 # huggingface_hub>=0.23: snapshot_download's local_dir no longer uses symlinks, which the
-# local-model layout in pyRadPlan.ai_models relies on. torch is deliberately
+# local-model layout in pyRadPlan.ai.modelhub relies on. torch is deliberately
 # not pulled in: pick the build matching your platform/CUDA yourself.
 
 [project.optional-dependencies]

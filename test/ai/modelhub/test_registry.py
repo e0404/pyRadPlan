@@ -1,17 +1,17 @@
 import json
 
-from pyRadPlan.ai_models import (
+from pyRadPlan.ai.modelhub import (
     ModelTask,
     list_local_models,
     task_from_dir,
     task_from_name,
 )
-from pyRadPlan.ai_models import _hub, _registry
+from pyRadPlan.ai.modelhub import _resolve, _registry
 
 
 def _make_model_dir(path, metadata=None):
     path.mkdir(parents=True, exist_ok=True)
-    for name in _hub.REQUIRED_FILES:
+    for name in _resolve.REQUIRED_FILES:
         (path / name).write_text("placeholder", encoding="utf-8")
     if metadata is not None:
         (path / "model_config.json").write_text(
@@ -72,7 +72,7 @@ def test_list_local_models_reports_full_ids(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "DKFZ-RadOpt" / "outcome-tg119")
     (tmp_path / "DKFZ-RadOpt" / "not-a-model").mkdir()  # missing the contract files
 
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     monkeypatch.setattr(_registry, "_scan_hf_cache", lambda cfg: {})
 
@@ -89,7 +89,7 @@ def test_a_fork_does_not_shadow_its_upstream(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "DKFZ-RadOpt" / "dosecalc-x", metadata={"task": "dose_calc"})
     _make_model_dir(tmp_path / "myfork" / "dosecalc-x", metadata={"task": "dose_calc"})
 
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     monkeypatch.setattr(_registry, "_scan_hf_cache", lambda cfg: {})
 
@@ -99,7 +99,7 @@ def test_a_fork_does_not_shadow_its_upstream(tmp_path, monkeypatch):
 def test_hand_placed_flat_model_is_listed_under_its_bare_name(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "dosecalc-handplaced")
 
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     monkeypatch.setattr(_registry, "_scan_hf_cache", lambda cfg: {})
 
@@ -110,7 +110,7 @@ def test_list_local_models_filters_on_declared_task(tmp_path, monkeypatch):
     # a name that carries no prefix, but a config that declares the task
     _make_model_dir(tmp_path / "DKFZ-RadOpt" / "ORPDenseNet-tg119", metadata={"task": "outcome"})
 
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     monkeypatch.setattr(_registry, "_scan_hf_cache", lambda cfg: {})
 
@@ -119,7 +119,7 @@ def test_list_local_models_filters_on_declared_task(tmp_path, monkeypatch):
 
 
 def test_list_local_models_unset_dir_is_empty(monkeypatch):
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", None)
     monkeypatch.setattr(_registry, "_scan_hf_cache", lambda cfg: {})
     assert list_local_models() == []
@@ -128,7 +128,7 @@ def test_list_local_models_unset_dir_is_empty(monkeypatch):
 def test_list_local_models_includes_hf_cache(tmp_path, monkeypatch):
     _make_model_dir(tmp_path / "DKFZ-RadOpt" / "dosecalc-local")
 
-    cfg = _registry.get_settings().ai_models
+    cfg = _registry.get_settings().ai_modelhub
     monkeypatch.setattr(cfg, "local_models_dir", tmp_path)
     # a model that only exists in the HuggingFace cache (dedup + merge)
     monkeypatch.setattr(

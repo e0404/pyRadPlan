@@ -1,6 +1,6 @@
 import pytest
 
-from pyRadPlan.ai_models import BasePreprocessor
+from pyRadPlan.ai.modelhub import BasePreprocessor
 
 
 def test_base_preprocessor_is_abstract():
