@@ -13,6 +13,7 @@ from abc import abstractmethod
 from copy import deepcopy
 
 import numpy as np
+import math
 
 from pyRadPlan.core import PyRadPlanBaseModel
 
@@ -100,6 +101,37 @@ class MLC(BeamLimitingDevice):
     leaf_leakage: float = Field(default=0.0)
     interleaf_leakage: float = Field(default=0.0)
 
+    @property
+    def num_of_active_leaf_pairs(self) -> int:
+        """Calculate the number of active leaf pairs based on leaf positions."""
+        if self.leaf_positions is None:
+            return 0
+        # Counts closed leaves as active too (matches the matRad convention where
+        # the number of active pairs equals the number of leaf rows in the field).
+        return len(self.leaf_positions)
+
+    def is_active_leaf_pair(self, central_leaf_pair: float, bixel_width: float) -> np.ndarray:
+        """Map the field's leaf rows onto the full MLC, given beam geometry.
+
+        Parameters
+        ----------
+        central_leaf_pair : float
+            Index of the central leaf pair in the full MLC.
+        bixel_width : float
+            The bixel width (beamlet / spot spacing) in mm.
+        """
+        # Leaf pair positions and active leaf pairs
+        top_leaf_pair_pos = self.leaf_position_boundaries[-1]
+        bottom_leaf_pair_pos = self.leaf_position_boundaries[0]
+        top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / bixel_width
+        bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / bixel_width
+        is_active_leaf_pair = np.zeros(self.number_of_elements)
+        # Activate indices between top and bottom leaf pairs (casting to int)
+        start_ix = int(math.floor(top_leaf_pair))
+        end_ix = int(math.ceil(bottom_leaf_pair))
+        is_active_leaf_pair[start_ix - 1 : end_ix] = 1
+        return is_active_leaf_pair
+
     @field_validator("leaf_position_boundaries", "leaf_positions", mode="before")
     @classmethod
     def _convert_to_array(cls, v):
@@ -156,7 +188,7 @@ class MLC(BeamLimitingDevice):
                 raise ValueError(
                     f"Leaf boundary positions need to be sorted: {self.leaf_position_boundaries}"
                 )
-            self.number_of_elements = len(self.leaf_positions)
+
             boundary_diffs = np.unique(np.abs(np.diff(self.leaf_position_boundaries)))
             if len(boundary_diffs) != 1:
                 raise ValueError(
@@ -169,6 +201,10 @@ class MLC(BeamLimitingDevice):
                     f"Distance between leaf boundary positions ({boundary_diffs[0]})"
                     f" differs from given leaf_width ({self.leaf_width})"
                 )
+
+            self.number_of_elements = max(
+                self.number_of_elements, len(self.leaf_position_boundaries)
+            )
         return self
 
     def calculate_transmission_mask(
@@ -245,6 +281,58 @@ class MLC(BeamLimitingDevice):
             mask += open_weight * cov_boundary * cov_opening
 
         return mask
+
+    def calculate_from_shape(  # noqa: PLR0913
+        self,
+        shape_map: NDArray,
+        min_x: float,
+        z_ray_pos: np.ndarray,
+        bixel_width: float,
+        lim_l: np.ndarray,
+        lim_r: np.ndarray,
+    ) -> Self:
+        """Derive leaf boundaries and positions from a shape map and beam geometry.
+
+        Parameters
+        ----------
+        shape_map : NDArray
+            Open-bixel map for the shape, shape (dim_z, dim_x).
+        min_x : float
+            Physical x coordinate of the corner bixel (mm).
+        z_ray_pos : np.ndarray
+            Ray z positions of the beam (mm), used for the leaf boundaries.
+        bixel_width : float
+            Bixel width / spot spacing (mm).
+        lim_l, lim_r : np.ndarray
+            Left/right leaf travel limits per leaf row (mm), used for the closed-leaf
+            fallback and to validate the resulting positions.
+        """
+        # get leaf position boundaries from unique ray positions
+        self.leaf_position_boundaries = np.unique(z_ray_pos)
+
+        # compute left/right leaf positions from open bixel columns in physical coordinates
+        dim_z = shape_map.shape[0]
+        self.leaf_positions = np.full((dim_z, 2), np.nan)
+        for n in range(dim_z):
+            open_cols = np.where(shape_map[n, :] > 0)[0]
+            if open_cols.size == 0:
+                # If no bixel is open, use the midpoint of limits
+                center_pos = (lim_l[n] + lim_r[n]) / 2
+                self.leaf_positions[n] = [center_pos, center_pos]
+            else:
+                self.leaf_positions[n] = [
+                    (open_cols[0]) * bixel_width + min_x - 0.5 * bixel_width,
+                    (open_cols[-1]) * bixel_width + min_x + 0.5 * bixel_width,
+                ]
+
+        # Validate positions stay within travel limits
+        if np.any(self.leaf_positions[:, 0] < lim_l):
+            raise ValueError("Left leaf positions exceed left travel limits (lim_l)")
+        if np.any(self.leaf_positions[:, 1] > lim_r):
+            raise ValueError("Right leaf positions exceed right travel limits (lim_r)")
+
+        self.validate_boundaries_and_positions()
+        return self
 
 
 class Jaw(BeamLimitingDevice):

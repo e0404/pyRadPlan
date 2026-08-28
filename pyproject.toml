@@ -44,7 +44,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "scipy>=1.13.0",
+    "scipy>=1.13.0,<1.18",
     "numpy>=2.0,<2.4",
     "array_api_compat",
     "array_api_strict",

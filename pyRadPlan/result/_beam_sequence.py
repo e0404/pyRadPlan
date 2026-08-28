@@ -13,6 +13,7 @@ from pydantic import (
     computed_field,
 )
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.machines import MLC
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class BeamSequence(PyRadPlanBaseModel):
     shape_map: Optional[list[NDArray]] = Field(default=None)
     vector_offset: Optional[list[int]] = Field(default=None)
     num_of_active_leaf_pairs: Optional[int] = Field(default=None)
+    mlc_sequence: Optional[list[MLC]] = Field(default=None)
 
     @computed_field
     @property
@@ -77,7 +79,10 @@ class BeamSequence(PyRadPlanBaseModel):
     @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
         """Handle data coming from matRad."""
-        if data == {}:
+        # Guard against non-dict inputs (e.g. an empty matRad struct read as an
+        # ndarray by newer readers) before the truthiness test, since ``ndarray == {}``
+        # raises an ambiguous-truth ValueError.
+        if not isinstance(data, dict) or not data:
             return data
 
         # add dimension because if num_of_shapes = 1, matLab saves only has 2d Shapes

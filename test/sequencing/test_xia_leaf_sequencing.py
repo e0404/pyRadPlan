@@ -8,6 +8,7 @@ from pyRadPlan.sequencing import (
     run_sequencing,
 )
 from pyRadPlan.result._beam_sequence import BeamSequence
+from pyRadPlan.machines import MLC
 
 
 def test_fluence_sequencing(test_data_xia):
@@ -93,3 +94,11 @@ def test_fluence_sequencing(test_data_xia):
             np.testing.assert_allclose(
                 arr1, arr2, atol=tol, err_msg=f"beam[{idx}].{attr} mismatch"
             )
+
+        # --- mlc_sequence: first-class MLC objects, consistent with flattened fields ---
+        assert isinstance(beam.mlc_sequence, list)
+        assert len(beam.mlc_sequence) == beam.num_of_shapes
+        for m, mlc in enumerate(beam.mlc_sequence):
+            assert isinstance(mlc, MLC)
+            np.testing.assert_allclose(mlc.leaf_positions[:, 0], beam.left_leaf_pos[m], atol=1e-4)
+            np.testing.assert_allclose(mlc.leaf_positions[:, 1], beam.right_leaf_pos[m], atol=1e-4)
