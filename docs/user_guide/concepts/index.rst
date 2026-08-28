@@ -19,6 +19,7 @@ in :ref:`quickstart`.
     quantities
     visualization
     ai_agents
+    ai_models
 
 .. rubric:: Workflow at a glance
 

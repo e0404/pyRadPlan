@@ -1,8 +1,9 @@
 """HuggingFace-based AI model handling for pyRadPlan.
 
 Loads models (and their preprocessors) either from the HuggingFace Hub or from a
-local directory, with version dedup and offline support. See ``README.md`` for
-the model-repository contract.
+local directory, with version dedup and offline support. See the "AI Models"
+section of the user guide for the configuration and the model-repository
+contract.
 """
 
 from ._settings import AiModelSettings

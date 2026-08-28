@@ -107,7 +107,7 @@ class AiModelSettings(BaseSettings):
         (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via
         ``PYRADPLAN_AI_MODELS_LOCAL_MODELS_DIR`` (or the legacy alias
         ``PYRADPLAN_HUGGINGFACE_PATH``). Models are downloaded into / loaded
-        from ``"<local_models_dir>/<repo>"`` and it is used as the default
+        from ``"<local_models_dir>/<org>/<repo>"``, which is used as the default
         ``local_dir``. Set it to ``""`` to opt out and use the HuggingFace
         cache only.
     cache_dir : Optional[Path]

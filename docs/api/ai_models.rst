@@ -4,9 +4,9 @@ ai_models
 .. currentmodule:: pyRadPlan.ai_models
 
 Loading of AI models and their preprocessors from the HuggingFace Hub or a
-local directory. See the module's ``README.md`` for the model-repository
-contract (``model.py``, ``preprocessor.py``, ``weights.safetensors``,
-``model_config.json``).
+local directory. See :ref:`concept_ai_models` in the user guide for the
+configuration and the model-repository contract (``model.py``,
+``preprocessor.py``, ``weights.safetensors``, ``model_config.json``).
 
 .. note::
 
