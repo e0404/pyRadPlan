@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `[profiling]` extra (`line_profiler`) for the line-profiling harnesses in `benchmark/`, plus a
+  "Benchmarks and profiling" section in the installation guide describing how to run both
+- `interpnd` accepts `bounds_error=True` to raise on query points outside the grid instead of
+  silently clipping them; used by the photon SVD pencil-beam engine, where an out-of-grid query
+  indicates a mis-sized convolution grid rather than intended extrapolation
+- CI: `tests-backends` job exercising the optional array-API backends on their CPU builds
+- Tests covering DLPack device parsing and detection (`test/core/xp_utils/helpers/test_device_parsing.py`)
 - `PYRADPLAN_GUI_DISABLED` environment variable: reports the GUI as unavailable (`pyRadPlan.gui.GUI_AVAILABLE` is `False`) so scripts fall back to static plots, used when executing the examples for the documentation
 - Documentation: the example scripts in `examples/` are rendered as notebooks in a new "Tutorials" section (myst-nb + jupytext). Notebooks are not executed during the docs build; outputs come from executed notebooks committed in `docs/tutorials/examples/`, refreshed locally with `python docs/execute_examples.py`
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
@@ -83,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `xp_utils.choose_device` now returns backend device objects (`torch.device`, `cupy.cuda.Device`,
+  or `None` for NumPy/array-api-strict, which expose no device concept) instead of strings such as
+  `"cpu"` or `"0"`. The returned objects round-trip back into `to_namespace(device=...)` and
+  `from_numpy(device=...)`
+- Optional compute backends are now declared as extras: `[torch]`, `[cupy]` and `[jax]`. For a
+  specific CUDA build, prefer the vendor install commands documented in the installation guide
+- Performance work is separated from the test suite: `[tool.pytest.ini_options]` sets
+  `testpaths = ["test"]`, the line-profiling harness moved from `test/` to `benchmark/`, and
+  benchmarks share a common `benchmark_*.py` prefix (profiling scripts use `profile_*.py`)
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
@@ -108,6 +124,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `xp_utils.to_namespace` without an explicit `device` moved arrays to the GPU whenever the target
+  backend had one, ignoring `settings.xp.prefer_gpu`; it now keeps the source array's device when
+  the target namespace supports it and otherwise uses the namespace default, which honors the setting
+- `xp_utils.choose_device` raised `RuntimeError` on CPU-only JAX installs when a GPU was preferred
+  (`jax.devices("gpu")` raises instead of returning an empty list)
+- Ray tracer: voxel indices past the end of the coordinate array are now treated as invalid instead
+  of raising during radiological depth lookup
+- `xp_utils.choose_device` raised `RuntimeError` instead of falling back to the CPU when a GPU was
+  preferred (the default) but unavailable, breaking dose engines and the Siddon ray tracer on
+  CPU-only PyTorch, CuPy and JAX installs
+- `interp1d` rejected 1-D `y` with an `IndexError` on backends without a native `xp.interp`
+  (array-api-strict, PyTorch), and mis-broadcast the out-of-bounds `left`/`right` values for 2-D
+  `y`. The `left=None`/`right=None` defaults are again rank-agnostic and match `numpy.interp`;
+  N-D query points are supported
+- `_fft2`/`_ifft2` handed non-NumPy arrays to `scipy.fft`; the generic path now uses the array API
+  `fft` extension
+- Photon SVD pencil-beam engine: a NumPy scalar leaked into backend array expressions, and
+  `np.exp`/`np.real` on backend arrays silently returned to NumPy; the primary-fluence grid also
+  lost its explicit `float32` dtype
+- Sparse conversion helpers: a CuPy index array was passed to `torch.sparse_coo_tensor` instead of
+  the converted tensor, `_is_torch_sparse_tensor` raised `AttributeError` when PyTorch was absent,
+  and a CuPy-to-CuPy conversion ignored the requested device index
+- `xp_utils.synchronize` swallowed stream synchronization errors via a `return` inside `finally`
+- `xp_utils.choose_device` raised `ValueError: CuPy does not support CPU` for the CuPy namespace
+  when `prefer_gpu` was disabled; CuPy is GPU-only, so the namespace already implies a CUDA device
+- Pencil-beam `calc_geo_dists` mixed the globally configured device into array constructors whose
+  namespace came from the input data, so a device from one backend could reach another backend's
+  `asarray`. The device is now taken from the input arrays
+- Photon SVD pencil-beam engine: the per-ray custom fluence path (used by field-based dose
+  calculation) was hard-wired to NumPy and `scipy.fft`, so it failed on every other backend; it
+  also multiplied beamlet masks in place, mutating the stored masks
+- examples: `pencilbeam_photon.py` forced the JAX backend on import, so it failed on any install
+  without the optional `[jax]` extra
+- Device detection no longer misclassifies devices: any device object whose `repr` merely contained
+  "cpu" was treated as CPU (array-api-strict devices are now matched by type), an array whose device
+  could not be determined was silently reported as CPU (it now warns), and JAX's global device id
+  was used to index the per-platform device list, selecting the wrong GPU or raising `IndexError`
+  on hosts with more than one platform
 - `ai_agents`: importing the module no longer floods stderr with `BeartypeClawDecorWarning`s
   (pydantic-ai pulls in `key_value.aio`, whose beartype import hook trips over numpydantic's
   vendored nptyping); the package's `PY_KEY_VALUE_DISABLE_BEARTYPE` opt-out is now set before

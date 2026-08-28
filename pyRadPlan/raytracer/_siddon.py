@@ -322,7 +322,7 @@ class RayTracerSiddon(RayTracerBase):
             alphas = (planes[None, :] - source[:, None]) / ray[:, None]
 
         # 3) mask out invalid entries
-        alphas[mask_invalid] = xp.nan
+        alphas = xp.where(mask_invalid, xp.nan, alphas)
 
         return alphas
 
@@ -427,7 +427,7 @@ class RayTracerSiddon(RayTracerBase):
         rv_scaled = self._ray_vec / res
 
         ijk = sp_scaled[:, :, None] + rv_scaled[:, :, None] * alphas_mid[:, None, :]
-        ijk[~xp.isfinite(ijk)] = -1.0
+        ijk = xp.where(xp.isfinite(ijk), ijk, -1.0)
 
         # Round in place
         ijk = xp.astype(xp.round(ijk), xp.int32)
@@ -458,7 +458,7 @@ class RayTracerSiddon(RayTracerBase):
         ix += stride_j * ijk[:, 1, :]
         ix += stride_i * ijk[:, 0, :]
 
-        ix[~val_ix] = -1
+        ix = xp.where(val_ix, ix, -1)
 
         rho = [
             xp.full(val_ix.shape, xp.nan, dtype=self._array_api_precision, device=self.device)
@@ -472,9 +472,9 @@ class RayTracerSiddon(RayTracerBase):
             # cube_values = cube_linear[ix[val_ix]]
             # cube_mask   = xp.arange(len(cube_linear),ix.dtype)[None,:] == ix[val_ix][:,None]
 
-            # rho[s] = xp.where(val_ix,cube_linear[ix[val_ix]],rho[s])
-
-            rho[s][val_ix] = xp.astype(cube_linear[ix[val_ix]], self._array_api_precision)
+            rho[s] = xp.where(
+                val_ix, xp.astype(cube_linear[ix], self._array_api_precision), rho[s]
+            )
 
         return rho, ix
 
