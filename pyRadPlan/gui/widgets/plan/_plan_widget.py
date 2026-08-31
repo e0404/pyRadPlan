@@ -597,8 +597,8 @@ class PlanWidget(WorkspaceWidget):
             self._set_status(f"Cannot prepare plan for AI: {exc}", error=True)
             return
 
-        # Deferred: keeps the optional ai_agents stack out of widget construction.
-        from pyRadPlan.ai_agents import (  # noqa: PLC0415
+        # Deferred: keeps the optional ai.agents stack out of widget construction.
+        from pyRadPlan.ai.agents import (  # noqa: PLC0415
             available_models,
             beam_angles_system_prompt,
             cst_geometry_summary,

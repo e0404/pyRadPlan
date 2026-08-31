@@ -24,6 +24,16 @@ Configurable algorithms
    AlgorithmParameterMetadata
 
 
+Data directories
+----------------
+
+.. autosummary::
+   :toctree: generated/core/
+
+   get_data_dir
+   get_data_subdir
+
+
 Progress and compute control
 ----------------------------
 

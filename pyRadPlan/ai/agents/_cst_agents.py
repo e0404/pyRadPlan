@@ -9,7 +9,9 @@ from pyRadPlan.analysis import QICollection
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.optimization.objectives import Objective, get_objectives_union
 from pyRadPlan.plan._plans import Plan
-from ._settings import AiSettings, load_ai_env
+from pyRadPlan._settings import get_settings
+
+from ._settings import load_ai_env
 from ._usage import log_run_usage
 
 
@@ -179,8 +181,7 @@ def generate_voi_objectives(  # noqa: PLR0913
         Additional clinical context or considerations to guide objective generation.
     model : str, optional
         The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
-        If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
-        the default defined in :class:`AiSettings`.
+        If None, uses ``settings.ai.agents_model`` (``PYRADPLAN_AI_AGENTS_MODEL``).
     clear_existing : bool, optional
         Whether to clear existing objectives on the VOIs before assigning new ones.
     qis : QICollection, optional
@@ -220,7 +221,7 @@ def generate_voi_objectives(  # noqa: PLR0913
     cst = cst.model_copy(update={"vois": vois})
 
     load_ai_env()
-    effective_model = model or AiSettings().model
+    effective_model = model or get_settings().ai.agents_model
 
     output_model = _create_output_model(tuple(voi.name for voi in cst.vois))
 

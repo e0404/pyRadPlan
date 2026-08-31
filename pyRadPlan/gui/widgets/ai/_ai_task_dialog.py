@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.ai_agents import pop_last_run_usage
+from pyRadPlan.ai.agents import pop_last_run_usage
 
 from .._base import Worker
 
@@ -80,7 +80,7 @@ class AiTaskDialog(QDialog):
         The task to run.
     models:
         Selectable model identifiers (e.g. from
-        :func:`pyRadPlan.ai_agents.available_models`).  The combo is editable so
+        :func:`pyRadPlan.ai.agents.available_models`).  The combo is editable so
         any model string can be entered.
     parent:
         Optional Qt parent widget.

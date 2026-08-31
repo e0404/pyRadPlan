@@ -14,35 +14,95 @@ change behavior of a running session::
     pyRadPlan.settings.xp.preferred_cpu_array_backend = "numpy"
 """
 
+from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: ``.env`` file consulted by all pyRadPlan settings classes.
 ENV_FILE = ".env"
 
 
-class AiSettings(BaseSettings):
-    """Global defaults for pyRadPlan AI agents.
+def _default_ai_models_dir() -> Path:
+    """Default base directory for local AI models: ``<data_dir>/ai_models``.
 
-    Values are read from environment variables prefixed with ``PYRADPLAN_AI_``
-    (e.g. ``PYRADPLAN_AI_MODEL``) or from a ``.env`` file in the working
-    directory.
+    The import is deferred to keep the *textual* dependency out of this module's
+    import block, but note it still runs while :mod:`pyRadPlan._settings` is
+    being imported, because the :data:`settings` singleton below is constructed
+    at module scope. It is safe only as long as nothing reachable from
+    ``pyRadPlan/core/__init__.py`` imports :mod:`pyRadPlan._settings` back
+    (:mod:`pyRadPlan.core.xp_utils` does, but is not imported there). Keep it
+    that way, or make the singleton lazy.
+    """
+    from pyRadPlan.core import get_data_dir  # noqa: PLC0415
+
+    return get_data_dir() / "ai_models"
+
+
+class AiSettings(BaseSettings):
+    """Global configuration of pyRadPlan's AI features.
+
+    One class covers both AI subsystems, kept apart by the field-name prefix:
+    the ``agents_*`` fields configure the LLM-powered planning agents
+    (:mod:`pyRadPlan.ai.agents`), the ``modelhub_*`` fields configure model
+    loading (:mod:`pyRadPlan.ai.modelhub`). Values are read from environment
+    variables prefixed with ``PYRADPLAN_AI_`` (e.g. ``PYRADPLAN_AI_AGENTS_MODEL``,
+    ``PYRADPLAN_AI_MODELHUB_DEVICE``) or from a ``.env`` file in the working
+    directory. The pre-0.4.2 names ``PYRADPLAN_AI_MODEL`` and
+    ``PYRADPLAN_AI_DISPLAY_USAGE`` are still read as legacy aliases.
 
     API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``,
     etc.) are read directly by *pydantic-ai* from the environment — they do
     not need to be set here.
 
+    Attributes
+    ----------
+    agents_model : str
+        pydantic-ai model string the planning agents query (an LLM identifier
+        such as ``"claude-sonnet-4-5"`` or ``"openai:gpt-4o-mini"``, not a
+        modelhub model). Overridable per call via the agents' ``model=``
+        keyword.
+    agents_display_usage : bool
+        Whether agent runs log token usage and estimated cost.
+    modelhub_hf_org : str
+        HuggingFace namespace/organization the model repositories live under.
+        Combined with a friendly model name to form the full ``"<org>/<repo>"``
+        repository id.
+    modelhub_local_models_dir : Optional[Path]
+        Base directory for local models. Defaults to ``<data_dir>/ai_models``
+        (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via
+        ``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``. Models are downloaded into /
+        loaded from ``"<local_models_dir>/<org>/<repo>"``, which is used as the
+        default ``local_dir``. Set it to ``""`` to opt out and use the
+        HuggingFace cache only.
+    modelhub_cache_dir : Optional[Path]
+        Override for the HuggingFace cache directory. ``None`` uses the default
+        HuggingFace cache location (or ``HF_HOME``).
+    modelhub_offline : bool
+        Force offline mode (``local_files_only``). When ``True``, no network
+        access is attempted and only cached / local files are used.
+    modelhub_trust_remote_code : bool
+        Whether loading a model resolved from the HuggingFace Hub is allowed to
+        execute the ``model.py`` and ``preprocessor.py`` shipped with it. This
+        runs arbitrary Python from the model repository, so it defaults to
+        ``False`` and must be opted into per source you trust. Loading from a
+        directory passed explicitly as ``local_dir`` is exempt: that code is
+        already under the caller's control.
+    modelhub_device : str
+        Default device a loaded model is moved to (e.g. ``"cpu"``, ``"cuda"``).
+
     Examples
     --------
-    Configure via environment variable::
+    Configure via environment variables::
 
-        export PYRADPLAN_AI_MODEL=gpt-4o-mini
+        export PYRADPLAN_AI_AGENTS_MODEL=gpt-4o-mini
+        export PYRADPLAN_AI_MODELHUB_OFFLINE=1
+        export PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1
 
-    Or override per call::
+    Or at runtime::
 
-        ai_agents.generate_beam_angles(pln, "prostate", model="claude-opus-4-6")
+        pyRadPlan.settings.ai.modelhub_device = "cuda"
     """
 
     model_config = SettingsConfigDict(
@@ -53,8 +113,34 @@ class AiSettings(BaseSettings):
         validate_assignment=True,
     )
 
-    model: str = "claude-sonnet-4-5"
-    display_usage: bool = True
+    # The canonical, prefix-conforming names come first; the second entries are
+    # the names these settings shipped under up to 0.4.1.
+    agents_model: str = Field(
+        default="claude-sonnet-4-5",
+        validation_alias=AliasChoices("PYRADPLAN_AI_AGENTS_MODEL", "PYRADPLAN_AI_MODEL"),
+    )
+    agents_display_usage: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "PYRADPLAN_AI_AGENTS_DISPLAY_USAGE",
+            "PYRADPLAN_AI_DISPLAY_USAGE",
+        ),
+    )
+
+    modelhub_hf_org: str = "DKFZ-RadOpt"
+    modelhub_local_models_dir: Optional[Path] = Field(default_factory=_default_ai_models_dir)
+    modelhub_cache_dir: Optional[Path] = None
+    modelhub_offline: bool = False
+    modelhub_trust_remote_code: bool = False
+    modelhub_device: str = "cpu"
+
+    @field_validator("modelhub_local_models_dir", "modelhub_cache_dir", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v):
+        """Treat an empty/blank string (e.g. ``PATH=""``) as unset."""
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
 
 class XpSettings(BaseSettings):
@@ -117,13 +203,10 @@ class PyRadPlanSettings(BaseSettings):
     Values are read from environment variables prefixed with ``PYRADPLAN_``
     or from a ``.env`` file in the working directory. Sub-configurations use
     extended prefixes (e.g. ``PYRADPLAN_XP_PREFER_GPU`` configures :attr:`xp`,
-    ``PYRADPLAN_AI_MODEL`` configures :attr:`ai`).
+    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai`).
 
-    Note that the AI agents read :class:`AiSettings` freshly from the
-    environment at call time, so :attr:`ai` reflects the environment at
-    construction of this object rather than live agent configuration. The
-    :attr:`xp` backend preferences, in contrast, are read from the
-    :data:`settings` singleton at runtime.
+    All sub-configurations are consulted from the :data:`settings` singleton at
+    runtime, so mutating them takes effect for subsequent computations.
     """
 
     model_config = SettingsConfigDict(
@@ -140,7 +223,7 @@ class PyRadPlanSettings(BaseSettings):
     )
     ai: AiSettings = Field(
         default_factory=AiSettings,
-        description="AI agent sub-configuration (PYRADPLAN_AI_* variables).",
+        description="AI sub-configuration (PYRADPLAN_AI_* variables).",
     )
 
 
