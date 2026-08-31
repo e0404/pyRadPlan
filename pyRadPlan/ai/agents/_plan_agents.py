@@ -6,7 +6,9 @@ from pydantic_ai import Agent
 
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.plan import Plan, validate_pln
-from ._settings import AiSettings, load_ai_env
+from pyRadPlan._settings import get_settings
+
+from ._settings import load_ai_env
 from ._usage import log_run_usage
 
 Angle = Annotated[float, Field(ge=0.0, lt=360.0)]
@@ -127,8 +129,7 @@ def generate_beam_angles(
         Additional clinical context or considerations to guide angle generation.
     model : str, optional
         The AI model to use (e.g., "gpt-4o", "gemini-1.5-pro", "claude-sonnet-4-5").
-        If None, uses ``PYRADPLAN_AI_MODEL`` from the environment, falling back to
-        the default defined in :class:`AiSettings`.
+        If None, uses ``settings.ai.agents_model`` (``PYRADPLAN_AI_AGENTS_MODEL``).
     cst : StructureSet, optional
         Structure set whose per-VOI geometry (centers of mass, principal axes,
         shape parameters) is summarized and sent along so the model can pick
@@ -140,7 +141,7 @@ def generate_beam_angles(
         The updated treatment plan with generated beam angles.
     """
     load_ai_env()
-    effective_model = model or AiSettings().model
+    effective_model = model or get_settings().ai.agents_model
 
     prompt = beam_angles_system_prompt(pln.radiation_mode, with_geometry=cst is not None)
 

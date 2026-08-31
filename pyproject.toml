@@ -63,9 +63,15 @@ dependencies = [
     "tqdm>=4.0.0",
     "pint>=0.24.0",
     "jinja2",
+    "huggingface_hub>=0.23",
+    "safetensors",
 #   "cudatoolkit",
 #   "Raytrace@git+https://github.com/ryanneph/raytrace.git@master#egg=raytrace"
 ]
+
+# huggingface_hub>=0.23: snapshot_download's local_dir no longer uses symlinks, which the
+# local-model layout in pyRadPlan.ai.modelhub relies on. torch is deliberately
+# not pulled in: pick the build matching your platform/CUDA yourself.
 
 [project.optional-dependencies]
 matlab = ["matlabengine"]
@@ -82,7 +88,7 @@ jax    = ["jax>=0.4.35"]
 # Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
 profiling = ["line_profiler>=4.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -176,43 +182,15 @@ exclude = [
   "test" ]
 extend-ignore = ["E203","E701","F722"]
 
-[tool.liccheck]
-level = "STANDARD"
-dependencies = true
-authorized_licenses = [
-  "bsd",
-  "new bsd",
-  "bsd license",
-  "new bsd license",
-  "simplified bsd",
-  "3-clause bsd",
-  "bsd-3-clause",
-  "bsd-2-clause",
-  "apache",
-  "apache 2.0",
-  "apache-2.0",
-  "apache software",
-  "apache software license",
-  "mit",
-  "mit license",
-  "mit and apache-2.0",
-  "mpl-2.0 and mit",
-  "apache-2.0 and cnri-python",
-  "mit-cmu",
-  "cmu license (mit-cmu)",
-  "isc",
-  "isc license",
-  "isc license (iscl)",
-  "python software foundation",
-  "python software foundation license",
-  "psf-2.0",
-  "mozilla public license 2.0 (mpl 2.0)",
-  "mpl-2.0",
-  "the unlicense (unlicense)",
-  "unlicense",
-  "historical permission notice and disclaimer (hpnd)",
-  "zlib",
-]
+[tool.licensecheck]
+# Compatibility is derived from this project's own license rather than from a
+# hand-maintained allowlist, so compound licenses such as regex's
+# "Apache-2.0;; CNRI-Python" or tqdm's "MIT;; MPL-2.0" resolve on their own.
+# Scope matches the previous liccheck --no-deps setup: the declared
+# [project.dependencies], not their transitive deps and not the optional
+# extras (add e.g. extras = ["ai", "gui"] to widen it).
+zero = true
+format = "simple"
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*,*.ipynb"

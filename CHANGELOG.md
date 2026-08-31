@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pyRadPlan.ai.modelhub` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a name — bare (resolved to `<hf_org>/<name>`) or a full `<org>/<repo>` id used as-is — with version dedup, offline support and logging. A pinned `revision` is reused from disk without touching the network; an unpinned request asks the Hub whether the local copy is current and falls back to it when the Hub is unreachable. Downloads are laid out as `<local_models_dir>/<org>/<repo>`, so a private fork never shares a directory with its upstream namesake. `list_local_models()` lists the models available on disk and in the HuggingFace cache (no network) as full `<org>/<repo>` ids, optionally filtered by `ModelTask` (`dose_calc`/`outcome`), read from `metadata.task` in a model's `model_config.json` and falling back to the repository-name prefix. Includes a `BasePreprocessor` contract, a `model_config.template.json` and a reference model folder under `test/data/ai_models/dummy_model`. Settings are the `modelhub_*` fields of the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), read from `PYRADPLAN_AI_MODELHUB_*` environment variables. `huggingface_hub`/`safetensors` are installed with pyRadPlan; only a `torch` build matching your platform must be installed separately.
+- Security: loading a model resolved from the HuggingFace Hub executes the `model.py` and `preprocessor.py` it ships, so it requires an explicit opt-in — `trust_remote_code=True` or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`; the setting defaults to `False`. A directory passed explicitly as `load_model(local_dir=...)` is exempt. Each model folder's code is imported under a package name unique to that folder, so several models can be loaded side by side and the classes they define stay picklable.
+- `pyRadPlan.core.get_data_dir()` / `get_data_subdir()`: a single writable data root for pyRadPlan (default `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Downloaded AI models default to `<data_dir>/ai_models`; the location is reserved for future downloaded datasets (patients, phantoms, machines).
+- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_XP_*`, `PYRADPLAN_AI_*`)
+- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - `[profiling]` extra (`line_profiler`) for the line-profiling harnesses in `benchmark/`, plus a
   "Benchmarks and profiling" section in the installation guide describing how to run both
 - `interpnd` accepts `bounds_error=True` to raise on query points outside the grid instead of
@@ -18,8 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests covering DLPack device parsing and detection (`test/core/xp_utils/helpers/test_device_parsing.py`)
 - `PYRADPLAN_GUI_DISABLED` environment variable: reports the GUI as unavailable (`pyRadPlan.gui.GUI_AVAILABLE` is `False`) so scripts fall back to static plots, used when executing the examples for the documentation
 - Documentation: the example scripts in `examples/` are rendered as notebooks in a new "Tutorials" section (myst-nb + jupytext). Notebooks are not executed during the docs build; outputs come from executed notebooks committed in `docs/tutorials/examples/`, refreshed locally with `python docs/execute_examples.py`
-- Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
-- GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
 
 - GUI: File menu collecting all data I/O (load/import/export)
@@ -29,17 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: AI buttons to suggest VOI objectives and beam angles via a reusable AI task dialog
 - GUI: when a result dose exists, the objectives AI button offers to adapt the current objectives using quality indicators computed from a selectable result dose
 - `VOI.center_of_mass`, `VOI.principal_axes` and `VOI.shape_parameters` computed fields describing the structure's geometry (nominal scenario, world LPS coordinates)
-- `ai_agents.generate_beam_angles` accepts an optional structure set; its per-VOI geometry (via new `cst_geometry_summary()`) is sent to the model, so beam directions can respect the patient anatomy (used by the GUI when a structure set is loaded)
-- `ai_agents.generate_voi_objectives` accepts an optional `QICollection` (`qis=`) to adapt the existing objectives based on quality indicators from a previous optimization run instead of suggesting fresh ones
+- `ai.agents.generate_beam_angles` accepts an optional structure set; its per-VOI geometry (via new `cst_geometry_summary()`) is sent to the model, so beam directions can respect the patient anatomy (used by the GUI when a structure set is loaded)
+- `ai.agents.generate_voi_objectives` accepts an optional `QICollection` (`qis=`) to adapt the existing objectives based on quality indicators from a previous optimization run instead of suggesting fresh ones
 - GUI: persistent log console panel (bottom-left) fed by Python's logging system, with a level filter and colored warnings/errors — messages are visible even without a terminal
 - GUI: "Log Panel" toggle in the View menu
 - GUI: VOI list tooltips showing the structure's metadata (type, α_x, β_x, α/β, overlap priority)
 - GUI: clicking a VOI name opens a popup to edit type, α_x, β_x and overlap priority (validated against the VOI model); toggling visibility remains on the checkbox
 - GUI: VOI list can be grouped by overlap priority (one group per priority level) instead of by type via a new dropdown
 - GUI: per-objective quantity selection in the objectives table (dropdown over the registered quantities)
-- `ai_agents.available_models()` to discover usable models from configured API keys
+- `ai.agents.available_models()` to discover usable models from configured API keys
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
-- pre-commit hook checking dependency license compliance via `liccheck` (allowlist in `[tool.liccheck]` in pyproject.toml)
+- pre-commit hook checking dependency license compliance via `licensecheck` (configured in `[tool.licensecheck]` in pyproject.toml); compatibility is derived from the project's own license instead of a hand-maintained allowlist
 - VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
 - IO: New extensible import/export framework in `pyRadPlan.io` with a layered design:
   `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`,
@@ -90,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** the AI subpackages are nested under a common `pyRadPlan.ai` parent: `pyRadPlan.ai_agents` is now `pyRadPlan.ai.agents`, and `pyRadPlan.ai_models` is now `pyRadPlan.ai.modelhub`. No compatibility shims are provided; update imports to `from pyRadPlan.ai import agents` / `from pyRadPlan.ai.modelhub import load_model`. Importing `pyRadPlan.ai` pulls in neither optional dependency stack.
+- All AI configuration is unified in a single `AiSettings` class, the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), with the two subsystems kept apart by the field-name prefix: the agents' `agents_model` / `agents_display_usage` (`PYRADPLAN_AI_AGENTS_MODEL`, `PYRADPLAN_AI_AGENTS_DISPLAY_USAGE`; the 0.4.1 names `PYRADPLAN_AI_MODEL` / `PYRADPLAN_AI_DISPLAY_USAGE` are still read as legacy aliases, the canonical name wins when both are set) and the model hub's `modelhub_*` fields (`PYRADPLAN_AI_MODELHUB_*`). The earlier `PYRADPLAN_AI_MODELS_*` and `PYRADPLAN_HUGGINGFACE_PATH` names are no longer read; one GUI settings section "AI" covers both subsystems.
+- The AI agents now consult the runtime settings singleton (`settings.ai`) instead of re-reading the environment on every call, matching `settings.xp` and the model hub: set `PYRADPLAN_AI_*` variables before importing pyRadPlan (or in a `.env` file), or mutate `pyRadPlan.settings.ai` at runtime.
 - `xp_utils.choose_device` now returns backend device objects (`torch.device`, `cupy.cuda.Device`,
   or `None` for NumPy/array-api-strict, which expose no device concept) instead of strings such as
   `"cpu"` or `"0"`. The returned objects round-trip back into `to_namespace(device=...)` and
@@ -107,7 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: shared worker-thread, adaptive spin box and number-list helpers consolidated in `pyRadPlan.gui.widgets._base`
 - GUI: viewer caches derived CT/quantity/mask arrays, optimization plots redraw rate-limited, and spin boxes commit on focus-out instead of per keystroke (performance)
 - GUI: colors picked in the VOI list are written back to `voi.visible_color`, so custom colors survive list rebuilds (e.g. grouping changes)
-- `ai_agents.generate_voi_objectives` no longer mutates the passed structure set; it returns an updated copy
+- `ai.agents.generate_voi_objectives` no longer mutates the passed structure set; it returns an updated copy
 - `pyRadPlanGUI` console script now uses a dedicated `pyRadPlan.gui.main()` CLI entry point; `gui()` no longer reads `sys.argv`
 - `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
 - GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place

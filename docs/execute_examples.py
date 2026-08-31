@@ -46,6 +46,7 @@ SKIP = {
     "mc_*": "needs an external Monte Carlo engine (FRED / TOPAS)",
     "utils_matrad": "needs MATLAB or Octave",
     "*ai_agent*": "needs AI API credentials",
+    "*ai_model*": "downloads model repositories from the HuggingFace Hub",
 }
 
 

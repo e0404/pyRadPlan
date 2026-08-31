@@ -1,0 +1,15 @@
+{
+    "model_name": "DummyNet",
+    "model_params": {
+        "in_channels": 3,
+        "hidden_channels": 4,
+        "out_features": 1
+    },
+    "model_preprocessing": {
+        "type_order": ["dose", "ct", "mask"]
+    },
+    "metadata": {
+        "task": "outcome",
+        "description": "Dummy model for pyRadPlan.ai.modelhub local-load tests."
+    }
+}

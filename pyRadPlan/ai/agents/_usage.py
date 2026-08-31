@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from genai_prices import Usage as PriceUsage, calc_price
 
-from ._settings import AiSettings
+from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def pop_last_run_usage() -> Optional[str]:
     Lets callers that only receive an agent's domain output (e.g. the GUI's AI
     task dialog) display the usage of the run that produced it. Returns ``None``
     if no run has been logged since the last call, e.g. because
-    ``AiSettings().display_usage`` is off or the usage could not be read.
+    ``settings.ai.agents_display_usage`` is off or the usage could not be read.
     """
     return _last_run_usage.pop() if _last_run_usage else None
 
@@ -56,7 +56,7 @@ def pop_last_run_usage() -> Optional[str]:
 def log_run_usage(result: Any, model: str, operation: Optional[str] = None) -> None:
     """Log token usage and estimated USD cost for a pydantic-ai run result.
 
-    Does nothing if ``AiSettings().display_usage`` is ``False``. Otherwise the
+    Does nothing if ``settings.ai.agents_display_usage`` is ``False``. Otherwise the
     summary is also recorded for retrieval via :func:`pop_last_run_usage`.
 
     Parameters
@@ -68,7 +68,7 @@ def log_run_usage(result: Any, model: str, operation: Optional[str] = None) -> N
     operation : str, optional
         Name of the calling operation, included in the log line for context.
     """
-    if not AiSettings().display_usage:
+    if not get_settings().ai.agents_display_usage:
         return
 
     summary = summarize_run_usage(result, model)
