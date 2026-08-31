@@ -9,7 +9,7 @@ from typing import Optional, Union
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.result import PlanResult, ApertureInfo
 from pyRadPlan.stf import SteeringInformation, Beam
-from pyRadPlan.machines import MLC, load_from_name, validate_machine
+from pyRadPlan.machines import MLC, Jaw, load_from_name, validate_machine
 from ._base import Sequencer
 
 logger = logging.getLogger(__name__)
@@ -326,6 +326,36 @@ class PhotonSequencer(Sequencer):
 
         return lim_l, lim_r
 
+    @staticmethod
+    def _build_jaw_pair(mlc_window: list[float], travel_axis: int) -> list[Jaw]:
+        """Static X/Y jaw pair bounding the beam's overall field window.
+
+        Jaws don't move between segments in step-and-shoot delivery, so the
+        same pair is reused for every shape of the beam.
+
+        Parameters
+        ----------
+        mlc_window : list[float]
+            ``[x_min, x_max, z_min, z_max]`` (the beam's ``MLCWindow``),
+            where "x"/"z" are named by role (travel/stack direction), not by
+            a fixed BEV axis.
+        travel_axis : int
+            BEV index (0 or 2) of the leaf travel direction; identifies
+            which of the two window axes is the BEV "X" axis vs. "Y" axis.
+        """
+        x_min, x_max, z_min, z_max = mlc_window
+        travel_bounds = (x_min, x_max)
+        stack_bounds = (z_min, z_max)
+        bev_x_bounds = travel_bounds if travel_axis == 0 else stack_bounds
+        bev_y_bounds = stack_bounds if travel_axis == 0 else travel_bounds
+
+        def _jaw(orientation: str, bounds: tuple[float, float]) -> Jaw:
+            lo, hi = bounds
+            field_width = 2 * max(abs(lo), abs(hi))
+            return Jaw(device_orientation=orientation, positions=[lo, hi], field_width=field_width)
+
+        return [_jaw("X", bev_x_bounds), _jaw("Y", bev_y_bounds)]
+
     def _compute_beam_aperture_info(
         self,
         stf: SteeringInformation,
@@ -435,6 +465,10 @@ class PhotonSequencer(Sequencer):
                 init["min_z"] - 0.5 * init["bixel_width"],
                 init["max_z"] + 0.5 * init["bixel_width"],
             ]
+
+            # Static jaw pair bounding the field
+            jaw_pair = self._build_jaw_pair(beam_aperture["MLCWindow"], init["travel_axis"])
+            beam_aperture["extra_blds"] = [list(jaw_pair) for _ in range(num_shapes)]
 
             info_beam.append(beam_aperture)
         return info_beam

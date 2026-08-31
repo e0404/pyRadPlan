@@ -26,6 +26,7 @@ from pyRadPlan import (
     load_tg119,
     generate_stf,
     calc_dose_influence,
+    calc_dose_forward,
     fluence_optimization,
     plot_aperture_info,
     plot_dose_comparison,
@@ -73,7 +74,7 @@ pln.prop_opt = {"solver": "scipy"}
 pln.prop_seq = {
     "run_sequencing": True,
     "num_of_levels": 5,
-    "sequencer": "xia",
+    "sequencer": "xia",  # xia/siochi
     "mode": "reducing_levels",
 }
 
@@ -135,3 +136,33 @@ plot_aperture_info(
 # computed shapes/MLC positions actually deliver, and their difference.
 # %%
 plot_dose_comparison(result, result_sequenced, image_volume=ct, cst=cst, view_slice=view_slice)
+
+
+# %% [markdown]
+# ## Forward-planning verification
+#
+# To verify the sequencing result independently of the optimizer/dij path,
+# re-deliver it through forward, field-based dose calculation.
+# %%
+pln_forward = PhotonPlan()
+pln_forward.machine = machine.model_dump(by_alias=True)
+pln_forward.prop_stf = {
+    "gantry_angles": pln.prop_stf["gantry_angles"],
+    "couch_angles": pln.prop_stf["couch_angles"],
+    "generator": "photonSingleBixel",
+    "field_based": True,
+    "beam_sequences": result_sequenced.sequence.beam,
+    "resolution": 0.5,
+    "energy": 6.0,
+}
+pln_forward.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+
+stf_forward = generate_stf(ct, cst, pln_forward)
+result_forward = calc_dose_forward(ct, cst, stf_forward, pln_forward)
+
+# %% [markdown]
+# Compare the dose from this independent forward/field-based recomputation
+# against the dose already stored on `result_sequenced` (computed via the
+# dij/fluence path during sequencing). They should closely agree.
+# %%
+plot_dose_comparison(result_sequenced, result_forward, image_volume=ct, cst=cst)

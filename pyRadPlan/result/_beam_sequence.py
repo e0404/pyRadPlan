@@ -13,7 +13,7 @@ from pydantic import (
     computed_field,
 )
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.machines import MLC
+from pyRadPlan.machines import MLC, BeamLimitingDevice
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 class BeamSequence(PyRadPlanBaseModel):
     """A class representing the aperture information of a beam."""
 
-    shapes: NDArray
+    shapes: Optional[NDArray] = Field(default=None)
     shapes_weight: NDArray
-    bixel_ix: list[int]
-    fluence: NDArray
+    bixel_ix: Optional[list[int]] = Field(default=None)
+    fluence: Optional[NDArray] = Field(default=None)
     leaf_pair_pos: Optional[list[float]] = Field(default=None)
     is_active_leaf_pair: Optional[list[bool]] = Field(default=None)
     bixel_ind_map: Optional[NDArray] = Field(default=None)
@@ -40,6 +40,7 @@ class BeamSequence(PyRadPlanBaseModel):
     vector_offset: Optional[list[int]] = Field(default=None)
     num_of_active_leaf_pairs: Optional[int] = Field(default=None)
     mlc_sequence: Optional[list[MLC]] = Field(default=None)
+    extra_blds: Optional[list[list[BeamLimitingDevice]]] = Field(default=None)
 
     @computed_field
     @property
@@ -59,9 +60,9 @@ class BeamSequence(PyRadPlanBaseModel):
     @property
     def num_of_shapes(self) -> int:
         """Total number of shapes in the beam."""
-        if self.shapes is None:
-            return 0
-        return self.shapes.shape[2] if self.shapes.ndim == 3 else 1
+        if self.shapes is not None:
+            return self.shapes.shape[2] if self.shapes.ndim == 3 else 1
+        return len(self.shapes_weight)
 
     @field_validator("bixel_ind_map", mode="after")
     @classmethod
@@ -117,6 +118,8 @@ class BeamSequence(PyRadPlanBaseModel):
     @field_validator("shapes", mode="before")
     @classmethod
     def _to_uint8(cls, v):
+        if v is None:
+            return None
         arr = np.asarray(v)
         return arr.astype(np.uint8)
 
@@ -124,6 +127,8 @@ class BeamSequence(PyRadPlanBaseModel):
     @field_validator("fluence", mode="before")
     @classmethod
     def _to_float(cls, v):
+        if v is None:
+            return None
         arr = np.asarray(v)
         return arr.astype(float)
 

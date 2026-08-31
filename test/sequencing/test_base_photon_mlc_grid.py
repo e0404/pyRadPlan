@@ -5,7 +5,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from pyRadPlan.machines import MLC, load_from_name
+from pyRadPlan.machines import MLC, Jaw, load_from_name
 from pyRadPlan.sequencing import run_sequencing
 from pyRadPlan.sequencing.sequencer._xia_leaf_sequencing import XiaLeafSequencer
 
@@ -105,6 +105,32 @@ def test_full_leaf_positions_closed_elsewhere(test_data_xia):
     assert np.count_nonzero(is_active) == len(mlc.leaf_positions)
     np.testing.assert_array_equal(full[is_active], mlc.leaf_positions)
     np.testing.assert_array_equal(full[~is_active], np.zeros((np.count_nonzero(~is_active), 2)))
+
+
+def test_extra_blds_jaw_pair_matches_field_window(test_data_xia):
+    """Each shape gets a static X/Y jaw pair bounding the beam's field window."""
+    pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
+    result_seq = run_sequencing(deepcopy(result_mat), pln_mat, stf_mat, dij=dij_mat)
+
+    for beam in result_seq.sequence.beam:
+        assert beam.extra_blds is not None
+        assert len(beam.extra_blds) == beam.num_of_shapes
+
+        x_min, x_max, z_min, z_max = beam.mlc_window
+        jaw_by_orientation = {jaw.device_orientation: jaw for jaw in beam.extra_blds[0]}
+        assert set(jaw_by_orientation) == {"X", "Y"}
+        for jaw in jaw_by_orientation.values():
+            assert isinstance(jaw, Jaw)
+        # test_data_xia has no configured machine MLC, so it uses the
+        # default MLCX orientation: travel axis == BEV "X".
+        np.testing.assert_allclose(jaw_by_orientation["X"].positions, [x_min, x_max])
+        np.testing.assert_allclose(jaw_by_orientation["Y"].positions, [z_min, z_max])
+
+        # jaws are static: identical across every shape of the beam
+        for shape_jaws in beam.extra_blds[1:]:
+            for jaw in shape_jaws:
+                reference = jaw_by_orientation[jaw.device_orientation]
+                assert jaw.positions == reference.positions
 
 
 def test_leaf_grid_centers_are_evenly_spaced_and_cover_the_range():

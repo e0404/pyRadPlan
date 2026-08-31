@@ -14,15 +14,25 @@ from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
 
-from pyRadPlan.stf import Ray, get_available_generators, get_generator
+from pyRadPlan.stf import (
+    Ray,
+    get_available_generators,
+    get_generator,
+    FieldShapeAsBLD,
+    FieldShapeAsMask,
+    FieldShapeComposite,
+)
 from pyRadPlan.stf.generators import (
     StfGeneratorBase,
     StfGeneratorExternalBeamRayBixel,
     StfGeneratorPhotonIMRT,
     StfGeneratorPhotonCollimatedSquareFields,
+    StfGeneratorPhotonSingleBixel,
     StfGeneratorIonSingleSpot,
     StfGeneratorIMPT,
 )
+from pyRadPlan.machines import MLC, Jaw
+from pyRadPlan.result._beam_sequence import BeamSequence
 
 
 @pytest.fixture
@@ -212,6 +222,197 @@ def test_basic_photon_collimated_field(sample_ct, sample_cst, sample_photon_pln)
         assert np.isclose(field["source_point"], expected_source_points[i]).all()
         assert np.isclose(field["rays"][0]["ray_pos_bev"], expected_ray_pos_bev[i]).all()
         assert np.isclose(field["rays"][0]["ray_pos"], expected_ray_pos[i]).all()
+
+
+def _make_mlc(leaf_width: float, opening: float) -> MLC:
+    boundaries = np.array([-10.0, 0.0, 10.0])
+    positions = np.array([[-opening, opening]] * 3)
+    return MLC(
+        device_type="MLCX",
+        leaf_position_boundaries=boundaries,
+        leaf_positions=positions,
+        leaf_width=leaf_width,
+    )
+
+
+def _make_beam_sequence(n_shapes: int, weight_start: float = 1.0) -> BeamSequence:
+    mlc_sequence = [_make_mlc(leaf_width=10.0, opening=5.0 + s) for s in range(n_shapes)]
+    return BeamSequence(
+        shapes=np.ones((3, 4, n_shapes), dtype=np.uint8),
+        shapes_weight=np.array([weight_start + s for s in range(n_shapes)]),
+        bixel_ix=list(range(4)),
+        fluence=np.ones(4),
+        mlc_sequence=mlc_sequence,
+        mlc_window=[-20.0, 20.0, -15.0, 15.0],
+    )
+
+
+def test_photon_single_bixel_bare_pencil_beam_without_beam_sequences(
+    sample_ct, sample_cst, sample_photon_pln_dict
+):
+    sample_photon_pln_dict["prop_stf"] = {"generator": "photonSingleBixel", "energy": 6.0}
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0, 90.0]
+    stf_gen.couch_angles = [0.0, 0.0]
+
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert len(stf) == 2
+    for field in stf:
+        assert len(field["rays"]) == 1
+        beamlet = field["rays"][0]["beamlets"][0]
+        assert isinstance(beamlet, dict)
+        assert beamlet["energy"] == 6.0
+
+
+def test_group_shapes_by_extra_blds_none_groups_everything():
+    beam_sequence = _make_beam_sequence(3)
+    groups = StfGeneratorPhotonSingleBixel._group_shapes_by_extra_blds(beam_sequence)
+    assert groups == [[0, 1, 2]]
+
+
+def test_group_shapes_by_extra_blds_splits_on_differing_devices():
+    beam_sequence = _make_beam_sequence(3)
+    jaw_a = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+    jaw_b = Jaw(device_orientation="X", positions=[-15.0, 15.0], field_width=30.0)
+    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_a], [jaw_a], [jaw_b]]})
+    groups = StfGeneratorPhotonSingleBixel._group_shapes_by_extra_blds(beam_sequence)
+    assert groups == [[0, 1], [2]]
+
+
+def test_photon_single_bixel_beam_sequences(sample_ct, sample_cst, sample_photon_pln_dict):
+    sample_photon_pln_dict["prop_stf"] = {
+        "generator": "photonSingleBixel",
+        "resolution": 0.5,
+        "energy": 6.0,
+    }
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0, 90.0]
+    stf_gen.couch_angles = [0.0, 0.0]
+    stf_gen.beam_sequences = [_make_beam_sequence(2), _make_beam_sequence(3, weight_start=2.0)]
+
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert len(stf) == 2
+    # all shapes of each beam share extra_blds=None -> one group -> one ray
+    assert len(stf[0]["rays"]) == 1
+    assert len(stf[1]["rays"]) == 1
+
+    for field, beam_sequence in zip(stf, stf_gen.beam_sequences):
+        beamlet = field["rays"][0]["beamlets"][0]
+        assert isinstance(beamlet, FieldShapeAsMask)
+        assert beamlet.weight == pytest.approx(1.0)
+
+        expected_mask = sum(
+            w
+            * FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5)
+            .resample(new_grid=beamlet.grid)
+            .mask
+            for w, mlc in zip(beam_sequence.shapes_weight, beam_sequence.mlc_sequence)
+        )
+        np.testing.assert_allclose(beamlet.mask, expected_mask)
+
+
+def test_photon_single_bixel_beam_sequences_single_shape_stays_a_plain_composite(
+    sample_ct, sample_cst, sample_photon_pln_dict
+):
+    sample_photon_pln_dict["prop_stf"] = {
+        "generator": "photonSingleBixel",
+        "resolution": 0.5,
+        "energy": 6.0,
+    }
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+
+    beam_sequence = _make_beam_sequence(1)
+    stf_gen.beam_sequences = [beam_sequence]
+
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert len(stf[0]["rays"]) == 1
+    beamlet = stf[0]["rays"][0]["beamlets"][0]
+    assert isinstance(beamlet, FieldShapeAsBLD)
+    assert beamlet.bld is beam_sequence.mlc_sequence[0]
+    assert beamlet.weight == pytest.approx(beam_sequence.shapes_weight[0])
+
+
+def test_photon_single_bixel_beam_sequences_with_extra_blds(
+    sample_ct, sample_cst, sample_photon_pln_dict
+):
+    sample_photon_pln_dict["prop_stf"] = {
+        "generator": "photonSingleBixel",
+        "resolution": 0.5,
+        "energy": 6.0,
+    }
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+
+    beam_sequence = _make_beam_sequence(2)
+    jaw_x = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+    jaw_y = Jaw(device_orientation="Y", positions=[-15.0, 15.0], field_width=30.0)
+    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_x, jaw_y]] * 2})
+    stf_gen.beam_sequences = [beam_sequence]
+
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert len(stf[0]["rays"]) == 1
+    beamlet = stf[0]["rays"][0]["beamlets"][0]
+    assert isinstance(beamlet, FieldShapeAsMask)
+    assert beamlet.weight == pytest.approx(1.0)
+
+
+def test_photon_single_bixel_beam_sequences_differing_extra_blds_stay_separate(
+    sample_ct, sample_cst, sample_photon_pln_dict
+):
+    sample_photon_pln_dict["prop_stf"] = {
+        "generator": "photonSingleBixel",
+        "resolution": 0.5,
+        "energy": 6.0,
+    }
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+
+    beam_sequence = _make_beam_sequence(2)
+    jaw_a = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+    jaw_b = Jaw(device_orientation="X", positions=[-15.0, 15.0], field_width=30.0)
+    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_a], [jaw_b]]})
+    stf_gen.beam_sequences = [beam_sequence]
+
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert len(stf[0]["rays"]) == 2
+    for m, ray in enumerate(stf[0]["rays"]):
+        beamlet = ray["beamlets"][0]
+        assert isinstance(beamlet, FieldShapeComposite)
+        assert beamlet.weight == pytest.approx(beam_sequence.shapes_weight[m])
+        blds = [shape.bld for shape in beamlet.shapes]
+        assert blds == [beam_sequence.mlc_sequence[m], beam_sequence.extra_blds[m][0]]
+
+
+def test_photon_single_bixel_beam_sequences_length_mismatch(
+    sample_ct, sample_cst, sample_photon_pln_dict
+):
+    sample_photon_pln_dict["prop_stf"] = {
+        "generator": "photonSingleBixel",
+        "resolution": 0.5,
+        "energy": 6.0,
+    }
+    pln = create_pln(sample_photon_pln_dict)
+    stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    stf_gen.gantry_angles = [0.0, 90.0]
+    stf_gen.couch_angles = [0.0, 0.0]
+    stf_gen.beam_sequences = [_make_beam_sequence(2)]  # only 1 entry, but 2 beams
+
+    with pytest.raises(ValueError):
+        stf_gen.generate(sample_ct, sample_cst)
 
 
 def test_single_ion_spot(sample_ct, sample_cst, sample_proton_pln):

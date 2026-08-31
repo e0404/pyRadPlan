@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from pyRadPlan.machines import MLC, Jaw
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.result._sequence import Sequence
 
@@ -106,6 +107,30 @@ def test_sequence_matrad_import_mismatched_beam_count(caplog):
 
     assert "does not match" in caplog.text
     assert [beam.num_of_active_leaf_pairs for beam in seq.beam] == [None, None]
+
+
+def test_beam_sequence_minimal_construction_for_forward_planning():
+    """A BeamSequence built without any sequencer bookkeeping (shapes/bixel_ix/fluence)
+    is valid and enough to drive forward-planning field shapes: only mlc_sequence,
+    shapes_weight, and extra_blds are needed for that.
+    """
+    mlc = MLC(
+        device_type="MLCX",
+        leaf_position_boundaries=np.array([-10.0, 0.0, 10.0]),
+        leaf_positions=np.array([[-5.0, 5.0]] * 3),
+        leaf_width=10.0,
+    )
+    jaw = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+
+    beam = BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0], extra_blds=[[jaw]])
+
+    assert beam.shapes is None
+    assert beam.bixel_ix is None
+    assert beam.fluence is None
+    assert beam.num_of_shapes == 1
+    np.testing.assert_array_equal(beam.sum_shapes, np.array([]))
+    assert beam.mlc_sequence == [mlc]
+    assert beam.extra_blds == [[jaw]]
 
 
 def test_sequence_matrad_import_leaves_input_untouched():
