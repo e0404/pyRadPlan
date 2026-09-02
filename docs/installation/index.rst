@@ -124,7 +124,9 @@ by appending them in brackets, e.g. ``pip install pyRadPlan[dev,gui]``.
        systems
    * - ``[numba]``
      - numba ≥ 0.61.0
-     - JIT-compiled acceleration of selected CPU code paths
+     - JIT-compiled NumPy execution paths for selected hot-path kernels (currently in the
+       Siddon ray tracer); enabled by default when installed, see
+       :ref:`jit-compiled-kernels`
    * - ``[torch]``, ``[cupy]``, ``[jax]``
      - torch ≥ 2.0 / cupy ≥ 13.0 / jax ≥ 0.4.35
      - Alternate array-API compute backends.  Prefer the vendor-specific install
@@ -349,6 +351,14 @@ Troubleshooting
 **PyTorch does not see the GPU**
    Confirm with ``python -c "import torch; print(torch.cuda.is_available())"`` and
    ensure the CUDA wheel matches your driver.
+
+**RuntimeWarning: "jit execution of kernel ... failed" mentioning Triton**
+   ``settings.xp.jit_backends`` includes ``"torch"``, but ``torch.compile`` needs a working
+   Triton install (not available on all platforms, e.g. plain CPU/Windows PyTorch builds).
+   This is a performance-only warning: the affected kernel falls back to its plain Array API
+   implementation automatically. Either install a Triton build compatible with your PyTorch
+   version, or drop ``"torch"`` from ``settings.xp.jit_backends`` /
+   ``PYRADPLAN_XP_JIT_BACKENDS``. See :ref:`jit-compiled-kernels`.
 
 **Pre-commit hook fails on first commit**
    The hook auto-fixes most style issues and then aborts the commit so you can review

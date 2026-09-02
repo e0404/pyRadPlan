@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
+from pyRadPlan.geometry import lps
 from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.stf._beam import Beam
 from pyRadPlan.stf._ray import Ray
@@ -51,12 +52,18 @@ def _make_beam(iso_center, n_rays=1, sad=1000.0, gantry_angle=0.0):
         if count >= n_rays:
             break
 
+    # Explicit consistent source points so the benchmark is comparable across
+    # pyRadPlan versions with and without the Beam source-point derivation
+    source_point_bev = np.array([0.0, -sad, 0.0])
+    rot_mat = lps.get_beam_rotation_matrix(gantry_angle, 0.0)
     return Beam(
         gantry_angle=gantry_angle,
         couch_angle=0.0,
         iso_center=np.array(iso_center, dtype=np.float64),
         rays=rays,
         SAD=sad,
+        source_point_bev=source_point_bev,
+        source_point=rot_mat @ source_point_bev,
     )
 
 

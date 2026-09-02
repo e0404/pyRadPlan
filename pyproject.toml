@@ -121,7 +121,7 @@ extend-include = [
 
 [tool.ruff.lint]
 extend-select = ["PL","D", "NPY", "N"]
-extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999"]
+extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999", "UP007"]
 exclude = ["test/**/*.py", "benchmark/**/*.py"]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
@@ -129,6 +129,11 @@ fixable = ["ALL"]
 
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+# flat computational kernels take their arrays and scalars as individual arguments
+"pyRadPlan/raytracer/_kernels.py" = ["PLR0913"]
+"pyRadPlan/raytracer/_kernels_numba.py" = ["PLR0913"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

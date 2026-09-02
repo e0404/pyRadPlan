@@ -195,6 +195,13 @@ class XpSettings(BaseSettings):
         "None selects the best available backend automatically. "
         "Algorithms may locally enforce a different backend.",
     )
+    jit_backends: str = Field(
+        default="numpy,jax",
+        description="Comma-separated backends that run jit-compiled kernel paths "
+        "(numba implementations for numpy, the backend's own jit like jax.jit or "
+        "torch.compile elsewhere; e.g. 'numpy,jax,torch'). An empty string "
+        "disables jitting entirely.",
+    )
 
 
 class PyRadPlanSettings(BaseSettings):
