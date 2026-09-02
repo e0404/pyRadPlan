@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
+from pyRadPlan._settings import get_settings
 from pyRadPlan.ai.agents import available_models
 
 
@@ -18,7 +19,7 @@ def _no_dotenv(monkeypatch):
 
 
 def test_available_models_lists_configured_default_first(monkeypatch):
-    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "my-default-model")
+    monkeypatch.setattr(get_settings().ai, "agents_model", "my-default-model")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
 
     models = available_models()
@@ -27,7 +28,7 @@ def test_available_models_lists_configured_default_first(monkeypatch):
 
 def test_available_models_empty_without_provider_keys(monkeypatch):
     # Without any provider key not even the default model is usable.
-    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "my-default-model")
+    monkeypatch.setattr(get_settings().ai, "agents_model", "my-default-model")
 
     assert available_models() == []
 

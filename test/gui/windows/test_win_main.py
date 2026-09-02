@@ -111,12 +111,11 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
     assert dialog._general_form is None
     assert "General" not in titles
     assert "XP (Backend)" in titles
-    assert "AI Agents" in titles
-    assert "AI Model Hub" in titles
+    assert "AI" in titles
     assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
     assert "preferred_gpu_array_backend" in dialog._sub_forms["xp"]._editors
-    assert "model" in dialog._sub_forms["ai_agents"]._editors
-    assert "device" in dialog._sub_forms["ai_modelhub"]._editors
+    assert "agents_model" in dialog._sub_forms["ai"]._editors
+    assert "modelhub_device" in dialog._sub_forms["ai"]._editors
 
 
 def test_settings_dialog_single_section(qapp):
@@ -138,7 +137,7 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
 
     settings = get_settings()
     orig_prefer_gpu = settings.xp.prefer_gpu
-    orig_ai_model = settings.ai_agents.model
+    orig_ai_model = settings.ai.agents_model
     monkeypatch.delenv("PYRADPLAN_XP_PREFER_GPU", raising=False)
     monkeypatch.delenv("PYRADPLAN_AI_AGENTS_MODEL", raising=False)
     monkeypatch.setenv("PYRADPLAN_AI_MODEL", "stale-legacy-value")
@@ -146,12 +145,12 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
     try:
         dialog = SettingsDialog()
         dialog._sub_forms["xp"]._set_value("prefer_gpu", False)
-        dialog._sub_forms["ai_agents"]._set_value("model", "test-model")
+        dialog._sub_forms["ai"]._set_value("agents_model", "test-model")
         dialog.apply()
 
         assert settings.xp.prefer_gpu is False
         assert os.environ["PYRADPLAN_XP_PREFER_GPU"] == "False"
-        assert settings.ai_agents.model == "test-model"
+        assert settings.ai.agents_model == "test-model"
         assert os.environ["PYRADPLAN_AI_AGENTS_MODEL"] == "test-model"
         # the legacy alias is cleared so it cannot override the new choice
         assert "PYRADPLAN_AI_MODEL" not in os.environ
@@ -159,35 +158,35 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
         os.environ.pop("PYRADPLAN_XP_PREFER_GPU", None)
         os.environ.pop("PYRADPLAN_AI_AGENTS_MODEL", None)
         settings.xp.prefer_gpu = orig_prefer_gpu
-        settings.ai_agents.model = orig_ai_model
+        settings.ai.agents_model = orig_ai_model
 
 
 def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path, monkeypatch):
     """An edit must be written under the env var name pydantic reads the field from."""
-    from pyRadPlan._settings import AiModelSettings, get_settings
+    from pyRadPlan._settings import AiSettings, get_settings
     from pyRadPlan.gui.menus._settings import SettingsDialog
 
     settings = get_settings()
-    orig = settings.ai_modelhub.local_models_dir
+    orig = settings.ai.modelhub_local_models_dir
     monkeypatch.delenv("PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR", raising=False)
 
     try:
-        dialog = SettingsDialog(section="ai_modelhub")
-        dialog._sub_forms["ai_modelhub"]._set_value("local_models_dir", tmp_path / "chosen")
+        dialog = SettingsDialog(section="ai")
+        dialog._sub_forms["ai"]._set_value("modelhub_local_models_dir", tmp_path / "chosen")
         dialog.apply()
 
-        assert settings.ai_modelhub.local_models_dir == tmp_path / "chosen"
+        assert settings.ai.modelhub_local_models_dir == tmp_path / "chosen"
         # a freshly constructed settings object must see the edit
-        assert AiModelSettings(_env_file=None).local_models_dir == tmp_path / "chosen"
+        assert AiSettings(_env_file=None).modelhub_local_models_dir == tmp_path / "chosen"
     finally:
         os.environ.pop("PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR", None)
-        settings.ai_modelhub.local_models_dir = orig
+        settings.ai.modelhub_local_models_dir = orig
 
 
 def test_settings_menu_has_quick_links_and_preferences(qapp):
     win = MainWindow(WorkspaceManager())
     labels = [a.text() for a in win._settings_menu.actions() if a.text()]
-    assert labels == ["XP (Backend)…", "AI Agents…", "AI Model Hub…", "Preferences…"]
+    assert labels == ["XP (Backend)…", "AI…", "Preferences…"]
 
 
 def test_inputs_locked_while_busy(qapp):

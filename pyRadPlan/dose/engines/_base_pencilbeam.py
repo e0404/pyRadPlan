@@ -854,7 +854,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     # Trigger resize for all quantities associated with this scenario
                     for q in self._computed_quantities:
                         dij[q][sub_scen_idx]["data"].resize((new_size,), refcheck=False)
-
                 bixel["ix"] = to_numpy(bixel["ix"])
                 shared_struct["indices"][start:end] = bixel["ix"]
                 shared_struct["nnz"] += ix_size
@@ -1067,13 +1066,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
                     ],
                     dtype=cross_ab.dtype,
-                    device=self.device,
+                    device=array_api_compat.device(cross_ab),
                 )
 
             ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
 
             derived_rot_mat = (
-                xp.eye(3, dtype=a.dtype, device=self.device)
+                xp.eye(3, dtype=a.dtype, device=array_api_compat.device(a))
                 + ssc_matrix
                 + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )

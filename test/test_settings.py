@@ -20,7 +20,7 @@ def restore_settings():
 def test_defaults():
     settings = PyRadPlanSettings(_env_file=None)
     assert isinstance(settings.xp, XpSettings)
-    assert isinstance(settings.ai_agents, AiSettings)
+    assert isinstance(settings.ai, AiSettings)
     assert settings.xp.prefer_gpu is True
     assert settings.xp.preferred_cpu_array_backend == "numpy"
 
@@ -35,11 +35,11 @@ def test_xp_env_override(monkeypatch):
     assert settings.xp.preferred_gpu_array_backend == "torch"
 
 
-def test_nested_ai_env_override(monkeypatch):
+def test_ai_env_override(monkeypatch):
     monkeypatch.delenv("PYRADPLAN_AI_MODEL", raising=False)
     monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "my-test-model")
     settings = PyRadPlanSettings(_env_file=None)
-    assert settings.ai_agents.model == "my-test-model"
+    assert settings.ai.agents_model == "my-test-model"
 
 
 def test_legacy_ai_env_names_still_read(monkeypatch):
@@ -50,24 +50,24 @@ def test_legacy_ai_env_names_still_read(monkeypatch):
     monkeypatch.setenv("PYRADPLAN_AI_DISPLAY_USAGE", "false")
 
     settings = PyRadPlanSettings(_env_file=None)
-    assert settings.ai_agents.model == "legacy-model"
-    assert settings.ai_agents.display_usage is False
+    assert settings.ai.agents_model == "legacy-model"
+    assert settings.ai.agents_display_usage is False
 
 
 def test_canonical_ai_env_name_wins_over_legacy(monkeypatch):
     monkeypatch.setenv("PYRADPLAN_AI_MODEL", "legacy-model")
     monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "canonical-model")
     settings = PyRadPlanSettings(_env_file=None)
-    assert settings.ai_agents.model == "canonical-model"
+    assert settings.ai.agents_model == "canonical-model"
 
 
-def test_agent_and_model_settings_do_not_collide(monkeypatch):
-    """PYRADPLAN_AI_AGENTS_* and PYRADPLAN_AI_MODELHUB_* configure different things."""
+def test_ai_section_covers_agents_and_modelhub(monkeypatch):
+    """Agent and modelhub fields live side by side in the unified ai section."""
     monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "an-llm")
     monkeypatch.setenv("PYRADPLAN_AI_MODELHUB_DEVICE", "cuda")
     settings = PyRadPlanSettings(_env_file=None)
-    assert settings.ai_agents.model == "an-llm"
-    assert settings.ai_modelhub.device == "cuda"
+    assert settings.ai.agents_model == "an-llm"
+    assert settings.ai.modelhub_device == "cuda"
 
 
 def test_assignment_is_validated():

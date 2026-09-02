@@ -9,8 +9,8 @@ can be loaded either from a local directory or from the HuggingFace Hub.
 
 ## Prerequisites
 
-1. The optional AI dependencies installed: `pip install pyRadPlan[ai]`
-   (plus a `torch` build matching your platform/CUDA).
+1. A `torch` build matching your platform/CUDA (the Hub client itself ships
+   with pyRadPlan).
 2. By default, local models live under `<data_dir>/ai_models` (the data root
    defaults to `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Override
    just the models base with the `PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR`
@@ -40,13 +40,13 @@ logging.basicConfig(level=logging.INFO)
 # Quiet the per-request HTTP chatter from the HuggingFace client
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Inspect effective settings (the `ai_modelhub` sub-configuration of pyRadPlan.settings)
-modelhub = settings.ai_modelhub
-print(f"HuggingFace org:    {modelhub.hf_org}")
-print(f"Local models dir:   {modelhub.local_models_dir}")
-print(f"Offline:            {modelhub.offline}")
-print(f"Device:             {modelhub.device}")
-print(f"Trust remote code:  {modelhub.trust_remote_code}")
+# Inspect effective settings (the modelhub_* fields of the `ai` sub-configuration)
+ai_cfg = settings.ai
+print(f"HuggingFace org:    {ai_cfg.modelhub_hf_org}")
+print(f"Local models dir:   {ai_cfg.modelhub_local_models_dir}")
+print(f"Offline:            {ai_cfg.modelhub_offline}")
+print(f"Device:             {ai_cfg.modelhub_device}")
+print(f"Trust remote code:  {ai_cfg.modelhub_trust_remote_code}")
 
 # %% [markdown]
 """
@@ -66,16 +66,16 @@ the local copy is still current on every load.
 # %%
 model, preprocessor = load_model(
     "pyRadPlan-outcome-ORPDenseNet-Xerostomia",
-    revision="v0.1",
+    revision="v0.4",
     trust_remote_code=True,
-    device=modelhub.device,
+    device=ai_cfg.modelhub_device,
 )
 # Or with an explicit repository id:
 model, preprocessor = load_model(
     repo_id="DKFZ-RadOpt/pyRadPlan-outcome-ORPDenseNet-tg119",
-    revision="v0.1",
+    revision="v0.6",
     trust_remote_code=True,
-    device=modelhub.device,
+    device=ai_cfg.modelhub_device,
 )
 
 # %% [markdown]

@@ -73,7 +73,7 @@ class Ray(PyRadPlanBaseModel):
             if isinstance(v, list):
                 v = np.array(v)
             else:
-                v = to_numpy(v)
+                v = to_numpy(v, dtype=np.float64)
             if not np.issubdtype(v.dtype, np.floating):
                 v = v.astype(float)
             v = v.reshape((3,))

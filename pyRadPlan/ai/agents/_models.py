@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 
-from ._settings import AiSettings, load_ai_env
+from pyRadPlan._settings import get_settings
+
+from ._settings import load_ai_env
 
 # Provider API-key env var -> a few suggested pydantic-ai model names. These are
 # suggestions only; callers may type any model string the backend understands.
@@ -23,7 +25,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
 def available_models() -> list[str]:
     """Return suggested model names for which an API key is configured.
 
-    The configured default (:attr:`AiSettings.model`) is listed first so a
+    The configured default (:attr:`AiSettings.agents_model`) is listed first so a
     sensible option is preselected.  When no provider API key is configured at
     all, an empty list is returned — including the default, since it could not
     be used either.
@@ -43,7 +45,7 @@ def available_models() -> list[str]:
                     models.append(name)
     if not models:
         return []
-    default = AiSettings().model
+    default = get_settings().ai.agents_model
     if default:
         if default in models:
             models.remove(default)
