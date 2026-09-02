@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import importlib
 
 import logging
+import re
 import warnings
 
 try:
@@ -218,6 +219,60 @@ def _parse_device_to_dlpack(device: Any) -> tuple[int, int] | None:
         "Supported values are None, 'cpu', 'gpu', 'cuda', 'gpu:N', 'cuda:N', "
         "a DLPack (type, id) tuple, or backend device objects."
     )
+
+
+def _linked_openblas_version() -> Optional[tuple[int, int, int]]:
+    """Version of the OpenBLAS NumPy is linked against, or None (e.g. MKL builds)."""
+    try:
+        blas_config = np.__config__.CONFIG["Build Dependencies"]["blas"]
+        openblas_info = blas_config.get("openblas configuration", "")
+    except (AttributeError, KeyError, TypeError):
+        return None
+
+    version_match = re.search(r"OpenBLAS\s+(\d+)\.(\d+)\.(\d+)", str(openblas_info))
+    if version_match is None:
+        return None
+    return tuple(int(g) for g in version_match.groups())
+
+
+def openblas_has_gemm_race() -> bool:
+    """
+    Whether NumPy links an OpenBLAS affected by the multithreaded-GEMM race.
+
+    The scipy-openblas 0.3.27 bundled with the NumPy 2.0 wheels can silently return
+    corrupted, run-to-run varying elements from multithreaded float32 matmuls with
+    tall-skinny operands (observed for ``(N, 3) @ (3, 3)`` coordinate rotations).
+    The upstream thread-race fixes landed in OpenBLAS 0.3.28; the 0.3.31 bundled with
+    current NumPy wheels is verified clean.
+    """
+    version = _linked_openblas_version()
+    return version is not None and version < (0, 3, 28)
+
+
+def warn_on_unreliable_openblas() -> None:
+    """Warn when NumPy is linked against an OpenBLAS with the multithreaded-GEMM race."""
+    if openblas_has_gemm_race():
+        warnings.warn(
+            f"NumPy {np.__version__} is linked against OpenBLAS "
+            f"{'.'.join(str(v) for v in _linked_openblas_version())}, whose "
+            "multithreaded GEMM can silently return corrupted, nondeterministic results "
+            "for some operand shapes. Consider upgrading NumPy (newer wheels bundle a "
+            "fixed OpenBLAS) or setting OPENBLAS_NUM_THREADS=1.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
+def is_host_device(device: Any) -> bool:
+    """
+    Check whether a device specification refers to a host (CPU) device.
+
+    Accepts anything :func:`_parse_device_to_dlpack` understands (backend device
+    objects, strings, DLPack tuples). ``None`` counts as host, since namespaces
+    without a device concept (NumPy, array-api-strict) use it.
+    """
+    dlpack_device = _parse_device_to_dlpack(device)
+    return dlpack_device is None or dlpack_device[0] == DLPACK_CPU
 
 
 def dlpack_to_backend_device(xp: ArrayNamespace, device: tuple[int, int] | None):
@@ -462,19 +517,86 @@ def record_event(xp: ArrayNamespace, stream: Optional[ContextManager] = None) ->
     return timer()
 
 
+def stream_wait_event(
+    xp: ArrayNamespace, stream: Optional[ContextManager], event: Optional[object]
+) -> None:
+    """
+    Make ``stream`` wait device-side on ``event`` without blocking the host.
+
+    Unlike :func:`synchronize`, this only enqueues an ordering constraint: work
+    submitted to ``stream`` afterwards runs once ``event`` has completed, while
+    the host keeps enqueueing. A no-op for host timestamps returned by
+    :func:`record_event` on backends without stream support.
+    """
+    if event is None or stream is None or isinstance(stream, nullcontext):
+        return
+
+    if array_api_compat.is_cupy_namespace(xp) and isinstance(event, cp.cuda.Event):
+        stream_obj = getattr(stream, "stream", stream)
+        stream_obj.wait_event(event)
+        return
+
+    if (
+        array_api_compat.is_torch_namespace(xp)
+        and torch.cuda.is_available()
+        and isinstance(event, torch.cuda.Event)
+    ):
+        # torch.cuda.stream() returns a StreamContext — delegate to the inner Stream
+        stream_obj = getattr(stream, "stream", stream)
+        if stream_obj is not None:
+            stream_obj.wait_event(event)
+        return
+
+    # timer()-based pseudo events (numpy/jax/torch-cpu) need no device-side ordering
+
+
 def elapsed_time(xp: ArrayNamespace, start, end) -> float:
     """Calculate the elapsed time between two events or timestamps."""
     if array_api_compat.is_cupy_namespace(xp):
         return cp.cuda.get_elapsed_time(start, end) / 1000.0  # Convert ms to s
     if array_api_compat.is_torch_namespace(xp):
         if isinstance(end, torch.Event):
-            td = timedelta(milliseconds=end.elapsed_time(start)).total_seconds()
+            td = timedelta(milliseconds=start.elapsed_time(end)).total_seconds()
         else:
             td = timedelta(seconds=(end - start)).total_seconds()
         return td
     else:
         # Assuming start and end are timestamps from timer()
         return (timedelta(seconds=(end - start))).total_seconds()
+
+
+def scatter(arr: Array, key: Any, values: Any) -> Array:
+    """
+    Backend-agnostic ``arr[key] = values``.
+
+    Parameters
+    ----------
+    arr : Array
+        The array to write into.
+    key : Any
+        Index expression (integer array, boolean mask, slice, ...).
+    values : Any
+        Values to assign at ``key``.
+
+    Returns
+    -------
+    Array
+        The updated array. The update can be out-of-place (JAX arrays are immutable,
+        and array-api-strict forbids integer-array assignment), so callers must use
+        the returned array; other backends assign in place and return ``arr`` itself.
+    """
+    if array_api_compat.is_jax_array(arr):
+        return arr.at[key].set(values)
+    try:
+        arr[key] = values
+        return arr
+    except IndexError:
+        xp = array_api_compat.array_namespace(arr)
+        np_arr = to_numpy(arr).copy()
+        np_arr[to_numpy(key) if array_api_compat.is_array_api_obj(key) else key] = (
+            to_numpy(values) if array_api_compat.is_array_api_obj(values) else values
+        )
+        return xp.asarray(np_arr)
 
 
 def to_numpy(arr: Array, detach: bool = True, dtype: np.dtype | type | None = None) -> NDArray:
