@@ -164,6 +164,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DVH.compute` rejected a float32 quantity with a pydantic `ValidationError` on `bin_edges`.
+  `np.histogram` takes the bin dtype from the quantity, so the float32 cube the DICOM importer
+  produces yielded float32 edges against a model field declared as float64; the histogram output
+  is now cast explicitly. Widening float32 is exact, so no bin edge moves
+- `DVH.get_dy` returned the same value (the last bin edge) for every volume percentage, so D2,
+  D50 and D95 were all identical and above the maximum dose in the structure. It interpolated a
+  fraction (`y / 100`) against a cumulative volume held in percent, and did so with
+  `np.interp`, which requires an increasing x array while the cumulative DVH decreases. Dy is now
+  the largest quantity value still covering at least y percent of the volume, matching the
+  "at least" reading documented on `DVH.cumulative` and agreeing with the independent percentile
+  that `QICollection`'s `DX` computes. It is deliberately not interpolated across the cumulative
+  curve, because a uniformly irradiated region forms a plateau there and interpolation reports
+  the dose at the wrong end of it. `get_dy` now also accepts an array of volume percentages.
+  `QICollection` was never affected, as it computes `DX` from the voxels directly
 - DICOM: an imported RTDOSE is now resampled onto the CT grid. RTDOSE is stored on its own grid
   (for a CIRS phantom export, 124x145x158 at 2 mm against a 512x512x297 CT at ~1 mm), and the
   cube was handed on unchanged. Since the viewer overlays the dose slice with the same index as
