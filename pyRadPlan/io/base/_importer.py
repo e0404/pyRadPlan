@@ -6,17 +6,23 @@ from typing import ClassVar, Optional, Union
 
 import SimpleITK as sitk
 
+from pyRadPlan.core import ProgressReporter
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
 
-class BaseImporter(ABC):
+class BaseImporter(ProgressReporter, ABC):
     """
     Abstract interface for all importers.
 
     An importer is bound to a single source (a file or a folder) and provides
     methods to load individual pyRadPlan objects (CT, StructureSet, dose) as well
     as bulk loaders (``load_patient`` and ``load_data``).
+
+    Every importer is a :class:`~pyRadPlan.core.ProgressReporter`, so a caller
+    (e.g. the GUI) can follow a long import through
+    :func:`~pyRadPlan.core.observe_reports` the same way it follows a dose
+    calculation.
 
     Subclasses must implement :meth:`load_ct` and :meth:`load_cst`. ``load_dose``
     is optional and returns ``None`` by default.
@@ -36,6 +42,9 @@ class BaseImporter(ABC):
     extensions: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, path: Union[str, os.PathLike]):
+        # Not super().__init__(): the combined handlers inherit from an exporter
+        # too, which a cooperative chain would call without its required path.
+        self._init_reporting()
         self.path = os.fspath(path)
 
     @classmethod
@@ -81,8 +90,11 @@ class BaseImporter(ABC):
         tuple[CT, StructureSet]
             The CT and StructureSet objects.
         """
-        ct = self.load_ct()
-        cst = self.load_cst(ct)
+        with self.progress("Importing patient", total=2) as step:
+            ct = self.load_ct()
+            step.advance()
+            cst = self.load_cst(ct)
+            step.advance()
         return ct, cst
 
     def load_data(self) -> dict:
@@ -97,16 +109,21 @@ class BaseImporter(ABC):
         """
         data = {}
 
-        ct = self.load_ct()
-        if ct is not None:
-            data["ct"] = ct
+        # One step per object so consumers see a determinate overall progress.
+        with self.progress("Importing", total=3) as step:
+            ct = self.load_ct()
+            if ct is not None:
+                data["ct"] = ct
+            step.advance()
 
-        cst = self.load_cst(ct)
-        if cst is not None:
-            data["cst"] = cst
+            cst = self.load_cst(ct)
+            if cst is not None:
+                data["cst"] = cst
+            step.advance()
 
-        dose = self.load_dose()
-        if dose is not None:
-            data["dose"] = dose
+            dose = self.load_dose()
+            if dose is not None:
+                data["dose"] = dose
+            step.advance()
 
         return data

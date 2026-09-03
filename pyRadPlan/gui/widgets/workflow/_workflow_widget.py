@@ -818,28 +818,56 @@ class WorkflowWidget(WorkspaceWidget):
         )
 
     def _open_dicom_import_dialog(self, directory: str) -> None:
-        """Open the DICOM import dialog (CT series / structures / dose) and load it."""
-        from ._dicom_import_dialog import DicomImportDialog  # noqa: PLC0415
+        """Scan a DICOM folder, ask what to import, and load the choice.
+
+        Both phases run in the worker thread (the scan reads one header per file,
+        the load reads the pixel data), so the progress bar and status line follow
+        them instead of the window freezing.
+        """
+        from ._dicom_import_dialog import scan_folder  # noqa: PLC0415
         from pyRadPlan.io.dicom import DicomImporter  # noqa: PLC0415
 
         importer = DicomImporter(directory)
-        dialog = DicomImportDialog(importer, self)
+
+        self._run_in_thread(
+            scan_folder,
+            importer,
+            on_success=lambda catalog: self._start_dicom_import(importer, catalog),
+            busy_text="Scanning DICOM folder…",
+        )
+
+    def _start_dicom_import(self, importer: Any, catalog: dict) -> None:
+        """Ask which series/structures/dose to import from a scanned folder, then load."""
+        from ._dicom_import_dialog import DicomImportDialog  # noqa: PLC0415
+
+        if not catalog["series"]:
+            QMessageBox.warning(self, "Import DICOM", "No CT series found in this folder.")
+            return
+
+        dialog = DicomImportDialog(importer, self, catalog=catalog)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         sel = dialog.selection()
 
         def _load() -> dict:
-            ct = importer.load_ct(series_uid=sel.get("series_uid"))
-            data: dict[str, Any] = {"ct": ct}
-            if sel.get("struct_file"):
-                cst = importer.load_cst(ct=ct, struct_file=sel["struct_file"])
-                if cst is not None:
-                    data["cst"] = cst
-            if sel.get("load_dose"):
-                # dose_file None => importer auto-selects the plan physical dose.
-                dose = importer.load_dose(dose_file=sel.get("dose_file"))
-                if dose is not None:
-                    data["dose"] = dose
+            # One step per object, so the bar reflects the whole import and each
+            # loader's own progress advances it by that step's share.
+            steps = 1 + bool(sel.get("struct_file")) + bool(sel.get("load_dose"))
+            data: dict[str, Any] = {}
+            with importer.progress("Importing DICOM", total=steps) as step:
+                data["ct"] = importer.load_ct(series_uid=sel.get("series_uid"))
+                step.advance()
+                if sel.get("struct_file"):
+                    cst = importer.load_cst(ct=data["ct"], struct_file=sel["struct_file"])
+                    if cst is not None:
+                        data["cst"] = cst
+                    step.advance()
+                if sel.get("load_dose"):
+                    # dose_file None => importer auto-selects the plan physical dose.
+                    dose = importer.load_dose(dose_file=sel.get("dose_file"))
+                    if dose is not None:
+                        data["dose"] = dose
+                    step.advance()
             return data
 
         self._run_in_thread(

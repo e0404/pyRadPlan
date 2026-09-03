@@ -6,12 +6,14 @@ pyRadPlan :class:`VOI` objects backed by SimpleITK masks aligned to the CT.
 """
 
 import logging
+from typing import Optional
 
 import numpy as np
 import matplotlib.path as mpath
 import SimpleITK as sitk
 from scipy.interpolate import interp1d
 
+from pyRadPlan.core import ProgressReporter
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import VOI, validate_voi
 
@@ -35,7 +37,9 @@ def _mask_cube_to_voi(cube_xyz, name, ct, visible_color):
     )
 
 
-def import_rtstruct(structure_dataset, ct: CT) -> list[VOI]:
+def import_rtstruct(
+    structure_dataset, ct: CT, reporter: Optional[ProgressReporter] = None
+) -> list[VOI]:
     """
     Convert an RTSTRUCT dataset to a list of pyRadPlan VOIs.
 
@@ -45,6 +49,9 @@ def import_rtstruct(structure_dataset, ct: CT) -> list[VOI]:
         The RTSTRUCT DICOM dataset.
     ct : CT
         The reference pyRadPlan CT object.
+    reporter : ProgressReporter, optional
+        Reporter used to publish the per-structure progress. Defaults to a
+        private reporter, which still reaches context-scoped observers.
 
     Returns
     -------
@@ -59,8 +66,12 @@ def import_rtstruct(structure_dataset, ct: CT) -> list[VOI]:
 
     structure_lookup = {seq.ROINumber: seq for seq in structure_dataset.StructureSetROISequence}
 
+    reporter = reporter if reporter is not None else ProgressReporter()
+    contours = structure_dataset.ROIContourSequence
+    logger.info("Converting %d RTSTRUCT contour set(s) to masks.", len(contours))
+
     vois = []
-    for roi_contour in structure_dataset.ROIContourSequence:
+    for roi_contour in reporter.track(contours, name="Structure", unit="roi"):
         roi_structure = structure_lookup.get(roi_contour.ReferencedROINumber)
         if roi_structure is None:
             logger.warning("No structure found for ROI number %s", roi_contour.ReferencedROINumber)
@@ -85,7 +96,9 @@ def import_rtstruct(structure_dataset, ct: CT) -> list[VOI]:
     return vois
 
 
-def import_seg(seg_dataset, ct_datasets: list, ct: CT) -> list[VOI]:
+def import_seg(
+    seg_dataset, ct_datasets: list, ct: CT, reporter: Optional[ProgressReporter] = None
+) -> list[VOI]:
     """
     Convert a SEG dataset to a list of pyRadPlan VOIs.
 
@@ -97,6 +110,9 @@ def import_seg(seg_dataset, ct_datasets: list, ct: CT) -> list[VOI]:
         The CT pydicom datasets (geometry only is required) for orientation.
     ct : CT
         The reference pyRadPlan CT object.
+    reporter : ProgressReporter, optional
+        Reporter used to publish the per-segment progress. Defaults to a
+        private reporter, which still reaches context-scoped observers.
 
     Returns
     -------
@@ -113,8 +129,11 @@ def import_seg(seg_dataset, ct_datasets: list, ct: CT) -> list[VOI]:
     frame_positions, frame_segments = _map_seg_frames(seg_dataset)
     ct_z = ct.z
 
+    reporter = reporter if reporter is not None else ProgressReporter()
+    logger.info("Converting %d SEG segment(s) to masks.", len(segments))
+
     vois = []
-    for segment in segments:
+    for segment in reporter.track(segments, name="Segment", unit="seg"):
         segment_number = getattr(segment, "SegmentNumber", None)
         segment_label = getattr(segment, "SegmentLabel", f"Segment_{segment_number}")
 

@@ -31,6 +31,9 @@ class DicomImporter(BaseImporter):
     def __init__(self, path):
         super().__init__(path)
         self._classified = None
+        # Pixel-free headers of every DICOM file found, keyed by path. Filled by
+        # :meth:`_classify` so the listing methods do not re-read them.
+        self._headers: dict[str, pydicom.Dataset] = {}
 
     @classmethod
     def handles_directory(cls, path) -> bool:
@@ -54,7 +57,12 @@ class DicomImporter(BaseImporter):
         return False
 
     def _classify(self) -> tuple[str, dict[str, list[str]]]:
-        """Return (directory, {modality: [files]}) for the source, cached."""
+        """Return (directory, {modality: [files]}) for the source, cached.
+
+        Reading the header of every file in the folder is the slow part of an
+        import, so it is reported as its own progress level and the headers are
+        kept in :attr:`_headers` for the listing and load methods to reuse.
+        """
         if self._classified is not None:
             return self._classified
 
@@ -67,7 +75,8 @@ class DicomImporter(BaseImporter):
             files = [path]
 
         groups: dict[str, list[str]] = {modality: [] for modality in _MODALITIES}
-        for f in files:
+        logger.info("Scanning %d file(s) in %s…", len(files), directory)
+        for f in self.track(files, name="Scanning files", unit="file"):
             if not os.path.isfile(f):
                 continue
             try:
@@ -77,6 +86,13 @@ class DicomImporter(BaseImporter):
             modality = getattr(ds, "Modality", None)
             if modality in groups:
                 groups[modality].append(f)
+                self._headers[f] = ds
+
+        logger.info(
+            "Found %s.",
+            ", ".join(f"{len(paths)}x {modality}" for modality, paths in groups.items() if paths)
+            or "no CT, RTSTRUCT, SEG or RTDOSE data",
+        )
 
         self._classified = (directory, groups)
         return self._classified
@@ -90,10 +106,7 @@ class DicomImporter(BaseImporter):
         _, groups = self._classify()
         series: dict[str, dict] = {}
         for f in groups["CT"]:
-            try:
-                ds = pydicom.dcmread(f, stop_before_pixels=True)
-            except Exception:  # noqa: BLE001 - unreadable files are skipped
-                continue
+            ds = self._headers[f]
             uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
             entry = series.setdefault(
                 uid,
@@ -115,10 +128,7 @@ class DicomImporter(BaseImporter):
         _, groups = self._classify()
         result = []
         for f in groups["RTSTRUCT"] + groups["SEG"]:
-            try:
-                ds = pydicom.dcmread(f, stop_before_pixels=True)
-            except Exception:  # noqa: BLE001 - unreadable files are skipped
-                continue
+            ds = self._headers[f]
             modality = getattr(ds, "Modality", "")
             if modality == "RTSTRUCT" and hasattr(ds, "StructureSetROISequence"):
                 names = [str(getattr(roi, "ROIName", "")) for roi in ds.StructureSetROISequence]
@@ -141,10 +151,7 @@ class DicomImporter(BaseImporter):
         _, groups = self._classify()
         result = []
         for f in groups["RTDOSE"]:
-            try:
-                ds = pydicom.dcmread(f, stop_before_pixels=True)
-            except Exception:  # noqa: BLE001 - unreadable files are skipped
-                continue
+            ds = self._headers[f]
             result.append(
                 {
                     "path": f,
@@ -175,7 +182,7 @@ class DicomImporter(BaseImporter):
             files = match["files"]
         else:
             files = groups["CT"]
-        return import_ct(directory, files)
+        return import_ct(directory, files, reporter=self)
 
     def load_cst(
         self, ct: Optional[CT] = None, struct_file: Optional[str] = None
@@ -200,14 +207,16 @@ class DicomImporter(BaseImporter):
             raise ValueError(f"Structure set {struct_file!r} not found in {self.path}.")
 
         f = struct_file
+        logger.info("Importing structure set %s.", os.path.basename(f))
         if f in groups["RTSTRUCT"]:
-            vois = import_rtstruct(pydicom.dcmread(f), ct)
+            vois = import_rtstruct(pydicom.dcmread(f), ct, reporter=self)
         else:
-            ct_datasets = [pydicom.dcmread(c, stop_before_pixels=True) for c in groups["CT"]]
-            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct)
+            ct_datasets = [self._headers[c] for c in groups["CT"]]
+            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct, reporter=self)
 
         if not vois:
             return None
+        logger.info("Assembling structure set from %d VOI(s).", len(vois))
         return validate_cst(vois, ct)
 
     def load_dose(self, dose_file: Optional[str] = None) -> Optional[sitk.Image]:
@@ -217,5 +226,5 @@ class DicomImporter(BaseImporter):
         if dose_file is not None:
             if dose_file not in groups["RTDOSE"]:
                 raise ValueError(f"RTDOSE {dose_file!r} not found in {self.path}.")
-            return import_dose([dose_file])
-        return import_dose(groups["RTDOSE"])
+            return import_dose([dose_file], reporter=self)
+        return import_dose(groups["RTDOSE"], reporter=self)

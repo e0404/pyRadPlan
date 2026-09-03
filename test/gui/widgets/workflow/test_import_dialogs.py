@@ -77,6 +77,56 @@ def test_dicom_dialog_populates_and_selects(qapp):
     assert sel["dose_file"] is None  # Auto => importer picks the plan physical dose
 
 
+def test_dicom_dialog_uses_precomputed_catalog(qapp):
+    """The dialog fills its combos from a scan done elsewhere (the worker thread)."""
+    from pyRadPlan.gui.widgets.workflow._dicom_import_dialog import scan_folder
+    from pyRadPlan.io.dicom import DicomImporter
+
+    importer = DicomImporter(str(DICOM_DIR))
+    catalog = scan_folder(importer)
+    assert catalog["series"] and catalog["structs"] and catalog["doses"]
+
+    scanned = DicomImportDialog(importer, catalog=catalog)
+    reference = DicomImportDialog(DicomImporter(str(DICOM_DIR)))
+    assert scanned.selection() == reference.selection()
+
+
+def test_dicom_import_scans_in_worker_thread(qapp, monkeypatch):
+    """Load Folder scans first (off the GUI thread), then opens the dialog."""
+    from pyRadPlan.gui.widgets.workflow import _workflow_widget as wf
+
+    w = WorkflowWidget(WorkspaceManager())
+    started = []
+    monkeypatch.setattr(
+        wf.WorkflowWidget,
+        "_run_in_thread",
+        lambda self, fn, *a, **kw: started.append((fn, a, kw)),
+    )
+
+    w._open_dicom_import_dialog(str(DICOM_DIR))
+    fn, args, kwargs = started.pop()
+    assert kwargs["busy_text"] == "Scanning DICOM folder…"
+
+    # The scan produces the catalog the dialog is then built from.
+    catalog = fn(*args)
+    assert {"series", "structs", "doses"} == set(catalog)
+    assert catalog["series"]
+
+
+def test_dicom_import_warns_without_ct_series(qapp, monkeypatch):
+    from pyRadPlan.gui.widgets.workflow import _workflow_widget as wf
+    from pyRadPlan.io.dicom import DicomImporter
+
+    w = WorkflowWidget(WorkspaceManager())
+    warned = []
+    monkeypatch.setattr(wf.QMessageBox, "warning", lambda *a: warned.append(a))
+
+    w._start_dicom_import(
+        DicomImporter(str(DICOM_DIR)), {"series": [], "structs": [], "doses": []}
+    )
+    assert warned
+
+
 # --------------------------------------------------------------------------
 # Routing / merge helpers
 # --------------------------------------------------------------------------

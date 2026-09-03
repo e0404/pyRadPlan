@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ParticleFredMCEngine.execution_timeout` (seconds, default `None` = wait indefinitely): aborts a
   FRED run that exceeds the timeout, killing the whole FRED process tree (e.g. when the GPU is
   occupied by another process)
+- Importers report progress: `BaseImporter` mixes in `ProgressReporter`, so an import can be
+  followed through `observe_reports` (or a console `tqdm` bar) like a dose calculation. The DICOM
+  importer reports one nested, determinate level per step — scanning the folder's headers, reading
+  the CT slices (driven by ITK's own per-slice progress), converting each RTSTRUCT ROI / SEG
+  segment, and reading the dose cube — and logs what it found and what it is loading
+- GUI: importing a DICOM folder shows these steps in the progress bar and status line, and logs
+  them to the output panel, instead of an untitled busy bar. Enumerating the folder now also runs
+  in the worker thread, so picking a large folder no longer freezes the window before the import
+  dialog appears
 - `pyRadPlan.util.openmp`: detection of clashing OpenMP runtimes in the running process.
   Several wheels vendor their own copy of the Intel/LLVM runtime, which calls `abort()`
   (`OMP: Error #15`) when a second copy initializes — killing the interpreter with no catchable

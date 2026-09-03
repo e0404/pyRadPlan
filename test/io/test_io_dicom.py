@@ -8,12 +8,14 @@ round-trips.
 
 import os
 import shutil
+from unittest import mock
 
 import numpy as np
 import pydicom
 import SimpleITK as sitk
 import pytest
 
+from pyRadPlan.core import ProgressReport, observe_reports
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.io import load_patient, load_data
@@ -161,6 +163,56 @@ def test_load_data_from_dicom_folder(dicom_dir, dicom_reference_mat):
     arr = sitk.GetArrayFromImage(data["dose"])
     assert arr.shape == ref_zyx.shape
     assert np.allclose(arr, ref_zyx, atol=1e-3)
+
+
+def test_dicom_import_reports_progress(dicom_dir):
+    """A folder import reports nested, determinate progress for each step."""
+    reports = []
+
+    with observe_reports(lambda r: reports.append(r)):
+        load_data(dicom_dir)
+
+    stacks = [
+        tuple((lvl.name, lvl.total) for lvl in r.levels)
+        for r in reports
+        if isinstance(r, ProgressReport) and r.levels
+    ]
+    assert stacks
+
+    # Every step nests under the overall "Importing" level.
+    nested = {s for s in stacks if len(s) > 1}
+    assert {
+        (("Importing", 3), ("Scanning files", 22)),
+        (("Importing", 3), ("Reading CT slices", 10)),
+        (("Importing", 3), ("Structure", 3)),
+        (("Importing", 3), ("Reading dose cube", 1)),
+    } <= nested
+
+    # Every level is determinate, so a consumer can drive a real progress bar.
+    assert all(lvl.total for r in reports if isinstance(r, ProgressReport) for lvl in r.levels)
+
+    # The outer level runs to completion.
+    outer = [
+        r.levels[0]
+        for r in reports
+        if isinstance(r, ProgressReport) and r.levels and r.levels[0].name == "Importing"
+    ]
+    assert outer[-1].current == outer[-1].total == 3
+
+
+def test_dicom_importer_caches_headers(dicom_dir):
+    """The folder is scanned once; the listings reuse the cached headers."""
+    importer = DicomImporter(dicom_dir)
+    assert not importer._headers  # nothing read before the first classification
+
+    series = importer.list_ct_series()
+    scanned = dict(importer._headers)
+    assert scanned
+
+    with mock.patch("pydicom.dcmread", side_effect=AssertionError("re-read the headers")):
+        assert importer.list_ct_series() == series
+        importer.list_structure_sets()
+        importer.list_doses()
 
 
 # --------------------------------------------------------------------------
