@@ -5,9 +5,11 @@ import logging
 import warnings
 from typing import ClassVar, Optional
 
+import numpy as np
 import pydicom
 import SimpleITK as sitk
 
+from pyRadPlan.core.resample import resample_image
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import validate_cst, StructureSet
 
@@ -19,6 +21,35 @@ from ._import_dose import import_dose, _dose_descriptor
 logger = logging.getLogger(__name__)
 
 _MODALITIES = ("CT", "RTSTRUCT", "SEG", "RTDOSE")
+
+
+def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
+    """Return *dose* on the grid of *ct*, resampling only when they differ.
+
+    Dose outside the RTDOSE cube is zero rather than nearest-neighbour
+    extrapolated: the cube covers the irradiated region, and smearing its edge
+    values across the rest of the patient would invent dose that was never
+    computed.
+    """
+    reference = ct.cube_hu
+    if (
+        dose.GetSize() == reference.GetSize()
+        and np.allclose(dose.GetSpacing(), reference.GetSpacing())
+        and np.allclose(dose.GetOrigin(), reference.GetOrigin())
+        and np.allclose(dose.GetDirection(), reference.GetDirection())
+    ):
+        return dose
+
+    logger.info(
+        "Resampling dose from %s at %s mm onto the CT grid %s at %s mm.",
+        dose.GetSize(),
+        tuple(round(s, 3) for s in dose.GetSpacing()),
+        reference.GetSize(),
+        tuple(round(s, 3) for s in reference.GetSpacing()),
+    )
+    return resample_image(
+        dose, interpolator=sitk.sitkLinear, target_image=reference, extrapolate=0
+    )
 
 
 class DicomImporter(BaseImporter):
@@ -34,6 +65,8 @@ class DicomImporter(BaseImporter):
         # Pixel-free headers of every DICOM file found, keyed by path. Filled by
         # :meth:`_classify` so the listing methods do not re-read them.
         self._headers: dict[str, pydicom.Dataset] = {}
+        # Last CT loaded, reused by :meth:`load_dose` as the grid to resample onto.
+        self._ct: Optional[CT] = None
 
     @classmethod
     def handles_directory(cls, path) -> bool:
@@ -182,7 +215,8 @@ class DicomImporter(BaseImporter):
             files = match["files"]
         else:
             files = groups["CT"]
-        return import_ct(directory, files, reporter=self)
+        self._ct = import_ct(directory, files, reporter=self)
+        return self._ct
 
     def load_cst(
         self, ct: Optional[CT] = None, struct_file: Optional[str] = None
@@ -219,12 +253,42 @@ class DicomImporter(BaseImporter):
         logger.info("Assembling structure set from %d VOI(s).", len(vois))
         return validate_cst(vois, ct)
 
-    def load_dose(self, dose_file: Optional[str] = None) -> Optional[sitk.Image]:
+    def load_dose(
+        self, dose_file: Optional[str] = None, ct: Optional[CT] = None
+    ) -> Optional[sitk.Image]:
+        """Load a dose distribution, resampled onto the CT grid.
+
+        RTDOSE is almost always stored on its own grid -- typically coarser than
+        the CT and covering only the irradiated region -- so the cube is
+        resampled onto the CT grid before it is returned. Everything downstream
+        (the viewer's overlays, dose/structure comparisons) indexes quantities
+        with CT voxel indices, and matRad's DICOM import interpolates onto the CT
+        grid for the same reason.
+
+        Parameters
+        ----------
+        dose_file : str, optional
+            An explicit RTDOSE path. By default the plan-level physical dose is
+            selected from the distributions found in the source.
+        ct : CT, optional
+            The CT defining the target grid. Defaults to the one this importer
+            loaded most recently, and failing that it loads one.
+
+        Returns
+        -------
+        sitk.Image or None
+            The dose in Gy on the CT grid, or ``None`` if the source has no RTDOSE.
+        """
         _, groups = self._classify()
         if not groups["RTDOSE"]:
             return None
         if dose_file is not None:
             if dose_file not in groups["RTDOSE"]:
                 raise ValueError(f"RTDOSE {dose_file!r} not found in {self.path}.")
-            return import_dose([dose_file], reporter=self)
-        return import_dose(groups["RTDOSE"], reporter=self)
+            dose = import_dose([dose_file], reporter=self)
+        else:
+            dose = import_dose(groups["RTDOSE"], reporter=self)
+
+        if ct is None:
+            ct = self._ct if self._ct is not None else self.load_ct()
+        return _resample_dose_to_ct(dose, ct)

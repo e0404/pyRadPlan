@@ -380,3 +380,352 @@ def test_load_cst_multiple_structure_sets_uses_first(dicom_dir, tmp_path):
 
     # One structure set is loaded (3 VOIs), not both merged (6).
     assert [v.name for v in cst.vois] == ["Target", "Body", "Core"]
+
+
+# --------------------------------------------------------------------------
+# Contour rasterization
+# --------------------------------------------------------------------------
+
+
+def _rasterization_ct(num_x=64, num_y=48, num_z=3) -> CT:
+    """A small CT grid to rasterize synthetic contours into."""
+    arr = np.zeros((num_z, num_y, num_x), dtype=np.float32)
+    img = sitk.GetImageFromArray(arr)
+    img.SetSpacing((1.5, 2.0, 3.0))
+    img.SetOrigin((-20.0, -30.0, -5.0))
+    return validate_ct(cube_hu=img)
+
+
+def _full_slice_mask(vertices, ct):
+    """Reference rasterization: fill the whole slice, without the bounding-box window."""
+    from pyRadPlan.io.dicom._import_cst import _fill_polygon
+
+    return _fill_polygon(vertices, 0, ct.cube_dim[0], 0, ct.cube_dim[1])
+
+
+@pytest.mark.parametrize(
+    "polygon_world",
+    [
+        # Well inside the grid, so the window is a small sub-box of the slice.
+        [(-10.0, -20.0), (0.0, -20.0), (0.0, -10.0), (-10.0, -10.0)],
+        # Straddling the grid edge: the window must be clipped, not go out of bounds.
+        [(-25.0, -35.0), (-10.0, -35.0), (-10.0, -20.0), (-25.0, -20.0)],
+        # A concave (L-shaped) contour, where the bounding box is far from tight.
+        [
+            (-18.0, -28.0),
+            (-2.0, -28.0),
+            (-2.0, -22.0),
+            (-10.0, -22.0),
+            (-10.0, -8.0),
+            (-18.0, -8.0),
+        ],
+        # Entirely outside the grid.
+        [(500.0, 500.0), (510.0, 500.0), (510.0, 510.0), (500.0, 510.0)],
+        # Extremes exactly on voxel centres (integer voxel indices), which is where
+        # the boundary-inclusion rule decides whether the edge voxels are in or out.
+        [(-20.0, -30.0), (-5.0, -30.0), (-5.0, -10.0), (-20.0, -10.0)],
+        # A single-voxel-wide sliver, whose window has an extent of one in x.
+        [(-11.0, -26.0), (-10.4, -26.0), (-10.4, -14.0), (-11.0, -14.0)],
+    ],
+)
+def test_contour_window_matches_full_slice(polygon_world):
+    """Rasterizing only the contour's bounding box must equal testing the whole slice.
+
+    The window is a pure optimization (a voxel outside the contour's bounding box
+    cannot be inside the contour), so it must not change a single voxel.
+    """
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _create_slice_mask
+
+    ct = _rasterization_ct()
+    x_interp, y_interp = _axis_interpolators(ct)
+
+    z_pos = float(ct.z[1])
+    points = np.array([[x, y, z_pos] for x, y in polygon_world])
+    window, x_start, y_start, _ = _create_slice_mask(points, ct, x_interp, y_interp)
+
+    vertices = np.column_stack((x_interp(points[:, 0]), y_interp(points[:, 1])))
+    expected = _full_slice_mask(vertices, ct)
+
+    actual = np.zeros(ct.cube_dim[:2], dtype=bool)
+    if window is not None:
+        actual[x_start : x_start + window.shape[0], y_start : y_start + window.shape[1]] = window
+
+    assert np.array_equal(actual, expected)
+
+
+def test_contour_with_non_finite_vertices_is_skipped():
+    """A contour that cannot be placed on the grid is dropped, not raised over."""
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _create_slice_mask
+
+    ct = _rasterization_ct()
+    x_interp, y_interp = _axis_interpolators(ct)
+
+    z_pos = float(ct.z[1])
+    points = np.array([[np.nan, 0.0, z_pos], [0.0, 0.0, z_pos], [0.0, 5.0, z_pos]])
+    window, _, _, _ = _create_slice_mask(points, ct, x_interp, y_interp)
+
+    assert window is None
+
+
+# --------------------------------------------------------------------------
+# The contour fill rule, on a grid small enough to read
+# --------------------------------------------------------------------------
+#
+# There is no single "correct" rasterization of a contour onto voxels: every
+# tool picks a rule for voxel centres landing exactly on the contour. pyRadPlan
+# fills a voxel when its *centre* lies inside the polygon, counting a centre
+# exactly on the boundary as inside.
+#
+# The end-to-end consequences of that rule are covered by
+# test_import_cst_matches_reference, which requires the bundled RTSTRUCT to
+# reproduce a matRad export voxel for voxel (and half of that phantom's contour
+# coordinates sit exactly on voxel centres, so it exercises the ties). The tests
+# here pin the rule itself on a grid small enough to write the answer out by
+# hand, so a future change to the fill routine says which case it broke.
+#
+# The same conversion was also checked against label maps exported from MITK
+# Workbench for a 512x512x297 CT: the two agreed to 3 voxels out of 17.6 million
+# across four structures, with two of them voxel-identical. That data is too
+# large to vendor, hence these miniature stand-ins.
+
+
+def _unit_ct(num_x=8, num_y=8, num_z=3) -> CT:
+    """A CT whose voxel indices equal its world coordinates, so masks read literally."""
+    arr = np.zeros((num_z, num_y, num_x), dtype=np.float32)
+    img = sitk.GetImageFromArray(arr)
+    img.SetSpacing((1.0, 1.0, 1.0))
+    img.SetOrigin((0.0, 0.0, 0.0))
+    return validate_ct(cube_hu=img)
+
+
+def _drawn(rows):
+    """Parse an ASCII picture into a boolean mask indexed ``[x, y]``."""
+    return np.array([[char == "#" for char in row.split()] for row in rows], dtype=bool)
+
+
+def _fill(vertices, size=8):
+    from pyRadPlan.io.dicom._import_cst import _fill_polygon
+
+    return _fill_polygon(np.asarray(vertices, dtype=float), 0, size, 0, size)
+
+
+def test_fill_polygon_off_lattice_rectangle():
+    """The unambiguous case: centres strictly inside, no ties to break."""
+    # Corners at x,y = 2.5 and 5.5, so the centres inside are 3, 4 and 5 on both axes.
+    mask = _fill([(2.5, 2.5), (5.5, 2.5), (5.5, 5.5), (2.5, 5.5)])
+    assert np.array_equal(
+        mask,
+        _drawn(
+            [
+                ". . . . . . . .",
+                ". . . . . . . .",
+                ". . . . . . . .",
+                ". . . # # # . .",
+                ". . . # # # . .",
+                ". . . # # # . .",
+                ". . . . . . . .",
+                ". . . . . . . .",
+            ]
+        ),
+    )
+
+
+def test_fill_polygon_on_lattice_rectangle_keeps_inherited_tie_break():
+    """Corners exactly on voxel centres: the tie-break is asymmetric between the axes.
+
+    Both x boundaries are kept, only the upper y boundary is. That asymmetry is
+    inherited from the per-voxel ``matplotlib`` test this replaced, and is what
+    keeps the bundled matRad phantom (half of whose coordinates are on voxel
+    centres) importing unchanged. It is pinned here so it cannot drift silently.
+    """
+    mask = _fill([(2, 2), (5, 2), (5, 5), (2, 5)])
+    assert np.array_equal(
+        mask,
+        _drawn(
+            [
+                ". . . . . . . .",
+                ". . . . . . . .",
+                ". . . # # # . .",
+                ". . . # # # . .",
+                ". . . # # # . .",
+                ". . . # # # . .",
+                ". . . . . . . .",
+                ". . . . . . . .",
+            ]
+        ),
+    )
+    assert mask[:, 2].sum() == 0, "the lower y boundary is excluded"
+    assert mask[2].any() and mask[5].any(), "both x boundaries are included"
+
+
+def test_fill_polygon_keeps_structure_narrower_than_a_voxel():
+    """A contour thinner than one voxel must still produce voxels, not vanish.
+
+    Requiring the centre to be *strictly* inside would empty this structure
+    entirely, silently dropping small VOIs (e.g. thin applicators) on import.
+    """
+    mask = _fill([(2.0, 1.0), (2.4, 1.0), (2.4, 6.0), (2.0, 6.0)])
+    assert mask.any(), "a sub-voxel-wide contour was rasterized away"
+    assert np.array_equal(np.flatnonzero(mask.any(axis=1)), [2])
+    assert np.array_equal(np.flatnonzero(mask.any(axis=0)), [2, 3, 4, 5, 6])
+
+
+def test_fill_polygon_concave_contour():
+    """A concave outline must not be filled as its convex hull."""
+    mask = _fill([(1, 1), (6, 1), (6, 3), (3, 3), (3, 6), (1, 6)])
+    assert np.array_equal(
+        mask,
+        _drawn(
+            [
+                ". . . . . . . .",
+                ". . # # # # # .",
+                ". . # # # # # .",
+                ". . # # # # # .",
+                ". . # # . . . .",
+                ". . # # . . . .",
+                ". . # # . . . .",
+                ". . . . . . . .",
+            ]
+        ),
+    )
+
+
+def test_fill_polygon_clips_to_the_window():
+    """A contour reaching past the grid fills up to the edge, without wrapping."""
+    mask = _fill([(-4.5, -4.5), (3.5, -4.5), (3.5, 3.5), (-4.5, 3.5)])
+    assert np.array_equal(np.flatnonzero(mask.any(axis=1)), [0, 1, 2, 3])
+    assert np.array_equal(np.flatnonzero(mask.any(axis=0)), [0, 1, 2, 3])
+    assert not mask[4:].any() and not mask[:, 4:].any()
+
+
+def test_fill_polygon_outside_the_window_is_empty():
+    assert not _fill([(20.0, 20.0), (30.0, 20.0), (30.0, 30.0), (20.0, 30.0)]).any()
+
+
+def test_fill_polygon_degenerate_contours_are_empty_not_an_error():
+    """Zero-area contours must rasterize to nothing rather than raise."""
+    assert not _fill([(3.0, 3.0), (3.0, 3.0), (3.0, 3.0)]).any()  # a point
+    assert not _fill([(1.5, 3.5), (5.5, 3.5), (1.5, 3.5)]).any()  # a line, there and back
+
+
+def test_compute_segment_mask_ors_contours_on_the_same_slice():
+    """Two contours on one slice are combined, and land on the slice they name."""
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    ct = _unit_ct()
+    z_pos = float(ct.z[1])
+
+    def contour(x0, x1, y0, y1):
+        item = mock.Mock()
+        item.ContourGeometricType = "CLOSED_PLANAR"
+        item.ContourData = [
+            x0,
+            y0,
+            z_pos,
+            x1,
+            y0,
+            z_pos,
+            x1,
+            y1,
+            z_pos,
+            x0,
+            y1,
+            z_pos,
+        ]
+        return item
+
+    roi = mock.Mock()
+    roi.ContourSequence = [contour(1.5, 3.5, 1.5, 3.5), contour(4.5, 6.5, 4.5, 6.5)]
+
+    cube = _compute_segment_mask(ct, roi, _axis_interpolators(ct))
+
+    assert cube[:, :, 0].sum() == 0 and cube[:, :, 2].sum() == 0, "only slice 1 is touched"
+    filled = cube[:, :, 1]
+    assert filled[2, 2] and filled[3, 3], "first contour"
+    assert filled[5, 5] and filled[6, 6], "second contour"
+    assert filled.sum() == 8, "both contours, nothing between them"
+
+
+# --------------------------------------------------------------------------
+# Dose grid handling
+# --------------------------------------------------------------------------
+#
+# RTDOSE is stored on its own grid: typically coarser than the CT and covering
+# only the irradiated region. The importer resamples it onto the CT grid,
+# because everything downstream indexes quantities with CT voxel indices - the
+# viewer overlays a dose slice on the CT slice of the same index, so an
+# unresampled cube is drawn at the wrong scale and raises IndexError as soon as
+# the index passes the dose cube's extent.
+
+
+def _offset_dose_cube(ct, value=2.0):
+    """A coarse dose cube covering only part of *ct*, on its own grid."""
+    reference = ct.cube_hu
+    spacing = tuple(2.5 * s for s in reference.GetSpacing())
+    size = tuple(max(2, n // 4) for n in reference.GetSize())
+    origin = tuple(o + 2 * s for o, s in zip(reference.GetOrigin(), reference.GetSpacing()))
+
+    cube = sitk.Image(size, sitk.sitkFloat32)
+    cube.SetSpacing(spacing)
+    cube.SetOrigin(origin)
+    cube.SetDirection(reference.GetDirection())
+    cube += value
+    return cube
+
+
+def test_load_dose_is_resampled_onto_the_ct_grid(dicom_dir, monkeypatch):
+    """A dose on its own grid must come back on the CT grid, not as-is."""
+    from pyRadPlan.io.dicom import _importer as importer_module
+
+    importer = DicomImporter(dicom_dir)
+    ct = importer.load_ct()
+    cube = _offset_dose_cube(ct)
+    assert cube.GetSize() != ct.cube_hu.GetSize(), "the fixture must actually differ"
+
+    monkeypatch.setattr(importer_module, "import_dose", lambda *a, **k: cube)
+    dose = importer.load_dose()
+
+    assert dose.GetSize() == ct.cube_hu.GetSize()
+    assert np.allclose(dose.GetSpacing(), ct.cube_hu.GetSpacing())
+    assert np.allclose(dose.GetOrigin(), ct.cube_hu.GetOrigin())
+    assert np.allclose(dose.GetDirection(), ct.cube_hu.GetDirection())
+
+
+def test_load_dose_keeps_values_and_leaves_uncovered_voxels_at_zero(dicom_dir, monkeypatch):
+    """Resampling preserves the dose where the cube reaches, and invents none where it does not."""
+    from pyRadPlan.io.dicom import _importer as importer_module
+
+    importer = DicomImporter(dicom_dir)
+    ct = importer.load_ct()
+    cube = _offset_dose_cube(ct, value=2.0)
+
+    monkeypatch.setattr(importer_module, "import_dose", lambda *a, **k: cube)
+    values = sitk.GetArrayFromImage(importer.load_dose())
+
+    assert np.isfinite(values).all()
+    # Inside the cube the constant value survives; outside it must stay zero
+    # rather than being nearest-neighbour smeared across the rest of the patient.
+    assert np.isclose(values.max(), 2.0)
+    assert np.isclose(values.min(), 0.0)
+    assert (values > 0).any() and (values == 0).any()
+
+
+def test_load_dose_on_the_ct_grid_is_not_resampled(dicom_dir):
+    """The bundled RTDOSE already shares the CT grid, so it must pass through untouched."""
+    importer = DicomImporter(dicom_dir)
+    ct = importer.load_ct()
+    dose = importer.load_dose()
+
+    assert dose.GetSize() == ct.cube_hu.GetSize()
+    assert np.allclose(dose.GetOrigin(), ct.cube_hu.GetOrigin())
+
+
+def test_load_data_dose_shares_the_ct_grid(dicom_dir):
+    """The bulk loader must hand out a dose the viewer can index with CT indices."""
+    data = load_data(dicom_dir)
+    ct, dose = data["ct"], data["dose"]
+
+    assert dose.GetSize() == ct.cube_hu.GetSize()
+    # An index valid for the CT must be valid for the dose, on every axis.
+    array = sitk.GetArrayFromImage(dose)
+    assert array.shape == sitk.GetArrayFromImage(ct.cube_hu).shape

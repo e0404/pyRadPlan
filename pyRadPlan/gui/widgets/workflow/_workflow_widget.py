@@ -864,7 +864,9 @@ class WorkflowWidget(WorkspaceWidget):
                     step.advance()
                 if sel.get("load_dose"):
                     # dose_file None => importer auto-selects the plan physical dose.
-                    dose = importer.load_dose(dose_file=sel.get("dose_file"))
+                    # The CT is passed so the dose comes back on its grid, which is
+                    # what the viewer indexes the overlay with.
+                    dose = importer.load_dose(dose_file=sel.get("dose_file"), ct=data["ct"])
                     if dose is not None:
                         data["dose"] = dose
                     step.advance()

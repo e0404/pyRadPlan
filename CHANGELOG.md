@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tests pinning the RTSTRUCT contour-to-mask fill rule on a grid small enough to read the
+  expected masks off the page: the boundary tie-break, that a contour narrower than one voxel
+  still produces voxels rather than vanishing, concave outlines, clipping at the grid edge,
+  degenerate (zero-area) contours, and that several contours on one slice are combined. The
+  conversion was additionally cross-checked against label maps exported from MITK Workbench for
+  a 512x512x297 CT (3 differing voxels out of 17.6 million across four structures, two of them
+  voxel-identical); that data is too large to vendor, so the miniature cases stand in for it
 
 - `pyRadPlan.ai.modelhub` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a name — bare (resolved to `<hf_org>/<name>`) or a full `<org>/<repo>` id used as-is — with version dedup, offline support and logging. A pinned `revision` is reused from disk without touching the network; an unpinned request asks the Hub whether the local copy is current and falls back to it when the Hub is unreachable. Downloads are laid out as `<local_models_dir>/<org>/<repo>`, so a private fork never shares a directory with its upstream namesake. `list_local_models()` lists the models available on disk and in the HuggingFace cache (no network) as full `<org>/<repo>` ids, optionally filtered by `ModelTask` (`dose_calc`/`outcome`), read from `metadata.task` in a model's `model_config.json` and falling back to the repository-name prefix. Includes a `BasePreprocessor` contract, a `model_config.template.json` and a reference model folder under `test/data/ai_models/dummy_model`. Settings are the `modelhub_*` fields of the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), read from `PYRADPLAN_AI_MODELHUB_*` environment variables. `huggingface_hub`/`safetensors` are installed with pyRadPlan; only a `torch` build matching your platform must be installed separately.
 - Security: loading a model resolved from the HuggingFace Hub executes the `model.py` and `preprocessor.py` it ships, so it requires an explicit opt-in — `trust_remote_code=True` or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`; the setting defaults to `False`. A directory passed explicitly as `load_model(local_dir=...)` is exempt. Each model folder's code is imported under a package name unique to that folder, so several models can be loaded side by side and the classes they define stay picklable.
@@ -157,6 +164,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- DICOM: an imported RTDOSE is now resampled onto the CT grid. RTDOSE is stored on its own grid
+  (for a CIRS phantom export, 124x145x158 at 2 mm against a 512x512x297 CT at ~1 mm), and the
+  cube was handed on unchanged. Since the viewer overlays the dose slice with the same index as
+  the CT slice, the dose was drawn at the wrong scale in a corner of the image, and scrolling
+  past the dose cube's extent raised an `IndexError` that left the viewer stuck. Dose outside
+  the RTDOSE cube is zero rather than extrapolated, so no dose is invented where none was
+  computed; a dose already on the CT grid (as in a matRad export) is passed through untouched.
+  `DicomImporter.load_dose` takes an optional `ct` for the target grid, defaulting to the CT the
+  importer loaded most recently
+- DICOM RTSTRUCT import is roughly 20x faster (a 512x512x297 CT with four structures went from
+  ~50 s to ~2 s): each contour was rasterized by testing *every* voxel of the slice against it
+  (262144 point-in-polygon tests per contour on a 512x512 grid, 92% of import time). Contours are
+  now filled by scanline, evaluating one intersection per edge per voxel row instead of testing
+  every voxel against every edge, and only within the contour's bounding box; the world-to-voxel
+  interpolators are also built once per structure set rather than twice per contour. The resulting
+  masks are unchanged, voxel for voxel, on both reference datasets. `matplotlib` is no longer used
+  for structure import
 - `xp_utils.to_namespace` without an explicit `device` moved arrays to the GPU whenever the target
   backend had one, ignoring `settings.xp.prefer_gpu`; it now keeps the source array's device when
   the target namespace supports it and otherwise uses the namespace default, which honors the setting
