@@ -35,12 +35,17 @@ from .helpers import (
     DLPACK_CUDA,
     get_device_info,
     is_on_gpu,
+    is_host_device,
+    openblas_has_gemm_race,
+    warn_on_unreliable_openblas,
     get_current_stream,
     create_stream,
     synchronize,
+    stream_wait_event,
     free_gpu_memory,
     record_event,
     elapsed_time,
+    scatter,
     to_numpy,
     from_numpy,
     to_namespace,
@@ -52,6 +57,8 @@ from .typing import (
 )
 
 from .helpers import dlpack_to_backend_device
+
+from .jittable import jittable, JittableKernel
 
 from .compat import (
     quantile,
@@ -240,12 +247,17 @@ sys.modules[__name__].__class__ = _SettingsAliasModule
 
 
 __all__ = [
+    "JittableKernel",
+    "jittable",
     "DLPACK_CPU",
     "DLPACK_CUDA",
     "choose_array_api_namespace",
     "choose_device",
     "get_device_info",
     "is_on_gpu",
+    "is_host_device",
+    "openblas_has_gemm_race",
+    "warn_on_unreliable_openblas",
     "cp",
     "torch",
     "jax",
@@ -257,8 +269,10 @@ __all__ = [
     "get_current_stream",
     "create_stream",
     "synchronize",
+    "stream_wait_event",
     "free_gpu_memory",
     "elapsed_time",
+    "scatter",
     "to_numpy",
     "from_numpy",
     "to_namespace",

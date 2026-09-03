@@ -14,7 +14,7 @@ pyRadPlan is an open-source radiotherapy treatment planning toolkit designed for
 Development is lead by the [Radiotherapy Optimization group](https://www.dkfz.de/radopt) at the [German Cancer Research Center (DKFZ)](https://www.dkfz.de)
 
 ## Installation
-pyRadPlan requires **Python 3.10–3.13** and is available on [PyPI](https://pypi.org/project/pyRadPlan/). We recommend installing it together with its graphical user interface:
+pyRadPlan requires **Python 3.10–3.14** and is available on [PyPI](https://pypi.org/project/pyRadPlan/). We recommend installing it together with its graphical user interface:
 
 ```sh
 pip install "pyRadPlan[gui]"
@@ -33,7 +33,13 @@ For headless environments (servers, compute clusters, CI) where the Qt runtime i
 pip install pyRadPlan
 ```
 
-Further optional extras (`[numba]`, `[matlab]`, `[octave]`, `[dev]`) are described in the documentation's installation guide.
+Further optional extras (`[numba]`, `[matlab]`, `[octave]`, `[dev]`) are described in the documentation's [installation guide](https://pyradplan.readthedocs.io/en/latest/installation/#optional-extras).
+
+⚡ **Compute backends** ([docs](https://pyradplan.readthedocs.io/en/latest/installation/#gpu-alternate-compute-backends))**:** beyond [`numpy`](https://numpy.org/), pyRadPlan can use [`cupy`](https://cupy.dev/) (GPU), [`pytorch`](https://pytorch.org/) (CPU/GPU) and [`jax`](https://docs.jax.dev/) (CPU by default), available as the extras `[cupy]`, `[torch]` and `[jax]`. For GPU builds we recommend following the respective project's install instructions for your platform / CUDA version instead.
+
+🎲 **Monte Carlo** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/dose_calculation.html#dose-engines))**:** the [TOPAS](https://www.topasmc.org/) and [FRED](https://fred-mc.org/) dose engines call external executables. Install those following their own instructions and make sure they are on your `PATH`.
+
+📉 **Solvers** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/optimization.html#solvers))**:** pyRadPlan ships an IPOPT interface [`ipyopt`](https://pypi.org/project/ipyopt/), which has to be installed separately via `pip install ipyopt` (Linux only). Default ships with [`scipy`](https://scipy.org/)
 
 ## Concept and Goals
 pyRadPlan is a multi-modality treatment planning toolkit in python born from the established Matlab-based toolkit [matRad](http://www.matRad.org). As such, pyRadPlan aims to provide a framework as well as tools for combining dose calculation with optimization with focus on ion planning.

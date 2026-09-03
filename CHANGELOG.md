@@ -9,30 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Tests pinning the RTSTRUCT contour-to-mask fill rule on a grid small enough to read the
-  expected masks off the page: the boundary tie-break, that a contour narrower than one voxel
-  still produces voxels rather than vanishing, concave outlines, clipping at the grid edge,
-  degenerate (zero-area) contours, and that several contours on one slice are combined. The
-  conversion was additionally cross-checked against label maps exported from MITK Workbench for
-  a 512x512x297 CT (3 differing voxels out of 17.6 million across four structures, two of them
-  voxel-identical); that data is too large to vendor, so the miniature cases stand in for it
-
+- Tests pinning the RTSTRUCT contour-to-mask fill rule on a grid small enough to read the expected masks off the page: the boundary tie-break, that a contour narrower than one voxel still produces voxels rather than vanishing, concave outlines, clipping at the grid edge, degenerate (zero-area) contours, and that several contours on one slice are combined. The conversion was additionally cross-checked against label maps exported from MITK Workbench for a 512x512x297 CT (3 differing voxels out of 17.6 million across four structures, two of them voxel-identical); that data is too large to vendor, so the miniature cases stand in for it
+- `xp_utils.warn_on_unreliable_openblas()`, called on `pyRadPlan` import: emits a `RuntimeWarning` when NumPy is linked against an OpenBLAS older than 0.3.28, whose multithreaded GEMM can silently return corrupted, nondeterministic results (observed with the scipy-openblas 0.3.27 bundled in the NumPy 2.0 wheels)
+- `xp_utils.stream_wait_event()`: enqueue a device-side ordering constraint on a stream via a recorded event instead of blocking the host (no-op on backends without stream support), and `xp_utils.is_host_device()`: check whether a device specification refers to a host (CPU) device via its DLPack device tuple
+- `xp_utils.scatter()`: backend-agnostic indexed assignment (`arr[key] = values`), out-of-place on JAX (`.at[key].set`), in place everywhere else
+- `xp_utils.jittable`: decorator wrapping a generic array-API kernel with jit-compiled execution paths — per-backend registered implementations (e.g. numba for NumPy, with a `NotImplemented` fallback protocol) and jit compilation of the generic code (`jax.jit`, `torch.compile`) for backends the kernel declares jit-capable. Which backends run jit-compiled paths is steered globally by the new `settings.xp.jit_backends`  (`PYRADPLAN_XP_JIT_BACKENDS`, default `"numpy,jax"`); failed compilations fall back to the generic code with a one-time warning
+- Documentation: "Jit-compiled kernels" section under Dose calculation covering `xp_utils.jittable` and `settings.xp.jit_backends`, `[numba]` extra description updated to point to it, and a troubleshooting entry for the `torch.compile`/Triton warning; new `xp_utils` API entries (`scatter`, `jittable`, `JittableKernel`, `is_host_device`, `stream_wait_event`, `choose_device`, `is_on_gpu`, `openblas_has_gemm_race`, `warn_on_unreliable_openblas`) added to the API reference
+- The ray tracer hot paths (plane alphas, alpha merge, index computation, radiological-depth segment selection) are extracted into jittable kernels in `raytracer._kernels`, with fused `numba` `prange` implementations for the NumPy backend in `raytracer._kernels_numba` (registered only when numba is installed, exact for index computation, boundary-tie-level differences for the float32 selection)
 - `pyRadPlan.ai.modelhub` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a name — bare (resolved to `<hf_org>/<name>`) or a full `<org>/<repo>` id used as-is — with version dedup, offline support and logging. A pinned `revision` is reused from disk without touching the network; an unpinned request asks the Hub whether the local copy is current and falls back to it when the Hub is unreachable. Downloads are laid out as `<local_models_dir>/<org>/<repo>`, so a private fork never shares a directory with its upstream namesake. `list_local_models()` lists the models available on disk and in the HuggingFace cache (no network) as full `<org>/<repo>` ids, optionally filtered by `ModelTask` (`dose_calc`/`outcome`), read from `metadata.task` in a model's `model_config.json` and falling back to the repository-name prefix. Includes a `BasePreprocessor` contract, a `model_config.template.json` and a reference model folder under `test/data/ai_models/dummy_model`. Settings are the `modelhub_*` fields of the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), read from `PYRADPLAN_AI_MODELHUB_*` environment variables. `huggingface_hub`/`safetensors` are installed with pyRadPlan; only a `torch` build matching your platform must be installed separately.
 - Security: loading a model resolved from the HuggingFace Hub executes the `model.py` and `preprocessor.py` it ships, so it requires an explicit opt-in — `trust_remote_code=True` or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`; the setting defaults to `False`. A directory passed explicitly as `load_model(local_dir=...)` is exempt. Each model folder's code is imported under a package name unique to that folder, so several models can be loaded side by side and the classes they define stay picklable.
 - `pyRadPlan.core.get_data_dir()` / `get_data_subdir()`: a single writable data root for pyRadPlan (default `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Downloaded AI models default to `<data_dir>/ai_models`; the location is reserved for future downloaded datasets (patients, phantoms, machines).
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_XP_*`, `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
-- `[profiling]` extra (`line_profiler`) for the line-profiling harnesses in `benchmark/`, plus a
-  "Benchmarks and profiling" section in the installation guide describing how to run both
-- `interpnd` accepts `bounds_error=True` to raise on query points outside the grid instead of
-  silently clipping them; used by the photon SVD pencil-beam engine, where an out-of-grid query
-  indicates a mis-sized convolution grid rather than intended extrapolation
+- `[profiling]` extra (`line_profiler`) for the line-profiling harnesses in `benchmark/`, plus a "Benchmarks and profiling" section in the installation guide describing how to run both
+- `interpnd` accepts `bounds_error=True` to raise on query points outside the grid instead of silently clipping them; used by the photon SVD pencil-beam engine, where an out-of-grid query indicates a mis-sized convolution grid rather than intended extrapolation
 - CI: `tests-backends` job exercising the optional array-API backends on their CPU builds
 - Tests covering DLPack device parsing and detection (`test/core/xp_utils/helpers/test_device_parsing.py`)
+- Regression test ensuring `trace_cubes` traverses the full cube at oblique beam angles on an anisotropic geometry (a cubic phantom cannot catch index-layout mix-ups)
 - `PYRADPLAN_GUI_DISABLED` environment variable: reports the GUI as unavailable (`pyRadPlan.gui.GUI_AVAILABLE` is `False`) so scripts fall back to static plots, used when executing the examples for the documentation
 - Documentation: the example scripts in `examples/` are rendered as notebooks in a new "Tutorials" section (myst-nb + jupytext). Notebooks are not executed during the docs build; outputs come from executed notebooks committed in `docs/tutorials/examples/`, refreshed locally with `python docs/execute_examples.py`
 - Preferred array backends are now the `xp` sub-configuration of the settings (`settings.xp.prefer_gpu`, `settings.xp.preferred_cpu_array_backend`, `settings.xp.preferred_gpu_array_backend`; `None` auto-selects the best available GPU backend), configurable via `PYRADPLAN_XP_PREFER_GPU`, `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` and `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND`
-
 - GUI: File menu collecting all data I/O (load/import/export)
 - GUI: resizable, collapsible main-window panels via splitters
 - GUI: workflow staleness indicators that flag outdated dose influence / results
@@ -52,93 +48,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - pre-commit hook checking dependency license compliance via `licensecheck` (configured in `[tool.licensecheck]` in pyproject.toml); compatibility is derived from the project's own license instead of a hand-maintained allowlist
 - VOI `objectives` are now validated into `Objective` instances (from names or dicts) instead of being stored as raw values
-- IO: New extensible import/export framework in `pyRadPlan.io` with a layered design:
-  `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`,
-  `npz/`, `pickle/` and `sitk_based/` (NIfTI/NRRD/MetaImage)
-- IO: Top-level I/O API: `load_data(path)` (loads everything found into a dict: ct, cst, dose, ...)
-  and `save_data(ct=..., cst=..., dose=..., file_name=..., format=...)` with a smart default
-  format (`.mat`) and per-object file naming when no `file_name` is given
-- IO: Per-format low-level handlers (`MatlabHandler`, `DicomHandler`, `NpzHandler`) exposing
-  `load_ct`/`load_cst`/`load_dose`/`load_patient`/`load_data` and `save`; the individual
-  `*Importer`/`*Exporter` classes live in the backend submodules (e.g. `pyRadPlan.io.dicom`)
-- IO: DICOM import for CT series, RTSTRUCT, SEG and RTDOSE (orientation-aware, SimpleITK-backed),
-  and DICOM export for CT series, RTSTRUCT, SEG and RTDOSE. Structures export as RTSTRUCT by
-  default; pass `DicomExporter(path, structure_format="seg")` to export as SEG instead
-- IO: NumPy `.npz` backend (`NpzImporter`/`NpzExporter`/`NpzHandler`) for fast single-file
-  import/export of ct, cst and dose (VOIs stored as linear indices; geometry/metadata as JSON)
-- IO: SimpleITK-based backends under `pyRadPlan.io.sitk_based` — NIfTI (`NiftiHandler`, `.nii`/`.nii.gz`),
-  NRRD (`NrrdHandler`, `.nrrd`) and MetaImage (`MetaImageHandler`, `.mha`/`.mhd`) — sharing common
-  base classes. A patient maps to a folder (`ct`, `dose`, and a label-map `cst` + JSON sidecar;
-  NRRD/MetaImage also embed 3D-Slicer/`pyradplan_*` metadata). A single image file is read as a CT.
-- IO: Pickle backend (`PickleHandler`, `.pkl`/`.pickle`) for fast, full-fidelity single-file
-  import/export of ct, cst, dose and arbitrary extras. (Unpickling executes code; load only trusted files.)
-- IO: `load_binary_patient(ct_file, structure_paths, selections=...)` imports a *foreign* folder:
-  a CT from an arbitrarily named image file (values taken as HU) plus one binary mask file per
-  structure (mixed formats allowed); masks on a different grid are nearest-neighbor resampled onto
-  the CT. VOI names come from file stems, types from a name heuristic; per-file `selections` can
-  rename/re-type/ignore masks. Helpers `list_image_files`, `masks_to_cst`, `mask_file_to_voi`,
-  `read_ct_image` in `pyRadPlan.io.sitk_based`
-- IO: `DicomImporter` can enumerate its source (`list_ct_series()`, `list_structure_sets()`,
-  `list_doses()`) and load selectively (`load_ct(series_uid=...)`, `load_cst(struct_file=...)`,
-  `load_dose(dose_file=...)`)
-- GUI: "Load Folder" now routes to an import dialog: DICOM folders open a series/structure/dose
-  selection dialog; folders of image files open a binary import dialog with a CT file field and an
-  editable structure review table (name + TARGET/OAR/EXTERNAL/IGNORED type per mask)
-- GUI: loading a single bare image file (NIfTI/NRRD/MetaImage) asks what it represents: CT as a
-  new patient (clears the workspace), CT replacing only the current one (mismatched grids clear
-  the dependent structures/dose influence/results after a warning), structure(s) added to the
-  structure set (binary mask or multi-label label map incl. sidecar/embedded metadata; name
-  clashes get a numeric suffix), or a dose added to the result collection under a chosen name
-  (resampled onto the CT grid if needed). The dialog preselects the likely option from the pixel
-  data (`infer_image_kind`: unsigned integers -> structures, negative values -> CT in HU,
-  non-negative floats -> dose)
-- IO: `image_file_to_vois(ct, path)` reads a structure image file into VOIs — a single binary
-  mask becomes one VOI, a multi-label image becomes one VOI per label (using a JSON sidecar or
-  embedded `pyradplan_*` metadata for names/types when present)
-- `ParticleFredMCEngine.execution_timeout` (seconds, default `None` = wait indefinitely): aborts a
-  FRED run that exceeds the timeout, killing the whole FRED process tree (e.g. when the GPU is
-  occupied by another process)
-- Importers report progress: `BaseImporter` mixes in `ProgressReporter`, so an import can be
-  followed through `observe_reports` (or a console `tqdm` bar) like a dose calculation. The DICOM
-  importer reports one nested, determinate level per step — scanning the folder's headers, reading
-  the CT slices (driven by ITK's own per-slice progress), converting each RTSTRUCT ROI / SEG
-  segment, and reading the dose cube — and logs what it found and what it is loading
-- GUI: importing a DICOM folder shows these steps in the progress bar and status line, and logs
-  them to the output panel, instead of an untitled busy bar. Enumerating the folder now also runs
-  in the worker thread, so picking a large folder no longer freezes the window before the import
-  dialog appears
-- `pyRadPlan.util.openmp`: detection of clashing OpenMP runtimes in the running process.
-  Several wheels vendor their own copy of the Intel/LLVM runtime, which calls `abort()`
-  (`OMP: Error #15`) when a second copy initializes — killing the interpreter with no catchable
-  exception, and only at the first parallel region rather than at import. `blocked_by_openmp()`
-  reports such a clash for a given package, built on `loaded_runtimes()`,
-  `duplicate_loaded_runtimes()`, `runtimes_shipped_by()` (which inspects a package on disk
-  without importing it) and `duplicate_runtimes_allowed()`. The latter also honours
-  `KMP_DUPLICATE_LIB_OK` set only in pyRadPlan's `.env` file, copying it into `os.environ` (as
-  pydantic-settings' own `.env` handling never does) since that is where the native OpenMP
-  runtime actually reads it from
+- IO: New extensible import/export framework in `pyRadPlan.io` with a layered design: `base/` (`BaseImporter`, `BaseExporter`) and per-format backends `matlab/`, `dicom/`, `npz/`, `pickle/` and `sitk_based/` (NIfTI/NRRD/MetaImage)
+- IO: Top-level I/O API: `load_data(path)` (loads everything found into a dict: ct, cst, dose, ...) and `save_data(ct=..., cst=..., dose=..., file_name=..., format=...)` with a smart default format (`.mat`) and per-object file naming when no `file_name` is given
+- IO: Per-format low-level handlers (`MatlabHandler`, `DicomHandler`, `NpzHandler`) exposing `load_ct`/`load_cst`/`load_dose`/`load_patient`/`load_data` and `save`; the individual `*Importer`/`*Exporter` classes live in the backend submodules (e.g. `pyRadPlan.io.dicom`)
+- IO: DICOM import for CT series, RTSTRUCT, SEG and RTDOSE (orientation-aware, SimpleITK-backed), and DICOM export for CT series, RTSTRUCT, SEG and RTDOSE. Structures export as RTSTRUCT by default; pass `DicomExporter(path, structure_format="seg")` to export as SEG instead
+- IO: NumPy `.npz` backend (`NpzImporter`/`NpzExporter`/`NpzHandler`) for fast single-file import/export of ct, cst and dose (VOIs stored as linear indices; geometry/metadata as JSON)
+- IO: SimpleITK-based backends under `pyRadPlan.io.sitk_based` — NIfTI (`NiftiHandler`, `.nii`/`.nii.gz`), NRRD (`NrrdHandler`, `.nrrd`) and MetaImage (`MetaImageHandler`, `.mha`/`.mhd`) — sharing common base classes. A patient maps to a folder (`ct`, `dose`, and a label-map `cst` + JSON sidecar; NRRD/MetaImage also embed 3D-Slicer/`pyradplan_*` metadata). A single image file is read as a CT.
+- IO: Pickle backend (`PickleHandler`, `.pkl`/`.pickle`) for fast, full-fidelity single-file import/export of ct, cst, dose and arbitrary extras. (Unpickling executes code; load only trusted files.)
+- IO: `load_binary_patient(ct_file, structure_paths, selections=...)` imports a *foreign* folder: a CT from an arbitrarily named image file (values taken as HU) plus one binary mask file per structure (mixed formats allowed); masks on a different grid are nearest-neighbor resampled onto the CT. VOI names come from file stems, types from a name heuristic; per-file `selections` can rename/re-type/ignore masks. Helpers `list_image_files`, `masks_to_cst`, `mask_file_to_voi`, `read_ct_image` in `pyRadPlan.io.sitk_based`
+- IO: `DicomImporter` can enumerate its source (`list_ct_series()`, `list_structure_sets()`, `list_doses()`) and load selectively (`load_ct(series_uid=...)`, `load_cst(struct_file=...)`, `load_dose(dose_file=...)`)
+- GUI: "Load Folder" now routes to an import dialog: DICOM folders open a series/structure/dose selection dialog; folders of image files open a binary import dialog with a CT file field and an editable structure review table (name + TARGET/OAR/EXTERNAL/IGNORED type per mask)
+- GUI: loading a single bare image file (NIfTI/NRRD/MetaImage) asks what it represents: CT as a new patient (clears the workspace), CT replacing only the current one (mismatched grids clear the dependent structures/dose influence/results after a warning), structure(s) added to the structure set (binary mask or multi-label label map incl. sidecar/embedded metadata; name clashes get a numeric suffix), or a dose added to the result collection under a chosen name (resampled onto the CT grid if needed). The dialog preselects the likely option from the pixel data (`infer_image_kind`: unsigned integers -> structures, negative values -> CT in HU, non-negative floats -> dose)
+- IO: `image_file_to_vois(ct, path)` reads a structure image file into VOIs — a single binary mask becomes one VOI, a multi-label image becomes one VOI per label (using a JSON sidecar or embedded `pyradplan_*` metadata for names/types when present)
+- `ParticleFredMCEngine.execution_timeout` (seconds, default `None` = wait indefinitely): aborts a FRED run that exceeds the timeout, killing the whole FRED process tree (e.g. when the GPU is occupied by another process)
+- Importers report progress: `BaseImporter` mixes in `ProgressReporter`, so an import can be followed through `observe_reports` (or a console `tqdm` bar) like a dose calculation. The DICOM importer reports one nested, determinate level per step — scanning the folder's headers, reading the CT slices (driven by ITK's own per-slice progress), converting each RTSTRUCT ROI / SEG segment, and reading the dose cube — and logs what it found and what it is loading
+- GUI: importing a DICOM folder shows these steps in the progress bar and status line, and logs them to the output panel, instead of an untitled busy bar. Enumerating the folder now also runs in the worker thread, so picking a large folder no longer freezes the window before the import dialog appears
+- `pyRadPlan.util.openmp`: detection of clashing OpenMP runtimes in the running process. Several wheels vendor their own copy of the Intel/LLVM runtime, which calls `abort()` (`OMP: Error #15`) when a second copy initializes — killing the interpreter with no catchable exception, and only at the first parallel region rather than at import. `blocked_by_openmp()` reports such a clash for a given package, built on `loaded_runtimes()`, `duplicate_loaded_runtimes()`, `runtimes_shipped_by()` (which inspects a package on disk without importing it) and `duplicate_runtimes_allowed()`. The latter also honours `KMP_DUPLICATE_LIB_OK` set only in pyRadPlan's `.env` file, copying it into `os.environ` (as pydantic-settings' own `.env` handling never does) since that is where the native OpenMP runtime actually reads it from
 
 ### Changed
 
-- IPOPT is no longer registered as a solver when `ipyopt`'s vendored OpenMP runtime clashes with
-  one already loaded in the process (e.g. PyTorch's), since starting a solve would abort the
-  interpreter. `pyRadPlan.optimization.solvers.IPOPT_DISABLED_REASON` explains why, a warning is
-  logged, and `PlanningProblem` falls back to the next available solver as it already did when
-  `ipyopt` was not installed. Set `KMP_DUPLICATE_LIB_OK=TRUE` before starting Python to use IPOPT
-  anyway (unsafe, per Intel's documentation); `OptimizerIpopt` also re-checks before each solve, so
-  a package imported after the solver raises a `RuntimeError` instead of crashing the process
+- IPOPT is no longer registered as a solver when `ipyopt`'s vendored OpenMP runtime clashes with one already loaded in the process (e.g. PyTorch's), since starting a solve would abort the interpreter. `pyRadPlan.optimization.solvers.IPOPT_DISABLED_REASON` explains why, a warning is logged, and `PlanningProblem` falls back to the next available solver as it already did when `ipyopt` was not installed. Set `KMP_DUPLICATE_LIB_OK=TRUE` before starting Python to use IPOPT anyway (unsafe, per Intel's documentation); `OptimizerIpopt` also re-checks before each solve, so a package imported after the solver raises a `RuntimeError` instead of crashing the process
+- Siddon ray tracing orders its per-axis plane-alpha streams with device-side event waits (`stream_wait_event`) instead of a host-blocking device synchronization, and the alpha-limit computation runs sequentially on the main stream (its arrays are too small for stream parallelism to pay off, and the streams required two further device synchronizations)
+- Siddon ray tracing caches constant geometry arrays (voxel planes, resolution, cube dimensions) and the uploaded cube buffers per array backend/device/precision, instead of re-converting and re-uploading them on every trace call
+- `trace_cubes` derives its BEV ray-matrix extent from the 8 cube corners (the maximum of an affine map over a box is attained at a corner) and evaluates the radiological-depth ray selection only on the valid segments through a single composed voxel-index-to-BEV affine map in working precision — previously every voxel coordinate was rotated per call in float64. Boundary-tie voxels of the selection may differ at the sub-micrometer level
+- `trace_cubes` runs its radiological-depth segment selection and cube filling on the active compute backend and consumes the traced arrays directly on the device through a new private `_trace_rays_device` hook (overridden by the Siddon tracer to skip the host round trip and the conversion of the unused alphas/d12; the numpy output contract of the public `trace_rays` is unchanged). Only the finished depth cubes are transferred back, removing the host-bound numpy post-processing that dominated GPU runtimes. Cube filling now scatters into a flat device buffer via the new `xp_utils.scatter` helper; the out-of-range index recovery path is gone since the selection mask only ever marks bounds-validated indices
+- The candidate ray matrix is computed with a loop-free interval-stabbing formulation (sort + searchsorted over per-row disc intervals) in Array API code, replacing both the per-ray Python loop and the optional numba kernel (`raytracer._numba_perf` is removed); results are identical, large ray sets reach the former numba speed, and GPU backends no longer launch per-ray kernels
+- Siddon ray tracing gathers through a C-contiguous representation of the SimpleITK image while preserving its public Fortran-order voxel indices, avoiding the previous Fortran-order buffer rearrangement
 - **Breaking:** the AI subpackages are nested under a common `pyRadPlan.ai` parent: `pyRadPlan.ai_agents` is now `pyRadPlan.ai.agents`, and `pyRadPlan.ai_models` is now `pyRadPlan.ai.modelhub`. No compatibility shims are provided; update imports to `from pyRadPlan.ai import agents` / `from pyRadPlan.ai.modelhub import load_model`. Importing `pyRadPlan.ai` pulls in neither optional dependency stack.
 - All AI configuration is unified in a single `AiSettings` class, the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), with the two subsystems kept apart by the field-name prefix: the agents' `agents_model` / `agents_display_usage` (`PYRADPLAN_AI_AGENTS_MODEL`, `PYRADPLAN_AI_AGENTS_DISPLAY_USAGE`; the 0.4.1 names `PYRADPLAN_AI_MODEL` / `PYRADPLAN_AI_DISPLAY_USAGE` are still read as legacy aliases, the canonical name wins when both are set) and the model hub's `modelhub_*` fields (`PYRADPLAN_AI_MODELHUB_*`). The earlier `PYRADPLAN_AI_MODELS_*` and `PYRADPLAN_HUGGINGFACE_PATH` names are no longer read; one GUI settings section "AI" covers both subsystems.
 - The AI agents now consult the runtime settings singleton (`settings.ai`) instead of re-reading the environment on every call, matching `settings.xp` and the model hub: set `PYRADPLAN_AI_*` variables before importing pyRadPlan (or in a `.env` file), or mutate `pyRadPlan.settings.ai` at runtime.
-- `xp_utils.choose_device` now returns backend device objects (`torch.device`, `cupy.cuda.Device`,
-  or `None` for NumPy/array-api-strict, which expose no device concept) instead of strings such as
-  `"cpu"` or `"0"`. The returned objects round-trip back into `to_namespace(device=...)` and
-  `from_numpy(device=...)`
-- Optional compute backends are now declared as extras: `[torch]`, `[cupy]` and `[jax]`. For a
-  specific CUDA build, prefer the vendor install commands documented in the installation guide
-- Performance work is separated from the test suite: `[tool.pytest.ini_options]` sets
-  `testpaths = ["test"]`, the line-profiling harness moved from `test/` to `benchmark/`, and
-  benchmarks share a common `benchmark_*.py` prefix (profiling scripts use `profile_*.py`)
+- `xp_utils.choose_device` now returns backend device objects (`torch.device`, `cupy.cuda.Device`, or `None` for NumPy/array-api-strict, which expose no device concept) instead of strings such as `"cpu"` or `"0"`. The returned objects round-trip back into `to_namespace(device=...)` and `from_numpy(device=...)`
+- Optional compute backends are now declared as extras: `[torch]`, `[cupy]` and `[jax]`. For a specific CUDA build, prefer the vendor install commands documented in the installation guide
+- Performance work is separated from the test suite: `[tool.pytest.ini_options]` sets `testpaths = ["test"]`, the line-profiling harness moved from `test/` to `benchmark/`, and benchmarks share a common `benchmark_*.py` prefix (profiling scripts use `profile_*.py`)
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
@@ -152,9 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ViewingWidget.set_data/set_vois/set_masks` are restored as deprecated shims (populate the `WorkspaceManager` instead)
 - GUI: visualization controls moved from the lower-left corner to the center column below the slice viewer, using the vertical slack under the square CT view; the log panel takes their former place
 - docs: `pip install "pyRadPlan[gui]"` is now the recommended install command (README and installation guide); the plain install is documented as the headless variant
-- IO: Refactored the `pyRadPlan.io` package around the new framework. `load_patient`, `load_tg119`
-  and `validate_matrad_patient` remain available; the legacy `MatlabFileHandler` and top-level
-  `matfile` module were removed (low-level `.mat` read/write lives in `pyRadPlan.io.matlab`)
+- IO: Refactored the `pyRadPlan.io` package around the new framework. `load_patient`, `load_tg119` and `validate_matrad_patient` remain available; the legacy `MatlabFileHandler` and top-level `matfile` module were removed (low-level `.mat` read/write lives in `pyRadPlan.io.matlab`)
 - examples: `proton_mc_topas.py` replaced by `mc_topas.py` with added result viewer
 - examples: `utils_matrad.py` uses `pyRadPlan.io` (`MatlabHandler`, `save_data`) instead of `pymatreader` / `scipy.io.savemat`
 
@@ -164,92 +103,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `DVH.compute` rejected a float32 quantity with a pydantic `ValidationError` on `bin_edges`.
-  `np.histogram` takes the bin dtype from the quantity, so the float32 cube the DICOM importer
-  produces yielded float32 edges against a model field declared as float64; the histogram output
-  is now cast explicitly. Widening float32 is exact, so no bin edge moves
-- `DVH.get_dy` returned the same value (the last bin edge) for every volume percentage, so D2,
-  D50 and D95 were all identical and above the maximum dose in the structure. It interpolated a
-  fraction (`y / 100`) against a cumulative volume held in percent, and did so with
-  `np.interp`, which requires an increasing x array while the cumulative DVH decreases. Dy is now
-  the largest quantity value still covering at least y percent of the volume, matching the
-  "at least" reading documented on `DVH.cumulative` and agreeing with the independent percentile
-  that `QICollection`'s `DX` computes. It is deliberately not interpolated across the cumulative
-  curve, because a uniformly irradiated region forms a plateau there and interpolation reports
-  the dose at the wrong end of it. `get_dy` now also accepts an array of volume percentages.
-  `QICollection` was never affected, as it computes `DX` from the voxels directly
-- DICOM: an imported RTDOSE is now resampled onto the CT grid. RTDOSE is stored on its own grid
-  (for a CIRS phantom export, 124x145x158 at 2 mm against a 512x512x297 CT at ~1 mm), and the
-  cube was handed on unchanged. Since the viewer overlays the dose slice with the same index as
-  the CT slice, the dose was drawn at the wrong scale in a corner of the image, and scrolling
-  past the dose cube's extent raised an `IndexError` that left the viewer stuck. Dose outside
-  the RTDOSE cube is zero rather than extrapolated, so no dose is invented where none was
-  computed; a dose already on the CT grid (as in a matRad export) is passed through untouched.
-  `DicomImporter.load_dose` takes an optional `ct` for the target grid, defaulting to the CT the
-  importer loaded most recently
-- DICOM RTSTRUCT import is roughly 20x faster (a 512x512x297 CT with four structures went from
-  ~50 s to ~2 s): each contour was rasterized by testing *every* voxel of the slice against it
-  (262144 point-in-polygon tests per contour on a 512x512 grid, 92% of import time). Contours are
-  now filled by scanline, evaluating one intersection per edge per voxel row instead of testing
-  every voxel against every edge, and only within the contour's bounding box; the world-to-voxel
-  interpolators are also built once per structure set rather than twice per contour. The resulting
-  masks are unchanged, voxel for voxel, on both reference datasets. `matplotlib` is no longer used
-  for structure import
-- `xp_utils.to_namespace` without an explicit `device` moved arrays to the GPU whenever the target
-  backend had one, ignoring `settings.xp.prefer_gpu`; it now keeps the source array's device when
-  the target namespace supports it and otherwise uses the namespace default, which honors the setting
-- `xp_utils.choose_device` raised `RuntimeError` on CPU-only JAX installs when a GPU was preferred
-  (`jax.devices("gpu")` raises instead of returning an empty list)
-- Ray tracer: voxel indices past the end of the coordinate array are now treated as invalid instead
-  of raising during radiological depth lookup
-- `xp_utils.choose_device` raised `RuntimeError` instead of falling back to the CPU when a GPU was
-  preferred (the default) but unavailable, breaking dose engines and the Siddon ray tracer on
-  CPU-only PyTorch, CuPy and JAX installs
-- `interp1d` rejected 1-D `y` with an `IndexError` on backends without a native `xp.interp`
-  (array-api-strict, PyTorch), and mis-broadcast the out-of-bounds `left`/`right` values for 2-D
-  `y`. The `left=None`/`right=None` defaults are again rank-agnostic and match `numpy.interp`;
-  N-D query points are supported
-- `_fft2`/`_ifft2` handed non-NumPy arrays to `scipy.fft`; the generic path now uses the array API
-  `fft` extension
-- Photon SVD pencil-beam engine: a NumPy scalar leaked into backend array expressions, and
-  `np.exp`/`np.real` on backend arrays silently returned to NumPy; the primary-fluence grid also
-  lost its explicit `float32` dtype
-- Sparse conversion helpers: a CuPy index array was passed to `torch.sparse_coo_tensor` instead of
-  the converted tensor, `_is_torch_sparse_tensor` raised `AttributeError` when PyTorch was absent,
-  and a CuPy-to-CuPy conversion ignored the requested device index
+- `DVH.compute` rejected a float32 quantity with a pydantic `ValidationError` on `bin_edges`. `np.histogram` takes the bin dtype from the quantity, so the float32 cube the DICOM importer produces yielded float32 edges against a model field declared as float64; the histogram output is now cast explicitly. Widening float32 is exact, so no bin edge moves
+- `DVH.get_dy` returned the same value (the last bin edge) for every volume percentage, so D2, D50 and D95 were all identical and above the maximum dose in the structure. It interpolated a fraction (`y / 100`) against a cumulative volume held in percent, and did so with `np.interp`, which requires an increasing x array while the cumulative DVH decreases. Dy is now the largest quantity value still covering at least y percent of the volume, matching the "at least" reading documented on `DVH.cumulative` and agreeing with the independent percentile that `QICollection`'s `DX` computes. It is deliberately not interpolated across the cumulative curve, because a uniformly irradiated region forms a plateau there and interpolation reports the dose at the wrong end of it. `get_dy` now also accepts an array of volume percentages. `QICollection` was never affected, as it computes `DX` from the voxels directly
+- DICOM: an imported RTDOSE is now resampled onto the CT grid. RTDOSE is stored on its own grid (for a CIRS phantom export, 124x145x158 at 2 mm against a 512x512x297 CT at ~1 mm), and the cube was handed on unchanged. Since the viewer overlays the dose slice with the same index as the CT slice, the dose was drawn at the wrong scale in a corner of the image, and scrolling past the dose cube's extent raised an `IndexError` that left the viewer stuck. Dose outside the RTDOSE cube is zero rather than extrapolated, so no dose is invented where none was computed; a dose already on the CT grid (as in a matRad export) is passed through untouched. `DicomImporter.load_dose` takes an optional `ct` for the target grid, defaulting to the CT the importer loaded most recently
+- DICOM RTSTRUCT import is roughly 20x faster (a 512x512x297 CT with four structures went from ~50 s to ~2 s): each contour was rasterized by testing *every* voxel of the slice against it (262144 point-in-polygon tests per contour on a 512x512 grid, 92% of import time). Contours are now filled by scanline, evaluating one intersection per edge per voxel row instead of testing every voxel against every edge, and only within the contour's bounding box; the world-to-voxel interpolators are also built once per structure set rather than twice per contour. The resulting masks are unchanged, voxel for voxel, on both reference datasets. `matplotlib` is no longer used for structure import
+- `DoseWeightedLET` & `LETxDose` quantities: fix inverted physical unit fractions (`keV/µm` instead of `µm/keV`), properly compute `DoseWeightedLET` as quotient of `let_dose` and `physical_dose`, and implement quotient rule chain derivative.
+- Radiological depth cubes could differ between identical runs at scattered boundary voxels: NumPy's bundled threaded OpenBLAS (scipy-openblas 0.3.27, observed on Zen) returns wrong, run-to-run varying elements for the tall-skinny `(N, 3) @ (3, 3)` matmuls used to rotate coordinates; when such an OpenBLAS (< 0.3.28) is detected, `trace_cubes` falls back to applying these affine transforms elementwise (BLAS keeps handling them otherwise)
+- `xp_utils.elapsed_time` returned negated durations for torch CUDA events (event arguments were passed in reversed order)
+- `Beam` derives unset `source_point_bev` / `source_point` from `sad` and the beam angles (matching the stf generators) instead of static defaults that were mutually inconsistent with `sad`; explicitly provided values are kept unchanged
+- `RayTracerSiddon.trace_ray` rejected every input under the torch backend: `Tensor.size` is a method, so the shape guard compared a bound method and was always true (now uses `array_api_compat.size`)
+- Siddon ray tracing preserves stored plane coordinates during alpha generation so boundary-plane intersections deduplicate exactly and copies read-only SimpleITK views before backend conversion
+- Siddon ray tracing now runs with JAX namespaces that do not expose the previously hard-coded Array API specification version, and its voxel-index calculation no longer uses in-place updates
+- `xp_utils.to_namespace` without an explicit `device` moved arrays to the GPU whenever the target backend had one, ignoring `settings.xp.prefer_gpu`; it now keeps the source array's device when the target namespace supports it and otherwise uses the namespace default, which honors the setting
+- `xp_utils.choose_device` raised `RuntimeError` on CPU-only JAX installs when a GPU was preferred (`jax.devices("gpu")` raises instead of returning an empty list)
+- Ray tracer: voxel indices past the end of the coordinate array are now treated as invalid instead of raising during radiological depth lookup
+- `xp_utils.choose_device` raised `RuntimeError` instead of falling back to the CPU when a GPU was preferred (the default) but unavailable, breaking dose engines and the Siddon ray tracer on CPU-only PyTorch, CuPy and JAX installs
+- `interp1d` rejected 1-D `y` with an `IndexError` on backends without a native `xp.interp` (array-api-strict, PyTorch), and mis-broadcast the out-of-bounds `left`/`right` values for 2-D `y`. The `left=None`/`right=None` defaults are again rank-agnostic and match `numpy.interp`; N-D query points are supported
+- `_fft2`/`_ifft2` handed non-NumPy arrays to `scipy.fft`; the generic path now uses the array API `fft` extension
+- Photon SVD pencil-beam engine: a NumPy scalar leaked into backend array expressions, and `np.exp`/`np.real` on backend arrays silently returned to NumPy; the primary-fluence grid also lost its explicit `float32` dtype
+- Sparse conversion helpers: a CuPy index array was passed to `torch.sparse_coo_tensor` instead of the converted tensor, `_is_torch_sparse_tensor` raised `AttributeError` when PyTorch was absent, and a CuPy-to-CuPy conversion ignored the requested device index
 - `xp_utils.synchronize` swallowed stream synchronization errors via a `return` inside `finally`
-- `xp_utils.choose_device` raised `ValueError: CuPy does not support CPU` for the CuPy namespace
-  when `prefer_gpu` was disabled; CuPy is GPU-only, so the namespace already implies a CUDA device
-- Pencil-beam `calc_geo_dists` mixed the globally configured device into array constructors whose
-  namespace came from the input data, so a device from one backend could reach another backend's
-  `asarray`. The device is now taken from the input arrays
-- Photon SVD pencil-beam engine: the per-ray custom fluence path (used by field-based dose
-  calculation) was hard-wired to NumPy and `scipy.fft`, so it failed on every other backend; it
-  also multiplied beamlet masks in place, mutating the stored masks
-- examples: `pencilbeam_photon.py` forced the JAX backend on import, so it failed on any install
-  without the optional `[jax]` extra
-- Device detection no longer misclassifies devices: any device object whose `repr` merely contained
-  "cpu" was treated as CPU (array-api-strict devices are now matched by type), an array whose device
-  could not be determined was silently reported as CPU (it now warns), and JAX's global device id
-  was used to index the per-platform device list, selecting the wrong GPU or raising `IndexError`
-  on hosts with more than one platform
-- `ai_agents`: importing the module no longer floods stderr with `BeartypeClawDecorWarning`s
-  (pydantic-ai pulls in `key_value.aio`, whose beartype import hook trips over numpydantic's
-  vendored nptyping); the package's `PY_KEY_VALUE_DISABLE_BEARTYPE` opt-out is now set before
-  the import
-- IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube);
-  it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
-- IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it
-  now raises (a single image file holds one image — use a directory for both)
+- `xp_utils.choose_device` raised `ValueError: CuPy does not support CPU` for the CuPy namespace when `prefer_gpu` was disabled; CuPy is GPU-only, so the namespace already implies a CUDA device
+- Pencil-beam `calc_geo_dists` mixed the globally configured device into array constructors whose namespace came from the input data, so a device from one backend could reach another backend's `asarray`. The device is now taken from the input arrays
+- Photon SVD pencil-beam engine: the per-ray custom fluence path (used by field-based dose calculation) was hard-wired to NumPy and `scipy.fft`, so it failed on every other backend; it also multiplied beamlet masks in place, mutating the stored masks
+- examples: `pencilbeam_photon.py` forced the JAX backend on import, so it failed on any install without the optional `[jax]` extra
+- Device detection no longer misclassifies devices: any device object whose `repr` merely contained "cpu" was treated as CPU (array-api-strict devices are now matched by type), an array whose device could not be determined was silently reported as CPU (it now warns), and JAX's global device id was used to index the per-platform device list, selecting the wrong GPU or raising `IndexError` on hosts with more than one platform
+- `ai_agents`: importing the module no longer floods stderr with `BeartypeClawDecorWarning`s (pydantic-ai pulls in `key_value.aio`, whose beartype import hook trips over numpydantic's vendored nptyping); the package's `PY_KEY_VALUE_DISABLE_BEARTYPE` opt-out is now set before the import
+- IO: `load_data` on a DICOM folder picked an arbitrary RTDOSE file (often a per-beam or LET cube); it now selects the plan-level physical dose via `DoseSummationType`/descriptor filtering
+- IO: exporting a ct *and* a dose to a single-file SimpleITK target silently dropped the dose; it now raises (a single image file holds one image — use a directory for both)
 - IO: `DicomHandler` ignored its `structure_format` argument (SEG export via the handler)
-- IO: exported RTSTRUCT files now reference the CT series/slices (`RTReferencedStudy` →
-  `RTReferencedSeries` → `ContourImageSequence`), so third-party viewers associate the structures
-  with the CT instead of relying on the frame-of-reference UID alone
-- IO: exported DICOM SEG files are now conformant `BINARY` segmentations (1-bit packed frames
-  instead of 8-bit pixels)
-- GUI: exporting a result quantity stored as a raw matRad array wrote it mis-oriented ((y,x,z) was
-  not transposed to (z,y,x)); saving a single quantity now also honors the chosen image format
-  instead of falling back to `.mat` for extension-less file names
+- IO: exported RTSTRUCT files now reference the CT series/slices (`RTReferencedStudy` → `RTReferencedSeries` → `ContourImageSequence`), so third-party viewers associate the structures with the CT instead of relying on the frame-of-reference UID alone
+- IO: exported DICOM SEG files are now conformant `BINARY` segmentations (1-bit packed frames instead of 8-bit pixels)
+- GUI: exporting a result quantity stored as a raw matRad array wrote it mis-oriented ((y,x,z) was not transposed to (z,y,x)); saving a single quantity now also honors the chosen image format instead of falling back to `.mat` for extension-less file names
 - GUI: DKFZ logo pinned to the top-left of the banner in wide windows
 - global variable GUI_AVAILABLE, checking for pyside6 and pyqtgraph
 - GUI: "Save / Keep Result" silently skipped every snake_case quantity (e.g. `physical_dose`), so snapshots lost the dose

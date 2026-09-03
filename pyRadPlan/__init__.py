@@ -40,6 +40,8 @@ from .visualization import plot_slice, plot_multiple_slices
 from .io import load_patient, load_data, save_data, load_binary_patient, load_tg119
 from .core import xp_utils
 
+xp_utils.warn_on_unreliable_openblas()
+
 try:
     __version__ = version(__name__)
 except PackageNotFoundError:
