@@ -9,7 +9,7 @@ ureg = pint.UnitRegistry()
 class LETxDose(FluenceDependentQuantity):
     """LET-weighted dose quantity backed directly by the dij.let_dose matrix."""
 
-    unit = ureg.gray * ureg.micrometer / ureg.keV
+    unit = ureg.gray * ureg.keV / ureg.micrometer
     dim = 1
     identifier = "let_dose"
     name = "LETxDose"
