@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DoseWeightedLET` & `LETxDose` quantities: fix inverted physical unit fractions (`keV/µm` instead of `µm/keV`), properly compute `DoseWeightedLET` as quotient of `let_dose` and `physical_dose`, and implement quotient rule chain derivative.
 - Radiological depth cubes could differ between identical runs at scattered boundary voxels: NumPy's bundled threaded OpenBLAS (scipy-openblas 0.3.27, observed on Zen) returns wrong, run-to-run varying elements for the tall-skinny `(N, 3) @ (3, 3)` matmuls used to rotate coordinates; when such an OpenBLAS (< 0.3.28) is detected, `trace_cubes` falls back to applying these affine transforms elementwise (BLAS keeps handling them otherwise)
 - `xp_utils.elapsed_time` returned negated durations for torch CUDA events (event arguments were passed in reversed order)
 - `Beam` derives unset `source_point_bev` / `source_point` from `sad` and the beam angles (matching the stf generators) instead of static defaults that were mutually inconsistent with `sad`; explicitly provided values are kept unchanged
