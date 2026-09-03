@@ -85,6 +85,20 @@ A *solver* implements the mathematical optimization algorithm. The solver is sel
 
 The currently registered fluence problem constrains fluence weights to be non-negative.
 
+.. note::
+
+   IPOPT is only offered when it can be used safely.  The ``ipyopt`` wheel bundles its own copy
+   of the Intel OpenMP runtime, and if another copy is already loaded in the process -- PyTorch
+   ships one too -- that runtime aborts the interpreter (``OMP: Error #15``) as soon as a solve
+   starts.  pyRadPlan detects this at import time, logs a warning, leaves ``"ipopt"`` out of
+   :func:`~pyRadPlan.optimization.solvers.get_available_solvers` (so a plan falls back to the next
+   solver), and records the cause in
+   ``pyRadPlan.optimization.solvers.IPOPT_DISABLED_REASON``.
+
+   To use IPOPT anyway, set ``KMP_DUPLICATE_LIB_OK=TRUE`` *before* starting Python.  Intel
+   documents this as unsafe -- the process may still crash or silently produce wrong results --
+   so prefer an environment with a single OpenMP runtime where you can.
+
 Objectives
 ----------
 

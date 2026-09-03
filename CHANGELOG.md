@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+
 - `pyRadPlan.ai.modelhub` module: HuggingFace-based AI model handling. `load_model()` loads a model and its preprocessor from a local directory, an explicit `repo_id`, or a name — bare (resolved to `<hf_org>/<name>`) or a full `<org>/<repo>` id used as-is — with version dedup, offline support and logging. A pinned `revision` is reused from disk without touching the network; an unpinned request asks the Hub whether the local copy is current and falls back to it when the Hub is unreachable. Downloads are laid out as `<local_models_dir>/<org>/<repo>`, so a private fork never shares a directory with its upstream namesake. `list_local_models()` lists the models available on disk and in the HuggingFace cache (no network) as full `<org>/<repo>` ids, optionally filtered by `ModelTask` (`dose_calc`/`outcome`), read from `metadata.task` in a model's `model_config.json` and falling back to the repository-name prefix. Includes a `BasePreprocessor` contract, a `model_config.template.json` and a reference model folder under `test/data/ai_models/dummy_model`. Settings are the `modelhub_*` fields of the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), read from `PYRADPLAN_AI_MODELHUB_*` environment variables. `huggingface_hub`/`safetensors` are installed with pyRadPlan; only a `torch` build matching your platform must be installed separately.
 - Security: loading a model resolved from the HuggingFace Hub executes the `model.py` and `preprocessor.py` it ships, so it requires an explicit opt-in — `trust_remote_code=True` or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`; the setting defaults to `False`. A directory passed explicitly as `load_model(local_dir=...)` is exempt. Each model folder's code is imported under a package name unique to that folder, so several models can be loaded side by side and the classes they define stay picklable.
 - `pyRadPlan.core.get_data_dir()` / `get_data_subdir()`: a single writable data root for pyRadPlan (default `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Downloaded AI models default to `<data_dir>/ai_models`; the location is reserved for future downloaded datasets (patients, phantoms, machines).
@@ -90,9 +91,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ParticleFredMCEngine.execution_timeout` (seconds, default `None` = wait indefinitely): aborts a
   FRED run that exceeds the timeout, killing the whole FRED process tree (e.g. when the GPU is
   occupied by another process)
+- `pyRadPlan.util.openmp`: detection of clashing OpenMP runtimes in the running process.
+  Several wheels vendor their own copy of the Intel/LLVM runtime, which calls `abort()`
+  (`OMP: Error #15`) when a second copy initializes — killing the interpreter with no catchable
+  exception, and only at the first parallel region rather than at import. `blocked_by_openmp()`
+  reports such a clash for a given package, built on `loaded_runtimes()`,
+  `duplicate_loaded_runtimes()`, `runtimes_shipped_by()` (which inspects a package on disk
+  without importing it) and `duplicate_runtimes_allowed()`. The latter also honours
+  `KMP_DUPLICATE_LIB_OK` set only in pyRadPlan's `.env` file, copying it into `os.environ` (as
+  pydantic-settings' own `.env` handling never does) since that is where the native OpenMP
+  runtime actually reads it from
 
 ### Changed
 
+- IPOPT is no longer registered as a solver when `ipyopt`'s vendored OpenMP runtime clashes with
+  one already loaded in the process (e.g. PyTorch's), since starting a solve would abort the
+  interpreter. `pyRadPlan.optimization.solvers.IPOPT_DISABLED_REASON` explains why, a warning is
+  logged, and `PlanningProblem` falls back to the next available solver as it already did when
+  `ipyopt` was not installed. Set `KMP_DUPLICATE_LIB_OK=TRUE` before starting Python to use IPOPT
+  anyway (unsafe, per Intel's documentation); `OptimizerIpopt` also re-checks before each solve, so
+  a package imported after the solver raises a `RuntimeError` instead of crashing the process
 - **Breaking:** the AI subpackages are nested under a common `pyRadPlan.ai` parent: `pyRadPlan.ai_agents` is now `pyRadPlan.ai.agents`, and `pyRadPlan.ai_models` is now `pyRadPlan.ai.modelhub`. No compatibility shims are provided; update imports to `from pyRadPlan.ai import agents` / `from pyRadPlan.ai.modelhub import load_model`. Importing `pyRadPlan.ai` pulls in neither optional dependency stack.
 - All AI configuration is unified in a single `AiSettings` class, the `ai` sub-configuration of `pyRadPlan.settings` (`settings.ai`), with the two subsystems kept apart by the field-name prefix: the agents' `agents_model` / `agents_display_usage` (`PYRADPLAN_AI_AGENTS_MODEL`, `PYRADPLAN_AI_AGENTS_DISPLAY_USAGE`; the 0.4.1 names `PYRADPLAN_AI_MODEL` / `PYRADPLAN_AI_DISPLAY_USAGE` are still read as legacy aliases, the canonical name wins when both are set) and the model hub's `modelhub_*` fields (`PYRADPLAN_AI_MODELHUB_*`). The earlier `PYRADPLAN_AI_MODELS_*` and `PYRADPLAN_HUGGINGFACE_PATH` names are no longer read; one GUI settings section "AI" covers both subsystems.
 - The AI agents now consult the runtime settings singleton (`settings.ai`) instead of re-reading the environment on every call, matching `settings.xp` and the model hub: set `PYRADPLAN_AI_*` variables before importing pyRadPlan (or in a `.env` file), or mutate `pyRadPlan.settings.ai` at runtime.
