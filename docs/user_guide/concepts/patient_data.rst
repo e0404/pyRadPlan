@@ -91,6 +91,12 @@ Each :class:`~pyRadPlan.cst.VOI` carries:
      - Linear-quadratic β parameter (Gy⁻², default 0.05).
    * - ``overlap_priority``
      - Determines which VOI "wins" in overlapping regions (lower = higher priority).
+   * - ``apply_overlap``
+     - Participation in overlap resolution. ``True`` (default) is the normal behaviour;
+       ``False`` keeps this VOI's own voxels but still removes them from lower-priority
+       VOIs; ``None`` excludes it in both directions, so it keeps its full mask and no
+       other VOI loses voxels to it. Use ``None`` for auxiliary evaluation structures
+       (e.g. an NTCP region) that must overlap other VOIs.
    * - ``objectives``
      - List of optimization objectives attached to this structure
        (see :ref:`concept_optimization`).

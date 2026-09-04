@@ -22,6 +22,7 @@
 import logging
 
 import numpy as np
+import SimpleITK as sitk
 
 from pyRadPlan import (
     IonPlan,
@@ -40,6 +41,7 @@ from pyRadPlan.optimization.objectives import (
     NTCPPOLO,
 )
 from pyRadPlan.quantities import POLO
+from pyRadPlan.cst import VOI
 
 logging.basicConfig(level=logging.INFO)
 
@@ -64,58 +66,65 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 
 # %% [markdown]
 # When defining objective functions, we add the POLO objective (`NTCPPOLO`).
-# For our TG119 surrogate phantom, we pass `risk_voi_name="Core"` to designate the central OAR ('Core') as the periventricular risk structure.
+# For our TG119 surrogate phantom, we pass `risk_voi_name="Core"` to designate the central OAR
+# ('Core') as the periventricular risk structure.
+#
+# POLO is evaluated on its own auxiliary structure: every voxel of BODY except the target. It
+# therefore overlaps both 'BODY' and 'Core'. Overlap resolution normally assigns each voxel to a
+# single VOI by priority, which would strip this structure down to nothing -- 'OuterTarget',
+# 'Core' and 'BODY' all outrank it -- leaving the objective with no voxels to optimize.
+# `apply_overlap=None` exempts it from that: it keeps its full mask, and 'BODY' and 'Core' keep
+# theirs.
 # %%
-# OAR ('Core' - simulating the ventricular risk structure)
-cst.vois[0].objectives = [
-    SquaredOverdosing(priority=10.0, d_max=15.0),
-]
-# Target ('OuterTarget' - prescribed to 50.0 Gy cumulative course dose)
-cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=50.0)]
+vois = {voi.name: voi for voi in cst.vois}
 
-# BODY (Evaluate general max dose over standard BODY)
-cst.vois[2].objectives = [
+# OAR ('Core' - simulating the ventricular risk structure)
+vois["Core"].objectives = [SquaredOverdosing(priority=10.0, d_max=15.0)]
+
+# Target ('OuterTarget' - prescribed to 50.0 Gy cumulative course dose)
+vois["OuterTarget"].objectives = [SquaredDeviation(priority=100.0, d_ref=50.0)]
+
+# BODY (general dose objectives over the standard BODY contour)
+vois["BODY"].objectives = [
     MeanDose(priority=1.0, d_ref=0.0),
     SquaredOverdosing(priority=10.0, d_max=33.0),
 ]
 
-# Create 'BODY_minus_Target' VOI to prevent POLO from penalizing dose inside the tumor
-import SimpleITK as sitk
-from pyRadPlan.cst import VOI
-
-body_mask = next(v.mask for v in cst.vois if v.name == "BODY")
-target_mask = next(v.mask for v in cst.vois if v.name == "OuterTarget")
-
-# Subtract target mask from body mask
-body_minus_target_mask = sitk.MaskNegated(body_mask, target_mask)
-
-bmt_voi = VOI(
-    name="BODY_minus_Target",
+# POLO evaluation region: every voxel of BODY except the target, including 'Core'.
+#
+# This matches the domain the model was fitted on: Bahn et al. estimated it over voxels "within
+# the brain and outside the GTV" that received at least 2 Gy -- a purely anatomical/dose
+# criterion, with no reference to the risk factor. The 4-mm periventricular fringe (distance to
+# the ventricular system <= 4 mm) falls inside that domain, so we include it too: 'Core' carries
+# no minimum-dose requirement here, so the optimizer can genuinely spare it if warranted.
+polo_voi = VOI(
+    name="POLO VOI",
     voi_type="OAR",
-    mask=body_minus_target_mask,
-    grid=cst.vois[2].grid,
-    objectives=[NTCPPOLO(priority=100.0, risk_voi_name="Core")],
+    mask=sitk.MaskNegated(vois["BODY"].mask, vois["OuterTarget"].mask),
+    grid=vois["BODY"].grid,
+    apply_overlap=None,
+    objectives=[NTCPPOLO(priority=1.0e6, risk_voi_name="Core")],
 )
-cst.vois.append(bmt_voi)
+cst.vois.append(polo_voi)
 
 # %% [markdown]
-# We calculate the optimized fluence and compute the resulting physical dose and POLO probability map.
+# We calculate the optimized fluence and compute the resulting physical dose and POLO probability
+# map.
 # %%
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
 # Compute standard physical result (without POLO quantity)
 result = dij.compute_result_ct_grid(fluence)
 
-# Attach risk mask to polo_qty for result calculation (it evaluates POLO quantity on all voxels)
+# Like every pyRadPlan quantity, POLO is computed over the whole dose grid. Only the POLO
+# segment is exported, though: the model is defined for brain tissue, so values inside the
+# target -- or out in air -- are not meaningful and should not be displayed. Because
+# 'POLO VOI' opts out of overlap resolution, its mask is exactly the one the objective saw.
 polo_qty = POLO(dij, cst=cst, risk_voi_name="Core")
-result["polo_full"] = polo_qty.compute_ct_grid(fluence)
+polo_full = polo_qty.compute_ct_grid(fluence)
+result["polo"] = sitk.Mask(polo_full, sitk.Cast(polo_voi.mask, sitk.sitkUInt8))
 
-# Manually zero out voxels outside of BODY_minus_Target
-# so the exported 3D image accurately reflects the optimized VOI.
-result["polo_masked"] = sitk.Mask(result["polo_full"], sitk.Cast(bmt_voi.mask, sitk.sitkUInt8))
-
-# Compute total NTCP for reporting (masked to the evaluation VOI)
-total_ntcp = polo_qty.compute_total_ntcp(fluence, mask=bmt_voi.mask)
+total_ntcp = polo_qty.compute_total_ntcp(fluence, mask=polo_voi.mask)
 logging.info(f"Optimized Plan Total POLO NTCP: {total_ntcp:.4%}")
 
 # %% [markdown]
@@ -139,14 +148,7 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["polo_full"],
-        view_slice=view_slice,
-        overlay_cmap="inferno",
-    )
-    plot_slice(
-        image_volume=ct,
-        cst=cst,
-        overlay=result["polo_masked"],
+        overlay=result["polo"],
         view_slice=view_slice,
         overlay_cmap="inferno",
     )

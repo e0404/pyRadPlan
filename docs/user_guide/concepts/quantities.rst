@@ -54,6 +54,14 @@ Available quantities
      - ``"rbe_x_dose"``
      - RBE-weighted dose in Gy(RBE). Derived from ``effect``, ``alpha_dose``,
        ``sqrt_beta_dose``.
+   * - :class:`~pyRadPlan.quantities.LinearPOLO`
+     - ``"linear_polo"``
+     - Linear predictor :math:`\eta` of the POLO model, before the sigmoid. Voxels below
+       the model's dose threshold are returned as ``-inf``.
+   * - :class:`~pyRadPlan.quantities.POLO`
+     - ``"polo"``
+     - Probability of lesion origin per voxel, volume-corrected to the grid the model was
+       fitted on. Derived from ``physical_dose`` and ``let_dose``.
 
 Selecting a quantity for optimization
 --------------------------------------

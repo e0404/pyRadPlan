@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Probability of Lesion Origin (POLO) biological risk model: `POLO` and `LinearPOLO` quantities, `NTCPPOLO`, `HellingerPOLO`, `LogSumExpConvPOLO`, and `HellingerConvPOLO` objectives, and TG119 example script (`pencilbeam_proton_polo.py`)
+- POLO quantities take a `dose_threshold` (default 2.0 Gy): below it the model is treated as undefined, matching the dose domain the model was fitted on (Bahn et al. 2020). `POLO` returns 0 there, `LinearPOLO` returns `-inf`
+- `VOI.apply_overlap` (`True` / `False` / `None`) controls participation in overlap resolution. `None` excludes a VOI in both directions -- it keeps its full mask and removes no voxels from others -- as required by auxiliary evaluation structures such as an NTCP region
+- `Objective.quantity_params` declares which objective fields are forwarded to the constructor of its quantity. `QuantityResolver` now only forwards declared fields, and raises when two objectives targeting one quantity request conflicting values (previously the first objective silently won)
 
 - Global pydantic-settings configuration `pyRadPlan.settings` (`PyRadPlanSettings`), read from `PYRADPLAN_*` environment variables / a `.env` file, with sub-configurations under extended prefixes (currently `PYRADPLAN_AI_*`)
 - GUI: the Settings menu offers quick links per sub-configuration ("XP (Backend)", "AI") opening a single-section editor, plus "Preferences" opening a tabbed editor for the full `PyRadPlanSettings` hierarchy (a General tab for top-level fields when present, one tab per sub-configuration); accepted edits update the runtime settings and the process environment
@@ -83,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `StructureSet.apply_overlap_priorities` warns when a VOI carrying objectives is left empty by overlap resolution; such objectives silently have no effect during optimization
+- `FluenceDependentQuantity.compute` moves the fluence onto the quantity's own array namespace and device when it differs, so quantities can be evaluated on an optimization result (which `PlanningProblem.solve` returns as NumPy) after being constructed on a GPU backend
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
 - launch_viewer calls to multiple examples with fallback to plot_slice
 - grids now have a 4D representation (x,y,z,t)
