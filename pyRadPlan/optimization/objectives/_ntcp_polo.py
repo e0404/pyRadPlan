@@ -1,11 +1,12 @@
 """NTCP POLO objective."""
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field
 import array_api_compat
 
 from ...core.xp_utils.typing import Array
+from ...quantities import P_MAX, total_ntcp
 from ._objective import Objective
 
 
@@ -35,14 +36,14 @@ class NTCPPOLO(Objective):
         description="Name of the periventricular risk structure in CST (<= 4mm).",
     )
 
+    quantity_params: ClassVar[tuple[str, ...]] = ("risk_voi_name",)
+
     def compute_objective(self, values: Array) -> Array:
-        xp = array_api_compat.array_namespace(values)
-        # Clip to avoid completely hitting 1.0 which makes the product exactly 0 (use 1e-6 for float32 compatibility)
-        vals = xp.clip(values, 0.0, 1.0 - 1e-6)
-        return 1.0 - xp.exp(xp.sum(xp.log1p(-vals)))
+        return total_ntcp(values)
 
     def compute_gradient(self, values: Array) -> Array:
+        # d/dp_i [1 - prod_j (1 - p_j)] = prod_{j != i} (1 - p_j)  (Ortkamp et al., Equation 10)
         xp = array_api_compat.array_namespace(values)
-        vals = xp.clip(values, 0.0, 1.0 - 1e-6)
+        vals = xp.clip(values, 0.0, P_MAX)
         prod_val = xp.exp(xp.sum(xp.log1p(-vals)))
         return prod_val / (1.0 - vals)

@@ -170,6 +170,25 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self.compute(fluence)
 
+    def _as_backend_array(self, fluence: Array) -> Array:
+        """
+        Move *fluence* onto this quantity's array namespace and device if it is elsewhere.
+
+        A quantity binds its dij to the globally preferred namespace at construction time,
+        which is not necessarily the namespace the caller holds its fluence in. The optimizer
+        returns fluence as NumPy (``PlanningProblem.solve`` calls ``to_numpy``), so evaluating
+        a quantity on an optimization result would otherwise mix, e.g., a CuPy dij with a
+        NumPy fluence. Arrays already in the right place are returned untouched.
+        """
+        from pyRadPlan.core.xp_utils import from_numpy, to_numpy  # noqa: PLC0415
+
+        if array_api_compat.array_namespace(fluence) is self.array_backend and (
+            self.device is None or array_api_compat.device(fluence) == self.device
+        ):
+            return fluence
+
+        return from_numpy(self.array_backend, to_numpy(fluence), device=self.device)
+
     def compute(self, fluence: Array) -> Array:
         """
         Forward calculation of the quantity from the fluence.
@@ -185,6 +204,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             Quantity vector.
         """
 
+        fluence = self._as_backend_array(fluence)
         xp = array_api_compat.array_namespace(fluence)
 
         if not xp.isdtype(fluence.dtype, self._dtype):
