@@ -31,6 +31,8 @@ Evaluators and tissue lookups
 .. autosummary::
    :toctree: generated/bio_models/
 
+   BioEvaluationContext
+   BioModelResult
    BioModelEvaluator
    ParametricEvaluator
    KernelBasedEvaluator

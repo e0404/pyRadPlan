@@ -19,7 +19,7 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator
+from pyRadPlan.bio_models import BioEvaluationContext, BiologicalModel, BioModelEvaluator
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -71,6 +71,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
         self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
+        self._bio_kernel_names: tuple[str, ...] = ()
 
         self._kernel_cache = {}
 
@@ -264,20 +265,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         used_kernels["idd"] = conversion_factor * kernel["idd"]
 
         # Lateral Kernel Model
-        if self.lateral_model == "single":
-            used_kernels["sigma"] = kernel["sigma"]
-        elif self.lateral_model == "singleXY":
-            used_kernels["sigma_x"] = kernel["sigma_x"]
-            used_kernels["sigma_y"] = kernel["sigma_y"]
-        elif self.lateral_model == "double":
-            used_kernels["sigma_1"] = kernel["sigma_1"]
-            used_kernels["sigma_2"] = kernel["sigma_2"]
-            used_kernels["weight"] = kernel["weight"]
-        elif self.lateral_model == "multi":
-            used_kernels["weight_multi"] = kernel["weight_multi"]
-            used_kernels["sigma_multi"] = kernel["sigma_multi"]
-        else:
-            raise ValueError("Invalid Lateral Model")
+        for name in self._lateral_kernel_names():
+            used_kernels[name] = kernel[name]
 
         # LET (matrix output and/or input to the biological model)
         if self._use_let_kernel:
@@ -286,10 +275,60 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Biological model kernels (1-D or (n_tissue_classes, n_depths) arrays); bixels
         # without tissue parameters (lateral cutoff calibration) only need physical dose
         if self._calc_bio_dose and "v_alpha_x" in bixel:
-            used_kernels.update(self._bio_evaluator.kernel_quantities(kernel))
+            bio_kernels = self._bio_evaluator.kernel_quantities(kernel)
+            used_kernels.update(bio_kernels)
 
         # Interpolate all fields in X
         return array_interp(bixel["rad_depths"], depths, used_kernels)
+
+    def _build_bio_context(
+        self, bixel: dict[str, Any], kernels: dict[str, Any]
+    ) -> BioEvaluationContext:
+        """Build the curated biological context for one bixel."""
+        inputs = {
+            "alpha_x": bixel["v_alpha_x"],
+            "beta_x": bixel["v_beta_x"],
+            "physical_dose": bixel["physical_dose"],
+        }
+        if self._bio_evaluator.model.requires_let:
+            inputs["let"] = kernels["let"]
+        inputs.update({name: kernels[name] for name in self._bio_kernel_names})
+        return BioEvaluationContext(inputs)
+
+    def _lateral_kernel_names(self) -> tuple[str, ...]:
+        """Return the kernel fields for the selected lateral model."""
+        try:
+            return {
+                "single": ("sigma",),
+                "singleXY": ("sigma_x", "sigma_y"),
+                "double": ("sigma_1", "sigma_2", "weight"),
+                "multi": ("weight_multi", "sigma_multi"),
+            }[self.lateral_model]
+        except KeyError:
+            raise ValueError("Invalid Lateral Model") from None
+
+    def _validate_bio_kernel_names(self) -> None:
+        """Reject model kernel names that make the evaluation namespace ambiguous."""
+        engine_kernel_names = {"idd", *self._lateral_kernel_names()}
+        if self._use_let_kernel:
+            engine_kernel_names.add("let")
+
+        collisions = engine_kernel_names.intersection(self._bio_kernel_names)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(
+                f"Biological kernel inputs collide with dose-engine kernels: {names}."
+            )
+
+        context_names = {"alpha_x", "beta_x", "physical_dose"}
+        if self._bio_evaluator.model.requires_let:
+            context_names.add("let")
+        collisions = context_names.intersection(self._bio_kernel_names)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(
+                f"Biological kernel inputs collide with standard context inputs: {names}."
+            )
 
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
         kernel = curr_bixel["kernel"]  # cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
@@ -525,6 +564,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             The updated dose influence matrix dictionary.
         """
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        self._bio_kernel_names = ()
         has_let = self._machine.has_let_kernel
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
             self.calc_bio_dose, self.calc_let, let_available=has_let, let_auto=has_let
@@ -540,6 +580,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._bio_evaluator = model.evaluator(
             self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
         )
+        if self._calc_bio_dose:
+            self._bio_kernel_names = self._bio_evaluator.kernel_field_names
+            self._validate_bio_kernel_names()
         dij["bio_model"] = model
 
         if self._calc_bio_dose:

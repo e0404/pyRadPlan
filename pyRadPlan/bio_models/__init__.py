@@ -2,6 +2,8 @@
 
 from ._base import BiologicalModel, BiologicalModelBase, EmptyModel
 from ._evaluator import (
+    BioEvaluationContext,
+    BioModelResult,
     BioModelEvaluator,
     ParametricEvaluator,
     KernelBasedEvaluator,
@@ -45,6 +47,8 @@ register_model(TabulatedAlphaBetaModel)
 __all__ = [
     "BiologicalModel",
     "BiologicalModelBase",
+    "BioEvaluationContext",
+    "BioModelResult",
     "BioModelEvaluator",
     "ParametricEvaluator",
     "KernelBasedEvaluator",

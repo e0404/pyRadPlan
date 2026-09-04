@@ -1,11 +1,13 @@
 """LET-based Linear-Quadratic (LQ) models."""
 
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import Any
 
 import array_api_compat
 
 from pyRadPlan.bio_models._evaluator import BioModelEvaluator, ParametricEvaluator
+
 from .lq_models import LQModel
 
 
@@ -33,8 +35,9 @@ class RBEMinMax(LETBasedLQModel):
     reference photon parameters.
     """
 
-    def alpha_beta(self, alpha_x: Any, beta_x: Any, kernels: dict[str, Any]) -> tuple[Any, Any]:
-        rbe_min, rbe_max = self.rbe_min_max(kernels["let"], alpha_x, beta_x)
+    def alpha_beta(self, alpha_x: Any, beta_x: Any, context: Mapping[str, Any]) -> tuple[Any, Any]:
+        """Evaluate alpha and beta using the context's named LET input."""
+        rbe_min, rbe_max = self.rbe_min_max(context["let"], alpha_x, beta_x)
         return rbe_max * alpha_x, rbe_min**2 * beta_x
 
     @abstractmethod

@@ -1,7 +1,9 @@
 """Tissue parameter lookups: how per-voxel (alpha_x, beta_x) select from per-class kernels."""
 
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any
 
 import array_api_compat
@@ -32,17 +34,22 @@ class TissueParameterLookup(ABC):
 
     @abstractmethod
     def gather(
-        self, bixel: dict[str, Any], kernels: dict[str, Any], fields: list[str]
+        self,
+        alpha_x: Any,
+        beta_x: Any,
+        context: Mapping[str, Any],
+        fields: list[str],
     ) -> dict[str, Any]:
         """
         Select per-voxel kernel values for one bixel.
 
         Parameters
         ----------
-        bixel : dict
-            Bixel with ``v_alpha_x`` / ``v_beta_x`` of shape ``(n_voxels,)``.
-        kernels : dict
-            Interpolated kernel arrays of shape ``(n_classes, n_voxels)``.
+        alpha_x, beta_x : Array, shape (n_voxels,)
+            Reference photon LQ parameters of the voxels.
+        context : mapping
+            Full biological evaluation context. The entries named by ``fields`` are
+            interpolated kernel arrays of shape ``(n_classes, n_voxels)``.
         fields : list[str]
             Names of the kernel arrays to gather.
 
@@ -99,12 +106,16 @@ class ExactClassLookup(TissueParameterLookup):
         self.class_index(voxel_params["alpha_x"], voxel_params["beta_x"])
 
     def gather(
-        self, bixel: dict[str, Any], kernels: dict[str, Any], fields: list[str]
+        self,
+        alpha_x: Any,
+        beta_x: Any,
+        context: Mapping[str, Any],
+        fields: list[str],
     ) -> dict[str, Any]:
-        xp = array_api_compat.array_namespace(bixel["v_alpha_x"])
-        class_ix = self.class_index(bixel["v_alpha_x"], bixel["v_beta_x"])
+        xp = array_api_compat.array_namespace(alpha_x)
+        class_ix = self.class_index(alpha_x, beta_x)
         voxel_ix = xp.arange(class_ix.shape[0], device=array_api_compat.device(class_ix))
-        return {name: kernels[name][class_ix, voxel_ix] for name in fields}
+        return {name: context[name][class_ix, voxel_ix] for name in fields}
 
 
 TISSUE_LOOKUPS: dict[str, type[TissueParameterLookup]] = {"exact": ExactClassLookup}

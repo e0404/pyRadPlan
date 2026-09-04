@@ -3,6 +3,8 @@ import pytest
 import array_api_strict as xp
 
 from pyRadPlan.bio_models import (
+    BioEvaluationContext,
+    BioModelResult,
     BiologicalModel,
     TabulatedAlphaBetaModel,
     TabulatedSpectrumEvaluator,
@@ -138,6 +140,7 @@ def test_TabulatedAlphaBetaModel_evaluator(machine, voxel_params):
     model = TabulatedAlphaBetaModel()
     evaluator = model.evaluator(machine, voxel_params)
     assert isinstance(evaluator, TabulatedSpectrumEvaluator)
+    assert evaluator.kernel_field_names == ("alpha", "sqrt_beta")
 
     # the machine is left untouched and one table per energy is precomputed
     assert not hasattr(machine.pb_kernels[100.0], "quantities")
@@ -167,18 +170,25 @@ def test_TabulatedAlphaBetaModel_selects_fragments_per_energy(machine, voxel_par
     assert np.allclose(evaluator._tables[200.0]["sqrt_beta"], expected["sqrt_beta"])
 
 
-def test_TabulatedAlphaBetaModel_bixel_alpha_beta(machine, voxel_params):
+def test_TabulatedAlphaBetaModel_evaluate(machine, voxel_params):
     evaluator = TabulatedAlphaBetaModel().evaluator(machine, voxel_params)
-    bixel = {
-        "rad_depths": xp.asarray([0.0, 1.0, 2.0, 3.0]),
-        "v_alpha_x": xp.asarray([0.1, 0.1, 0.0, 0.1]),
-        "v_beta_x": xp.asarray([0.05, 0.05, 0.0, 0.05]),
-    }
+    alpha_x = xp.asarray([0.1, 0.1, 0.0, 0.1])
+    beta_x = xp.asarray([0.05, 0.05, 0.0, 0.05])
     # interpolated kernels: (n_tissue_classes, n_voxels)
     kernels = {
         "alpha": xp.asarray([[1.0, 2.0, 3.0, 4.0]]),
         "sqrt_beta": xp.asarray([[1.0, 2.0, 1.0, 2.0]]),
     }
-    alpha, beta = evaluator.bixel_alpha_beta(bixel, kernels)
-    assert np.allclose(np.asarray(alpha), [1.0, 2.0, 3.0, 4.0])
-    assert np.allclose(np.asarray(beta), [1.0, 4.0, 1.0, 4.0])
+    result = evaluator.evaluate(
+        BioEvaluationContext(
+            {
+                "alpha_x": alpha_x,
+                "beta_x": beta_x,
+                **kernels,
+            }
+        )
+    )
+
+    assert isinstance(result, BioModelResult)
+    assert np.allclose(np.asarray(result["alpha"]), [1.0, 2.0, 3.0, 4.0])
+    assert np.allclose(np.asarray(result["beta"]), [1.0, 4.0, 1.0, 4.0])

@@ -3,6 +3,8 @@ import pytest
 import array_api_strict as xp
 
 from pyRadPlan.bio_models import (
+    BioEvaluationContext,
+    BioModelResult,
     BiologicalModel,
     ExactClassLookup,
     KernelBasedEvaluator,
@@ -54,6 +56,7 @@ def test_KernelBasedLQModel_evaluator(machine, voxel_params):
     assert isinstance(evaluator.lookup, ExactClassLookup)
 
     kernel = {"alpha": "A", "beta": "B", "idd": "ignored"}
+    assert evaluator.kernel_field_names == ("alpha", "beta")
     assert evaluator.kernel_quantities(kernel) == {"alpha": "A", "beta": "B"}
 
 
@@ -64,21 +67,28 @@ def test_KernelBasedLQModel_evaluator_rejects_unknown_tissue(machine):
         )
 
 
-def test_KernelBasedLQModel_bixel_alpha_beta_mixed_tissue_classes(machine, voxel_params):
+def test_KernelBasedLQModel_evaluate_mixed_tissue_classes(machine, voxel_params):
     evaluator = KernelBasedLQModel().evaluator(machine, voxel_params)
-    bixel = {
-        "rad_depths": xp.asarray([0.0, 1.0, 2.0, 3.0]),
-        "v_alpha_x": xp.asarray([0.1, 0.5, 0.1, 0.0]),
-        "v_beta_x": xp.asarray([0.05, 0.05, 0.05, 0.0]),
-    }
+    alpha_x = xp.asarray([0.1, 0.5, 0.1, 0.0])
+    beta_x = xp.asarray([0.05, 0.05, 0.05, 0.0])
     # interpolated kernels: (n_tissue_classes, n_voxels)
     kernels = {
         "alpha": xp.asarray([[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0]]),
         "beta": xp.asarray([[4.0, 4.0, 4.0, 4.0], [5.0, 5.0, 5.0, 5.0]]),
     }
-    alpha, beta = evaluator.bixel_alpha_beta(bixel, kernels)
-    assert np.allclose(np.asarray(alpha), [1.0, 2.0, 1.0, 1.0])
-    assert np.allclose(np.asarray(beta), [4.0, 5.0, 4.0, 4.0])
+    result = evaluator.evaluate(
+        BioEvaluationContext(
+            {
+                "alpha_x": alpha_x,
+                "beta_x": beta_x,
+                **kernels,
+            }
+        )
+    )
+
+    assert isinstance(result, BioModelResult)
+    assert np.allclose(np.asarray(result["alpha"]), [1.0, 2.0, 1.0, 1.0])
+    assert np.allclose(np.asarray(result["beta"]), [4.0, 5.0, 4.0, 4.0])
 
 
 def test_KernelBasedLQModel_unknown_lookup(machine, voxel_params):

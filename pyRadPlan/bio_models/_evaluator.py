@@ -1,7 +1,10 @@
 """Evaluators: per-dose-calculation state and evaluation of biological models."""
 
 from __future__ import annotations
+
 from abc import ABC
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import array_api_compat
@@ -10,6 +13,98 @@ from ._tissue_lookup import TissueParameterLookup
 
 if TYPE_CHECKING:  # pragma: no cover
     from ._base import BiologicalModel
+
+
+class BioEvaluationContext(Mapping[str, Any]):
+    """Named inputs available during one biological-model evaluation.
+
+    The mapping keeps the evaluator contract independent of a particular biological
+    methodology. Callers explicitly construct the context from the inputs exposed to the
+    model; engine-internal state is not forwarded implicitly.
+
+    The core input vocabulary is ``alpha_x``, ``beta_x``, ``physical_dose`` and ``let``.
+    Dose engines supply the applicable subset and may add the model-specific fields declared
+    by :meth:`BioModelEvaluator.kernel_quantities`; those fields keep their declared names
+    after interpolation. Engine-local geometry and raw kernel objects are not exposed.
+
+    Parameters
+    ----------
+    inputs : mapping
+        Biological inputs keyed by their semantic name.
+    """
+
+    def __init__(self, inputs: Mapping[str, Any] | None = None):
+        values = {} if inputs is None else dict(inputs)
+        if not all(isinstance(name, str) for name in values):
+            raise TypeError("Biological evaluation input names must be strings.")
+        self._inputs = MappingProxyType(values)
+
+    @property
+    def inputs(self) -> Mapping[str, Any]:
+        """Read-only view of the named inputs."""
+        return self._inputs
+
+    def __getitem__(self, name: str) -> Any:
+        return self._inputs[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._inputs)
+
+    def __len__(self) -> int:
+        return len(self._inputs)
+
+    def require(self, name: str) -> Any:
+        """Return a required input with a model-facing error if it is unavailable."""
+        try:
+            return self._inputs[name]
+        except KeyError as exc:
+            available = ", ".join(sorted(self._inputs)) or "none"
+            raise ValueError(
+                f"Biological evaluation requires input '{name}'; available inputs: {available}."
+            ) from exc
+
+
+class BioModelResult(Mapping[str, Any]):
+    """Named quantities produced by a biological-model evaluation.
+
+    A mapping rather than an alpha/beta-specific tuple permits models to return direct RBE,
+    effect, survival or future biological endpoints without extending this interface.
+
+    Parameters
+    ----------
+    quantities : mapping
+        Evaluated arrays keyed by their semantic quantity name.
+    """
+
+    def __init__(self, quantities: Mapping[str, Any] | None = None):
+        values = {} if quantities is None else dict(quantities)
+        if not all(isinstance(name, str) for name in values):
+            raise TypeError("Biological result quantity names must be strings.")
+        self._quantities = MappingProxyType(values)
+
+    @property
+    def quantities(self) -> Mapping[str, Any]:
+        """Read-only view of the named result quantities."""
+        return self._quantities
+
+    def __getitem__(self, name: str) -> Any:
+        return self._quantities[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._quantities)
+
+    def __len__(self) -> int:
+        return len(self._quantities)
+
+    def require(self, name: str) -> Any:
+        """Return a required result with a clear error if the model did not produce it."""
+        try:
+            return self._quantities[name]
+        except KeyError as exc:
+            available = ", ".join(sorted(self._quantities)) or "none"
+            raise ValueError(
+                f"Biological model did not produce quantity '{name}'; produced: {available}."
+            ) from exc
 
 
 class BioModelEvaluator(ABC):
@@ -23,12 +118,19 @@ class BioModelEvaluator(ABC):
     The dose engine interacts with a model exclusively through this interface.
     """
 
-    def __init__(self, model: "BiologicalModel"):
+    def __init__(self, model: BiologicalModel):
         self.model = model
+
+    @property
+    def kernel_field_names(self) -> tuple[str, ...]:
+        """Names of the depth-dependent kernel fields requested by this evaluator."""
+        return ()
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
         """
         Depth-dependent arrays the engine must interpolate per bixel for this model.
+
+        Returned keys must match :attr:`kernel_field_names` for every machine energy.
 
         Parameters
         ----------
@@ -39,25 +141,14 @@ class BioModelEvaluator(ABC):
         -------
         dict[str, Array]
             Arrays of shape ``(n_depths,)`` or ``(n_classes, n_depths)`` keyed by name;
-            they are handed back, interpolated, to :meth:`bixel_alpha_beta`.
+            after interpolation they become named inputs to :meth:`evaluate`.
         """
         return {}
 
-    def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
-        """
-        Per-voxel LQ parameters (alpha, beta) for one bixel.
-
-        Parameters
-        ----------
-        bixel : dict
-            Bixel with at least ``v_alpha_x`` / ``v_beta_x`` (reference LQ parameters of the
-            voxels hit) and ``rad_depths``.
-        kernels : dict
-            Kernel values interpolated at the bixel's radiological depths, including the
-            arrays requested through :meth:`kernel_quantities`.
-        """
+    def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
+        """Evaluate the model from named inputs and return named biological quantities."""
         raise NotImplementedError(
-            f"Biological model '{self.model.model}' does not provide alpha/beta values."
+            f"Biological model '{self.model.model}' does not provide evaluated quantities."
         )
 
 
@@ -68,13 +159,40 @@ class ParametricEvaluator(BioModelEvaluator):
     Holds nothing but the model; forwards to :meth:`BiologicalModel.alpha_beta`.
     """
 
-    def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
+    def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
         if not self.model.provides_alpha_beta:
-            return super().bixel_alpha_beta(bixel, kernels)
-        return self.model.alpha_beta(bixel["v_alpha_x"], bixel["v_beta_x"], kernels)
+            raise NotImplementedError(
+                f"Biological model '{self.model.model}' does not provide alpha/beta values."
+            )
+        alpha, beta = self.model.alpha_beta(
+            context.require("alpha_x"), context.require("beta_x"), context
+        )
+        return BioModelResult({"alpha": alpha, "beta": beta})
 
 
-class KernelBasedEvaluator(BioModelEvaluator):
+class _TissueKernelEvaluator(BioModelEvaluator):
+    """Shared evaluation of tissue-class kernel fields."""
+
+    kernel_fields: list[str]
+    lookup: TissueParameterLookup
+
+    @property
+    def kernel_field_names(self) -> tuple[str, ...]:
+        """Names of the tissue kernel fields requested by this evaluator."""
+        return tuple(self.kernel_fields)
+
+    def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
+        rows = self.lookup.gather(
+            context.require("alpha_x"),
+            context.require("beta_x"),
+            context,
+            self.kernel_fields,
+        )
+        alpha, beta = self.model.alpha_beta_from_kernel_rows(rows)
+        return BioModelResult({"alpha": alpha, "beta": beta})
+
+
+class KernelBasedEvaluator(_TissueKernelEvaluator):
     """
     Evaluator for models reading pre-tabulated alpha/beta kernels from the machine data.
 
@@ -96,7 +214,7 @@ class KernelBasedEvaluator(BioModelEvaluator):
 
     def __init__(
         self,
-        model: "BiologicalModel",
+        model: BiologicalModel,
         kernel_fields: list[str],
         lookup: TissueParameterLookup,
         voxel_params: dict[str, Any],
@@ -109,12 +227,8 @@ class KernelBasedEvaluator(BioModelEvaluator):
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
         return {name: kernel[name] for name in self.kernel_fields}
 
-    def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
-        rows = self.lookup.gather(bixel, kernels, self.kernel_fields)
-        return self.model.alpha_beta_from_kernel_rows(rows)
 
-
-class TabulatedSpectrumEvaluator(BioModelEvaluator):
+class TabulatedSpectrumEvaluator(_TissueKernelEvaluator):
     """
     Evaluator for models whose kernels are dose-averaged from tables over fluence spectra.
 
@@ -134,7 +248,7 @@ class TabulatedSpectrumEvaluator(BioModelEvaluator):
 
     def __init__(
         self,
-        model: "BiologicalModel",
+        model: BiologicalModel,
         machine: Any,
         lookup: TissueParameterLookup,
         voxel_params: dict[str, Any],
@@ -161,7 +275,3 @@ class TabulatedSpectrumEvaluator(BioModelEvaluator):
                 name: xp.asarray(arr, device=device) for name, arr in self._tables[key[0]].items()
             }
         return self._converted[key]
-
-    def bixel_alpha_beta(self, bixel: dict[str, Any], kernels: dict[str, Any]) -> tuple[Any, Any]:
-        rows = self.lookup.gather(bixel, kernels, self.kernel_fields)
-        return self.model.alpha_beta_from_kernel_rows(rows)

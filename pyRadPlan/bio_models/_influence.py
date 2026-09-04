@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
-from ._evaluator import BioModelEvaluator
+from ._evaluator import BioEvaluationContext, BioModelEvaluator
 
 
 def alpha_beta_influence_from_let(
@@ -40,11 +40,18 @@ def alpha_beta_influence_from_let(
     rows, cols, d = dose.row[keep], dose.col[keep], dose.data[keep]
 
     let = np.asarray(sparse.csr_array(let_dose)[rows, cols]).ravel() / d
-    bixel = {
-        "v_alpha_x": np.asarray(alpha_x).ravel()[rows],
-        "v_beta_x": np.asarray(beta_x).ravel()[rows],
-    }
-    alpha, beta = evaluator.bixel_alpha_beta(bixel, {"let": let})
+    result = evaluator.evaluate(
+        BioEvaluationContext(
+            {
+                "alpha_x": np.asarray(alpha_x).ravel()[rows],
+                "beta_x": np.asarray(beta_x).ravel()[rows],
+                "physical_dose": d,
+                "let": let,
+            }
+        )
+    )
+    alpha = result.require("alpha")
+    beta = result.require("beta")
     alpha = np.broadcast_to(np.asarray(alpha, dtype=d.dtype), d.shape)
     beta = np.broadcast_to(np.asarray(beta, dtype=d.dtype), d.shape)
 

@@ -13,8 +13,73 @@ import SimpleITK as sitk
 
 import pyRadPlan
 from pyRadPlan import calc_dose_influence
+from pyRadPlan.bio_models import Wedenberg
 from pyRadPlan.dose.engines._base import DoseEngineBase
+from pyRadPlan.dose.engines._hongpb import ParticleHongPencilBeamEngine
 from pyRadPlan.machines import load_machine_from_mat, validate_machine
+
+
+def _bio_engine(kernel_names=()):
+    engine = object.__new__(ParticleHongPencilBeamEngine)
+    engine._bio_evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
+    engine._bio_kernel_names = tuple(kernel_names)
+    return engine
+
+
+def test_bio_context_is_curated():
+    """The shared particle-engine helper exposes only named biological inputs."""
+    bixel = {
+        "v_alpha_x": "alpha_x",
+        "v_beta_x": "beta_x",
+        "physical_dose": "dose",
+        "sigma_ini_sq": "engine detail",
+        "kernel": "raw kernel",
+    }
+    kernels = {"let": "LET", "alpha": "kernel alpha", "sigma": "engine sigma"}
+
+    engine = _bio_engine(["alpha"])
+    context = engine._build_bio_context(bixel, kernels)
+
+    assert dict(context) == {
+        "alpha_x": "alpha_x",
+        "beta_x": "beta_x",
+        "physical_dose": "dose",
+        "let": "LET",
+        "alpha": "kernel alpha",
+    }
+
+
+@pytest.mark.parametrize(
+    "kernel_name,lateral_model,use_let_kernel",
+    [("idd", "single", False), ("sigma", "single", False), ("let", "single", True)],
+)
+def test_bio_kernel_names_reject_engine_collisions(kernel_name, lateral_model, use_let_kernel):
+    """Engine and biological kernels must have disjoint names before dose calculation."""
+    engine = _bio_engine([kernel_name])
+    engine.lateral_model = lateral_model
+    engine._use_let_kernel = use_let_kernel
+
+    with pytest.raises(ValueError, match=rf"dose-engine kernels: {kernel_name}"):
+        engine._validate_bio_kernel_names()
+
+
+def test_bio_kernel_names_reject_standard_context_collisions():
+    """Model kernels cannot shadow a standard evaluation-context input."""
+    engine = _bio_engine(["physical_dose"])
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match="standard context inputs: physical_dose"):
+        engine._validate_bio_kernel_names()
+
+
+def test_lateral_kernel_names_reject_invalid_model():
+    """An unresolved lateral model retains the interpolation path's clear error."""
+    engine = _bio_engine()
+    engine.lateral_model = "auto"
+
+    with pytest.raises(ValueError, match="Invalid Lateral Model"):
+        engine._lateral_kernel_names()
 
 
 def _per_entry(dij):

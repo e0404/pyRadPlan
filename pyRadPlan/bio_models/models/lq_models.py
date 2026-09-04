@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any
 
 from pyRadPlan.bio_models._base import BiologicalModel
@@ -22,16 +23,17 @@ class LQModel(BiologicalModel):
     provides_alpha_beta = True
     default_report_quantity = "rbe_x_dose"
 
-    def alpha_beta(self, alpha_x: Any, beta_x: Any, kernels: dict[str, Any]) -> tuple[Any, Any]:
+    def alpha_beta(self, alpha_x: Any, beta_x: Any, context: Mapping[str, Any]) -> tuple[Any, Any]:
         """
-        Per-voxel (alpha, beta) as a pure function of reference parameters and kernels.
+        Per-voxel (alpha, beta) as a pure function of the biological evaluation context.
 
         Parameters
         ----------
         alpha_x, beta_x : Array, shape (n_voxels,)
             Reference photon LQ parameters of the voxels.
-        kernels : dict
-            Kernel values interpolated at the voxels (e.g. ``kernels["let"]``).
+        context : mapping
+            Full biological evaluation context, including named tissue parameters and
+            model inputs such as interpolated ``context["let"]`` values.
         """
         raise NotImplementedError(f"Model '{self.model}' is not a parametric LQ model.")
 

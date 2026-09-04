@@ -1,4 +1,5 @@
 from typing import ClassVar
+
 import array_api_compat
 
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
@@ -83,7 +84,9 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
         if self._calc_bio_dose and "v_alpha_x" in bixel:
-            alpha, beta = self._bio_evaluator.bixel_alpha_beta(bixel, kernels)
+            bio_result = self._bio_evaluator.evaluate(self._build_bio_context(bixel, kernels))
+            alpha = bio_result.require("alpha")
+            beta = bio_result.require("beta")
             bixel["alpha_dose"] = bixel["physical_dose"] * alpha
             bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(beta)
 

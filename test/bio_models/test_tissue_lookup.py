@@ -34,16 +34,14 @@ def test_exact_validate(lookup):
 
 
 def test_exact_gather(lookup):
-    bixel = {
-        "v_alpha_x": xp.asarray([0.1, 0.5, 0.1, 0.0]),
-        "v_beta_x": xp.asarray([0.05, 0.05, 0.05, 0.0]),
-    }
+    alpha_x = xp.asarray([0.1, 0.5, 0.1, 0.0])
+    beta_x = xp.asarray([0.05, 0.05, 0.05, 0.0])
     kernels = {
         "alpha": xp.asarray([[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0]]),
         "beta": xp.asarray([[4.0, 4.0, 4.0, 4.0], [5.0, 5.0, 5.0, 5.0]]),
         "let": xp.asarray([9.0, 9.0, 9.0, 9.0]),  # not requested, must be ignored
     }
-    rows = lookup.gather(bixel, kernels, ["alpha", "beta"])
+    rows = lookup.gather(alpha_x, beta_x, kernels, ["alpha", "beta"])
     assert set(rows) == {"alpha", "beta"}
     assert np.allclose(np.asarray(rows["alpha"]), [1.0, 2.0, 1.0, 1.0])
     assert np.allclose(np.asarray(rows["beta"]), [4.0, 5.0, 4.0, 4.0])

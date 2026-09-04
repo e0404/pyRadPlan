@@ -1,6 +1,11 @@
 import pytest
 
-from pyRadPlan.bio_models import BiologicalModel, ConstantRBEModel, ParametricEvaluator
+from pyRadPlan.bio_models import (
+    BioEvaluationContext,
+    BiologicalModel,
+    ConstantRBEModel,
+    ParametricEvaluator,
+)
 
 
 def test_ConstantRBEModel_constructor():
@@ -30,5 +35,5 @@ def test_ConstantRBEModel_evaluator():
     evaluator = ConstantRBEModel().evaluator(machine=None, voxel_params={})
     assert isinstance(evaluator, ParametricEvaluator)
     assert evaluator.kernel_quantities({}) == {}
-    with pytest.raises(NotImplementedError):
-        evaluator.bixel_alpha_beta({}, {})
+    with pytest.raises(NotImplementedError, match="does not provide alpha/beta values"):
+        evaluator.evaluate(BioEvaluationContext())
