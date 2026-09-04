@@ -110,7 +110,7 @@ def runtime_key(path: str) -> Optional[str]:
         The runtime stem (e.g. ``"libiomp5md"``) for a runtime that aborts on
         duplicate initialization, otherwise ``None``.
     """
-    name = os.path.basename(path).lower()
+    name = re.split(r"[\\/]", path)[-1].lower()
     name = re.sub(r"\.(dll|dylib|pyd)$", "", name)
     name = re.sub(r"\.so(\.\d+)*$", "", name)
     name = _VENDOR_HASH.sub("", name)
