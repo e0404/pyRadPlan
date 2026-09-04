@@ -75,7 +75,12 @@ class POLO(POLOBase):
         """
         import numpy as np
 
-        polo_flat = self.compute(fluence).flat[scenario_index]
+        from pyRadPlan.core.xp_utils import to_numpy  # noqa: PLC0415
+
+        # Bring the result to the host before masking and aggregating. The quantity may hold
+        # its dij on an accelerator, and a device array neither converts implicitly to NumPy
+        # nor indexes with a NumPy boolean mask.
+        polo_flat = to_numpy(self.compute(fluence).flat[scenario_index])
 
         if mask is not None:
             if hasattr(mask, "GetSize"):
@@ -94,4 +99,4 @@ class POLO(POLOBase):
 
             polo_flat = polo_flat[mask_idx]
 
-        return float(total_ntcp(np.asarray(polo_flat)))
+        return float(total_ntcp(polo_flat))
