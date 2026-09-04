@@ -111,13 +111,20 @@ def test_choose_device_defaults():
     xp = choose_array_api_namespace()
 
     if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
-        assert dev == "cuda:0"
+        import torch
+
+        assert dev == torch.device("cuda", 0)
     elif array_api_compat.is_cupy_namespace(xp) and cupy_available():
-        assert dev == "0"
-    elif array_api_compat.is_array_api_strict_namespace(xp):
-        assert dev is None
+        import cupy as cp
+
+        assert dev == cp.cuda.Device(0)
+    elif array_api_compat.is_jax_namespace(xp):
+        import jax
+
+        assert dev in jax.devices()
     else:
-        assert dev == "cpu"
+        # numpy and array-api-strict have no device concept beyond the default
+        assert dev is None
 
 
 @pytest.mark.skipif(not (HAS_TORCH and TORCH_CUDA_AVAILABLE), reason="PyTorch GPU not available")
@@ -125,17 +132,20 @@ def test_choose_device_torch():
     """Test choose_device with torch namespace."""
     import array_api_compat.torch as xp
 
+    import torch
+
     dev = choose_device(xp)
-    assert dev == "cuda:0"
+    assert dev == torch.device("cuda", 0)
 
 
 @pytest.mark.skipif(not (HAS_TORCH and TORCH_CUDA_AVAILABLE), reason="PyTorch GPU not available")
 def test_choose_device_torch_multi_gpu():
     """Test choose_device with torch namespace and explicit gpu_index."""
     import array_api_compat.torch as xp
+    import torch
 
-    assert choose_device(xp, gpu_index=0) == "cuda:0"
-    assert choose_device(xp, gpu_index=1) == "cuda:1"
+    assert choose_device(xp, gpu_index=0) == torch.device("cuda", 0)
+    assert choose_device(xp, gpu_index=1) == torch.device("cuda", 1)
 
 
 @pytest.mark.skipif(not (HAS_CUPY and CUPY_CUDA_AVAILABLE), reason="CuPy GPU not available")
@@ -143,22 +153,45 @@ def test_choose_device_cupy():
     """Test choose_device with cupy namespace."""
     import array_api_compat.cupy as xp
 
+    import cupy as cp
+
     dev = choose_device(xp)
-    assert dev == "0"
+    assert dev == cp.cuda.Device(0)
 
 
 @pytest.mark.skipif(not (HAS_CUPY and CUPY_CUDA_AVAILABLE), reason="CuPy GPU not available")
 def test_choose_device_cupy_multi_gpu():
     """Test choose_device with cupy namespace and explicit gpu_index."""
     import array_api_compat.cupy as xp
+    import cupy as cp
 
-    assert choose_device(xp, gpu_index=0) == "0"
-    assert choose_device(xp, gpu_index=1) == "1"
+    assert choose_device(xp, gpu_index=0) == cp.cuda.Device(0)
+    assert choose_device(xp, gpu_index=1) == cp.cuda.Device(1)
 
 
 def test_choose_device_numpy():
     """Test choose_device with numpy namespace."""
     import array_api_compat.numpy as xp
 
+    # NumPy exposes no device object; None means "the namespace default device"
     dev = choose_device(xp)
-    assert dev == "cpu"
+    assert dev is None
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not available")
+def test_choose_device_torch_cpu_fallback():
+    """choose_device must fall back to CPU when a GPU is preferred but unavailable."""
+    import array_api_compat.torch as xp
+    import torch
+
+    if TORCH_CUDA_AVAILABLE:
+        pytest.skip("GPU available, CPU fallback not exercised")
+
+    settings = get_settings()
+    prefer_gpu = settings.xp.prefer_gpu
+    settings.xp.prefer_gpu = True
+    try:
+        with pytest.warns(UserWarning, match="Falling back to CPU"):
+            assert choose_device(xp) == torch.device("cpu")
+    finally:
+        settings.xp.prefer_gpu = prefer_gpu

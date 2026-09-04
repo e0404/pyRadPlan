@@ -256,7 +256,7 @@ class StfGeneratorIMPT(StfGeneratorIonRayBixel):
                 exit_ix = np.argwhere(diff_voi_exit == -1)
                 # Manage Edge case for last voxel
                 exit_ix[exit_ix > len(rho[1])] = len(rho[1]) - 1
-                target_exit = rad_depths[exit_ix] + length[entry_ix] * rho[0][entry_ix] / 2.0
+                target_exit = rad_depths[exit_ix] + length[exit_ix] * rho[0][exit_ix] / 2.0
                 target_exit = target_exit.squeeze(axis=1)
 
                 # Sanity Check
@@ -278,6 +278,8 @@ class StfGeneratorIMPT(StfGeneratorIonRayBixel):
                     ]
 
                     ray_energies = np.append(ray_energies, select_energies)
+
+                ray_energies = np.unique(ray_energies)
 
                 # TODO: finalize range shifters
                 ray_range_shifters = [RangeShifter() for _ in ray_energies]

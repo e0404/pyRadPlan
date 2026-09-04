@@ -1,11 +1,17 @@
-import pytest
-import numpy as np
-import SimpleITK as sitk
-
-from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
-from pyRadPlan.core.xp_utils import from_numpy
+import warnings
 
 import array_api_strict as xps
+import numpy as np
+import pytest
+import SimpleITK as sitk
+
+from pyRadPlan import settings
+from pyRadPlan.core.xp_utils import from_numpy
+from pyRadPlan.geometry import lps
+from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
+from pyRadPlan.stf._beam import Beam
+from pyRadPlan.stf._beamlet import Beamlet
+from pyRadPlan.stf._ray import Ray
 
 
 @pytest.fixture
@@ -124,3 +130,116 @@ def test_raytracer_ray_does_not_hit(sample_cube):
     assert rho[0].size == 0
     assert np.isclose(d12, np.sqrt(np.sum((target_point - source_point) ** 2)))
     assert ix.size == 0
+
+
+def test_raytracer_trace_rays_jax(sample_cube, monkeypatch):
+    pytest.importorskip("jax")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "jax")
+
+    raytracer = RayTracerSiddon(sample_cube)
+    isocenter = sample_cube.TransformIndexToPhysicalPoint([3, 2, 1])
+    source_points = np.array([[0.0, -5.0, 0.0]])
+    target_points = np.array([[0.0, 5.0, 0.0], [2.0, 5.0, 0.0]])
+
+    _, _, rho, _, ix = raytracer.trace_rays(isocenter, source_points, target_points)
+
+    valid = ix >= 0
+    expected = np.full(ix.shape, np.nan, dtype=raytracer.precision)
+    cube_linear = sitk.GetArrayViewFromImage(sample_cube).ravel(order="F")
+    expected[valid] = cube_linear[ix[valid]]
+    np.testing.assert_allclose(rho[0], expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("backend", ["array_api_strict", "torch"])
+def test_readonly_sitk_buffer_is_copied_for_backend(sample_cube, monkeypatch, backend):
+    if backend == "torch":
+        pytest.importorskip("torch")
+
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", backend)
+    cube_before = sitk.GetArrayViewFromImage(sample_cube).copy()
+    raytracer = RayTracerSiddon(sample_cube)
+    isocenter = sample_cube.TransformIndexToPhysicalPoint([3, 2, 1])
+
+    with warnings.catch_warnings(record=True) as caught:
+        _, _, rho, _, ix = raytracer.trace_rays(
+            isocenter,
+            np.array([[0.0, -5.0, 0.0]]),
+            np.array([[0.0, 5.0, 0.0], [2.0, 5.0, 0.0]]),
+        )
+
+    valid = ix >= 0
+    expected = np.full(ix.shape, np.nan, dtype=raytracer.precision)
+    expected[valid] = cube_before.ravel(order="F")[ix[valid]]
+    np.testing.assert_allclose(rho[0], expected, equal_nan=True)
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(sample_cube), cube_before)
+    assert not any("not writable" in str(warning.message).lower() for warning in caught)
+
+
+def test_boundary_planes_do_not_create_duplicate_voxel_segments(monkeypatch):
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    size = (20, 3, 3)
+    spacing = (0.7, 1.1, 1.3)
+    origin = (0.1, 0.2, 0.3)
+    cube = sitk.GetImageFromArray(np.ones(size[::-1], dtype=np.float32))
+    cube.SetSpacing(spacing)
+    cube.SetOrigin(origin)
+    raytracer = RayTracerSiddon(cube)
+    yz = np.array([origin[1] + spacing[1], origin[2] + spacing[2]])
+
+    _, lengths, _, _, ix = raytracer.trace_rays(
+        np.zeros(3),
+        np.array([[-100.0, yz[0], yz[1]]]),
+        np.array([[100.0, yz[0], yz[1]]]),
+    )
+
+    valid = ix[0] >= 0
+    valid_ix = ix[0, valid]
+    assert valid_ix.size == size[0]
+    assert np.all(np.diff(valid_ix) != 0)
+    assert np.isclose(np.sum(lengths[0, valid]), size[0] * spacing[0])
+
+
+@pytest.mark.parametrize(("gantry", "couch"), [(0.0, 0.0), (45.0, 0.0), (30.0, 45.0)])
+def test_trace_cubes_traverses_full_cube_at_oblique_angles(monkeypatch, gantry, couch):
+    """The ray matrix extent must reach past the cube for any beam orientation.
+
+    Regression test: a mis-derived BEV extent placed the ray targets inside the
+    cube for oblique angles, truncating traversal on the far side.
+    """
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    # Anisotropic on purpose: with a cubic, isotropically spaced cube an index-layout
+    # mix-up maps corners onto corners and would go unnoticed
+    size = (24, 16, 10)
+    spacing = (1.5, 2.5, 3.5)
+    cube = sitk.GetImageFromArray(np.ones(size[::-1], dtype=np.float32))
+    cube.SetSpacing(spacing)
+    cube.SetOrigin([-0.5 * (n - 1) * s for n, s in zip(size, spacing)])
+
+    raytracer = RayTracerSiddon(cube)
+    raytracer.lateral_cut_off = 100.0  # covers the whole cube laterally
+
+    beam = Beam(
+        gantry_angle=gantry,
+        couch_angle=couch,
+        iso_center=np.zeros(3),
+        rays=[Ray(ray_pos_bev=np.zeros(3), ray_pos=np.zeros(3), beamlets=[Beamlet(energy=100.0)])],
+        SAD=10000.0,
+    )
+    # source points are derived consistently from SAD and the angles by the Beam model
+    np.testing.assert_allclose(beam.source_point_bev, [0.0, -10000.0, 0.0])
+    rot_mat = lps.get_beam_rotation_matrix(gantry, couch)
+    np.testing.assert_allclose(beam.source_point, rot_mat @ beam.source_point_bev)
+
+    rad_depth = sitk.GetArrayFromImage(raytracer.trace_cubes(beam)[0])
+    finite = np.isfinite(rad_depth)
+
+    # Unit density and full lateral coverage: every voxel must receive a depth, and the
+    # deepest voxel must lie about one full chord through the cube behind the entry face
+    assert finite.mean() > 0.99
+    assert np.nanmax(rad_depth) > 0.9 * min(n * s for n, s in zip(size, spacing))

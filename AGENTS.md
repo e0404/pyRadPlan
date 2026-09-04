@@ -40,6 +40,17 @@ pytest --cov=pyRadPlan        # with coverage
 
 CI runs on Python 3.10–3.13. Do not reduce existing coverage.
 
+Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
+so a bare `pytest` run never collects it — invoke it explicitly:
+
+```bash
+pytest benchmark/benchmark_interp1d.py                 # one harness ([dev])
+pytest benchmark/ -o python_files="benchmark_*.py"     # all of them
+python benchmark/profile_pencilbeam_photon_forward_lineprof.py  # line_profiler ([profiling])
+```
+
+Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance work.
+
 ## Changelog
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
@@ -55,6 +66,8 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
+
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. They are **never executed during a docs build or in CI**. The executed notebooks (with outputs) are committed in `docs/tutorials/examples/`; refresh them locally with `python docs/execute_examples.py` and commit the result when examples change and as part of the release recipe.
 
 ## Key Architecture Notes
 

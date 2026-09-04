@@ -3,7 +3,7 @@
 AI Agents
 =========
 
-pyRadPlan ships an optional ``ai_agents`` module that uses
+pyRadPlan ships an optional ``ai.agents`` module that uses
 `pydantic-ai <https://ai.pydantic.dev/>`_ to integrate large-language-model (LLM) reasoning
 into the treatment planning workflow.  The agents follow the same pydantic data-model
 conventions as the rest of pyRadPlan and return fully-validated plan and structure-set
@@ -11,7 +11,7 @@ objects, so their output can be fed directly into the rest of the pipeline.
 
 .. note::
 
-   The ``ai_agents`` module is an optional feature.  Before using it you need to install
+   The ``ai.agents`` module is an optional feature.  Before using it you need to install
    the optional dependencies and set an API key for your chosen LLM provider:
 
    .. code-block:: bash
@@ -39,31 +39,34 @@ The module exposes two high-level helper functions and a settings class:
 
    * - Symbol
      - Purpose
-   * - :func:`~pyRadPlan.ai_agents.generate_beam_angles`
+   * - :func:`~pyRadPlan.ai.agents.generate_beam_angles`
      - Ask the LLM to suggest gantry (and couch) angles for a given treatment site and
        radiation mode, then write them back into the :class:`~pyRadPlan.plan.Plan`.
-   * - :func:`~pyRadPlan.ai_agents.generate_voi_objectives`
+   * - :func:`~pyRadPlan.ai.agents.generate_voi_objectives`
      - Ask the LLM to propose optimization objectives for each VOI in a
        :class:`~pyRadPlan.cst.StructureSet` based on the treatment site and prescribed dose.
-   * - :class:`~pyRadPlan.ai_agents.AiSettings`
-     - Pydantic-settings class that reads the default model name from the environment
-       variable ``PYRADPLAN_AI_MODEL`` or a ``.env`` file.
+   * - :class:`~pyRadPlan.ai.agents.AiSettings`
+     - The unified AI settings class (the ``ai`` sub-configuration of
+       ``pyRadPlan.settings``); its :attr:`agents_model` field selects the default LLM,
+       read from the environment variable ``PYRADPLAN_AI_AGENTS_MODEL`` or a ``.env``
+       file.
 
 Model selection
 ---------------
 
 The default model is ``claude-sonnet-4-5``.  You can override it globally via the
-environment variable ``PYRADPLAN_AI_MODEL``, or per-call via the ``model=`` keyword:
+environment variable ``PYRADPLAN_AI_AGENTS_MODEL`` (before importing pyRadPlan) or the
+settings singleton, or per-call via the ``model=`` keyword:
 
 .. code-block:: python
 
-    import os
-    os.environ["PYRADPLAN_AI_MODEL"] = "openai:gpt-4o-mini"
+    import pyRadPlan
+    from pyRadPlan.ai import agents as ai_agents
 
-    from pyRadPlan import ai_agents
+    pyRadPlan.settings.ai.agents_model = "openai:gpt-4o-mini"
 
     # Check effective settings
-    print(ai_agents.AiSettings().model)   # openai:gpt-4o-mini
+    print(pyRadPlan.settings.ai.agents_model)   # openai:gpt-4o-mini
 
     # Override for a single call
     pln = ai_agents.generate_beam_angles(pln, "prostate", model="gemini-2.0-flash")
@@ -75,13 +78,14 @@ to the Anthropic backend.
 Generating beam angles
 ----------------------
 
-:func:`~pyRadPlan.ai_agents.generate_beam_angles` populates ``pln.prop_stf`` with
+:func:`~pyRadPlan.ai.agents.generate_beam_angles` populates ``pln.prop_stf`` with
 ``gantry_angles`` and matching ``couch_angles`` (zeros unless the model suggests
 non-coplanar beams):
 
 .. code-block:: python
 
-    from pyRadPlan import IonPlan, ai_agents
+    from pyRadPlan import IonPlan
+    from pyRadPlan.ai import agents as ai_agents
 
     pln = IonPlan(
         radiation_mode="protons",
@@ -107,14 +111,15 @@ An optional ``additional_context`` string lets you pass extra clinical constrain
 Generating optimization objectives
 -----------------------------------
 
-:func:`~pyRadPlan.ai_agents.generate_voi_objectives` iterates over the VOIs in a
+:func:`~pyRadPlan.ai.agents.generate_voi_objectives` iterates over the VOIs in a
 :class:`~pyRadPlan.cst.StructureSet` and attaches LLM-suggested
 :ref:`optimization objectives <concept_optimization>` to each structure.  By default any
 previously assigned objectives are cleared first (``clear_existing=True``):
 
 .. code-block:: python
 
-    from pyRadPlan import load_tg119, IonPlan, ai_agents
+    from pyRadPlan import load_tg119, IonPlan
+    from pyRadPlan.ai import agents as ai_agents
 
     ct, cst = load_tg119()
     pln = IonPlan(
@@ -155,10 +160,11 @@ The script ``examples/utils_ai_agents.py`` shows a complete workflow:
 
     from dotenv import load_dotenv
     from pyRadPlan import (
-        IonPlan, load_tg119, ai_agents,
+        IonPlan, load_tg119,
         generate_stf, calc_dose_influence, fluence_optimization,
         plot_slice, DVHCollection,
     )
+    from pyRadPlan.ai import agents as ai_agents
 
     load_dotenv()   # load API key from .env
 
@@ -182,9 +188,9 @@ The script ``examples/utils_ai_agents.py`` shows a complete workflow:
 API reference
 -------------
 
-The full API for the ``ai_agents`` module, including the settings class and helper
+The full API for the ``ai.agents`` module, including the settings class and helper
 functions, is documented in the :doc:`API reference </api/ai_agents>`:
 
-* :class:`~pyRadPlan.ai_agents.AiSettings`
-* :func:`~pyRadPlan.ai_agents.generate_beam_angles`
-* :func:`~pyRadPlan.ai_agents.generate_voi_objectives`
+* :class:`~pyRadPlan.ai.agents.AiSettings`
+* :func:`~pyRadPlan.ai.agents.generate_beam_angles`
+* :func:`~pyRadPlan.ai.agents.generate_voi_objectives`

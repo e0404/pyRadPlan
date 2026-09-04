@@ -154,3 +154,18 @@ def test_interp1d_out_of_bounds(dtype):
     result = interp1d(xq, x, y)
     expected = np.interp(to_numpy(xq), to_numpy(x), to_numpy(y))
     assert np.allclose(to_numpy(result), expected, rtol=1e-6 if dtype == xp.float32 else 1e-7)
+
+
+def test_interp1d_rejects_mixed_namespaces():
+    x = np.asarray([0.0, 1.0, 2.0])
+    xq = np.asarray([0.5, 1.5])
+    y = xp.asarray([0.0, 1.0, 2.0])
+
+    with pytest.raises(TypeError, match="Multiple namespaces for array inputs"):
+        interp1d(xq, x, y)
+
+    with pytest.raises(TypeError, match="Multiple namespaces for array inputs"):
+        interp1d(xq, x, [np.asarray([0.0, 1.0, 2.0]), y])
+
+    with pytest.raises(TypeError, match="Multiple namespaces for array inputs"):
+        interp1d(xq, x, np.asarray([0.0, 1.0, 2.0]), left=xp.asarray(-1.0))

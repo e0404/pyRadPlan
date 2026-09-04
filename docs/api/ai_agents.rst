@@ -1,10 +1,10 @@
-ai_agents
+ai.agents
 =========
 
-.. currentmodule:: pyRadPlan.ai_agents
+.. currentmodule:: pyRadPlan.ai.agents
 
 .. autosummary::
-   :toctree: generated/ai_agents/
+   :toctree: generated/ai/agents/
 
    AiSettings
 
@@ -13,7 +13,7 @@ Agents
 ------
 
 .. autosummary::
-   :toctree: generated/ai_agents/
+   :toctree: generated/ai/agents/
 
    generate_beam_angles
    beam_angles_system_prompt
@@ -24,7 +24,7 @@ Other Functions
 ---------------
 
 .. autosummary::
-   :toctree: generated/ai_agents/
+   :toctree: generated/ai/agents/
 
    load_ai_env
    available_models

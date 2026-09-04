@@ -29,6 +29,7 @@ Version: `vX.Y.Z`
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
 - [ ] Full test suite passes locally (`pytest test`).
 - [ ] Documentation builds without errors.
+- [ ] Example notebooks re-executed locally (`python docs/execute_examples.py`) and the updated `docs/tutorials/examples/*.ipynb` committed.
 - [ ] No outstanding deprecations are due to be removed in this version (or they have been removed).
 
 ## Post-Merge Actions

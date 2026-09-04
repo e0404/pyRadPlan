@@ -1,8 +1,10 @@
 """Dialog to import from a DICOM folder: pick a CT series, structure set and dose.
 
-Enumeration (fast header reads) is done up front via the :class:`DicomImporter`;
-the actual pixel loading runs in the caller's worker thread using the selectors
-returned by :meth:`DicomImportDialog.selection`.
+Enumeration (a header read per file) is done by the :class:`DicomImporter`; the
+caller normally does it in a worker thread and hands the result in as *catalog*,
+so a large folder does not freeze the GUI while it is scanned.  The actual pixel
+loading also runs in the caller's worker thread, using the selectors returned by
+:meth:`DicomImportDialog.selection`.
 """
 
 from __future__ import annotations
@@ -20,16 +22,37 @@ from PySide6.QtWidgets import (
 
 
 class DicomImportDialog(QDialog):
-    """Choose which CT series, structure set and dose to import from a DICOM folder."""
+    """Choose which CT series, structure set and dose to import from a DICOM folder.
 
-    def __init__(self, importer, parent: Optional[QWidget] = None) -> None:
+    Parameters
+    ----------
+    importer : DicomImporter
+        The importer bound to the folder. Only used to enumerate the contents
+        when no *catalog* is given.
+    parent : QWidget, optional
+        The parent widget.
+    catalog : dict, optional
+        A previously enumerated folder content with the keys ``series``,
+        ``structs`` and ``doses`` (see :meth:`DicomImporter.list_ct_series` and
+        friends). Pass the result of a background scan here to keep the dialog
+        construction instant.
+    """
+
+    def __init__(
+        self,
+        importer,
+        parent: Optional[QWidget] = None,
+        catalog: Optional[dict] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Import DICOM")
         self.resize(520, 200)
 
-        self._series = importer.list_ct_series()
-        self._structs = importer.list_structure_sets()
-        self._doses = importer.list_doses()
+        if catalog is None:
+            catalog = scan_folder(importer)
+        self._series = catalog["series"]
+        self._structs = catalog["structs"]
+        self._doses = catalog["doses"]
 
         form = QFormLayout(self)
 
@@ -89,6 +112,19 @@ class DicomImportDialog(QDialog):
             "load_dose": load_dose,
             "dose_file": dose_file,
         }
+
+
+def scan_folder(importer) -> dict:
+    """Enumerate a DICOM folder into the *catalog* consumed by the dialog.
+
+    Reads one header per file, so it belongs in a worker thread for anything
+    larger than a toy folder; the importer reports its progress while it runs.
+    """
+    return {
+        "series": importer.list_ct_series(),
+        "structs": importer.list_structure_sets(),
+        "doses": importer.list_doses(),
+    }
 
 
 #: Sentinels distinguishing "no dose" from "auto-select a dose" in the combo data.

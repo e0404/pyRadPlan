@@ -395,8 +395,8 @@ class OptimizationWidget(WorkspaceWidget):
         if cst is None or pln is None:
             return
 
-        # Deferred: keeps the optional ai_agents stack out of widget construction.
-        from pyRadPlan.ai_agents import (  # noqa: PLC0415
+        # Deferred: keeps the optional ai.agents stack out of widget construction.
+        from pyRadPlan.ai.agents import (  # noqa: PLC0415
             available_models,
             cst_context_summary,
             generate_voi_objectives,

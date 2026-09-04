@@ -4,10 +4,12 @@ import os
 import re
 import logging
 import warnings
-from typing import Union
+from typing import Optional, Union
 
 import pydicom
 import SimpleITK as sitk
+
+from pyRadPlan.core import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,9 @@ def _select_dose_file(dose_files: list) -> Union[str, os.PathLike]:
     return pool[0][0]
 
 
-def import_dose(dose_files: Union[str, os.PathLike, list]) -> sitk.Image:
+def import_dose(
+    dose_files: Union[str, os.PathLike, list], reporter: Optional[ProgressReporter] = None
+) -> sitk.Image:
     """
     Read a DICOM RTDOSE file into a SimpleITK image (in Gy).
 
@@ -83,6 +87,9 @@ def import_dose(dose_files: Union[str, os.PathLike, list]) -> sitk.Image:
     ----------
     dose_files : str, os.PathLike or list
         Path to an RTDOSE file, or a list of such paths.
+    reporter : ProgressReporter, optional
+        Reporter used to publish the read progress. Defaults to a private
+        reporter, which still reaches context-scoped observers.
 
     Returns
     -------
@@ -96,14 +103,21 @@ def import_dose(dose_files: Union[str, os.PathLike, list]) -> sitk.Image:
     if not dose_files:
         raise ValueError("No RTDOSE file provided.")
 
-    dose_file = dose_files[0] if len(dose_files) == 1 else _select_dose_file(dose_files)
+    reporter = reporter if reporter is not None else ProgressReporter()
 
-    image = sitk.ReadImage(dose_file)
-    image = sitk.Cast(image, sitk.sitkFloat32)
+    # A single-file read has no inner structure to report; the level still gives
+    # consumers a determinate step (and a name to show) while it runs.
+    with reporter.progress("Reading dose cube", total=1) as step:
+        dose_file = dose_files[0] if len(dose_files) == 1 else _select_dose_file(dose_files)
+        logger.info("Reading RTDOSE %s.", os.path.basename(os.fspath(dose_file)))
 
-    ds = pydicom.dcmread(dose_file, stop_before_pixels=True)
-    scaling = float(getattr(ds, "DoseGridScaling", 1.0))
-    if scaling != 1.0:
-        image = image * scaling
+        image = sitk.ReadImage(dose_file)
+        image = sitk.Cast(image, sitk.sitkFloat32)
+
+        ds = pydicom.dcmread(dose_file, stop_before_pixels=True)
+        scaling = float(getattr(ds, "DoseGridScaling", 1.0))
+        if scaling != 1.0:
+            image = image * scaling
+        step.advance()
 
     return image
