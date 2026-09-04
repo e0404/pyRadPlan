@@ -1,107 +1,47 @@
 import pint
 
-from typing import Optional
 from ..core.xp_utils.typing import Array
-from pyRadPlan.quantities._base import FluenceDependentQuantity
+from pyRadPlan.quantities._polo_base import POLOBase
 
 ureg = pint.UnitRegistry()
 
 
-class LinearPOLO(FluenceDependentQuantity):
+class LinearPOLO(POLOBase):
     """
     Linear Probability of Lesion Origin (POLO) model quantity (eta).
 
-    Predicts the linear predictor (eta) before the sigmoid transformation.
+    Exposes the linear predictor eta before the sigmoid transformation, as used by the
+    convexified objectives in Ortkamp et al. ([2], Sec. 2.2.2). The volume correction of
+    :class:`~pyRadPlan.quantities.POLO` is deliberately not applied here: it acts on the
+    probability, not on eta.
 
-    References
-    ----------
-    .. [1] Bahn, E., Bauer, J., Harrabi, S. B., et al. (2020). Late contrast enhancing brain lesions
-           in proton-treated patients with low-grade glioma. Int J Radiat Oncol Biol Phys, 107(3),
-           571–578. https://doi.org/10.1016/j.ijrobp.2020.03.013
-    .. [2] Ortkamp, T., Sallem, H., Harrabi, S., Frank, M., Jäkel, O., Bauer, J., & Wahl, N. (2026).
-           Direct optimization of the probability of lesion origin in proton treatment planning for
-           low-grade glioma patients. Medical Physics, 53, e70395. https://doi.org/10.1002/mp.70395
+    Voxels below :attr:`dose_threshold` fall outside the dose domain the model was fitted on
+    and are returned as ``-inf``, which maps to a probability of zero. Objectives on eta are
+    expected to filter these out (see :class:`HellingerConvPOLO`).
+
+    For coefficients and references, see :class:`~pyRadPlan.quantities.POLOBase`.
     """
 
-    required_dependencies = ("physical_dose", "let_dose")
     unit = ureg.dimensionless
     dim = 1
     identifier = "linear_polo"
     name = "Linear POLO"
 
-    def __init__(
-        self,
-        dij,
-        binary_risk_mask: Optional[Array] = None,
-        cst=None,
-        risk_voi_name: str = "Ventricles_4mm",
-        mode=None,
-        dependencies=None,
-        scenarios=None,
-    ):
-        super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
-        self.risk_voi_name = risk_voi_name
-
-        if binary_risk_mask is None and cst is not None:
-            # Look up requested risk VOI in CST
-            vois = cst.vois if hasattr(cst, "vois") else (cst if isinstance(cst, list) else [])
-            for voi in vois:
-                if voi.name == risk_voi_name:
-                    binary_risk_mask = voi.mask
-                    break
-
-        if binary_risk_mask is None:
-            binary_risk_mask = getattr(dij, "binary_risk_mask", None)
-
-        if hasattr(binary_risk_mask, "mask") or hasattr(binary_risk_mask, "GetSize"):
-            import SimpleITK as sitk
-            from pyRadPlan.core.resample import resample_image
-
-            img = binary_risk_mask.mask if hasattr(binary_risk_mask, "mask") else binary_risk_mask
-            resampled = resample_image(
-                img,
-                target_grid=dij.dose_grid,
-                extrapolate=0.0,
-                interpolator=sitk.sitkNearestNeighbor,
-            )
-            binary_risk_mask = sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
-
-        if binary_risk_mask is None:
-            if risk_voi_name is not None:
-                raise ValueError(
-                    f"POLO risk VOI '{risk_voi_name}' not found in CST and no binary_risk_mask provided. "
-                    "The POLO model was originally fitted using a 'Ventricles_4mm' risk mask. "
-                    "If you intentionally want to evaluate POLO without the periventricular risk component, "
-                    "explicitly set `risk_voi_name=None`."
-                )
-            num_vox = getattr(dij, "num_of_voxels", getattr(dij, "total_voxels", 0))
-            binary_risk_mask = self.array_backend.zeros((num_vox,), dtype=self._dtype)
-
-        self.binary_risk_mask = self.array_backend.asarray(binary_risk_mask, dtype=self._dtype)
-
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
-        d = self.array_backend.asarray(
-            self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index],
-            dtype=self._dtype,
+        eta, d = self._linear_predictor(self._w_cache, scenario_index)
+
+        # -inf is the only correct sentinel in eta-space: it maps to p = 0, whereas a finite
+        # 0 would mean p = 0.5.
+        return self.array_backend.where(
+            self._in_dose_domain(d), eta, self.array_backend.full_like(eta, float("-inf"))
         )
-        d_x_ld = self.array_backend.asarray(
-            self._deps["let_dose"].compute(self._w_cache).flat[scenario_index], dtype=self._dtype
-        )
-        eta = -26.3 + 0.19 * d + 0.018 * d_x_ld + 1.19 * self.binary_risk_mask
-        return eta
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
-        # Gradient of eta w.r.t physical_dose is 0.19
-        grad_d = d_quantity * 0.19
-
-        # Gradient of eta w.r.t let_dose is 0.018
-        grad_d_x_ld = d_quantity * 0.018
-
-        chain_d = self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
-            grad_d, scenario_index
+        # d(eta)/d(dose) and d(eta)/d(let_dose) are the model coefficients, so the incoming
+        # gradient only needs masking to the dose domain before back-propagation.
+        d_quantity = self.array_backend.where(
+            self._in_dose_domain(self._dose(self._w_grad_cache, scenario_index)),
+            d_quantity,
+            self.array_backend.zeros_like(d_quantity),
         )
-        chain_d_x_ld = self._deps["let_dose"]._compute_chain_derivative_single_scenario(
-            grad_d_x_ld, scenario_index
-        )
-
-        return chain_d + chain_d_x_ld
+        return self._backpropagate(d_quantity, scenario_index)
