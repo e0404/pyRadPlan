@@ -4,6 +4,7 @@ import pytest
 import SimpleITK as sitk
 import numpy as np
 
+from pyRadPlan.optimization.objectives import SquaredOverdosing
 from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.ct import create_ct
 
@@ -589,6 +590,54 @@ def test_apply_overlap_priorities(generic_ct, generic_vois):
 
         # we currently should be zero where overlapped
         assert (voi_mask_overlapped[expected][ol_mask] == 0).all()
+
+
+def test_apply_overlap_priorities_none_is_excluded_both_ways(generic_ct, generic_vois):
+    # A VOI with apply_overlap=None keeps its full mask and takes no voxels from others.
+    spanning = generic_vois[0].model_copy(
+        update={
+            "name": "Spanning",
+            "mask": generic_vois[-1].mask,
+            "overlap_priority": 99,
+            "apply_overlap": None,
+        }
+    )
+    before = sitk.GetArrayViewFromImage(spanning.mask).sum()
+
+    plain = StructureSet(ct_image=generic_ct, vois=generic_vois).apply_overlap_priorities()
+    with_spanning = StructureSet(
+        ct_image=generic_ct, vois=[*generic_vois, spanning]
+    ).apply_overlap_priorities()
+
+    resolved = {v.name: sitk.GetArrayViewFromImage(v.mask) for v in with_spanning.vois}
+
+    # Kept everything, despite the worst priority and overlapping every other VOI.
+    assert resolved["Spanning"].sum() == before
+
+    # And removed nothing from the VOIs it overlaps.
+    for voi in plain.vois:
+        expected = sitk.GetArrayViewFromImage(voi.mask)
+        assert np.array_equal(resolved[voi.name], expected)
+
+
+def test_apply_overlap_priorities_warns_when_objectives_are_silenced(generic_ct, generic_vois):
+    # A VOI fully covered by higher-priority structures loses every voxel, so its objectives
+    # would silently never be evaluated. That must not pass unremarked.
+    swallowed = generic_vois[0].model_copy(
+        update={
+            "name": "Swallowed",
+            "mask": generic_vois[0].mask,
+            "overlap_priority": 99,
+            "objectives": [SquaredOverdosing(priority=1.0, d_max=1.0)],
+        }
+    )
+    structure_set = StructureSet(ct_image=generic_ct, vois=[*generic_vois, swallowed])
+
+    with pytest.warns(UserWarning, match="Swallowed"):
+        overlapped = structure_set.apply_overlap_priorities()
+
+    resolved = next(v for v in overlapped.vois if v.name == "Swallowed")
+    assert sitk.GetArrayViewFromImage(resolved.mask).sum() == 0
 
 
 def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):

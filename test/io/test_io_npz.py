@@ -78,6 +78,36 @@ def test_npz_roundtrip_dose(tmp_path):
     )
 
 
+def test_npz_roundtrip_preserves_apply_overlap(tmp_path):
+    # apply_overlap=None marks a VOI as exempt from overlap resolution. If that is lost on
+    # reload it silently reverts to True, the VOI is emptied by the next
+    # apply_overlap_priorities() call, and any objective on it becomes inert.
+    ct, cst = load_tg119()
+    cst.vois[0].apply_overlap = None
+    cst.vois[1].apply_overlap = False
+
+    out = tmp_path / "apply_overlap.npz"
+    save_data(ct=ct, cst=cst, file_name=str(out))
+    cst2 = load_data(out)["cst"]
+
+    reloaded = {v.name: v.apply_overlap for v in cst2.vois}
+    assert reloaded[cst.vois[0].name] is None
+    assert reloaded[cst.vois[1].name] is False
+    assert reloaded[cst.vois[2].name] is True
+
+    kept = next(v for v in cst2.vois if v.apply_overlap is None)
+    before = set(cst.vois[0].indices_numpy.tolist())
+    assert set(kept.indices_numpy.tolist()) == before
+    assert (
+        set(
+            next(
+                v for v in cst2.apply_overlap_priorities().vois if v.name == kept.name
+            ).indices_numpy.tolist()
+        )
+        == before
+    )
+
+
 def test_npz_cst_only_is_self_contained(tmp_path):
     # Saving a cst alone must still produce a loadable file (ct pulled from cst.ct_image).
     ct, cst = load_tg119()

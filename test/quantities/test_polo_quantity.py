@@ -2,6 +2,10 @@ import pytest
 import numpy as np
 import array_api_strict as xp
 
+import SimpleITK as sitk
+
+from pyRadPlan.ct import create_ct
+from pyRadPlan.cst import StructureSet, create_voi
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import POLO, LinearPOLO, QuantityResolver
 
@@ -68,20 +72,97 @@ def test_linear_polo_quantity_compute(sample_dij_dense):
     assert eta.flat[0].shape[0] == 125
 
 
-def test_polo_quantity_cst_lookup(sample_dij_dense):
-    class MockVOI:
-        def __init__(self, name, mask):
-            self.name = name
-            self.mask = mask
+@pytest.fixture
+def risk_cst():
+    """A StructureSet on the dij's ct grid carrying a 'Ventricles_4mm' risk structure."""
+    # Geometry must match the dij's ct_grid (10^3 at 1.5 mm, origin 0) so that the risk mask
+    # still lands on the dose grid (5^3 at 3.0 mm, origin 0) after resampling.
+    cube = sitk.GetImageFromArray(np.zeros((10, 10, 10), dtype=np.float32))
+    cube.SetSpacing((1.5, 1.5, 1.5))
+    cube.SetOrigin((0.0, 0.0, 0.0))
+    ct = create_ct(cube_hu=cube)
 
-    class MockCST:
-        def __init__(self, vois):
-            self.vois = vois
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask[:4, :, :] = 1  # lower quarter along z, so it survives resampling to the 5^3 dose grid
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(cube)
 
-    risk_mask = np.zeros(125, dtype=bool)
-    risk_mask[:15] = True
-    cst = MockCST([MockVOI("Ventricles_4mm", risk_mask)])
+    voi = create_voi(name="Ventricles_4mm", voi_type="OAR", mask=mask_image, ct_image=ct)
+    return ct, StructureSet(ct_image=ct, vois=[voi])
 
+
+def test_polo_quantity_cst_lookup(sample_dij_dense, risk_cst):
+    _ct, cst = risk_cst
     polo = POLO(sample_dij_dense, cst=cst, risk_voi_name="Ventricles_4mm")
+
     assert polo.risk_voi_name == "Ventricles_4mm"
-    assert np.array_equal(polo.binary_risk_mask, risk_mask.astype(float))
+
+    risk = np.asarray(polo.binary_risk_mask)
+    assert risk.shape == (125,)
+    assert set(np.unique(risk)) <= {0.0, 1.0}
+    # The structure covers part of the volume, so the resampled mask must be neither empty
+    # nor everything -- an empty risk mask would silently drop the beta_3 term.
+    assert 0 < risk.sum() < risk.size
+
+
+def test_polo_quantity_missing_risk_voi_raises(sample_dij_dense, risk_cst):
+    _ct, cst = risk_cst
+    with pytest.raises(ValueError, match="Absent"):
+        POLO(sample_dij_dense, cst=cst, risk_voi_name="Absent")
+
+
+def test_polo_dose_threshold_zeroes_below_domain(sample_dij_dense):
+    # Bahn et al. fitted on voxels receiving at least 2 Gy; below that POLO is undefined.
+    fluence = xp.ones(10, dtype=xp.float32)  # dij is all ones -> dose 10 Gy everywhere
+
+    above = np.asarray(POLO(sample_dij_dense, risk_voi_name=None).compute(fluence).flat[0])
+    below = np.asarray(
+        POLO(sample_dij_dense, risk_voi_name=None, dose_threshold=1e3).compute(fluence).flat[0]
+    )
+
+    assert np.all(above > 0.0)
+    assert np.all(below == 0.0)
+
+
+def test_linear_polo_marks_below_threshold_as_neg_inf(sample_dij_dense):
+    # -inf is the sentinel the ConvPOLO objectives filter on; a finite 0 would mean p = 0.5.
+    fluence = xp.ones(10, dtype=xp.float32)
+
+    eta = np.asarray(
+        LinearPOLO(sample_dij_dense, risk_voi_name=None, dose_threshold=1e3)
+        .compute(fluence)
+        .flat[0]
+    )
+    assert np.all(np.isneginf(eta))
+
+    eta_in_domain = np.asarray(
+        LinearPOLO(sample_dij_dense, risk_voi_name=None).compute(fluence).flat[0]
+    )
+    assert np.all(np.isfinite(eta_in_domain))
+
+
+def test_polo_derivative_without_forward_compute(sample_dij_dense):
+    # The derivative path must not depend on a prior compute() having populated _w_cache.
+    polo = POLO(sample_dij_dense, risk_voi_name=None)
+
+    fluence = xp.ones(10, dtype=xp.float32)
+    d_q = xp.ones((1, 125), dtype=xp.float32)
+    deriv = np.asarray(polo.compute_chain_derivative(d_q, fluence).flat[0])
+
+    assert np.all(np.isfinite(deriv))
+
+
+def test_polo_derivative_uses_current_fluence(sample_dij_dense):
+    # The chain derivative must be evaluated at _w_grad_cache, not at whatever fluence the
+    # last forward pass happened to leave in _w_cache.
+    polo = POLO(sample_dij_dense, risk_voi_name=None)
+    d_q = xp.ones((1, 125), dtype=xp.float32)
+
+    grad_fluence = xp.asarray(np.arange(1, 11, dtype=np.float32))
+    expected = np.asarray(polo.compute_chain_derivative(d_q, grad_fluence).flat[0])
+
+    stale = POLO(sample_dij_dense, risk_voi_name=None)
+    stale.compute(xp.ones(10, dtype=xp.float32))  # different fluence, forward cache only
+    actual = np.asarray(stale.compute_chain_derivative(d_q, grad_fluence).flat[0])
+
+    assert np.allclose(actual, expected)
