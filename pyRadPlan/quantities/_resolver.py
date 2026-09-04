@@ -22,9 +22,11 @@ class QuantityResolver:
     When instantiating a quantity class, the resolver inspects the quantity's ``__init__`` signature.
     It automatically supplies required dependencies from:
     1. Problem-level context objects (e.g., ``cst``, ``pln``, ``stf``, ``ct``).
-    2. Objective-level attributes matching constructor parameter names (e.g., ``risk_voi_name``).
-       Note: Only the parameters from the FIRST objective targeting this quantity are used.
-       If you need multiple parameterizations, you must subclass the quantity with a unique identifier.
+    2. Objective-level parameters that the objective explicitly opts into via its
+       ``quantity_params`` ClassVar (e.g., ``risk_voi_name``).
+       Each quantity is instantiated once, so all objectives targeting it must agree on those
+       values; conflicting values raise. If you need multiple parameterizations, subclass the
+       quantity with a unique identifier.
     3. Explicit ``quantity_kwargs`` passed to the resolver.
 
     Mode resolution per class:
@@ -91,14 +93,27 @@ class QuantityResolver:
             if param in self.context and param not in kwargs:
                 kwargs[param] = self.context[param]
 
-        # B. Inject from objective-level properties (e.g. risk_voi_name) if objective targets this quantity
-        if self.objective_list:
-            for _, objs in self.objective_list:
-                for obj in objs:
-                    if getattr(obj, "quantity", None) == identifier:
-                        for param in sig.parameters:
-                            if hasattr(obj, param) and param not in kwargs:
-                                kwargs[param] = getattr(obj, param)
+        # B. Inject parameters the targeting objectives explicitly opt into (e.g. risk_voi_name).
+        # The quantity is built once, so disagreeing objectives cannot both be honoured.
+        from_objectives: dict[str, Any] = {}
+        for _, objs in self.objective_list:
+            for obj in objs:
+                if getattr(obj, "quantity", None) != identifier:
+                    continue
+                for param in type(obj).quantity_params:
+                    if param not in sig.parameters or param in kwargs:
+                        continue
+                    value = getattr(obj, param)
+                    if param in from_objectives and from_objectives[param] != value:
+                        raise ValueError(
+                            f"Objectives on quantity {identifier!r} disagree on {param!r}: "
+                            f"{from_objectives[param]!r} vs {value!r}. The quantity is "
+                            "instantiated once per identifier, so only one value can apply. "
+                            "Give all objectives on this quantity the same value, or subclass "
+                            "the quantity with its own identifier."
+                        )
+                    from_objectives[param] = value
+        kwargs.update(from_objectives)
 
         # C. Explicit overrides passed directly to QuantityResolver
         if identifier in self.quantity_kwargs:

@@ -1,6 +1,6 @@
 """Hellinger POLO objective."""
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field
 import array_api_compat
@@ -27,6 +27,8 @@ class HellingerPOLO(Objective):
         default="Ventricles_4mm",
         description="Name of the periventricular risk structure in CST (<= 4mm).",
     )
+
+    quantity_params: ClassVar[tuple[str, ...]] = ("risk_voi_name",)
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)

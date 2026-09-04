@@ -84,6 +84,13 @@ class Objective(PyRadPlanBaseModel):
 
     name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
+    quantity_params: ClassVar[tuple[str, ...]] = ()
+    """Field names this objective forwards to the constructor of its :attr:`quantity`.
+
+    Only fields listed here are passed on by :class:`~pyRadPlan.quantities.QuantityResolver`.
+    The list is opt-in on purpose: matching on attribute names alone would let unrelated
+    objective fields be captured by any quantity that happens to share a parameter name.
+    """
     priority: float = Field(
         default=1.0,
         ge=0.0,
