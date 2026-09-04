@@ -57,15 +57,21 @@ class POLO(POLOBase):
         """
         Compute the total Normal Tissue Complication Probability (NTCP).
 
-        Args:
-            fluence: The optimized fluence array.
-            mask: Optional binary mask (as a SimpleITK image or 1D boolean array) to restrict the evaluation.
-                  If provided as a SimpleITK image, it will be resampled to the dose grid.
-            scenario_index: Scenario index to compute the NTCP for (default: 0).
+        Parameters
+        ----------
+        fluence : Array
+            The optimized fluence vector.
+        mask : Array or sitk.Image, optional
+            Binary mask restricting the evaluation. A SimpleITK image is resampled to the
+            dose grid; an array is used as a flat boolean index. Evaluates every voxel when
+            omitted.
+        scenario_index : int, optional
+            Scenario index to compute the NTCP for, by default 0.
 
         Returns
         -------
-            The total NTCP as a float.
+        float
+            The total NTCP.
         """
         import numpy as np
 

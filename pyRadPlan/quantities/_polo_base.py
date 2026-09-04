@@ -83,17 +83,27 @@ class POLOBase(FluenceDependentQuantity):
         """
         Initialize a POLO-family quantity.
 
-        Args:
-            dij: Dose influence matrix object.
-            binary_risk_mask: Optional array of shape (n_voxels,) containing 1 for risk voxels.
-            cst: Optional Clinical Structure Set object to extract the risk mask from.
-            risk_voi_name: VOI name in CST for the periventricular risk structure
-                (default: 'Ventricles_4mm'). Pass None to evaluate without the risk component.
-            dose_threshold: Physical dose in Gy below which the model is treated as undefined
-                (default: 2.0 Gy). Set to 0.0 to disable.
-            mode: Compute mode.
-            dependencies: Dictionary of dependency quantity objects.
-            scenarios: Scenario indices.
+        Parameters
+        ----------
+        dij : Dij
+            Dose influence matrix object.
+        binary_risk_mask : Array, optional
+            Array of shape ``(n_voxels,)`` holding 1 for risk voxels. Takes precedence over
+            a lookup in *cst*.
+        cst : StructureSet, optional
+            Structure set to extract the risk mask from, by name.
+        risk_voi_name : str, optional
+            VOI name in the CST for the periventricular risk structure, by default
+            ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component.
+        dose_threshold : float, optional
+            Physical dose in Gy below which the model is treated as undefined, by default
+            2.0 Gy. Set to 0.0 to disable.
+        mode : str, optional
+            Compute mode, ``"direct"`` or ``"indirect"``. Resolved automatically when omitted.
+        dependencies : dict, optional
+            Dependency quantity instances, supplied by the resolver.
+        scenarios : array_like, optional
+            Scenario indices.
         """
         super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
         self.risk_voi_name = risk_voi_name
