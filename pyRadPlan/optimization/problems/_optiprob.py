@@ -16,7 +16,7 @@ from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import ScenarioModel
 from pyRadPlan.quantities import RTQuantity, QuantityResolver
 
-from ..objectives import get_objective
+from ..objectives import Objective, get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
 from ...core import ProgressReporter, xp_utils
 
