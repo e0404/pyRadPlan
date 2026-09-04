@@ -61,7 +61,7 @@ def test_create_bio_model_errors():
 def test_get_bio_model_checks_machine_quantities():
     model = get_bio_model({"model": "WED", "p1": 0.5}, "protons", ["physical_dose", "let"])
     assert model.p1_WED == 0.5
-    with pytest.raises(ValueError, match="not available"):
+    with pytest.raises(ValueError, match="Required quantities.*let"):
         get_bio_model("WED", "protons", ["physical_dose"])
     with pytest.raises(ValueError, match="does not support radiation mode"):
         get_bio_model("WED", "carbon", ["physical_dose", "let"])

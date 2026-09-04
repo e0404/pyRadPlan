@@ -18,8 +18,7 @@ class LETBasedLQModel(LQModel):
     Requires LET kernels from the dose engine in addition to physical dose.
     """
 
-    required_quantities = ["physical_dose", "let"]
-    requires_let = True
+    required_quantities = ("physical_dose", "let")
 
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
         return ParametricEvaluator(self)
@@ -51,7 +50,7 @@ class Wedenberg(RBEMinMax):
     """
 
     model = "WED"
-    possible_radiation_modes = ["protons"]
+    possible_radiation_modes = ("protons",)
 
     def __init__(self, p0: float = 1.0, p1: float = 0.434, p2: float = 1.0):
         self.p0_WED = p0
@@ -70,7 +69,7 @@ class MCNamara(RBEMinMax):
     """
 
     model = "MCN"
-    possible_radiation_modes = ["protons"]
+    possible_radiation_modes = ("protons",)
 
     def __init__(
         self,
@@ -99,7 +98,7 @@ class Carabe(RBEMinMax):
     """
 
     model = "CAR"
-    possible_radiation_modes = ["protons"]
+    possible_radiation_modes = ("protons",)
 
     def __init__(
         self,
@@ -128,7 +127,7 @@ class HeliumMairani(RBEMinMax):
     """
 
     model = "HEL"
-    possible_radiation_modes = ["helium"]
+    possible_radiation_modes = ("helium",)
 
     def __init__(self, p0: float = 1.36938e-1, p1: float = 9.73154e-3, p2: float = 1.51998e-2):
         self.p0_HEL = p0
@@ -151,7 +150,7 @@ class LinearScaling(RBEMinMax):
     """
 
     model = "LSM"
-    possible_radiation_modes = ["protons", "helium", "carbon"]
+    possible_radiation_modes = ("protons", "helium", "carbon")
 
     def __init__(
         self,

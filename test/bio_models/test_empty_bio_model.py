@@ -12,17 +12,18 @@ def test_EmptyModel_constructor():
     empty_model = EmptyModel()
     assert isinstance(empty_model, BiologicalModel)
     assert empty_model.model == "none"
-    assert empty_model.required_quantities == []
-    assert empty_model.possible_radiation_modes == [
+    assert empty_model.required_quantities == ()
+    assert empty_model.possible_radiation_modes == (
         "photons",
         "protons",
         "helium",
         "carbon",
         "oxygen",
         "VHEE",
-    ]
-    assert empty_model.provides_alpha_beta is False
-    assert empty_model.requires_let is False
+    )
+    assert empty_model.output_quantities == ()
+    assert not empty_model.provides("alpha", "beta")
+    assert not empty_model.requires("let")
     assert empty_model.default_report_quantity == "physical_dose"
 
 

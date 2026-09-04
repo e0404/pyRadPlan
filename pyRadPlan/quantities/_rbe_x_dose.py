@@ -80,7 +80,7 @@ class RBExDose(FluenceDependentQuantity):
         """
         model = getattr(dij, "bio_model", None)
         rbe = getattr(dij, "rbe", None)
-        if model is not None and model.provides_alpha_beta:
+        if model is not None and model.provides("alpha", "beta"):
             if has_effect:
                 return "effect"
             if not strict:

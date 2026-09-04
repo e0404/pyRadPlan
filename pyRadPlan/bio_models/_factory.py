@@ -80,7 +80,7 @@ def get_available_models(
     result = {}
     for cls in set(BIO_MODELS.values()):
         if radiation_mode in cls.possible_radiation_modes and all(
-            q in provided_quantities for q in cls.required_quantities
+            name in provided_quantities for name in cls.required_quantities
         ):
             result[cls.model] = cls
             for alias in cls.model_aliases:

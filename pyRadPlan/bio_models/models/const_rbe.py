@@ -21,11 +21,13 @@ class ConstantRBEModel(BiologicalModel):
     """
 
     model = "constant_rbe"
-    model_aliases: ClassVar[list[str]] = ["constRBE"]
+    model_aliases: ClassVar[tuple[str, ...]] = ("constRBE",)
     matrad_name: ClassVar[str] = "constRBE"
-    required_quantities = ["physical_dose"]
-    possible_radiation_modes = ["photons", "protons", "helium", "carbon", "oxygen", "VHEE"]
+    required_quantities = ("physical_dose",)
+    possible_radiation_modes = ("photons", "protons", "helium", "carbon", "oxygen", "VHEE")
     default_report_quantity = "rbe_x_dose"
+    # RBE is applied through dij.rbe, not returned as an evaluator quantity.
+    output_quantities = ()
 
     def __init__(self, rbe: float = 1.1):
         if rbe <= 0:

@@ -43,18 +43,18 @@ class TabulatedRBEModel(LQModel):
 
     Attributes
     ----------
-    quantities_in_table : list[str]
-        Names of the quantity columns in the loaded table (e.g. ``["alpha", "beta"]``).
-    quantities_in_kernel : list[str]
-        Names of the dose-averaged arrays produced per kernel (e.g. ``["alpha", "sqrt_beta"]``).
+    quantities_in_table : tuple[str, ...]
+        Names of the quantity columns in the loaded table (e.g. ``("alpha", "beta")``).
+    quantities_in_kernel : tuple[str, ...]
+        Names of the dose-averaged arrays produced per kernel (e.g. ``("alpha", "sqrt_beta")``).
     quantity_transforms : dict[str, str | None]
         Element-wise transform applied to a table quantity before averaging
         (e.g. ``{"beta": "sqrt"}``).
     """
 
-    possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
-    quantities_in_table: list[str] = []
-    quantities_in_kernel: list[str] = []
+    possible_radiation_modes = ("protons", "helium", "carbon", "oxygen")
+    quantities_in_table: tuple[str, ...] = ()
+    quantities_in_kernel: tuple[str, ...] = ()
     quantity_transforms: dict[str, Optional[str]] = {}
 
     _folder_name_quantity_tables = resources.files("pyRadPlan.data.RBEtables")
@@ -266,9 +266,9 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
     """
 
     model = "dose_average_alpha_beta"
-    quantities_in_table = ["alpha", "beta"]
-    quantities_in_kernel = ["alpha", "sqrt_beta"]
-    required_quantities = ["fluence"]
+    quantities_in_table = ("alpha", "beta")
+    quantities_in_kernel = ("alpha", "sqrt_beta")
+    required_quantities = ("fluence",)
     quantity_transforms = {"alpha": None, "beta": "sqrt"}
 
     def __init__(

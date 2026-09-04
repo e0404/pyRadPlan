@@ -102,6 +102,11 @@ model instance:
 
     [cls.model for cls in available_bio_models("protons")]
 
+Each model declares the named data it needs through ``required_quantities`` and the evaluator
+quantities it can produce through ``output_quantities``. Availability checks compare the
+requirements against the selected machine, while dose engines select capabilities such as LQ
+evaluation by checking for the ``"alpha"`` and ``"beta"`` quantities.
+
 .. list-table::
    :header-rows: 1
    :widths: 22 18 60

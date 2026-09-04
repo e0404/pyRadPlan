@@ -19,10 +19,10 @@ class KernelBasedLQModel(LQModel):
     ----------
     model : str
         ``"kernel_based_lq"`` (alias ``"LEM"``)
-    required_quantities : list[str]
-        ``["physical_dose", "alpha", "beta"]``
-    kernel_quantities : list[str]
-        ``["alpha", "beta"]`` — the kernel arrays gathered per tissue class.
+    required_quantities : tuple[str, ...]
+        ``("physical_dose", "alpha", "beta")``
+    kernel_quantities : tuple[str, ...]
+        ``("alpha", "beta")`` — the kernel arrays gathered per tissue class.
 
     Parameters
     ----------
@@ -31,11 +31,11 @@ class KernelBasedLQModel(LQModel):
     """
 
     model = "kernel_based_lq"
-    model_aliases: ClassVar[list[str]] = ["LEM"]
+    model_aliases: ClassVar[tuple[str, ...]] = ("LEM",)
     matrad_name: ClassVar[str] = "LEM"
-    required_quantities = ["physical_dose", "alpha", "beta"]
-    possible_radiation_modes = ["protons", "helium", "carbon", "oxygen"]
-    kernel_quantities = ["alpha", "beta"]
+    required_quantities = ("physical_dose", "alpha", "beta")
+    possible_radiation_modes = ("protons", "helium", "carbon", "oxygen")
+    kernel_quantities = ("alpha", "beta")
 
     def __init__(self, tissue_lookup: str = "exact"):
         self.tissue_lookup = tissue_lookup

@@ -190,7 +190,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         ----------
         calc_bio_dose : "auto" or bool
             Requested alpha/beta influence calculation. ``"auto"`` follows the model's
-            ``provides_alpha_beta``; ``True`` without such a model raises.
+            declared ``"alpha"`` / ``"beta"`` outputs; ``True`` without such a model raises.
         calc_let : "auto" or bool
             Requested LET influence calculation. ``"auto"`` resolves to ``let_auto``; ``True``
             without LET data resolves to ``False`` with a warning.
@@ -206,11 +206,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             either as output or as input to the biological model.
         """
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        provides_alpha_beta = model is not None and model.provides_alpha_beta
+        provides_lq_outputs = model is not None and model.provides("alpha", "beta")
 
         if calc_bio_dose == "auto":
-            bio = provides_alpha_beta
-        elif calc_bio_dose and not provides_alpha_beta:
+            bio = provides_lq_outputs
+        elif calc_bio_dose and not provides_lq_outputs:
             raise ValueError(
                 "calc_bio_dose=True requires a biological model providing alpha/beta, "
                 f"but the plan's bio_model is {model!r}."
@@ -226,7 +226,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         else:
             let = bool(calc_let)
 
-        use_let_kernel = let or (bio and model is not None and model.requires_let)
+        use_let_kernel = let or (bio and model is not None and model.requires("let"))
         return bio, let, use_let_kernel
 
     def calc_dose_forward(

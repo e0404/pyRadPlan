@@ -1225,13 +1225,13 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         # Alpha/beta influence matrices are derived from the scored LET, so only LET-based
         # models are supported
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        supported = model is not None and model.provides_alpha_beta and model.requires_let
+        supported = model is not None and model.provides("alpha", "beta") and model.requires("let")
         if self.calc_bio_dose is True and not supported:
             raise NotImplementedError(
                 "FRED derives alpha/beta influence matrices from the scored LET and therefore "
                 f"only supports LET-based biological models, not {model!r}."
             )
-        if self.calc_bio_dose == "auto" and model is not None and model.provides_alpha_beta:
+        if self.calc_bio_dose == "auto" and model is not None and model.provides("alpha", "beta"):
             if not supported:
                 logger.warning(
                     "FRED only supports LET-based biological models; alpha/beta influence "
@@ -1242,7 +1242,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             self.calc_bio_dose if supported else False,
             self.calc_let,
             let_available=True,
-            let_auto=model is not None and model.requires_let,
+            let_auto=model is not None and model.requires("let"),
         )
         if model is not None:
             dij["bio_model"] = model

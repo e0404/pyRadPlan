@@ -290,7 +290,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             "beta_x": bixel["v_beta_x"],
             "physical_dose": bixel["physical_dose"],
         }
-        if self._bio_evaluator.model.requires_let:
+        if self._bio_evaluator.model.requires("let"):
             inputs["let"] = kernels["let"]
         inputs.update({name: kernels[name] for name in self._bio_kernel_names})
         return BioEvaluationContext(inputs)
@@ -321,7 +321,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             )
 
         context_names = {"alpha_x", "beta_x", "physical_dose"}
-        if self._bio_evaluator.model.requires_let:
+        if self._bio_evaluator.model.requires("let"):
             context_names.add("let")
         collisions = context_names.intersection(self._bio_kernel_names)
         if collisions:

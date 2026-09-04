@@ -12,17 +12,18 @@ def test_ConstantRBEModel_constructor():
     const_rbe_model = ConstantRBEModel()
     assert isinstance(const_rbe_model, BiologicalModel)
     assert const_rbe_model.model == "constant_rbe"
-    assert const_rbe_model.required_quantities == ["physical_dose"]
-    assert const_rbe_model.possible_radiation_modes == [
+    assert const_rbe_model.required_quantities == ("physical_dose",)
+    assert const_rbe_model.possible_radiation_modes == (
         "photons",
         "protons",
         "helium",
         "carbon",
         "oxygen",
         "VHEE",
-    ]
-    assert const_rbe_model.provides_alpha_beta is False
-    assert const_rbe_model.requires_let is False
+    )
+    assert const_rbe_model.output_quantities == ()
+    assert not const_rbe_model.provides("alpha", "beta")
+    assert not const_rbe_model.requires("let")
     assert const_rbe_model.rbe == pytest.approx(1.1)
 
 

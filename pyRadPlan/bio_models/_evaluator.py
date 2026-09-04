@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -160,7 +160,7 @@ class ParametricEvaluator(BioModelEvaluator):
     """
 
     def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
-        if not self.model.provides_alpha_beta:
+        if not self.model.provides("alpha", "beta"):
             raise NotImplementedError(
                 f"Biological model '{self.model.model}' does not provide alpha/beta values."
             )
@@ -203,8 +203,8 @@ class KernelBasedEvaluator(_TissueKernelEvaluator):
     ----------
     model : BiologicalModel
         Must implement ``alpha_beta_from_kernel_rows``.
-    kernel_fields : list[str]
-        Names of the machine kernel arrays to interpolate per bixel (e.g. ``["alpha", "beta"]``).
+    kernel_fields : Sequence[str]
+        Names of the machine kernel arrays to interpolate per bixel (e.g. ``("alpha", "beta")``).
     lookup : TissueParameterLookup
         Voxel parameter → tissue class mapping.
     voxel_params : dict[str, Array]
@@ -215,7 +215,7 @@ class KernelBasedEvaluator(_TissueKernelEvaluator):
     def __init__(
         self,
         model: BiologicalModel,
-        kernel_fields: list[str],
+        kernel_fields: Sequence[str],
         lookup: TissueParameterLookup,
         voxel_params: dict[str, Any],
     ):

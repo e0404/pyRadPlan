@@ -41,21 +41,22 @@ def _evaluate(model, alpha_x, beta_x, kernels):
 @pytest.mark.parametrize(
     "model_cls, name, modes",
     [
-        (Wedenberg, "WED", ["protons"]),
-        (MCNamara, "MCN", ["protons"]),
-        (Carabe, "CAR", ["protons"]),
-        (HeliumMairani, "HEL", ["helium"]),
-        (LinearScaling, "LSM", ["protons", "helium", "carbon"]),
+        (Wedenberg, "WED", ("protons",)),
+        (MCNamara, "MCN", ("protons",)),
+        (Carabe, "CAR", ("protons",)),
+        (HeliumMairani, "HEL", ("helium",)),
+        (LinearScaling, "LSM", ("protons", "helium", "carbon")),
     ],
 )
 def test_let_model_constructor(model_cls, name, modes):
     model = model_cls()
     assert isinstance(model, BiologicalModel)
     assert model.model == name
-    assert model.required_quantities == ["physical_dose", "let"]
+    assert model.required_quantities == ("physical_dose", "let")
     assert model.possible_radiation_modes == modes
-    assert model.provides_alpha_beta is True
-    assert model.requires_let is True
+    assert model.output_quantities == ("alpha", "beta")
+    assert model.provides("alpha", "beta")
+    assert model.requires("let")
 
 
 def test_Wedenberg_alpha_beta(sample_parameters, sample_kernel):

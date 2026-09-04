@@ -82,11 +82,12 @@ def test_TabulatedAlphaBetaModel_constructor():
     model = TabulatedAlphaBetaModel()
     assert isinstance(model, BiologicalModel)
     assert model.model == "dose_average_alpha_beta"
-    assert model.quantities_in_table == ["alpha", "beta"]
-    assert model.quantities_in_kernel == ["alpha", "sqrt_beta"]
-    assert model.required_quantities == ["fluence"]
+    assert model.quantities_in_table == ("alpha", "beta")
+    assert model.quantities_in_kernel == ("alpha", "sqrt_beta")
+    assert model.required_quantities == ("fluence",)
     assert model.quantity_transforms == {"alpha": None, "beta": "sqrt"}
-    assert model.provides_alpha_beta is True
+    assert model.output_quantities == ("alpha", "beta")
+    assert model.provides("alpha", "beta")
     assert model.table_alpha_x.shape == (1,)
     assert model.table_beta_x.shape == (1,)
 

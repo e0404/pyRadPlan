@@ -20,7 +20,7 @@ class LQModel(BiologicalModel):
     tissue-class kernel rows (:meth:`alpha_beta_from_kernel_rows`).
     """
 
-    provides_alpha_beta = True
+    output_quantities = ("alpha", "beta")
     default_report_quantity = "rbe_x_dose"
 
     def alpha_beta(self, alpha_x: Any, beta_x: Any, context: Mapping[str, Any]) -> tuple[Any, Any]:

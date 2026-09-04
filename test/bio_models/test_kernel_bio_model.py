@@ -43,11 +43,12 @@ def test_KernelBasedLQModel_constructor():
     kernel_lq_model = KernelBasedLQModel()
     assert isinstance(kernel_lq_model, BiologicalModel)
     assert kernel_lq_model.model == "kernel_based_lq"
-    assert kernel_lq_model.required_quantities == ["physical_dose", "alpha", "beta"]
-    assert kernel_lq_model.possible_radiation_modes == ["protons", "helium", "carbon", "oxygen"]
-    assert kernel_lq_model.kernel_quantities == ["alpha", "beta"]
-    assert kernel_lq_model.provides_alpha_beta is True
-    assert kernel_lq_model.requires_let is False
+    assert kernel_lq_model.required_quantities == ("physical_dose", "alpha", "beta")
+    assert kernel_lq_model.possible_radiation_modes == ("protons", "helium", "carbon", "oxygen")
+    assert kernel_lq_model.kernel_quantities == ("alpha", "beta")
+    assert kernel_lq_model.output_quantities == ("alpha", "beta")
+    assert kernel_lq_model.provides("alpha", "beta")
+    assert not kernel_lq_model.requires("let")
 
 
 def test_KernelBasedLQModel_evaluator(machine, voxel_params):

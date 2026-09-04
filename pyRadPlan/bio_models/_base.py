@@ -23,31 +23,28 @@ class BiologicalModel(ABC):
     ----------
     model : str
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
-    model_aliases : list[str]
+    model_aliases : tuple[str, ...]
         Alternative names by which this model can be looked up.
     matrad_name : str or None
         Name of the equivalent matRad model (``pln.bioModel``); ``None`` if it is ``model``.
-    required_quantities : list[str]
-        Kernel quantities the machine data must provide (e.g. ``["physical_dose", "let"]``).
-    possible_radiation_modes : list[str]
+    required_quantities : tuple[str, ...]
+        Named dose-engine or machine quantities required to construct and evaluate the model
+        (e.g. ``("physical_dose", "let")``).
+    possible_radiation_modes : tuple[str, ...]
         Radiation modalities this model supports.
     default_report_quantity : str
         Quantity recommended for display and planning by default.
-    provides_alpha_beta : bool
-        Whether the model yields per-voxel LQ parameters; if so, the dose engine computes
-        ``alpha_dose`` / ``sqrt_beta_dose`` influence matrices.
-    requires_let : bool
-        Whether the dose engine has to provide LET kernels to evaluate the model.
+    output_quantities : tuple[str, ...]
+        Named quantities returned by the model evaluator, such as ``("alpha", "beta")``.
     """
 
     model: ClassVar[str]
-    model_aliases: ClassVar[list[str]] = []
+    model_aliases: ClassVar[tuple[str, ...]] = ()
     matrad_name: ClassVar[Optional[str]] = None
-    required_quantities: ClassVar[list[str]] = []
-    possible_radiation_modes: ClassVar[list[str]]
+    required_quantities: ClassVar[tuple[str, ...]] = ()
+    possible_radiation_modes: ClassVar[tuple[str, ...]]
     default_report_quantity: ClassVar[str] = "physical_dose"
-    provides_alpha_beta: ClassVar[bool] = False
-    requires_let: ClassVar[bool] = False
+    output_quantities: ClassVar[tuple[str, ...]] = ()
 
     _parameters: dict[str, Any]
 
@@ -71,6 +68,14 @@ class BiologicalModel(ABC):
     def to_matrad(self) -> str:
         """Model name as used by matRad's ``pln.bioModel``."""
         return self.matrad_name or self.model
+
+    def requires(self, quantity_name: str) -> bool:
+        """Whether the model requires the named engine or machine quantity."""
+        return quantity_name in self.required_quantities
+
+    def provides(self, quantity_name: str, *additional_names: str) -> bool:
+        """Whether the evaluator provides every named quantity."""
+        return all(name in self.output_quantities for name in (quantity_name, *additional_names))
 
     @classmethod
     def config_model(cls) -> type:
@@ -158,7 +163,8 @@ class BiologicalModel(ABC):
             if missing:
                 valid_quantities = False
                 messages.append(
-                    "Required quantities not provided by Dose Engine or selected Machine Dataset."
+                    "Required quantities not provided by Dose Engine or selected Machine Dataset: "
+                    f"{', '.join(missing)}."
                 )
 
         return (valid_rad_mode and valid_quantities), ", ".join(messages)
@@ -202,8 +208,7 @@ class EmptyModel(BiologicalModel):
     """
 
     model = "none"
-    required_quantities = []
-    possible_radiation_modes = ["photons", "protons", "helium", "carbon", "oxygen", "VHEE"]
+    possible_radiation_modes = ("photons", "protons", "helium", "carbon", "oxygen", "VHEE")
     default_report_quantity = "physical_dose"
 
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:

@@ -25,7 +25,7 @@ def alpha_beta_influence_from_let(
     Parameters
     ----------
     evaluator : BioModelEvaluator
-        Evaluator of a model with ``requires_let`` (e.g. Wedenberg, McNamara).
+        Evaluator of a model requiring the ``"let"`` input (e.g. Wedenberg, McNamara).
     physical_dose, let_dose : sparse matrix, shape (n_voxels, n_columns)
         Physical dose and LET-weighted dose influence matrices of one scenario.
     alpha_x, beta_x : array, shape (n_voxels,)

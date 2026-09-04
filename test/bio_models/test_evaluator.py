@@ -90,13 +90,21 @@ def test_parametric_evaluator_returns_named_result():
 def test_generic_result_does_not_require_lq_outputs():
     """The general evaluator contract can represent non-LQ endpoints."""
 
+    class DirectRBEModel(ConstantRBEModel):
+        output_quantities = ("rbe",)
+
     class DirectRBEEvaluator(BioModelEvaluator):
         def evaluate(self, context):
             return BioModelResult({"rbe": context.require("rbe")})
 
-    evaluator = DirectRBEEvaluator(Wedenberg())
+    model = DirectRBEModel()
+    evaluator = DirectRBEEvaluator(model)
     result = evaluator.evaluate(BioEvaluationContext({"rbe": xp.asarray([1.25])}))
 
+    assert model.provides("rbe")
+    assert not model.provides("alpha", "beta")
+    with pytest.raises(TypeError):
+        model.provides()
     assert set(result) == {"rbe"}
     assert np.allclose(np.asarray(result["rbe"]), [1.25])
 
