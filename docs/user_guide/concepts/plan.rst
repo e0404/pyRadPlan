@@ -73,9 +73,9 @@ Key fields
      - Total prescribed dose in Gy. Used as the reference dose for normalization.
    * - ``bio_model``
      - per mode
-     - Biological model (see :ref:`concept_bio_model`). Defaults to ``"constant_rbe"`` for
-       protons, ``"HEL"`` for helium, ``"kernel_based_lq"`` for carbon/oxygen and ``"none"``
-       for photons.
+     - Biological model (see :ref:`concept_bio_model`). Defaults to ``"kernel_based_lq"``
+       for carbon, preserving its established RBE-weighted workflow, and ``"none"`` for
+       other radiation modes. Select proton, helium, or oxygen models explicitly.
    * - ``mult_scen``
      - nominal
      - Uncertainty / robustness scenario model

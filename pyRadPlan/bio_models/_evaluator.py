@@ -144,10 +144,10 @@ class TabulatedSpectrumEvaluator(BioModelEvaluator):
         self.lookup = lookup
         self.lookup.validate(voxel_params)
 
-        first_kernel = machine.pb_kernels[machine.energies[0]]
-        fragments = model.select_fragments(first_kernel.fluence_spectrum)
         self._tables = {
-            float(energy): model.dose_average(kernel, fragments)
+            float(energy): model.dose_average(
+                kernel, model.select_fragments(kernel.fluence_spectrum)
+            )
             for energy, kernel in machine.pb_kernels.items()
         }
         self._converted: dict[tuple, dict[str, Any]] = {}

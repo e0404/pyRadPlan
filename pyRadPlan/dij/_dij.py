@@ -416,6 +416,9 @@ class Dij(PyRadPlanBaseModel):
     _INTENSIVE_RESULTS: ClassVar[frozenset[str]] = frozenset(
         {"let", "rbe", "alpha", "beta", "let_beam", "rbe_beam", "alpha_beam", "beta_beam"}
     )
+    _SQRT_EXTENSIVE_RESULTS: ClassVar[frozenset[str]] = frozenset(
+        {"sqrt_beta_dose", "sqrt_beta_dose_beam"}
+    )
 
     @classmethod
     def _scale_result_to_fractions(cls, out: dict[str, Any], num_of_fractions: int) -> dict:
@@ -425,9 +428,12 @@ class Dij(PyRadPlanBaseModel):
         for key, value in out.items():
             if key in cls._INTENSIVE_RESULTS:
                 continue
-            factor = (
-                num_of_fractions**2 if key.startswith("physical_dose_var") else num_of_fractions
-            )
+            if key in cls._SQRT_EXTENSIVE_RESULTS:
+                factor = num_of_fractions**0.5
+            elif key.startswith("physical_dose_var"):
+                factor = num_of_fractions**2
+            else:
+                factor = num_of_fractions
             if isinstance(value, list):
                 out[key] = [factor * v for v in value]
             else:
@@ -455,17 +461,23 @@ class Dij(PyRadPlanBaseModel):
 
         out = {}
         xp = array_api_compat.array_namespace(intensity)
-        beam_num = xp.asarray(self.beam_num)
-        beam_indices = [xp.nonzero(beam_num == i)[0] for i in range(self.num_of_beams)]
+        beam_num = xp.asarray(self.beam_num, device=array_api_compat.device(intensity))
+        zero_intensity = xp.zeros_like(intensity)
+        beam_intensities = [
+            xp.where(beam_num == i, intensity, zero_intensity) for i in range(self.num_of_beams)
+        ]
 
         # TODO: implement quantity system to select the corresponding quantities automatically
         if self.physical_dose is not None:
             dose_mat = self.physical_dose.flat[scenario_index]
             out["physical_dose"] = dose_mat @ intensity
 
-            # Slicing intensity by beam is faster than multiplying by a beam mask,
-            # since it shrinks the matmul size instead of just zeroing terms.
-            out["physical_dose_beam"] = [dose_mat[:, idx] @ intensity[idx] for idx in beam_indices]
+            # Mask the fluence instead of selecting matrix columns. Integer-array
+            # indexing is not part of the Python Array API and fails for strict
+            # backends.
+            out["physical_dose_beam"] = [
+                dose_mat @ beam_intensity for beam_intensity in beam_intensities
+            ]
 
         if self.physical_dose_var is not None:
             out["physical_dose_var"] = self.physical_dose_var.flat[scenario_index] @ intensity
@@ -478,20 +490,23 @@ class Dij(PyRadPlanBaseModel):
 
             let_mat = self.let_dose.flat[scenario_index]
             let_dose = let_mat @ intensity
-            out["let"] = xp.zeros_like(let_dose)
-            out["let"][indices] = let_dose[indices] / out["physical_dose"][indices]
+            safe_dose = xp.where(indices, out["physical_dose"], xp.ones_like(let_dose))
+            out["let"] = xp.where(indices, let_dose / safe_dose, xp.zeros_like(let_dose))
 
-            let_dose_beams = [let_mat[:, idx] @ intensity[idx] for idx in beam_indices]
+            let_dose_beams = [let_mat @ beam_intensity for beam_intensity in beam_intensities]
             out["let_beam"] = []
             for i, let_dose_beam in enumerate(let_dose_beams):
                 phys_dose_beam = out["physical_dose_beam"][i]
-                let_beam = xp.zeros_like(let_dose_beam)
                 max_phys = xp.max(phys_dose_beam)
-                if max_phys > 0:
-                    indices_beam = phys_dose_beam > 0.05 * max_phys
-                    let_beam[indices_beam] = (
-                        let_dose_beam[indices_beam] / phys_dose_beam[indices_beam]
-                    )
+                indices_beam = (max_phys > 0) & (phys_dose_beam > 0.05 * max_phys)
+                safe_dose_beam = xp.where(
+                    indices_beam, phys_dose_beam, xp.ones_like(phys_dose_beam)
+                )
+                let_beam = xp.where(
+                    indices_beam,
+                    let_dose_beam / safe_dose_beam,
+                    xp.zeros_like(let_dose_beam),
+                )
                 out["let_beam"].append(let_beam)
 
         # Lazy import: the quantities module depends on the dij
@@ -509,11 +524,14 @@ class Dij(PyRadPlanBaseModel):
             out["alpha_dose"] = alpha_mat @ intensity
             out["sqrt_beta_dose"] = sqrt_beta_mat @ intensity
 
-            valid = (out["physical_dose"] > 0) & (betax > 0)
+            valid = out["physical_dose"] > 0
             phys = out["physical_dose"]
-            out["alpha"] = np.where(valid, out["alpha_dose"] / np.where(valid, phys, 1.0), 0.0)
-            out["beta"] = np.where(
-                valid, (out["sqrt_beta_dose"] / np.where(valid, phys, 1.0)) ** 2, 0.0
+            safe_phys = xp.where(valid, phys, xp.ones_like(phys))
+            out["alpha"] = xp.where(valid, out["alpha_dose"] / safe_phys, xp.zeros_like(phys))
+            out["beta"] = xp.where(
+                valid,
+                (out["sqrt_beta_dose"] / safe_phys) ** 2,
+                xp.zeros_like(phys),
             )
 
             out["effect_beam"] = []
@@ -521,29 +539,50 @@ class Dij(PyRadPlanBaseModel):
             out["beta_beam"] = []
             out["alpha_dose_beam"] = []
             out["sqrt_beta_dose_beam"] = []
-            for idx, phys_beam in zip(beam_indices, out["physical_dose_beam"]):
-                alpha_dose_beam = alpha_mat[:, idx] @ intensity[idx]
-                sqrt_beta_dose_beam = sqrt_beta_mat[:, idx] @ intensity[idx]
+            for beam_intensity, phys_beam in zip(
+                beam_intensities, out["physical_dose_beam"], strict=True
+            ):
+                alpha_dose_beam = alpha_mat @ beam_intensity
+                sqrt_beta_dose_beam = sqrt_beta_mat @ beam_intensity
                 mask_beam = phys_beam > 0
-                denom_beam = np.where(mask_beam, phys_beam, 1.0)
+                denom_beam = xp.where(mask_beam, phys_beam, xp.ones_like(phys_beam))
                 out["effect_beam"].append(alpha_dose_beam + sqrt_beta_dose_beam**2)
                 out["alpha_dose_beam"].append(alpha_dose_beam)
                 out["sqrt_beta_dose_beam"].append(sqrt_beta_dose_beam)
-                out["alpha_beam"].append(np.where(mask_beam, alpha_dose_beam / denom_beam, 0.0))
+                out["alpha_beam"].append(
+                    xp.where(
+                        mask_beam,
+                        alpha_dose_beam / denom_beam,
+                        xp.zeros_like(phys_beam),
+                    )
+                )
                 out["beta_beam"].append(
-                    np.where(mask_beam, (sqrt_beta_dose_beam / denom_beam) ** 2, 0.0)
+                    xp.where(
+                        mask_beam,
+                        (sqrt_beta_dose_beam / denom_beam) ** 2,
+                        xp.zeros_like(phys_beam),
+                    )
                 )
 
         if rbe_path == "effect":
             phys = out["physical_dose"]
             valid = phys > 0
             out["rbe_x_dose"] = lq_inverse_dose(out["effect"], alphax, betax)
-            out["rbe"] = np.where(valid, out["rbe_x_dose"] / np.where(valid, phys, 1.0), 0.0)
+            safe_phys = xp.where(valid, phys, xp.ones_like(phys))
+            out["rbe"] = xp.where(
+                valid,
+                out["rbe_x_dose"] / safe_phys,
+                xp.zeros_like(phys),
+            )
             out["rbe_x_dose_beam"] = [
                 lq_inverse_dose(effect_beam, alphax, betax) for effect_beam in out["effect_beam"]
             ]
             out["rbe_beam"] = [
-                np.where(phys_beam > 0, rbe_x_beam / np.where(phys_beam > 0, phys_beam, 1.0), 0.0)
+                xp.where(
+                    phys_beam > 0,
+                    rbe_x_beam / xp.where(phys_beam > 0, phys_beam, xp.ones_like(phys_beam)),
+                    xp.zeros_like(phys_beam),
+                )
                 for rbe_x_beam, phys_beam in zip(out["rbe_x_dose_beam"], out["physical_dose_beam"])
             ]
         elif rbe_path == "constant":

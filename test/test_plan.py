@@ -175,7 +175,12 @@ def test_plan_to_matrad():
 
 @pytest.mark.parametrize(
     "radiation_mode, expected",
-    [("protons", "constant_rbe"), ("helium", "HEL"), ("carbon", "kernel_based_lq")],
+    [
+        ("protons", "none"),
+        ("helium", "none"),
+        ("carbon", "kernel_based_lq"),
+        ("oxygen", "none"),
+    ],
 )
 def test_ion_plan_default_bio_model(radiation_mode, expected):
     pln = IonPlan(radiation_mode=radiation_mode)
@@ -195,7 +200,12 @@ def test_plan_bio_model_from_dict_and_instance():
     assert isinstance(pln.bio_model, ConstantRBEModel)
     assert pln.bio_model.rbe == 1.0
     assert pln.model_dump()["bio_model"] == {"model": "constant_rbe", "rbe": 1.0}
-    assert pln.to_matrad()["bioModel"] == "constRBE"
+    matrad = pln.to_matrad()
+    assert matrad["bioModel"] == "constRBE"
+    assert matrad["bioModelParameters"] == {"rbe": 1.0}
+    round_trip = create_pln(matrad)
+    assert isinstance(round_trip.bio_model, ConstantRBEModel)
+    assert round_trip.bio_model.rbe == 1.0
 
     model = Wedenberg(p1=0.5)
     pln = IonPlan(radiation_mode="protons", bio_model=model)
@@ -225,6 +235,12 @@ def test_plan_round_trip_keeps_bio_model_parameters():
     pln2 = create_pln(pln.model_dump())
     assert pln2.bio_model == pln.bio_model
     assert pln2.bio_model.p_upperLETThreshold == 20.0
+
+    matrad = pln.to_matrad()
+    assert matrad["bioModel"] == "LSM"
+    assert matrad["bioModelParameters"] == {"upper_let_threshold": 20.0}
+    pln3 = create_pln(matrad)
+    assert pln3.bio_model == pln.bio_model
 
 
 def test_plan_dose_convention():

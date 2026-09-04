@@ -1,8 +1,9 @@
 """Scenario-column handling of alphax/betax in the Dij and the LQ quantities."""
 
+import array_api_compat
+import array_api_strict as xp
 import numpy as np
 import pytest
-import array_api_strict as xp
 from pydantic import ValidationError
 
 from pyRadPlan.dij import Dij
@@ -135,8 +136,18 @@ def test_result_scaling_to_fractions(two_scenario_dij):
     per_fraction = dij.get_result_arrays_from_intensity(w)
     total = dij.get_result_arrays_from_intensity(w, num_of_fractions=30)
 
-    for key in ("physical_dose", "effect", "rbe_x_dose", "alpha_dose", "sqrt_beta_dose"):
+    for key in ("physical_dose", "effect", "rbe_x_dose", "alpha_dose"):
         assert np.allclose(total[key], 30 * per_fraction[key])
+    assert np.allclose(total["sqrt_beta_dose"], np.sqrt(30) * per_fraction["sqrt_beta_dose"])
     for key in ("rbe", "alpha", "beta"):
         assert np.allclose(total[key], per_fraction[key])
     assert np.allclose(total["physical_dose_beam"][0], 30 * per_fraction["physical_dose_beam"][0])
+    assert np.allclose(total["effect"], total["alpha_dose"] + total["sqrt_beta_dose"] ** 2)
+
+
+def test_result_arrays_preserve_array_api_backend(two_scenario_dij):
+    dij = two_scenario_dij.to_namespace(xp, keep_sparse_compat=False)
+    result = dij.get_result_arrays_from_intensity(xp.arange(N_BIX, dtype=xp.float32))
+
+    for key in ("physical_dose", "effect", "alpha", "beta", "rbe_x_dose", "rbe"):
+        assert array_api_compat.is_array_api_strict_namespace(result[key].__array_namespace__())

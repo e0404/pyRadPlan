@@ -131,14 +131,17 @@ def test_bio_model_combo_follows_radiation_mode(qapp):
     assert {"constant_rbe", "WED", "MCN", "CAR", "LSM"} <= set(items)
     assert "HEL" not in items
     assert "LEM" not in items  # aliases are not listed
-    assert widget._cmb_bio_model.currentText() == "constant_rbe"  # per-mode default
+    assert widget._cmb_bio_model.currentText() == "none"  # per-mode default
 
     widget._cmb_radiation.setCurrentText("helium")
     assert "HEL" in _combo_items(widget._cmb_bio_model)
-    assert widget._cmb_bio_model.currentText() == "HEL"
+    assert widget._cmb_bio_model.currentText() == "none"
 
     widget._cmb_radiation.setCurrentText("carbon")
     assert widget._cmb_bio_model.currentText() == "kernel_based_lq"
+
+    widget._cmb_radiation.setCurrentText("oxygen")
+    assert widget._cmb_bio_model.currentText() == "none"
 
 
 def test_bio_model_selection_survives_mode_switch_when_supported(qapp):

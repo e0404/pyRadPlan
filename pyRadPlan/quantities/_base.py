@@ -194,10 +194,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         # check if we need to update the cache
         if self._w_cache is None or not xp.all(self._w_cache == fluence):
-            if self._w_cache is None:
-                self._w_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_cache[:] = fluence
+            self._w_cache = xp.asarray(fluence, copy=True)
             self._compute_quantity_cache()
 
         return self._q_cache
@@ -225,10 +222,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             fluence = xp.asarray(fluence, dtype=self._dtype)
 
         if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
-            if self._w_grad_cache is None:
-                self._w_grad_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_grad_cache[:] = fluence
+            self._w_grad_cache = xp.asarray(fluence, copy=True)
             self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache

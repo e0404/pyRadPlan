@@ -74,8 +74,13 @@ class ExactClassLookup(TissueParameterLookup):
             If a voxel pair has no exact match in the reference classes.
         """
         xp = array_api_compat.array_namespace(v_alpha_x)
-        ref_alpha_x = xp.reshape(xp.asarray(self.class_alpha_x, dtype=v_alpha_x.dtype), (-1,))
-        ref_beta_x = xp.reshape(xp.asarray(self.class_beta_x, dtype=v_beta_x.dtype), (-1,))
+        device = array_api_compat.device(v_alpha_x)
+        ref_alpha_x = xp.reshape(
+            xp.asarray(self.class_alpha_x, dtype=v_alpha_x.dtype, device=device), (-1,)
+        )
+        ref_beta_x = xp.reshape(
+            xp.asarray(self.class_beta_x, dtype=v_beta_x.dtype, device=device), (-1,)
+        )
 
         # (..., n_classes) boolean match against every class
         matches = (v_alpha_x[..., None] == ref_alpha_x) & (v_beta_x[..., None] == ref_beta_x)
@@ -98,7 +103,7 @@ class ExactClassLookup(TissueParameterLookup):
     ) -> dict[str, Any]:
         xp = array_api_compat.array_namespace(bixel["v_alpha_x"])
         class_ix = self.class_index(bixel["v_alpha_x"], bixel["v_beta_x"])
-        voxel_ix = xp.arange(class_ix.shape[0])
+        voxel_ix = xp.arange(class_ix.shape[0], device=array_api_compat.device(class_ix))
         return {name: kernels[name][class_ix, voxel_ix] for name in fields}
 
 

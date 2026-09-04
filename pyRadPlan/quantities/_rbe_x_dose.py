@@ -14,15 +14,17 @@ ureg = pint.UnitRegistry()
 def lq_inverse_dose(effect: Array, alpha_x: Array, beta_x: Array) -> Array:
     """
     Photon-equivalent (RBE-weighted) dose of an LQ effect: the dose ``d`` solving
-    ``alpha_x * d + beta_x * d**2 = effect``. Zero where ``beta_x`` is zero.
+    ``alpha_x * d + beta_x * d**2 = effect``. For a zero quadratic coefficient,
+    the linear solution ``effect / alpha_x`` is used when ``alpha_x`` is positive.
     """
     xp = array_api_compat.array_namespace(effect)
-    valid = beta_x > 0
-    dose = xp.zeros(effect.shape, dtype=effect.dtype)
-    dose[valid] = (
-        xp.sqrt(alpha_x[valid] ** 2 + 4 * beta_x[valid] * effect[valid]) - alpha_x[valid]
-    ) / (2 * beta_x[valid])
-    return dose
+    quadratic = beta_x > 0
+    linear = (~quadratic) & (alpha_x > 0)
+    safe_beta = xp.where(quadratic, beta_x, xp.ones_like(beta_x))
+    safe_alpha = xp.where(linear, alpha_x, xp.ones_like(alpha_x))
+    quadratic_dose = (xp.sqrt(alpha_x**2 + 4 * safe_beta * effect) - alpha_x) / (2 * safe_beta)
+    linear_dose = effect / safe_alpha
+    return xp.where(quadratic, quadratic_dose, xp.where(linear, linear_dose, 0.0))
 
 
 class RBExDose(FluenceDependentQuantity):
@@ -131,21 +133,29 @@ class RBExDose(FluenceDependentQuantity):
                 copy=False,
             )
 
-        dtype_xp = self._dtype
         d_quantity = xp.reshape(d_quantity, (-1,))
         alphax, betax = self._reference_params(scenario_index)
-        ix = betax > 0
-
-        gamma = xp.zeros(betax.shape, dtype=dtype_xp)
-        gamma[ix] = alphax[ix] / betax[ix] / 2
+        quadratic = betax > 0
+        linear = (~quadratic) & (alphax > 0)
+        safe_beta = xp.where(quadratic, betax, xp.ones_like(betax))
+        safe_alpha = xp.where(linear, alphax, xp.ones_like(alphax))
+        gamma = alphax / (2 * safe_beta)
 
         # d(rbe_x_dose)/d(effect) = 1 / (2 * beta_x * (rbe_x_dose + gamma))
         effect = self._deps["effect"].compute(self._w_cache)
         effect_slice = xp.asarray(effect.flat[scenario_index])
-        effect_slice[ix] = effect_slice[ix] + gamma[ix]
-
-        fgrad = xp.zeros(d_quantity.shape, dtype=dtype_xp)
-        fgrad[ix] = d_quantity[ix] / (2 * betax[ix] * effect_slice[ix])
+        rbe_x_dose = lq_inverse_dose(effect_slice, alphax, betax)
+        safe_quadratic_denominator = xp.where(
+            quadratic,
+            2 * safe_beta * (rbe_x_dose + gamma),
+            xp.ones_like(betax),
+        )
+        inverse_derivative = xp.where(
+            quadratic,
+            1 / safe_quadratic_denominator,
+            xp.where(linear, 1 / safe_alpha, 0.0),
+        )
+        fgrad = d_quantity * inverse_derivative
 
         fgrad = xp.reshape(fgrad, (1, -1))
         return self._deps["effect"]._compute_chain_derivative_single_scenario(

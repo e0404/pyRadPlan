@@ -150,6 +150,23 @@ def test_TabulatedAlphaBetaModel_evaluator(machine, voxel_params):
         assert np.allclose(np.asarray(quantities["alpha"][0, :]), expected)
 
 
+def test_TabulatedAlphaBetaModel_selects_fragments_per_energy(machine, voxel_params):
+    second_kernel = machine.pb_kernels[200.0]
+    second_kernel.fluence_spectrum.fragments = list(
+        reversed(second_kernel.fluence_spectrum.fragments)
+    )
+    model = TabulatedAlphaBetaModel()
+
+    evaluator = model.evaluator(machine, voxel_params)
+    expected = model.dose_average(
+        second_kernel,
+        model.select_fragments(second_kernel.fluence_spectrum),
+    )
+
+    assert np.allclose(evaluator._tables[200.0]["alpha"], expected["alpha"])
+    assert np.allclose(evaluator._tables[200.0]["sqrt_beta"], expected["sqrt_beta"])
+
+
 def test_TabulatedAlphaBetaModel_bixel_alpha_beta(machine, voxel_params):
     evaluator = TabulatedAlphaBetaModel().evaluator(machine, voxel_params)
     bixel = {

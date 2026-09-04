@@ -23,10 +23,10 @@ from pyRadPlan.bio_models import BiologicalModel, create_bio_model, bio_model_sp
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
-    "protons": "constant_rbe",
-    "helium": "HEL",
+    "protons": "none",
+    "helium": "none",
     "carbon": "kernel_based_lq",
-    "oxygen": "kernel_based_lq",
+    "oxygen": "none",
     "VHEE": "none",
 }
 
@@ -213,6 +213,10 @@ class Plan(PyRadPlanBaseModel, ABC):
 
         pln_dict = super().to_matrad(context=context)
         pln_dict["numOfFractions"] = float(pln_dict["numOfFractions"])
+        if isinstance(self.bio_model, BiologicalModel) and self.bio_model.parameters:
+            # Keep matRad's established string-valued bioModel field while retaining
+            # pyRadPlan's model configuration for a lossless .mat round trip.
+            pln_dict["bioModelParameters"] = self.bio_model.parameters
         return pln_dict
 
 
@@ -349,8 +353,15 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
         if radiation_mode is None:
             radiation_mode = data.get("radiationMode")
 
+        bio_model_parameters = data.pop("bioModelParameters", None)
         if "bioModel" in data:
             data["bio_model"] = bio_model_spec_from_matrad(data.pop("bioModel"))
+        if bio_model_parameters:
+            bio_model = data.get("bio_model")
+            if isinstance(bio_model, str):
+                data["bio_model"] = {"model": bio_model, **bio_model_parameters}
+            elif isinstance(bio_model, dict):
+                data["bio_model"] = {**bio_model, **bio_model_parameters}
         data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
 
         if radiation_mode == "photons":

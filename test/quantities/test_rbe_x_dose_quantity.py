@@ -1,14 +1,12 @@
-import pytest
-
-import numpy as np
 import array_api_strict as xp
+import numpy as np
+import pytest
 from scipy.sparse import csc_array
 
-from pyRadPlan import dose
+from pyRadPlan.bio_models import ConstantRBEModel, Wedenberg
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import FluenceDependentQuantity
-from pyRadPlan.bio_models import ConstantRBEModel, Wedenberg
-from pyRadPlan.quantities._rbe_x_dose import RBExDose
+from pyRadPlan.quantities._rbe_x_dose import RBExDose, lq_inverse_dose
 
 
 @pytest.fixture
@@ -138,15 +136,16 @@ def test_RBExDose_effect_dense(sample_dij_dense):
     assert np.allclose(ret_callable.flat[0], rbe_x_dose_expected)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
+    cached_effect = rbe_x_dose.dependencies["effect"].compute(fluence)
+    effect_before_gradient = np.array(cached_effect.flat[0], copy=True)
     dose_grad = xp.ones((1, 125), dtype=xp.float32)
     ret_deriv = rbe_x_dose.compute_chain_derivative(dose_grad, fluence)
-    effect = effect + gamma
     betax = xp.asarray(sample_dij_dense.betax[:, 0])
-    effect = xp.asarray(effect)
-    fgrad = dose_grad / (2 * betax * effect)
+    fgrad = dose_grad / (2 * betax * (xp.asarray(rbe_x_dose_expected) + xp.asarray(gamma)))
     calc_derivative = rbe_x_dose.dependencies["effect"]._compute_chain_derivative_single_scenario(
         fgrad, 0
     )
+    assert np.array_equal(cached_effect.flat[0], effect_before_gradient)
     assert np.array_equal(rbe_x_dose._w_grad_cache, fluence)
     assert np.array_equal(rbe_x_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
@@ -175,15 +174,16 @@ def test_RBExDose_effect_sparse(sample_dij_sparse):
     assert np.allclose(ret_callable.flat[0], rbe_x_dose_expected)
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
+    cached_effect = rbe_x_dose.dependencies["effect"].compute(fluence)
+    effect_before_gradient = np.array(cached_effect.flat[0], copy=True)
     dose_grad = xp.ones((1, 125), dtype=xp.float32)
     ret_deriv = rbe_x_dose.compute_chain_derivative(dose_grad, fluence)
-    effect = effect + gamma
-    betax = xp.asarray(sample_dij_sparse.betax)
-    effect = xp.asarray(effect)
-    fgrad = dose_grad / (2 * betax * effect)
+    betax = xp.asarray(sample_dij_sparse.betax[:, 0])
+    fgrad = dose_grad / (2 * betax * (xp.asarray(rbe_x_dose_expected) + xp.asarray(gamma)))
     calc_derivative = rbe_x_dose.dependencies["effect"]._compute_chain_derivative_single_scenario(
         fgrad, 0
     )
+    assert np.array_equal(cached_effect.flat[0], effect_before_gradient)
     assert np.array_equal(rbe_x_dose._w_grad_cache, fluence)
     assert np.array_equal(rbe_x_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
@@ -313,3 +313,13 @@ def test_dij_without_rbe_path_raises(sample_dij_dense):
     dij.sqrt_beta_dose = None
     with pytest.raises(ValueError, match="neither"):
         RBExDose(dij)
+
+
+def test_lq_inverse_dose_supports_linear_limit_and_immutable_arrays():
+    effect = xp.asarray([2.0, 2.0, 2.0])
+    alpha_x = xp.asarray([1.0, 2.0, 0.0])
+    beta_x = xp.asarray([1.0, 0.0, 0.0])
+
+    result = lq_inverse_dose(effect, alpha_x, beta_x)
+
+    assert np.allclose(np.asarray(result), [1.0, 1.0, 0.0])
