@@ -25,6 +25,36 @@ except ImportError:
     torch = None
     has_torch = False
 
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax.experimental import sparse as jsparse
+
+    has_jax = True
+except ImportError:
+    jax = None
+    jnp = None
+    jsparse = None
+    has_jax = False
+
+
+def _jax_gpu_available():
+    if not has_jax:
+        return False
+    try:
+        return len(jax.devices("gpu")) > 0
+    except Exception:
+        return False
+
+
+def _cupy_gpu_available():
+    if not has_cupy:
+        return False
+    try:
+        return cp.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
 
 @pytest.fixture
 def numpy_array():
@@ -59,7 +89,7 @@ def test_to_namespace_no_conversion(array_api_array):
 # --- Torch Tests ---
 @pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
 def test_numpy_to_torch(numpy_array):
-    result = to_namespace(torch, numpy_array)
+    result = to_namespace(torch, numpy_array, device="cpu")
     assert isinstance(result, torch.Tensor)
     assert not result.is_cuda
     assert np.array_equal(result.numpy(), numpy_array)
@@ -147,9 +177,66 @@ def test_scipy_sparse_to_numpy(scipy_sparse_matrix):
 
 @pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
 def test_scipy_sparse_to_torch(scipy_sparse_matrix):
-    result = to_namespace(torch, scipy_sparse_matrix)
+    result = to_namespace(torch, scipy_sparse_matrix, device="cpu")
     assert result.is_sparse
     assert not result.is_cuda
+
+
+@pytest.mark.skipif(not has_jax, reason="JAX not installed")
+@pytest.mark.parametrize(
+    ("fmt", "jax_type"),
+    (("coo", "COO"), ("csr", "CSR"), ("csc", "CSC")),
+)
+def test_scipy_jax_sparse_roundtrip_preserves_format(fmt, jax_type):
+    source = getattr(sp, f"{fmt}_array")([[0.0, 1.0], [2.0, 0.0]])
+
+    jax_sparse = to_namespace(jnp, source)
+    result = to_namespace(np, jax_sparse, device="cpu")
+
+    assert isinstance(jax_sparse, getattr(jsparse, jax_type))
+    assert result.format == fmt
+    assert np.array_equal(result.toarray(), source.toarray())
+
+
+@pytest.mark.skipif(not (has_jax and has_torch), reason="JAX and PyTorch required")
+@pytest.mark.parametrize(
+    ("fmt", "jax_type", "torch_layout"),
+    (
+        ("coo", "COO", "sparse_coo"),
+        ("csr", "CSR", "sparse_csr"),
+        ("csc", "CSC", "sparse_csc"),
+    ),
+)
+def test_torch_jax_sparse_cpu_roundtrip_preserves_format(fmt, jax_type, torch_layout):
+    source = getattr(sp, f"{fmt}_array")([[0.0, 1.0], [2.0, 0.0]])
+    torch_sparse = to_namespace(torch, source, device="cpu")
+
+    jax_sparse = to_namespace(jnp, torch_sparse, device="cpu")
+    result = to_namespace(torch, jax_sparse, device="cpu")
+
+    assert isinstance(jax_sparse, getattr(jsparse, jax_type))
+    assert result.layout == getattr(torch, torch_layout)
+    assert np.array_equal(result.to_dense().numpy(), source.toarray())
+
+
+@pytest.mark.skipif(
+    not (has_jax and has_cupy and _jax_gpu_available() and _cupy_gpu_available()),
+    reason="JAX and CuPy GPU backends required",
+)
+@pytest.mark.parametrize(
+    ("fmt", "jax_type"),
+    (("coo", "COO"), ("csr", "CSR"), ("csc", "CSC")),
+)
+def test_cupy_jax_sparse_gpu_roundtrip_preserves_format(fmt, jax_type):
+    source_scipy = getattr(sp, f"{fmt}_array")([[0.0, 1.0], [2.0, 0.0]])
+    source = getattr(csp, f"{fmt}_matrix")(source_scipy)
+
+    jax_sparse = to_namespace(jnp, source, device="gpu")
+    result = to_namespace(cp, jax_sparse, device="gpu")
+
+    assert isinstance(jax_sparse, getattr(jsparse, jax_type))
+    assert result.getformat() == fmt
+    assert np.array_equal(result.get().toarray(), source_scipy.toarray())
 
 
 @pytest.mark.skipif(
@@ -168,7 +255,7 @@ def test_cupy_sparse_to_torch_gpu(scipy_sparse_matrix):
 def test_from_numpy_torch_cpu(numpy_array):
     import array_api_compat.torch as xp
 
-    result = from_numpy(xp, numpy_array)
+    result = from_numpy(xp, numpy_array, device="cpu")
     assert isinstance(result, torch.Tensor)
     assert result.device.type == "cpu"
 
@@ -194,3 +281,28 @@ def test_to_namespace_torch_specific_gpu(numpy_array):
     result = to_namespace(torch, numpy_array, device="cuda:1")
     assert result.is_cuda
     assert result.device.index == 1
+
+
+@pytest.mark.skipif(
+    not (has_torch and torch.cuda.is_available()), reason="PyTorch with CUDA required"
+)
+def test_to_namespace_default_device_keeps_source_and_honors_prefer_gpu(numpy_array):
+    """Without an explicit device, arrays stay where they are.
+
+    The GPU is only used as the fallback default when ``settings.xp.prefer_gpu`` allows it.
+    """
+    from pyRadPlan import settings
+
+    prefer_gpu = settings.xp.prefer_gpu
+    try:
+        settings.xp.prefer_gpu = False
+        assert to_namespace(torch, numpy_array).device.type == "cpu"
+        assert to_namespace(torch, torch.ones(3)).device.type == "cpu"
+        assert to_namespace(torch, torch.ones(3, device="cuda")).device.type == "cuda"
+
+        settings.xp.prefer_gpu = True
+        # Source device is still preserved; the setting only governs the fallback default
+        assert to_namespace(torch, numpy_array).device.type == "cpu"
+        assert to_namespace(torch, torch.ones(3, device="cuda")).device.type == "cuda"
+    finally:
+        settings.xp.prefer_gpu = prefer_gpu

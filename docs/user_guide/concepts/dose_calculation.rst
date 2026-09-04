@@ -137,6 +137,37 @@ at runtime:
 The ``Dij`` object can also convert its influence matrices explicitly with
 ``dij.to_namespace("cupy")`` or another supported namespace.
 
+.. _jit-compiled-kernels:
+
+Jit-compiled kernels
+~~~~~~~~~~~~~~~~~~~~
+
+A handful of hot-path computations (currently in the Siddon ray tracer) are written once
+as plain Array API code and additionally wrapped in
+:func:`pyRadPlan.core.xp_utils.jittable`. This decorator gives such a kernel jit-compiled
+execution paths per backend — a `numba <https://numba.pydata.org>`_ implementation for
+NumPy, or the backend's own tracer (``jax.jit``, ``torch.compile``) for backends where the
+kernel is written in a jit-traceable, static-shape style — while still falling back to the
+plain implementation everywhere else, and whenever a compiled path is unavailable or fails.
+
+Which backends actually take the jit-compiled path is controlled by
+``settings.xp.jit_backends``, a comma-separated list (``PYRADPLAN_XP_JIT_BACKENDS``,
+default ``"numpy,jax"``):
+
+.. code-block:: python
+
+    from pyRadPlan import settings
+
+    settings.xp.jit_backends = "numpy,jax,torch"   # also let torch.compile try
+    settings.xp.jit_backends = ""                  # disable jitting everywhere
+
+The NumPy path requires the ``[numba]`` extra (``pip install "pyRadPlan[numba]"``); without
+it, NumPy silently runs the plain implementation. If a backend's jit fails to compile or
+raises on its first execution (this can happen with ``torch.compile`` when the platform's
+Triton install is missing or incompatible), pyRadPlan emits a ``RuntimeWarning`` once and
+continues with the plain implementation for the remainder of the run — jitting is always a
+performance option, never a correctness requirement.
+
 Multi-scenario support
 -----------------------
 

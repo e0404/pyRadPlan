@@ -35,10 +35,39 @@ def test_xp_env_override(monkeypatch):
     assert settings.xp.preferred_gpu_array_backend == "torch"
 
 
-def test_nested_ai_env_override(monkeypatch):
-    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "my-test-model")
+def test_ai_env_override(monkeypatch):
+    monkeypatch.delenv("PYRADPLAN_AI_MODEL", raising=False)
+    monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "my-test-model")
     settings = PyRadPlanSettings(_env_file=None)
-    assert settings.ai.model == "my-test-model"
+    assert settings.ai.agents_model == "my-test-model"
+
+
+def test_legacy_ai_env_names_still_read(monkeypatch):
+    """PYRADPLAN_AI_MODEL / _DISPLAY_USAGE shipped in 0.4.0/0.4.1."""
+    monkeypatch.delenv("PYRADPLAN_AI_AGENTS_MODEL", raising=False)
+    monkeypatch.delenv("PYRADPLAN_AI_AGENTS_DISPLAY_USAGE", raising=False)
+    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "legacy-model")
+    monkeypatch.setenv("PYRADPLAN_AI_DISPLAY_USAGE", "false")
+
+    settings = PyRadPlanSettings(_env_file=None)
+    assert settings.ai.agents_model == "legacy-model"
+    assert settings.ai.agents_display_usage is False
+
+
+def test_canonical_ai_env_name_wins_over_legacy(monkeypatch):
+    monkeypatch.setenv("PYRADPLAN_AI_MODEL", "legacy-model")
+    monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "canonical-model")
+    settings = PyRadPlanSettings(_env_file=None)
+    assert settings.ai.agents_model == "canonical-model"
+
+
+def test_ai_section_covers_agents_and_modelhub(monkeypatch):
+    """Agent and modelhub fields live side by side in the unified ai section."""
+    monkeypatch.setenv("PYRADPLAN_AI_AGENTS_MODEL", "an-llm")
+    monkeypatch.setenv("PYRADPLAN_AI_MODELHUB_DEVICE", "cuda")
+    settings = PyRadPlanSettings(_env_file=None)
+    assert settings.ai.agents_model == "an-llm"
+    assert settings.ai.modelhub_device == "cuda"
 
 
 def test_assignment_is_validated():

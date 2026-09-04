@@ -21,6 +21,7 @@ from ...core.xp_utils.typing import Array
 
 from ._base_solvers import NonLinearOptimizer
 from ...core import xp_utils
+from ...util.openmp import blocked_by_openmp
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,18 @@ class OptimizerIpopt(NonLinearOptimizer):
         self,
         x0: Array,
     ) -> tuple[Array, dict]:
+        # Re-checked here, not just at registration: another OpenMP-carrying package
+        # (PyTorch) may only have been imported after this module. IPOPT initializes
+        # its runtime at the first parallel region, so without this the process would
+        # abort inside nlp.solve() with no catchable exception.
+        blocked = blocked_by_openmp("ipyopt")
+        if blocked is not None:
+            raise RuntimeError(
+                f"Refusing to run IPOPT: {blocked}. Initializing the second OpenMP runtime "
+                "would abort the process (OMP: Error #15). Set KMP_DUPLICATE_LIB_OK=TRUE "
+                "before starting Python to run it anyway (unsafe), or pick another solver."
+            )
+
         self.options.update(
             {
                 "max_iter": self.max_iter,

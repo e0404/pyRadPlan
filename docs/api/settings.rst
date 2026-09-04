@@ -12,3 +12,7 @@ Global configuration read from ``PYRADPLAN_*`` environment variables or a
 .. autoclass:: pyRadPlan.XpSettings
    :members:
    :show-inheritance:
+
+.. autoclass:: pyRadPlan._settings.AiSettings
+   :members:
+   :show-inheritance:

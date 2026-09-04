@@ -28,6 +28,9 @@ from pyRadPlan import (
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
+# The array backend is auto-detected. To pin it, set PYRADPLAN_XP_* environment
+# variables or assign to pyRadPlan.settings.xp before the first computation.
+
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -35,7 +38,7 @@ logging.basicConfig(level=logging.INFO)
 ct, cst = load_tg119()
 
 # %% [markdown]
-# In this section, we create a photon therapy plan using the ParticleHongPencilBeamEngine.
+# In this section, we create a photon therapy plan using the PhotonPencilBeamSVDEngine.
 # %%
 # Create a plan object
 pln = PhotonPlan(machine="Generic")
@@ -47,7 +50,6 @@ pln.prop_stf = {
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
 
-# Calculate Dose Influence Matrix ("dij")
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 

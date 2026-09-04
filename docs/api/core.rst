@@ -24,6 +24,16 @@ Configurable algorithms
    AlgorithmParameterMetadata
 
 
+Data directories
+----------------
+
+.. autosummary::
+   :toctree: generated/core/
+
+   get_data_dir
+   get_data_subdir
+
+
 Progress and compute control
 ----------------------------
 
@@ -76,11 +86,16 @@ xp_utils
    cupy_available
    pytorch_gpu_available
    choose_array_api_namespace
+   choose_device
+   is_on_gpu
+   is_host_device
    get_current_stream
    create_stream
    synchronize
+   stream_wait_event
    record_event
    elapsed_time
+   scatter
    to_numpy
    from_numpy
    to_namespace
@@ -88,3 +103,7 @@ xp_utils
    ArrayNamespace
    quantile
    interp1d
+   jittable
+   JittableKernel
+   openblas_has_gemm_race
+   warn_on_unreliable_openblas

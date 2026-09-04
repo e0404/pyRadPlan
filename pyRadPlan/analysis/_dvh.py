@@ -224,11 +224,24 @@ class DVH(PyRadPlanBaseModel):
         -------
             float: Dose/quantity value corresponding to the given volume percentage.
         """
-        if y < 0 or y > 100:
+        y = np.asarray(y, dtype=np.float64)
+        if np.any(y < 0) or np.any(y > 100):
             raise ValueError("Volume percentage must be between 0 and 100.")
 
-        # Interpolate to find the dose value
-        return np.interp(y / 100, self.cum_volume, self.bins)
+        # Dy is the largest quantity value still covering at least y percent of the
+        # volume, matching the "at least" reading of the cumulative DVH documented
+        # on :attr:`cumulative`. cum_volume decreases with dose, so the search runs
+        # over the reversed (increasing) array and the index is mapped back.
+        #
+        # This is deliberately not an interpolation across the cumulative curve: a
+        # uniformly irradiated region is a plateau in the DVH, and interpolating
+        # over it reports the dose at the wrong end of that plateau.
+        reversed_volume = self.cum_volume[::-1]
+        last = self.cum_volume.size - 1
+        index = last - np.searchsorted(reversed_volume, y, side="left")
+        index = np.clip(index, 0, last)
+        values = self.bins[index]
+        return float(values) if values.ndim == 0 else values
 
     @classmethod
     def compute(
@@ -293,7 +306,15 @@ class DVH(PyRadPlanBaseModel):
         # Remove the last bin
         hist = hist / len(q_array) * 100
 
-        return DVH(diff_volume=hist, bin_edges=edges, **kwargs)
+        # np.histogram takes the bin dtype from the quantity, so a float32 input --
+        # what a DICOM-imported dose is -- would produce float32 edges, which the
+        # model declares as float64 and rejects. Widening float32 is exact, so this
+        # only changes the storage dtype, never a bin edge.
+        return DVH(
+            diff_volume=np.asarray(hist, dtype=np.float64),
+            bin_edges=np.asarray(edges, dtype=np.float64),
+            **kwargs,
+        )
 
     def plot(self, ax=None, line_width=2, plot_legend=True, **kwargs):
         """Plot the DVH curve.
