@@ -1,5 +1,6 @@
 """Structure Set Implementation."""
 
+import warnings
 from typing import Any, Literal, Union, Optional
 from typing_extensions import Self
 from pydantic import (
@@ -573,23 +574,42 @@ class StructureSet(PyRadPlanBaseModel):
         """
         Apply overlaps to the StructureSet.
 
+        A VOI with ``apply_overlap=None`` is excluded in both directions: it keeps its full
+        mask and removes no voxels from any other VOI. ``apply_overlap=False`` keeps its own
+        voxels but still removes them from lower-priority VOIs.
+
+        A warning is emitted for any VOI that carries objectives but is left empty, since
+        its objectives would silently have no effect during optimization.
+
         Returns
         -------
         StructureSet
             The StructureSet with overlaps applied.
         """
 
-        # gather overlaps
-        overlaps = [v.overlap_priority for v in self.vois]
+        new_vois: list[Optional[VOI]] = [None] * len(self.vois)
+
+        # VOIs with None will instantly be copied to new_vois.
+        overlap_indices = []
+        for i, v in enumerate(self.vois):
+            if v.apply_overlap is not None:
+                overlap_indices.append(i)
+            else:
+                new_vois[i] = v.model_copy()
+
+        # Cases where all VOIs were set to None
+        if not overlap_indices:
+            return self._warn_on_empty_objectives(new_vois)
 
         # sort by overlap priority
-        ix_sorted = np.argsort(overlaps)
+        overlaps = [self.vois[i].overlap_priority for i in overlap_indices]
+        ix_sorted_subset = np.argsort(overlaps)
+        ix_sorted = [overlap_indices[i] for i in ix_sorted_subset]
 
         overlap_mask = self.vois[ix_sorted[0]].mask  # Will aggregate the overlap masks using OR
         last_priority_mask = sitk.Image(overlap_mask.GetSize(), overlap_mask.GetPixelID())
         last_priority_mask.CopyInformation(overlap_mask)
 
-        new_vois = [None] * len(self.vois)
         new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].model_copy()
 
         for i, ix_voi in enumerate(ix_sorted[1:], 1):
@@ -597,18 +617,36 @@ class StructureSet(PyRadPlanBaseModel):
             curr_mask = curr_voi.mask
 
             # if the overlap priority is higher than we need to apply overlap
-            if curr_voi.overlap_priority >= new_vois[ix_sorted[i - 1]].overlap_priority:
-                if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
+            prev_voi = new_vois[ix_sorted[i - 1]]
+            if curr_voi.overlap_priority >= prev_voi.overlap_priority:
+                if curr_voi.overlap_priority > prev_voi.overlap_priority:
                     last_priority_mask = overlap_mask
-                curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
+
+                # False means IT DOES NOT UPDATE ITS VOXELS (is not masked by higher priority)
+                if curr_voi.apply_overlap is not False:
+                    curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
 
             curr_voi.mask = curr_mask
 
+            # Both True and False contribute to overlap_mask
             overlap_mask = sitk.Or(overlap_mask, curr_mask)
 
-            # sitk.Show(overlap_mask, debugOn = True)
-
             new_vois[ix_voi] = curr_voi
+
+        return self._warn_on_empty_objectives(new_vois)
+
+    def _warn_on_empty_objectives(self, new_vois: list[VOI]) -> Self:
+        """Warn about VOIs left empty by overlap resolution, then build the new StructureSet."""
+        for voi in new_vois:
+            if voi.objectives and not sitk.GetArrayViewFromImage(voi.mask).any():
+                warnings.warn(
+                    f"VOI '{voi.name}' has objectives defined but was fully overlapped by "
+                    "structures with a higher overlap priority. Its objectives will have no "
+                    "effect during optimization. Set `apply_overlap=None` on this VOI to "
+                    "exclude it from overlap resolution.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
         return self.model_copy(deep=True, update={"vois": new_vois})
 

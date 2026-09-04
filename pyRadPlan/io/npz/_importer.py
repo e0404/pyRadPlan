@@ -65,6 +65,7 @@ class NpzImporter(BaseImporter):
                     alpha_x=vmeta["alpha_x"],
                     beta_x=vmeta["beta_x"],
                     overlap_priority=vmeta["overlap_priority"],
+                    apply_overlap=vmeta.get("apply_overlap", True),
                     visible=vmeta["visible"],
                     visible_color=vmeta["visible_color"],
                 )

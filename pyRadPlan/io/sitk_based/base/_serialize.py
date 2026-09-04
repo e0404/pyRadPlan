@@ -119,6 +119,7 @@ def build_sidecar(cst: StructureSet) -> dict:
             "alpha_x": voi.alpha_x,
             "beta_x": voi.beta_x,
             "overlap_priority": voi.overlap_priority,
+            "apply_overlap": voi.apply_overlap,
             "visible": voi.visible,
             "visible_color": list(voi.visible_color) if voi.visible_color is not None else None,
         }
@@ -227,5 +228,10 @@ def label_image_to_vois(label_image: sitk.Image, ct, sidecar: Optional[dict]) ->
         for field in ("alpha_x", "beta_x", "overlap_priority", "visible", "visible_color"):
             if field in meta and meta[field] is not None:
                 kwargs[field] = meta[field]
+
+        # None is a meaningful value for apply_overlap (excluded from overlap resolution), so
+        # it must not be treated as "absent" and fall back to the voi_type default.
+        if "apply_overlap" in meta:
+            kwargs["apply_overlap"] = meta["apply_overlap"]
         vois.append(validate_voi(**kwargs))
     return vois

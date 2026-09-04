@@ -63,6 +63,7 @@ class NpzExporter(BaseExporter):
                         "alpha_x": voi.alpha_x,
                         "beta_x": voi.beta_x,
                         "overlap_priority": voi.overlap_priority,
+                        "apply_overlap": voi.apply_overlap,
                         "visible": voi.visible,
                         "visible_color": (
                             list(voi.visible_color) if voi.visible_color is not None else None

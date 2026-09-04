@@ -69,6 +69,15 @@ class VOI(PyRadPlanBaseModel, ABC):
         The beta_x value. Defaults to 0.05.
     overlap_priority : int
         The overlap priority of the VOI. Lowest number is overlapping higher numbers.
+        Also used for render order and grouping in IO and GUI, independently of
+        ``apply_overlap``.
+    apply_overlap : bool or None
+        Controls participation in overlap resolution. ``True`` (default) is the normal
+        behaviour. ``False`` keeps this VOI's own voxels but still removes them from
+        lower-priority VOIs. ``None`` excludes it in both directions: it keeps its full
+        mask, and no other VOI loses voxels to it. ``None`` is intended for auxiliary
+        evaluation structures (e.g. an NTCP region) that must overlap other VOIs, where
+        assigning each voxel to a single VOI would be wrong.
     """
 
     name: str
@@ -81,6 +90,8 @@ class VOI(PyRadPlanBaseModel, ABC):
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
+
+    apply_overlap: Union[bool, None] = Field(default=True)
 
     visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
     visible_color: Union[tuple[int, int, int], None] = Field(
@@ -800,7 +811,8 @@ class VOI(PyRadPlanBaseModel, ABC):
         property_dict = {
             "alphaX": self.alpha_x,
             "betaX": self.beta_x,
-            "Priority": self.overlap_priority,
+            # matRad encodes "excluded from overlap handling" as Priority = NaN
+            "Priority": np.nan if self.apply_overlap is None else self.overlap_priority,
         }
         voi_list.append(property_dict)
 
