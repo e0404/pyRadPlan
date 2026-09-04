@@ -154,6 +154,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VHEE now has target points for matRad export
 - Cleaned up in-repo deprecation warnings for forward compatibility (Pydantic V3, NumPy, Python)
 - examples: crashing plot block in `pencilbeam_carbon.py` and broken `.mat` unpacking in `utils_matrad.py`, deprecated `plot_slice(ct=...)` calls, missing jupytext cell markers in `pencilbeam_vhee.py`, plus stale docstrings, engine names and file references
+- stf: Fixed target exit WET using entry-voxel density instead of exit-voxel density (could cause duplicate energy selection in the STF generator in edge cases); added a unique(Energies) safeguard per ray.
 
 ## [0.4.1] - 2026-06-16
 
