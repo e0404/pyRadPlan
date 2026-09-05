@@ -115,7 +115,9 @@ class BioModelEvaluator(ABC):
     duration of a single dose calculation. Holds only derived, machine- and
     geometry-specific state; never reuse it across patients or machines.
 
-    The dose engine interacts with a model exclusively through this interface.
+    The dose engine interacts with a model exclusively through this interface. ``evaluate``
+    returns intrinsic model outputs, while ``evaluate_influence`` returns the additive per-bixel
+    quantities declared by ``influence_quantity_names`` for storage in influence matrices.
     """
 
     def __init__(self, model: BiologicalModel):
@@ -124,6 +126,11 @@ class BioModelEvaluator(ABC):
     @property
     def kernel_field_names(self) -> tuple[str, ...]:
         """Names of the depth-dependent kernel fields requested by this evaluator."""
+        return ()
+
+    @property
+    def influence_quantity_names(self) -> tuple[str, ...]:
+        """Names of the additive influence quantities produced by this evaluator."""
         return ()
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
@@ -151,8 +158,49 @@ class BioModelEvaluator(ABC):
             f"Biological model '{self.model.model}' does not provide evaluated quantities."
         )
 
+    def evaluate_influence(self, context: BioEvaluationContext) -> BioModelResult:
+        """Evaluate additive per-bixel quantities suitable for influence matrices."""
+        declared = self.influence_quantity_names
+        result = self._evaluate_influence(context)
+        if not isinstance(result, BioModelResult):
+            result = BioModelResult(result)
 
-class ParametricEvaluator(BioModelEvaluator):
+        if set(result) != set(declared):
+            raise ValueError(
+                f"Biological evaluator for '{self.model.model}' declared influence quantities "
+                f"{declared!r}, but produced {tuple(result)!r}."
+            )
+        return result
+
+    def _evaluate_influence(self, context: BioEvaluationContext) -> Mapping[str, Any]:
+        """Implement the model-specific conversion to additive influence quantities."""
+        raise NotImplementedError(
+            f"Biological model '{self.model.model}' does not provide influence quantities."
+        )
+
+
+class _LQInfluenceEvaluator(BioModelEvaluator):
+    """Convert evaluated LQ parameters into their additive influence quantities."""
+
+    @property
+    def influence_quantity_names(self) -> tuple[str, ...]:
+        if not self.model.provides("alpha", "beta"):
+            return ()
+        return ("alpha_dose", "sqrt_beta_dose")
+
+    def _evaluate_influence(self, context: BioEvaluationContext) -> Mapping[str, Any]:
+        result = self.evaluate(context)
+        physical_dose = context.require("physical_dose")
+        xp = array_api_compat.array_namespace(physical_dose)
+        return BioModelResult(
+            {
+                "alpha_dose": physical_dose * result.require("alpha"),
+                "sqrt_beta_dose": physical_dose * xp.sqrt(result.require("beta")),
+            }
+        )
+
+
+class ParametricEvaluator(_LQInfluenceEvaluator):
     """
     Evaluator for models that are pure functions of the per-voxel parameters.
 
@@ -170,7 +218,7 @@ class ParametricEvaluator(BioModelEvaluator):
         return BioModelResult({"alpha": alpha, "beta": beta})
 
 
-class _TissueKernelEvaluator(BioModelEvaluator):
+class _TissueKernelEvaluator(_LQInfluenceEvaluator):
     """Shared evaluation of tissue-class kernel fields."""
 
     kernel_fields: list[str]

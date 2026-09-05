@@ -67,8 +67,9 @@ Biological models and LET
 Which of the additional matrices a particle engine computes follows from ``pln.bio_model``
 (see :ref:`concept_bio_model`) and the machine data:
 
-* ``alpha_dose`` / ``sqrt_beta_dose`` are computed when the model provides α/β
-  (LET-based, kernel-based and tabulated models).
+* Supported biological influence matrices are computed when the evaluator declares them. The
+  current ``Dij`` schema supports the ``alpha_dose`` / ``sqrt_beta_dose`` declared by the in-tree
+  LQ evaluators.
 * ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
   requires LET (FRED, which scores LET only on request).
 
@@ -81,10 +82,11 @@ which accept ``"auto"`` (default), ``True`` or ``False``:
     # keep only physical dose and LET; evaluate the LET-based model later
     pln.prop_dose_calc = {"engine": "HongPB", "calc_bio_dose": False}
 
-Setting ``calc_bio_dose=True`` without a model providing α/β raises an error; switching
-``calc_let`` off does not affect LET-based models, which still receive the LET kernels
-internally. The FRED engine derives α/β matrices from its scored LET and therefore supports
-LET-based models only.
+Setting ``calc_bio_dose=True`` without an evaluator providing influence quantities raises an
+error. An evaluator declaring a quantity that ``Dij`` cannot currently store also fails during
+setup. Switching ``calc_let`` off does not affect LET-based models, which still receive the LET
+kernels internally. The FRED engine derives biological matrices from its scored LET and therefore
+supports LET-based models only.
 
 During the calculation the model is bound to the machine and the reference photon parameters
 of the voxels (``dij.alphax`` / ``dij.betax`` from the structure set) through a

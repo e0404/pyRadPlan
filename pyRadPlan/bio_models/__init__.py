@@ -10,7 +10,7 @@ from ._evaluator import (
     TabulatedSpectrumEvaluator,
 )
 from ._tissue_lookup import TissueParameterLookup, ExactClassLookup, make_tissue_lookup
-from ._influence import alpha_beta_influence_from_let
+from ._influence import bio_influence_from_let
 from .models.const_rbe import ConstantRBEModel
 from .models.let_based_lq_models import (
     LETBasedLQModel,
@@ -56,7 +56,7 @@ __all__ = [
     "TissueParameterLookup",
     "ExactClassLookup",
     "make_tissue_lookup",
-    "alpha_beta_influence_from_let",
+    "bio_influence_from_let",
     "EmptyModel",
     "ConstantRBEModel",
     "LETBasedLQModel",

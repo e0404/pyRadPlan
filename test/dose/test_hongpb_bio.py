@@ -23,6 +23,7 @@ def _bio_engine(kernel_names=()):
     engine = object.__new__(ParticleHongPencilBeamEngine)
     engine._bio_evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
     engine._bio_kernel_names = tuple(kernel_names)
+    engine._bio_influence_names = engine._bio_evaluator.influence_quantity_names
     return engine
 
 
@@ -60,7 +61,7 @@ def test_bio_kernel_names_reject_engine_collisions(kernel_name, lateral_model, u
     engine._use_let_kernel = use_let_kernel
 
     with pytest.raises(ValueError, match=rf"dose-engine kernels: {kernel_name}"):
-        engine._validate_bio_kernel_names()
+        engine._validate_bio_names({})
 
 
 def test_bio_kernel_names_reject_standard_context_collisions():
@@ -70,7 +71,45 @@ def test_bio_kernel_names_reject_standard_context_collisions():
     engine._use_let_kernel = False
 
     with pytest.raises(ValueError, match="standard context inputs: physical_dose"):
-        engine._validate_bio_kernel_names()
+        engine._validate_bio_names({})
+
+
+def test_bio_influence_names_reject_dose_engine_collisions():
+    engine = _bio_engine()
+    engine._bio_influence_names = ("alpha_dose",)
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match="dose-engine fields: alpha_dose"):
+        engine._validate_bio_names({"alpha_dose": object()})
+
+
+def test_bio_influence_names_reject_unsupported_dij_quantity():
+    engine = _bio_engine()
+    engine._bio_influence_names = ("rbe_dose",)
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(NotImplementedError, match="cannot yet store.*rbe_dose"):
+        engine._validate_bio_names({})
+
+
+@pytest.mark.parametrize(
+    ("names", "message"),
+    [
+        ((), "non-empty"),
+        (("",), "non-empty"),
+        (("alpha_dose", "alpha_dose"), "unique"),
+    ],
+)
+def test_bio_influence_declaration_is_validated_at_setup(names, message):
+    engine = _bio_engine()
+    engine._bio_influence_names = names
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match=message):
+        engine._validate_bio_names({})
 
 
 def test_lateral_kernel_names_reject_invalid_model():

@@ -1,10 +1,10 @@
 import numpy as np
 from scipy import sparse
 
-from pyRadPlan.bio_models import Wedenberg, alpha_beta_influence_from_let
+from pyRadPlan.bio_models import Wedenberg, bio_influence_from_let
 
 
-def test_alpha_beta_influence_from_let_matches_model():
+def test_bio_influence_from_let_matches_model():
     rng = np.random.default_rng(1)
     n_vox, n_bix = 40, 7
     dose = sparse.random_array((n_vox, n_bix), density=0.3, rng=rng, dtype=np.float64)
@@ -14,9 +14,9 @@ def test_alpha_beta_influence_from_let_matches_model():
     beta_x = rng.uniform(0.01, 0.1, n_vox)
 
     model = Wedenberg()
-    alpha_dose, sqrt_beta_dose = alpha_beta_influence_from_let(
-        model.evaluator(None, {}), dose, let_dose, alpha_x, beta_x
-    )
+    result = bio_influence_from_let(model.evaluator(None, {}), dose, let_dose, alpha_x, beta_x)
+    alpha_dose = result["alpha_dose"]
+    sqrt_beta_dose = result["sqrt_beta_dose"]
     assert sparse.issparse(alpha_dose) and alpha_dose.shape == dose.shape
 
     d = dose.toarray()

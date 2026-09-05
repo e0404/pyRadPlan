@@ -54,4 +54,4 @@ Creating and registering models
    get_available_models
    register_model
    bio_model_spec_from_matrad
-   alpha_beta_influence_from_let
+   bio_influence_from_let

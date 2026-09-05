@@ -103,9 +103,16 @@ model instance:
     [cls.model for cls in available_bio_models("protons")]
 
 Each model declares the named data it needs through ``required_quantities`` and the evaluator
-quantities it can produce through ``output_quantities``. Availability checks compare the
-requirements against the selected machine, while dose engines select capabilities such as LQ
-evaluation by checking for the ``"alpha"`` and ``"beta"`` quantities.
+quantities it can produce through ``output_quantities``. Availability checks compare those
+requirements against the selected machine; the output declaration describes the intrinsic result
+returned by the model evaluator.
+
+An evaluator separately declares its additive matrix outputs through
+``influence_quantity_names`` and produces them with ``evaluate_influence()``. For LQ models these
+are ``alpha_dose`` and ``sqrt_beta_dose``. The evaluator boundary can describe different
+sufficient statistics, but the current fixed ``Dij`` schema cannot store additional names; the
+dose engine reports those during setup. A future generic quantity registry is outlined in
+``docs/development/dynamic_dij_quantities.md``.
 
 .. list-table::
    :header-rows: 1

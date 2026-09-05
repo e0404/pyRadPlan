@@ -19,7 +19,12 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import BioEvaluationContext, BiologicalModel, BioModelEvaluator
+from pyRadPlan.bio_models import (
+    BioEvaluationContext,
+    BiologicalModel,
+    BioModelEvaluator,
+    BioModelResult,
+)
 from pyRadPlan.cst import StructureSet
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -43,9 +48,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         machine provides LET kernels; ``False`` skips the matrix (the LET kernel is still used
         internally if the biological model needs it).
     calc_bio_dose : Literal["auto"] or bool
-        Whether alpha/beta influence matrices are computed. ``"auto"`` computes them whenever
-        the plan's biological model provides alpha/beta; ``False`` skips them (e.g. to evaluate
-        an LET-based model on the fly later on); ``True`` requires a model providing alpha/beta.
+        Whether biological influence matrices are computed. ``"auto"`` computes the quantities
+        declared by the model evaluator; ``False`` skips them (e.g. to evaluate an LET-based
+        model on the fly later on); ``True`` requires an evaluator with influence quantities.
     air_offset_correction : bool
         Corrects WEPL for SSD difference to kernel database.
     lateral_model : Literal["auto", "single", "double", "multi", "fastest"]
@@ -72,6 +77,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
         self._bio_kernel_names: tuple[str, ...] = ()
+        self._bio_influence_names: tuple[str, ...] = ()
 
         self._kernel_cache = {}
 
@@ -295,6 +301,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         inputs.update({name: kernels[name] for name in self._bio_kernel_names})
         return BioEvaluationContext(inputs)
 
+    def _evaluate_bio_influence(
+        self, bixel: dict[str, Any], kernels: dict[str, Any]
+    ) -> BioModelResult:
+        """Evaluate the biological influence contributions for one bixel."""
+        return self._bio_evaluator.evaluate_influence(self._build_bio_context(bixel, kernels))
+
     def _lateral_kernel_names(self) -> tuple[str, ...]:
         """Return the kernel fields for the selected lateral model."""
         try:
@@ -307,8 +319,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         except KeyError:
             raise ValueError("Invalid Lateral Model") from None
 
-    def _validate_bio_kernel_names(self) -> None:
-        """Reject model kernel names that make the evaluation namespace ambiguous."""
+    def _validate_bio_names(self, dij: dict[str, Any]) -> None:
+        """Reject biological names that make engine inputs or outputs ambiguous."""
         engine_kernel_names = {"idd", *self._lateral_kernel_names()}
         if self._use_let_kernel:
             engine_kernel_names.add("let")
@@ -329,6 +341,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             raise ValueError(
                 f"Biological kernel inputs collide with standard context inputs: {names}."
             )
+
+        self._validate_bio_influence_names(dij, self._bio_influence_names)
 
     def _get_bixel_indices_on_ray(self, curr_bixel, curr_ray):
         kernel = curr_bixel["kernel"]  # cast(ParticlePencilBeamKernel, curr_bixel["kernel"])
@@ -551,7 +565,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Create the biological model evaluator for this dose calculation.
 
         Resolves ``calc_bio_dose`` / ``calc_let`` against the model and the machine, stores the
-        model's scalar contributions on the dij and allocates the alpha/beta influence containers.
+        model on the dij and allocates its declared biological influence containers.
 
         Parameters
         ----------
@@ -564,34 +578,39 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             The updated dose influence matrix dictionary.
         """
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        self._bio_evaluator = None
         self._bio_kernel_names = ()
+        self._bio_influence_names = ()
         has_let = self._machine.has_let_kernel
+
+        if model is not None:
+            self._v_alpha_x = self.xp.asarray(dij["alphax"])
+            self._v_beta_x = self.xp.asarray(dij["betax"])
+            self._bio_evaluator = model.evaluator(
+                self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
+            )
+            self._bio_influence_names = self._bio_evaluator.influence_quantity_names
+
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
-            self.calc_bio_dose, self.calc_let, let_available=has_let, let_auto=has_let
+            self.calc_bio_dose,
+            self.calc_let,
+            bio_influence_quantities=self._bio_influence_names,
+            let_available=has_let,
+            let_auto=has_let,
         )
 
-        if model is None:
-            self._bio_evaluator = None
-            return dij
+        if model is not None:
+            dij["bio_model"] = model
 
-        self._v_alpha_x = self.xp.asarray(dij["alphax"])
-        self._v_beta_x = self.xp.asarray(dij["betax"])
-
-        self._bio_evaluator = model.evaluator(
-            self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
-        )
         if self._calc_bio_dose:
             self._bio_kernel_names = self._bio_evaluator.kernel_field_names
-            self._validate_bio_kernel_names()
-        dij["bio_model"] = model
-
-        if self._calc_bio_dose:
-            dij = self._allocate_bio_dose_container(dij)
+            self._validate_bio_names(dij)
+            dij = self._allocate_bio_influence_containers(dij)
         return dij
 
-    def _allocate_bio_dose_container(self, dij: dict[str, Any]):
+    def _allocate_bio_influence_containers(self, dij: dict[str, Any]):
         """
-        Allocate space for container used in LET calculation.
+        Allocate the evaluator's declared biological influence matrices.
 
         Parameters
         ----------
@@ -601,10 +620,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Returns
         -------
         dict
-            The updated dose influence matrix dictionary with LET containers allocated.
+            The updated dose influence matrix dictionary with biological containers allocated.
         """
         if self._calc_bio_dose:
-            dij = self._allocate_quantity_matrices(dij, ["alpha_dose", "sqrt_beta_dose"])
+            dij = self._allocate_quantity_matrices(dij, list(self._bio_influence_names))
 
         return dij
 

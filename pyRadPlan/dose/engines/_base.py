@@ -180,6 +180,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         calc_bio_dose: Union[Literal["auto"], bool],
         calc_let: Union[Literal["auto"], bool],
         *,
+        bio_influence_quantities: tuple[str, ...],
         let_available: bool,
         let_auto: bool,
     ) -> tuple[bool, bool, bool]:
@@ -189,11 +190,13 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         Parameters
         ----------
         calc_bio_dose : "auto" or bool
-            Requested alpha/beta influence calculation. ``"auto"`` follows the model's
-            declared ``"alpha"`` / ``"beta"`` outputs; ``True`` without such a model raises.
+            Requested biological influence calculation. ``"auto"`` follows the evaluator's
+            declared influence quantities; ``True`` without such an evaluator raises.
         calc_let : "auto" or bool
             Requested LET influence calculation. ``"auto"`` resolves to ``let_auto``; ``True``
             without LET data resolves to ``False`` with a warning.
+        bio_influence_quantities : tuple[str, ...]
+            Additive matrix quantities the biological evaluator can produce.
         let_available : bool
             Whether the engine can produce LET at all.
         let_auto : bool
@@ -206,14 +209,14 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             either as output or as input to the biological model.
         """
         model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        provides_lq_outputs = model is not None and model.provides("alpha", "beta")
+        provides_bio_influence = bool(bio_influence_quantities)
 
         if calc_bio_dose == "auto":
-            bio = provides_lq_outputs
-        elif calc_bio_dose and not provides_lq_outputs:
+            bio = provides_bio_influence
+        elif calc_bio_dose and not provides_bio_influence:
             raise ValueError(
-                "calc_bio_dose=True requires a biological model providing alpha/beta, "
-                f"but the plan's bio_model is {model!r}."
+                "calc_bio_dose=True requires a biological evaluator providing influence "
+                f"quantities, but the plan's bio_model is {model!r}."
             )
         else:
             bio = bool(calc_bio_dose)
@@ -228,6 +231,35 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         use_let_kernel = let or (bio and model is not None and model.requires("let"))
         return bio, let, use_let_kernel
+
+    @staticmethod
+    def _validate_bio_influence_names(
+        dij: dict[str, Any], influence_names: tuple[str, ...]
+    ) -> None:
+        """Validate evaluator outputs against the influence fields supported by Dij."""
+        if not influence_names or any(
+            not isinstance(name, str) or not name for name in influence_names
+        ):
+            raise ValueError("Biological influence quantity names must be non-empty strings.")
+        if len(set(influence_names)) != len(influence_names):
+            raise ValueError("Biological influence quantity names must be unique.")
+
+        # TODO: Replace this fixed set with centrally registered Dij quantities. See
+        # docs/development/dynamic_dij_quantities.md for the proposed design.
+        supported_names = {"alpha_dose", "sqrt_beta_dose"}
+        unsupported = set(influence_names) - supported_names
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise NotImplementedError(
+                f"Dij cannot yet store biological influence quantities: {names}."
+            )
+
+        collisions = set(influence_names).intersection(dij)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(
+                f"Biological influence quantities collide with dose-engine fields: {names}."
+            )
 
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray

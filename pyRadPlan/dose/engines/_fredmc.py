@@ -34,7 +34,7 @@ import numpy as np
 import SimpleITK as sitk
 from scipy import sparse
 
-from ...bio_models import BiologicalModel, alpha_beta_influence_from_let
+from ...bio_models import BiologicalModel, bio_influence_from_let
 from ...core import Grid
 from ...ct import CT, resample_ct
 from ...cst import StructureSet
@@ -108,6 +108,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
         ### Private attributes ###
         self._computed_quantities = []
+        self._bio_evaluator = None
+        self._bio_influence_names: tuple[str, ...] = ()
         self._total_number_of_bixels = None
         self._dij_format_version = None
         self._fred_root_folder = Path(tempfile.mkdtemp())
@@ -949,19 +951,19 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         return dij
 
     def _store_let_quantities(self, dij: dict[str, Any], let_dose: sparse.csc_array) -> None:
-        """Store the LET matrix and/or the alpha/beta matrices derived from it."""
+        """Store the LET matrix and any biological matrices derived from it."""
         if self._calc_let:
             dij["let_dose"].flat[0] = let_dose
         if self._calc_bio_dose:
-            alpha_dose, sqrt_beta_dose = alpha_beta_influence_from_let(
+            bio_influence = bio_influence_from_let(
                 self._bio_evaluator,
                 dij["physical_dose"].flat[0],
                 let_dose,
                 np.asarray(dij["alphax"])[:, 0],
                 np.asarray(dij["betax"])[:, 0],
             )
-            dij["alpha_dose"].flat[0] = alpha_dose
-            dij["sqrt_beta_dose"].flat[0] = sqrt_beta_dose
+            for name, matrix in bio_influence.items():
+                dij[name].flat[0] = matrix
 
     def _check_saving_options(self) -> None:
         if self._save_input is not None:
@@ -1213,7 +1215,60 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 process.returncode, execute_cmd, output=stdout, stderr=stderr
             )
 
-    def _init_dose_calc(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> None:
+    def _init_bio_model(self, dij: dict[str, Any]) -> dict[str, Any]:
+        """Configure biological and LET outputs without constructing unsupported evaluators."""
+        # Biological influence matrices are derived from the scored LET, so only models
+        # whose evaluator consumes LET are supported.
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        model_requires_let = model is not None and model.requires("let")
+        self._bio_evaluator = None
+        self._bio_influence_names = ()
+        if model_requires_let and self.calc_bio_dose is not False:
+            self._bio_evaluator = model.evaluator(
+                self._machine,
+                {"alpha_x": np.asarray(dij["alphax"]), "beta_x": np.asarray(dij["betax"])},
+            )
+            self._bio_influence_names = self._bio_evaluator.influence_quantity_names
+        supported = bool(self._bio_influence_names)
+        if self.calc_bio_dose is True and not supported:
+            raise NotImplementedError(
+                "FRED derives biological influence matrices from the scored LET and therefore "
+                f"only supports LET-based evaluators, not {model!r}."
+            )
+        if (
+            self.calc_bio_dose == "auto"
+            and model is not None
+            and model.output_quantities
+            and not supported
+        ):
+            logger.warning(
+                "FRED only supports LET-based biological evaluators; influence matrices "
+                "for %r are skipped (set calc_bio_dose=False to silence this).",
+                model,
+            )
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
+            self.calc_bio_dose if supported else False,
+            self.calc_let,
+            bio_influence_quantities=self._bio_influence_names if supported else (),
+            let_available=True,
+            let_auto=model_requires_let,
+        )
+        if model is not None:
+            dij["bio_model"] = model
+        if self._calc_bio_dose:
+            self._validate_bio_influence_names(dij, self._bio_influence_names)
+            dij = self._allocate_quantity_matrices(dij, list(self._bio_influence_names))
+
+        if self._use_let_kernel:
+            self.scorers.extend(["LETd"])
+        if self._calc_let:
+            dij = self._allocate_quantity_matrices(dij, ["let_dose"])
+
+        return dij
+
+    def _init_dose_calc(
+        self, ct: CT, cst: StructureSet, stf: SteeringInformation
+    ) -> dict[str, Any]:
         dij = super()._init_dose_calc(ct, cst, stf)
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
 
@@ -1222,43 +1277,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 "Multiple scenarios are not supported for FRED calculations."
             )
 
-        # Alpha/beta influence matrices are derived from the scored LET, so only LET-based
-        # models are supported
-        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        supported = model is not None and model.provides("alpha", "beta") and model.requires("let")
-        if self.calc_bio_dose is True and not supported:
-            raise NotImplementedError(
-                "FRED derives alpha/beta influence matrices from the scored LET and therefore "
-                f"only supports LET-based biological models, not {model!r}."
-            )
-        if self.calc_bio_dose == "auto" and model is not None and model.provides("alpha", "beta"):
-            if not supported:
-                logger.warning(
-                    "FRED only supports LET-based biological models; alpha/beta influence "
-                    "matrices for %r are skipped (set calc_bio_dose=False to silence this).",
-                    model,
-                )
-        self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
-            self.calc_bio_dose if supported else False,
-            self.calc_let,
-            let_available=True,
-            let_auto=model is not None and model.requires("let"),
-        )
-        if model is not None:
-            dij["bio_model"] = model
-        if self._calc_bio_dose:
-            self._bio_evaluator = model.evaluator(
-                self._machine,
-                {"alpha_x": np.asarray(dij["alphax"]), "beta_x": np.asarray(dij["betax"])},
-            )
-            dij = self._allocate_quantity_matrices(dij, ["alpha_dose", "sqrt_beta_dose"])
-
-        if self._use_let_kernel:
-            self.scorers.extend(["LETd"])
-        if self._calc_let:
-            dij = self._allocate_quantity_matrices(dij, ["let_dose"])
-
-        return dij
+        return self._init_bio_model(dij)
 
     def _finalize_dose(self, dij: dict) -> None:
         """

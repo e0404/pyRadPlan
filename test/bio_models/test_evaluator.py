@@ -70,21 +70,28 @@ def test_parametric_evaluator_returns_named_result():
     """Parametric LQ evaluation produces alpha and beta as named quantities."""
     evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
     assert evaluator.kernel_field_names == ()
-    result = evaluator.evaluate(
-        BioEvaluationContext(
-            {
-                "alpha_x": xp.asarray([0.1, 0.1]),
-                "beta_x": xp.asarray([0.05, 0.05]),
-                "physical_dose": xp.asarray([1.0, 1.0]),
-                "let": xp.asarray([0.0, 2.0]),
-            }
-        )
+    assert evaluator.influence_quantity_names == ("alpha_dose", "sqrt_beta_dose")
+    context = BioEvaluationContext(
+        {
+            "alpha_x": xp.asarray([0.1, 0.1]),
+            "beta_x": xp.asarray([0.05, 0.05]),
+            "physical_dose": xp.asarray([2.0, 3.0]),
+            "let": xp.asarray([0.0, 2.0]),
+        }
     )
+    result = evaluator.evaluate(context)
 
     assert isinstance(result, BioModelResult)
     assert set(result) == {"alpha", "beta"}
     assert np.allclose(np.asarray(result["alpha"]), [0.1, 0.1434])
     assert np.allclose(np.asarray(result["beta"]), [0.05, 0.05])
+
+    influence = evaluator.evaluate_influence(context)
+    assert set(influence) == {"alpha_dose", "sqrt_beta_dose"}
+    assert np.allclose(np.asarray(influence["alpha_dose"]), [0.2, 0.4302])
+    assert np.allclose(
+        np.asarray(influence["sqrt_beta_dose"]), np.asarray([2.0, 3.0]) * np.sqrt(0.05)
+    )
 
 
 def test_generic_result_does_not_require_lq_outputs():
@@ -94,12 +101,21 @@ def test_generic_result_does_not_require_lq_outputs():
         output_quantities = ("rbe",)
 
     class DirectRBEEvaluator(BioModelEvaluator):
+        @property
+        def influence_quantity_names(self):
+            return ("rbe_dose",)
+
         def evaluate(self, context):
             return BioModelResult({"rbe": context.require("rbe")})
 
+        def _evaluate_influence(self, context):
+            result = self.evaluate(context)
+            return {"rbe_dose": context.require("physical_dose") * result.require("rbe")}
+
     model = DirectRBEModel()
     evaluator = DirectRBEEvaluator(model)
-    result = evaluator.evaluate(BioEvaluationContext({"rbe": xp.asarray([1.25])}))
+    context = BioEvaluationContext({"physical_dose": xp.asarray([2.0]), "rbe": xp.asarray([1.25])})
+    result = evaluator.evaluate(context)
 
     assert model.provides("rbe")
     assert not model.provides("alpha", "beta")
@@ -107,6 +123,22 @@ def test_generic_result_does_not_require_lq_outputs():
         model.provides()
     assert set(result) == {"rbe"}
     assert np.allclose(np.asarray(result["rbe"]), [1.25])
+    influence = evaluator.evaluate_influence(context)
+    assert set(influence) == {"rbe_dose"}
+    assert np.allclose(np.asarray(influence["rbe_dose"]), [2.5])
+
+
+def test_evaluator_rejects_influence_results_that_do_not_match_declaration():
+    class InvalidEvaluator(BioModelEvaluator):
+        @property
+        def influence_quantity_names(self):
+            return ("declared",)
+
+        def _evaluate_influence(self, context):
+            return {"other": 1.0}
+
+    with pytest.raises(ValueError, match="declared influence quantities.*produced"):
+        InvalidEvaluator(ConstantRBEModel()).evaluate_influence(BioEvaluationContext())
 
 
 def test_non_lq_parametric_evaluator_has_specific_failure_message():
