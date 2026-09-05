@@ -7,6 +7,7 @@ optimization
    :toctree: generated/optimization/
 
     fluence_optimization
+    OptInfo
 
 
 optimization.objectives
