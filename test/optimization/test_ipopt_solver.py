@@ -4,16 +4,17 @@ import array_api_compat
 import array_api_extra as xpx
 import numpy as np
 
-
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
 
-if OptimizerIpopt is None:
-    pytest.skip("IPOPT not installed", allow_module_level=True)
+skipif_no_ipopt = pytest.mark.skipif(
+    OptimizerIpopt is None,
+    reason="IPOPT is not installed on this system.",
+)
 
 
 def build_quadratic_problem(solver):
     def objective(x):
-        return float(x[0] ** 2 + x[1] ** 2)
+        return x[0] ** 2 + x[1] ** 2
 
     def gradient(x):
         return np.asarray([2 * x[0], 2 * x[1]], dtype=np.float64)
@@ -23,6 +24,7 @@ def build_quadratic_problem(solver):
     return np.asarray([1.0, -1.0], dtype=np.float64)
 
 
+@skipif_no_ipopt
 def test_validate_problem_basic():
     solver = get_solver("ipopt")
     x0 = build_quadratic_problem(solver)
@@ -48,16 +50,20 @@ def test_validate_problem_basic():
     assert problem is not None
 
 
+@skipif_no_ipopt
 def test_ipopt_quadratic_solution():
     solver = get_solver("ipopt")
     x0 = build_quadratic_problem(solver)
     # API: allow_keyboard_cancel is configured on the solver, not per-call
     solver.allow_keyboard_cancel = False
-    res, status = solver.solve(x0)
+    res, result_info = solver.solve(x0)
     assert np.allclose(res, 0.0, atol=1e-4)
-    assert isinstance(status, int)
+    assert isinstance(result_info, dict)
+    assert isinstance(result_info["status"], int)
+    assert result_info["num_iter"] > 0
 
 
+@skipif_no_ipopt
 def test_get_solver_ipopt():
     solver = get_solver("ipopt")
     assert isinstance(solver, OptimizerIpopt)
@@ -65,6 +71,7 @@ def test_get_solver_ipopt():
     assert solver.short_name == "ipopt"
 
 
+@skipif_no_ipopt
 def test_simple_problem_ipopt():
     solver = get_solver("ipopt")
 
@@ -82,9 +89,10 @@ def test_simple_problem_ipopt():
     x0 = xp.asarray([1.0, 1.0], dtype=xp.float64)
 
     # Solve
-    result, status = solver.solve(x0)
+    result, result_info = solver.solve(x0)
 
     assert array_api_compat.array_namespace(result) is xp
-    assert isinstance(status, int)
+    assert isinstance(result_info, dict)
+    assert isinstance(result_info["status"], int)
 
     assert xp.all(xpx.isclose(result, 0.0, atol=1e-4))
