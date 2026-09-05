@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Development implementation plan for explicit optimization quantities and opt-in `dose_auto` strategies, including prescription conversion, fraction normalization, GUI integration, and migration (design only).
 - Biological models (`pyRadPlan.bio_models`): constant RBE, LET-based LQ models (Wedenberg, McNamara, Carabé, Mairani helium, linear scaling), kernel-based LQ (LEM base data) and tabulated RBE models dose-averaged over fragment fluence spectra. Models are lightweight parameter objects declaring `required_quantities` and `output_quantities`; per-calculation state lives in a `BioModelEvaluator` created by `model.evaluator(machine, voxel_params)`, which evaluates named inputs from `BioEvaluationContext` into a mapping-backed `BioModelResult` and converts them to its declared additive influence quantities; discrete tissue classes are selected through a `TissueParameterLookup` (`"exact"`)
 - `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back; carbon keeps its established `kernel_based_lq` default while other modalities default to `none`, so selecting biological optimization for protons, helium or oxygen is explicit
 - `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective dose parameters and reported result doses refer to one fraction or to the total course; `Dij.compute_result_*` take `num_of_fractions` for the scaling and the optimizer logs the interpretation it applies
@@ -78,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Legacy optimization quantity conversion now rejects explicitly incompatible objective quantities instead of silently overwriting them, while accepting an objective that already names the inferred default; set `prop_opt["convert_dose_objectives"] = False` to preserve every objective's selected quantity literally
 - `calc_let` and `calc_bio_dose` of the particle engines accept `"auto"` (new default): supported biological influence matrices are computed whenever the evaluator declares them and LET whenever the machine provides it (pencil beam) or the model requires it (FRED); `False` switches the matrices off explicitly (LET-based models still receive the LET kernel in the pencil-beam engines), `calc_bio_dose=True` without an evaluator providing influence quantities raises. FRED sets `Dij.rbe` for constant-RBE models; the unused `calc_bio_dose` of the TOPAS engine was removed
 - IPOPT is no longer registered as a solver when `ipyopt`'s vendored OpenMP runtime clashes with one already loaded in the process (e.g. PyTorch's), since starting a solve would abort the interpreter. `pyRadPlan.optimization.solvers.IPOPT_DISABLED_REASON` explains why, a warning is logged, and `PlanningProblem` falls back to the next available solver as it already did when `ipyopt` was not installed. Set `KMP_DUPLICATE_LIB_OK=TRUE` before starting Python to use IPOPT anyway (unsafe, per Intel's documentation); `OptimizerIpopt` also re-checks before each solve, so a package imported after the solver raises a `RuntimeError` instead of crashing the process
 - Siddon ray tracing orders its per-axis plane-alpha streams with device-side event waits (`stream_wait_event`) instead of a host-blocking device synchronization, and the alpha-limit computation runs sequentially on the main stream (its arrays are too small for stream parallelism to pay off, and the streams required two further device synchronizations)
@@ -115,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The proton LET optimization tutorial now disables legacy objective conversion, so its
+  `let_dose` objective is evaluated as documented instead of being silently relabelled as
+  physical dose.
 - Biological optimization: corrected the RBE-weighted-dose chain derivative without mutating the cached effect, added the linear LQ limit for `beta_x == 0`, made biological result assembly Array API-compatible, selected fragment spectra independently for every machine energy, and scaled total-course `sqrt_beta_dose` by the square root of the fraction count so that it remains consistent with the reported effect
 - particle pencil-beam multi-Gaussian lateral model: kernels are interpolated along depth, so the weights/sigmas are `(n_components, n_voxels)`; the model is now evaluated in that orientation with array-API calls only, and 1-D `weight_multi` (single free weight) is supported
 - `ParticlePencilBeamKernel` rejected multi-Gaussian kernels stored as `(n_components, n_depths)`; both orientations are accepted and the number of sigmas must be the number of weights plus one

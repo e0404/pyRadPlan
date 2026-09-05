@@ -156,6 +156,35 @@ Attaching objectives to structures
 
 Objectives are pydantic models, so they can be serialized and shared as JSON.
 
+Literal quantities and legacy conversion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The current automatic conversion is a legacy, plan-wide mode and remains enabled by default for
+compatibility with existing ion-planning workflows. It converts objectives whose quantity is
+``"physical_dose"`` to the planning problem's inferred physical- or RBE-weighted dose quantity.
+It does not convert prescription values between physical dose, effect, or other biological
+semantics.
+
+An objective configured for a quantity other than ``"physical_dose"`` or the inferred default is
+therefore rejected while legacy conversion is enabled instead of being silently relabelled. To
+use every objective quantity literally, disable the conversion explicitly:
+
+.. code-block:: python
+
+    pln.prop_opt["convert_dose_objectives"] = False
+
+    ptv.objectives = [
+        SquaredDeviation(quantity="effect", d_ref=4.0),
+    ]
+    oar.objectives = [
+        SquaredOverdosing(quantity="physical_dose", d_max=2.0),
+    ]
+
+With conversion disabled, reference parameters are interpreted in the selected quantity's
+semantics. The independent ``dose_convention`` normalization described below still applies.
+Explicit automatic intent and biological prescription conversion are deferred to the future
+``dose_auto`` strategy API.
+
 .. _concept_dose_convention:
 
 Dose convention

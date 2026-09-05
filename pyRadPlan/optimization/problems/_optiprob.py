@@ -43,6 +43,9 @@ class PlanningProblem(ProgressReporter, ABC):
         Whether to apply overlap priorities to the StructureSet
     solver : Union[str, dict, SolverBase], default="ipopt"
         The solver to use for optimization.
+    convert_dose_objectives : bool, default=True
+        Legacy plan-wide conversion of physical-dose objectives to the inferred planning
+        quantity. Set to ``False`` to use every objective's quantity literally.
     """
 
     # Constant, Abstract properties are realized as ClassVars
@@ -109,7 +112,8 @@ class PlanningProblem(ProgressReporter, ABC):
 
             self.solver = solver_names[0]
 
-    def get_default_quantities(self, radiation_mode: str) -> str:
+    def _get_legacy_default_quantity(self, radiation_mode: str) -> str:
+        """Return the quantity used by the legacy plan-wide objective conversion."""
         use_rbe = (hasattr(self._dij, "rbe") and self._dij.rbe is not None) or (
             hasattr(self._dij, "alpha_dose") and self._dij.alpha_dose is not None
         )
@@ -192,14 +196,15 @@ class PlanningProblem(ProgressReporter, ABC):
 
     def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
         """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
-        default_quantity = self.get_default_quantities(self._stf.beams[0].radiation_mode)
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
 
         if self.convert_dose_objectives:
+            default_quantity = self._get_legacy_default_quantity(self._stf.beams[0].radiation_mode)
             logger.info(
-                "Converting all objectives to use quantity: "
-                + self.get_default_quantities(self._stf.beams[0].radiation_mode)
+                "Legacy objective conversion is enabled; converting physical-dose objectives "
+                "to quantity: %s",
+                default_quantity,
             )
 
         for voi in self._cst.vois:
@@ -223,7 +228,16 @@ class PlanningProblem(ProgressReporter, ABC):
             objs = [get_objective(obj).model_copy() for obj in valid_objectives]
 
             if self.convert_dose_objectives:
-                for obj in objs:
+                for objective_index, obj in enumerate(objs, start=1):
+                    # TODO: Replace this plan-wide legacy mode with explicit ``dose_auto``
+                    # objective intent; see docs/development/optimization_quantity_api.md.
+                    if obj.quantity not in ("physical_dose", default_quantity):
+                        raise ValueError(
+                            f"VOI {voi.name!r}, objective {objective_index} ({obj.name!r}) uses "
+                            f"quantity {obj.quantity!r}, which cannot be overwritten by legacy "
+                            "automatic dose conversion. Set convert_dose_objectives=False to "
+                            "use literal objective quantities."
+                        )
                     obj.quantity = default_quantity
 
             for obj in objs:
