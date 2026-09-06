@@ -13,7 +13,7 @@ import SimpleITK as sitk
 
 import pyRadPlan
 from pyRadPlan import calc_dose_influence
-from pyRadPlan.bio_models import Wedenberg
+from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator, Wedenberg
 from pyRadPlan.dose.engines._base import DoseEngineBase
 from pyRadPlan.dose.engines._hongpb import ParticleHongPencilBeamEngine
 from pyRadPlan.machines import load_machine_from_mat, validate_machine
@@ -24,6 +24,7 @@ def _bio_engine(kernel_names=()):
     engine._bio_evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
     engine._bio_kernel_names = tuple(kernel_names)
     engine._bio_influence_names = engine._bio_evaluator.influence_quantity_names
+    engine._validated_bio_kernel_energies = set()
     return engine
 
 
@@ -119,6 +120,54 @@ def test_lateral_kernel_names_reject_invalid_model():
 
     with pytest.raises(ValueError, match="Invalid Lateral Model"):
         engine._lateral_kernel_names()
+
+
+@pytest.mark.parametrize(
+    ("declared", "returned", "message"),
+    [
+        (("depth_factor",), {}, "missing.*depth_factor"),
+        ((), {"idd": np.ones(2)}, "undeclared.*idd"),
+    ],
+)
+def test_bio_kernel_results_must_match_declaration_before_interpolation(
+    declared, returned, message
+):
+    """Missing fields and undeclared engine-name collisions fail at the boundary."""
+
+    class KernelModel(BiologicalModel):
+        model = "kernel_contract_test"
+        possible_radiation_modes = ("protons",)
+
+        def evaluator(self, machine, voxel_params):
+            return KernelEvaluator(self)
+
+    class KernelEvaluator(BioModelEvaluator):
+        @property
+        def kernel_field_names(self):
+            return declared
+
+        def kernel_quantities(self, kernel):
+            return returned
+
+    engine = _bio_engine(declared)
+    engine._bio_evaluator = KernelEvaluator(KernelModel())
+    engine._calc_bio_dose = True
+    engine._use_let_kernel = False
+    engine.lateral_model = "single"
+    bixel = {
+        "kernel": {
+            "energy": 100.0,
+            "depths": np.arange(2),
+            "offset": 0.0,
+            "idd": np.ones(2),
+            "sigma": np.ones(2),
+        },
+        "rad_depth_offset": 0.0,
+        "v_alpha_x": np.ones(1),
+    }
+
+    with pytest.raises(ValueError, match=message):
+        engine._interpolate_kernels_in_depth(bixel)
 
 
 def _per_entry(dij):

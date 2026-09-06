@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Optimization quantity API: implementation plan
 
 Status: proposed design for review and later implementation. No runtime API described as

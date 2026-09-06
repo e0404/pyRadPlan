@@ -105,7 +105,7 @@ def test_generic_result_does_not_require_lq_outputs():
         def influence_quantity_names(self):
             return ("rbe_dose",)
 
-        def evaluate(self, context):
+        def _evaluate(self, context):
             return BioModelResult({"rbe": context.require("rbe")})
 
         def _evaluate_influence(self, context):
@@ -139,6 +139,20 @@ def test_evaluator_rejects_influence_results_that_do_not_match_declaration():
 
     with pytest.raises(ValueError, match="declared influence quantities.*produced"):
         InvalidEvaluator(ConstantRBEModel()).evaluate_influence(BioEvaluationContext())
+
+
+def test_evaluator_rejects_results_that_do_not_match_model_outputs():
+    """Intrinsic results must contain exactly the quantities declared by the model."""
+
+    class DeclaredModel(ConstantRBEModel):
+        output_quantities = ("alpha", "beta")
+
+    class InvalidEvaluator(BioModelEvaluator):
+        def _evaluate(self, context):
+            return {"alpha": 1.0}
+
+    with pytest.raises(ValueError, match="declared output quantities.*produced"):
+        InvalidEvaluator(DeclaredModel()).evaluate(BioEvaluationContext())
 
 
 def test_non_lq_parametric_evaluator_has_specific_failure_message():

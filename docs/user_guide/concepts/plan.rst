@@ -112,7 +112,8 @@ An evaluator separately declares its additive matrix outputs through
 are ``alpha_dose`` and ``sqrt_beta_dose``. The evaluator boundary can describe different
 sufficient statistics, but the current fixed ``Dij`` schema cannot store additional names; the
 dose engine reports those during setup. A future generic quantity registry is outlined in
-``docs/development/dynamic_dij_quantities.md``.
+``docs/development/dynamic_dij_quantities.md``. See :ref:`custom_biological_models` for the
+complete extension contract and a registered external model example.
 
 .. list-table::
    :header-rows: 1

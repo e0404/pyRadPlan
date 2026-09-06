@@ -1224,8 +1224,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         self._bio_evaluator = None
         self._bio_influence_names = ()
         if model_requires_let and self.calc_bio_dose is not False:
-            self._bio_evaluator = model.evaluator(
-                self._machine,
+            self._bio_evaluator = self._create_bio_evaluator(
+                model,
                 {"alpha_x": np.asarray(dij["alphax"]), "beta_x": np.asarray(dij["betax"])},
             )
             self._bio_influence_names = self._bio_evaluator.influence_quantity_names

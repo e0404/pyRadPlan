@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import inspect
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Optional, get_type_hints
 
-from ._evaluator import BioModelEvaluator, ParametricEvaluator
+from ._evaluator import BioModelEvaluator, ParametricEvaluator, _validate_name_tuple
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,12 @@ class BiologicalModel(ABC):
     class lookup, pre-computed kernel tables, ...) lives in the
     :class:`~pyRadPlan.bio_models.BioModelEvaluator` created by :meth:`evaluator` for one
     dose calculation.
+
+    Custom subclasses must provide immutable tuple declarations for aliases, required machine
+    quantities, evaluator outputs and supported radiation modes. Register a concrete subclass
+    with :func:`~pyRadPlan.bio_models.register_model`; constructor arguments are retained by
+    :meth:`__new__` for :attr:`parameters` and :meth:`to_dict`, so constructor parameters should
+    be serialisable.
 
     Attributes
     ----------
@@ -78,6 +85,31 @@ class BiologicalModel(ABC):
         return all(name in self.output_quantities for name in (quantity_name, *additional_names))
 
     @classmethod
+    def validate_declarations(cls) -> None:
+        """Validate the public name and capability declarations of a model class."""
+        canonical_name = getattr(cls, "model", None)
+        if not isinstance(canonical_name, str) or not canonical_name:
+            raise ValueError("Biological model must declare a non-empty string model name.")
+
+        _validate_name_tuple(cls.model_aliases, "model_aliases", subject="Biological model")
+        _validate_name_tuple(
+            getattr(cls, "possible_radiation_modes", None),
+            "possible_radiation_modes",
+            subject="Biological model",
+            allow_empty=False,
+        )
+        _validate_name_tuple(
+            cls.required_quantities, "required_quantities", subject="Biological model"
+        )
+        _validate_name_tuple(
+            cls.output_quantities, "output_quantities", subject="Biological model"
+        )
+        if not isinstance(cls.default_report_quantity, str) or not cls.default_report_quantity:
+            raise ValueError(
+                "Biological model default_report_quantity must be a non-empty string."
+            )
+
+    @classmethod
     def config_model(cls) -> type:
         """
         Pydantic model of the constructor parameters (one field per parameter).
@@ -90,6 +122,7 @@ class BiologicalModel(ABC):
             return cls.__dict__["_config_model"]
 
         from pydantic import create_model
+
         from pyRadPlan.core import AlgorithmConfig
 
         try:
@@ -125,6 +158,9 @@ class BiologicalModel(ABC):
     def evaluator(self, machine: Any, voxel_params: dict[str, Any]) -> BioModelEvaluator:
         """
         Create the evaluator of this model for one machine / patient geometry.
+
+        Return a fresh :class:`BioModelEvaluator` bound to ``self``. Dose engines validate the
+        evaluator's type, model binding and name declarations once during setup.
 
         Parameters
         ----------

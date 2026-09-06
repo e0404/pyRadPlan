@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Dynamic quantities on `Dij`
 
 Status: design note only; no dynamic storage API is implemented yet.

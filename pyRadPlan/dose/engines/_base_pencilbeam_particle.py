@@ -78,6 +78,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
         self._bio_kernel_names: tuple[str, ...] = ()
         self._bio_influence_names: tuple[str, ...] = ()
+        self._validated_bio_kernel_energies: set[float] = set()
 
         self._kernel_cache = {}
 
@@ -282,6 +283,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # without tissue parameters (lateral cutoff calibration) only need physical dose
         if self._calc_bio_dose and "v_alpha_x" in bixel:
             bio_kernels = self._bio_evaluator.kernel_quantities(kernel)
+            kernel_energy = float(kernel["energy"])
+            if kernel_energy not in self._validated_bio_kernel_energies:
+                self._bio_evaluator.validate_kernel_quantities(bio_kernels)
+                self._validated_bio_kernel_energies.add(kernel_energy)
             used_kernels.update(bio_kernels)
 
         # Interpolate all fields in X
@@ -581,13 +586,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._bio_evaluator = None
         self._bio_kernel_names = ()
         self._bio_influence_names = ()
+        self._validated_bio_kernel_energies.clear()
         has_let = self._machine.has_let_kernel
 
         if model is not None:
             self._v_alpha_x = self.xp.asarray(dij["alphax"])
             self._v_beta_x = self.xp.asarray(dij["betax"])
-            self._bio_evaluator = model.evaluator(
-                self._machine, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
+            self._bio_evaluator = self._create_bio_evaluator(
+                model, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
             )
             self._bio_influence_names = self._bio_evaluator.influence_quantity_names
 

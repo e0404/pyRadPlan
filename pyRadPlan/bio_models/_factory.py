@@ -1,8 +1,8 @@
 from __future__ import annotations
+
 import inspect
 import logging
-import warnings
-from typing import Any, List, Optional, Union
+from typing import Any, Union
 
 from pydantic.alias_generators import to_snake
 
@@ -10,7 +10,7 @@ from pyRadPlan.bio_models._base import BiologicalModel
 
 BioModelSpec = Union[str, dict[str, Any], BiologicalModel]
 
-BIO_MODELS = {}
+BIO_MODELS: dict[str, type[BiologicalModel]] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -40,43 +40,71 @@ get_available_models
     Filter the registry to models compatible with a given radiation mode and
     set of provided quantities.
 get_bio_model
-    Look up and instantiate a biological model by name, falling back to
-    :class:`~pyRadPlan.bio_models._base.EmptyModel` when no match is found.
+    Look up, instantiate and validate a biological model by name.
 """
 
 
-def register_model(model_cls: BiologicalModel) -> None:
+def register_model(model_cls: type[BiologicalModel]) -> type[BiologicalModel]:
     """
-    Register a new model.
+    Register a concrete biological model class and return it unchanged.
+
+    The return value makes the function usable as a class decorator. Registration is
+    process-global and idempotent for the same class. A name already owned by another class
+    raises before any canonical name or alias is added, so registration is all-or-nothing.
 
     Parameters
     ----------
-    model_cls : type
-        A Biological Model class.
+    model_cls : type[BiologicalModel]
+        Concrete biological model class. Its name, aliases, radiation modes and quantity
+        declarations are validated during registration.
+
+    Returns
+    -------
+    type[BiologicalModel]
+        ``model_cls``, allowing ``@register_model`` decorator use.
+
+    Raises
+    ------
+    TypeError
+        The argument is not a biological model class or a tuple declaration has the wrong type.
+    ValueError
+        The class is abstract, a declaration is invalid, or a name belongs to another model.
     """
-    if not issubclass(model_cls, BiologicalModel):
-        raise ValueError("Model must be a subclass of BiologicalModel.")
+    if not isinstance(model_cls, type) or not issubclass(model_cls, BiologicalModel):
+        raise TypeError("Model must be a BiologicalModel subclass.")
+    if inspect.isabstract(model_cls):
+        raise ValueError(f"Biological model '{model_cls.__name__}' must be concrete.")
 
-    if model_cls.model is None:
-        raise ValueError("Model must have a 'model' attribute.")
+    model_cls.validate_declarations()
 
-    if model_cls.possible_radiation_modes is None:
-        raise ValueError("Model must have a 'possible_radiation_modes' attribute.")
+    canonical_name = model_cls.model
+    aliases = model_cls.model_aliases
+    names = (canonical_name, *aliases)
+    if len(set(names)) != len(names):
+        raise ValueError(
+            f"Biological model '{model_cls.__name__}' must use distinct canonical and alias names."
+        )
 
-    for name in [model_cls.model, *model_cls.model_aliases]:
-        if name in BIO_MODELS:
-            warnings.warn(f"Model '{name}' is already registered.")
-        else:
-            BIO_MODELS[name] = model_cls
+    collisions = {
+        name: BIO_MODELS[name]
+        for name in names
+        if name in BIO_MODELS and BIO_MODELS[name] is not model_cls
+    }
+    if collisions:
+        details = ", ".join(
+            f"{name!r} ({registered.__name__})" for name, registered in collisions.items()
+        )
+        raise ValueError(f"Biological model names already registered: {details}.")
+
+    BIO_MODELS.update(dict.fromkeys(names, model_cls))
+    return model_cls
 
 
 def get_available_models(
     radiation_mode: str,
-    provided_quantities: List[str],
+    provided_quantities: list[str],
 ) -> dict[str, type[BiologicalModel]]:
-    """
-    Return all registered models given the radiaiton mode and provided quantities.
-    """
+    """Return registered models matching the radiation mode and provided quantities."""
     result = {}
     for cls in set(BIO_MODELS.values()):
         if radiation_mode in cls.possible_radiation_modes and all(
@@ -90,7 +118,7 @@ def get_available_models(
 
 def available_bio_models(radiation_mode: str) -> list[type[BiologicalModel]]:
     """
-    Registered model classes supporting a radiation mode, independent of machine data.
+    Return registered model classes supporting a mode, independent of machine data.
 
     Canonical names only (no aliases), ``"none"`` first, then alphabetically.
     """
@@ -100,7 +128,7 @@ def available_bio_models(radiation_mode: str) -> list[type[BiologicalModel]]:
     return sorted(classes, key=lambda cls: (cls.model != "none", cls.model))
 
 
-def create_bio_model(spec: BioModelSpec, radiation_mode: Optional[str] = None) -> BiologicalModel:
+def create_bio_model(spec: BioModelSpec, radiation_mode: str | None = None) -> BiologicalModel:
     """
     Create a biological model from a name, a specification dict or an instance.
 
@@ -154,6 +182,7 @@ def create_bio_model(spec: BioModelSpec, radiation_mode: Optional[str] = None) -
                 f"Accepted parameters: {accepted}"
             ) from exc
 
+    type(model).validate_declarations()
     if radiation_mode is not None and radiation_mode not in model.possible_radiation_modes:
         raise ValueError(
             f"Biological model '{model.model}' does not support radiation mode "
@@ -163,7 +192,7 @@ def create_bio_model(spec: BioModelSpec, radiation_mode: Optional[str] = None) -
 
 
 def get_bio_model(
-    spec: BioModelSpec, radiation_mode: str, provided_quantities: List[str]
+    spec: BioModelSpec, radiation_mode: str, provided_quantities: list[str]
 ) -> BiologicalModel:
     """
     Create a biological model and check it against a radiation mode and machine data.

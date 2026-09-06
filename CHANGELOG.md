@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A documented and engine-tested custom biological-model extension contract. `register_model`
+  is usable as a decorator, validates model declarations, and checks every name before modifying
+  the registry; dose engines validate custom evaluator bindings, declarations, per-energy kernel
+  fields and returned quantity names at their public boundaries.
 - Development implementation plan for explicit optimization quantities and opt-in `dose_auto` strategies, including prescription conversion, fraction normalization, GUI integration, and migration (design only).
 - Biological models (`pyRadPlan.bio_models`): constant RBE, LET-based LQ models (Wedenberg, McNamara, Carabé, Mairani helium, linear scaling), kernel-based LQ (LEM base data) and tabulated RBE models dose-averaged over fragment fluence spectra. Models are lightweight parameter objects declaring `required_quantities` and `output_quantities`; per-calculation state lives in a `BioModelEvaluator` created by `model.evaluator(machine, voxel_params)`, which evaluates named inputs from `BioEvaluationContext` into a mapping-backed `BioModelResult` and converts them to its declared additive influence quantities; discrete tissue classes are selected through a `TissueParameterLookup` (`"exact"`)
 - `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back; carbon keeps its established `kernel_based_lq` default while other modalities default to `none`, so selecting biological optimization for protons, helium or oxygen is explicit

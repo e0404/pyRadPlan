@@ -29,7 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
-from pyRadPlan.bio_models import BiologicalModel, get_bio_model
+from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator, get_bio_model
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -690,6 +690,24 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
+
+    def _create_bio_evaluator(
+        self, model: BiologicalModel, voxel_params: dict[str, Any]
+    ) -> BioModelEvaluator:
+        """Create and validate a model evaluator for this dose calculation."""
+        evaluator = model.evaluator(self._machine, voxel_params)
+        if not isinstance(evaluator, BioModelEvaluator):
+            raise TypeError(
+                f"Biological model '{model.model}' evaluator() must return a "
+                f"BioModelEvaluator, got {type(evaluator).__name__}."
+            )
+        if evaluator.model is not model:
+            raise ValueError(
+                f"Biological model '{model.model}' returned an evaluator bound to a different "
+                "model instance."
+            )
+        evaluator.validate_declarations()
+        return evaluator
 
     # Private and abstract methods
 

@@ -15,6 +15,24 @@ if TYPE_CHECKING:  # pragma: no cover
     from ._base import BiologicalModel
 
 
+def _validate_name_tuple(
+    names: Any,
+    declaration: str,
+    *,
+    subject: str,
+    allow_empty: bool = True,
+) -> None:
+    """Validate a tuple-valued public name declaration."""
+    if not isinstance(names, tuple):
+        raise TypeError(f"{subject} {declaration} must be a tuple.")
+    if not allow_empty and not names:
+        raise ValueError(f"{subject} {declaration} must not be empty.")
+    if any(not isinstance(name, str) or not name for name in names):
+        raise ValueError(f"{subject} {declaration} must contain non-empty strings.")
+    if len(set(names)) != len(names):
+        raise ValueError(f"{subject} {declaration} must contain unique names.")
+
+
 class BioEvaluationContext(Mapping[str, Any]):
     """Named inputs available during one biological-model evaluation.
 
@@ -118,10 +136,32 @@ class BioModelEvaluator(ABC):
     The dose engine interacts with a model exclusively through this interface. ``evaluate``
     returns intrinsic model outputs, while ``evaluate_influence`` returns the additive per-bixel
     quantities declared by ``influence_quantity_names`` for storage in influence matrices.
+
+    Custom evaluators declare depth-dependent machine fields through ``kernel_field_names``;
+    ``kernel_quantities`` must return exactly those keys for every energy. Custom implementations
+    override ``_evaluate`` and ``_evaluate_influence``; the public methods validate their results
+    against ``model.output_quantities`` and ``influence_quantity_names``. Both declaration
+    properties must return tuples of unique, non-empty strings. The current fixed ``Dij`` schema
+    only accepts ``alpha_dose`` and ``sqrt_beta_dose`` as biological influence outputs.
     """
 
     def __init__(self, model: BiologicalModel):
         self.model = model
+
+    def validate_declarations(self) -> None:
+        """Validate the kernel-input and influence-output declarations.
+
+        Dose engines call this once when the evaluator is created. It is public so custom
+        evaluator authors can validate an evaluator independently of a dose calculation.
+        """
+        _validate_name_tuple(
+            self.kernel_field_names, "kernel_field_names", subject="Biological evaluator"
+        )
+        _validate_name_tuple(
+            self.influence_quantity_names,
+            "influence_quantity_names",
+            subject="Biological evaluator",
+        )
 
     @property
     def kernel_field_names(self) -> tuple[str, ...]:
@@ -152,22 +192,63 @@ class BioModelEvaluator(ABC):
         """
         return {}
 
+    def validate_kernel_quantities(self, quantities: Mapping[str, Any]) -> None:
+        """Validate kernel fields returned for one machine energy."""
+        if not isinstance(quantities, Mapping):
+            raise TypeError(
+                f"Biological evaluator for '{self.model.model}' kernel_quantities() must "
+                "return a mapping."
+            )
+
+        actual = tuple(quantities)
+        _validate_name_tuple(actual, "kernel_quantities() keys", subject="Biological evaluator")
+        declared = self.kernel_field_names
+        if set(actual) != set(declared):
+            missing = sorted(set(declared).difference(actual))
+            undeclared = sorted(set(actual).difference(declared))
+            details = []
+            if missing:
+                details.append(f"missing {missing!r}")
+            if undeclared:
+                details.append(f"undeclared {undeclared!r}")
+            raise ValueError(
+                f"Biological evaluator for '{self.model.model}' kernel_quantities() does not "
+                f"match kernel_field_names {declared!r}: {', '.join(details)}."
+            )
+
     def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
         """Evaluate the model from named inputs and return named biological quantities."""
+        return self._validate_result(
+            self._evaluate(context), self.model.output_quantities, "output quantities"
+        )
+
+    def _evaluate(self, context: BioEvaluationContext) -> Mapping[str, Any]:
+        """Implement the model-specific evaluation of intrinsic quantities."""
         raise NotImplementedError(
             f"Biological model '{self.model.model}' does not provide evaluated quantities."
         )
 
     def evaluate_influence(self, context: BioEvaluationContext) -> BioModelResult:
         """Evaluate additive per-bixel quantities suitable for influence matrices."""
-        declared = self.influence_quantity_names
-        result = self._evaluate_influence(context)
+        return self._validate_result(
+            self._evaluate_influence(context),
+            self.influence_quantity_names,
+            "influence quantities",
+        )
+
+    def _validate_result(
+        self,
+        result: Mapping[str, Any],
+        declared: tuple[str, ...],
+        kind: str,
+    ) -> BioModelResult:
+        """Validate and normalize one evaluator result at its public boundary."""
         if not isinstance(result, BioModelResult):
             result = BioModelResult(result)
 
         if set(result) != set(declared):
             raise ValueError(
-                f"Biological evaluator for '{self.model.model}' declared influence quantities "
+                f"Biological evaluator for '{self.model.model}' declared {kind} "
                 f"{declared!r}, but produced {tuple(result)!r}."
             )
         return result
@@ -207,7 +288,7 @@ class ParametricEvaluator(_LQInfluenceEvaluator):
     Holds nothing but the model; forwards to :meth:`BiologicalModel.alpha_beta`.
     """
 
-    def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
+    def _evaluate(self, context: BioEvaluationContext) -> BioModelResult:
         if not self.model.provides("alpha", "beta"):
             raise NotImplementedError(
                 f"Biological model '{self.model.model}' does not provide alpha/beta values."
@@ -229,7 +310,7 @@ class _TissueKernelEvaluator(_LQInfluenceEvaluator):
         """Names of the tissue kernel fields requested by this evaluator."""
         return tuple(self.kernel_fields)
 
-    def evaluate(self, context: BioEvaluationContext) -> BioModelResult:
+    def _evaluate(self, context: BioEvaluationContext) -> BioModelResult:
         rows = self.lookup.gather(
             context.require("alpha_x"),
             context.require("beta_x"),

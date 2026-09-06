@@ -3,6 +3,8 @@ bio_models
 
 .. currentmodule:: pyRadPlan.bio_models
 
+See :ref:`custom_biological_models` for the extension contract and a complete registered model.
+
 Models
 ------
 
