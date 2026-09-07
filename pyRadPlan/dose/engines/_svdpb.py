@@ -183,8 +183,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 stf.beams[i].rays[j].beamlets[k].model_dump()
             )
             # TODO: add mask as computed field?
-            beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.rot90(
-                stf.beams[i].rays[j].beamlets[k].mask, k=-1
+            # Materialized: np.rot90 returns a negatively strided view, which the torch
+            # backend cannot take, and the mask is converted once per ray below.
+            beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
+                np.rot90(stf.beams[i].rays[j].beamlets[k].mask, k=-1)
             )
 
         field_grid = xp.asarray(field_grid)

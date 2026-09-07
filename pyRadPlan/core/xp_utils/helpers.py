@@ -616,6 +616,18 @@ def to_numpy(arr: Array, detach: bool = True, dtype: np.dtype | type | None = No
     return out
 
 
+def _ensure_torch_compatible_strides(arr: Any) -> Any:
+    """Materialize a NumPy view that has negative strides.
+
+    PyTorch supports neither ``torch.from_numpy`` nor a DLPack import of a negatively strided
+    array; the DLPack path aborts the process instead of raising on some builds. Reversed views
+    (``arr[::-1]``, ``np.flip``, ``np.rot90``) therefore have to be copied before conversion.
+    """
+    if isinstance(arr, np.ndarray) and arr.strides and min(arr.strides) < 0:
+        return np.ascontiguousarray(arr)
+    return arr
+
+
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Any = None) -> Array:
     """Convert a NumPy array to the specified array namespace.
 
@@ -646,7 +658,7 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Any = None) -> Ar
             return cp.asarray(arr)
 
     if array_api_compat.is_torch_namespace(xp) and torch is not None:
-        t = torch.from_numpy(arr)
+        t = torch.from_numpy(_ensure_torch_compatible_strides(arr))
         if device_type == DLPACK_CUDA:
             if not torch.cuda.is_available():
                 raise RuntimeError("GPU requested but not available for PyTorch.")
@@ -790,6 +802,8 @@ def to_namespace(
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
         device_type = int(device[0])
         device_id = int(device[1])
+
+        arr = _ensure_torch_compatible_strides(arr)
 
         # Convert to Torch, preserving device if possible.
         try:
