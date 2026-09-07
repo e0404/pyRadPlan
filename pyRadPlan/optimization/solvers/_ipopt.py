@@ -14,6 +14,8 @@ from importlib.metadata import version as _pkg_version
 
 import logging
 import re
+from contextlib import nullcontext
+from typing import Literal
 import numpy as np
 import array_api_compat
 
@@ -21,6 +23,8 @@ from ...core.xp_utils.typing import Array
 
 from ._base_solvers import NonLinearOptimizer
 from ...core import xp_utils
+from ...util._jupyter import detect_jupyter
+from ...util.logging_utils import native_output_to_logger
 from ...util.openmp import blocked_by_openmp
 
 logger = logging.getLogger(__name__)
@@ -33,7 +37,17 @@ class OptimizerIpopt(NonLinearOptimizer):
     Attributes
     ----------
     options : dict
-        Options for IPOPT
+        Options passed to IPOPT by name. ``max_iter``, ``max_cpu_time`` and ``acceptable_tol``
+        are not taken from here: they are derived from the generic solver attributes
+        :attr:`max_iter`, :attr:`max_time` and :attr:`abs_obj_tol` on every solve, and a value
+        placed here for one of them is reported and ignored.
+    display : bool, default=True
+        Whether to show solver output. Sets IPOPT's ``print_level`` to 0 when disabled.
+    output_mode : {"auto", "native", "logging"}, default="auto"
+        Where IPOPT's output goes. It is written by the IPOPT library to the process' standard
+        output descriptor, which Jupyter does not display, so ``"auto"`` leaves it there in a
+        terminal and captures it into this module's logger in a notebook. ``"native"`` and
+        ``"logging"`` force one or the other regardless of the environment.
     """
 
     name = "Interior Point Optimizer"
@@ -43,11 +57,17 @@ class OptimizerIpopt(NonLinearOptimizer):
     allow_keyboard_cancel = True
 
     options: dict[str]
+    display: bool
+    output_mode: Literal["auto", "native", "logging"]
 
     def __init__(self):
         self.result = None
+        self.display = True
+        self.output_mode = "auto"
 
         super().__init__()
+
+        self._iter_count = 0
 
         self.options = {
             "print_level": 5,
@@ -58,13 +78,10 @@ class OptimizerIpopt(NonLinearOptimizer):
             "constr_viol_tol": 1e-4,
             "compl_inf_tol": 1e-4,
             "acceptable_iter": 5,
-            "acceptable_tol": self.abs_obj_tol,
             "acceptable_constr_viol_tol": 1e-2,
             "acceptable_dual_inf_tol": 1e10,
             "acceptable_compl_inf_tol": 1e10,
             "acceptable_obj_change_tol": 1e-4,
-            "max_iter": self.max_iter,
-            "max_cpu_time": float(self.max_time),
             "mu_strategy": "adaptive",
             "hessian_approximation": "limited-memory",
             "limited_memory_max_history": 20,
@@ -89,13 +106,9 @@ class OptimizerIpopt(NonLinearOptimizer):
                 "before starting Python to run it anyway (unsafe), or pick another solver."
             )
 
-        self.options.update(
-            {
-                "max_iter": self.max_iter,
-                "max_cpu_time": float(self.max_time),
-                "acceptable_tol": self.abs_obj_tol,
-            }
-        )
+        options = self._effective_options()
+
+        self._iter_count = 0
 
         xp = array_api_compat.array_namespace(x0)
 
@@ -121,13 +134,75 @@ class OptimizerIpopt(NonLinearOptimizer):
                 "eval_f": ipopt_objective,
                 "eval_grad_f": ipopt_derivative,
                 "intermediate_callback": self._callback,
-                "ipopt_options": self.options,
+                "ipopt_options": options,
             }
         )
 
-        x, _, status = nlp.solve(x0=x0)
+        with self._output_context():
+            x, obj_value, status = nlp.solve(x0=x0)
 
-        return xp_utils.from_numpy(xp, x), status
+        # ipyopt returns the status as a bare integer code; the solver interface promises a
+        # dictionary, so the code is wrapped together with the information IPOPT does not
+        # report back itself (the iteration count is only visible from the callback).
+        result_info = {
+            "status": int(status),
+            "objective": float(obj_value),
+            "num_iter": self._iter_count,
+        }
+
+        return xp_utils.from_numpy(xp, x), result_info
+
+    # IPOPT options that mirror a generic solver attribute; the attribute is the source of truth.
+    _ATTRIBUTE_BACKED_OPTIONS = {
+        "max_iter": "max_iter",
+        "max_cpu_time": "max_time",
+        "acceptable_tol": "abs_obj_tol",
+    }
+
+    def _effective_options(self) -> dict:
+        """Assemble the options for one solve without touching :attr:`options`.
+
+        Working on a copy keeps ``display=False`` from permanently overwriting ``print_level``
+        and keeps the option-name normalization in :meth:`_validate_ipopt_problem` from leaking
+        back into the stored dictionary.
+        """
+        options = dict(self.options)
+
+        for option, attribute in self._ATTRIBUTE_BACKED_OPTIONS.items():
+            if option in options:
+                logger.warning(
+                    "IPOPT option '%s' in `options` is ignored: it is set from the solver "
+                    "attribute '%s' (%r). Configure the attribute instead.",
+                    option,
+                    attribute,
+                    getattr(self, attribute),
+                )
+
+        options["max_iter"] = self.max_iter
+        options["max_cpu_time"] = float(self.max_time)
+        options["acceptable_tol"] = self.abs_obj_tol
+
+        if not self.display:
+            options["print_level"] = 0
+
+        return options
+
+    def _output_context(self):
+        """Return the context routing IPOPT's output according to :attr:`output_mode`."""
+        mode = self.output_mode
+        if mode not in ("auto", "native", "logging"):
+            raise ValueError(
+                f"Unknown output_mode '{mode}', expected 'auto', 'native' or 'logging'."
+            )
+
+        if mode == "auto":
+            # Only a notebook actually loses the native output, so leave it alone elsewhere.
+            mode = "logging" if detect_jupyter() else "native"
+
+        if mode == "native" or not self.display:
+            return nullcontext()
+
+        return native_output_to_logger(self.short_name, target=logger)
 
     def _callback(self, *cb_args):
         # Ipopt's intermediate callback args:
@@ -143,6 +218,10 @@ class OptimizerIpopt(NonLinearOptimizer):
                 "step": float(cb_args[9]),
             }
         message = f"iteration {data['iteration']}" if data else ""
+
+        if data:
+            # IPOPT does not report the iteration count back from solve(), so it is taken here.
+            self._iter_count = data["iteration"]
 
         cont = self._emit_status(message=message, **data)
         if not cont or self._keyboard_listener.stop_event.is_set():

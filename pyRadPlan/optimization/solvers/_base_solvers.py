@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 from ...core.xp_utils.typing import Array
 from ...util.keyboard_listener import KeyboardListener
+from ...util.logging_utils import warnings_to_logger
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -98,9 +99,8 @@ class SolverBase(ABC):
         # Or terminal stays in weird state.
         try:
             logger.info(f"Starting optimization using {self.name}")
-            x, status = self._solve_problem(x0)
-
-        # Ensure thread is stopped.
+            with warnings_to_logger(self.name):
+                x, status = self._solve_problem(x0)
         finally:
             self._keyboard_listener.finalize()
 
