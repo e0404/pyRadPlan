@@ -22,6 +22,7 @@ pre-commit install
 | `interface/*` | API/interface changes |
 | `devops/*` | CI, tooling, docs |
 | `dev/*` | experimental |
+| `rc/X.Y.Z` | release candidate, branched from `develop`, merged into `main` |
 
 Always branch from `develop` (not `main`) for regular work.
 
@@ -62,6 +63,22 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] Branch targets `develop` (not `main`)
 - [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
+
+## Releases
+
+Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
+stays open for regular work while the candidate is stabilised:
+
+1. Branch `rc/X.Y.Z` from `develop`.
+2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog, re-executed example notebooks.
+3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
+4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
+   `main` back into `develop`, and delete `rc/X.Y.Z`.
+
+When proposing or preparing a release, follow
+[.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
+the authoritative checklist for both the pre-merge and post-merge steps, and it applies whichever
+platform hosts the release. Do not tag, publish, or push a release without explicit confirmation.
 
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).

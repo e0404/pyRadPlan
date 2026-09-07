@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Optional
 
 import numpy as np
@@ -800,11 +801,14 @@ class PlanWidget(WorkspaceWidget):
         is_ion = radiation_mode in _ION_MODES
         spacing_key = "longitudinal_spot_spacing" if is_ion else "bixel_width"
 
-        prop_stf = {
-            "gantry_angles": gantry,
-            "couch_angles": couch,
-            "bixel_width": float(self._spn_bixel.value()),
-        }
+        current = self._ws.pln
+        same_mode = current is not None and current.radiation_mode == radiation_mode
+        prop_stf = deepcopy(current.prop_stf) if same_mode else {}
+        prop_stf.update(
+            gantry_angles=gantry,
+            couch_angles=couch,
+            bixel_width=float(self._spn_bixel.value()),
+        )
         if is_ion:
             prop_stf[spacing_key] = float(self._spn_bixel.value())
 
@@ -813,6 +817,8 @@ class PlanWidget(WorkspaceWidget):
             if len(iso) != 3:
                 raise ValueError("iso center requires exactly three coordinates (x y z)")
             prop_stf["iso_center"] = iso
+        else:
+            prop_stf.pop("iso_center", None)
 
         prop_dose_calc: dict = {}
         engine_name = self._cmb_engine.currentText()
@@ -827,16 +833,29 @@ class PlanWidget(WorkspaceWidget):
             }
         }
 
-        plan_data = {
-            "radiation_mode": radiation_mode,
-            "machine": self._cmb_machine.currentText() or "Generic",
-            "num_of_fractions": int(self._spn_fractions.value()),
-            "dose_convention": self._cmb_dose_convention.currentData(),
-            "bio_model": self._selected_bio_model(),
-            "mult_scen": self._cmb_scenario.currentText(),
-            "prop_stf": prop_stf,
-            "prop_dose_calc": prop_dose_calc,
-        }
+        # Keep settings this form does not edit (solver configuration, prescription,
+        # sequencing, etc.). Read field values directly to retain arbitrary model types.
+        plan_data = (
+            {name: deepcopy(getattr(current, name)) for name in type(current).model_fields}
+            if current is not None
+            else {}
+        )
+        scenario = self._cmb_scenario.currentText()
+        if current is not None and getattr(current.mult_scen, "short_name", None) == scenario:
+            scenario = deepcopy(current.mult_scen)
+        plan_data.update(
+            {
+                "radiation_mode": radiation_mode,
+                "machine": self._cmb_machine.currentText() or "Generic",
+                "num_of_fractions": int(self._spn_fractions.value()),
+                "dose_convention": self._cmb_dose_convention.currentData(),
+                "bio_model": self._selected_bio_model(),
+                "mult_scen": scenario,
+                "prop_stf": prop_stf,
+                "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
+                "prop_dose_calc": prop_dose_calc,
+            }
+        )
 
         return validate_pln(_plan_class(radiation_mode)(**plan_data))
 

@@ -10,22 +10,24 @@ pyRadPlan = ["data/**/*", "gui/assets/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.4.1"
+version = "0.5.0"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
+  { name="Maxim Braunsburger", email = "m.braunsburger@icloud.com" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
   { name="Louis Ermeneux", email = "louis.ermeneux@gmail.com" },
+  { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" },
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
   { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Moritz Müller", email = "moritz.mueller@dkfz-heidelberg.de" },
   { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
   { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },
   { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
   { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" },
-  { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" },
-  { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" }
+  { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" }
 ]
 
 maintainers = [
@@ -131,11 +133,19 @@ fixable = ["ALL"]
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
-# flat computational kernels take their arrays and scalars as individual arguments
-"pyRadPlan/raytracer/_kernels.py" = ["PLR0913"]
-"pyRadPlan/raytracer/_kernels_numba.py" = ["PLR0913"]
 # nuclide names follow physics convention: A is the mass number, Z the atomic number
 "pyRadPlan/machines/particles/_beam_fragment_spectrum.py" = ["N802", "N803", "N806", "N815"]
+
+[tool.ruff.lint.pylint]
+# Relaxed for scientific code: physics kernels and backend dispatchers legitimately take
+# many parameters and branch on dtype/backend/modality, and early returns are the clearer
+# pattern for such dispatch. These thresholds are set to flag genuine outliers rather than
+# ordinary numerical code; silence individual leftovers with a `# noqa: PLR09xx  # reason`
+# on the `def` so the justification is recorded at the site.
+max-args = 10        # default 5
+max-returns = 12     # default 6
+max-branches = 20    # default 12
+max-statements = 80  # default 50
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

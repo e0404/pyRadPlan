@@ -52,9 +52,9 @@ def calc_dose_forward(
     stf: Union[SteeringInformation, dict],
     pln: Union[Plan, dict],
     weights: np.ndarray = None,
-) -> Dij:
+) -> dict:
     """
-    Calculate the dose forward matrix.
+    Calculate forward-dose results on the CT grid.
 
     Parameters
     ----------
@@ -69,8 +69,8 @@ def calc_dose_forward(
 
     Returns
     -------
-    PlanResult
-        A PlanResult object.
+    dict
+        Result quantities on the CT grid, keyed by quantity name.
     """
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct=ct)
@@ -79,5 +79,4 @@ def calc_dose_forward(
 
     engine = get_engine(pln)
 
-    dij = engine.calc_dose_forward(ct, cst, stf, weights)
-    return dij
+    return engine.calc_dose_forward(ct, cst, stf, weights)

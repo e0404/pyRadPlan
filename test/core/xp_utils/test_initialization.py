@@ -70,18 +70,20 @@ def test_choose_array_api_namespace_defaults():
     xp = choose_array_api_namespace()
 
     settings = get_settings().xp
-    if settings.prefer_gpu and settings.preferred_gpu_array_backend == "cupy" and cupy_available():
-        assert "cupy" in xp.__name__
-    elif (
-        settings.prefer_gpu
-        and settings.preferred_gpu_array_backend == "torch"
-        and pytorch_gpu_available()
-    ):
-        assert "torch" in xp.__name__
+
+    if settings.prefer_gpu and settings.preferred_gpu_array_backend is not None:
+        # An explicitly configured GPU backend is taken as-is (test/conftest.py pins it to
+        # array_api_strict so the suite exercises this branch without a GPU)
+        expected = settings.preferred_gpu_array_backend
+    elif settings.prefer_gpu and (cupy_available() or pytorch_gpu_available()):
+        # Auto-detected in the order cupy, torch, jax
+        expected = "cupy" if cupy_available() else "torch"
     else:
-        # It seems array_api_compat.numpy might be aliased or implemented via array_api_strict in some envs?
-        # Or maybe preferred_cpu_array_backend is different.
-        assert "numpy" in xp.__name__ or "array_api_strict" in xp.__name__
+        # Whatever CPU backend the settings ask for -- numpy by default, but the backend CI
+        # jobs override it via PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND
+        expected = settings.preferred_cpu_array_backend
+
+    assert expected in xp.__name__
 
 
 @pytest.mark.skipif(not HAS_CUPY, reason="CuPy not installed")
@@ -109,11 +111,16 @@ def test_choose_device_defaults():
     dev = choose_device()
 
     xp = choose_array_api_namespace()
+    prefer_gpu = get_settings().xp.prefer_gpu
 
-    if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
+    if array_api_compat.is_torch_namespace(xp):
         import torch
 
-        assert dev == torch.device("cuda", 0)
+        # torch runs on either device, so which one is picked follows prefer_gpu
+        if prefer_gpu and pytorch_gpu_available():
+            assert dev == torch.device("cuda", 0)
+        else:
+            assert dev == torch.device("cpu")
     elif array_api_compat.is_cupy_namespace(xp) and cupy_available():
         import cupy as cp
 
@@ -135,7 +142,12 @@ def test_choose_device_torch():
     import torch
 
     dev = choose_device(xp)
-    assert dev == torch.device("cuda", 0)
+
+    # choose_device only reaches for a GPU when prefer_gpu is set
+    if get_settings().xp.prefer_gpu:
+        assert dev == torch.device("cuda", 0)
+    else:
+        assert dev == torch.device("cpu")
 
 
 @pytest.mark.skipif(not (HAS_TORCH and TORCH_CUDA_AVAILABLE), reason="PyTorch GPU not available")
@@ -143,6 +155,9 @@ def test_choose_device_torch_multi_gpu():
     """Test choose_device with torch namespace and explicit gpu_index."""
     import array_api_compat.torch as xp
     import torch
+
+    if not get_settings().xp.prefer_gpu:
+        pytest.skip("gpu_index only takes effect when prefer_gpu is set")
 
     assert choose_device(xp, gpu_index=0) == torch.device("cuda", 0)
     assert choose_device(xp, gpu_index=1) == torch.device("cuda", 1)
