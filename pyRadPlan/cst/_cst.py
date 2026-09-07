@@ -33,6 +33,11 @@ class StructureSet(PyRadPlanBaseModel):
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
 
+        # MATLAB cell arrays can arrive as object ndarrays as well as Python lists.
+        # Normalize before format detection without mutating the caller's mapping.
+        if isinstance(data["vois"], np.ndarray):
+            data = {**data, "vois": data["vois"].tolist()}
+
         # Check input format and return the appropriate context.
         context = cls._get_context(data, info)
 

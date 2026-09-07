@@ -293,3 +293,44 @@ def test_hold_updates_guard_prevents_recursion(qapp):
     assert isinstance(ws.pln, IonPlan)
     # apply happens inside hold_updates so the widget must not re-enter _do_update
     assert calls == []
+
+
+def test_apply_preserves_unedited_plan_settings(qapp):
+    widget, ws = _make_widget()
+    original = PhotonPlan(
+        prescribed_dose=72.0,
+        prop_opt={"solver": {"name": "scipy", "max_iter": 17}, "convert_dose_objectives": False},
+        prop_seq={"custom": 7},
+        prop_stf={"gantry_angles": [0.0], "energy": 6.0, "iso_center": [1.0, 2.0, 3.0]},
+    )
+    ws.pln = original
+    widget._txt_gantry.setText("0 180")
+    widget._chk_iso_auto.setChecked(True)
+    widget._on_apply()
+
+    assert ws.pln.prop_opt == original.prop_opt
+    assert ws.pln.prop_seq == original.prop_seq
+    assert ws.pln.prescribed_dose == 72.0
+    assert ws.pln.prop_stf["energy"] == 6.0
+    assert ws.pln.prop_stf["gantry_angles"] == [0.0, 180.0]
+    assert "iso_center" not in ws.pln.prop_stf
+    assert original.prop_stf["iso_center"] == [1.0, 2.0, 3.0]
+    assert original.prop_stf["gantry_angles"] == [0.0]
+
+
+def test_modality_switch_resets_sequencing_and_steering_settings(qapp):
+    widget, ws = _make_widget()
+    original = PhotonPlan(
+        prop_opt={"solver": "scipy"},
+        prop_seq={"custom": 7},
+        prop_stf={"gantry_angles": [0.0], "energy": 6.0},
+    )
+    ws.pln = original
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._on_apply()
+
+    assert isinstance(ws.pln, IonPlan)
+    assert ws.pln.prop_seq == {}
+    assert "energy" not in ws.pln.prop_stf
+    assert ws.pln.prop_opt == original.prop_opt
+    assert original.prop_seq == {"custom": 7}
