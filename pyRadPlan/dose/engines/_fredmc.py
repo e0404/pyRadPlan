@@ -56,6 +56,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
     name = "FRED"
     possible_radiation_modes = ["protons", "helium", "carbon", "oxygen16"]  # add more if needed
 
+    computes_bio_influence = True
+
     available_source_models = ["gaussian", "emittance", "sigmaSqrModel"]
 
     available_versions = ["3.70.0", "3.76.0"]
@@ -1215,6 +1217,45 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 process.returncode, execute_cmd, output=stdout, stderr=stderr
             )
 
+    def engine_provided_quantities(self) -> list[str]:
+        """FRED scores LET itself, independently of the machine's pencil-beam kernels."""
+        return ["let"]
+
+    @staticmethod
+    def _unsupported_evaluator_reason(model, evaluator) -> Optional[str]:
+        """Why FRED cannot drive ``evaluator``, or ``None`` if it can."""
+        # bio_influence_from_let supplies alpha_x, beta_x, physical_dose and LET only; FRED
+        # has no pencil-beam kernels to interpolate any further model input from.
+        if evaluator.kernel_field_names:
+            names = ", ".join(evaluator.kernel_field_names)
+            return (
+                f"the evaluator of {model!r} additionally requires the machine kernel inputs "
+                f"{names}, which FRED cannot supply"
+            )
+        if not evaluator.influence_quantity_names:
+            return f"the evaluator of {model!r} declares no biological influence quantities"
+        return None
+
+    def _unsupported_bio_reason(self, model, evaluator) -> Optional[str]:
+        """Why FRED cannot evaluate ``model``, or ``None`` if it can."""
+        if model is None:
+            return None
+
+        # Judge an existing evaluator by what it actually needs and produces rather than by
+        # the model's intrinsic output declaration: an evaluator may build the additive
+        # influence quantities directly, without declaring any intrinsic outputs.
+        if evaluator is not None:
+            return self._unsupported_evaluator_reason(model, evaluator)
+
+        # No evaluator was built: either nothing biological was asked of the model, or it is
+        # not LET-based and therefore outside what FRED can derive from its scored LET.
+        if model.output_quantities and not model.requires("let"):
+            return (
+                "FRED derives biological influence matrices from the scored LET and therefore "
+                f"only supports LET-based evaluators, not {model!r}"
+            )
+        return None
+
     def _init_bio_model(self, dij: dict[str, Any]) -> dict[str, Any]:
         """Configure biological and LET outputs without constructing unsupported evaluators."""
         # Biological influence matrices are derived from the scored LET, so only models
@@ -1223,38 +1264,37 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         model_requires_let = model is not None and model.requires("let")
         self._bio_evaluator = None
         self._bio_influence_names = ()
+
+        evaluator = None
         if model_requires_let and self.calc_bio_dose is not False:
-            self._bio_evaluator = self._create_bio_evaluator(
+            evaluator = self._create_bio_evaluator(
                 model,
                 {"alpha_x": np.asarray(dij["alphax"]), "beta_x": np.asarray(dij["betax"])},
             )
-            self._bio_influence_names = self._bio_evaluator.influence_quantity_names
-        supported = bool(self._bio_influence_names)
+        reason = self._unsupported_bio_reason(model, evaluator)
+        supported = reason is None and evaluator is not None
+        if supported:
+            self._bio_evaluator = evaluator
+            self._bio_influence_names = evaluator.influence_quantity_names
+
         if self.calc_bio_dose is True and not supported:
             raise NotImplementedError(
-                "FRED derives biological influence matrices from the scored LET and therefore "
-                f"only supports LET-based evaluators, not {model!r}."
+                reason
+                or "FRED cannot compute biological influence matrices for "
+                f"{model!r} (no biological model requiring LET was selected)."
             )
-        if (
-            self.calc_bio_dose == "auto"
-            and model is not None
-            and model.output_quantities
-            and not supported
-        ):
+        if self.calc_bio_dose == "auto" and reason is not None:
             logger.warning(
-                "FRED only supports LET-based biological evaluators; influence matrices "
-                "for %r are skipped (set calc_bio_dose=False to silence this).",
-                model,
+                "%s; influence matrices are skipped (set calc_bio_dose=False to silence this).",
+                reason,
             )
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
             self.calc_bio_dose if supported else False,
             self.calc_let,
-            bio_influence_quantities=self._bio_influence_names if supported else (),
+            bio_influence_quantities=self._bio_influence_names,
             let_available=True,
             let_auto=model_requires_let,
         )
-        if model is not None:
-            dij["bio_model"] = model
         if self._calc_bio_dose:
             self._validate_bio_influence_names(dij, self._bio_influence_names)
             dij = self._allocate_quantity_matrices(dij, list(self._bio_influence_names))

@@ -62,6 +62,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         the dose drops to the requested cutoff
     """
 
+    computes_bio_influence: ClassVar[bool] = True
+
     calc_let: Union[Literal["auto"], bool] = "auto"
     calc_bio_dose: Union[Literal["auto"], bool] = "auto"
     air_offset_correction: bool = True
@@ -569,8 +571,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
         Create the biological model evaluator for this dose calculation.
 
-        Resolves ``calc_bio_dose`` / ``calc_let`` against the model and the machine, stores the
-        model on the dij and allocates its declared biological influence containers.
+        Resolves ``calc_bio_dose`` / ``calc_let`` against the model and the machine and
+        allocates the declared biological influence containers. The model itself is stored on
+        the dij by the common engine setup.
 
         Parameters
         ----------
@@ -590,8 +593,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         has_let = self._machine.has_let_kernel
 
         if model is not None:
-            self._v_alpha_x = self.xp.asarray(dij["alphax"])
-            self._v_beta_x = self.xp.asarray(dij["betax"])
+            self._v_alpha_x = self.xp.asarray(dij["alphax"], device=self.device)
+            self._v_beta_x = self.xp.asarray(dij["betax"], device=self.device)
             self._bio_evaluator = self._create_bio_evaluator(
                 model, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
             )
@@ -604,9 +607,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             let_available=has_let,
             let_auto=has_let,
         )
-
-        if model is not None:
-            dij["bio_model"] = model
 
         if self._calc_bio_dose:
             self._bio_kernel_names = self._bio_evaluator.kernel_field_names

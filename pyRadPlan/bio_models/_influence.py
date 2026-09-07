@@ -52,12 +52,15 @@ def bio_influence_from_let(
         )
     )
     shape = physical_dose.shape
-    return BioModelResult(
-        {
-            name: sparse.csc_array(
-                (np.broadcast_to(np.asarray(values, dtype=d.dtype), d.shape), (rows, cols)),
-                shape=shape,
+    matrices = {}
+    for name, values in result.items():
+        data = np.broadcast_to(np.asarray(values, dtype=d.dtype), d.shape)
+        if not np.all(np.isfinite(data)):
+            raise ValueError(
+                f"Biological model '{evaluator.model.model}' produced non-finite "
+                f"'{name}' values for {int(np.count_nonzero(~np.isfinite(data)))} of "
+                f"{data.size} influence matrix entries. Check the reference photon "
+                "alpha_x / beta_x of the structures against the model's parameter domain."
             )
-            for name, values in result.items()
-        }
-    )
+        matrices[name] = sparse.csc_array((data, (rows, cols)), shape=shape)
+    return BioModelResult(matrices)

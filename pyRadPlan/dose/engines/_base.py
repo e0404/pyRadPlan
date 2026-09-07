@@ -75,6 +75,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
 
+    # Whether this engine can evaluate a biological model into additive influence matrices.
+    # Engines that only produce physical dose still store the model on the dij (so that a
+    # constant RBE keeps working) but warn about model outputs they cannot compute.
+    computes_bio_influence: ClassVar[bool] = False
+
     mult_scen: Union[str, ScenarioModel] = "nomScen"
     bio_model: Optional[Union[str, dict]] = None
     dose_grid: Optional[Union[Grid, dict]] = None
@@ -668,10 +673,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Load machine file from base data folder
         self._machine = self.load_machine(radiation_mode, machine)
 
-        if self.bio_model is not None:
-            self.bio_model = get_bio_model(
-                self.bio_model, radiation_mode, self._machine.provided_quantities()
-            )
+        self._resolve_bio_model(dij, radiation_mode)
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
 
         # TODO: this is currently not needed, but may be needed in the future
@@ -688,6 +690,42 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         return dij
 
+    def _resolve_bio_model(self, dij: dict[str, Any], radiation_mode: str) -> None:
+        """Validate the plan's biological model and record it on the dij."""
+        if self.bio_model is None:
+            return
+
+        self.bio_model = get_bio_model(self.bio_model, radiation_mode, self.provided_quantities())
+        # Every engine records the model the dij was computed with, so that quantities and
+        # result assembly (e.g. a constant RBE) work independently of the engine used.
+        dij["bio_model"] = self.bio_model
+
+        if self.bio_model.output_quantities and not self.computes_bio_influence:
+            logger.warning(
+                "Dose engine '%s' cannot compute the biological quantities %s of model '%s'; "
+                "only physical dose is stored and RBE-weighted dose will not be available.",
+                self.short_name,
+                ", ".join(self.bio_model.output_quantities),
+                self.bio_model.model,
+            )
+
+    def provided_quantities(self) -> list[str]:
+        """
+        Named quantities available to a biological model in this calculation.
+
+        The machine's tabulated quantities plus the ones this engine can produce itself
+        (:meth:`engine_provided_quantities`). Biological availability is checked against
+        this union, so an engine that scores a quantity is not restricted to machines
+        that tabulate it.
+        """
+        quantities = list(self._machine.provided_quantities())
+        quantities += [q for q in self.engine_provided_quantities() if q not in quantities]
+        return quantities
+
+    def engine_provided_quantities(self) -> list[str]:
+        """Named quantities this engine can produce without machine data (e.g. scored LET)."""
+        return []
+
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
 
@@ -695,6 +733,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self, model: BiologicalModel, voxel_params: dict[str, Any]
     ) -> BioModelEvaluator:
         """Create and validate a model evaluator for this dose calculation."""
+        # Reject reference photon parameters outside the model's domain before any dose is
+        # computed, instead of storing nonfinite values in the influence matrices.
+        model.validate_reference_parameters(voxel_params)
         evaluator = model.evaluator(self._machine, voxel_params)
         if not isinstance(evaluator, BioModelEvaluator):
             raise TypeError(

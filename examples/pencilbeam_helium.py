@@ -36,8 +36,9 @@ ct, cst = load_tg119()
 # %% [markdown]
 # In this section, we create a helium therapy plan using the ParticleHongPencilBeamEngine.
 # %%
-# Create a plan object
-pln = IonPlan(radiation_mode="helium", machine="Generic")
+# Create a plan object. The Mairani helium model ("HEL") derives alpha/beta from the LET of
+# the Generic helium base data, so the plan reports RBE-weighted dose next to physical dose.
+pln = IonPlan(radiation_mode="helium", machine="Generic", bio_model="HEL")
 pln.prop_opt = {"solver": "scipy"}
 
 # Generate Steering Geometry ("stf")
@@ -62,20 +63,20 @@ else:
     # Choose a slice to visualize
     view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["rbe_x_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+    # Visualize physical and RBE-weighted dose
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["physical_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["rbe_x_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )

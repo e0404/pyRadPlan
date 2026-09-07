@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import array_api_compat
 
+from pyRadPlan.core.xp_utils import device_cache_key
+
 from ._tissue_lookup import TissueParameterLookup
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -396,11 +398,13 @@ class TabulatedSpectrumEvaluator(_TissueKernelEvaluator):
         self._converted: dict[tuple, dict[str, Any]] = {}
 
     def kernel_quantities(self, kernel: dict[str, Any]) -> dict[str, Any]:
-        xp = array_api_compat.array_namespace(kernel["depths"])
-        device = array_api_compat.device(kernel["depths"])
-        key = (float(kernel["energy"]), xp, device)
+        depths = kernel["depths"]
+        xp = array_api_compat.array_namespace(depths)
+        device = array_api_compat.device(depths)
+        key = (float(kernel["energy"]), xp, device_cache_key(depths))
         if key not in self._converted:
             self._converted[key] = {
-                name: xp.asarray(arr, device=device) for name, arr in self._tables[key[0]].items()
+                name: xp.asarray(arr, device=device)
+                for name, arr in self._tables[float(kernel["energy"])].items()
             }
         return self._converted[key]

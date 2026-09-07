@@ -3,11 +3,17 @@ from __future__ import annotations
 import inspect
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, ClassVar, Optional, get_type_hints
+
+import array_api_compat
 
 from ._evaluator import BioModelEvaluator, ParametricEvaluator, _validate_name_tuple
 
 logger = logging.getLogger(__name__)
+
+#: Per-voxel reference photon LQ parameters a dose engine supplies to a biological model.
+REFERENCE_PARAMETER_NAMES = ("alpha_x", "beta_x")
 
 
 class BiologicalModel(ABC):
@@ -43,6 +49,10 @@ class BiologicalModel(ABC):
         Quantity recommended for display and planning by default.
     output_quantities : tuple[str, ...]
         Named quantities returned by the model evaluator, such as ``("alpha", "beta")``.
+    requires_positive_reference : tuple[str, ...]
+        Names of the per-voxel reference photon LQ parameters (``"alpha_x"``, ``"beta_x"``)
+        the model formulation is only defined for when they are strictly positive. Dose
+        engines validate them over the whole dose grid before a calculation starts.
     """
 
     model: ClassVar[str]
@@ -52,6 +62,7 @@ class BiologicalModel(ABC):
     possible_radiation_modes: ClassVar[tuple[str, ...]]
     default_report_quantity: ClassVar[str] = "physical_dose"
     output_quantities: ClassVar[tuple[str, ...]] = ()
+    requires_positive_reference: ClassVar[tuple[str, ...]] = ()
 
     _parameters: dict[str, Any]
 
@@ -108,6 +119,11 @@ class BiologicalModel(ABC):
             raise ValueError(
                 "Biological model default_report_quantity must be a non-empty string."
             )
+        _validate_name_tuple(
+            cls.requires_positive_reference,
+            "requires_positive_reference",
+            subject="Biological model",
+        )
 
     @classmethod
     def config_model(cls) -> type:
@@ -214,6 +230,91 @@ class BiologicalModel(ABC):
         ok, msg = self.is_available(radiation_mode, provided_quantities)
         if not ok:
             raise ValueError(f"Biological model '{self.model}' not valid: {msg}")
+
+    def validate_reference_parameters(self, voxel_params: Mapping[str, Any]) -> None:
+        """
+        Check the per-voxel reference photon LQ parameters against the model's domain.
+
+        Two levels are checked. First, every supplied reference coefficient must be a valid
+        LQ rate: finite and non-negative, regardless of the model. Second, the parameters
+        listed in :attr:`requires_positive_reference` must be strictly positive wherever
+        reference parameters exist at all, so that a model formulated in terms of
+        ``alpha_x / beta_x`` never has to invent a value for a degenerate ratio. Voxels
+        outside every structure carry no reference parameters
+        (``alpha_x == beta_x == 0``); models evaluate to zero there and they are skipped by
+        the second check.
+
+        Together the two levels guarantee that a model receiving these parameters cannot be
+        driven into a non-finite result by the reference data itself. Dose engines call this
+        during setup, before any dose is computed.
+
+        Parameters
+        ----------
+        voxel_params : mapping
+            Per-voxel tissue parameters on the dose grid (``"alpha_x"``, ``"beta_x"``).
+
+        Raises
+        ------
+        ValueError
+            A supplied coefficient is negative, infinite or NaN, a declared parameter is
+            missing, or a voxel inside a structure is outside the model's parameter domain.
+        """
+        present = [
+            (name, voxel_params[name])
+            for name in REFERENCE_PARAMETER_NAMES
+            if voxel_params.get(name) is not None
+        ]
+        if not present:
+            if self.requires_positive_reference:
+                raise ValueError(
+                    f"Biological model '{self.model}' requires the reference photon parameters "
+                    f"{sorted(self.requires_positive_reference)}, which the dose calculation "
+                    "did not provide."
+                )
+            return
+
+        xp = array_api_compat.array_namespace(*[values for _, values in present])
+
+        # Level 1: the reference coefficients themselves must be valid LQ rates. A negative,
+        # infinite or NaN alpha_x / beta_x would otherwise reach the influence matrices.
+        for name, values in present:
+            invalid = ~(xp.isfinite(values) & (values >= 0.0))
+            n_invalid = int(xp.sum(xp.astype(invalid, xp.int64)))
+            if n_invalid:
+                raise ValueError(
+                    f"The reference photon parameter {name} must be finite and non-negative, "
+                    f"but {n_invalid} voxel(s) are negative, infinite or NaN. Check the "
+                    "alpha_x / beta_x of the structures used in this dose calculation."
+                )
+
+        names = self.requires_positive_reference
+        if not names:
+            return
+
+        missing = [name for name in names if voxel_params.get(name) is None]
+        if missing:
+            raise ValueError(
+                f"Biological model '{self.model}' requires the reference photon parameters "
+                f"{sorted(missing)}, which the dose calculation did not provide."
+            )
+
+        # Level 2: a voxel outside every structure has *no* reference parameter set, so
+        # "outside" is decided from all of them, not only from the ones this model needs.
+        defined = present[0][1] != 0.0
+        for _, values in present[1:]:
+            defined = defined | (values != 0.0)
+
+        for name in names:
+            values = voxel_params[name]
+            invalid = defined & ~(values > 0.0)
+            n_invalid = int(xp.sum(xp.astype(invalid, xp.int64)))
+            if n_invalid:
+                raise ValueError(
+                    f"Biological model '{self.model}' is only defined for {name} > 0, but "
+                    f"{n_invalid} voxel(s) inside a structure have {name} <= 0. Set positive "
+                    "reference photon alpha_x / beta_x values on every structure used in this "
+                    "dose calculation."
+                )
 
 
 def _params_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:

@@ -134,6 +134,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # flat computational kernels take their arrays and scalars as individual arguments
 "pyRadPlan/raytracer/_kernels.py" = ["PLR0913"]
 "pyRadPlan/raytracer/_kernels_numba.py" = ["PLR0913"]
+# nuclide names follow physics convention: A is the mass number, Z the atomic number
+"pyRadPlan/machines/particles/_beam_fragment_spectrum.py" = ["N802", "N803", "N806", "N815"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

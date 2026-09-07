@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Optional, Union
 
 
@@ -97,6 +98,11 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
     @classmethod
     def validate_possible_cast_array(cls, v: Any) -> Any:
         """Validate if the input can be cast to a float64 array."""
+        # These fields are optional; np.array(None) would turn an absent kernel array into a
+        # 0-d NaN and break a native round trip through model_dump().
+        if v is None:
+            return v
+
         try:
             v = np.array(v, dtype=np.float64)
         except ValueError as exc:
@@ -107,9 +113,14 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
     @field_validator("fluence_spectrum", mode="before")
     @classmethod
     def create_fluence_spectrum(cls, v: Any) -> Any:
-        # Fragment Spectra
-        if v is not None:
-            v = ChargedBeamFragmentSpectrum.from_dict(v)
+        """Accept an existing spectrum, a native dict, or a matRad ``spectra`` struct.
+
+        Only the matRad import needs the dedicated parser; a model instance and a native
+        dict (as produced by ``model_dump()``) are handed to pydantic unchanged so that a
+        kernel with a fragment spectrum round-trips.
+        """
+        if isinstance(v, Mapping) and "spectra" in v:
+            return ChargedBeamFragmentSpectrum.from_dict(v)
         return v
 
     @field_validator(

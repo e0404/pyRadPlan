@@ -32,12 +32,37 @@ class RBEMinMax(LETBasedLQModel):
 
     Concrete subclasses provide :meth:`rbe_min_max` as a function of LET and the
     reference photon parameters.
+
+    These models are formulated in terms of the reference alpha/beta ratio and are therefore
+    only defined for positive reference parameters; the exact requirement is declared in
+    :attr:`~pyRadPlan.bio_models.BiologicalModel.requires_positive_reference` and validated
+    by the dose engine before a calculation starts. Voxels outside every structure carry no
+    reference parameters at all (``alpha_x == beta_x == 0``) and evaluate to
+    ``alpha = beta = 0`` instead of a nonfinite value.
     """
+
+    requires_positive_reference = ("alpha_x",)
 
     def alpha_beta(self, alpha_x: Any, beta_x: Any, context: Mapping[str, Any]) -> tuple[Any, Any]:
         """Evaluate alpha and beta using the context's named LET input."""
-        rbe_min, rbe_max = self.rbe_min_max(context["let"], alpha_x, beta_x)
-        return rbe_max * alpha_x, rbe_min**2 * beta_x
+        let = context["let"]
+        xp = array_api_compat.array_namespace(let)
+        alpha_x = xp.asarray(alpha_x)
+        beta_x = xp.asarray(beta_x)
+
+        # Outside every structure no reference parameters exist. Evaluating the model there
+        # would divide by zero, so it is evaluated on an in-domain placeholder and zeroed.
+        defined = (alpha_x != 0.0) | (beta_x != 0.0)
+        ones = xp.ones_like(alpha_x)
+        rbe_min, rbe_max = self.rbe_min_max(
+            let, xp.where(defined, alpha_x, ones), xp.where(defined, beta_x, ones)
+        )
+        alpha = rbe_max * alpha_x
+        beta = rbe_min**2 * beta_x
+        return (
+            xp.where(defined, alpha, xp.zeros_like(alpha)),
+            xp.where(defined, beta, xp.zeros_like(beta)),
+        )
 
     @abstractmethod
     def rbe_min_max(self, let: Any, alpha_x: Any, beta_x: Any) -> tuple[Any, Any]:
@@ -66,10 +91,14 @@ class Wedenberg(RBEMinMax):
 class MCNamara(RBEMinMax):
     """
     McNamara model (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4634882/).
+
+    ``RBE_min`` contains ``sqrt(alpha_x / beta_x)``, which diverges for a vanishing reference
+    beta, so unlike the other RBEmin/RBEmax models this one also needs ``beta_x > 0``.
     """
 
     model = "MCN"
     possible_radiation_modes = ("protons",)
+    requires_positive_reference = ("alpha_x", "beta_x")
 
     def __init__(
         self,

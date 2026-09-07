@@ -323,3 +323,92 @@ def test_lq_inverse_dose_supports_linear_limit_and_immutable_arrays():
     result = lq_inverse_dose(effect, alpha_x, beta_x)
 
     assert np.allclose(np.asarray(result), [1.0, 1.0, 0.0])
+
+
+def test_RBExDose_constant_reuses_the_physical_dose_quantity(sample_dij_sparse_constant_rbe):
+    """The constant path scales the dose vector instead of the influence matrix."""
+    const_rbe = RBExDose(sample_dij_sparse_constant_rbe)
+    matrix = const_rbe._dij.physical_dose.flat[0]
+    fluence = xp.arange(10, dtype=xp.float32)
+
+    quantity = const_rbe(fluence)
+
+    physical_dose = const_rbe.dependencies["physical_dose"]
+    assert np.allclose(physical_dose.compute(fluence).flat[0], matrix @ fluence)
+    assert np.allclose(quantity.flat[0], 1.1 * np.asarray(physical_dose._q_cache.flat[0]))
+    # the dij matrix itself is untouched
+    assert const_rbe._dij.physical_dose.flat[0] is matrix
+
+
+def _finite_difference_gradient(quantity, fluence, d_quantity, eps=1e-4):
+    """Numerical d(d_quantity . q)/dw by central differences."""
+    fluence = np.asarray(fluence, dtype=np.float64)
+    weights = np.asarray(d_quantity, dtype=np.float64).reshape(-1)
+    grad = np.zeros_like(fluence)
+    for i in range(fluence.size):
+        plus, minus = fluence.copy(), fluence.copy()
+        plus[i] += eps
+        minus[i] -= eps
+        q_plus = np.asarray(quantity.compute(xp.asarray(plus, dtype=xp.float64)).flat[0])
+        q_minus = np.asarray(quantity.compute(xp.asarray(minus, dtype=xp.float64)).flat[0])
+        grad[i] = float(weights @ (q_plus - q_minus)) / (2 * eps)
+    return grad
+
+
+@pytest.fixture
+def sample_dij_float64_constant_rbe(sample_base_dij_constant_rbe_dict):
+    rng = np.random.default_rng(0)
+    sample_base_dij_constant_rbe_dict["physical_dose"].flat[0] = csc_array(rng.random((125, 10)))
+    return Dij.model_validate(sample_base_dij_constant_rbe_dict)
+
+
+@pytest.fixture
+def sample_dij_float64_effect(sample_base_dij_dict):
+    rng = np.random.default_rng(1)
+    sample_base_dij_dict["alphax"] = np.full((125, 1), 0.1)
+    sample_base_dij_dict["betax"] = np.full((125, 1), 0.05)
+    sample_base_dij_dict["physical_dose"].flat[0] = csc_array(rng.random((125, 10)))
+    sample_base_dij_dict["alpha_dose"].flat[0] = csc_array(0.3 * rng.random((125, 10)))
+    sample_base_dij_dict["sqrt_beta_dose"].flat[0] = csc_array(0.2 * rng.random((125, 10)))
+    sample_base_dij_dict["bio_model"] = {"model": "WED"}
+    return Dij.model_validate(sample_base_dij_dict)
+
+
+def test_RBExDose_constant_gradient_matches_finite_differences(
+    sample_dij_float64_constant_rbe,
+):
+    quantity = RBExDose(sample_dij_float64_constant_rbe)
+    assert quantity.path == "constant"
+
+    fluence = np.linspace(0.2, 1.4, 10)
+    rng = np.random.default_rng(2)
+    d_quantity = rng.random((1, 125))
+
+    analytic = np.asarray(
+        quantity.compute_chain_derivative(
+            xp.asarray(d_quantity, dtype=xp.float64), xp.asarray(fluence, dtype=xp.float64)
+        ).flat[0]
+    ).reshape(-1)
+    numeric = _finite_difference_gradient(quantity, fluence, d_quantity)
+
+    assert np.allclose(analytic, numeric, rtol=1e-5, atol=1e-7)
+
+
+def test_RBExDose_effect_gradient_matches_finite_differences(sample_dij_float64_effect):
+    quantity = RBExDose(sample_dij_float64_effect)
+    assert quantity.path == "effect"
+
+    fluence = np.linspace(0.2, 1.4, 10)
+    rng = np.random.default_rng(3)
+    d_quantity = rng.random((1, 125))
+
+    # the effect path linearises around the current fluence, so evaluate it first
+    quantity.compute(xp.asarray(fluence, dtype=xp.float64))
+    analytic = np.asarray(
+        quantity.compute_chain_derivative(
+            xp.asarray(d_quantity, dtype=xp.float64), xp.asarray(fluence, dtype=xp.float64)
+        ).flat[0]
+    ).reshape(-1)
+    numeric = _finite_difference_gradient(quantity, fluence, d_quantity)
+
+    assert np.allclose(analytic, numeric, rtol=1e-5, atol=1e-7)

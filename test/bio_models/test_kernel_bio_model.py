@@ -95,3 +95,77 @@ def test_KernelBasedLQModel_evaluate_mixed_tissue_classes(machine, voxel_params)
 def test_KernelBasedLQModel_unknown_lookup(machine, voxel_params):
     with pytest.raises(ValueError, match="Unknown tissue lookup"):
         KernelBasedLQModel(tissue_lookup="nearest").evaluator(machine, voxel_params)
+
+
+class _MultiEnergyMachine:
+    """Machine stand-in with one alpha/beta kernel per energy."""
+
+    def __init__(self, classes_per_energy):
+        self.energies = sorted(classes_per_energy)
+        self.pb_kernels = {
+            energy: _Kernel(*classes) for energy, classes in classes_per_energy.items()
+        }
+
+
+def test_reference_classes_require_the_same_order_at_every_energy():
+    """Reordered tissue rows at another energy would silently select the wrong alpha/beta."""
+    machine = _MultiEnergyMachine(
+        {100.0: ([0.1, 0.5], [0.05, 0.05]), 200.0: ([0.5, 0.1], [0.05, 0.05])}
+    )
+    voxel_params = {
+        "alpha_x": np.asarray([[0.1], [0.5]]),
+        "beta_x": np.asarray([[0.05], [0.05]]),
+    }
+
+    with pytest.raises(ValueError, match="identical tissue classes in the same order"):
+        KernelBasedLQModel().evaluator(machine, voxel_params)
+
+    # why it must not be accepted: the class index is computed once from one ordering, so
+    # index 1 selects (alpha_x=0.5) at 100 MeV but (alpha_x=0.1) at 200 MeV.
+    lookup = ExactClassLookup(*[np.asarray(v) for v in ([0.1, 0.5], [0.05, 0.05])])
+    class_ix = lookup.class_index(np.asarray([0.5]), np.asarray([0.05]))
+    assert int(class_ix[0]) == 1
+    assert machine.pb_kernels[200.0].alpha_x[int(class_ix[0])] == 0.1
+
+
+def test_reference_classes_accept_identical_classes_at_every_energy(voxel_params):
+    machine = _MultiEnergyMachine(
+        {100.0: ([0.1, 0.5], [0.05, 0.05]), 200.0: ([0.1, 0.5], [0.05, 0.05])}
+    )
+    model = KernelBasedLQModel()
+    class_alpha_x, class_beta_x = model.reference_classes(machine)
+
+    assert class_alpha_x.tolist() == [0.1, 0.5]
+    assert class_beta_x.tolist() == [0.05, 0.05]
+    assert isinstance(model.evaluator(machine, voxel_params), KernelBasedEvaluator)
+
+
+def test_reference_classes_reject_differing_class_values(voxel_params):
+    machine = _MultiEnergyMachine(
+        {100.0: ([0.1, 0.5], [0.05, 0.05]), 200.0: ([0.1, 0.4], [0.05, 0.05])}
+    )
+    with pytest.raises(ValueError, match="identical tissue classes in the same order"):
+        KernelBasedLQModel().evaluator(machine, voxel_params)
+
+
+def test_reference_classes_reject_missing_class_metadata(voxel_params):
+    machine = _MultiEnergyMachine({100.0: ([0.1, 0.5], [0.05, 0.05])})
+    machine.pb_kernels[200.0] = _Kernel([0.1, 0.5], [0.05, 0.05])
+    machine.pb_kernels[200.0].beta_x = None
+
+    with pytest.raises(ValueError, match="kernel of energy 200.0 declares none"):
+        KernelBasedLQModel().evaluator(machine, voxel_params)
+
+
+def test_reference_classes_reject_inconsistent_class_metadata(voxel_params):
+    machine = _MultiEnergyMachine({100.0: ([0.1, 0.5], [0.05])})
+
+    with pytest.raises(ValueError, match="2 reference alpha_x but 1 reference beta_x"):
+        KernelBasedLQModel().evaluator(machine, voxel_params)
+
+
+def test_reference_classes_reject_machine_without_kernels(voxel_params):
+    machine = _MultiEnergyMachine({})
+
+    with pytest.raises(ValueError, match="the machine carries none"):
+        KernelBasedLQModel().evaluator(machine, voxel_params)

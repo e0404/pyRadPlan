@@ -385,3 +385,80 @@ def test_carbon_tabulated_alpha_beta_matrices(test_data_carbon, monkeypatch):
     assert np.all(e["alpha"] >= alphas.min() - 1e-9) and np.all(e["alpha"] <= alphas.max() + 1e-9)
     assert np.all(e["sqrt_beta"] >= sqrt_betas.min() - 1e-9)
     assert np.all(e["sqrt_beta"] <= sqrt_betas.max() + 1e-9)
+
+
+def test_bio_tissue_arrays_use_the_selected_device(test_data_protons):
+    """Tissue inputs are created on the engine's device, not the namespace default one."""
+    import array_api_compat
+    import array_api_strict
+
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc["calc_bio_dose"] = False
+
+    device = array_api_strict.Device("device1")
+    engine = ParticleHongPencilBeamEngine(pln)
+    engine.xp = array_api_strict
+    engine.device = device
+    engine._machine = DoseEngineBase.load_machine(pln.radiation_mode, pln.machine)
+
+    engine._init_bio_model({"alphax": np.full((4, 1), 0.1), "betax": np.full((4, 1), 0.05)})
+
+    assert array_api_compat.device(engine._v_alpha_x) == device
+    assert array_api_compat.device(engine._v_beta_x) == device
+
+    # array_api_strict refuses to combine arrays from different devices, which is exactly
+    # what the engine does per bixel with its physical-dose and LET arrays.
+    let = array_api_strict.asarray([1.0, 2.0, 3.0, 4.0], device=device)
+    alpha, beta = pln.bio_model.alpha_beta(
+        engine._v_alpha_x[:, 0], engine._v_beta_x[:, 0], {"let": let}
+    )
+    assert array_api_compat.device(alpha) == device
+    assert array_api_compat.device(beta) == device
+
+
+def test_out_of_domain_reference_parameters_fail_before_dose_calculation(test_data_protons):
+    """A structure whose beta_x is zero is rejected by McNamara during setup."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "MCN"
+    cst.vois[0].beta_x = 0.0
+
+    with pytest.raises(ValueError, match="only defined for beta_x > 0"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value", "name"),
+    [
+        # Wedenberg does not declare beta_x positive, but a negative rate is still invalid
+        ("WED", "beta_x", -0.05, "beta_x"),
+        ("WED", "beta_x", float("nan"), "beta_x"),
+        ("WED", "alpha_x", float("inf"), "alpha_x"),
+        ("MCN", "alpha_x", float("inf"), "alpha_x"),
+        ("MCN", "beta_x", float("inf"), "beta_x"),
+        # a model computing nothing biological still reads invalid reference data
+        ("none", "beta_x", float("nan"), "beta_x"),
+    ],
+)
+def test_invalid_reference_coefficients_fail_before_dose_calculation(
+    test_data_protons, model, field, value, name
+):
+    """The public dose calculation rejects invalid LQ reference rates during setup."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = model
+    setattr(cst.vois[0], field, value)
+
+    with pytest.raises(ValueError, match=f"{name} must be finite and non-negative"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
+def test_bio_influence_matrices_are_finite(test_data_protons):
+    """No NaN/Inf ever reaches the stored biological influence matrices."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "MCN"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    for name in ("alpha_dose", "sqrt_beta_dose"):
+        data = getattr(dij_py, name).flat[0].data
+        assert data.size > 0
+        assert np.all(np.isfinite(data))

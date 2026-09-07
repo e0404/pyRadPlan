@@ -7,6 +7,37 @@ from pyRadPlan.core import PyRadPlanBaseModel
 from numpydantic import NDArray, Shape
 
 
+def match_fragment_species(available_AZ: Any, species_AZ: Any) -> np.ndarray:
+    """
+    Find the ``(A, Z)`` rows denoting the same fragment population as ``species_AZ``.
+
+    A mass number of ``NaN`` marks an entry that aggregates every isotope of its charge
+    (see :attr:`FragmentFluence.A`), so plain equality can never match such an entry.
+    Two species are the same when their charges are equal and their mass numbers are
+    either both ``NaN`` (two aggregates over the same charge) or equal. An aggregate is
+    deliberately not matched against a single isotope, since the two describe different
+    fragment populations.
+
+    Parameters
+    ----------
+    available_AZ : array-like, shape (n, 2)
+        Rows of ``(A, Z)`` pairs to search.
+    species_AZ : array-like, shape (2,)
+        The ``(A, Z)`` pair to look for.
+
+    Returns
+    -------
+    ndarray
+        Indices of the matching rows of ``available_AZ``.
+    """
+    available = np.asarray(available_AZ, dtype=float).reshape(-1, 2)
+    A, Z = (float(v) for v in np.asarray(species_AZ, dtype=float).reshape(2))
+    same_charge = available[:, 1] == Z
+    if np.isnan(A):
+        return np.flatnonzero(same_charge & np.isnan(available[:, 0]))
+    return np.flatnonzero(same_charge & (available[:, 0] == A))
+
+
 class FragmentFluence(PyRadPlanBaseModel):
     """
     Fluence data for a single fragment species.
@@ -47,11 +78,17 @@ class ChargedBeamFragmentSpectrum(PyRadPlanBaseModel):
     )
 
     def get(self, Z: float, A: float) -> Optional[FragmentFluence]:
-        """Look up a specific fragment by (Z, A). Returns None if not found."""
-        for entry in self.fragments:
-            if entry.Z == Z and entry.A == A:
-                return entry
-        return None
+        """Look up a specific fragment by (Z, A). Returns None if not found.
+
+        ``A`` may be ``NaN`` to address the entry aggregating all isotopes of ``Z``.
+        """
+        matches = match_fragment_species(self.fragments_AZ, (A, Z))
+        return self.fragments[int(matches[0])] if matches.size else None
+
+    @property
+    def fragments_AZ(self) -> np.ndarray:
+        """``(n_fragments, 2)`` array of the ``(A, Z)`` pairs, in fragment order."""
+        return np.asarray([[e.A, e.Z] for e in self.fragments], dtype=float).reshape(-1, 2)
 
     @property
     def Z_values(self) -> list[float]:

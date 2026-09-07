@@ -104,8 +104,17 @@ model instance:
 
 Each model declares the named data it needs through ``required_quantities`` and the evaluator
 quantities it can produce through ``output_quantities``. Availability checks compare those
-requirements against the selected machine; the output declaration describes the intrinsic result
-returned by the model evaluator.
+requirements against the quantities the selected machine tabulates plus the ones the dose engine
+produces itself (FRED, for instance, scores LET without needing LET kernels); the output
+declaration describes the intrinsic result returned by the model evaluator.
+
+Before a calculation starts, the dose engine checks the reference photon parameters of all
+structures: ``alpha_x`` and ``beta_x`` must be finite and non-negative for every model. Models
+formulated in terms of the reference α/β ratio additionally declare which of them must be
+strictly positive (``requires_positive_reference``), so a structure with ``beta_x = 0`` selected
+together with ``"MCN"`` fails with a clear message instead of producing non-finite influence
+matrix entries. Voxels outside every structure carry no reference parameters
+(``alpha_x == beta_x == 0``) and evaluate to zero.
 
 An evaluator separately declares its additive matrix outputs through
 ``influence_quantity_names`` and produces them with ``evaluate_influence()``. For LQ models these
@@ -132,7 +141,7 @@ complete extension contract and a registered external model example.
      - protons
      - LET-based LQ models (Wedenberg, McNamara, Carabé) yielding per-voxel α/β.
    * - ``"LSM"``
-     - protons, helium, carbon, oxygen
+     - protons, helium, carbon
      - Linear scaling of α with LET between two thresholds.
    * - ``"HEL"``
      - helium
@@ -141,7 +150,7 @@ complete extension contract and a registered external model example.
      - protons, helium, carbon, oxygen
      - α/β depth kernels per tissue class from the machine data (e.g. LEM tables).
    * - ``"dose_average_alpha_beta"``
-     - carbon, oxygen
+     - protons, helium, carbon, oxygen
      - α/β dose-averaged from RBE tables over the machine's fragment fluence spectra.
 
 Models are lightweight parameter objects: ``pln.bio_model.parameters`` and

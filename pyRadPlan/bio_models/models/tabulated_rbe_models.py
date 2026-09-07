@@ -123,6 +123,11 @@ class TabulatedRBEModel(LQModel):
             ``fragments_AZ`` (n, 2), ``kernel_ix``, ``sp_table_ix``, ``q_table_ix`` — index
             lists of the selected fragments into the kernel spectrum and both tables.
         """
+        # Local import: pyRadPlan.machines imports pyRadPlan.plan, which imports this package.
+        from pyRadPlan.machines.particles._beam_fragment_spectrum import (  # noqa: PLC0415
+            match_fragment_species,
+        )
+
         charged = [(i, f) for i, f in enumerate(fluence_spectrum.fragments) if f.Z > 0]
         available = np.asarray([[f.A, f.Z] for _, f in charged], dtype=float).reshape(-1, 2)
 
@@ -133,7 +138,10 @@ class TabulatedRBEModel(LQModel):
 
         selected = {"fragments_AZ": [], "kernel_ix": [], "sp_table_ix": [], "q_table_ix": []}
         for fragment in requested:
-            in_kernel = np.flatnonzero((available == fragment).all(axis=1))
+            # A == NaN aggregates all isotopes of a charge and never compares equal, so the
+            # spectrum entries are matched by species rather than by array equality. Both
+            # tables are tabulated per charge, hence the Z-only lookup.
+            in_kernel = match_fragment_species(available, fragment)
             idx_sp = np.flatnonzero(self._sp_table["fragments_AZ"][:, 1] == fragment[1])
             idx_q = np.flatnonzero(self._q_table["fragments_AZ"][:, 1] == fragment[1])
             if in_kernel.size == 0 or idx_sp.size == 0 or idx_q.size == 0:

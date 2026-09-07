@@ -56,9 +56,11 @@ Additional matrices are available for biological dose calculation in particle th
      - Per-beamlet √β-dose for the LQ model.
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
-resolved during optimization. The engine also stores the biological model it used as
+resolved during optimization. Every engine, photon engines included, stores the biological model it used as
 ``dij.bio_model``; for a constant-RBE model no matrices are needed and the constant is
-available as ``dij.rbe``. The model decides how ``rbe_x_dose`` is derived (LQ inversion of
+available as ``dij.rbe``. An engine that cannot compute a model's declared outputs (for
+example a photon engine with an LQ model) still records the model but logs a warning that
+only physical dose is available. The model decides how ``rbe_x_dose`` is derived (LQ inversion of
 the effect, or ``rbe * physical_dose``).
 
 Biological models and LET
@@ -71,7 +73,9 @@ Which of the additional matrices a particle engine computes follows from ``pln.b
   current ``Dij`` schema supports the ``alpha_dose`` / ``sqrt_beta_dose`` declared by the in-tree
   LQ evaluators.
 * ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
-  requires LET (FRED, which scores LET only on request).
+  requires LET (FRED, which scores LET only on request). Because FRED scores LET itself, an
+  LET-based model can be used with a machine that carries no LET kernels; the pencil-beam
+  engines interpolate the machine's LET kernels and therefore need them.
 
 Both can be overridden through the engine parameters ``calc_bio_dose`` and ``calc_let``,
 which accept ``"auto"`` (default), ``True`` or ``False``:

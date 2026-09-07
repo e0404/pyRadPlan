@@ -112,10 +112,10 @@ class RBExDose(FluenceDependentQuantity):
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         xp = self.array_backend
         if self._path == "constant":
-            return xp.asarray(
-                self._dij.rbe * self._dij.physical_dose.flat[scenario_index] @ self._w_cache,
-                copy=False,
-            )
+            # Scale the already resolved physical dose vector; `rbe * matrix @ w` would
+            # instead build a scaled copy of the whole influence matrix per call.
+            physical_dose = self._deps["physical_dose"].compute(self._w_cache)
+            return xp.asarray(self._dij.rbe * physical_dose.flat[scenario_index], copy=False)
         effect = self._deps["effect"].compute(self._w_cache)
         alphax, betax = self._reference_params(scenario_index)
         effect_slice = xp.astype(xp.asarray(effect.flat[scenario_index]), self._dtype)
@@ -126,11 +126,10 @@ class RBExDose(FluenceDependentQuantity):
     ) -> Array:
         xp = self.array_backend
         if self._path == "constant":
-            # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
-            return xp.asarray(
-                self._dij.rbe
-                * self._dij.physical_dose.flat[scenario_index].__rmatmul__(d_quantity),
-                copy=False,
+            # d(rbe * physical_dose)/dw = rbe * d(physical_dose)/dw; chaining through the
+            # physical-dose quantity avoids scaling the influence matrix itself.
+            return self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
+                xp.asarray(self._dij.rbe * d_quantity), scenario_index
             )
 
         d_quantity = xp.reshape(d_quantity, (-1,))
