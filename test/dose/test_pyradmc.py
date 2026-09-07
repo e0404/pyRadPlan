@@ -10,7 +10,7 @@ import pytest
 import SimpleITK as sitk
 from scipy import sparse
 
-pyradmc = pytest.importorskip("pyRadMC")
+pyradmc = pytest.importorskip("pyradmc")
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import VOI, StructureSet
@@ -138,7 +138,7 @@ def test_msc_preset_plumbed_to_run_dij(
     water_ct, water_cst, photon_stf, photon_pln, monkeypatch, preset, expected
 ):
     """The preset arrives at pyRadMC as the coupled (model, step) pair."""
-    from pyRadMC.backends.ref.engine import ReferenceEngine
+    from pyradmc import ReferenceEngine
 
     photon_pln.prop_dose_calc["msc_preset"] = preset
     engine = get_engine(photon_pln)
@@ -178,7 +178,7 @@ def test_beam_scheduling_resolution(photon_pln):
 
 
 def test_transport_grid_from_ct(water_ct):
-    from pyRadMC.data.materials import CORTICAL_BONE, WATER
+    from pyradmc import CORTICAL_BONE, WATER
 
     grid = transport_grid_from_ct(water_ct)
 
@@ -198,7 +198,7 @@ def test_transport_grid_from_ct(water_ct):
 
 
 def test_transport_grid_water_only(water_ct):
-    from pyRadMC.data.materials import WATER
+    from pyradmc import WATER
 
     grid = transport_grid_from_ct(water_ct, water_only=True)
     assert np.all(grid.material == WATER)
@@ -259,7 +259,7 @@ def test_row_permutation_dense_roundtrip():
 
 
 def test_beamlet_source_geometry(photon_stf):
-    from pyRadMC.geometry.spectrum import ali_rogers_mv
+    from pyradmc import ali_rogers_mv
 
     spectrum = ali_rogers_mv("varian-6mv")
 
@@ -365,7 +365,7 @@ def test_machine_mc_beam_model_defaults():
 
 
 def test_spectrum_from_model_variants():
-    from pyRadMC.geometry.spectrum import ali_rogers_mv
+    from pyradmc import ali_rogers_mv
 
     from pyRadPlan.dose.engines._pyradmc import spectrum_from_model
     from pyRadPlan.machines.photons import (
@@ -394,7 +394,7 @@ def test_spectrum_from_model_variants():
 
 
 def test_beam_limiting_stack_geometry(photon_stf):
-    from pyRadMC.geometry.collimation import MLC, JawPair, project_between_planes
+    from pyradmc.geometry.collimation import MLC, JawPair, project_between_planes
 
     from pyRadPlan.dose.engines import DoseEngineBase
     from pyRadPlan.dose.engines._pyradmc import beam_limiting_stack_for_beam
@@ -539,7 +539,7 @@ def test_field_aperture_from_blds(photon_stf):
 
 def test_stack_from_configured_blds(photon_stf):
     """Configured leaf/jaw settings land on the projected device planes."""
-    from pyRadMC.geometry.collimation import project_between_planes
+    from pyradmc.geometry.collimation import project_between_planes
 
     from pyRadPlan.dose.engines import DoseEngineBase
     from pyRadPlan.dose.engines._pyradmc import (

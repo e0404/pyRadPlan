@@ -5,11 +5,10 @@
 # (NVIDIA warp) photon/electron Monte Carlo engine for beamlet-resolved dose influence
 # calculation.
 #
-# pyRadMC is an optional dependency. Until it is published, install it locally in
-# editable mode:
+# pyRadMC is an optional dependency:
 #
 # ```bash
-# pip install -e path/to/pyRadMC[warp]
+# pip install pyRadPlan[pyradmc]
 # ```
 #
 # Notes:
@@ -25,7 +24,7 @@
 #   to the stf rays and adds collimator transmission and scatter, but ignores
 #   per-bixel fluence modulation.
 # - The default `cross_section_model` 'tabulated' downloads the EPICS data libraries
-#   (~120 MB) into `~/.cache/pyRadMC/epics` on first use.
+#   (~120 MB) into `~/.cache/pyradmc/epics` on first use.
 
 # %%
 # Import necessary libraries

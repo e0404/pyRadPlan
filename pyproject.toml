@@ -72,9 +72,7 @@ matlab = ["matlabengine"]
 octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
-# Not yet on PyPI - install locally in editable mode for now:
-#   pip install -e path/to/pyRadMC[warp]
-pyradmc = ["pyRadMC[warp]"]
+pyradmc = ["pyRadMC[warp]>=0.2.1"]
 
 dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","liccheck","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
 

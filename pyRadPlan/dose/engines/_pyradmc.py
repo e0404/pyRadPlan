@@ -54,7 +54,7 @@ from ...stf import Beam, FieldShapeAsBLD, FieldShapeComposite, SteeringInformati
 from ._base_montecarlo import MonteCarloEngineAbstract
 
 if TYPE_CHECKING:
-    from pyRadMC.progress import ProgressEvent
+    from pyradmc.progress import ProgressEvent
 
 logger = logging.getLogger(__name__)
 
@@ -93,12 +93,12 @@ def transport_grid_from_ct(ct: CT, water_only: bool = False):
         Map all HU to water composition (density still follows the HU ramp).
         Required for the analytic (water-only) cross-section model.
     """
-    from pyRadMC.adapters.ct import (
+    from pyradmc import WATER
+    from pyradmc.adapters.ct import (
         DEFAULT_CALIBRATION,
         HounsfieldCalibration,
         grid_from_image,
     )
-    from pyRadMC.data.materials import WATER
 
     calibration = DEFAULT_CALIBRATION
     if water_only:
@@ -119,7 +119,7 @@ def scoring_grid_from_dose_grid(dose_grid: Grid, transport_grid):
     grid origin is the lower *corner* in cm. Per-voxel masses are rebinned from
     the transport grid by exact voxel overlap inside pyRadMC.
     """
-    from pyRadMC.scoring.grid import ScoringGrid
+    from pyradmc import ScoringGrid
 
     if not np.allclose(dose_grid.direction, np.eye(3), atol=1e-6):
         raise ValueError(
@@ -166,7 +166,7 @@ def spectrum_from_model(model) -> Any:
     analytic MV form (evaluated by pyRadMC), an explicit histogram, and a
     monoenergetic beam (represented as one narrow histogram bin).
     """
-    from pyRadMC.geometry.spectrum import AliRogersMV, Spectrum, ali_rogers_mv
+    from pyradmc.geometry.spectrum import AliRogersMV, Spectrum, ali_rogers_mv
 
     kind = getattr(model, "kind", None)
     if kind == "analytic_mv":
@@ -220,7 +220,7 @@ def beamlet_source_for_beam(beam: Beam, spectrum, focal_spot_sigma: float = 0.0)
     width = beam.bixel_width / _MM_PER_CM
 
     if focal_spot_sigma > 0.0:
-        from pyRadMC.geometry.source import GaussianSpotBeamletSource
+        from pyradmc import GaussianSpotBeamletSource
 
         sigma = focal_spot_sigma / _MM_PER_CM
         return GaussianSpotBeamletSource(
@@ -235,7 +235,7 @@ def beamlet_source_for_beam(beam: Beam, spectrum, focal_spot_sigma: float = 0.0)
             v_axis=tuple(v_axis),
         )
 
-    from pyRadMC.geometry.source import SpectralBeamletSource
+    from pyradmc import SpectralBeamletSource
 
     return SpectralBeamletSource(
         spectrum,
@@ -407,8 +407,8 @@ def beam_limiting_stack_for_beam(  # noqa: PLR0912, PLR0915
     (for the analytic, water-only cross-section model - unrealistically weak
     attenuation, testing only).
     """
-    from pyRadMC.data.materials import TUNGSTEN, WATER
-    from pyRadMC.geometry.collimation import (
+    from pyradmc import TUNGSTEN, WATER
+    from pyradmc.geometry.collimation import (
         MLC,
         BeamFrame,
         BeamLimitingStack,
@@ -606,7 +606,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         'dose_to_medium' or 'dose_to_water'.
     spectrum_beam : str, optional
         Override: Ali & Rogers (2012) analytic MV spectrum key (e.g.
-        'varian-6mv'; see ``pyRadMC.geometry.spectrum.ALI_ROGERS_BEAMS``).
+        'varian-6mv'; see ``pyradmc.geometry.spectrum.ALI_ROGERS_BEAMS``).
         None (default) uses the machine's ``mc_beam_model`` spectrum selected
         by the stf beamlet energy.
     forward_mode : str
@@ -620,7 +620,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         bixel-area ratio. Dij calculation never models the devices.
     cross_section_model : str
         'tabulated' compiles multi-material tables from the EPICS libraries
-        (~120 MB download on first use, cached in ``~/.cache/pyRadMC/epics``).
+        (~120 MB download on first use, cached in ``~/.cache/pyradmc/epics``).
         'analytic' is a water-only closed-form model: all voxels are treated as
         water with the HU-derived density (fast, no download - testing and
         water-phantom use).
@@ -647,7 +647,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         separately: under 'gaussian' longer substeps are re-bound by an
         internal angular cap, under 'gs' that cap is lifted. The first 'gs'
         run per machine builds a deflection-table grid (~30-45 s, one time,
-        persisted to ``~/.cache/pyRadMC/gs-grid``); later processes load it
+        persisted to ``~/.cache/pyradmc/gs-grid``); later processes load it
         in ~40 ms. 'gs' keeps the engine's reproducibility guarantees
         (bit-identical per device, Dij group-size invariant).
     beamlet_group_size : int, optional
@@ -710,7 +710,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         if self.spectrum_beam is not None:
             key = ("named", self.spectrum_beam)
             if key not in self._spectrum_cache:
-                from pyRadMC.geometry.spectrum import ali_rogers_mv
+                from pyradmc import ali_rogers_mv
 
                 self._spectrum_cache[key] = ali_rogers_mv(self.spectrum_beam)
             return self._spectrum_cache[key]
@@ -730,22 +730,21 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
     def _make_cross_sections(self, transport_grid, e_max: float):
         """Build the cross-section source configured by ``cross_section_model``."""
         if self.cross_section_model == "analytic":
-            from pyRadMC.data.analytic import AnalyticCrossSections
+            from pyradmc import AnalyticCrossSections
 
             return AnalyticCrossSections(
                 geometry_densities=transport_grid.max_density_by_material()
             )
 
-        from pyRadMC import ECUT_MEV, PCUT_MEV
-        from pyRadMC.data.tabulated import build
-        from pyRadMC.data.tabulated.precompile import compile_materials
-        from pyRadMC.data.tabulated.source import TabulatedCrossSections
+        from pyradmc import ECUT_MEV, PCUT_MEV, TabulatedCrossSections
+        from pyradmc.data.tabulated import build
+        from pyradmc.data.tabulated.precompile import compile_materials
 
         cache_key = (round(e_max, 6), PCUT_MEV, ECUT_MEV)
         if cache_key not in _TABULATED_DATA_CACHE:
             logger.info(
                 "Compiling tabulated cross sections from the EPICS libraries "
-                "(downloads ~120 MB into ~/.cache/pyRadMC/epics on first use)..."
+                "(downloads ~120 MB into ~/.cache/pyradmc/epics on first use)..."
             )
             epdl = build.download_library("epdl")
             eedl = build.download_library("eedl")
@@ -765,7 +764,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         if self.backend == "warp":
             import warp as wp
 
-            from pyRadMC.backends.warp.engine import WarpEngine
+            from pyradmc import WarpEngine
 
             device = self.warp_device
             if device is None:
@@ -773,8 +772,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
             logger.info("pyRadMC warp backend on device '%s'.", device)
             return WarpEngine(grid=transport_grid, cross_sections=cross_sections, device=device)
 
-        from pyRadMC.backends.ref.engine import ReferenceEngine
-        from pyRadMC.rng.host import HostRNG
+        from pyradmc import HostRNG, ReferenceEngine
 
         logger.info("pyRadMC reference (CPU) backend.")
         return ReferenceEngine(grid=transport_grid, cross_sections=cross_sections, rng=HostRNG())
@@ -942,11 +940,11 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         are deliberately not modeled in the influence matrix. Rows are already
         remapped to pyRadPlan dose-grid linear indices. ``devices`` shards the
         beamlet groups over the given warp devices (None/empty runs on the
-        engine's own device). ``progress`` (see :mod:`pyRadMC.progress`) is
+        engine's own device). ``progress`` (see :mod:`pyradmc.progress`) is
         forwarded to ``run_dij`` verbatim; it ticks once per beamlet group
         drained, covering that group's full history count.
         """
-        from pyRadMC import DIJ_TRUNCATION_RELATIVE
+        from pyradmc import DIJ_TRUNCATION_RELATIVE
 
         beam_model = self._mc_beam_model()
         focal_spot_sigma = beam_model.focal_spot_sigma if beam_model is not None else 0.0
@@ -1018,7 +1016,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         dose to the per-bixel-history convention via the emission-to-bixel
         area ratio.
         """
-        from pyRadMC import GY_PER_MEV_PER_G
+        from pyradmc import GY_PER_MEV_PER_G
 
         rotation_matrix = lps.get_beam_rotation_matrix(
             np.asarray(beam.gantry_angle, dtype=np.float64),
@@ -1052,13 +1050,13 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
 
         sigma = (beam_model.focal_spot_sigma if beam_model is not None else 0.0) / _MM_PER_CM
         if sigma > 0.0:
-            from pyRadMC.geometry.source import GaussianSpotBeamSource
+            from pyradmc import GaussianSpotBeamSource
 
             source = GaussianSpotBeamSource(
                 spectrum, focal_point, center, width_u, width_v, sigma, sigma, u_axis, v_axis
             )
         else:
-            from pyRadMC.geometry.source import SpectralBeamSource
+            from pyradmc import SpectralBeamSource
 
             source = SpectralBeamSource(
                 spectrum, focal_point, center, width_u, width_v, u_axis, v_axis
@@ -1066,7 +1064,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
 
         exit_z = max(device.z_bottom for device in stack.devices) + 1.0  # cm, local w
         if self.backend == "warp":
-            from pyRadMC.backends.warp.presolve import presolve_head_device
+            from pyradmc.backends.warp.presolve import presolve_head_device
 
             phase_space = presolve_head_device(
                 source,
@@ -1079,7 +1077,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                 return_device_source=True,
             )
         else:
-            from pyRadMC.geometry.head import presolve_head
+            from pyradmc.geometry.head import presolve_head
 
             phase_space = presolve_head(
                 source,
@@ -1127,7 +1125,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         """
         import warp as wp
 
-        from pyRadMC.backends.warp import kernels
+        from pyradmc.backends.warp import kernels
 
         # Warp module loading is not thread-safe, and pyRadMC preloads only
         # when it multi-threads internally; the single-device run_dij calls
@@ -1286,7 +1284,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                 "Goudsmit-Saunderson electron scattering selected (msc_preset='gs', "
                 "step_energy_fraction=0.20). The first GS run on this machine builds a "
                 "deflection-table grid once (~30-45 s, persisted to "
-                "~/.cache/pyRadMC/gs-grid); later runs load it in ~40 ms."
+                "~/.cache/pyradmc/gs-grid); later runs load it in ~40 ms."
             )
 
         n_histories = self._histories_per_beamlet(dij["total_num_of_bixels"])

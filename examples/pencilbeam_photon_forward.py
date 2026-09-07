@@ -216,7 +216,7 @@ result_pb = calc_dose_forward(ct, cst, stf, pln)
 #   between the two engines.
 # %%
 result_mc = None
-if find_spec("pyRadMC") is not None:
+if find_spec("pyradmc") is not None:
     pln_mc = PhotonPlan(machine="Generic")
     pln_mc.prop_stf = pln.prop_stf
     pln_mc.prop_dose_calc = {

@@ -16,7 +16,7 @@ register_engine(ParticleFredMCEngine)
 register_engine(ParticleTOPASMCEngine)
 
 # pyRadMC is an optional dependency (pip install pyRadPlan[pyradmc])
-if find_spec("pyRadMC") is not None:
+if find_spec("pyradmc") is not None:
     register_engine(PhotonPyRadMCEngine)
 
 __all__ = [
