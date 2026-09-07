@@ -22,14 +22,15 @@ from pyRadPlan import (
     calc_dose_influence,
     fluence_optimization,
     load_tg119,
-    xp_utils,
+    plot_slice,
+    settings,
 )
-from pyRadPlan.gui import launch_viewer
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 
-xp_utils.PREFER_GPU = True
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = True
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -41,7 +42,13 @@ ct, cst = load_tg119()
 # %%
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
-pln.prop_opt = {"solver": "scipy"}
+# "display" and "max_iter" are optional; left out, the solver's own defaults apply.
+# See the "Solver configuration and optimization utilities" tutorial for the full set.
+pln.prop_opt = {
+    "solver": "scipy",  # or "ipopt", the default
+    "display": True,
+    "max_iter": 500,
+}
 pln.prop_dose_calc = {"dose_grid": ct.grid}
 
 # Generate Steering Geometry ("stf")
@@ -67,8 +74,11 @@ result = dij.compute_result_ct_grid(fluence)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-launch_viewer(ct, cst, result)
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
+    plot_slice(ct, cst, result["physical_dose"], view_slice)

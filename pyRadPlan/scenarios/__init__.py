@@ -1,6 +1,7 @@
 """Scenario Models for uncertainty quantification, robust optimization and robustness analysis."""
 
 from typing import Union, Optional, Type
+import numpy as np
 from pyRadPlan.ct import CT, validate_ct
 from ._base import ScenarioModel
 from ._nominal import NominalScenario
@@ -21,7 +22,7 @@ def create_scenario_model(
     ct: Optional[Union[CT, dict]] = None,
 ) -> ScenarioModel:
     """
-    Return a scenario model object.
+    Create a scenario model object.
 
     Parameters
     ----------
@@ -73,7 +74,7 @@ def validate_scenario_model(
     model_def: Union[ScenarioModel, Union[str, dict]], ct: Union[CT, dict] = None
 ) -> ScenarioModel:
     """
-    Validate a scenario model input and returns a scenario model object.
+    Validate a scenario model object.
 
     Parameters
     ----------
@@ -86,9 +87,13 @@ def validate_scenario_model(
         The scenario model object.
     """
     model_def = deepcopy(model_def)
-    if "ctScenProb" in model_def:
-        if all(a > 0 for a, b in model_def["ctScenProb"]):
-            model_def["ctScenProb"] = [(a - 1, b) for (a, b) in model_def["ctScenProb"]]
+    if isinstance(model_def, dict) and "ctScenProb" in model_def:
+        # Normalize to (n, 2), so squeezed 1-D pairs loaded from .mat files, 2-D
+        # arrays and Python lists of tuples all become an (index, prob) matrix.
+        arr = np.atleast_2d(np.asarray(model_def["ctScenProb"], dtype=float))
+        pairs = [(int(round(a)), float(b)) for a, b in arr]
+        if all(a > 0 for a, _ in pairs):
+            pairs = [(a - 1, b) for a, b in pairs]
             logger.info(
                 "Assuming scenario model from matRad. Converting 1-based indexing to 0-based "
                 "indexing..."
@@ -98,8 +103,15 @@ def validate_scenario_model(
                 "CamelCase was used, but assuming 0-based indexing, since some values are less "
                 "than 1. No index conversion applied"
             )
+        model_def["ctScenProb"] = pairs
 
     return create_scenario_model(model_def, ct)
 
 
-__all__ = ["ScenarioModel", "NominalScenario", "create_scenario_model"]
+__all__ = [
+    "ScenarioModel",
+    "NominalScenario",
+    "create_scenario_model",
+    "available_scenario_models",
+    "validate_scenario_model",
+]

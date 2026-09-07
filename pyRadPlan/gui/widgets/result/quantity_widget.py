@@ -71,7 +71,7 @@ class QuantityWidget(QWidget):
         self._setup_ui()
 
     def _init_state(self) -> None:
-        """Initialise all instance-level state attributes."""
+        """Initialize all instance-level state attributes."""
         self._ct: Optional[np.ndarray] = None
         self._quantities: dict[str, np.ndarray] = {}
         self._active_quantity_name: Optional[str] = None
@@ -92,13 +92,15 @@ class QuantityWidget(QWidget):
         self._colorbar_mode: str | None = None  # 'quantity' or 'ct'
 
         self._isocenter: Optional[np.ndarray] = None
+        self._ct_origin: Optional[np.ndarray] = None
+        self._ct_spacing: Optional[np.ndarray] = None
         self._show_isocenter: bool = False
         self._isoline_levels: list[float] = []
         self._quantity_opacity: float = 0.4
         self._ct_window: Optional[tuple[float, float]] = None
         self._quantity_window: Optional[tuple[float, float]] = None
         self._quantity_colormap: str = "jet"
-        self._ct_colormap: str = "grey"
+        self._ct_colormap: str = "gray"
         self._active_mode: str = "quantity"
 
         self._image_item = None
@@ -120,6 +122,17 @@ class QuantityWidget(QWidget):
         self._plot_widget.viewport().installEventFilter(self)
         layout.addWidget(self._plot_widget)
         self._colorbar = None  # created lazily with quantity
+
+        # Cursor info overlay (lower-left corner of the plot area)
+        self._info_label = QLabel(self._plot_widget)
+        self._info_label.setStyleSheet(
+            "background-color: rgba(0, 0, 0, 150); color: white;"
+            "padding: 4px 6px; border-radius: 3px;"
+            "font-family: monospace; font-size: 8pt;"
+        )
+        self._info_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._info_label.hide()
+        self._plot_widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
         slider_row = QHBoxLayout()
 
@@ -183,7 +196,7 @@ class QuantityWidget(QWidget):
                     else:
                         self._active_quantity_name = next(iter(self._quantities))
             else:
-                self._quantities["Physical quantity"] = quantity_volume.astype(float)
+                self._quantities["Physical quantity"] = quantity_volume.astype(float, copy=False)
                 self._active_quantity_name = "Physical quantity"
 
         if isinstance(overlay_unit, dict):
@@ -200,6 +213,104 @@ class QuantityWidget(QWidget):
         self._configure_slider()
         self.update_slice()
 
+    def clear_data(self) -> None:
+        """Remove all imaging data and rendered items (e.g. workspace cleared)."""
+        self._ct = None
+        self._quantities = {}
+        self._active_quantity_name = None
+        self._masks = {}
+        self._isocenter = None
+        self._ct_origin = None
+        self._ct_spacing = None
+        self._info_label.hide()
+        for attr in ("_image_item", "_quantity_item", "_isocenter_item"):
+            item = getattr(self, attr)
+            if item is not None:
+                self._view_box.removeItem(item)
+                setattr(self, attr, None)
+        for iso in self._iso_items:
+            self._view_box.removeItem(iso)
+        self._iso_items.clear()
+        for item in getattr(self, "_mask_items", []):
+            self._view_box.removeItem(item)
+        if hasattr(self, "_mask_items"):
+            self._mask_items.clear()
+        if self._colorbar is not None:
+            try:
+                self._plot_widget.removeItem(self._colorbar)
+            except Exception:  # noqa: BLE001 - already removed
+                pass
+            self._colorbar = None
+            self._colorbar_mode = None
+        self._configure_slider()
+        self._slice_label.setText("Slice: -")
+
+    def set_ct_geometry(
+        self,
+        origin: Optional[Sequence[float]],
+        spacing: Optional[Sequence[float]],
+    ) -> None:
+        """Set CT origin/spacing in (x, y, z) order for physical-coordinate display."""
+        self._ct_origin = None if origin is None else np.asarray(origin, dtype=float)
+        self._ct_spacing = None if spacing is None else np.asarray(spacing, dtype=float)
+
+    # ------------------------------------------------------------------
+    # Cursor info overlay
+    # ------------------------------------------------------------------
+    def _on_mouse_moved(self, scene_pos) -> None:
+        if self._ct is None or not self._view_box.sceneBoundingRect().contains(scene_pos):
+            self._info_label.hide()
+            return
+        view_pos = self._view_box.mapSceneToView(scene_pos)
+        index = self._view_to_volume_index(view_pos.x(), view_pos.y())
+        if index is None:
+            self._info_label.hide()
+            return
+        self._info_label.setText(self._format_cursor_info(index))
+        self._info_label.adjustSize()
+        self._position_info_label()
+        self._info_label.show()
+
+    def _view_to_volume_index(self, vx: float, vy: float) -> Optional[tuple[int, int, int]]:
+        """Map view coordinates and slice index to a (iz, ix, iy) viewer-volume index."""
+        axis = self._PLANE_MAP.get(self._plane, 2)
+        idx = self.slice_slider.value()
+        a, b = int(np.floor(vx)), int(np.floor(vy))
+        if axis == 0:  # Axial: view = (x, y)
+            iz, ix, iy = idx, a, b
+        elif axis == 1:  # Sagittal: view = (z, y)
+            iz, ix, iy = a, idx, b
+        else:  # Coronal: view = (z, x)
+            iz, ix, iy = a, b, idx
+        nz, nx, ny = self._ct.shape
+        if not (0 <= iz < nz and 0 <= ix < nx and 0 <= iy < ny):
+            return None
+        return iz, ix, iy
+
+    def _format_cursor_info(self, index: tuple[int, int, int]) -> str:
+        """Build the overlay text for the voxel at the given (iz, ix, iy) index."""
+        iz, ix, iy = index
+        lines = []
+        if self._ct_origin is not None and self._ct_spacing is not None:
+            pos = self._ct_origin + self._ct_spacing * np.array([ix, iy, iz], dtype=float)
+            lines.append(f"Pos: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}) mm")
+        lines.append(f"Index: [{ix}, {iy}, {iz}] (sitk) / [{iz}, {iy}, {ix}] (numpy)")
+        lines.append(f"CT: {self._ct[iz, ix, iy]:.0f} HU")
+        for name, arr in self._quantities.items():
+            base = name.split()[0] if " " in name else name
+            if base.endswith("_beam"):
+                continue
+            unit = self._overlay_units.get(name, getattr(self, "_overlay_units_default", ""))
+            value = f"{name}: {arr[iz, ix, iy]:.4g}"
+            lines.append(f"{value} {unit}" if unit else value)
+        return "\n".join(lines)
+
+    def _position_info_label(self) -> None:
+        margin = 6
+        self._info_label.move(
+            margin, self._plot_widget.height() - self._info_label.height() - margin
+        )
+
     def _process_dict_quantity(self, quantity_dict: dict) -> dict[str, np.ndarray]:
         """Process a dict of quantity volumes into a flat ``{name: array}`` mapping."""
         result: dict[str, np.ndarray] = {}
@@ -207,7 +318,7 @@ class QuantityWidget(QWidget):
             if isinstance(v, list):
                 for i, beam_vol in enumerate(v):
                     try:
-                        arr = beam_vol.astype(float)
+                        arr = beam_vol.astype(float, copy=False)
                     except AttributeError:
                         if isinstance(beam_vol, sitk.Image):
                             arr = sitk.GetArrayFromImage(beam_vol).transpose(2, 1, 0).astype(float)
@@ -216,7 +327,7 @@ class QuantityWidget(QWidget):
                     result[f"{k} {i}"] = arr
             else:
                 try:
-                    arr = v.astype(float)
+                    arr = v.astype(float, copy=False)
                 except AttributeError:
                     if isinstance(v, sitk.Image):
                         arr = sitk.GetArrayFromImage(v).transpose(2, 1, 0).astype(float)
@@ -720,7 +831,12 @@ class QuantityWidget(QWidget):
         self.slice_slider.setValue(new_val)
 
     def eventFilter(self, obj, ev):  # noqa: N802
-        """Handle native gesture events for pinch-to-zoom on the viewport."""
+        """Handle native gestures and keep the cursor-info overlay anchored."""
+        if obj is self._plot_widget.viewport():
+            if ev.type() == QEvent.Type.Resize:
+                self._position_info_label()
+            elif ev.type() == QEvent.Type.Leave:
+                self._info_label.hide()
         if ev.type() == QEvent.Type.NativeGesture:
             if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
                 factor = 1.0 + ev.value()
@@ -879,7 +995,7 @@ class QuantityWidget(QWidget):
         self._quantity_window = None
         self._ct_window = None
         self._quantity_colormap = "jet"
-        self._ct_colormap = "grey"
+        self._ct_colormap = "gray"
         self._quantity_opacity = 0.4
 
         if self._quantity_item is not None:

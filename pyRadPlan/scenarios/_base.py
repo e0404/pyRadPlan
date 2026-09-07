@@ -31,7 +31,7 @@ from pyRadPlan.ct import validate_ct
 
 
 class ScenarioModel(PyRadPlanBaseModel):
-    """Abstract base class for scenario models.
+    """Base class representing a scenario model.
 
     Attributes
     ----------
@@ -95,8 +95,8 @@ class ScenarioModel(PyRadPlanBaseModel):
     _num_of_available_ct_scen: int = PrivateAttr(default=1)
     _ct_scen_ix: np.ndarray[int] = PrivateAttr(default=np.array([0]))
     _iso_shift: np.ndarray[float] = PrivateAttr(default=np.array([[0.0, 0.0, 0.0]]))
-    _rel_range_shift: np.ndarray[float] = PrivateAttr(default=0.0)
-    _abs_range_shift: np.ndarray[float] = PrivateAttr(default=0.0)
+    _rel_range_shift: np.ndarray[float] = PrivateAttr(default=np.array([0.0]))
+    _abs_range_shift: np.ndarray[float] = PrivateAttr(default=np.array([0.0]))
     _tot_num_shift_scen: int = PrivateAttr(default=1)
     _tot_num_range_scen: int = PrivateAttr(default=1)
     _tot_num_scen: int = PrivateAttr(default=1)
@@ -182,13 +182,13 @@ class ScenarioModel(PyRadPlanBaseModel):
 
     @computed_field
     @property
-    def rel_range_shift(self) -> float:
+    def rel_range_shift(self) -> NDArray[Shape["1-*"], float]:
         """Relative range shift value."""
         return self._rel_range_shift
 
     @computed_field
     @property
-    def abs_range_shift(self) -> float:
+    def abs_range_shift(self) -> NDArray[Shape["1-*"], float]:
         """Absolute range shift value."""
         return self._abs_range_shift
 

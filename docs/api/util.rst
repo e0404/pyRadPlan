@@ -1,21 +1,15 @@
-pyRadPlan.util package
-======================
+util
+====
 
-Submodules
-----------
+.. currentmodule:: pyRadPlan.util
 
-pyRadPlan.util.helpers module
------------------------------
+.. autosummary::
+   :toctree: generated/util/
 
-.. automodule:: pyRadPlan.util.helpers
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: pyRadPlan.util
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   dl2ld
+   ld2dl
+   models2recarray
+   swap_orientation_sparse_matrix
+   KeyboardListener
+   warnings_to_logger
+   native_output_to_logger

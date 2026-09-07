@@ -56,6 +56,14 @@ def test_plan_fred() -> IonPlan:
         "room_material": "Air",  # std: Air
         "print_output": True,
         "num_histories_per_beamlet": 2e2,
+        # Forward (direct) calculations use num_histories_direct, not
+        # num_histories_per_beamlet; the 1e6 default makes each forward test
+        # occupy the GPU for minutes. 4e4 keeps the statistical noise well below
+        # the ~8e-4 systematic offset to the matRad reference (atol 1e-3) while
+        # the FRED runtime stays startup-dominated (a few seconds).
+        "num_histories_direct": 4e4,
+        # Fail instead of blocking the GPU indefinitely (e.g. under contention).
+        "execution_timeout": 120.0,
         "dose_grid": {"resolution": {"x": 10, "y": 10, "z": 10}},
         "dosimetric_lateral_cutoff": 0.995,
         "lateral_model": "single",

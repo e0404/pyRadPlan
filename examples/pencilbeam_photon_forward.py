@@ -1,7 +1,8 @@
 # %% [markdown]
-"""# Example for photon dose calculation using pencilbeam engine."""
+"""# Example for forward photon dose calculation of a field-based plan."""
 # %% [markdown]
-# This example demonstrates how to use the pyRadPlan library to perform photon dose calculations.
+# This example demonstrates how to use the pyRadPlan library to define beam limiting devices
+# (MLC and jaws), turn them into field shapes, and run a forward photon dose calculation.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
@@ -26,6 +27,7 @@ from pyRadPlan import (
     load_tg119,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.machines import create_bld
 from pyRadPlan.stf import FieldShapeAsBLD, FieldShapeComposite
 
@@ -133,7 +135,7 @@ plt.show()
 ct, cst = load_tg119()
 
 # %% [markdown]
-# In this section, we create a photon therapy plan using the ParticleHongPencilBeamEngine.
+# In this section, we create a photon therapy plan using the PhotonPencilBeamSVDEngine.
 # %%
 # Create a plan object
 pln = PhotonPlan(machine="Generic")
@@ -166,22 +168,26 @@ for beam in stf.beams:
         for beamlet in ray.beamlets:
             beamlet.weight *= weights
 
-# Calculate Dose Influence Matrix ("dij")
-dij = calc_dose_forward(ct, cst, stf, pln)
+# Forward dose calculation, which directly returns the result on the CT grid
+result = calc_dose_forward(ct, cst, stf, pln)
 
 
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[1] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[1] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=dij["physical_dose"],
-    view_slice=view_slice,
-    plane="coronal",
-    overlay_unit="Gy",
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["physical_dose"],
+        view_slice=view_slice,
+        plane="coronal",
+        overlay_unit="Gy",
+    )

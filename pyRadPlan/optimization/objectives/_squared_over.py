@@ -1,6 +1,6 @@
 """Squared Overdosing Objective."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -23,9 +23,13 @@ class SquaredOverdosing(Objective):
         maximum values value (above which we penalize)
     """
 
-    name = "Squared Overdosing"
+    name: Literal["Squared Overdosing"] = "Squared Overdosing"
 
-    d_max: Annotated[float, Field(default=30.0, ge=0.0), ParameterMetadata(kind="reference")]
+    d_max: Annotated[
+        float,
+        Field(default=30.0, ge=0.0, description="Maximum dose above which dose is penalized."),
+        ParameterMetadata(kind="reference"),
+    ]
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)

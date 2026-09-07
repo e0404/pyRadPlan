@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     """
-    Abstract interface for Particle Pencil-Beam dose calculation.
+    Abstract class representing a Particle Pencil Beam Engine.
 
     This class extends PencilBeamEngineAbstract by adding infrastructure for particles spots and
     quantities like LET and biological dose for variable RBE calculations.
@@ -52,22 +52,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         the dose drops to the requested cutoff
     """
 
-    calc_let: bool
-    calc_bio_dose: bool
-    air_offset_correction: bool
-    lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"]
-    cut_off_method: Literal["integral", "relative"]
+    calc_let: bool = True
+    calc_bio_dose: bool = False
+    air_offset_correction: bool = True
+    lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
+    cut_off_method: Literal["integral", "relative"] = "integral"
 
     _dij_guarantee_canonical: ClassVar[bool]
     _dij_guarantee_nonzero: ClassVar[bool]
 
     def __init__(self, pln):
-        self.calc_let = True
-        self.calc_bio_dose = False
-        self.air_offset_correction = True
-        self.lateral_model = "fastest"
-        self.cut_off_method = "integral"
-
         # Protected properties with public get access
         self._constant_rbe = None  # constant RBE value
         self._v_tissue_index = None  # Stores tissue indices available in the matRad base data

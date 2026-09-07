@@ -33,6 +33,13 @@ repos:
     rev: v0.25
     hooks:
     -   id: validate-pyproject
+-   repo: https://github.com/FHPythonUtils/LicenseCheck
+    rev: 2025.1.0
+    hooks:
+    -   id: licensecheck
+        # Upstream leaves this unfiltered, which runs it on every commit; the
+        # inputs are the dependencies declared in pyproject.toml.
+        files: ^pyproject\.toml$
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.4.2
     hooks:

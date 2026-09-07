@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class Beamlet(PyRadPlanBaseModel):
     """
-    A class representing a single beamlet.
+    Base class representing a single beamlet.
 
     This class extends PyRadPlanBaseModel (pydantic) and provides functionality to
     handle the bemamlet information, including properties like
@@ -91,7 +91,7 @@ class Beamlet(PyRadPlanBaseModel):
 
 class IonSpot(Beamlet):
     """
-    A class representing a single beamlet.
+    Class representing a single ion spot beamlet.
 
     This class extends PyRadPlanBaseModel (pydantic) and provides functionality to
     handle the beamlet information specific to particles, including properties like
@@ -108,7 +108,7 @@ class IonSpot(Beamlet):
 
 class PhotonBixel(Beamlet):
     """
-    A class representing a single photon beamlet.
+    Class representing a single photon beamlet.
 
     This class extends PyRadPlanBaseModel (pydantic) and provides functionality to
     handle the beamlet information for photons. Mainly the relative fluence of the beamlet /
@@ -171,7 +171,7 @@ class FieldShape(Beamlet):
             if len(grid_resolution) != 1:
                 raise ValueError("Grid must have uniform spacing")
             # TODO: field_width = #intervals not #points ?
-            grid_field_width = float((len(grid) - 1) * grid_resolution)
+            grid_field_width = float((len(grid) - 1) * grid_resolution[0])
             if field_width is not None:
                 if not np.isclose(grid_field_width, field_width):
                     raise ValueError(

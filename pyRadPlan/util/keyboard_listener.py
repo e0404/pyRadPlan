@@ -136,10 +136,11 @@ class KeyboardListener:
 
     def finalize(self) -> None:
         """Stop the background keyboard listener thread."""
+        aborted_by_user = self.stop_event.is_set()
         if self._thread and self._thread.is_alive():
             self.stop_event.set()
             self._thread.join(timeout=0.2)
-        if self.stop_event.is_set():
+        if aborted_by_user:
             logger.info("Optimization aborted by user. Returning last known iterate.")
 
     def cancel(self) -> None:

@@ -43,7 +43,7 @@ class DVHPlotWidget(QWidget):
         """Plot primary (solid) and optional secondary (dotted) DVH curves.
 
         The legend is placed outside the axes on the right. It contains one
-        coloured line per plotted VOI, plus line-style indicator rows for Q1
+        colored line per plotted VOI, plus line-style indicator rows for Q1
         (solid black) and, when present, Q2 (dotted black).
         """
         self.figure.clear()
@@ -53,7 +53,7 @@ class DVHPlotWidget(QWidget):
             if voi_colors and name in voi_colors:
                 r, g, b = voi_colors[name]
                 return (r / 255, g / 255, b / 255)
-            return "grey"
+            return "gray"
 
         # Track which VOI names were actually plotted (preserving order)
         plotted: list[str] = []
@@ -80,7 +80,7 @@ class DVHPlotWidget(QWidget):
         ax.grid(True, which="both", linestyle="--", alpha=0.7)
 
         # --- Custom external legend ---
-        # One coloured line per plotted VOI
+        # One colored line per plotted VOI
         voi_handles = [Line2D([0], [0], color=_get_color(n), lw=2, label=n) for n in plotted]
 
         # Line-style indicator rows

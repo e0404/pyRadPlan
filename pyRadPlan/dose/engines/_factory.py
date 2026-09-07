@@ -37,25 +37,28 @@ def register_engine(engine_cls: Type[DoseEngineBase]) -> None:
         DOSE_ENGINES[engine_name] = engine_cls
 
 
-def get_available_engines(pln: Union[Plan, dict[str]]) -> dict[str, Type[DoseEngineBase]]:
+def get_available_engines(pln: Union[Plan, dict[str], str]) -> dict[str, Type[DoseEngineBase]]:
     """
     Get a list of available engines based on the plan.
 
     Parameters
     ----------
-    pln : Union[Plan,dict]
-        A Plan object.
+    pln : Union[Plan, dict, str]
+        A Plan object, or directly a radiation mode.
 
     Returns
     -------
     dict[str, Type[DoseEngineBase]]
         A dictionary containing the available engines.
     """
-    pln = validate_pln(pln)
+    if isinstance(pln, str):
+        radiation_mode = pln
+    else:
+        radiation_mode = validate_pln(pln).radiation_mode
     return {
         name: cls
         for name, cls in DOSE_ENGINES.items()
-        if pln.radiation_mode in cls.possible_radiation_modes
+        if radiation_mode in cls.possible_radiation_modes
     }
 
 

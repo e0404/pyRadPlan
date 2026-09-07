@@ -76,3 +76,20 @@ def test_data_carbon(test_data_carbon_raw):
     result = tmp["resultGUI"]
 
     return pln, ct, cst, stf, dij_matRad, result
+
+
+@pytest.fixture
+def test_data_oxygen(test_data_oxygen_raw):
+    tmp = test_data_oxygen_raw
+    pln = validate_pln(tmp["pln"])
+    pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
+    pln.prop_dose_calc["lateral_model"] = "single"
+
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    dij_matRad = validate_dij(tmp["dij"])
+    stf = validate_stf(tmp["stf"])
+
+    result = tmp["resultGUI"]
+
+    return pln, ct, cst, stf, dij_matRad, result

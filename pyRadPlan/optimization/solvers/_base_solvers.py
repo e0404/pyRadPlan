@@ -1,10 +1,11 @@
 """Solver Base Classes for Planning Problems."""
 
-from typing import ClassVar, Callable, Any
+from typing import ClassVar, Callable, Any, Optional
 from abc import ABC, abstractmethod
 
 from ...core.xp_utils.typing import Array
 from ...util.keyboard_listener import KeyboardListener
+from ...util.logging_utils import warnings_to_logger
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -40,10 +41,18 @@ class SolverBase(ABC):
     max_time: float
     bounds: Array
 
+    #: Optional generic status sink installed by the owning planning problem.  Called
+    #: with arbitrary keyword *data* at safe points during :meth:`solve` and returns
+    #: whether to continue (``False`` requests a cooperative stop).  Makes no
+    #: assumption about iterative solving: a solver may call it zero, one, or many
+    #: times.  Left ``None`` for stand-alone (non-GUI) use.
+    status_callback: Optional[Callable[..., bool]]
+
     def __init__(self):
         self.max_time = 3600
         self.bounds = [0.0, np.inf]
         self.device = None
+        self.status_callback = None
         # Keyboard listener utility (manages platform specifics internally)
         self._keyboard_listener = KeyboardListener(
             allow_keyboard_cancel=self.allow_keyboard_cancel,
@@ -56,6 +65,17 @@ class SolverBase(ABC):
 
     def __repr__(self) -> str:
         return f"Solver {self.name} ({self.short_name})"
+
+    def _emit_status(self, message: str = "", **data: Any) -> bool:
+        """Push status through :attr:`status_callback`; return whether to continue.
+
+        Returns ``True`` (continue) when no callback is installed, so solvers can call
+        this unconditionally.  Concrete solvers decide what *data* to pass (e.g.
+        iterative ones pass ``iteration``/``objective``).
+        """
+        if self.status_callback is None:
+            return True
+        return bool(self.status_callback(message=message, **data))
 
     def solve(self, x0: Array) -> tuple[Array, dict]:
         """
@@ -79,9 +99,8 @@ class SolverBase(ABC):
         # Or terminal stays in weird state.
         try:
             logger.info(f"Starting optimization using {self.name}")
-            x, status = self._solve_problem(x0)
-
-        # Ensure thread is stopped.
+            with warnings_to_logger(self.name):
+                x, status = self._solve_problem(x0)
         finally:
             self._keyboard_listener.finalize()
 
@@ -133,8 +152,6 @@ class NonLinearOptimizer(SolverBase):
         Constraints function handle
     constraints_jac : Callable, default=None
         Constraints Jacobian function handle
-    supply_iter_func : bool
-        Whether to supply an iteration callback function
     """
 
     max_iter: int
@@ -146,8 +163,6 @@ class NonLinearOptimizer(SolverBase):
     constraints: Callable
     constraints_jac: Callable
 
-    supply_iter_func: bool
-
     def __init__(self):
         super().__init__()
         self.max_iter = 500
@@ -158,24 +173,3 @@ class NonLinearOptimizer(SolverBase):
         self.hessian = None
         self.constraints = None
         self.constraints_jac = None
-
-    def iter_func(self, *args, **kwargs) -> bool:
-        """
-        Get or set solver information as iteration callback.
-
-        Agnostic signature with *args and **kwargs to be able to accommodate
-        various solvers.
-
-        Parameters
-        ----------
-        *args
-            Additional arguments
-        **kwargs
-            Additional keyword arguments
-
-        Returns
-        -------
-        bool
-            Whether to continue the optimization
-        """
-        return True

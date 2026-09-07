@@ -55,7 +55,7 @@ class AnalysisWidget(QWidget):
     a replot from the cache.
     """
 
-    # Emitted when a VOI colour is changed inside this widget
+    # Emitted when a VOI color is changed inside this widget
     color_changed = Signal(str, tuple)  # voi name, new RGB tuple
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -263,7 +263,7 @@ class AnalysisWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _rebuild_voi_rows(self, initial_vois: list[str] | None) -> None:
-        """Clear and rebuild the per-VOI checkbox + colour-swatch rows."""
+        """Clear and rebuild the per-VOI checkbox + color-swatch rows."""
         # Remove old widgets
         for cb in self._voi_checkboxes.values():
             cb.deleteLater()
@@ -320,7 +320,7 @@ class AnalysisWidget(QWidget):
         rgb = self._voi_colors.get(name) or (128, 128, 128)
         self._voi_colors[name] = rgb
 
-        # Colour swatch button
+        # Color swatch button
         swatch = QPushButton()
         swatch.setFixedSize(14, 14)
         swatch.setFlat(True)
@@ -328,7 +328,7 @@ class AnalysisWidget(QWidget):
             f"background-color: rgb({rgb[0]},{rgb[1]},{rgb[2]}); border: 1px solid #555;"
         )
         swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-        swatch.setToolTip(f"Change colour for {name}")
+        swatch.setToolTip(f"Change color for {name}")
         swatch.clicked.connect(lambda _, n=name: self._pick_color(n))
         self._voi_color_swatches[name] = swatch
 
@@ -347,9 +347,9 @@ class AnalysisWidget(QWidget):
         return row
 
     def _pick_color(self, name: str) -> None:
-        """Open a colour dialog for *name* and apply the result."""
+        """Open a color dialog for *name* and apply the result."""
         current = self._voi_colors.get(name, (128, 128, 128))
-        color = QColorDialog.getColor(QColor(*current), self, f"Pick colour for {name}")
+        color = QColorDialog.getColor(QColor(*current), self, f"Pick color for {name}")
         if color.isValid():
             rgb = (color.red(), color.green(), color.blue())
             self._voi_colors[name] = rgb

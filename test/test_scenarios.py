@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import SimpleITK as sitk
 from pyRadPlan.scenarios import ScenarioModel, NominalScenario, validate_scenario_model
@@ -200,6 +202,38 @@ def test_nominal_scenario_creation_by_matrad_dict(sample_model_dict_matrad):
     for key in sample_model_dict_matrad.keys():
         assert key in return_dict
         assert return_dict[key] == sample_model_dict_matrad[key]
+
+
+@pytest.mark.parametrize(
+    "ct_scen_prob",
+    [
+        np.array([1.0, 1.0]),  # 1-D, as a squeezed single scenario loaded from a .mat file
+        np.array([[1.0, 1.0]]),  # 2-D (n, 2) as scipy would deliver it
+        [(1, 1.0)],  # plain list of tuples (matRad 1-based)
+    ],
+)
+def test_validate_scenario_model_ctscenprob_shapes(ct_scen_prob):
+    """matRad ``ctScenProb`` normalizes regardless of numpy shape"""
+    scenario = validate_scenario_model({"model": "nomScen", "ctScenProb": ct_scen_prob})
+    assert isinstance(scenario, NominalScenario)
+    # matRad 1-based index 1 -> 0-based 0.
+    assert scenario.ct_scen_prob == [(0, 1.0)]
+
+
+def test_scenario_serialization_emits_no_pydantic_warning():
+    """Serializing a scenario must not warn about range-shift array/float mismatch."""
+    scenario = NominalScenario()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        scenario.model_dump()
+        scenario.to_matrad()
+    messages = [str(w.message) for w in caught]
+    assert not any(
+        "PydanticSerializationUnexpectedValue" in m or "range_shift" in m for m in messages
+    ), messages
+    # The values themselves are arrays (one entry per ct scenario).
+    assert np.array_equal(scenario.rel_range_shift, np.zeros(1))
+    assert np.array_equal(scenario.abs_range_shift, np.zeros(1))
 
 
 def test_nominal_scenario_extract_single_scenario():

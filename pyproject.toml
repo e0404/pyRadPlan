@@ -6,26 +6,28 @@ build-backend = "setuptools.build_meta"
 exclude = ["matRad","build"]
 
 [tool.setuptools.package-data]
-pyRadPlan = ["data/**/*"]
+pyRadPlan = ["data/**/*", "gui/assets/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.4.1"
+version = "0.5.0"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
+  { name="Maxim Braunsburger", email = "m.braunsburger@icloud.com" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
   { name="Louis Ermeneux", email = "louis.ermeneux@gmail.com" },
+  { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" },
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
   { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Moritz Müller", email = "moritz.mueller@dkfz-heidelberg.de" },
   { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
   { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },
   { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
   { name="Samir Schulz", email = "samirshivaji.schulz@dkfz-heidelberg.de" },
-  { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" },
-  { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" }
+  { name="Wilfrid Wangon Zekou", email = "wangonwil@gmail.com" }
 ]
 
 maintainers = [
@@ -37,7 +39,7 @@ maintainers = [
 
 description = "A python interface and reimplementation to matRad"
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10,<3.15"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
@@ -45,7 +47,7 @@ classifiers = [
 ]
 dependencies = [
     "scipy>=1.13.0",
-    "numpy>=2.0,<=2.3",
+    "numpy>=2.0,<2.4",
     "array_api_compat",
     "array_api_strict",
     "array_api_extra",
@@ -63,9 +65,15 @@ dependencies = [
     "tqdm>=4.0.0",
     "pint>=0.24.0",
     "jinja2",
+    "huggingface_hub>=0.23",
+    "safetensors",
 #   "cudatoolkit",
 #   "Raytrace@git+https://github.com/ryanneph/raytrace.git@master#egg=raytrace"
 ]
+
+# huggingface_hub>=0.23: snapshot_download's local_dir no longer uses symlinks, which the
+# local-model layout in pyRadPlan.ai.modelhub relies on. torch is deliberately
+# not pulled in: pick the build matching your platform/CUDA yourself.
 
 [project.optional-dependencies]
 matlab = ["matlabengine"]
@@ -73,10 +81,31 @@ octave = ["oct2py"]
 gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints"]
+# Optional compute backends. The core is array-API based (array_api_compat), so
+# these only need installing for the backend you actually intend to run on.
+torch  = ["torch>=2.0"]
+cupy   = ["cupy>=13.0"]
+jax    = ["jax>=0.4.35"]
+
+# Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
+profiling = ["line_profiler>=4.0"]
+
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+
+[project.scripts]
+pyRadPlanGUI = "pyRadPlan.gui:main"
 
 [project.urls]
 "Homepage" = "https://git.dkfz.de"
+
+[tool.pytest.ini_options]
+# The test suite lives in test/ only. benchmark/ holds pytest-benchmark harnesses
+# and line-profiling scripts which are run deliberately, never as part of the suite.
+testpaths = ["test"]
+# benchmark/ is deliberately NOT listed here: testpaths already keeps it out of a bare
+# `pytest` run, and its benchmark_*/profile_* filenames do not match python_files, so
+# listing it would only break `pytest benchmark/` for deliberate runs.
+norecursedirs = ["examples", "matRad", "docs", ".venv", "build", "dist"]
 
 [tool.ruff]
 line-length = 99
@@ -94,7 +123,7 @@ extend-include = [
 
 [tool.ruff.lint]
 extend-select = ["PL","D", "NPY", "N"]
-extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999"]
+extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999", "UP007"]
 exclude = ["test/**/*.py", "benchmark/**/*.py"]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
@@ -102,6 +131,17 @@ fixable = ["ALL"]
 
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.pylint]
+# Relaxed for scientific code: physics kernels and backend dispatchers legitimately take
+# many parameters and branch on dtype/backend/modality, and early returns are the clearer
+# pattern for such dispatch. These thresholds are set to flag genuine outliers rather than
+# ordinary numerical code; silence individual leftovers with a `# noqa: PLR09xx  # reason`
+# on the `def` so the justification is recorded at the site.
+max-args = 10        # default 5
+max-returns = 12     # default 6
+max-branches = 20    # default 12
+max-statements = 80  # default 50
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -155,8 +195,18 @@ exclude = [
   "test" ]
 extend-ignore = ["E203","E701","F722"]
 
+[tool.licensecheck]
+# Compatibility is derived from this project's own license rather than from a
+# hand-maintained allowlist, so compound licenses such as regex's
+# "Apache-2.0;; CNRI-Python" or tqdm's "MIT;; MPL-2.0" resolve on their own.
+# Scope matches the previous liccheck --no-deps setup: the declared
+# [project.dependencies], not their transitive deps and not the optional
+# extras (add e.g. extras = ["ai", "gui"] to widen it).
+zero = true
+format = "simple"
+
 [tool.codespell]
-skip = "./matRad,*/matRad/*"
+skip = "./matRad,*/matRad/*,*.ipynb"
 ignore-words-list = "coo"
 
 [tool.pydocstringformatter]

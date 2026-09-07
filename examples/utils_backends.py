@@ -29,9 +29,11 @@ from pyRadPlan import (
     fluence_optimization,
     plot_slice,
     load_tg119,
+    settings,
     xp_utils,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 # %% [markdown]
@@ -53,10 +55,15 @@ print(
 print(f"CuPy available: {xp_utils.cupy_available()}")
 print(f"JAX available: {xp_utils.jax_available()} (GPU: {xp_utils.jax_gpu_available()})")
 
+# The preferred backends are the "xp" sub-configuration of the global pyRadPlan
+# settings. They can be configured via environment variables / a `.env` file
+# (PYRADPLAN_XP_PREFER_GPU, PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND,
+# PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND) or at runtime as below.
+
 # Let's start by calculating the dose influence matrix (dij) on the CPU
 print("\nConfiguring CPU Backend (NumPy) for Dose Calculation...")
-xp_utils.PREFER_GPU = False
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = False
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -92,12 +99,13 @@ cst.vois[2].objectives = [
 # Here we switch the backends before optimization:
 # %%
 print("\n--- Switching to a GPU Backend for Optimization ---")
-xp_utils.PREFER_GPU = True
+settings.xp.prefer_gpu = True
 
-print(f"Accelerated GPU backend selected: {xp_utils.PREFERRED_GPU_ARRAY_BACKEND}")
+# `preferred_gpu_array_backend = None` selects the best available GPU backend automatically
+print(f"Accelerated GPU backend selected: {xp_utils.choose_array_api_namespace().__name__}")
 
 # or you can force a specific backend:
-# xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "torch"  # or "cupy"
+# settings.xp.preferred_gpu_array_backend = "torch"  # or "cupy"
 
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
@@ -108,15 +116,19 @@ result = dij.compute_result_ct_grid(fluence)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-plot_slice(
-    ct=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["physical_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )

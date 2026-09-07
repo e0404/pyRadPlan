@@ -13,6 +13,34 @@ pyRadPlan is an open-source radiotherapy treatment planning toolkit designed for
 
 Development is lead by the [Radiotherapy Optimization group](https://www.dkfz.de/radopt) at the [German Cancer Research Center (DKFZ)](https://www.dkfz.de)
 
+## Installation
+pyRadPlan requires **Python 3.10–3.14** and is available on [PyPI](https://pypi.org/project/pyRadPlan/). We recommend installing it together with its graphical user interface:
+
+```sh
+pip install "pyRadPlan[gui]"
+```
+
+This additionally provides the `pyRadPlanGUI` command, which launches the matRad-style main GUI — optionally loading a patient file on startup:
+
+```sh
+pyRadPlanGUI                    # empty workspace
+pyRadPlanGUI path/to/TG119.mat  # load a matRad patient file
+```
+
+For headless environments (servers, compute clusters, CI) where the Qt runtime is unnecessary weight, install the scripting/API core without the GUI:
+
+```sh
+pip install pyRadPlan
+```
+
+Further optional extras (`[numba]`, `[matlab]`, `[octave]`, `[dev]`) are described in the documentation's [installation guide](https://pyradplan.readthedocs.io/en/latest/installation/#optional-extras).
+
+⚡ **Compute backends** ([docs](https://pyradplan.readthedocs.io/en/latest/installation/#gpu-alternate-compute-backends))**:** beyond [`numpy`](https://numpy.org/), pyRadPlan can use [`cupy`](https://cupy.dev/) (GPU), [`pytorch`](https://pytorch.org/) (CPU/GPU) and [`jax`](https://docs.jax.dev/) (CPU by default), available as the extras `[cupy]`, `[torch]` and `[jax]`. For GPU builds we recommend following the respective project's install instructions for your platform / CUDA version instead.
+
+🎲 **Monte Carlo** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/dose_calculation.html#dose-engines))**:** the [TOPAS](https://www.topasmc.org/) and [FRED](https://fred-mc.org/) dose engines call external executables. Install those following their own instructions and make sure they are on your `PATH`.
+
+📉 **Solvers** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/optimization.html#solvers))**:** pyRadPlan ships an IPOPT interface [`ipyopt`](https://pypi.org/project/ipyopt/), which has to be installed separately via `pip install ipyopt` (Linux only). Default ships with [`scipy`](https://scipy.org/)
+
 ## Concept and Goals
 pyRadPlan is a multi-modality treatment planning toolkit in python born from the established Matlab-based toolkit [matRad](http://www.matRad.org). As such, pyRadPlan aims to provide a framework as well as tools for combining dose calculation with optimization with focus on ion planning.
 
@@ -31,7 +59,13 @@ A minimal script is very similar to matRad's example [`matRad.m`](https://github
 ```python
 from importlib import resources
 import pymatreader
-from pyRadPlan import load_patient, IonPlan, generate_stf, calc_dose_influence, fluence_optimization
+from pyRadPlan import (
+    load_patient,
+    IonPlan,
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+)
 
 #  Read patient from provided TG119.mat file and validate data
 tg119_path = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
@@ -71,6 +105,7 @@ Instead of using above top-level workflow functions and a central plan configura
 ```python
 ...
 from pyRadPlan.stf import StfGeneratorIMPT
+
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 
@@ -82,14 +117,14 @@ pln = IonPlan(radiation_mode="protons", machine="Generic")
 stf_gen = StfGeneratorIMPT()
 stf_gen.gantry_angles = [90, 270]
 stf_gen.couch_angles = [0, 0]
-stf = stf_gen.generate(ct,cst)
+stf = stf_gen.generate(ct, cst)
 ```
 
 If you are interested in helping with development, get in touch, read the contributing guidelines, and the developer note below.
 
 ## Contributing & Notes for Developers
 pyRadPlan development uses unit-testing and code formatting via pre-commit hooks to ensure clean code.
-If you are a developer or want to contribute, make sure to clone the latest state via git. Then, we strongly suggest to create a virtual python environment with a suitable version and do an editable installation of pyRadPlan in dev mode:  `pip install -e .[dev]`
+If you are a developer or want to contribute, make sure to clone the latest state via git. Then, we strongly suggest to create a virtual python environment with a suitable version and do an editable installation of pyRadPlan in dev mode: `pip install -e ".[dev,gui]"` (the `gui` extra is needed to run the GUI test suite)
 
 > **Note**
 > If you are using venv to create a virtual environment in the project's root folder, we suggest to name it `.venv` as this folder will be automatically excluded by all formatters and linters
@@ -98,7 +133,7 @@ This will install an editable pyRadPlan module including `pytest` and `pre-commi
 - **pytest** is used to run unit tests before publishing the code. Run on the test folder via `pytest test`, or choose any test file following the pytest syntax. We encourage writing at least fundamental unit tests for new code. Will also install `coverage` and the pytest extension to monitor coverage.
 - **pre-commit** allows for automatic code formatting to ensure following of PEPs (mainly PEP8 and PEP257).
 
-After successfully running `pip install -e .[dev]` check in the console that `pre-commit --version` provides a correct response.
+After successfully running `pip install -e ".[dev,gui]"` check in the console that `pre-commit --version` provides a correct response.
 Afterwards run `pre-commit install`. This reads the `.pre-commit_config.yaml` and adds a hook to your git repository, which whenever a commit is made the changed files are reformatted to ensure the PEP standards.
 
 ### Matlab / Octave Files & Engine

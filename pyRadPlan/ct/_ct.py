@@ -21,7 +21,7 @@ from pyRadPlan.core import PyRadPlanBaseModel, Grid
 
 class CT(PyRadPlanBaseModel, ABC):
     """
-    A class representing a CT (Computed Tomography) image.
+    Class representing a CT (Computed Tomography) image.
 
     This class extends PyRadPlanBaseModel and provides functionality to
     handle CT images, including their properties like resolution, size, origin,
@@ -570,7 +570,7 @@ def create_ct(data: Union[dict[str, Any], CT, os.PathLike, str, None] = None, **
 
 def validate_ct(ct: Union[dict[str, Any], CT, os.PathLike, None] = None, **kwargs) -> CT:
     """
-    Validate and create a CT object.
+    Validate a CT object.
 
     This function is a wrapper around create_ct and ensures the returned object
     is a valid CT instance.

@@ -1,10 +1,12 @@
-"""
-Example of importing a patient from a MatRad file and visualizing the CT, VOIs with matplotlib.
+# %% [markdown]
+"""# Example for ray tracing radiological depth.
 
-Also produces a simple beam configuration and visualizes the resulting radiological depth cubes by
-calling the RayTracer.
+Imports a patient from a matRad file and visualizes the CT and VOIs with matplotlib. Also produces
+a simple beam configuration and visualizes the resulting radiological depth cubes by calling the
+RayTracer.
 """
 
+# %%
 # Standard Library Imports
 import logging
 import sys
@@ -28,10 +30,10 @@ from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.visualization import plot_slice
 from pyRadPlan.io import load_patient
 
-from pyRadPlan import xp_utils
+from pyRadPlan import settings
 
-xp_utils.PREFERRED_GPU_ARRAY_BACKEND = "cupy"
-xp_utils.PREFER_GPU = True
+# Use a GPU backend if one is available (auto-selected), otherwise fall back to the CPU backend
+settings.xp.prefer_gpu = True
 
 # Configure the Logger to show you debug information
 logging.basicConfig(level=logging.INFO)

@@ -27,17 +27,20 @@ Use the documentation, docstrings or examples for a detailed overview.
 from importlib.metadata import version, PackageNotFoundError
 import logging
 
+from ._settings import PyRadPlanSettings, XpSettings, settings
 from .plan._plans import Plan, validate_pln, IonPlan, PhotonPlan
 from .ct._ct import CT, validate_ct
 from .cst._cst import StructureSet, validate_cst
 from .stf._generate_stf import generate_stf
 from .stf import SteeringInformation, validate_stf
 from .dose._calc_dose import calc_dose_influence, calc_dose_forward
-from .optimization._fluence_optimization import fluence_optimization
+from .optimization._fluence_optimization import fluence_optimization, OptInfo
 from .analysis._dvh import DVH, DVHCollection
 from .visualization import plot_slice, plot_multiple_slices
-from .io import load_patient, load_tg119
+from .io import load_patient, load_data, save_data, load_binary_patient, load_tg119
 from .core import xp_utils
+
+xp_utils.warn_on_unreliable_openblas()
 
 try:
     __version__ = version(__name__)
@@ -50,6 +53,9 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "__version__",
+    "settings",
+    "PyRadPlanSettings",
+    "XpSettings",
     "xp_utils",
     "Plan",
     "IonPlan",
@@ -63,6 +69,7 @@ __all__ = [
     "calc_dose_influence",
     "calc_dose_forward",
     "fluence_optimization",
+    "OptInfo",
     "DVH",
     "DVHCollection",
     "SteeringInformation",
@@ -70,5 +77,8 @@ __all__ = [
     "plot_slice",
     "plot_multiple_slices",
     "load_patient",
+    "load_data",
+    "save_data",
+    "load_binary_patient",
     "load_tg119",
 ]

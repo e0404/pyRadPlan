@@ -8,7 +8,7 @@
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/pencilbeam_proton.py
+# jupytext --to notebook path/to/this/file/proton_mimicking.py
 
 # %%
 # Import necessary libraries
@@ -24,9 +24,10 @@ from pyRadPlan import (
     fluence_optimization,
     plot_slice,
     load_tg119,
-    xp_utils,
+    settings,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
     SquaredOverdosing,
@@ -35,8 +36,8 @@ from pyRadPlan.optimization.objectives import (
 )
 
 
-xp_utils.PREFER_GPU = False
-xp_utils.PREFERRED_CPU_ARRAY_BACKEND = "numpy"
+settings.xp.prefer_gpu = False
+settings.xp.preferred_cpu_array_backend = "numpy"
 logging.basicConfig(level=logging.INFO)
 
 # %%
@@ -92,17 +93,21 @@ result_mimicked = dij.compute_result_ct_grid(fluence_mimicked)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result_mimicked)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result_mimicked["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result_mimicked["physical_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )
 
 # %%

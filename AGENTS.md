@@ -22,6 +22,7 @@ pre-commit install
 | `interface/*` | API/interface changes |
 | `devops/*` | CI, tooling, docs |
 | `dev/*` | experimental |
+| `rc/X.Y.Z` | release candidate, branched from `develop`, merged into `main` |
 
 Always branch from `develop` (not `main`) for regular work.
 
@@ -40,6 +41,17 @@ pytest --cov=pyRadPlan        # with coverage
 
 CI runs on Python 3.10–3.13. Do not reduce existing coverage.
 
+Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
+so a bare `pytest` run never collects it — invoke it explicitly:
+
+```bash
+pytest benchmark/benchmark_interp1d.py                 # one harness ([dev])
+pytest benchmark/ -o python_files="benchmark_*.py"     # all of them
+python benchmark/profile_pencilbeam_photon_forward_lineprof.py  # line_profiler ([profiling])
+```
+
+Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance work.
+
 ## Changelog
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
@@ -50,10 +62,29 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 - [ ] Coverage not reduced
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] Branch targets `develop` (not `main`)
+- [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
+
+## Releases
+
+Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
+stays open for regular work while the candidate is stabilised:
+
+1. Branch `rc/X.Y.Z` from `develop`.
+2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog, re-executed example notebooks.
+3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
+4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
+   `main` back into `develop`, and delete `rc/X.Y.Z`.
+
+When proposing or preparing a release, follow
+[.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
+the authoritative checklist for both the pre-merge and post-merge steps, and it applies whichever
+platform hosts the release. Do not tag, publish, or push a release without explicit confirmation.
 
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
+
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. They are **never executed during a docs build or in CI**. The executed notebooks (with outputs) are committed in `docs/tutorials/examples/`; refresh them locally with `python docs/execute_examples.py` and commit the result when examples change and as part of the release recipe.
 
 ## Key Architecture Notes
 
@@ -70,3 +101,4 @@ If you add documentation, you can run multiple builds of the documentation and i
 - Be careful with physical units, coordinate systems, voxel ordering, and SimpleITK image metadata.
 - Prefer focused tests for geometry, dose, and serialization changes because regressions can be subtle.
 - Treat dose engine changes as high-risk and validate against existing fixtures where possible.
+- The GUI (`pyRadPlan/gui/`) binds directly to the pydantic data models and to algorithm calling APIs: widgets read/write model fields (e.g. `VOI` metadata, objectives, plan properties) and invoke dose engines, stf generators, and optimizers through their public interfaces. When changing a data structure or an algorithm's calling API, search `pyRadPlan/gui/` for usages, update the affected widgets, and run the GUI tests (`pytest test/gui`).

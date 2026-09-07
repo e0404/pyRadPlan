@@ -1,31 +1,21 @@
-plan
-======================
+pln
+===
 
-Base Class
----------------
+.. currentmodule:: pyRadPlan.plan
 
-.. autoclass:: pyRadPlan.plan.Plan
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autosummary::
+   :toctree: generated/pln/
 
-
-Plans for different modalities
--------------------------------
-
-.. autoclass:: pyRadPlan.plan.PhotonPlan
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: pyRadPlan.plan.IonPlan
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   Plan
+   PhotonPlan
+   IonPlan
 
 
-Creating and validating plans
------------------------------
+Creating and validating
+-----------------------
 
-.. autofunction:: pyRadPlan.plan.create_pln
-.. autofunction:: pyRadPlan.plan.validate_pln
+.. autosummary::
+   :toctree: generated/pln/
+
+   create_pln
+   validate_pln

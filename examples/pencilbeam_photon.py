@@ -25,7 +25,11 @@ from pyRadPlan import (
     load_tg119,
 )
 
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
+
+# The array backend is auto-detected. To pin it, set PYRADPLAN_XP_* environment
+# variables or assign to pyRadPlan.settings.xp before the first computation.
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,7 +38,7 @@ logging.basicConfig(level=logging.INFO)
 ct, cst = load_tg119()
 
 # %% [markdown]
-# In this section, we create a photon therapy plan using the ParticleHongPencilBeamEngine.
+# In this section, we create a photon therapy plan using the PhotonPencilBeamSVDEngine.
 # %%
 # Create a plan object
 pln = PhotonPlan(machine="Generic")
@@ -46,7 +50,6 @@ pln.prop_stf = {
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
 
-# Calculate Dose Influence Matrix ("dij")
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
@@ -67,15 +70,19 @@ result = dij.compute_result_ct_grid(fluence)
 # %% [markdown]
 # Visualize the results
 # %%
-# Choose a slice to visualize
-view_slice = int(np.round(ct.size[2] / 2))
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result)
+else:
+    # Choose a slice to visualize
+    view_slice = int(np.round(ct.size[2] / 2))
 
-# Visualize
-plot_slice(
-    image_volume=ct,
-    cst=cst,
-    overlay=result["physical_dose"],
-    view_slice=view_slice,
-    plane="axial",
-    overlay_unit="Gy",
-)
+    # Visualize
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["physical_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )

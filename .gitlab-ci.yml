@@ -19,7 +19,7 @@ build-matrix:
     stage: build
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
@@ -29,6 +29,8 @@ build-matrix:
         - . .venv/bin/activate
         # - LLVM_CONFIG=/usr/bin/llvm14-config pip install llvmlite  # Uncomment if needed for numba on specific images
         - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
+        # Cached here so tests-matrix does not re-download it every pipeline.
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu || echo "torch unavailable for ${PYTHON_VERSION}"
     cache:
         key: "$MATRIX_CACHE_KEY"
         paths:
@@ -47,7 +49,7 @@ lint:
     script:
         # - if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - return_code=0
         - ruff check --output-format grouped || return_code=$(($return_code + $?))
         - ruff check --exit-zero --output-format grouped --output-file ruff.txt
@@ -72,7 +74,7 @@ format:
         policy: pull
     script:
         - . .venv/bin/activate
-        - pip install ruff
+        - pip install ruff==0.15.22
         - ruff format --check
 
 codespell:
@@ -106,7 +108,7 @@ tests-matrix:
     stage: test
     parallel:
         matrix:
-            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.11.9"]
+            - PYTHON_VERSION: ["3.10", "3.12", "3.13", "3.14", "3.11.9"]
     image: python:${PYTHON_VERSION}-slim-bookworm
     variables:
         MATRIX_CACHE_KEY: "venv-${CI_COMMIT_REF_SLUG}-${PYTHON_VERSION}"
@@ -124,6 +126,10 @@ tests-matrix:
         - python -m venv .venv
         - . .venv/bin/activate
         - pip install --upgrade --upgrade-strategy eager -e ".[gui]"
+        # CPU-only torch, so the ai.modelhub loader tests actually run. Tolerated
+        # to fail: torch lags new Python releases, and the tests that need it
+        # skip themselves when it is absent.
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu || echo "torch unavailable for ${PYTHON_VERSION}, ai.modelhub load tests will skip"
         - pip install coverage pytest pytest-cov
         - mkdir -p .testreports
         - PYVER_SAFE=${PYTHON_VERSION//./}
@@ -144,6 +150,36 @@ tests-matrix:
             - .testreports/coverage-${PYTHON_VERSION}.xml
             - .testreports/report-${PYTHON_VERSION}.xml
     coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+
+# Exercise the optional array-API backends on their CPU builds, once per backend as
+# the *default* namespace (PYRADPLAN_XP_*), so engines and tracers run on it too.
+# CuPy needs a GPU runner and is therefore not covered here. Marked allow_failure
+# while JAX support is still being brought up - remove that once the JAX path is green.
+tests-backends:
+    stage: test
+    image: python:3.11.9-slim-bookworm
+    parallel:
+        matrix:
+            - XP_BACKEND: ["torch", "jax"]
+    variables:
+        MATRIX_CACHE_KEY: "venv-backends-${CI_COMMIT_REF_SLUG}"
+        PYRADPLAN_XP_PREFER_GPU: "false"
+        PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND: "${XP_BACKEND}"
+    cache:
+        key: "$MATRIX_CACHE_KEY"
+        paths:
+            - .venv/
+            - .cache/pip/
+        policy: pull-push
+    script:
+        - python -m pip install --upgrade pip
+        - python -m venv .venv
+        - . .venv/bin/activate
+        - pip install --upgrade --upgrade-strategy eager -e ".[jax]"
+        - pip install torch --index-url https://download.pytorch.org/whl/cpu
+        - pip install pytest
+        - pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q
+    allow_failure: true
 
 coverage-aggregate:
     stage: report
@@ -204,12 +240,7 @@ docs:
     script:
         #- if [ ! -d .venv ]; then python -m venv .venv; fi
         - . .venv/bin/activate
-        - pip install sphinx
-        - pip install sphinx-autodoc-typehints
-        - pip install autodoc_pydantic
-        - pip install sphinx-design
-        - pip install pydata-sphinx-theme
-        - pip install numpydoc
+        - pip install -r docs/requirements.txt
         - sphinx-build docs .doc
     artifacts:
         when: always

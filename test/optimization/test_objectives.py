@@ -1,4 +1,5 @@
-# import numpy as np
+import pytest
+
 from pyRadPlan.optimization.objectives import (
     DoseUniformity,
     SquaredDeviation,
@@ -63,6 +64,32 @@ def test_get_objective_from_matrad_tg119(tg119_raw):
     assert isinstance(obj2, SquaredDeviation)
     assert obj2.priority == obj_mat_2["penalty"]
     assert obj2.d_ref == obj_mat_2["parameters"]
+
+
+def test_get_objective_matrad_dict_not_mutated():
+    """Validating a matRad objective struct must not consume its ``parameters``."""
+    desc = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    first = get_objective(desc)
+    second = get_objective(desc)  # must not raise
+    assert isinstance(first, SquaredOverdosing) and isinstance(second, SquaredOverdosing)
+    assert first.priority == second.priority == 100.0
+    assert first.d_max == second.d_max == 30.0
+    assert desc["parameters"] == [30.0]  # caller's input untouched
+
+
+def test_get_objective_numpy_struct_scalar():
+    """A scipy-loaded numpy structured scalar validates like a dict."""
+    desc = np.array(
+        [("DoseObjectives.matRad_SquaredOverdosing", 30.0, 100.0)],
+        dtype=[("className", "O"), ("parameters", "O"), ("penalty", "O")],
+    )[0]
+    obj = get_objective({name: desc[name] for name in desc.dtype.names})
+    assert isinstance(obj, SquaredOverdosing)
+    assert obj.priority == 100.0
 
 
 def test_DoseUniformity_constructor():
@@ -148,6 +175,37 @@ def test_SquaredMimicking_cache():
         np.full(8, 60.0),
         atol=1e-10,
     )
+
+
+def _preprocessed_mimicking():
+    """SquaredMimicking whose cache was built with numpy, as in the planning problem."""
+    image = sitk.Image(4, 4, 4, sitk.sitkFloat32)
+    image += 2.0
+    sq_mimic = SquaredMimicking(d_ref=image)
+    sq_mimic.preprocess_image_reference_parameters(
+        target_grid=Grid.from_sitk_image(image), index_list=np.arange(8)
+    )
+    assert isinstance(sq_mimic._resampled_image_reference_cache["d_ref"], np.ndarray)
+    return sq_mimic
+
+
+def test_SquaredMimicking_values_from_other_namespace():
+    # the optimization backend (values) may differ from the numpy-built cache
+    sq_mimic = _preprocessed_mimicking()
+    dose = xp.full(8, 2.0, dtype=xp.float64)
+    assert float(sq_mimic.compute_objective(dose)) == 0.0
+    grad = sq_mimic.compute_gradient(dose)
+    assert isinstance(grad, type(dose))
+
+
+@pytest.mark.parametrize("backend", ["torch", "cupy"])
+def test_SquaredMimicking_values_from_gpu_backends(backend):
+    xpb = pytest.importorskip(backend)
+    sq_mimic = _preprocessed_mimicking()
+    dose = xpb.full((8,), 2.0)
+    assert float(sq_mimic.compute_objective(dose)) == 0.0
+    grad = sq_mimic.compute_gradient(dose)
+    assert isinstance(grad, type(dose))
 
 
 def test_SquaredOverdosing_constructor():
