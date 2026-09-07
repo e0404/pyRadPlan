@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-07
+
 ### Added
 
 - Tests pinning the RTSTRUCT contour-to-mask fill rule on a grid small enough to read the expected masks off the page: the boundary tie-break, that a contour narrower than one voxel still produces voxels rather than vanishing, concave outlines, clipping at the grid edge, degenerate (zero-area) contours, and that several contours on one slice are combined. The conversion was additionally cross-checked against label maps exported from MITK Workbench for a 512x512x297 CT (3 differing voxels out of 17.6 million across four structures, two of them voxel-identical); that data is too large to vendor, so the miniature cases stand in for it
@@ -453,7 +455,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/e0404/pyRadPlan/compare/v0.3.4...v0.3.5
