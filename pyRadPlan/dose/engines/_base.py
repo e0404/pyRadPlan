@@ -23,7 +23,7 @@ from pyRadPlan.core import ConfigurableAlgorithm, Grid, ProgressReporter
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.resample import resample_numpy_array
 from pyRadPlan.ct import CT, resample_ct
-from pyRadPlan.cst import StructureSet, GlobalVOI
+from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
@@ -509,16 +509,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         dij["num_of_particles_per_mu"] = np.ones(self._num_of_columns_dij) * 1e6
 
         if self.voxel_sub_ix is None:
-            # GlobalVOIs span the whole grid and must not drive the dose calc mask
-            valid_indices = [
-                cst.vois[c].indices_numpy
-                for c in range(len(cst.vois))
-                if not isinstance(cst.vois[c], GlobalVOI)
-            ]
-            if valid_indices:
-                self.voxel_sub_ix = np.unique(np.concatenate(valid_indices))
-            else:
-                self.voxel_sub_ix = np.array([])
+            self.voxel_sub_ix = np.unique(
+                np.concatenate([cst.vois[c].indices_numpy for c in range(0, len(cst.vois))])
+            )
 
         tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
 

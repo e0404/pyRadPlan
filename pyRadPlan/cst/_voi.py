@@ -19,7 +19,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.core import Grid
 
 # Default overlap priorities
-DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15, "GLOBAL": 20}
+DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15}
 
 # Preferred colors per VOI type (RGB 0..255), tried in order before HSV fallback.
 DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
@@ -46,11 +46,6 @@ DEFAULT_VOI_COLORS: dict[str, list[tuple[int, int, int]]] = {
         (255, 200, 60),
         (255, 140, 0),
         (230, 180, 50),
-    ],
-    "GLOBAL": [
-        (200, 200, 200),
-        (150, 150, 150),
-        (220, 220, 220),
     ],
 }
 
@@ -1033,56 +1028,11 @@ class ExternalVOI(VOI):
         return v
 
 
-class GlobalVOI(VOI):
-    """
-    Represents a global VOI spanning the entire grid, bypassing default overlap rules and dose calculation masks.
-
-    Attributes
-    ----------
-    Inherits all attributes from Plan.
-
-    Methods
-    -------
-    voi_type : str
-        Returns the voi_type as 'GLOBAL'.
-    """
-
-    voi_type: str = "GLOBAL"
-    apply_overlap: Union[bool, None] = Field(default=None)
-
-    @field_validator("voi_type", mode="after")
-    @classmethod
-    def validate_voi_type(cls, v: str) -> str:
-        """
-        Validate the voi type for a Global VOI.
-
-        Parameters
-        ----------
-        v : str
-            The voi type to be validated.
-
-        Returns
-        -------
-        str
-            The validated voi type.
-
-        Raises
-        ------
-        ValueError
-            If the voi type is not "GLOBAL".
-        """
-
-        if v != "GLOBAL":
-            raise ValueError('VOI type for GLOBAL must be "GLOBAL"')
-        return v
-
-
 __VOITYPES__ = {
     "OAR": OAR,
     "TARGET": Target,
     "HELPER": HelperVOI,
     "EXTERNAL": ExternalVOI,
-    "GLOBAL": GlobalVOI,
 }
 
 

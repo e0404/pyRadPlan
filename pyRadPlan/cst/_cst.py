@@ -15,7 +15,7 @@ import SimpleITK as sitk
 from ..core import PyRadPlanBaseModel, Grid
 from ..core.resample import resample_numpy_array
 from ..ct import CT, validate_ct
-from . import VOI, ExternalVOI, GlobalVOI, validate_voi, DEFAULT_VOI_COLORS
+from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -630,22 +630,6 @@ class StructureSet(PyRadPlanBaseModel):
             new_vois[ix_voi] = curr_voi
 
         return self.model_copy(deep=True, update={"vois": new_vois})
-
-    def add_global_voi(self, **kwargs) -> Self:
-        """Add a Global VOI spanning the entire CT grid to the StructureSet."""
-
-        mask_arr = np.ones(self.ct_image.cube_hu.GetSize()[::-1], dtype=np.uint8)
-        mask_img = sitk.GetImageFromArray(mask_arr)
-        mask_img.CopyInformation(self.ct_image.cube_hu)
-
-        name = kwargs.pop("name", "Global")
-        objectives = kwargs.pop("objectives", [])
-
-        global_voi = GlobalVOI(
-            name=name, ct_image=self.ct_image, mask=mask_img, objectives=objectives, **kwargs
-        )
-        self.vois.append(global_voi)
-        return self
 
     def create_body_seg(
         self, threshold: float = -200.0, name: str = "BODY", voi_type="OAR"

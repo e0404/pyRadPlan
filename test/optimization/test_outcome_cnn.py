@@ -27,7 +27,7 @@ if _HAS_TORCH:
     # Limit torch threads to avoid Windows + CUDA-built torch crashes in pytest
     torch.set_num_threads(1)
 
-    from pyRadPlan.ai_models import BasePreprocessor
+    from pyRadPlan.ai.modelhub import BasePreprocessor
 
 _CNN_MODULE = "pyRadPlan.optimization.objectives.model._cnn"
 

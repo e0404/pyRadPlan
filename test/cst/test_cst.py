@@ -19,7 +19,6 @@ from pyRadPlan.cst import (
     Target,
     OAR,
     DEFAULT_VOI_COLORS,
-    GlobalVOI,
 )
 # @pytest.fixture
 # def sample_ct():
@@ -680,34 +679,6 @@ def test_apply_overlap_flags(generic_ct):
     expected_m4[mask2 == 1] = 0
     expected_m4[mask1 == 1] = 0
     assert np.array_equal(m4_out, expected_m4)
-
-
-def test_add_global_voi(generic_ct):
-    cst = StructureSet(ct_image=generic_ct, vois=[])
-
-    # add arbitrary VOI
-    mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
-    mask1[2:8, 2:8, 2:8] = 1
-    m1_img = sitk.GetImageFromArray(mask1)
-    m1_img.CopyInformation(generic_ct.cube_hu)
-    cst.vois.append(Target(name="PTV", ct_image=generic_ct, mask=m1_img, apply_overlap=True))
-
-    cst.add_global_voi(name="Global_test", objectives=["test_objective"])
-
-    assert len(cst.vois) == 2
-    global_voi = cst.vois[-1]
-    assert global_voi.voi_type == "GLOBAL"
-    assert global_voi.name == "Global_test"
-    assert global_voi.apply_overlap is None
-    assert "test_objective" in global_voi.objectives
-
-    # Needs to match CT full shape directly (10x10x10 initialized as exactly 1)
-    mask_arr = sitk.GetArrayViewFromImage(global_voi.mask)
-    assert np.all(mask_arr == 1)
-
-    # After overlapping, PTV should remain completely intact (Global bypasses overlap completely)
-    cst_overlapped = cst.apply_overlap_priorities()
-    assert np.array_equal(sitk.GetArrayViewFromImage(cst_overlapped.vois[0].mask), mask1)
 
 
 # --- Helpers for body segmentation tests ---

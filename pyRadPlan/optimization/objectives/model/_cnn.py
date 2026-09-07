@@ -1,6 +1,6 @@
 """CNN-based outcome objective (NTCP / TCP).
 
-Uses a pre-trained CNN loaded via :func:`pyRadPlan.ai_models.load_model` to
+Uses a pre-trained CNN loaded via :func:`pyRadPlan.ai.modelhub.load_model` to
 predict an outcome probability and compute its gradient w.r.t. dose for use in
 optimisation. All model-specific behaviour (grid geometry, cropping, CT/mask
 resampling, dose normalisation, differentiable interpolation) lives in the
@@ -60,7 +60,7 @@ class OutcomeCNN(Objective):
     Parameters
     ----------
     model : str or tuple
-        Model identifier passed to :func:`pyRadPlan.ai_models.load_model`: a
+        Model identifier passed to :func:`pyRadPlan.ai.modelhub.load_model`: a
         HuggingFace model name, a local directory path, or a preloaded
         ``(model, preprocessor)`` tuple used directly.
     mode : ``"NTCP"`` or ``"TCP"``
