@@ -32,13 +32,45 @@ def base_dij_dict():
         "bixel_num": np.arange(10),
         "ray_num": np.arange(10),
         "beam_num": np.zeros((10,), dtype=np.int64),
-        "alphax": np.ones(125, dtype=np.float32),
-        "betax": np.ones(125, dtype=np.float32),
+        "alphax": np.ones((125, 1), dtype=np.float32),
+        "betax": np.ones((125, 1), dtype=np.float32),
+    }
+
+
+@pytest.fixture
+def base_dij_const_rbe_dict():
+    return {
+        "ct_grid": {
+            "resolution": {"x": 1.5, "y": 1.5, "z": 1.5},
+            "dimensions": (10, 10, 10),
+            "num_of_voxels": 1000,
+        },
+        "dose_grid": {
+            "resolution": {"x": 3.0, "y": 3.0, "z": 3.0},
+            "dimensions": (5, 5, 5),
+            "num_of_voxels": 125,
+        },
+        "num_of_beams": 1,
+        "total_num_of_bixels": 10,
+        "bixel_num": np.arange(10),
+        "ray_num": np.arange(10),
+        "beam_num": np.zeros((10,), dtype=np.int64),
+        "alphax": np.ones((125, 1), dtype=np.float32),
+        "betax": np.ones((125, 1), dtype=np.float32),
+        "rbe": 1.1,
     }
 
 
 def _fill(container, value):
     container.flat[0] = value
+
+
+@pytest.fixture
+def full_const_rbe_dij(base_dij_const_rbe_dict):
+    mat = lambda: np.ones((125, 10), dtype=np.float32)  # noqa: E731
+    base_dij_const_rbe_dict["physical_dose"] = np.empty((1, 1, 1), dtype=object)
+    _fill(base_dij_const_rbe_dict["physical_dose"], mat())
+    return Dij.model_validate(base_dij_const_rbe_dict)
 
 
 @pytest.fixture
@@ -109,7 +141,7 @@ def test_resolver_resolves_transitive_dependencies(full_dij):
     resolver = QuantityResolver(full_dij)
     resolver.resolve(["rbe_x_dose"])
     keys = set(resolver.instances)
-    assert keys == {"rbe_x_dose", "effect", "alpha_dose", "sqrt_beta_dose"}
+    assert keys == {"rbe_x_dose", "effect", "alpha_dose", "sqrt_beta_dose", "physical_dose"}
     assert isinstance(resolver.instances["rbe_x_dose"], RBExDose)
     assert isinstance(resolver.instances["effect"], Effect)
     assert isinstance(resolver.instances["alpha_dose"], AlphaDose)
@@ -130,3 +162,17 @@ def test_let_dose_root_works(full_dij):
     let = resolver.get("let_dose")
     assert isinstance(let, LETxDose)
     assert let.mode == "direct"
+
+
+def test_rbe_from_const_or_alpha_beta(full_dij, full_const_rbe_dij):
+    """Test that RBExDose resolves to the correct implementation based on dij contents."""
+    resolver = QuantityResolver(full_dij)
+    rbe_from_alpha_beta = resolver.get("rbe_x_dose")
+    assert isinstance(rbe_from_alpha_beta, RBExDose)
+    assert rbe_from_alpha_beta.path == "effect"
+
+    resolver_const_rbe = QuantityResolver(full_const_rbe_dij)
+    rbe_from_const = resolver_const_rbe.get("rbe_x_dose")
+    assert isinstance(rbe_from_const, RBExDose)
+    assert rbe_from_const.path == "constant"
+    assert "effect" not in rbe_from_const.dependencies

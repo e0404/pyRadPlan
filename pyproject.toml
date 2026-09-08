@@ -90,7 +90,7 @@ jax    = ["jax>=0.4.35"]
 # Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
 profiling = ["line_profiler>=4.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.16","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -131,6 +131,10 @@ fixable = ["ALL"]
 
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+# nuclide names follow physics convention: A is the mass number, Z the atomic number
+"pyRadPlan/machines/particles/_beam_fragment_spectrum.py" = ["N802", "N803", "N806", "N815"]
 
 [tool.ruff.lint.pylint]
 # Relaxed for scientific code: physics kernels and backend dispatchers legitimately take
@@ -207,7 +211,7 @@ format = "simple"
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*,*.ipynb"
-ignore-words-list = "coo"
+ignore-words-list = "coo,HEL"
 
 [tool.pydocstringformatter]
 write = true

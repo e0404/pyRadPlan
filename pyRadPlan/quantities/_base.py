@@ -85,9 +85,15 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 # Lazy import to avoid circular dependency at module import time.
                 from ._resolver import QuantityResolver  # noqa: PLC0415
 
-                resolver = QuantityResolver(self._dij, _dij_already_in_namespace=True)
-                for dep_id in self._dep_ids_for_indirect():
+                resolver = QuantityResolver(
+                    self._dij, scenarios=self.scenarios, _dij_already_in_namespace=True
+                )
+                for dep_id in self.required_dependencies:
                     self._deps[dep_id] = resolver.get(dep_id)
+                for dep_id in self.optional_dependencies:
+                    dep = resolver.try_get(dep_id)
+                    if dep is not None:
+                        self._deps[dep_id] = dep
         else:
             if mode not in ("direct", "indirect"):
                 raise ValueError(f"Unknown quantity mode: {mode!r}")
@@ -129,10 +135,6 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             f"Quantity {type(self).__name__!r} cannot be computed: dij has no attribute "
             f"{self.identifier!r} and no dependencies are declared."
         )
-
-    def _dep_ids_for_indirect(self) -> tuple[str, ...]:
-        """Return identifiers that must be resolved to compute this quantity indirectly."""
-        return tuple(self.required_dependencies) + tuple(self.optional_dependencies)
 
     def _validate_dependencies(self) -> None:
         if self._mode == "indirect":
@@ -192,10 +194,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         # check if we need to update the cache
         if self._w_cache is None or not xp.all(self._w_cache == fluence):
-            if self._w_cache is None:
-                self._w_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_cache[:] = fluence
+            self._w_cache = xp.asarray(fluence, copy=True)
             self._compute_quantity_cache()
 
         return self._q_cache
@@ -223,10 +222,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             fluence = xp.asarray(fluence, dtype=self._dtype)
 
         if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
-            if self._w_grad_cache is None:
-                self._w_grad_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_grad_cache[:] = fluence
+            self._w_grad_cache = xp.asarray(fluence, copy=True)
             self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache

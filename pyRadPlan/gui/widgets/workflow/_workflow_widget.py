@@ -945,7 +945,7 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights)
+            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
             return weights, result
 
         def _on_success(data: tuple) -> None:

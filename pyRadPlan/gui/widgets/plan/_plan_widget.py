@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any, Optional
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,13 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.bio_models import BiologicalModel, available_bio_models
 from pyRadPlan.dose.engines import get_available_engines
 from pyRadPlan.gui.workspace import WorkspaceManager
-from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, validate_pln
+from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, validate_pln, default_bio_models
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.scenarios import available_scenario_models
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
+from ._tissue_dialog import TissueParametersDialog
 from ..ai import ai_disabled_reason
 
 _ION_MODES = list(IonPlan.available_radiation_modes)
@@ -75,6 +78,9 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Parameter overrides per biological model name (edited via the "…" button).
+        self._bio_params: dict[str, dict] = {}
+        self._bio_model_classes: dict[str, type[BiologicalModel]] = {}
         self._engines: dict[str, type] = {}
         #: True while syncing the form *from* the workspace, so programmatic
         #: widget changes don't register as user edits.
@@ -93,7 +99,10 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine,
             "engine": self._cmb_engine,
             "engine_props": self._btn_engine_config,
+            "bio_model": self._cmb_bio_model,
+            "bio_params": self._btn_bio_config,
             "fractions": self._spn_fractions,
+            "dose_convention": self._cmb_dose_convention,
             "gantry": self._txt_gantry,
             "couch": self._txt_couch,
             "bixel": self._spn_bixel,
@@ -139,6 +148,7 @@ class PlanWidget(WorkspaceWidget):
 
         self._refresh_machines(self._cmb_radiation.currentText())
         self._refresh_engines(self._cmb_radiation.currentText())
+        self._refresh_bio_models(self._cmb_radiation.currentText())
         self._update_mode_dependent_fields()
         self._update_beam_count()
 
@@ -165,6 +175,21 @@ class PlanWidget(WorkspaceWidget):
         self._spn_fractions.setRange(1, 1000)
         self._spn_fractions.setValue(30)
 
+        self._cmb_dose_convention = QComboBox()
+        self._cmb_dose_convention.addItem("per fraction", "per_fraction")
+        self._cmb_dose_convention.addItem("total", "total")
+        self._cmb_dose_convention.setToolTip(
+            "Convention for dose values in objectives and results:\n"
+            "per fraction - objective doses and reported doses refer to one fraction;\n"
+            "total - objective doses are total-course doses (scaled by 1/fractions for "
+            "optimization) and reported doses are multiplied by the number of fractions."
+        )
+        fractions_row = QHBoxLayout()
+        fractions_row.setContentsMargins(0, 0, 0, 0)
+        fractions_row.addWidget(self._spn_fractions, 1)
+        fractions_row.addWidget(QLabel("Doses:"))
+        fractions_row.addWidget(self._cmb_dose_convention, 1)
+
         grid.addWidget(QLabel("Radiation mode:"), 0, 0)
         grid.addWidget(self._cmb_radiation, 0, 1)
         grid.addWidget(QLabel("Machine:"), 0, 2)
@@ -173,7 +198,7 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(QLabel("Dose engine:"), 1, 0)
         grid.addLayout(self._engine_row, 1, 1)
         grid.addWidget(QLabel("Fractions:"), 1, 2)
-        grid.addWidget(self._spn_fractions, 1, 3)
+        grid.addLayout(fractions_row, 1, 3)
 
     def _build_geometry_rows(self, grid: QGridLayout) -> None:
         self._txt_gantry = QLineEdit("0")
@@ -240,8 +265,25 @@ class PlanWidget(WorkspaceWidget):
 
     def _build_model_rows(self, grid: QGridLayout) -> None:
         self._cmb_bio_model = QComboBox()
-        self._cmb_bio_model.addItems(["none"])
-        self._set_not_implemented(self._cmb_bio_model, "Biological models")
+        self._cmb_bio_model.setToolTip(
+            "Biological model used in dose calculation and optimization.\n"
+            "Models are listed by radiation mode; availability of the required kernels "
+            "(LET, alpha/beta, fluence spectra) is checked against the machine at dose "
+            "calculation time."
+        )
+        #: Model instance of the workspace plan, kept so that Apply preserves its
+        #: parameters as long as the selected model name is unchanged.
+        self._pln_bio_model: Optional[BiologicalModel] = None
+        self._btn_bio_config = QPushButton("…")
+        self._btn_bio_config.setFixedWidth(28)
+        self._btn_bio_config.setToolTip("Edit the parameters of the selected biological model")
+        self._btn_bio_config.clicked.connect(self._on_bio_config)
+        self._cmb_bio_model.currentTextChanged.connect(self._update_bio_config_button)
+        bio_row = QHBoxLayout()
+        bio_row.setContentsMargins(0, 0, 0, 0)
+        bio_row.setSpacing(4)
+        bio_row.addWidget(self._cmb_bio_model, 1)
+        bio_row.addWidget(self._btn_bio_config)
 
         self._cmb_scenario = QComboBox()
         self._cmb_scenario.addItems(available_scenario_models())
@@ -258,10 +300,14 @@ class PlanWidget(WorkspaceWidget):
         )
 
         self._btn_tissue = QPushButton("Set tissue α/β")
-        self._set_not_implemented(self._btn_tissue, "Tissue parameter configuration")
+        self._btn_tissue.setToolTip(
+            "Edit the reference photon alpha_x / beta_x of the loaded structures"
+        )
+        self._btn_tissue.setEnabled(False)
+        self._btn_tissue.clicked.connect(self._on_tissue_parameters)
 
         grid.addWidget(QLabel("Biological model:"), 4, 0)
-        grid.addWidget(self._cmb_bio_model, 4, 1)
+        grid.addLayout(bio_row, 4, 1)
         grid.addWidget(QLabel("Scenario model:"), 4, 2)
         grid.addWidget(self._cmb_scenario, 4, 3)
 
@@ -377,8 +423,80 @@ class PlanWidget(WorkspaceWidget):
     def _on_radiation_changed(self, radiation_mode: str) -> None:
         self._refresh_machines(radiation_mode)
         self._refresh_engines(radiation_mode)
+        self._refresh_bio_models(radiation_mode)
         self._update_mode_dependent_fields()
         self._update_dirty_state()
+
+    # ------------------------------------------------------------------
+    # Biological model handling
+    # ------------------------------------------------------------------
+
+    def _refresh_bio_models(self, radiation_mode: str) -> None:
+        """List the models supporting ``radiation_mode``; keep or default the selection."""
+        # Keep an explicit choice if the new mode supports it; a selection that merely
+        # was the previous mode's default follows the new mode's default instead.
+        current = self._cmb_bio_model.currentText()
+        previous_default = default_bio_models.get(getattr(self, "_bio_models_mode", None))
+        if current == previous_default:
+            current = ""
+        self._bio_models_mode = radiation_mode
+        models = available_bio_models(radiation_mode)
+        names = [cls.model for cls in models]
+        self._bio_model_classes = {cls.model: cls for cls in models}
+        self._cmb_bio_model.blockSignals(True)
+        self._cmb_bio_model.clear()
+        for cls in models:
+            self._cmb_bio_model.addItem(cls.model)
+            doc = (cls.__doc__ or "").strip().splitlines()
+            tooltip = doc[0].strip() if doc else cls.model
+            if cls.required_quantities:
+                tooltip += f"\nRequires: {', '.join(cls.required_quantities)}"
+            self._cmb_bio_model.setItemData(
+                self._cmb_bio_model.count() - 1, tooltip, Qt.ItemDataRole.ToolTipRole
+            )
+        if current in names:
+            self._cmb_bio_model.setCurrentText(current)
+        else:
+            self._cmb_bio_model.setCurrentText(default_bio_models.get(radiation_mode, "none"))
+        self._cmb_bio_model.blockSignals(False)
+        self._update_bio_config_button()
+
+    def _update_bio_config_button(self, *_args) -> None:
+        cls = self._bio_model_classes.get(self._cmb_bio_model.currentText())
+        self._btn_bio_config.setEnabled(cls is not None and bool(cls.config_model().model_fields))
+
+    def _on_bio_config(self) -> None:
+        name = self._cmb_bio_model.currentText()
+        cls = self._bio_model_classes.get(name)
+        if cls is None:
+            return
+        dialog = ConfigFormDialog(
+            cls.config_model(),
+            initial=self._bio_params.get(name, {}),
+            title=f"Configure {name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._bio_params[name] = dialog.values()
+            self._update_dirty_state()
+
+    def _on_tissue_parameters(self) -> None:
+        cst = self._ws.cst
+        if cst is None:
+            return
+        dialog = TissueParametersDialog(cst, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.changed:
+            self._ws.cst = cst
+
+    def _selected_bio_model(self) -> Any:
+        """Model spec for the plan: the workspace instance if its name is still selected."""
+        name = self._cmb_bio_model.currentText() or "none"
+        params = self._bio_params.get(name)
+        if params:
+            return {"model": name, **params}
+        if self._pln_bio_model is not None and self._pln_bio_model.model == name:
+            return self._pln_bio_model
+        return name
 
     # ------------------------------------------------------------------
     # Dose engine handling
@@ -422,6 +540,7 @@ class PlanWidget(WorkspaceWidget):
         finally:
             self._syncing = False
         self._mark_clean()
+        self._btn_tissue.setEnabled(self._ws.cst is not None)
         if self._ws.pln is None and self._ws.has("ct", "cst"):
             self._apply_default_plan()
 
@@ -453,13 +572,24 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_radiation.blockSignals(False)
         self._refresh_machines(pln.radiation_mode)
         self._refresh_engines(pln.radiation_mode)
+        self._refresh_bio_models(pln.radiation_mode)
         self._update_mode_dependent_fields()
 
         self._restore_engine_from_pln(pln)
 
+        bio_model = pln.bio_model if isinstance(pln.bio_model, BiologicalModel) else None
+        self._pln_bio_model = bio_model
+        if bio_model is not None:
+            self._bio_params[bio_model.model] = dict(bio_model.parameters)
+            if self._cmb_bio_model.findText(bio_model.model) >= 0:
+                self._cmb_bio_model.setCurrentText(bio_model.model)
+
         machine = pln.machine if isinstance(pln.machine, str) else "Generic"
         self._cmb_machine.setEditText(machine)
         self._spn_fractions.setValue(int(pln.num_of_fractions))
+        idx = self._cmb_dose_convention.findData(pln.dose_convention)
+        if idx >= 0:
+            self._cmb_dose_convention.setCurrentIndex(idx)
 
         stf = pln.prop_stf or {}
         gantry = stf.get("gantry_angles")
@@ -718,6 +848,8 @@ class PlanWidget(WorkspaceWidget):
                 "radiation_mode": radiation_mode,
                 "machine": self._cmb_machine.currentText() or "Generic",
                 "num_of_fractions": int(self._spn_fractions.value()),
+                "dose_convention": self._cmb_dose_convention.currentData(),
+                "bio_model": self._selected_bio_model(),
                 "mult_scen": scenario,
                 "prop_stf": prop_stf,
                 "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
@@ -745,7 +877,9 @@ class PlanWidget(WorkspaceWidget):
         # ``_cmb_radiation`` is handled by ``_on_radiation_changed``.
         self._cmb_machine.editTextChanged.connect(self._on_field_edited)
         self._cmb_engine.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_bio_model.currentTextChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
+        self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
         self._txt_gantry.textChanged.connect(self._on_field_edited)
         self._txt_couch.textChanged.connect(self._on_field_edited)
         self._spn_bixel.valueChanged.connect(self._on_field_edited)
@@ -767,7 +901,14 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine.currentText(),
             "engine": engine,
             "engine_props": dict(self._engine_props.get(engine, {})),
+            "bio_model": self._cmb_bio_model.currentText(),
+            "bio_params": json.dumps(
+                self._bio_params.get(self._cmb_bio_model.currentText(), {}),
+                default=str,
+                sort_keys=True,
+            ),
             "fractions": self._spn_fractions.value(),
+            "dose_convention": self._cmb_dose_convention.currentData(),
             "gantry": self._safe_parse(self._txt_gantry.text()),
             "couch": self._safe_parse(self._txt_couch.text()),
             "bixel": self._spn_bixel.value(),

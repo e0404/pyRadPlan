@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Optional, Union
 
 
@@ -14,6 +15,7 @@ from pydantic import (
 from numpydantic import NDArray, Shape
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core.xp_utils import to_namespace as xp_to_namespace
+from pyRadPlan.machines.particles._beam_fragment_spectrum import ChargedBeamFragmentSpectrum
 from .._beam_cutoff import LateralCutOff
 
 
@@ -36,13 +38,20 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
     sigma_y: Optional[NDArray[Shape["1-*"], np.float64]] = None
     weight: Optional[NDArray[Shape["1-*"], np.float64]] = None
     sigma_multi: Optional[NDArray[Shape["1-*,1-*"], np.float64]] = None
-    weight_multi: Optional[NDArray[Shape["1-*,1-*"], np.float64]] = None
+    weight_multi: Optional[
+        Union[NDArray[Shape["1-*"], np.float64], NDArray[Shape["1-*,1-*"], np.float64]]
+    ] = None
     let: Optional[NDArray[Shape["1-*"], np.float64]] = Field(alias="LET", default=None)
     alpha_x: Optional[NDArray[Shape["1-*"], np.float64]] = None
     beta_x: Optional[NDArray[Shape["1-*"], np.float64]] = None
     alpha: Optional[NDArray[Shape["1-*,1-*"], np.float64]] = None
     beta: Optional[NDArray[Shape["1-*,1-*"], np.float64]] = None
     lateral_cut_off: Optional[LateralCutOff] = None
+    fluence_spectrum: Optional[ChargedBeamFragmentSpectrum] = Field(
+        validation_alias=AliasChoices("Fluence", "fluence"),
+        serialization_alias="Fluence",
+        default=None,
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -89,11 +98,29 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
     @classmethod
     def validate_possible_cast_array(cls, v: Any) -> Any:
         """Validate if the input can be cast to a float64 array."""
+        # These fields are optional; np.array(None) would turn an absent kernel array into a
+        # 0-d NaN and break a native round trip through model_dump().
+        if v is None:
+            return v
+
         try:
             v = np.array(v, dtype=np.float64)
         except ValueError as exc:
             raise exc
 
+        return v
+
+    @field_validator("fluence_spectrum", mode="before")
+    @classmethod
+    def create_fluence_spectrum(cls, v: Any) -> Any:
+        """Accept an existing spectrum, a native dict, or a matRad ``spectra`` struct.
+
+        Only the matRad import needs the dedicated parser; a model instance and a native
+        dict (as produced by ``model_dump()``) are handed to pydantic unchanged so that a
+        kernel with a fragment spectrum round-trips.
+        """
+        if isinstance(v, Mapping) and "spectra" in v:
+            return ChargedBeamFragmentSpectrum.from_dict(v)
         return v
 
     @field_validator(
@@ -121,16 +148,28 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if v is None:
             return v
 
-        # The imported array might be transposed
-        if (
-            v.shape[1] != info.data["depths"].shape[0]
-            and v.shape[0] == info.data["depths"].shape[0]
-        ):
+        # Stored as (n_components, n_depths); the imported array might be transposed.
+        # weight_multi may be 1-D (n_depths,) for a single free weight.
+        n_depths = info.data["depths"].shape[0]
+        if v.ndim > 1 and v.shape[1] != n_depths and v.shape[0] == n_depths:
             v = np.ascontiguousarray(v.T)
-        elif v.shape[0] != info.data["depths"].shape[0]:
+        if v.shape[-1] != n_depths:
             raise ValueError("Kernel data length does not match the depth data length.")
 
         return v
+
+    @model_validator(mode="after")
+    def validate_multi_gaussian_components(self) -> "ParticlePencilBeamKernel":
+        """Validate that the leading sigma carries the remaining weight: n_sigma == n_weights + 1."""
+        if self.sigma_multi is None or self.weight_multi is None:
+            return self
+        n_weights = 1 if self.weight_multi.ndim == 1 else self.weight_multi.shape[0]
+        if self.sigma_multi.shape[0] != n_weights + 1:
+            raise ValueError(
+                f"Multi-Gaussian kernel needs one sigma more than weights, got "
+                f"{self.sigma_multi.shape[0]} sigmas and {n_weights} weights."
+            )
+        return self
 
     @field_validator("alpha", "beta", mode="after")
     @classmethod
@@ -158,6 +197,36 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         if v.shape[1] != info.data["depths"].size:
             raise ValueError("Kernel data length does not match the depth data length.")
 
+        return v
+
+    @field_validator("fluence_spectrum", mode="after")
+    @classmethod
+    def validate_fluence_spectrum(
+        cls, v: Union[ChargedBeamFragmentSpectrum, None], info: ValidationInfo
+    ) -> Union[ChargedBeamFragmentSpectrum, None]:
+        """Validate the length of the fluence spectrum data."""
+        if v is None:
+            return v
+        # check if fluence spectrum data is of correct shape
+        n_depths = info.data["depths"].shape[0]
+        n_a = len(v.A_values)
+        n_z = len(v.Z_values)
+        if n_a != n_z:
+            raise ValueError("Fluence spectrum data has inconsistent number of Z and A entries.")
+        if n_a != len(v.fragments):
+            raise ValueError(
+                "Fluence spectrum data has inconsistent number of fragments and Z/A entries."
+            )
+        for entry in v.fragments:
+            n_e = len(entry.energy)
+            if entry.fluenceZ.shape[0] != n_depths:
+                raise ValueError(
+                    "Fluence spectrum data has inconsistent number of depths between fluenceZ and kernel depths."
+                )
+            if entry.fluence_spectrum.shape != (n_e, n_depths):
+                raise ValueError(
+                    "Fluence spectrum data has inconsistent shape between fluence_spectrum and kernel depths / energy bins."
+                )
         return v
 
     @computed_field(return_type=NDArray[Shape["1-*"], np.float64], alias="alphaBetaRatio")

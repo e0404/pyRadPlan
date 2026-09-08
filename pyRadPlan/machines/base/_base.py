@@ -55,3 +55,15 @@ class Machine(PyRadPlanBaseModel):
                     pass
 
         return v
+
+    def provided_quantities(self) -> list[str]:
+        """Return the quantities provided by this machine."""
+        quantities = ["physical_dose"]  # All machines provide physical dose
+        if hasattr(self, "has_let_kernel") and self.has_let_kernel:
+            quantities.append("let")
+        if hasattr(self, "has_alpha_beta_kernels") and self.has_alpha_beta_kernels:
+            quantities.append("alpha")
+            quantities.append("beta")
+        if hasattr(self, "has_fluence_spectrum") and self.has_fluence_spectrum:
+            quantities.append("fluence")
+        return quantities

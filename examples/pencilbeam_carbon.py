@@ -25,7 +25,6 @@ from pyRadPlan import (
     plot_multiple_slices,
 )
 
-from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 
 logging.basicConfig(level=logging.INFO)
@@ -40,17 +39,10 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="carbon", machine="Generic")
 pln.prop_stf = {"bixel_width": 4}
-pln.prop_dose_calc = {"calc_bio_dose": True, "dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
+pln.prop_dose_calc = {"dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
 
 pln.prop_opt = {"solver": "scipy"}
 
-# Optimization
-cst.vois[0].objectives = [SquaredOverdosing(priority=10.0, d_max=1.0)]  # OAR
-cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=3.0)]  # Target
-cst.vois[2].objectives = [
-    MeanDose(priority=1.0, d_ref=0.0),
-    SquaredOverdosing(priority=10.0, d_max=2.0),
-]  # BODY
 
 # %%
 # Generate Steering Geometry ("stf")

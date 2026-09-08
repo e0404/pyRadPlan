@@ -28,12 +28,8 @@ def sample_dij_dict():
         "bixel_num": np.ones(65),
         "ray_num": np.ones(65),
         "beam_num": np.ones(65),
-        "alphax": np.ones(
-            17 * 17 * 10,
-        ),
-        "betax": np.ones(
-            17 * 17 * 10,
-        ),
+        "alphax": np.ones((17 * 17 * 10, 1), dtype=np.float32),
+        "betax": np.ones((17 * 17 * 10, 1), dtype=np.float32),
     }
     return dose_information
 
@@ -57,12 +53,8 @@ def sample_dij_dict_camel():
         "bixelNum": np.ones(65),
         "rayNum": np.ones(65),
         "beamNum": np.ones(65),
-        "alphax": np.ones(
-            17 * 17 * 10,
-        ),
-        "betax": np.ones(
-            17 * 17 * 10,
-        ),
+        "alphax": np.ones((17 * 17 * 10, 1), dtype=np.float32),
+        "betax": np.ones((17 * 17 * 10, 1), dtype=np.float32),
     }
     return dose_information
 
