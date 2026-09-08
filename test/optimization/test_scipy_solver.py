@@ -60,6 +60,34 @@ def test_scipy_emits_status_through_callback():
     assert [d["iteration"] for d in reports] == sorted(d["iteration"] for d in reports)
 
 
+def test_allow_keyboard_cancel_is_honoured_after_construction():
+    """The flag is solver-level config, so a change after __init__ must reach the listener."""
+    solver = _quadratic_solver()
+    assert solver._keyboard_listener.allow_keyboard_cancel is True  # class default for scipy
+
+    solver.allow_keyboard_cancel = False
+    solver.solve(xp.asarray([1.0, 1.0], dtype=xp.float64))
+
+    assert solver._keyboard_listener.allow_keyboard_cancel is False
+    # The flag assertion above carries the regression check on every platform. This one only
+    # adds coverage on Windows: on POSIX under pytest stdin is not a tty, so the listener
+    # would not start a thread even with a stale ``True``.
+    assert solver._keyboard_listener._thread is None
+
+
+def test_cancel_key_settings_are_honoured_after_construction():
+    """``cancel_key`` / ``allow_esc_cancel`` are solver-level config like the enable flag."""
+    solver = _quadratic_solver()
+    solver.allow_keyboard_cancel = False  # keep the listener thread out of the test
+    solver.cancel_key = "x"
+    solver.allow_esc_cancel = False
+
+    solver.solve(xp.asarray([1.0, 1.0], dtype=xp.float64))
+
+    assert solver._keyboard_listener.cancel_key == "x"
+    assert solver._keyboard_listener.allow_esc_cancel is False
+
+
 def test_scipy_status_callback_can_stop():
     solver = _quadratic_solver()
     calls = []
