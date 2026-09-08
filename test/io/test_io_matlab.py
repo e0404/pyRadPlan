@@ -167,3 +167,20 @@ def test_matlab_roundtrip_preserves_plan(tmp_path):
         assert getattr(reloaded, prop) == {}
     # mult_scen re-validated (the exact regression that crashed the reload).
     assert reloaded.mult_scen.ct_scen_prob == [(0, 1.0)]
+
+
+def test_matlab_roundtrip_preserves_bio_model_parameters(tmp_path):
+    """Explicit biological-model parameters survive a .mat round-trip."""
+    from pyRadPlan.plan import IonPlan  # noqa: PLC0415
+
+    pln = IonPlan(
+        radiation_mode="protons",
+        bio_model={"model": "constant_rbe", "rbe": 1.23},
+    )
+    out = tmp_path / "plan.mat"
+
+    save_data(pln=pln, file_name=str(out))
+    reloaded = load_data(out)["pln"]
+
+    assert reloaded.bio_model == pln.bio_model
+    assert reloaded.bio_model.rbe == pytest.approx(1.23)

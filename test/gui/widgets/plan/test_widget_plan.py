@@ -105,13 +105,141 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
 
 def test_placeholder_controls_disabled(qapp):
     widget, _ = _make_widget()
-    assert not widget._cmb_bio_model.isEnabled()
     assert not widget._cmb_quantity.isEnabled()
     assert not widget._btn_tissue.isEnabled()
     assert not widget._chk_sequencing.isEnabled()
     assert not widget._chk_dao.isEnabled()
     assert not widget._chk_conf3d.isEnabled()
     assert widget._cmb_quantity.count() > 0  # populated from available quantities
+
+
+def _combo_items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_bio_model_combo_follows_radiation_mode(qapp):
+    widget, _ = _make_widget()
+    assert widget._cmb_bio_model.isEnabled()
+
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+    assert "WED" not in _combo_items(widget._cmb_bio_model)
+
+    widget._cmb_radiation.setCurrentText("protons")
+    items = _combo_items(widget._cmb_bio_model)
+    assert items[0] == "none"
+    assert {"constant_rbe", "WED", "MCN", "CAR", "LSM"} <= set(items)
+    assert "HEL" not in items
+    assert "LEM" not in items  # aliases are not listed
+    assert widget._cmb_bio_model.currentText() == "none"  # per-mode default
+
+    widget._cmb_radiation.setCurrentText("helium")
+    assert "HEL" in _combo_items(widget._cmb_bio_model)
+    assert widget._cmb_bio_model.currentText() == "none"
+
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "kernel_based_lq"
+
+    widget._cmb_radiation.setCurrentText("oxygen")
+    assert widget._cmb_bio_model.currentText() == "none"
+
+
+def test_bio_model_selection_survives_mode_switch_when_supported(qapp):
+    widget, _ = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._cmb_bio_model.setCurrentText("LSM")
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "LSM"
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+
+
+def test_apply_writes_bio_model_to_pln(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("MCN")
+    widget._on_apply()
+    assert isinstance(ws.pln, IonPlan)
+    assert ws.pln.bio_model.model == "MCN"
+
+
+def test_do_update_restores_bio_model_and_apply_keeps_parameters(qapp):
+    widget, ws = _make_widget()
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._cmb_bio_model.currentText() == "constant_rbe"
+
+    # unchanged selection: the parametrised instance is kept on Apply
+    widget._txt_gantry.setText("0")
+    widget._on_apply()
+    assert ws.pln.bio_model.rbe == 1.0
+
+    # changing the selection replaces the model
+    widget._cmb_bio_model.setCurrentText("WED")
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
+
+
+def test_dose_convention_round_trip(qapp):
+    widget, ws = _make_widget()
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+    widget._txt_gantry.setText("0")
+    widget._cmb_dose_convention.setCurrentIndex(widget._cmb_dose_convention.findData("total"))
+    widget._on_apply()
+    assert ws.pln.dose_convention == "total"
+
+    ws.pln = PhotonPlan(num_of_fractions=5, dose_convention="per_fraction")
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+
+def test_bio_model_parameters_round_trip(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("WED")
+    assert widget._btn_bio_config.isEnabled()
+    widget._bio_params["WED"] = {"p1": 0.5}
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
+    assert ws.pln.bio_model.p1_WED == 0.5
+
+    widget._cmb_bio_model.setCurrentText("none")
+    assert not widget._btn_bio_config.isEnabled()
+
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._bio_params["constant_rbe"] == {"rbe": 1.0}
+    assert widget._capture_state()["bio_params"] == '{"rbe": 1.0}'
+
+
+def test_bio_model_config_model():
+    from pyRadPlan.bio_models import ConstantRBEModel, EmptyModel, Wedenberg
+
+    assert set(Wedenberg.config_model().model_fields) == {"p0", "p1", "p2"}
+    assert Wedenberg.config_model()().p1 == 0.434
+    assert ConstantRBEModel.config_model()(rbe=1.0).rbe == 1.0
+    assert not EmptyModel.config_model().model_fields
+
+
+def test_tissue_dialog_edits_cst(qapp, test_data_protons):
+    from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
+
+    _, cst, _ = test_data_protons
+    widget, ws = _make_widget()
+    assert not widget._btn_tissue.isEnabled()
+    ws.cst = cst
+    assert widget._btn_tissue.isEnabled()
+
+    dialog = TissueParametersDialog(cst)
+    dialog.set_values(0, 0.2, 0.04)
+    dialog.accept()
+    assert dialog.changed
+    assert cst.vois[0].alpha_x == pytest.approx(0.2)
+    assert cst.vois[0].beta_x == pytest.approx(0.04)
+
+    dialog = TissueParametersDialog(cst)
+    dialog.accept()
+    assert not dialog.changed
 
 
 def test_iso_center_auto_omits_key(qapp):

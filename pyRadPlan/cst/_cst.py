@@ -702,8 +702,7 @@ class StructureSet(PyRadPlanBaseModel):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
 
-        if not overlap_is_applied:
-            cst = self.apply_overlap_priorities()
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
         num_voxels = np.prod(cst.ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
@@ -725,6 +724,12 @@ class StructureSet(PyRadPlanBaseModel):
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
+        beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
         return alpha, beta
 
     def set_colors(self) -> Self:

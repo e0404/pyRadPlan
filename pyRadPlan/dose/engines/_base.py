@@ -12,7 +12,7 @@ else:
 
 import warnings
 import time
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
@@ -29,6 +29,7 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
+from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator, get_bio_model
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
@@ -73,6 +74,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     name: ClassVar[str]
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
+
+    # Whether this engine can evaluate a biological model into additive influence matrices.
+    # Engines that only produce physical dose still store the model on the dij (so that a
+    # constant RBE keeps working) but warn about model outputs they cannot compute.
+    computes_bio_influence: ClassVar[bool] = False
 
     mult_scen: Union[str, ScenarioModel] = "nomScen"
     bio_model: Optional[Union[str, dict]] = None
@@ -141,9 +147,12 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         if hasattr(pln, "mult_scen"):
             self.mult_scen = pln.mult_scen
 
+        # Reported forward-dose scaling follows the plan's dose convention
+        self._result_dose_factor = getattr(pln, "result_dose_factor", 1)
+
         # Assign Biologival Model
-        if hasattr(pln, "bio_param"):
-            self.bio_param = pln.bio_param  # TODO: No bio_param yet
+        if hasattr(pln, "bio_model"):
+            self.bio_model = pln.bio_model  # TODO: No bio_model yet
 
         if not isinstance(warn_when_property_changed, bool):
             warn_when_property_changed = False
@@ -170,6 +179,92 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             warn_on_overwrite=warn_when_property_changed,
             overwrite_source="pln.propDoseCalc",
         )
+
+    def _resolve_quantity_flags(
+        self,
+        calc_bio_dose: Union[Literal["auto"], bool],
+        calc_let: Union[Literal["auto"], bool],
+        *,
+        bio_influence_quantities: tuple[str, ...],
+        let_available: bool,
+        let_auto: bool,
+    ) -> tuple[bool, bool, bool]:
+        """
+        Resolve ``"auto"`` quantity switches against the biological model and the machine.
+
+        Parameters
+        ----------
+        calc_bio_dose : "auto" or bool
+            Requested biological influence calculation. ``"auto"`` follows the evaluator's
+            declared influence quantities; ``True`` without such an evaluator raises.
+        calc_let : "auto" or bool
+            Requested LET influence calculation. ``"auto"`` resolves to ``let_auto``; ``True``
+            without LET data resolves to ``False`` with a warning.
+        bio_influence_quantities : tuple[str, ...]
+            Additive matrix quantities the biological evaluator can produce.
+        let_available : bool
+            Whether the engine can produce LET at all.
+        let_auto : bool
+            Value ``calc_let="auto"`` resolves to.
+
+        Returns
+        -------
+        tuple[bool, bool, bool]
+            ``(calc_bio_dose, calc_let, use_let_kernel)``; the last one is True if LET is needed
+            either as output or as input to the biological model.
+        """
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        provides_bio_influence = bool(bio_influence_quantities)
+
+        if calc_bio_dose == "auto":
+            bio = provides_bio_influence
+        elif calc_bio_dose and not provides_bio_influence:
+            raise ValueError(
+                "calc_bio_dose=True requires a biological evaluator providing influence "
+                f"quantities, but the plan's bio_model is {model!r}."
+            )
+        else:
+            bio = bool(calc_bio_dose)
+
+        if calc_let == "auto":
+            let = let_auto and let_available
+        elif calc_let and not let_available:
+            logger.warning("No LET data found in machine data. LET calculation will be skipped.")
+            let = False
+        else:
+            let = bool(calc_let)
+
+        use_let_kernel = let or (bio and model is not None and model.requires("let"))
+        return bio, let, use_let_kernel
+
+    @staticmethod
+    def _validate_bio_influence_names(
+        dij: dict[str, Any], influence_names: tuple[str, ...]
+    ) -> None:
+        """Validate evaluator outputs against the influence fields supported by Dij."""
+        if not influence_names or any(
+            not isinstance(name, str) or not name for name in influence_names
+        ):
+            raise ValueError("Biological influence quantity names must be non-empty strings.")
+        if len(set(influence_names)) != len(influence_names):
+            raise ValueError("Biological influence quantity names must be unique.")
+
+        # TODO: Replace this fixed set with centrally registered Dij quantities. See
+        # docs/development/dynamic_dij_quantities.md for the proposed design.
+        supported_names = {"alpha_dose", "sqrt_beta_dose"}
+        unsupported = set(influence_names) - supported_names
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise NotImplementedError(
+                f"Dij cannot yet store biological influence quantities: {names}."
+            )
+
+        collisions = set(influence_names).intersection(dij)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(
+                f"Biological influence quantities collide with dose-engine fields: {names}."
+            )
 
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
@@ -229,7 +324,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
-        result = dij.compute_result_ct_grid(np.ones(dij.total_num_of_bixels, dtype=np.float32))
+        result = dij.compute_result_ct_grid(
+            np.ones(dij.total_num_of_bixels, dtype=np.float32),
+            num_of_fractions=self._result_dose_factor,
+        )
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)
@@ -575,6 +673,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Load machine file from base data folder
         self._machine = self.load_machine(radiation_mode, machine)
 
+        self._resolve_bio_model(dij, radiation_mode)
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
+
         # TODO: this is currently not needed, but may be needed in the future
         # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)
 
@@ -589,8 +690,65 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         return dij
 
+    def _resolve_bio_model(self, dij: dict[str, Any], radiation_mode: str) -> None:
+        """Validate the plan's biological model and record it on the dij."""
+        if self.bio_model is None:
+            return
+
+        self.bio_model = get_bio_model(self.bio_model, radiation_mode, self.provided_quantities())
+        # Every engine records the model the dij was computed with, so that quantities and
+        # result assembly (e.g. a constant RBE) work independently of the engine used.
+        dij["bio_model"] = self.bio_model
+
+        if self.bio_model.output_quantities and not self.computes_bio_influence:
+            logger.warning(
+                "Dose engine '%s' cannot compute the biological quantities %s of model '%s'; "
+                "only physical dose is stored and RBE-weighted dose will not be available.",
+                self.short_name,
+                ", ".join(self.bio_model.output_quantities),
+                self.bio_model.model,
+            )
+
+    def provided_quantities(self) -> list[str]:
+        """
+        Named quantities available to a biological model in this calculation.
+
+        The machine's tabulated quantities plus the ones this engine can produce itself
+        (:meth:`engine_provided_quantities`). Biological availability is checked against
+        this union, so an engine that scores a quantity is not restricted to machines
+        that tabulate it.
+        """
+        quantities = list(self._machine.provided_quantities())
+        quantities += [q for q in self.engine_provided_quantities() if q not in quantities]
+        return quantities
+
+    def engine_provided_quantities(self) -> list[str]:
+        """Named quantities this engine can produce without machine data (e.g. scored LET)."""
+        return []
+
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
+
+    def _create_bio_evaluator(
+        self, model: BiologicalModel, voxel_params: dict[str, Any]
+    ) -> BioModelEvaluator:
+        """Create and validate a model evaluator for this dose calculation."""
+        # Reject reference photon parameters outside the model's domain before any dose is
+        # computed, instead of storing nonfinite values in the influence matrices.
+        model.validate_reference_parameters(voxel_params)
+        evaluator = model.evaluator(self._machine, voxel_params)
+        if not isinstance(evaluator, BioModelEvaluator):
+            raise TypeError(
+                f"Biological model '{model.model}' evaluator() must return a "
+                f"BioModelEvaluator, got {type(evaluator).__name__}."
+            )
+        if evaluator.model is not model:
+            raise ValueError(
+                f"Biological model '{model.model}' returned an evaluator bound to a different "
+                "model instance."
+            )
+        evaluator.validate_declarations()
+        return evaluator
 
     # Private and abstract methods
 

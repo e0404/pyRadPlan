@@ -33,6 +33,7 @@ except ImportError:
 from .helpers import (
     DLPACK_CPU,
     DLPACK_CUDA,
+    device_cache_key,
     get_device_info,
     is_on_gpu,
     is_host_device,
@@ -253,6 +254,7 @@ __all__ = [
     "DLPACK_CUDA",
     "choose_array_api_namespace",
     "choose_device",
+    "device_cache_key",
     "get_device_info",
     "is_on_gpu",
     "is_host_device",

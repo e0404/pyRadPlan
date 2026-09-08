@@ -1,11 +1,15 @@
 """Resolver that builds the dependency graph of fluence-dependent quantities."""
 
-from typing import Iterable
+import logging
+from typing import Iterable, Optional
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.core import xp_utils as compute_backend
 
 from ._base import FluenceDependentQuantity
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuantityResolver:
@@ -26,7 +30,7 @@ class QuantityResolver:
     - If neither path is available, a ``ValueError`` is raised.
     """
 
-    def __init__(self, dij: Dij, *, _dij_already_in_namespace: bool = False):
+    def __init__(self, dij: Dij, *, scenarios=None, _dij_already_in_namespace: bool = False):
         xp = compute_backend.choose_array_api_namespace()
         device = compute_backend.choose_device(xp)
 
@@ -34,6 +38,8 @@ class QuantityResolver:
             self._dij = dij
         else:
             self._dij = dij.to_namespace(xp, device=device)
+        # Scenario indices every resolved quantity (and its dependencies) computes.
+        self._scenarios = scenarios
         self._instances: dict[str, FluenceDependentQuantity] = {}
         # In-progress identifiers used for cycle detection.
         self._resolving: set[str] = set()
@@ -69,7 +75,7 @@ class QuantityResolver:
         try:
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
-            inst = cls(self._dij, mode=mode, dependencies=deps)
+            inst = cls(self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios)
         finally:
             self._resolving.discard(identifier)
 
@@ -79,6 +85,14 @@ class QuantityResolver:
     def resolve(self, identifiers: Iterable[str]) -> list[FluenceDependentQuantity]:
         """Resolve every identifier and return them in input order."""
         return [self.get(i) for i in identifiers]
+
+    def try_get(self, identifier: str) -> Optional[FluenceDependentQuantity]:
+        """Resolve ``identifier`` or return ``None`` if it cannot be computed for this dij."""
+        try:
+            return self.get(identifier)
+        except ValueError as exc:
+            logger.debug("Optional quantity %r not resolvable: %s", identifier, exc)
+            return None
 
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:
@@ -99,5 +113,7 @@ class QuantityResolver:
         for dep_id in cls.required_dependencies:
             deps[dep_id] = self.get(dep_id)
         for dep_id in cls.optional_dependencies:
-            deps[dep_id] = self.get(dep_id)
+            dep = self.try_get(dep_id)
+            if dep is not None:
+                deps[dep_id] = dep
         return deps

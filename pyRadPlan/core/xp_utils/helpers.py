@@ -275,6 +275,37 @@ def is_host_device(device: Any) -> bool:
     return dlpack_device is None or dlpack_device[0] == DLPACK_CPU
 
 
+def device_cache_key(arr: Any) -> Any:
+    """
+    Hashable identity of the device an array lives on, usable as a dict key.
+
+    Backend device objects cannot simply be used as dictionary keys: ``cupy.cuda.Device``
+    is not hashable. The DLPack ``(device_type, device_id)`` tuple is always hashable but
+    is not always distinguishing either -- every ``array_api_strict`` logical device
+    reports ``(1, 0)``. This therefore prefers the backend's own device object, which
+    identifies the device exactly, and falls back to the DLPack tuple only for the
+    backends whose device objects are unhashable (where the tuple does distinguish the
+    devices, since it carries the GPU index).
+
+    Parameters
+    ----------
+    arr : Array
+        Array whose device should be identified.
+
+    Returns
+    -------
+    Hashable
+        A value that compares equal for two arrays on the same device and differs for
+        arrays on different devices of the same backend.
+    """
+    device = array_api_compat.device(arr)
+    try:
+        hash(device)
+    except TypeError:
+        return get_device_info(arr)
+    return device
+
+
 def dlpack_to_backend_device(xp: ArrayNamespace, device: tuple[int, int] | None):
     """Return backend-specific device object for a given DLPack device tuple."""
     if device is None:

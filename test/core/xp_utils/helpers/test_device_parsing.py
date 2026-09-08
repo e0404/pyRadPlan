@@ -2,12 +2,16 @@
 
 import importlib.util
 
+import array_api_compat
 import array_api_strict as xps
+import numpy as np
 import pytest
 
+from pyRadPlan.core.xp_utils import cupy_available
 from pyRadPlan.core.xp_utils.helpers import (
     DLPACK_CPU,
     _parse_device_to_dlpack,
+    device_cache_key,
     dlpack_to_backend_device,
     get_device_info,
 )
@@ -89,3 +93,33 @@ def test_jax_device_index_out_of_range():
 
     with pytest.raises(ValueError, match="out of range"):
         dlpack_to_backend_device(jnp, (DLPACK_CPU, 99))
+
+
+def test_device_cache_key_prefers_the_backend_device_object():
+    """Hashable device objects identify a device exactly; the DLPack tuple does not."""
+    cpu = xps.asarray([1.0], device=xps.Device("CPU_DEVICE"))
+    other = xps.asarray([1.0], device=xps.Device("device1"))
+
+    # both report the same DLPack device, so the tuple alone cannot be the cache key
+    assert get_device_info(cpu) == get_device_info(other) == (DLPACK_CPU, 0)
+    assert device_cache_key(cpu) != device_cache_key(other)
+    assert device_cache_key(cpu) == device_cache_key(xps.asarray([2.0, 3.0]))
+    assert {device_cache_key(cpu), device_cache_key(other)}
+
+
+def test_device_cache_key_is_hashable_for_numpy():
+    assert hash(device_cache_key(np.asarray([1.0]))) is not None
+
+
+@pytest.mark.skipif(not cupy_available(), reason="CuPy / CUDA is not available.")
+def test_device_cache_key_falls_back_to_dlpack_for_unhashable_devices():
+    """``cupy.cuda.Device`` is unhashable, so the DLPack tuple stands in for it."""
+    import array_api_compat.cupy as cp  # noqa: PLC0415
+
+    arr = cp.asarray([1.0])
+    with pytest.raises(TypeError):
+        hash(array_api_compat.device(arr))
+
+    key = device_cache_key(arr)
+    assert key == get_device_info(arr)
+    assert hash(key) is not None

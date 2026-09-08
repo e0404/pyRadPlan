@@ -60,7 +60,7 @@ class ParticleAccelerator(ExternalBeamMachine):
     spectra: Optional[dict[float, ChargedEnergySpectrum]] = None
 
     pb_kernels: dict = None
-    # Optionally we can have pencil-beam kernels
+    # Optionally we can have pencil-beam kernel
 
     @classmethod
     def _parse_tabulated_energy_data_from_mat(
@@ -86,9 +86,11 @@ class ParticleAccelerator(ExternalBeamMachine):
                 focus_list = [foci_entry]
             else:
                 focus_list = dl2ld(foci_entry)
-            foci[returned_data["energies"][i]] = [
-                ChargedBeamFocus(**focus) for focus in focus_list
-            ]
+            energy_foci = []
+            for focus in focus_list:
+                created = ChargedBeamFocus.from_dict(focus)
+                energy_foci.extend(created if isinstance(created, list) else [created])
+            foci[returned_data["energies"][i]] = energy_foci
 
         returned_data["foci"] = foci
 
@@ -329,3 +331,18 @@ class ParticleAccelerator(ExternalBeamMachine):
             kernel.alpha is not None and kernel.beta is not None
             for kernel in self.pb_kernels.values()
         )
+
+    @property
+    def has_fluence_spectrum(self) -> bool:
+        """
+        Check if it has fluence spectra data.
+
+        Returns
+        -------
+        bool
+            True if fluence spectra data is available
+        """
+        if self.pb_kernels is None:
+            return False
+
+        return all(kernel.fluence_spectrum is not None for kernel in self.pb_kernels.values())

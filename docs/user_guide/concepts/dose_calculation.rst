@@ -56,7 +56,47 @@ Additional matrices are available for biological dose calculation in particle th
      - Per-beamlet √β-dose for the LQ model.
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
-resolved during optimization.
+resolved during optimization. Every engine, photon engines included, stores the biological model it used as
+``dij.bio_model``; for a constant-RBE model no matrices are needed and the constant is
+available as ``dij.rbe``. An engine that cannot compute a model's declared outputs (for
+example a photon engine with an LQ model) still records the model but logs a warning that
+only physical dose is available. The model decides how ``rbe_x_dose`` is derived (LQ inversion of
+the effect, or ``rbe * physical_dose``).
+
+Biological models and LET
+-------------------------
+
+Which of the additional matrices a particle engine computes follows from ``pln.bio_model``
+(see :ref:`concept_bio_model`) and the machine data:
+
+* Supported biological influence matrices are computed when the evaluator declares them. The
+  current ``Dij`` schema supports the ``alpha_dose`` / ``sqrt_beta_dose`` declared by the in-tree
+  LQ evaluators.
+* ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
+  requires LET (FRED, which scores LET only on request). Because FRED scores LET itself, an
+  LET-based model can be used with a machine that carries no LET kernels; the pencil-beam
+  engines interpolate the machine's LET kernels and therefore need them.
+
+Both can be overridden through the engine parameters ``calc_bio_dose`` and ``calc_let``,
+which accept ``"auto"`` (default), ``True`` or ``False``:
+
+.. code-block:: python
+
+    pln.bio_model = "MCN"
+    # keep only physical dose and LET; evaluate the LET-based model later
+    pln.prop_dose_calc = {"engine": "HongPB", "calc_bio_dose": False}
+
+Setting ``calc_bio_dose=True`` without an evaluator providing influence quantities raises an
+error. An evaluator declaring a quantity that ``Dij`` cannot currently store also fails during
+setup. Switching ``calc_let`` off does not affect LET-based models, which still receive the LET
+kernels internally. The FRED engine derives biological matrices from its scored LET and therefore
+supports LET-based models only.
+
+During the calculation the model is bound to the machine and the reference photon parameters
+of the voxels (``dij.alphax`` / ``dij.betax`` from the structure set) through a
+:class:`~pyRadPlan.bio_models.BioModelEvaluator`; kernel- and table-based models select the
+tissue class of each voxel by exact match of ``(alpha_x, beta_x)`` against the classes of the
+base data.
 
 Grid information
 ~~~~~~~~~~~~~~~~
