@@ -11,3 +11,5 @@ util
    models2recarray
    swap_orientation_sparse_matrix
    KeyboardListener
+   warnings_to_logger
+   native_output_to_logger

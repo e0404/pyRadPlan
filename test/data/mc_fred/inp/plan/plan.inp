@@ -1,4 +1,4 @@
-nprim = 200.0 
+nprim = 200 
 #Beamlets Field 0, Layer 0 
 		 def: S0 = {'beamletID': 0, 'P': [-0.9, -0.9, 0], 'v':[-0.001, -0.001, 1], 'w':1.0} 
 		 def: S1 = {'beamletID': 1, 'P': [0.9, -0.9, 0], 'v':[0.001, -0.001, 1], 'w':1.0} 

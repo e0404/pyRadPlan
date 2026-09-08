@@ -103,7 +103,19 @@ class Plan(PyRadPlanBaseModel, ABC):
                 "mult_scen must be a ScenarioModel object or respective dictionary"
             ) from exc
 
-    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_opt", mode="after")
+    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="before")
+    @classmethod
+    def _coerce_empty_prop(cls, v: Any) -> Dict[str, Any]:
+        """Coerce missing/empty property blocks to an empty dict.
+
+        MATLAB ``.mat`` round-trips turn an empty ``{}`` struct into ``None`` (or an
+        empty array); accept those so a saved plan re-validates.
+        """
+        if v is None or (hasattr(v, "__len__") and len(v) == 0):
+            return {}
+        return v
+
+    @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="after")
     @classmethod
     def validate_prop(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """

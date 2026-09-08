@@ -14,6 +14,7 @@ from numpydantic import NDArray, Shape
 from pyRadPlan.stf._ray import Ray
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core.xp_utils import to_numpy
+from pyRadPlan.geometry import lps
 from pyRadPlan.util.helpers import models2recarray
 
 
@@ -143,6 +144,22 @@ class Beam(PyRadPlanBaseModel):
             v = to_numpy(v)
         v = np.asarray(v, dtype=np.float64)
         return v.reshape((3,))
+
+    @model_validator(mode="after")
+    def derive_source_points(self) -> "Beam":
+        """
+        Derive source points from ``sad`` and the beam angles when not explicitly given.
+
+        Mirrors the stf generators: ``source_point_bev = (0, -sad, 0)`` rotated into LPS
+        for ``source_point``. The previous static defaults were mutually inconsistent
+        with ``sad``. Writes bypass validation to not re-trigger validate_assignment.
+        """
+        if "source_point_bev" not in self.model_fields_set:
+            self.__dict__["source_point_bev"] = np.array([0.0, -self.sad, 0.0])
+        if "source_point" not in self.model_fields_set:
+            rotation_matrix = lps.get_beam_rotation_matrix(self.gantry_angle, self.couch_angle)
+            self.__dict__["source_point"] = rotation_matrix @ self.source_point_bev
+        return self
 
     @field_validator("rays", mode="after")
     @classmethod

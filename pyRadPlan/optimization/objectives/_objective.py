@@ -215,6 +215,37 @@ class Objective(PyRadPlanBaseModel):
         """List[str]: Parameter values."""
         return [getattr(self, name) for name in self.parameter_names]
 
+    def to_matrad(self, context: str = "mat-file") -> Optional[dict]:
+        """
+        Serialize the objective into a matRad-compatible struct.
+
+        Returns
+        -------
+        Optional[dict]
+            A ``{"className", "parameters", "penalty"}`` dict matRad understands, or
+            ``None`` when this objective has no matRad equivalent (in which case it is
+            skipped on export). The shape mirrors what :func:`get_objective` consumes on
+            import, so objectives round-trip through a ``.mat`` file.
+        """
+        if context != "mat-file":
+            raise ValueError(f"Context {context} not supported")
+
+        # Deferred import to avoid a circular import with the factory module.
+        from ._factory import get_matrad_class_name  # noqa: PLC0415
+
+        class_name = get_matrad_class_name(self)
+        if class_name is None:
+            logger.warning(
+                "Objective '%s' has no matRad equivalent and is skipped on export.", self.name
+            )
+            return None
+
+        return {
+            "className": class_name,
+            "parameters": list(self.parameters),
+            "penalty": self.priority,
+        }
+
     @field_validator("quantity")
     @classmethod
     def _validate_quantity(cls, v):
@@ -237,11 +268,14 @@ class Objective(PyRadPlanBaseModel):
             # Should we confirm once more we have the correct objective?
             data.pop("className")
 
+            # Copy into a fresh list: data.copy() is shallow, so popping from the
+            # original ``parameters`` list would mutate the caller's input and break
+            # a second validation of the same objective definition.
             params = data.get("parameters", [])
-
-            # If there are not more than one parameter,
-            # it will usually not be in a list so we put it into one
-            if not isinstance(params, list):
+            if isinstance(params, list):
+                params = list(params)
+            else:
+                # A single scalar (or numpy array) parameter arrives unwrapped.
                 params = [params]
 
             # obtain the parameter names

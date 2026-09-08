@@ -54,7 +54,7 @@ def calc_dose_forward(
     weights: np.ndarray = None,
 ) -> dict:
     """
-    Calculate the dose forward matrix.
+    Calculate forward-dose results on the CT grid.
 
     Parameters
     ----------
@@ -70,7 +70,7 @@ def calc_dose_forward(
     Returns
     -------
     dict
-        The computed result quantities on the CT grid (see
+        Result quantities on the CT grid, keyed by quantity name (see
         ``Dij.compute_result_ct_grid``), already weighted by ``weights``.
     """
     ct = validate_ct(ct)

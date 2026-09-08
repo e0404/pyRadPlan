@@ -161,7 +161,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-
+# ai_models - but keep the example.json:
+pyRadPlan/data/ai_models/*
+!pyRadPlan/data/ai_models/model_config.template.json
 
 .vscode/
 

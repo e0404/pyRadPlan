@@ -33,6 +33,11 @@ class StructureSet(PyRadPlanBaseModel):
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
 
+        # MATLAB cell arrays can arrive as object ndarrays as well as Python lists.
+        # Normalize before format detection without mutating the caller's mapping.
+        if isinstance(data["vois"], np.ndarray):
+            data = {**data, "vois": data["vois"].tolist()}
+
         # Check input format and return the appropriate context.
         context = cls._get_context(data, info)
 
@@ -256,8 +261,17 @@ class StructureSet(PyRadPlanBaseModel):
         for i, voi in enumerate(self.vois):
             voi_list = voi.to_matrad(context=context)
             voi_list[0] = i
-            # TODO: set objectives here
-            voi_list[5] = {}
+            # Populate the objectives cell (matRad's cst{i,6}) from the VOI's objectives.
+            # Passthrough placeholders (e.g. empty dicts from imports) have no to_matrad.
+            objectives = []
+            for objective in voi.objectives:
+                exported = getattr(objective, "to_matrad", None)
+                if exported is None:
+                    continue
+                serialized = exported(context=context)
+                if serialized is not None:
+                    objectives.append(serialized)
+            voi_list[5] = objectives
 
             export_cell_list.append(voi_list)
 

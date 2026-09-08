@@ -160,6 +160,8 @@ ct, cst = load_tg119()
 
 # %% [markdown]
 # ## Forward dose with the pencil-beam engine
+#
+# The plan uses the `PhotonPencilBeamSVDEngine`.
 # %%
 # Create a plan object
 pln = PhotonPlan(machine="Generic")
@@ -190,7 +192,7 @@ for beam in stf.beams:
         for beamlet in ray.beamlets:
             beamlet.weight *= weights
 
-# Forward dose calculation (pencil beam)
+# Forward dose calculation, which directly returns the result on the CT grid
 result_pb = calc_dose_forward(ct, cst, stf, pln)
 
 # %% [markdown]

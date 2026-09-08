@@ -30,8 +30,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "patient",
         nargs="?",
         default=None,
-        help="Patient dataset to load on startup: a path to a matRad *.mat file "
-        "or the shorthand name of a bundled phantom (e.g. TG119).",
+        help="Path to a patient dataset (any supported file or folder) to load on startup.",
     )
     gui(parser.parse_args(argv).patient)
 
@@ -42,9 +41,9 @@ def gui(patient: Optional[str] = None) -> None:
     Parameters
     ----------
     patient:
-        Optional patient dataset to load on startup: a path to a matRad
-        ``*.mat`` file or the shorthand name of a bundled phantom (e.g.
-        ``"TG119"``, see :func:`pyRadPlan.io.available_phantoms`). When
+        Optional path to a patient dataset to load on startup. Any format
+        supported by :func:`pyRadPlan.io.load_data` is accepted (a matRad
+        ``*.mat`` file, a DICOM folder, ``*.npz``/``*.nrrd``/NIfTI, ...). When
         ``None`` (the default), the GUI starts with an empty workspace.
     """
     workspace = None
@@ -53,27 +52,17 @@ def gui(patient: Optional[str] = None) -> None:
         import os  # noqa: PLC0415
 
         from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
-        from pyRadPlan.io import matfile  # noqa: PLC0415
-        from pyRadPlan.io._patient_loader import (  # noqa: PLC0415
-            resolve_phantom,
-            validate_matrad_patient,
-        )
+        from pyRadPlan.io import load_data  # noqa: PLC0415
 
-        if not os.path.isfile(patient):
-            try:
-                patient = str(resolve_phantom(patient))
-            except ValueError as exc:
-                raise FileNotFoundError(f"Patient file not found: {patient}. {exc}") from None
-        if os.path.splitext(patient)[1].lower() != ".mat":
-            raise ValueError(
-                f"Unsupported patient file format: {patient}. "
-                "Only matRad *.mat files are currently supported."
-            )
+        if not os.path.exists(patient):
+            raise FileNotFoundError(f"Patient dataset not found: {patient}")
 
-        mdict = matfile.load(patient)
-        data = validate_matrad_patient(mdict)
+        data = load_data(patient)
         workspace = WorkspaceManager.instance()
-        workspace.set_many(**{k: v for k, v in data.items() if v is not None})
+        payload = {k: data[k] for k in workspace.keys if data.get(k) is not None}
+        if "result" not in payload and data.get("dose") is not None:
+            payload["result"] = {"physical_dose": data["dose"]}
+        workspace.set_many(**payload)
 
     # Deferred: avoids pulling in the full Qt main-window stack at package import time.
     from .windows._main_win import launch_main_window  # noqa: PLC0415

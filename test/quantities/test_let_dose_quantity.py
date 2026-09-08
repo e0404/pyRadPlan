@@ -58,7 +58,7 @@ def test_LETxDose_constructor(sample_dij_dense):
     assert let_dose.scenarios == [0]
     assert let_dose._dij == sample_dij_dense.to_namespace(xp)
     assert let_dose.dim == 1
-    assert format(let_dose.unit, "~") == "Gy * µm / keV"
+    assert format(let_dose.unit, "~") == "Gy * keV / µm"
     assert let_dose.identifier == "let_dose"
     assert let_dose.name == "LETxDose"
 
