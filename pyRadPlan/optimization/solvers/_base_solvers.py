@@ -92,6 +92,11 @@ class SolverBase(ABC):
             Solution vector and additional information as dictionary
         """
 
+        # The cancel settings are solver-level configuration, so pick up any change made
+        # since construction before the listener decides to start.
+        self._keyboard_listener.allow_keyboard_cancel = self.allow_keyboard_cancel
+        self._keyboard_listener.cancel_key = self.cancel_key
+        self._keyboard_listener.allow_esc_cancel = self.allow_esc_cancel
         self._keyboard_listener.initialize()
 
         # Important!: Everything between start and end kb_thread must be

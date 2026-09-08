@@ -52,6 +52,9 @@ class PlanningProblem(ProgressReporter, ABC):
     max_iter : int, optional
         Iteration cap propagated to the solver. Left unset, the solver keeps whatever it was
         configured with (its own default, or a value from the ``solver`` dict).
+    convert_dose_objectives : bool, default=True
+        Legacy plan-wide conversion of physical-dose objectives to the inferred planning
+        quantity. Set to ``False`` to use every objective's quantity literally.
     """
 
     # Constant, Abstract properties are realized as ClassVars
@@ -76,14 +79,6 @@ class PlanningProblem(ProgressReporter, ABC):
         "oxygen",
         "VHEE",
     ]
-    default_quantities: dict[str, str] = {
-        "photons": "physical_dose",
-        "protons": "physical_dose",
-        "helium": "physical_dose",
-        "carbon": "rbe_x_dose",
-        "oxygen": "physical_dose",
-        "VHEE": "physical_dose",
-    }
     # right now only kernel based rbe model which is only standard in the carbon machine
 
     apply_overlap: bool
@@ -109,6 +104,9 @@ class PlanningProblem(ProgressReporter, ABC):
     _solver_explicit: bool
 
     _array_backend: ArrayNamespace
+
+    _num_of_fractions: int = 1
+    _dose_convention: str = "per_fraction"
 
     def __init__(self, pln: Union[Plan, dict] = None):
         super().__init__()
@@ -170,6 +168,21 @@ class PlanningProblem(ProgressReporter, ABC):
             )
             self.solver = fallback
 
+    def _get_legacy_default_quantity(self, radiation_mode: str) -> str:
+        """Return the quantity used by the legacy plan-wide objective conversion."""
+        use_rbe = (hasattr(self._dij, "rbe") and self._dij.rbe is not None) or (
+            hasattr(self._dij, "alpha_dose") and self._dij.alpha_dose is not None
+        )
+        default_quantities = {
+            "photons": "physical_dose",
+            "protons": "rbe_x_dose" if use_rbe else "physical_dose",
+            "helium": "rbe_x_dose" if use_rbe else "physical_dose",
+            "carbon": "rbe_x_dose" if use_rbe else "physical_dose",
+            "oxygen": "rbe_x_dose" if use_rbe else "physical_dose",
+            "VHEE": "physical_dose",
+        }
+        return default_quantities.get(radiation_mode, "physical_dose")
+
     def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
         """
         Assign properties from a Plan object to the Planning Problem.
@@ -184,6 +197,9 @@ class PlanningProblem(ProgressReporter, ABC):
         warn_when_property_changed : bool
             Whether to warn when properties are changed.
         """
+
+        self._num_of_fractions = pln.num_of_fractions
+        self._dose_convention = pln.dose_convention
 
         # Set Scenario Model
         self._mult_scen = pln.mult_scen
@@ -239,16 +255,15 @@ class PlanningProblem(ProgressReporter, ABC):
 
     def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
         """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
-        default_quantity = self.default_quantities.get(
-            self._stf.beams[0].radiation_mode, "physical_dose"
-        )
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
 
         if self.convert_dose_objectives:
+            default_quantity = self._get_legacy_default_quantity(self._stf.beams[0].radiation_mode)
             logger.info(
-                "Converting all objectives to use quantity: "
-                + self.default_quantities.get(self._stf.beams[0].radiation_mode, "physical_dose")
+                "Legacy objective conversion is enabled; converting physical-dose objectives "
+                "to quantity: %s",
+                default_quantity,
             )
 
         for voi in self._cst.vois:
@@ -267,17 +282,30 @@ class PlanningProblem(ProgressReporter, ABC):
             cube_ix = voi.indices_numpy
             linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
             linear_mask[cube_ix] = True
-            objs = [get_objective(obj) for obj in valid_objectives]
+            # Copy so that quantity conversion / fraction normalization below do not
+            # alter the objectives stored in the user's StructureSet.
+            objs = [get_objective(obj).model_copy() for obj in valid_objectives]
 
             if self.convert_dose_objectives:
-                for obj in objs:
+                for objective_index, obj in enumerate(objs, start=1):
+                    # TODO: Replace this plan-wide legacy mode with explicit ``dose_auto``
+                    # objective intent; see docs/development/optimization_quantity_api.md.
+                    if obj.quantity not in ("physical_dose", default_quantity):
+                        raise ValueError(
+                            f"VOI {voi.name!r}, objective {objective_index} ({obj.name!r}) uses "
+                            f"quantity {obj.quantity!r}, which cannot be overwritten by legacy "
+                            "automatic dose conversion. Set convert_dose_objectives=False to "
+                            "use literal objective quantities."
+                        )
                     obj.quantity = default_quantity
 
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
-
+            if self._dose_convention == "total":
+                for obj in objs:
+                    obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
 
@@ -295,9 +323,25 @@ class PlanningProblem(ProgressReporter, ABC):
 
         self._cst = self._cst.resample_on_new_ct(self._ct)
 
+        # check consistency of bio models and dij
+        if getattr(self._dij, "alphax", None) is not None:
+            [ax, bx] = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
+            if not np.array_equal(ax, self._dij.alphax) or not np.array_equal(bx, self._dij.betax):
+                logger.error(
+                    "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
+                )
+        if self._dose_convention == "total":
+            logger.info(
+                "Objective doses are interpreted as total-course doses (dose_convention='total'); "
+                "scaling reference doses by 1/%d for the per-fraction optimization.",
+                self._num_of_fractions,
+            )
+        else:
+            logger.info(
+                "Objective doses are interpreted per fraction (dose_convention='per_fraction')."
+            )
         # sanitize objectives and constraints and manage required quantities
         objectives, quantity_ids = self._collect_objectives()
-
         self._objective_list = objectives
         # unique quantities
         quantity_ids = list(set(quantity_ids))
