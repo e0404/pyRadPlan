@@ -200,6 +200,64 @@ class TestOutcomeCNN:
         assert obj.preprocessor is dummy_pp
         assert obj.compute_objective(_dose()).ndim == 0
 
+    def _load_device_used(self, ct, cst, **overrides):
+        """Build an objective with load_model patched and report the device it got."""
+        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+
+        dummies = (DummyNet().eval(), DummyOutcomePreprocessor(DUMMY_CONFIG))
+        with patch(f"{_CNN_MODULE}.load_model", return_value=dummies) as loader:
+            OutcomeCNN(priority=1.0, model="dummy", mode="NTCP", ct=ct, cst=cst, **overrides)
+        return loader.call_args.kwargs["device"]
+
+    def test_device_defaults_to_the_backend_preference(self, ct_and_cst, monkeypatch):
+        """Without an explicit device the model follows settings.xp.prefer_gpu."""
+        import pyRadPlan
+
+        ct, cst = ct_and_cst
+        monkeypatch.setattr(pyRadPlan.settings.xp, "prefer_gpu", False)
+
+        assert self._load_device_used(ct, cst) == "cpu"
+
+    def test_explicit_device_overrides_the_preference(self, ct_and_cst, monkeypatch):
+        """An explicitly requested device is passed through untouched."""
+        import pyRadPlan
+
+        ct, cst = ct_and_cst
+        monkeypatch.setattr(pyRadPlan.settings.xp, "prefer_gpu", True)
+
+        assert self._load_device_used(ct, cst, device="cpu") == "cpu"
+
+    def test_preloaded_model_is_moved_only_when_a_device_is_given(self, ct_and_cst):
+        """A caller-supplied model is left where it is unless a device is named."""
+        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+
+        ct, cst = ct_and_cst
+        moved = []
+
+        def _make(**overrides):
+            model = DummyNet().eval()
+            monkey = model.to
+
+            def _record(device):
+                moved.append(str(device))
+                return monkey(device)
+
+            model.to = _record
+            OutcomeCNN(
+                priority=1.0,
+                model=(model, DummyOutcomePreprocessor(DUMMY_CONFIG)),
+                mode="NTCP",
+                ct=ct,
+                cst=cst,
+                **overrides,
+            )
+
+        _make()
+        assert moved == []  # left alone
+
+        _make(device="cpu")
+        assert moved == ["cpu"]
+
     def test_compute_objective_returns_scalar_array(self, outcome_obj):
         """A 0-d array in the input's namespace, like every other objective.
 

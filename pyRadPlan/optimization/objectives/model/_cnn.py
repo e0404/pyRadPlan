@@ -54,6 +54,11 @@ from pyRadPlan.optimization.objectives._objective import Objective
 logger = logging.getLogger(__name__)
 
 
+def _default_model_device() -> str:
+    """Device for a model the objective loads itself, when none was requested."""
+    return str(xp_utils.choose_device(array_api_compat.array_namespace(torch.empty(0))))
+
+
 class OutcomeCNN(Objective):
     """CNN-based outcome objective (NTCP or TCP).
 
@@ -66,6 +71,9 @@ class OutcomeCNN(Objective):
     mode : ``"NTCP"`` or ``"TCP"``
         ``"NTCP"`` minimises the predicted probability; ``"TCP"`` maximises it
         (i.e. minimises the negative).
+    device : str, optional
+        Device to run the model on, e.g. ``"cuda"`` or ``"cpu"``. Defaults to following
+        :attr:`XpSettings.prefer_gpu`.
     monitor_only : bool
         When *True* the objective returns 0 to the optimiser (and a zero
         gradient) but still logs the predicted probability.
@@ -86,6 +94,10 @@ class OutcomeCNN(Objective):
 
     # -- User-facing fields --
     model: str = Field(description="Model name, local directory, or preloaded objects.")
+    device: Optional[str] = Field(
+        default=None,
+        description="Device to run the model on (e.g. 'cuda'); None follows xp.prefer_gpu.",
+    )
     mode: Literal["NTCP", "TCP"] = Field(default="NTCP")
     monitor_only: bool = Field(default=False)
     warmup_iterations: int = Field(default=0, ge=0)
@@ -138,27 +150,33 @@ class OutcomeCNN(Objective):
             return data
 
         spec = data.get("model")
-        nn_model, preprocessor = cls._resolve_model(spec)
+        nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
         if not isinstance(spec, str):
             # Preloaded objects — keep the serialised field a plain string.
             data["model"] = "<preloaded>"
 
-        device = next(nn_model.parameters()).device
-        preprocessor.configure(ct, cst, cst_masks=data.get("cst_masks"), device=device)
+        # Read back where the model actually ended up rather than trusting the request,
+        # so the preprocessor follows it even when placement came from the settings.
+        model_device = next(nn_model.parameters()).device
+        preprocessor.configure(ct, cst, cst_masks=data.get("cst_masks"), device=model_device)
 
         data["nn_model"] = nn_model
         data["preprocessor"] = preprocessor
         return data
 
     @staticmethod
-    def _resolve_model(spec: Any) -> tuple[Any, Any]:
+    def _resolve_model(spec: Any, device: Optional[str] = None) -> tuple[Any, Any]:
         """Resolve ``model`` into an ``(nn_model, preprocessor)`` pair."""
         if isinstance(spec, (tuple, list)) and len(spec) == 2 and hasattr(spec[0], "forward"):
-            return spec[0], spec[1]
+            nn_model, preprocessor = spec[0], spec[1]
+            if device is not None and hasattr(nn_model, "to"):
+                nn_model.to(device)
+            return nn_model, preprocessor
+        target = device if device is not None else _default_model_device()
         if isinstance(spec, str):
             if Path(spec).is_dir():
-                return load_model(local_dir=spec)
-            return load_model(name=spec)
+                return load_model(local_dir=spec, device=target)
+            return load_model(name=spec, device=target)
         raise TypeError(
             "OutcomeCNN 'model' must be a model name, a local directory path, "
             "or a preloaded (model, preprocessor) tuple."
