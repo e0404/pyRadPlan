@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import array_api_compat
 import numpy as np
 import pytest
 
@@ -197,12 +198,20 @@ class TestOutcomeCNN:
         assert obj.model == "<preloaded>"
         assert obj.nn_model is dummy_model
         assert obj.preprocessor is dummy_pp
-        assert isinstance(obj.compute_objective(_dose()), float)
+        assert obj.compute_objective(_dose()).ndim == 0
 
-    def test_compute_objective_returns_float(self, outcome_obj):
-        val = outcome_obj.compute_objective(_dose())
-        assert isinstance(val, float)
-        assert 0.0 <= val <= 1.0
+    def test_compute_objective_returns_scalar_array(self, outcome_obj):
+        """A 0-d array in the input's namespace, like every other objective.
+
+        cupy rejects bare Python scalars where the caller stacks the per-scenario values.
+        """
+        dose = _dose()
+        val = outcome_obj.compute_objective(dose)
+
+        assert val.ndim == 0
+        assert array_api_compat.array_namespace(val) is array_api_compat.array_namespace(dose)
+        assert array_api_compat.device(val) == array_api_compat.device(dose)
+        assert 0.0 <= float(val) <= 1.0
 
     def test_monitor_only_objective_is_zero(self, ct_and_cst):
         ct, cst = ct_and_cst

@@ -226,8 +226,13 @@ class OutcomeCNN(Objective):
             self._dose_index_xp = None
             self._dose_index_key = None
 
-    def compute_objective(self, dose_values) -> float:
-        """Compute the outcome probability (0.0 when *monitor_only*)."""
+    def compute_objective(self, dose_values):
+        """Compute the outcome probability (0.0 when *monitor_only*).
+
+        Returns a 0-d array in the namespace and device of ``dose_values``, as the other
+        objectives do: the model itself yields a Python float, and backends such as cupy
+        reject scalars where the caller stacks the per-scenario values.
+        """
         self._check_ready()
 
         xp = array_api_compat.array_namespace(dose_values)
@@ -235,8 +240,12 @@ class OutcomeCNN(Objective):
         self.ntcp_history.append(prob)
 
         if self.monitor_only:
-            return 0.0
-        return -prob if self.mode == "TCP" else prob
+            value = 0.0
+        else:
+            value = -prob if self.mode == "TCP" else prob
+        return xp.asarray(
+            value, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
+        )
 
     def compute_gradient(self, dose_values):
         """Compute the gradient of the outcome probability w.r.t. dose.
@@ -250,8 +259,15 @@ class OutcomeCNN(Objective):
         self.iteration_count += 1
         n = array_api_compat.size(dose_values)
 
+        # Match what the real gradient path below returns (via _from_full_grid), so the
+        # shortcut cannot hand back an array on a different device or in a different dtype.
+        zeros_like_input = {
+            "dtype": dose_values.dtype,
+            "device": array_api_compat.device(dose_values),
+        }
+
         if self.monitor_only:
-            return xp.zeros(n, dtype=xp.float32)
+            return xp.zeros(n, **zeros_like_input)
 
         if self.iteration_count <= self.warmup_iterations:
             if self.iteration_count == self.warmup_iterations:
@@ -259,7 +275,7 @@ class OutcomeCNN(Objective):
                     "Outcome CNN warmup complete after %d iterations. Activating gradient.",
                     self.warmup_iterations,
                 )
-            return xp.zeros(n, dtype=xp.float32)
+            return xp.zeros(n, **zeros_like_input)
 
         inputs = self.preprocessor.preprocess(
             self._to_full_grid(dose_values, xp), requires_grad=True
@@ -306,8 +322,8 @@ class OutcomeCNN(Objective):
 
     # ------------------------------------------------------------------
     # Private helpers
-    # These are needed for future work where soomeone passes e.g. only the
-    # VOI dose (not the full dose grid via GlobalVoi)
+    # These are needed for future work where someone passes e.g. only the
+    # VOI dose rather than the full dose grid.
     # ------------------------------------------------------------------
 
     def _check_ready(self) -> None:
