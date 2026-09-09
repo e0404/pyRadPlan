@@ -1,0 +1,464 @@
+"""Biological output of the Hong pencil-beam engine.
+
+The matRad reference data carries no biological quantities, so the alpha_dose /
+sqrt_beta_dose influence matrices are verified analytically per bixel against the
+physical-dose and LET-dose matrices produced in the same run.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+import SimpleITK as sitk
+
+import pyRadPlan
+from pyRadPlan import calc_dose_influence
+from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator, Wedenberg
+from pyRadPlan.dose.engines._base import DoseEngineBase
+from pyRadPlan.dose.engines._hongpb import ParticleHongPencilBeamEngine
+from pyRadPlan.machines import load_machine_from_mat, validate_machine
+
+
+def _bio_engine(kernel_names=()):
+    engine = object.__new__(ParticleHongPencilBeamEngine)
+    engine._bio_evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
+    engine._bio_kernel_names = tuple(kernel_names)
+    engine._bio_influence_names = engine._bio_evaluator.influence_quantity_names
+    engine._validated_bio_kernel_energies = set()
+    return engine
+
+
+def test_bio_context_is_curated():
+    """The shared particle-engine helper exposes only named biological inputs."""
+    bixel = {
+        "v_alpha_x": "alpha_x",
+        "v_beta_x": "beta_x",
+        "physical_dose": "dose",
+        "sigma_ini_sq": "engine detail",
+        "kernel": "raw kernel",
+    }
+    kernels = {"let": "LET", "alpha": "kernel alpha", "sigma": "engine sigma"}
+
+    engine = _bio_engine(["alpha"])
+    context = engine._build_bio_context(bixel, kernels)
+
+    assert dict(context) == {
+        "alpha_x": "alpha_x",
+        "beta_x": "beta_x",
+        "physical_dose": "dose",
+        "let": "LET",
+        "alpha": "kernel alpha",
+    }
+
+
+@pytest.mark.parametrize(
+    "kernel_name,lateral_model,use_let_kernel",
+    [("idd", "single", False), ("sigma", "single", False), ("let", "single", True)],
+)
+def test_bio_kernel_names_reject_engine_collisions(kernel_name, lateral_model, use_let_kernel):
+    """Engine and biological kernels must have disjoint names before dose calculation."""
+    engine = _bio_engine([kernel_name])
+    engine.lateral_model = lateral_model
+    engine._use_let_kernel = use_let_kernel
+
+    with pytest.raises(ValueError, match=rf"dose-engine kernels: {kernel_name}"):
+        engine._validate_bio_names({})
+
+
+def test_bio_kernel_names_reject_standard_context_collisions():
+    """Model kernels cannot shadow a standard evaluation-context input."""
+    engine = _bio_engine(["physical_dose"])
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match="standard context inputs: physical_dose"):
+        engine._validate_bio_names({})
+
+
+def test_bio_influence_names_reject_dose_engine_collisions():
+    engine = _bio_engine()
+    engine._bio_influence_names = ("alpha_dose",)
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match="dose-engine fields: alpha_dose"):
+        engine._validate_bio_names({"alpha_dose": object()})
+
+
+def test_bio_influence_names_reject_unsupported_dij_quantity():
+    engine = _bio_engine()
+    engine._bio_influence_names = ("rbe_dose",)
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(NotImplementedError, match="cannot yet store.*rbe_dose"):
+        engine._validate_bio_names({})
+
+
+@pytest.mark.parametrize(
+    ("names", "message"),
+    [
+        ((), "non-empty"),
+        (("",), "non-empty"),
+        (("alpha_dose", "alpha_dose"), "unique"),
+    ],
+)
+def test_bio_influence_declaration_is_validated_at_setup(names, message):
+    engine = _bio_engine()
+    engine._bio_influence_names = names
+    engine.lateral_model = "single"
+    engine._use_let_kernel = False
+
+    with pytest.raises(ValueError, match=message):
+        engine._validate_bio_names({})
+
+
+def test_lateral_kernel_names_reject_invalid_model():
+    """An unresolved lateral model retains the interpolation path's clear error."""
+    engine = _bio_engine()
+    engine.lateral_model = "auto"
+
+    with pytest.raises(ValueError, match="Invalid Lateral Model"):
+        engine._lateral_kernel_names()
+
+
+@pytest.mark.parametrize(
+    ("declared", "returned", "message"),
+    [
+        (("depth_factor",), {}, "missing.*depth_factor"),
+        ((), {"idd": np.ones(2)}, "undeclared.*idd"),
+    ],
+)
+def test_bio_kernel_results_must_match_declaration_before_interpolation(
+    declared, returned, message
+):
+    """Missing fields and undeclared engine-name collisions fail at the boundary."""
+
+    class KernelModel(BiologicalModel):
+        model = "kernel_contract_test"
+        possible_radiation_modes = ("protons",)
+
+        def evaluator(self, machine, voxel_params):
+            return KernelEvaluator(self)
+
+    class KernelEvaluator(BioModelEvaluator):
+        @property
+        def kernel_field_names(self):
+            return declared
+
+        def kernel_quantities(self, kernel):
+            return returned
+
+    engine = _bio_engine(declared)
+    engine._bio_evaluator = KernelEvaluator(KernelModel())
+    engine._calc_bio_dose = True
+    engine._use_let_kernel = False
+    engine.lateral_model = "single"
+    bixel = {
+        "kernel": {
+            "energy": 100.0,
+            "depths": np.arange(2),
+            "offset": 0.0,
+            "idd": np.ones(2),
+            "sigma": np.ones(2),
+        },
+        "rad_depth_offset": 0.0,
+        "v_alpha_x": np.ones(1),
+    }
+
+    with pytest.raises(ValueError, match=message):
+        engine._interpolate_kernels_in_depth(bixel)
+
+
+def _per_entry(dij):
+    """Physical dose, alpha, sqrt(beta) and LET per non-zero (voxel, bixel) entry."""
+    dose = dij.physical_dose.flat[0].tocoo()
+    rows, cols, d = dose.row, dose.col, dose.data
+    keep = d > 0
+    rows, cols, d = rows[keep], cols[keep], d[keep]
+
+    def pick(container):
+        return np.asarray(container.flat[0].tocsr()[rows, cols]).ravel()
+
+    return {
+        "rows": rows,
+        "dose": d,
+        "alpha": pick(dij.alpha_dose) / d,
+        "sqrt_beta": pick(dij.sqrt_beta_dose) / d,
+        "let": pick(dij.let_dose) / d if dij.let_dose is not None else None,
+        "alpha_x": dij.alphax[rows, 0],
+        "beta_x": dij.betax[rows, 0],
+    }
+
+
+def _assert_rbe_min_max_model(dij, rbe_min_max):
+    e = _per_entry(dij)
+    assert e["alpha"].size > 0
+    assert np.all(e["beta_x"] > 0), "dose deposited outside any structure"
+    abr = e["alpha_x"] / e["beta_x"]
+    rbe_min, rbe_max = rbe_min_max(e["let"], e["alpha_x"], abr)
+    assert np.allclose(e["alpha"], rbe_max * e["alpha_x"], rtol=1e-5)
+    assert np.allclose(e["sqrt_beta"], np.sqrt(rbe_min**2 * e["beta_x"]), rtol=1e-5)
+
+
+def test_protons_WED_alpha_beta_matrices(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "WED"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.bio_model == pln.bio_model
+    assert dij_py.model_dump()["bio_model"] == {"model": "WED"}
+
+    def wedenberg(let, alpha_x, abr):
+        return 1.0, 1.0 + 0.434 * let / abr
+
+    _assert_rbe_min_max_model(dij_py, wedenberg)
+
+
+def test_protons_MCN_alpha_beta_matrices(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "MCN"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    def mcnamara(let, alpha_x, abr):
+        rbe_max = 0.999064 + 0.35605 * let / abr
+        rbe_min = 1.1012 - 0.0038703 * np.sqrt(abr) * let
+        return rbe_min, rbe_max
+
+    _assert_rbe_min_max_model(dij_py, mcnamara)
+
+
+def test_helium_HEL_alpha_beta_matrices(test_data_helium):
+    pln, ct, cst, stf, dij, result = test_data_helium
+    pln.bio_model = "HEL"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    def mairani(let, alpha_x, abr):
+        f_qe = 9.73154e-3 * let**2 * np.exp(-1.51998e-2 * let)
+        return 1.0, 1.0 + (1.36938e-1 + 1.0 / abr) * f_qe
+
+    _assert_rbe_min_max_model(dij_py, mairani)
+
+
+def test_protons_constant_rbe(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "constant_rbe"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    assert dij_py.rbe == pytest.approx(1.1)
+    assert dij_py.bio_model.model == "constant_rbe"
+    assert dij_py.alpha_dose is None
+    assert dij_py.sqrt_beta_dose is None
+
+    res = dij_py.compute_result_ct_grid(np.asarray(result["w"]))
+    phys = sitk.GetArrayFromImage(res["physical_dose"])
+    rbe_x = sitk.GetArrayFromImage(res["rbe_x_dose"])
+    assert np.allclose(rbe_x, 1.1 * phys)
+
+
+def test_protons_constant_rbe_parameter_from_plan(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = {"model": "constant_rbe", "rbe": 1.0}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.rbe == pytest.approx(1.0)
+
+
+def test_calc_bio_dose_off_keeps_let_for_on_the_fly_models(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc = {"calc_bio_dose": False}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.alpha_dose is None
+    assert dij_py.sqrt_beta_dose is None
+    assert dij_py.let_dose is not None
+
+
+def test_calc_let_off_still_feeds_let_based_model(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc = {"calc_let": False}
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.let_dose is None
+    assert dij_py.alpha_dose is not None
+    assert dij_py.alpha_dose.flat[0].count_nonzero() > 0
+
+
+def test_calc_bio_dose_true_requires_alpha_beta_model(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "constant_rbe"
+    pln.prop_dose_calc = {"calc_bio_dose": True}
+    with pytest.raises(ValueError, match="calc_bio_dose=True requires"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
+def test_protons_bio_model_none_has_no_bio_matrices(test_data_protons):
+    pln, ct, cst, stf, dij, result = test_data_protons
+    pln.bio_model = "none"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.alpha_dose is None
+    assert dij_py.sqrt_beta_dose is None
+    assert dij_py.rbe is None
+    assert dij_py.bio_model.model == "none"
+
+
+def test_carbon_kernel_based_lq_alpha_beta_matrices(test_data_carbon):
+    pln, ct, cst, stf, dij, result = test_data_carbon
+    pln.bio_model = "kernel_based_lq"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    e = _per_entry(dij_py)
+    assert e["alpha"].size > 0
+    assert np.all(np.isfinite(e["alpha"])) and np.all(np.isfinite(e["sqrt_beta"]))
+
+    # every voxel's alpha/beta must be an interpolated value of the kernel of its tissue class
+    machine_file = Path(pyRadPlan.__file__).parent / "data" / "machines" / "carbon_Generic.mat"
+    machine = validate_machine(load_machine_from_mat(machine_file))
+    kernel = machine.pb_kernels[machine.energies[0]]
+    tissue = np.flatnonzero(
+        (kernel.alpha_x == np.unique(e["alpha_x"])) & (kernel.beta_x == np.unique(e["beta_x"]))
+    )
+    assert tissue.size == 1, "test data is expected to contain a single tissue class"
+    alphas = np.concatenate([k.alpha[tissue[0]] for k in machine.pb_kernels.values()])
+    betas = np.concatenate([k.beta[tissue[0]] for k in machine.pb_kernels.values()])
+    assert np.all(e["alpha"] >= alphas.min() - 1e-9) and np.all(e["alpha"] <= alphas.max() + 1e-9)
+    assert np.all(e["sqrt_beta"] ** 2 >= betas.min() - 1e-9)
+    assert np.all(e["sqrt_beta"] ** 2 <= betas.max() + 1e-9)
+
+    # RBE-weighted dose from the result must be consistent with the LQ inversion of the effect
+    w = np.asarray(result["w"])
+    res = dij_py.compute_result_dose_grid(w)
+    effect = dij_py.alpha_dose.flat[0] @ w + (dij_py.sqrt_beta_dose.flat[0] @ w) ** 2
+    ax, bx = dij_py.alphax[:, 0], dij_py.betax[:, 0]
+    valid = (bx > 0) & (effect > 0)
+    expected = np.zeros_like(effect)
+    expected[valid] = (np.sqrt(ax[valid] ** 2 + 4 * bx[valid] * effect[valid]) - ax[valid]) / (
+        2 * bx[valid]
+    )
+    assert np.allclose(np.asarray(res["rbe_x_dose"]).ravel(), expected, rtol=1e-5, atol=1e-8)
+
+
+def _attach_synthetic_spectra(machine, n_energies=20, seed=0):
+    """Give every kernel a random fragment fluence spectrum (H, C and electrons)."""
+    rng = np.random.default_rng(seed)
+    energies = np.geomspace(1.0, 400.0, n_energies)
+    for kernel in machine.pb_kernels.values():
+        n_depths = kernel.depths.shape[0]
+        spectra = [rng.random((n_energies, n_depths)) for _ in range(3)]
+        kernel.fluence_spectrum = {
+            "spectra": {
+                "Z": np.asarray([1, 6, -1]),
+                "A": np.asarray([1.0, 12.0, np.nan]),
+                "fluenceSpectrum": spectra,
+                "energyBin": [energies] * 3,
+                "fluenceDepth": [s.sum(axis=0) for s in spectra],
+            }
+        }
+
+
+def test_carbon_tabulated_alpha_beta_matrices(test_data_carbon, monkeypatch):
+    pln, ct, cst, stf, dij, result = test_data_carbon
+    machine_file = Path(pyRadPlan.__file__).parent / "data" / "machines" / "carbon_Generic.mat"
+    machine = validate_machine(load_machine_from_mat(machine_file))
+    _attach_synthetic_spectra(machine)
+    assert "fluence" in machine.provided_quantities()
+    monkeypatch.setattr(DoseEngineBase, "load_machine", staticmethod(lambda *_: machine))
+
+    pln.bio_model = "dose_average_alpha_beta"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    assert dij_py.alpha_dose is not None and dij_py.sqrt_beta_dose is not None
+
+    e = _per_entry(dij_py)
+    assert e["alpha"].size > 0
+    assert np.all(np.isfinite(e["alpha"])) and np.all(np.isfinite(e["sqrt_beta"]))
+    assert np.all(e["alpha"] > 0) and np.all(e["sqrt_beta"] > 0)
+
+    # entries are depth-interpolated rows of the dose-averaged tables of the voxels' class
+    evaluator = pln.bio_model.evaluator(
+        machine, {"alpha_x": dij_py.alphax, "beta_x": dij_py.betax}
+    )
+    tissue = np.flatnonzero(
+        (pln.bio_model.table_alpha_x == np.unique(e["alpha_x"]))
+        & (pln.bio_model.table_beta_x == np.unique(e["beta_x"]))
+    )
+    assert tissue.size == 1
+    alphas = np.concatenate([t["alpha"][tissue[0]] for t in evaluator._tables.values()])
+    sqrt_betas = np.concatenate([t["sqrt_beta"][tissue[0]] for t in evaluator._tables.values()])
+    assert np.all(e["alpha"] >= alphas.min() - 1e-9) and np.all(e["alpha"] <= alphas.max() + 1e-9)
+    assert np.all(e["sqrt_beta"] >= sqrt_betas.min() - 1e-9)
+    assert np.all(e["sqrt_beta"] <= sqrt_betas.max() + 1e-9)
+
+
+def test_bio_tissue_arrays_use_the_selected_device(test_data_protons):
+    """Tissue inputs are created on the engine's device, not the namespace default one."""
+    import array_api_compat
+    import array_api_strict
+
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "WED"
+    pln.prop_dose_calc["calc_bio_dose"] = False
+
+    device = array_api_strict.Device("device1")
+    engine = ParticleHongPencilBeamEngine(pln)
+    engine.xp = array_api_strict
+    engine.device = device
+    engine._machine = DoseEngineBase.load_machine(pln.radiation_mode, pln.machine)
+
+    engine._init_bio_model({"alphax": np.full((4, 1), 0.1), "betax": np.full((4, 1), 0.05)})
+
+    assert array_api_compat.device(engine._v_alpha_x) == device
+    assert array_api_compat.device(engine._v_beta_x) == device
+
+    # array_api_strict refuses to combine arrays from different devices, which is exactly
+    # what the engine does per bixel with its physical-dose and LET arrays.
+    let = array_api_strict.asarray([1.0, 2.0, 3.0, 4.0], device=device)
+    alpha, beta = pln.bio_model.alpha_beta(
+        engine._v_alpha_x[:, 0], engine._v_beta_x[:, 0], {"let": let}
+    )
+    assert array_api_compat.device(alpha) == device
+    assert array_api_compat.device(beta) == device
+
+
+def test_out_of_domain_reference_parameters_fail_before_dose_calculation(test_data_protons):
+    """A structure whose beta_x is zero is rejected by McNamara during setup."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "MCN"
+    cst.vois[0].beta_x = 0.0
+
+    with pytest.raises(ValueError, match="only defined for beta_x > 0"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value", "name"),
+    [
+        # Wedenberg does not declare beta_x positive, but a negative rate is still invalid
+        ("WED", "beta_x", -0.05, "beta_x"),
+        ("WED", "beta_x", float("nan"), "beta_x"),
+        ("WED", "alpha_x", float("inf"), "alpha_x"),
+        ("MCN", "alpha_x", float("inf"), "alpha_x"),
+        ("MCN", "beta_x", float("inf"), "beta_x"),
+        # a model computing nothing biological still reads invalid reference data
+        ("none", "beta_x", float("nan"), "beta_x"),
+    ],
+)
+def test_invalid_reference_coefficients_fail_before_dose_calculation(
+    test_data_protons, model, field, value, name
+):
+    """The public dose calculation rejects invalid LQ reference rates during setup."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = model
+    setattr(cst.vois[0], field, value)
+
+    with pytest.raises(ValueError, match=f"{name} must be finite and non-negative"):
+        calc_dose_influence(ct, cst, stf, pln)
+
+
+def test_bio_influence_matrices_are_finite(test_data_protons):
+    """No NaN/Inf ever reaches the stored biological influence matrices."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "MCN"
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    for name in ("alpha_dose", "sqrt_beta_dose"):
+        data = getattr(dij_py, name).flat[0].data
+        assert data.size > 0
+        assert np.all(np.isfinite(data))

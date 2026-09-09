@@ -34,16 +34,19 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
         if not isinstance(self.solver, NonLinearOptimizer):
-            raise ValueError("Solver must be an instance of SolverBase")
+            raise ValueError(
+                f"Problem '{self.short_name}' is non-linear and needs a NonLinearOptimizer, "
+                f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
+            )
 
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, np.inf)
-        self.solver.max_iter = 500
-        self.solver.options = {
-            "disp": True,
-            "ftol": 1e-4,
-        }
+
+        # A loose objective tolerance is enough for this simple problem. Expressed through the
+        # solver-agnostic knob rather than a solver's own options dictionary, which would
+        # otherwise discard the defaults and any configuration from prop_opt["solver"].
+        self.solver.abs_obj_tol = 1e-4
 
     def _objective_functions(self, x: np.ndarray) -> np.ndarray:
         """Define the objective functions."""

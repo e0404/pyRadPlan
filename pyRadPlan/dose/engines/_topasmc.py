@@ -106,7 +106,6 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
 
     available_source_models = ["biGaussian"]
 
-    calc_bio_dose: bool
     radiation_mode: str
 
     external_calculation: Union[str, bool]

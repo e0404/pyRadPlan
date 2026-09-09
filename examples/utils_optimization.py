@@ -17,6 +17,7 @@ from pyRadPlan import (
 )
 
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
+from pyRadPlan.optimization.solvers import get_available_solvers
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,18 +30,30 @@ ct, cst = load_tg119()
 # `pln.prop_opt` is a dictionary that controls the optimization.
 # All keys are forwarded as attributes to the planning problem.
 #
-# | Key              | Type   | Default   | Description                                        |
-# |------------------|--------|-----------|----------------------------------------------------|
-# | `solver`         | str    | `"ipopt"` | `"scipy"` (L-BFGS-B) or `"ipopt"` (Interior Point) |
-# | `display`        | bool   | `True`    | Show solver iteration output                       |
-# | `max_iter`       | int    | `500`     | Maximum number of iterations                       |
-# | `solver_options` | dict   | `{}`      | Solver-specific options (merged into solver defaults)|
+# | Key        | Type        | Default        | Description                                   |
+# |------------|-------------|----------------|-----------------------------------------------|
+# | `solver`   | str or dict | `"ipopt"`      | `"scipy"` (L-BFGS-B) or `"ipopt"` (Interior Point), or a dict for full control (see below) |
+# | `display`  | bool        | solver default | Show solver iteration output                  |
+# | `max_iter` | int         | solver default | Maximum number of iterations                  |
+#
+# `display` and `max_iter` are convenience shortcuts for the two solver settings that are
+# useful regardless of the solver. Set at top-level they take priority over the same keys
+# inside the `solver` dict; left unset, whatever the solver is configured with applies
+# (the value from the `solver` dict, or the solver's own default).
+#
+# A solver named here explicitly must be available: naming one that is not registered raises,
+# rather than quietly substituting another and returning a plan optimized by something else.
+# IPOPT ships in the separate `ipyopt` package, which pyRadPlan does not depend on, so this
+# example picks it only when it is installed and falls back to SciPy otherwise.
 
 # %%
+solver_name = "ipopt" if "ipopt" in get_available_solvers() else "scipy"
+print(f"Using the '{solver_name}' solver")
+
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 
 pln.prop_opt = {
-    "solver": "ipopt",
+    "solver": solver_name,
     "display": True,  # set False to silence iteration output
     "max_iter": 200,
 }
@@ -97,40 +110,83 @@ plt.title("Optimization convergence")
 plt.grid(True)
 plt.show()
 
-# %% [markdown]
-# Note that the number of iterations may differ to the number set above.
-# This is due to solver specific internal evaluations (e.g. line search ...)
-#
-# You can also inspect ``opt_info["num_iter"]`` and ``opt_info["result_info"]``
-# for additional solver details.
+# %%
+print(f"Iterations:           {opt_info['num_iter']}")
+print(f"Objective evaluations: {len(opt_info['obj_history'])}")
+print(f"Result info:          {opt_info['result_info']}")
 
 # %% [markdown]
-# ## Solver-specific options via `solver_options`
+# Note that the number of objective evaluations is higher than the number of iterations,
+# because of solver-internal evaluations (e.g. line search).
 #
-# Use `solver_options` to override solver-internal defaults.
-# These are passed directly into the solver's `options` dict.
+# ``result_info`` holds the solver's own result details. Every solver reports its iteration
+# count there under ``num_iter``, which is what ``opt_info["num_iter"]`` is taken from.
+
+# %% [markdown]
+# ## Solver-specific configuration via the `solver` dict
+#
+# Pass a dict to `solver` instead of a string to configure solver-internal attributes.
+# `"name"` selects the solver
 #
 # **SciPy (L-BFGS-B):**
 # ```python
 # pln.prop_opt = {
-#     "solver": "scipy",
-#     "solver_options": {
-#         "ftol": 1e-8,   # function value change tolerance (default 1e-5)
-#         "gtol": 1e-8,   # gradient norm tolerance (default 1e-5)
+#     "solver": {
+#         "name": "scipy",
+#         "abs_obj_tol": 1e-8,        # convergence tolerance (default 1e-5)
+#         "method": "L-BFGS-B",       # any method scipy.optimize.minimize accepts
+#         "options": {
+#             "ftol": 1e-8,           # method-specific options, incl. individual tolerances
+#             "gtol": 1e-10,
+#             "maxcor": 20,
+#         },
 #     },
 # }
 # ```
 #
+# `abs_obj_tol` sets whichever tolerance the chosen method understands (`ftol`, `gtol`,
+# `xtol`, ...). Set one of those in `options` as well and that value wins for that tolerance,
+# which is how SciPy itself resolves it — useful when a method's tolerances need tuning
+# individually. The iteration cap is the exception: it always comes from `max_iter`, under
+# whichever name the method uses (`maxiter`, or `maxfun` for TNC).
+#
 # **IPOPT:**
 # ```python
 # pln.prop_opt = {
-#     "solver": "ipopt",
-#     "solver_options": {
-#         "tol": 1e-12,                    # overall convergence tolerance (default 1e-10)
-#         "acceptable_obj_change_tol": 1e-6,  # acceptable objective change (default 1e-4)
-#         "dual_inf_tol": 1e-6,            # dual infeasibility tolerance (default 1e-4)
-#         "compl_inf_tol": 1e-6,           # complementarity tolerance (default 1e-4)
-#         "acceptable_iter": 10,           # iterations within acceptable tol (default 5)
+#     "solver": {
+#         "name": "ipopt",
+#         "options": {
+#             "tol": 1e-12,                       # overall convergence tolerance (default 1e-10)
+#             "acceptable_obj_change_tol": 1e-6,  # acceptable objective change (default 1e-4)
+#             "dual_inf_tol": 1e-6,               # dual infeasibility tolerance (default 1e-4)
+#             "compl_inf_tol": 1e-6,              # complementarity tolerance (default 1e-4)
+#             "acceptable_iter": 10,              # iterations within acceptable tol (default 5)
+#         },
 #     },
 # }
 # ```
+#
+# `max_iter`, `max_cpu_time` and `acceptable_tol` are not IPOPT-dict options here: they come from
+# the generic solver attributes (`max_iter`, `max_time`, `abs_obj_tol`), so set those instead.
+
+# %% [markdown]
+# ## Where IPOPT's output goes
+#
+# IPOPT is a C library and prints its iteration table straight to the process' standard
+# output descriptor, which Jupyter does not display. `output_mode` controls the routing:
+#
+# | Mode        | Behaviour                                                          |
+# |-------------|--------------------------------------------------------------------|
+# | `"auto"`    | Default. Native output in a terminal, captured into the log in a notebook |
+# | `"native"`  | Always leave the output on the descriptor                          |
+# | `"logging"` | Always capture it and emit it through Python's `logging`           |
+#
+# Captured output is logged in full, including the convergence summary and the `EXIT:` line
+# that the iteration callback does not expose. `display=False` silences it either way.
+#
+# ```python
+# pln.prop_opt = {"solver": {"name": "ipopt", "output_mode": "logging"}}
+# ```
+#
+# The records go to the `pyRadPlan.optimization.solvers._ipopt` logger at `INFO` level, so
+# they only appear once logging is configured for it (as `logging.basicConfig` does above).

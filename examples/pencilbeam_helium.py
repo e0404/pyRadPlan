@@ -26,7 +26,6 @@ from pyRadPlan import (
 )
 
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
-from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
 logging.basicConfig(level=logging.INFO)
 
@@ -37,8 +36,9 @@ ct, cst = load_tg119()
 # %% [markdown]
 # In this section, we create a helium therapy plan using the ParticleHongPencilBeamEngine.
 # %%
-# Create a plan object
-pln = IonPlan(radiation_mode="helium", machine="Generic")
+# Create a plan object. The Mairani helium model ("HEL") derives alpha/beta from the LET of
+# the Generic helium base data, so the plan reports RBE-weighted dose next to physical dose.
+pln = IonPlan(radiation_mode="helium", machine="Generic", bio_model="HEL")
 pln.prop_opt = {"solver": "scipy"}
 
 # Generate Steering Geometry ("stf")
@@ -46,14 +46,6 @@ stf = generate_stf(ct, cst, pln)
 
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
-
-# Optimization
-cst.vois[0].objectives = [SquaredOverdosing(priority=10.0, d_max=1.0)]  # OAR
-cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=3.0)]  # Target
-cst.vois[2].objectives = [
-    MeanDose(priority=1.0, d_ref=0.0),
-    SquaredOverdosing(priority=10.0, d_max=2.0),
-]  # BODY
 
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
@@ -71,11 +63,19 @@ else:
     # Choose a slice to visualize
     view_slice = int(np.round(ct.size[2] / 2))
 
-    # Visualize
+    # Visualize physical and RBE-weighted dose
     plot_slice(
         image_volume=ct,
         cst=cst,
         overlay=result["physical_dose"],
+        view_slice=view_slice,
+        plane="axial",
+        overlay_unit="Gy",
+    )
+    plot_slice(
+        image_volume=ct,
+        cst=cst,
+        overlay=result["rbe_x_dose"],
         view_slice=view_slice,
         plane="axial",
         overlay_unit="Gy",

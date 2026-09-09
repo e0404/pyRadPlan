@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 from ...core.xp_utils.typing import Array
 from ...util.keyboard_listener import KeyboardListener
+from ...util.logging_utils import warnings_to_logger
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -91,6 +92,11 @@ class SolverBase(ABC):
             Solution vector and additional information as dictionary
         """
 
+        # The cancel settings are solver-level configuration, so pick up any change made
+        # since construction before the listener decides to start.
+        self._keyboard_listener.allow_keyboard_cancel = self.allow_keyboard_cancel
+        self._keyboard_listener.cancel_key = self.cancel_key
+        self._keyboard_listener.allow_esc_cancel = self.allow_esc_cancel
         self._keyboard_listener.initialize()
 
         # Important!: Everything between start and end kb_thread must be
@@ -98,9 +104,8 @@ class SolverBase(ABC):
         # Or terminal stays in weird state.
         try:
             logger.info(f"Starting optimization using {self.name}")
-            x, status = self._solve_problem(x0)
-
-        # Ensure thread is stopped.
+            with warnings_to_logger(self.name):
+                x, status = self._solve_problem(x0)
         finally:
             self._keyboard_listener.finalize()
 

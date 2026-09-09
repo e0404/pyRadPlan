@@ -89,13 +89,16 @@ def load_patient(
     fmt = detect_format(path)
     importer = get_importer(fmt)(path)
 
-    ct = importer.load_ct()
-    if ct is None:
-        raise ValueError("ct is missing from the patient file.")
+    with importer.progress("Importing patient", total=2) as step:
+        ct = importer.load_ct()
+        if ct is None:
+            raise ValueError("ct is missing from the patient file.")
+        step.advance()
 
-    cst = importer.load_cst(ct)
-    if cst is None:
-        warnings.warn("cst/StructureSet is missing from the patient file.")
+        cst = importer.load_cst(ct)
+        if cst is None:
+            warnings.warn("cst/StructureSet is missing from the patient file.")
+        step.advance()
 
     if (isinstance(extra_plan_data, dict) or isinstance(extra_data, dict)) and fmt == "mat":
         mdict = dict(importer.mdict)

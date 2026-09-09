@@ -1,4 +1,5 @@
-from typing import TypedDict
+import logging
+from typing import Optional, TypedDict
 
 import numpy as np
 
@@ -10,6 +11,8 @@ from pyRadPlan.stf import SteeringInformation, validate_stf
 
 from .problems import get_problem_from_pln
 
+logger = logging.getLogger(__name__)
+
 
 class OptInfo(TypedDict, total=False):
     """Solver-specific optimization information populated during optimization.
@@ -20,12 +23,17 @@ class OptInfo(TypedDict, total=False):
     Attributes
     ----------
     obj_history : list[float]
-        Objective function value at each evaluation.
+        Objective function value at each evaluation. Absent if the planning problem does not
+        record one (``records_obj_history``), rather than empty.
     num_iter : int
-        Number of iterations performed by the solver.
+        Number of iterations performed by the solver. Absent if the solver does not report
+        one under ``result_info["num_iter"]``.
     result_info : dict
         Solver-specific result information (convergence status, iteration
         count, etc.).
+    objective_info : list[dict]
+        Auxiliary information reported by the individual objectives (e.g. NTCP histories from
+        outcome objectives). Absent when no objective reports any.
     """
 
     obj_history: list[float]
@@ -34,8 +42,14 @@ class OptInfo(TypedDict, total=False):
     objective_info: list[dict]
 
 
-def fluence_optimization(
-    ct: CT, cst: StructureSet, stf: SteeringInformation, dij: Dij, pln: Plan, **kwargs
+def fluence_optimization(  # noqa: PLR0913
+    ct: CT,
+    cst: StructureSet,
+    stf: SteeringInformation,
+    dij: Dij,
+    pln: Plan,
+    *,
+    opt_info: Optional[OptInfo] = None,
 ) -> np.ndarray:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
@@ -52,12 +66,10 @@ def fluence_optimization(
         Dij object.
     pln : Plan
         Plan object.
-
-    Additional keyword arguments:
-
     opt_info : OptInfo, optional
         If provided (e.g. as an empty ``{}``), it will be populated with
-        ``obj_history``, ``n_iter``, and ``result_info`` after optimization.
+        ``obj_history``, ``num_iter``, ``result_info`` and ``objective_info``
+        after optimization.
 
     Returns
     -------
@@ -73,20 +85,41 @@ def fluence_optimization(
 
     planning_prob = get_problem_from_pln(_pln)
 
-    opt_info: OptInfo = kwargs.get("opt_info", None)
+    records_history = getattr(planning_prob, "records_obj_history", False)
+
     if opt_info is not None:
+        # The caller owns this dictionary and may reuse it across solves. The optional keys are
+        # dropped up front so a key this solve does not fill cannot be read as its result - and
+        # so a solve that raises leaves no stale values behind either.
+        for key in ("obj_history", "num_iter", "result_info", "objective_info"):
+            opt_info.pop(key, None)
+
+    if opt_info is not None and records_history:
         planning_prob.obj_history = []
 
     x, result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
 
     if opt_info is not None:
-        opt_info["obj_history"] = planning_prob.obj_history
+        # Only a problem that declares it actually fills the history; reporting an empty list
+        # for one that does not would be indistinguishable from a solve without evaluations.
+        if records_history:
+            opt_info["obj_history"] = planning_prob.obj_history
+        else:
+            logger.warning(
+                "Planning problem '%s' does not record an objective history, so "
+                "opt_info['obj_history'] is left unset.",
+                getattr(planning_prob, "short_name", type(planning_prob).__name__),
+            )
         opt_info["result_info"] = result_info
-        # Extract iteration count from solver-specific result
-        if isinstance(result_info, dict):
-            opt_info["num_iter"] = result_info.get("nit", result_info.get("iter_count", 0))
-        # Collect objective-reported info (e.g. NTCP histories)
-        objective_info = planning_prob.collect_objective_info()
+        # Every solver normalizes its iteration count under "num_iter"; a third-party solver
+        # that does not is left without the key rather than reported as zero iterations.
+        if isinstance(result_info, dict) and "num_iter" in result_info:
+            opt_info["num_iter"] = int(result_info["num_iter"])
+        # Objectives may report their own auxiliary series (e.g. NTCP per evaluation); left
+        # unset rather than empty when none does, matching the other optional keys. Looked up
+        # defensively so a duck-typed planning problem is not required to implement it.
+        collect = getattr(planning_prob, "collect_objective_info", None)
+        objective_info = collect() if callable(collect) else None
         if objective_info:
             opt_info["objective_info"] = objective_info
 
