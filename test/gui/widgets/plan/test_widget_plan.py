@@ -108,10 +108,122 @@ def test_placeholder_controls_disabled(qapp):
     assert not widget._cmb_bio_model.isEnabled()
     assert not widget._cmb_quantity.isEnabled()
     assert not widget._btn_tissue.isEnabled()
-    assert not widget._chk_sequencing.isEnabled()
     assert not widget._chk_dao.isEnabled()
     assert not widget._chk_conf3d.isEnabled()
     assert widget._cmb_quantity.count() > 0  # populated from available quantities
+
+
+def test_sequencing_controls_enabled_for_photons(qapp):
+    widget, _ = _make_widget()
+    assert widget._cmb_radiation.currentText() == "photons"
+    assert widget._chk_sequencing.isEnabled()
+    assert not widget._chk_sequencing.isChecked()
+    # The config button only becomes usable once sequencing is actually enabled.
+    assert not widget._btn_sequencer_config.isEnabled()
+
+    widget._chk_sequencing.setChecked(True)
+    assert widget._btn_sequencer_config.isEnabled()
+
+
+def test_sequencing_controls_disabled_for_ions(qapp):
+    widget, _ = _make_widget()
+    widget._chk_sequencing.setChecked(True)
+
+    widget._cmb_radiation.setCurrentText("protons")
+
+    assert not widget._chk_sequencing.isEnabled()
+    assert not widget._chk_sequencing.isChecked()
+    assert not widget._btn_sequencer_config.isEnabled()
+
+
+def test_apply_writes_prop_seq_when_sequencing_enabled(qapp):
+    widget, ws = _make_widget()
+    widget._chk_sequencing.setChecked(True)
+    widget._cmb_sequencer.setCurrentText("xia")
+    # simulate values confirmed in the [...] config popup
+    widget._sequencer_props["xia"] = {"num_of_levels": 9, "mode": "sliding_window"}
+
+    widget._on_apply()
+
+    assert ws.pln.prop_seq.get("run_sequencing") is True
+    assert ws.pln.prop_seq.get("num_of_levels") == 9
+    assert ws.pln.prop_seq.get("mode") == "sliding_window"
+    assert ws.pln.prop_seq.get("sequencer") == "xia"
+
+
+def test_sequencer_config_dialog_round_trip(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    widget, _ = _make_widget()
+    widget._chk_sequencing.setChecked(True)
+    widget._cmb_sequencer.setCurrentText("xia")
+
+    sequencer_cls = widget._sequencers["xia"]
+    dialog = ConfigFormDialog(sequencer_cls.config_model(), initial={"num_of_levels": 3})
+    assert "mode" in dialog.form._editors
+    dialog.form._set_value("mode", "sliding_window")
+    assert dialog.values() == {"num_of_levels": 3, "mode": "sliding_window"}
+
+
+def test_do_update_restores_sequencer_and_config_from_pln(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        num_of_fractions=30,
+        machine="Generic",
+        prop_seq={"sequencer": "xia", "run_sequencing": True, "num_of_levels": 12},
+    )
+
+    assert widget._chk_sequencing.isChecked()
+    assert widget._cmb_sequencer.currentText() == "xia"
+    assert widget._sequencer_props["xia"] == {"num_of_levels": 12}
+
+
+def test_sequencer_combo_populated_with_photon_sequencers(qapp):
+    widget, _ = _make_widget()
+    items = [widget._cmb_sequencer.itemText(i) for i in range(widget._cmb_sequencer.count())]
+    assert set(items) == {"xia", "siochi", "engel"}
+
+
+def test_sequencer_combo_disabled_until_sequencing_checked(qapp):
+    widget, _ = _make_widget()
+    assert not widget._cmb_sequencer.isEnabled()
+
+    widget._chk_sequencing.setChecked(True)
+    assert widget._cmb_sequencer.isEnabled()
+
+
+def test_apply_preserves_selected_sequencer_across_reload(qapp):
+    widget, ws = _make_widget()
+    widget._chk_sequencing.setChecked(True)
+    widget._cmb_sequencer.setCurrentText("siochi")
+    widget._on_apply()
+
+    # A second widget bound to the same (now-populated) workspace should
+    # restore the sequencing selection from ``pln.prop_seq``.
+    reloaded = PlanWidget(workspace=ws)
+    assert reloaded._chk_sequencing.isChecked()
+    assert reloaded._cmb_sequencer.currentText() == "siochi"
+
+
+def test_apply_omits_prop_seq_when_sequencing_disabled(qapp):
+    widget, ws = _make_widget()
+    assert not widget._chk_sequencing.isChecked()
+
+    widget._on_apply()
+
+    assert ws.pln.prop_seq == {}
+
+
+def test_apply_clears_prop_seq_after_unchecking_sequencing(qapp):
+    widget, ws = _make_widget()
+    widget._chk_sequencing.setChecked(True)
+    widget._on_apply()
+    assert ws.pln.prop_seq.get("run_sequencing") is True
+
+    widget._chk_sequencing.setChecked(False)
+    widget._on_apply()
+
+    assert ws.pln.prop_seq == {}
 
 
 def test_iso_center_auto_omits_key(qapp):

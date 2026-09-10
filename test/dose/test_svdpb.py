@@ -1,8 +1,9 @@
+import pytest
 import SimpleITK as sitk
 import numpy as np
 
 from pyRadPlan import PhotonPlan, generate_stf, calc_dose_forward, load_tg119
-from pyRadPlan.machines import MLC
+from pyRadPlan.machines import MLC, Jaw
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.visualization._plot_slice import plot_slice
 
@@ -45,9 +46,11 @@ def _mlc(opening: float) -> MLC:
     )
 
 
-def _forward_dose(ct, cst, mlc_sequence, weights):
+def _forward_dose(ct, cst, mlc_sequence, weights, extra_blds=None):
     pln = PhotonPlan(machine="Generic")
-    beam_sequence = BeamSequence(mlc_sequence=mlc_sequence, shapes_weight=weights)
+    beam_sequence = BeamSequence(
+        mlc_sequence=mlc_sequence, shapes_weight=weights, extra_blds=extra_blds
+    )
     pln.prop_stf = {
         "gantry_angles": [0.0],
         "couch_angles": [0.0],

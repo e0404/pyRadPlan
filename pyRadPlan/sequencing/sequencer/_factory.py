@@ -37,25 +37,28 @@ def register_sequencer(sequencer_cls: Type[Sequencer]) -> None:
         SEQUENCER[prob_name] = sequencer_cls
 
 
-def get_available_sequencers(pln: Union[Plan, dict[str]]) -> dict[str, Type[Sequencer]]:
+def get_available_sequencers(pln: Union[Plan, dict[str], str]) -> dict[str, Type[Sequencer]]:
     """
     Get a list of available Sequencer based on the plan.
 
     Parameters
     ----------
-    pln : Union[Plan,dict]
-        A Plan object.
+    pln : Union[Plan, dict, str]
+        A Plan object, or directly a radiation mode.
 
     Returns
     -------
     list
         A list of available sequencer.
     """
-    pln = validate_pln(pln)
+    if isinstance(pln, str):
+        radiation_mode = pln
+    else:
+        radiation_mode = validate_pln(pln).radiation_mode
     return {
         name: cls
         for name, cls in SEQUENCER.items()
-        if pln.radiation_mode in cls.possible_radiation_modes
+        if radiation_mode in cls.possible_radiation_modes
     }
 
 

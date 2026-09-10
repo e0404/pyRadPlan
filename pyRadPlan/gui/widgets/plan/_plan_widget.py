@@ -26,6 +26,7 @@ from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, validate_pln
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.scenarios import available_scenario_models
+from pyRadPlan.sequencing.sequencer import get_available_sequencers
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
 from ..ai import ai_disabled_reason
@@ -75,6 +76,9 @@ class PlanWidget(WorkspaceWidget):
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
         self._engines: dict[str, type] = {}
+        #: Sequencer configuration values per sequencer short name, edited via
+        #: the [...] popup and written into ``pln.prop_seq`` on Apply.
+        self._sequencer_props: dict[str, dict] = {}
         #: True while syncing the form *from* the workspace, so programmatic
         #: widget changes don't register as user edits.
         self._syncing = False
@@ -102,6 +106,9 @@ class PlanWidget(WorkspaceWidget):
             "res_x": self._spn_res_x,
             "res_y": self._spn_res_y,
             "res_z": self._spn_res_z,
+            "sequencing": self._chk_sequencing,
+            "sequencer": self._cmb_sequencer,
+            "sequencer_props": self._btn_sequencer_config,
         }
         self._connect_dirty_signals()
         self.initialize()
@@ -139,6 +146,7 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(self._cmb_radiation.currentText())
         self._refresh_engines(self._cmb_radiation.currentText())
         self._update_mode_dependent_fields()
+        self._update_sequencing_availability(self._cmb_radiation.currentText())
         self._update_beam_count()
 
     def _build_fields(self, grid: QGridLayout) -> None:
@@ -269,22 +277,26 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(self._btn_tissue, 5, 3)
 
     def _build_sequencing_row(self, grid: QGridLayout) -> None:
+        self._sequencers: dict[str, type] = {}
         self._chk_sequencing = QCheckBox("Run sequencing")
-        self._spn_seq_levels = QSpinBox()
-        self._spn_seq_levels.setRange(1, 100)
-        self._spn_seq_levels.setValue(7)
+        self._chk_sequencing.toggled.connect(self._on_sequencing_toggled)
+        self._cmb_sequencer = QComboBox()
+        self._cmb_sequencer.setToolTip("Sequencing algorithm.")
+        self._btn_sequencer_config = QPushButton("…")
+        self._btn_sequencer_config.setFixedWidth(28)
+        self._btn_sequencer_config.setToolTip("Configure the selected sequencing algorithm")
+        self._btn_sequencer_config.clicked.connect(self._on_sequencer_config)
         self._chk_dao = QCheckBox("Run DAO")
         self._chk_conf3d = QCheckBox("3D conformal")
-        for widget in (self._chk_sequencing, self._spn_seq_levels, self._chk_dao):
-            self._set_not_implemented(widget, "Sequencing / aperture optimization")
+        self._set_not_implemented(self._chk_dao, "Direct aperture optimization")
         self._set_not_implemented(self._chk_conf3d, "3D conformal planning")
 
         seq_row = QHBoxLayout()
         seq_row.setContentsMargins(0, 0, 0, 0)
         seq_row.setSpacing(4)
         seq_row.addWidget(self._chk_sequencing)
-        seq_row.addWidget(QLabel("Levels:"))
-        seq_row.addWidget(self._spn_seq_levels)
+        seq_row.addWidget(self._cmb_sequencer, 1)
+        seq_row.addWidget(self._btn_sequencer_config)
 
         opt_row = QHBoxLayout()
         opt_row.setContentsMargins(0, 0, 0, 0)
@@ -377,7 +389,58 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(radiation_mode)
         self._refresh_engines(radiation_mode)
         self._update_mode_dependent_fields()
+        self._update_sequencing_availability(radiation_mode)
         self._update_dirty_state()
+
+    _SEQUENCING_TOOLTIP = (
+        "Configure MLC sequencing for this plan; run it from the workflow panel's "
+        "'Run Sequencing' button once a result is available."
+    )
+
+    def _update_sequencing_availability(self, radiation_mode: str) -> None:
+        """Sequencing (xia/siochi/engel) currently only supports photon plans."""
+        available = radiation_mode == "photons"
+        self._refresh_sequencers(radiation_mode)
+        self._chk_sequencing.setEnabled(available)
+        self._chk_sequencing.setToolTip(
+            self._SEQUENCING_TOOLTIP
+            if available
+            else "Sequencing is only available for photon plans."
+        )
+        if not available:
+            self._chk_sequencing.setChecked(False)
+        self._on_sequencing_toggled(self._chk_sequencing.isChecked())
+
+    def _refresh_sequencers(self, radiation_mode: str) -> None:
+        self._sequencers = get_available_sequencers(radiation_mode)
+        current = self._cmb_sequencer.currentText()
+        self._cmb_sequencer.blockSignals(True)
+        self._cmb_sequencer.clear()
+        self._cmb_sequencer.addItems(list(self._sequencers))
+        if current in self._sequencers:
+            self._cmb_sequencer.setCurrentText(current)
+        self._cmb_sequencer.blockSignals(False)
+
+    def _on_sequencing_toggled(self, checked: bool) -> None:
+        enabled = checked and self._chk_sequencing.isEnabled()
+        self._cmb_sequencer.setEnabled(enabled)
+        self._btn_sequencer_config.setEnabled(enabled)
+
+    def _on_sequencer_config(self) -> None:
+        sequencer_name = self._cmb_sequencer.currentText()
+        sequencer_cls = self._sequencers.get(sequencer_name)
+        if sequencer_cls is None:
+            return
+
+        dialog = ConfigFormDialog(
+            sequencer_cls.config_model(),
+            initial=self._sequencer_props.get(sequencer_name, {}),
+            title=f"Configure {sequencer_cls.name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._sequencer_props[sequencer_name] = dialog.values()
+            self._update_dirty_state()
 
     # ------------------------------------------------------------------
     # Dose engine handling
@@ -453,6 +516,7 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(pln.radiation_mode)
         self._refresh_engines(pln.radiation_mode)
         self._update_mode_dependent_fields()
+        self._update_sequencing_availability(pln.radiation_mode)
 
         self._restore_engine_from_pln(pln)
 
@@ -491,8 +555,23 @@ class PlanWidget(WorkspaceWidget):
             self._spn_res_y.setValue(float(resolution.get("y", self._spn_res_y.value())))
             self._spn_res_z.setValue(float(resolution.get("z", self._spn_res_z.value())))
 
+        self._restore_sequencing_from_pln(pln)
+
         self._btn_ct_grid.setEnabled(self._ws.ct is not None)
         self._update_beam_count()
+
+    def _restore_sequencing_from_pln(self, pln: Plan) -> None:
+        prop_seq = pln.prop_seq if isinstance(pln.prop_seq, dict) else {}
+        self._chk_sequencing.setChecked(bool(prop_seq) and self._chk_sequencing.isEnabled())
+        sequencer_name = prop_seq.get("sequencer")
+        if sequencer_name not in self._sequencers:
+            return
+        self._cmb_sequencer.setCurrentText(sequencer_name)
+        sequencer_props = {
+            k: v for k, v in prop_seq.items() if k not in ("sequencer", "run_sequencing")
+        }
+        if sequencer_props:
+            self._sequencer_props[sequencer_name] = sequencer_props
 
     def _restore_engine_from_pln(self, pln: Plan) -> None:
         prop_dose_calc = pln.prop_dose_calc if isinstance(pln.prop_dose_calc, dict) else {}
@@ -697,6 +776,17 @@ class PlanWidget(WorkspaceWidget):
             }
         }
 
+        prop_seq: dict = {}
+        if not is_ion and self._chk_sequencing.isChecked():
+            sequencer_name = self._cmb_sequencer.currentText()
+            if not sequencer_name:
+                raise ValueError("no sequencing algorithm available for this radiation mode")
+            prop_seq = {
+                "run_sequencing": True,
+                "sequencer": sequencer_name,
+                **self._sequencer_props.get(sequencer_name, {}),
+            }
+
         plan_data = {
             "radiation_mode": radiation_mode,
             "machine": self._cmb_machine.currentText() or "Generic",
@@ -704,6 +794,7 @@ class PlanWidget(WorkspaceWidget):
             "mult_scen": self._cmb_scenario.currentText(),
             "prop_stf": prop_stf,
             "prop_dose_calc": prop_dose_calc,
+            "prop_seq": prop_seq,
         }
 
         return validate_pln(_plan_class(radiation_mode)(**plan_data))
@@ -735,6 +826,8 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_scenario.currentTextChanged.connect(self._on_field_edited)
         for spin in (self._spn_res_x, self._spn_res_y, self._spn_res_z):
             spin.valueChanged.connect(self._on_field_edited)
+        self._chk_sequencing.toggled.connect(self._on_field_edited)
+        self._cmb_sequencer.currentTextChanged.connect(self._on_field_edited)
 
     def _on_field_edited(self, *_args) -> None:
         self._update_dirty_state()
@@ -742,6 +835,7 @@ class PlanWidget(WorkspaceWidget):
     def _capture_state(self) -> dict[str, Any]:
         """Snapshot the tracked field values for modified-state comparison."""
         engine = self._cmb_engine.currentText()
+        sequencer = self._cmb_sequencer.currentText()
         not_auto = not self._chk_iso_auto.isChecked()
         return {
             "radiation": self._cmb_radiation.currentText(),
@@ -758,6 +852,9 @@ class PlanWidget(WorkspaceWidget):
             "res_x": self._spn_res_x.value(),
             "res_y": self._spn_res_y.value(),
             "res_z": self._spn_res_z.value(),
+            "sequencing": self._chk_sequencing.isChecked(),
+            "sequencer": sequencer,
+            "sequencer_props": dict(self._sequencer_props.get(sequencer, {})),
         }
 
     @staticmethod

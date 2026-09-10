@@ -93,12 +93,16 @@ def _validate_inputs(
     return image_volume, cst, image_cube, array_shape
 
 
+#: (x_axis, y_axis, z_axis) LPS coordinate names plotted horizontally/vertically/
+#: out-of-plane for each ``plane`` index (0=axial, 1=coronal, 2=sagittal).
+_AXIS_ORDERS = {0: ("x", "y", "z"), 1: ("z", "x", "y"), 2: ("z", "y", "x")}
+
+
 def _resolve_axes(
     image_volume: Optional[CT], cst: Optional[StructureSet], plane: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (x_plot, y_plot, z_plot) physical-coordinate axes for the chosen plane."""
-    axis_orders = {0: ("x", "y", "z"), 1: ("z", "x", "y"), 2: ("z", "y", "x")}
-    x_axis, y_axis, z_axis = axis_orders[plane]
+    x_axis, y_axis, z_axis = _AXIS_ORDERS[plane]
     source = image_volume if image_volume is not None else cst.ct_image
     return getattr(source, x_axis), getattr(source, y_axis), getattr(source, z_axis)
 
@@ -192,7 +196,7 @@ def _draw_overlay(
         ctx.y_plot,
         overlay_2d,
         cmap=style.cmap,
-        alpha=style.alpha * (overlay_2d > style.rel_threshold * current_max),
+        alpha=style.alpha * (np.abs(overlay_2d) > style.rel_threshold * np.abs(current_max)),
         vmin=vmin,
         vmax=vmax,
         shading="nearest",
@@ -420,6 +424,11 @@ def plot_slice(
     transpose = plane != 0
     for i, slice_idx in enumerate(view_slice):
         _render_slice(_PlotCtx(axes[i], x_plot, y_plot, transpose), slice_idx, cfg)
+
+    x_axis_name, y_axis_name, _ = _AXIS_ORDERS[plane]
+    for a in axes:
+        a.set_xlabel(f"{x_axis_name} [mm]")
+        a.set_ylabel(f"{y_axis_name} [mm]")
 
     if ax is None:  # Only manage layout and saving for internal figures
         _finalize_figure(save_filename, show_plot)

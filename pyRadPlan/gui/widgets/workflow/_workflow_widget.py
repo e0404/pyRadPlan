@@ -213,6 +213,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._dij_stale = False
         self._result_stale = False
         self._indicators: dict[str, QLabel] = {}
+        self._prev_pln: Optional[Any] = None
 
         self._setup_ui()
         # Queued (cross-thread) delivery of compute reports to the GUI thread.
@@ -261,6 +262,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
+        self._btn_sequence = self._add_button("Run Sequencing", self._on_sequence)
         self._btn_save_result = self._add_button("Save / Keep Result", self._on_save_result)
 
         # Each column is a workflow stage, progressing left to right (as in
@@ -286,9 +288,10 @@ class WorkflowWidget(WorkspaceWidget):
         # Col 1: dose influence
         grid.addWidget(self._btn_calc_dose, 1, 1)
         grid.addWidget(self._btn_load_dij, 2, 1)
-        # Col 2: result computation (optimization, recalculation)
+        # Col 2: result computation (optimization, recalculation, sequencing)
         grid.addWidget(self._btn_optimize, 1, 2)
         grid.addWidget(self._btn_recalc, 2, 2)
+        grid.addWidget(self._btn_sequence, 3, 2)
         # Col 3: keep result in-memory (file saves live in the File menu)
         grid.addWidget(self._btn_save_result, 1, 3)
         root.addLayout(grid)
@@ -357,6 +360,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._update_status()
         self._update_button_states()
         self._update_indicators()
+        self._prev_pln = self._ws.pln
 
     def _prune_saved_tags(self) -> None:
         """Drop snapshot tags whose keys no longer exist in the result.
@@ -399,26 +403,49 @@ class WorkflowWidget(WorkspaceWidget):
             if carry and key not in new_result.beam_quantities:
                 new_result.add_beam_quantity(key, prev.beam_quantities[key])
 
+    #: pln fields that feed into stf/dose-influence generation (calc_dose_influence);
+    #: a change here invalidates dij (and, transitively, result).
+    _DIJ_PLN_FIELDS = ("radiation_mode", "machine", "mult_scen", "prop_stf", "prop_dose_calc")
+    #: Additional pln fields that feed into optimization but not dij (e.g. the
+    #: solver choice); objective edits live on ``cst`` and are tracked separately.
+    _RESULT_ONLY_PLN_FIELDS = ("prop_opt",)
+
+    def _pln_changed(self, *fields: str) -> bool:
+        """Whether any of *fields* differs between the last-seen and current pln."""
+        prev, current = self._prev_pln, self._ws.pln
+        if prev is None or current is None:
+            return prev is not current
+        return any(getattr(prev, f, None) != getattr(current, f, None) for f in fields)
+
     def _update_staleness(self, changed_keys: list) -> None:
         """Flag downstream products as outdated when an upstream object changes.
 
         A product written in the same update as its upstream (e.g. loading a
         .mat that carries both ``pln`` and ``dij``) is fresh; only an
-        upstream-only change marks the product outdated.
+        upstream-only change marks the product outdated. A ``pln`` write only
+        counts as "upstream" for the fields that actually feed into dij/result
+        (see ``_DIJ_PLN_FIELDS``/``_RESULT_ONLY_PLN_FIELDS``) — e.g. toggling
+        sequencing settings does not require recalculating dose influence or
+        re-optimizing.
         """
         ws = self._ws
         keys = set(changed_keys)
+        pln_affects_dij = "pln" in keys and self._pln_changed(*self._DIJ_PLN_FIELDS)
+        pln_affects_result = pln_affects_dij or (
+            "pln" in keys and self._pln_changed(*self._RESULT_ONLY_PLN_FIELDS)
+        )
+
         if not ws.has("dij"):
             self._dij_stale = False
         elif keys & {"stf", "dij"}:
             self._dij_stale = False
-        elif "pln" in keys:
+        elif pln_affects_dij:
             self._dij_stale = True
         if not ws.has("result"):
             self._result_stale = False
         elif "result" in keys:
             self._result_stale = False
-        elif keys & {"pln", "cst", "stf", "dij"}:
+        elif keys & {"cst", "stf", "dij"} or pln_affects_result:
             self._result_stale = True
 
     def _update_indicators(self) -> None:
@@ -470,6 +497,11 @@ class WorkflowWidget(WorkspaceWidget):
         has_pln = ws.has("pln")
         has_stf_dij = ws.has("stf", "dij")
         has_result = ws.has("result")
+        is_photon = getattr(ws.pln, "radiation_mode", None) == "photons"
+        prop_seq = getattr(ws.pln, "prop_seq", None) or {}
+        seq_configured = (
+            bool(prop_seq.get("run_sequencing")) if isinstance(prop_seq, dict) else False
+        )
 
         self._btn_calc_dose.setEnabled(has_patient and has_pln)
         # Loading a precomputed dij is always available; geometry compatibility is
@@ -477,6 +509,26 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij.setEnabled(True)
         self._btn_optimize.setEnabled(has_stf_dij)
         self._btn_recalc.setEnabled(has_result and has_stf_dij)
+        self._btn_sequence.setEnabled(
+            has_result
+            and ws.has("stf")
+            and is_photon
+            and seq_configured
+            and not self._result_stale
+        )
+        if not is_photon:
+            seq_tooltip = "Sequencing is only available for photon plans."
+        elif self._result_stale:
+            seq_tooltip = (
+                "Result is outdated relative to the current plan (e.g. after switching "
+                "radiation mode) — recalculate dose influence and re-optimize before "
+                "sequencing."
+            )
+        elif not seq_configured:
+            seq_tooltip = "Enable 'Run sequencing' in the Plan panel first."
+        else:
+            seq_tooltip = ""
+        self._btn_sequence.setToolTip(seq_tooltip)
         self._btn_save_result.setEnabled(has_result)
 
     # ------------------------------------------------------------------
@@ -1041,6 +1093,55 @@ class WorkflowWidget(WorkspaceWidget):
             self._ws.result = new_result
 
         self._run_in_thread(_compute, on_success=_on_success, busy_text="Recalculating dose…")
+
+    # ------------------------------------------------------------------
+    # Sequencing callbacks
+    # ------------------------------------------------------------------
+
+    def _on_sequence(self) -> None:
+        stf, dij, pln = self._ws.stf, self._ws.dij, self._ws.pln
+        result: Optional[PlanResult] = self._ws.result
+
+        if result is None:
+            QMessageBox.warning(self, "Run Sequencing", "No result available to sequence.")
+            return
+        if pln is None or pln.radiation_mode != "photons":
+            QMessageBox.warning(
+                self, "Run Sequencing", "Sequencing is only available for photon plans."
+            )
+            return
+        if self._result_stale:
+            QMessageBox.warning(
+                self,
+                "Run Sequencing",
+                "Result is outdated relative to the current plan (e.g. after switching "
+                "radiation mode) — recalculate dose influence and re-optimize before "
+                "sequencing.",
+            )
+            return
+        prop_seq = getattr(pln, "prop_seq", None)
+        if not (isinstance(prop_seq, dict) and prop_seq.get("run_sequencing")):
+            QMessageBox.warning(
+                self,
+                "Run Sequencing",
+                "Enable 'Run sequencing' in the Plan panel first.",
+            )
+            return
+
+        def _compute() -> PlanResult:
+            # Deferred: only needed inside the worker thread, not at widget construction.
+            from copy import deepcopy  # noqa: PLC0415
+
+            from pyRadPlan import run_sequencing  # noqa: PLC0415
+
+            # Sequence a copy so the pre-sequencing result (still referenced elsewhere,
+            # e.g. for a before/after comparison) is not mutated in place.
+            return run_sequencing(deepcopy(result), pln, stf, dij=dij)
+
+        def _on_success(new_result: PlanResult) -> None:
+            self._ws.result = new_result
+
+        self._run_in_thread(_compute, on_success=_on_success, busy_text="Sequencing…")
 
     # ------------------------------------------------------------------
     # Result callbacks

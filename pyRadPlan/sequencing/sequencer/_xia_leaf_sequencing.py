@@ -22,14 +22,13 @@ systems with different motion constraints.
 
 import logging
 
-from typing import Union
+from typing import Literal
 import numpy as np
 import math
 
 from pyRadPlan.result import PlanResult, validate_result
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
-from pyRadPlan.plan import Plan
 from ._base_photon import PhotonSequencer
 
 logger = logging.getLogger(__name__)
@@ -40,11 +39,7 @@ class XiaLeafSequencer(PhotonSequencer):
     short_name = "xia"
     possible_radiation_modes = ["photons"]
 
-    def __init__(self, pln: Union[Plan, dict] = None):
-        """Initialize the Sequencer class."""
-
-        self.mode = "reducing_levels"  # 'sliding_window' or 'reducing_levels'
-        super().__init__(pln)
+    mode: Literal["reducing_levels", "sliding_window"] = "reducing_levels"
 
     def _apply_reducing_levels(
         self, opening_mx: np.ndarray, d_k: np.ndarray, dim_of_fluence_mx_z: np.ndarray

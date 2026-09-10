@@ -125,9 +125,9 @@ class MLC(BeamLimitingDevice):
         bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / self.leaf_width
         is_active_leaf_pair = np.zeros(self.number_of_elements)
         # Activate indices between top and bottom leaf pairs (casting to int)
-        start_ix = int(math.floor(top_leaf_pair))
+        start_ix = max(int(math.floor(top_leaf_pair)) - 1, 0)
         end_ix = int(math.ceil(bottom_leaf_pair))
-        is_active_leaf_pair[start_ix - 1 : end_ix] = 1
+        is_active_leaf_pair[start_ix:end_ix] = 1
         return is_active_leaf_pair
 
     def full_leaf_positions(self, central_leaf_pair: float) -> np.ndarray:
@@ -143,6 +143,14 @@ class MLC(BeamLimitingDevice):
             Index of the central leaf pair in the full MLC.
         """
         is_active = self.is_active_leaf_pair(central_leaf_pair).astype(bool)
+        if is_active.sum() != len(self.leaf_positions):
+            raise ValueError(
+                f"This shape's {len(self.leaf_positions)} leaf rows do not fit within "
+                f"the full device's {self.number_of_elements} leaf pairs at "
+                f"central_leaf_pair={central_leaf_pair}: only {int(is_active.sum())} "
+                "leaf pairs of the device fall within this shape's leaf-row range. "
+                "The field does not fit within the physical collimator at this alignment."
+            )
         full = np.zeros((self.number_of_elements, 2))
         full[is_active] = self.leaf_positions
         return full

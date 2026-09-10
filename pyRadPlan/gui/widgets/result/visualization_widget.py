@@ -31,6 +31,7 @@ class VisualizationWidget(QWidget):
     isolines_set = Signal(list)  # list of float levels
     recenter_requested = Signal()
     show_analysis_requested = Signal()
+    show_sequence_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -117,6 +118,19 @@ class VisualizationWidget(QWidget):
         self.dvh_btn.setEnabled(True)
         self.dvh_btn.clicked.connect(self.show_analysis_requested)
         parent_layout.addWidget(self.dvh_btn)
+
+        self.sequence_btn = QPushButton("Show Sequence")
+        self.sequence_btn.setToolTip(
+            "Show the sequence viewer for the sequenced plan (requires sequencing "
+            "to have been run)"
+        )
+        self.sequence_btn.setEnabled(False)
+        self.sequence_btn.clicked.connect(self.show_sequence_requested)
+        parent_layout.addWidget(self.sequence_btn)
+
+    def set_sequence_enabled(self, enabled: bool) -> None:
+        """Enable/disable the sequence viewer button (whether a sequence is available)."""
+        self.sequence_btn.setEnabled(enabled)
 
     def update_quantity_selector(self, quantities: list[str], active: str | None = None) -> None:
         """Update the quantity selector items."""

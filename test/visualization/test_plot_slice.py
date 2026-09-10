@@ -95,6 +95,41 @@ def test_plot_slice_with_overlay(sample_ct, sample_cst, sample_overlay, tmp_path
     )
 
 
+def test_plot_slice_overlay_threshold_is_sign_symmetric(sample_ct):
+    import matplotlib.pyplot as plt
+
+    signed = np.zeros((10, 100, 100), dtype=np.float32)
+    signed[5, :50, :] = 2.0
+    signed[5, 50:, :] = -2.0
+    overlay = sitk.GetImageFromArray(signed)
+
+    _, ax = plt.subplots()
+    plot_slice(
+        image_volume=sample_ct,
+        overlay=overlay,
+        view_slice=5,
+        show_plot=False,
+        ax=ax,
+    )
+    alphas = ax.collections[-1].get_facecolors()[:, 3]
+    assert np.all(alphas > 0)
+
+
+def test_plot_slice_axis_labels_per_plane(sample_ct):
+    import matplotlib.pyplot as plt
+
+    expected = {
+        "axial": ("x [mm]", "y [mm]"),
+        "coronal": ("z [mm]", "x [mm]"),
+        "sagittal": ("z [mm]", "y [mm]"),
+    }
+    for plane, (xlabel, ylabel) in expected.items():
+        _, ax = plt.subplots()
+        plot_slice(image_volume=sample_ct, view_slice=1, plane=plane, show_plot=False, ax=ax)
+        assert ax.get_xlabel() == xlabel
+        assert ax.get_ylabel() == ylabel
+
+
 def test_plot_slice_parameters_coronal(sample_ct, sample_cst, sample_overlay, tmp_path):
     plot_slice(
         image_volume=sample_ct,

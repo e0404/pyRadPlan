@@ -261,6 +261,18 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
 
         return FieldShapeAsMask(energy=self.energy, mask=combined_mask, grid=grid, weight=1.0)
 
+    def _merge_group_shapes(self, group_shapes: list[FieldShape]) -> FieldShape:
+        """Combine every extra_blds group's own composite field shape into one beam-wide mask."""
+        if len(group_shapes) == 1:
+            return group_shapes[0]
+
+        field_width = max(s.field_width for s in group_shapes)
+        grid = FieldShape._build_grid(self.resolution, field_width)
+
+        combined_mask = sum(s.weight * s.resample(new_grid=grid).mask for s in group_shapes)
+
+        return FieldShapeAsMask(energy=self.energy, mask=combined_mask, grid=grid, weight=1.0)
+
     def _create_rays(self, beam: dict) -> list[dict]:
         """Create the rays for the photon IMRT geometry.
 
@@ -272,19 +284,17 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         Returns
         -------
         list[dict]
-            A list of ray dictionaries. One ray per group of shapes sharing
-            identical ``extra_blds`` when ``beam_sequences`` is set, else the
+            A single ray combining every shape of the beam when
+            ``beam_sequences`` is set (see ``_merge_group_shapes``), else the
             single ray from the base class.
         """
         rays = super()._create_rays(beam)
-        base_ray = rays[0]
-        target_point = 2 * base_ray["ray_pos"] - beam["source_point"]
-        target_point_bev = 2 * base_ray["ray_pos_bev"] - beam["source_point_bev"]
+        ray = rays[0]  # single ray for single-bixel generator
 
         if self.beam_sequences is not None:
             beam_sequence = self.beam_sequences[beam["beam_ix"]]
             groups = self._group_shapes_by_extra_blds(beam_sequence)
-            rays = []
+            group_shapes = []
             for group in groups:
                 mlcs = [beam_sequence.mlc_sequence[m] for m in group]
                 weights = [float(beam_sequence.shapes_weight[m]) for m in group]
@@ -293,24 +303,24 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
                     if beam_sequence.extra_blds is not None
                     else None
                 )
-                beamlet = self._composite_shape_group(mlcs, weights, extra_blds)
-                rays.append(
-                    {
-                        **base_ray,
-                        "beamlets": [beamlet],
-                        "target_point": target_point,
-                        "target_point_bev": target_point_bev,
-                    }
-                )
-            return rays
+                group_shapes.append(self._composite_shape_group(mlcs, weights, extra_blds))
 
-        beamlet_template = {"energy": self.energy}
+            beamlet = self._merge_group_shapes(group_shapes)
+            return [
+                {
+                    **ray,
+                    "beamlets": [beamlet],
+                    "target_point": 2 * ray["ray_pos"] - beam["source_point"],
+                    "target_point_bev": 2 * ray["ray_pos_bev"] - beam["source_point_bev"],
+                }
+            ]
+
+        beamlet = {"energy": self.energy}
         return [
             {
                 **ray,
-                "beamlets": [beamlet_template.copy()],
-                "target_point": target_point,
-                "target_point_bev": target_point_bev,
+                "beamlets": [beamlet],
+                "target_point": 2 * ray["ray_pos"] - beam["source_point"],
+                "target_point_bev": 2 * ray["ray_pos_bev"] - beam["source_point_bev"],
             }
-            for ray in rays
         ]

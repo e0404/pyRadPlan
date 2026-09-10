@@ -2,7 +2,6 @@
 
 from typing import Optional, Union, Literal
 import numpy as np
-import SimpleITK as sitk
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -14,7 +13,7 @@ from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, SteeringInformation, validate_stf
-from pyRadPlan.visualization._plot_slice import plot_slice
+from pyRadPlan.visualization._plot_dose_comparison import _draw_dose_comparison_panels
 
 
 def _leaf_row_bounds(mlc: MLC, leaf_coordinate: str) -> tuple[np.ndarray, np.ndarray]:
@@ -22,9 +21,7 @@ def _leaf_row_bounds(mlc: MLC, leaf_coordinate: str) -> tuple[np.ndarray, np.nda
 
     For ``"physical"``, rows sit at their true z position with height
     ``mlc.leaf_width``. For ``"leaf_num"``, rows are relabeled 1..N from the
-    lowest to the highest z (a simple, beam-local index; pyRadPlan does not
-    currently expose a machine-wide fixed leaf-pair numbering to plot
-    against, unlike matRad's ``apertureInfo``).
+    lowest to the highest z.
     """
     n = len(mlc.leaf_positions)
     if leaf_coordinate == "physical":
@@ -84,8 +81,8 @@ def _beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:
     if stf is not None and beam_index < len(stf.beams):
         angle = getattr(stf.beams[beam_index], "gantry_angle", None)
         if angle is not None:
-            return f"Beam {beam_index + 1} ({float(angle):.0f}°)"
-    return f"Beam {beam_index + 1}"
+            return f"Beam {beam_index} ({float(angle):.0f}°)"
+    return f"Beam {beam_index}"
 
 
 def _per_beam_layout(n_shapes: int) -> tuple[int, int]:
@@ -95,9 +92,6 @@ def _per_beam_layout(n_shapes: int) -> tuple[int, int]:
     return rows, cols
 
 
-# Shape subplots are small/square; the shape grid figure and the fluence/dose
-# comparison figure are sized independently since they no longer share one
-# figure.
 _SHAPE_ROW_HEIGHT = 1.8
 _SHAPE_COL_WIDTH = 1.9
 _COMPARISON_ROW_HEIGHT = 4.5
@@ -120,14 +114,8 @@ def _col_edges(n_cols: int, n_panels: int) -> np.ndarray:
 
 
 def _comparison_layout(show_fluence: bool, show_dose: bool) -> dict:
-    """Rows/cols/column-edges/figsize for the fluence+dose comparison figure.
-
-    Both rows share the same column edges (3-way split when a dose row is
-    present, else a 2-way split) so the "pre-sequencing" and "post-sequencing"
-    panels of the fluence row line up directly above/below the "optimized" and
-    "delivered" panels of the dose row.
-    """
-    n_panels = 3 if show_dose else 2
+    """Rows/cols/column-edges/figsize for the fluence+dose comparison figure."""
+    n_panels = 3
     total_rows = int(show_fluence) + int(show_dose)
     edges = _col_edges(n_panels, n_panels)
     return {
@@ -179,21 +167,31 @@ def _native_fluence_map(beam: Beam, values: np.ndarray, device_orientation: str)
 def _draw_fluence_axis(
     ax: plt.Axes, fig: Figure, grid: np.ndarray, window: list[float], vmax: float, title: str
 ) -> None:
-    """Draw one fluence heatmap (with its own colorbar) into an existing axis.
-
-    Uses ``aspect="equal"`` (true physical x/z proportions) rather than
-    "auto": the GridSpec cell handed to this axis is often much wider than
-    the fluence map itself needs, and "auto" would stretch the image to
-    fill that whole cell. With "equal" and the default ``adjustable="box"``,
-    matplotlib instead shrinks the axes box to the correct aspect ratio and
-    centers it (anchor "C") within the cell, so the plot keeps its true
-    proportions instead of looking stretched.
-    """
+    """Draw one fluence heatmap (with its own colorbar) into an existing axis."""
     im = ax.imshow(
         grid, origin="lower", extent=window, aspect="equal", cmap="viridis", vmin=0, vmax=vmax
     )
-    ax.set_xlabel("horiz. pos. [mm]")
-    ax.set_ylabel("vert. pos. [mm]")
+    ax.set_xlabel("x (BEV) [mm]")
+    ax.set_ylabel("z (BEV) [mm]")
+    ax.set_title(title, fontsize=9)
+    fig.colorbar(im, ax=ax, shrink=0.8)
+
+
+def _draw_fluence_diff_axis(
+    ax: plt.Axes, fig: Figure, diff: np.ndarray, window: list[float], vmax_abs: float, title: str
+) -> None:
+    """Draw one fluence-difference heatmap."""
+    im = ax.imshow(
+        diff,
+        origin="lower",
+        extent=window,
+        aspect="equal",
+        cmap="RdBu_r",
+        vmin=-vmax_abs,
+        vmax=vmax_abs,
+    )
+    ax.set_xlabel("x (BEV) [mm]")
+    ax.set_ylabel("z (BEV) [mm]")
     ax.set_title(title, fontsize=9)
     fig.colorbar(im, ax=ax, shrink=0.8)
 
@@ -209,23 +207,7 @@ def _add_fluence_comparison_row(
     sequence: Sequence,
     unsequenced_result: PlanResult,
 ) -> list[plt.Axes]:
-    """Add the target-vs-delivered fluence comparison as one extra GridSpec row.
-
-    Both are scattered onto the same native-resolution ray grid via
-    `_native_fluence_map`, so they're directly comparable pixel-for-pixel.
-    ``sequence.fluence`` (not ``beam.fluence``, which is the pre-decomposition
-    target in unscaled integer levels on the leaf grid) is what each
-    sequencing algorithm actually reconstructs per ray, in physical units.
-
-    ``edges`` are the same column boundaries used by the dose comparison row
-    (see `_comparison_layout`), so the pre-/post-sequencing columns of both
-    rows line up; only the first two spans (pre-sequencing, post-sequencing)
-    are used here, even when a third (difference) span exists for the dose
-    row.
-
-    Returns the two created axes, so a caller that redraws into the same
-    figure for a different beam can remove them again.
-    """
+    """Add the target/delivered/difference fluence comparison as one extra GridSpec row."""
     device_orientation = beam.mlc_sequence[0].device_orientation
     target_grid, window = _native_fluence_map(
         stf.beams[beam_ix], unsequenced_result.fluence[beam.bixel_ix], device_orientation
@@ -235,77 +217,23 @@ def _add_fluence_comparison_row(
     )
     vmax = max(np.nanmax(target_grid), np.nanmax(delivered_grid))
 
+    diff_grid = delivered_grid - target_grid
+    finite_abs_diff = np.abs(diff_grid[np.isfinite(diff_grid)])
+    max_abs_diff = float(finite_abs_diff.max()) if finite_abs_diff.size else 0.0
+    max_abs_diff = max_abs_diff or 1.0
+
     ax_target = fig.add_subplot(gs[row, edges[0] : edges[1]])
     ax_delivered = fig.add_subplot(gs[row, edges[1] : edges[2]])
+    ax_diff = fig.add_subplot(gs[row, edges[2] : edges[3]])
 
+    _draw_fluence_axis(ax_target, fig, target_grid, window, vmax, "Target fluence (optimization)")
     _draw_fluence_axis(
-        ax_target, fig, target_grid, window, vmax, "Target fluence (pre-sequencing)"
+        ax_delivered, fig, delivered_grid, window, vmax, "Delivered fluence (sequencing)"
     )
-    _draw_fluence_axis(
-        ax_delivered, fig, delivered_grid, window, vmax, "Delivered fluence (from shapes)"
+    _draw_fluence_diff_axis(
+        ax_diff, fig, diff_grid, window, max_abs_diff, "Difference (sequencing − optimization)"
     )
-    return [ax_target, ax_delivered]
-
-
-def _draw_dose_comparison_panels(
-    axes: list[plt.Axes],
-    before: sitk.Image,
-    after: sitk.Image,
-    *,
-    image_volume: Optional[CT],
-    cst: Optional[StructureSet],
-    view_slice: Optional[int],
-    plane: str,
-    overlay_unit: str,
-    overlay_cmap: str,
-    title_before: str = "Optimized dose (pre-sequencing)",
-    title_after: str = "Delivered dose (from MLC shapes)",
-) -> None:
-    """Draw the optimized/delivered/difference dose panels into three existing axes."""
-    diff_arr = sitk.GetArrayFromImage(after) - sitk.GetArrayFromImage(before)
-    diff = sitk.GetImageFromArray(diff_arr)
-    diff.CopyInformation(after)
-    max_abs_diff = float(np.max(np.abs(diff_arr))) or 1.0
-
-    plot_slice(
-        image_volume=image_volume,
-        cst=cst,
-        overlay=before,
-        view_slice=view_slice,
-        plane=plane,
-        overlay_unit=overlay_unit,
-        overlay_cmap=overlay_cmap,
-        ax=axes[0],
-        show_plot=False,
-    )
-    axes[0].set_title(title_before, fontsize=9)
-
-    plot_slice(
-        image_volume=image_volume,
-        cst=cst,
-        overlay=after,
-        view_slice=view_slice,
-        plane=plane,
-        overlay_unit=overlay_unit,
-        overlay_cmap=overlay_cmap,
-        ax=axes[1],
-        show_plot=False,
-    )
-    axes[1].set_title(title_after, fontsize=9)
-
-    plot_slice(
-        image_volume=image_volume,
-        cst=cst,
-        overlay=diff,
-        view_slice=view_slice,
-        plane=plane,
-        overlay_unit=overlay_unit,
-        overlay_cmap="RdBu_r",
-        overlay_window=(-max_abs_diff, max_abs_diff),
-        ax=axes[2],
-        show_plot=False,
-    )
-    axes[2].set_title("Difference (delivered − optimized)", fontsize=9)
+    return [ax_target, ax_delivered, ax_diff]
 
 
 def _add_dose_comparison_row(
@@ -324,14 +252,7 @@ def _add_dose_comparison_row(
     overlay_unit: str,
     overlay_cmap: str,
 ) -> list[plt.Axes]:
-    """Add this beam's optimized/delivered/difference dose as one extra GridSpec row.
-
-    Uses the per-beam dose already available on both results (``dij.compute_result_ct_grid``
-    always decomposes physical_dose by beam), so no dij access is needed here. ``edges`` are
-    the same column boundaries used by the fluence comparison row (see `_comparison_layout`).
-
-    Returns the three created axes.
-    """
+    """Add this beam's optimized/delivered/difference dose as one extra GridSpec row."""
     axes = [fig.add_subplot(gs[row, edges[i] : edges[i + 1]]) for i in range(3)]
 
     before = unsequenced_result.beam.physical_dose[beam_ix].values
@@ -346,8 +267,9 @@ def _add_dose_comparison_row(
         plane=plane,
         overlay_unit=overlay_unit,
         overlay_cmap=overlay_cmap,
-        title_before=f"Optimized dose (beam {beam_ix + 1})",
-        title_after=f"Delivered dose (beam {beam_ix + 1})",
+        title_before="Target dose (optimization)",
+        title_after="Delivered dose (sequencing)",
+        title_diff="Difference (sequencing − optimization)",
     )
     return axes
 
@@ -465,41 +387,28 @@ def plot_aperture_info(
     save_filename: Optional[str] = None,
     show_plot: bool = True,
 ) -> list[Figure]:
-    """Plot MLC aperture shapes of a sequenced (static, step-and-shoot) plan.
-
-    One figure per beam, with one subplot per delivered segment (shape); the
-    open aperture is shaded by the segment's weight relative to the heaviest
-    segment of that beam (light grey = low, blue = high). Mirrors the
-    "perBeam" view of matRad's ``matRad_visApertureInfo``; VMAT-specific
-    views (control-point grid, leaf trajectories, delivery metrics, the
-    animated player) are not implemented since pyRadPlan sequencing is
-    currently static only.
+    """Plot MLC aperture shapes of a sequenced plan.
 
     When ``unsequenced_result`` (and, for the dose row, ``image_volume``/
     ``cst``) are given, a second, separate figure per beam holds the fluence
-    and/or dose comparison rows, so it doesn't crowd the shape grid; the two
-    rows share the same column layout, with the pre-sequencing (target/
-    optimized) panel of each row directly above the post-sequencing
-    (delivered) panel of the other.
+    and/or dose comparison rows.
 
     Parameters
     ----------
     result : PlanResult or Sequence
         A sequenced plan result (``run_sequencing()``'s return value) or its
         ``.sequence`` directly. Must be a ``PlanResult`` (not a bare
-        ``Sequence``) for the dose comparison row (``image_volume``/``cst``).
+        ``Sequence``) for the dose comparison row.
     stf : SteeringInformation, optional
         Steering information used to label each beam with its gantry angle,
         if available, and required (together with ``unsequenced_result``) to
         plot the fluence comparison. Beams are labeled "Beam N" otherwise.
     unsequenced_result : PlanResult, optional
-        The plan result *before* sequencing (``fluence_optimization()``'s
-        return value, or whatever was passed as ``result`` into
-        ``run_sequencing()``). When given (together with ``stf``), one
-        additional row per beam compares the target (pre-sequencing)
-        fluence against what the sequenced shapes actually deliver.
+        The plan result *before* sequencing. Required (together with ``stf``)
+        to plot the fluence comparison, and (with ``image_volume``/``cst``) to
+        plot the dose comparison.
     beam_indices : int or list of int, optional
-        Which beams to plot (0-based). Defaults to all beams.
+        Which beams to plot. Defaults to all beams.
     leaf_coordinate : {"leaf_num", "physical"}
         Vertical axis of the aperture: a simple 1..N row index (default) or
         the true physical z position in mm.
@@ -582,7 +491,7 @@ def plot_aperture_info(
         )
         shape_fig.tight_layout()
         if save_filename is not None:
-            shape_fig.savefig(f"{save_filename}_beam{beam_ix + 1}.png")
+            shape_fig.savefig(f"{save_filename}_beam{beam_ix}.png")
         figures.append(shape_fig)
 
         if show_fluence or show_dose:
@@ -609,84 +518,10 @@ def plot_aperture_info(
             )
             comp_fig.tight_layout()
             if save_filename is not None:
-                comp_fig.savefig(f"{save_filename}_beam{beam_ix + 1}_comparison.png")
+                comp_fig.savefig(f"{save_filename}_beam{beam_ix}_comparison.png")
             figures.append(comp_fig)
 
     if show_plot:
         plt.show()
 
     return figures
-
-
-def plot_dose_comparison(
-    unsequenced_result: PlanResult,
-    sequenced_result: PlanResult,
-    *,
-    image_volume: Optional[CT] = None,
-    cst: Optional[StructureSet] = None,
-    view_slice: Optional[int] = None,
-    plane: str = "axial",
-    overlay_unit: str = "Gy",
-    overlay_cmap: str = "jet",
-    save_filename: Optional[str] = None,
-    show_plot: bool = True,
-) -> Figure:
-    """Compare the pre-sequencing dose to the dose the sequenced MLC shapes deliver.
-
-    One figure, three panels on the same slice: the optimized (pre-sequencing)
-    dose, the dose the computed shapes/MLC positions actually deliver, and
-    their difference. At least one of ``image_volume``/``cst`` must be given,
-    same as for `~pyRadPlan.visualization.plot_slice`.
-
-    Parameters
-    ----------
-    unsequenced_result : PlanResult
-        The plan result before sequencing (``fluence_optimization()``'s
-        return value).
-    sequenced_result : PlanResult
-        The plan result after sequencing (``run_sequencing()``'s return value).
-    image_volume : CT, optional
-        CT image for the grayscale background.
-    cst : StructureSet, optional
-        Structure set for contour overlays.
-    view_slice : int, optional
-        Slice index to display. Defaults to the middle slice.
-    plane : str
-        "axial" (default), "coronal", or "sagittal".
-    overlay_unit : str
-        Physical unit for the dose colorbars. Default "Gy".
-    overlay_cmap : str
-        Colormap for the two dose panels (the difference panel always uses a
-        diverging colormap centered at zero). Default "jet".
-    save_filename : str, optional
-        If given, the figure is saved to this path.
-    show_plot : bool
-        If True (default), show the figure.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-    """
-    before = unsequenced_result.physical_dose.values
-    after = sequenced_result.physical_dose.values
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5.5))
-    _draw_dose_comparison_panels(
-        list(axes),
-        before,
-        after,
-        image_volume=image_volume,
-        cst=cst,
-        view_slice=view_slice,
-        plane=plane,
-        overlay_unit=overlay_unit,
-        overlay_cmap=overlay_cmap,
-    )
-
-    fig.tight_layout()
-    if save_filename is not None:
-        fig.savefig(save_filename)
-    if show_plot:
-        plt.show()
-
-    return fig

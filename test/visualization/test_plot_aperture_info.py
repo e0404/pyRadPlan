@@ -3,9 +3,9 @@ import SimpleITK as sitk
 import matplotlib
 import pytest
 
-from pyRadPlan import CT, plot_aperture_info, plot_dose_comparison
+from pyRadPlan import CT, plot_aperture_info
 from pyRadPlan.machines import MLC
-from pyRadPlan.result import PlanResult, QuantityDistribution, Sequence
+from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, Ray, SteeringInformation
 from pyRadPlan.stf._beamlet import PhotonBixel
@@ -46,8 +46,8 @@ def test_plot_aperture_info_from_sequence(sample_sequence, tmp_path):
         sample_sequence, show_plot=False, save_filename=str(tmp_path / "apertures")
     )
     assert len(figures) == 2
+    assert (tmp_path / "apertures_beam0.png").exists()
     assert (tmp_path / "apertures_beam1.png").exists()
-    assert (tmp_path / "apertures_beam2.png").exists()
 
 
 def test_plot_aperture_info_from_result(sample_sequence):
@@ -124,15 +124,35 @@ def test_plot_aperture_info_fluence_comparison(fluence_comparison_setup):
 
 
 def test_plot_aperture_info_fluence_comparison_keeps_true_aspect_ratio(fluence_comparison_setup):
-    """The fluence panels must not be stretched to fill their (possibly wide) grid cell."""
     stf, sequence, unsequenced_result = fluence_comparison_setup
     figures = plot_aperture_info(
         sequence, stf=stf, unsequenced_result=unsequenced_result, show_plot=False
     )
     fluence_axes = [ax for ax in figures[1].axes if ax.get_images()]
-    assert len(fluence_axes) == 2
+    assert len(fluence_axes) == 3
     for ax in fluence_axes:
         assert ax.get_aspect() == 1.0  # "equal", not "auto" (which reports "auto")
+        assert ax.get_xlabel() == "x (BEV) [mm]"
+        assert ax.get_ylabel() == "z (BEV) [mm]"
+
+
+def test_plot_aperture_info_fluence_difference_panel(fluence_comparison_setup):
+    stf, sequence, unsequenced_result = fluence_comparison_setup
+    figures = plot_aperture_info(
+        sequence, stf=stf, unsequenced_result=unsequenced_result, show_plot=False
+    )
+    axes_by_title = {ax.get_title(): ax for ax in figures[1].axes}
+    diff_ax = axes_by_title["Difference (sequencing − optimization)"]
+
+    im = diff_ax.get_images()[0]
+    assert im.get_cmap().name == "RdBu_r"
+    vmin, vmax = im.get_clim()
+    assert vmin == pytest.approx(-vmax)
+
+    delivered = np.nan_to_num(sequence.fluence, nan=0.0)
+    target = np.nan_to_num(unsequenced_result.fluence, nan=0.0)
+    expected_max_abs = np.max(np.abs(delivered - target))
+    assert vmax == pytest.approx(expected_max_abs)
 
 
 def test_plot_aperture_info_fluence_comparison_saves_files(fluence_comparison_setup, tmp_path):
@@ -144,12 +164,8 @@ def test_plot_aperture_info_fluence_comparison_saves_files(fluence_comparison_se
         show_plot=False,
         save_filename=str(tmp_path / "mlc"),
     )
-    assert (tmp_path / "mlc_beam1.png").exists()
-    assert (tmp_path / "mlc_beam1_comparison.png").exists()
-
-
-def _make_dose_result(values: np.ndarray) -> PlanResult:
-    return PlanResult(quantities={"physical_dose": QuantityDistribution(values=values)})
+    assert (tmp_path / "mlc_beam0.png").exists()
+    assert (tmp_path / "mlc_beam0_comparison.png").exists()
 
 
 @pytest.fixture
@@ -189,7 +205,6 @@ def test_plot_aperture_info_dose_comparison_row(dose_comparison_setup):
 
 
 def test_plot_aperture_info_dose_comparison_columns_align_with_fluence(dose_comparison_setup):
-    """Pre-/post-sequencing columns must line up between the fluence and dose rows."""
     stf, sequenced_result, unsequenced_result, ct = dose_comparison_setup
     figures = plot_aperture_info(
         sequenced_result,
@@ -199,10 +214,12 @@ def test_plot_aperture_info_dose_comparison_columns_align_with_fluence(dose_comp
         show_plot=False,
     )
     axes_by_title = {ax.get_title(): ax for ax in figures[1].axes}
-    fluence_target = axes_by_title["Target fluence (pre-sequencing)"]
-    fluence_delivered = axes_by_title["Delivered fluence (from shapes)"]
-    dose_optimized = axes_by_title["Optimized dose (beam 1)"]
-    dose_delivered = axes_by_title["Delivered dose (beam 1)"]
+    fluence_target = axes_by_title["Target fluence (optimization)"]
+    fluence_delivered = axes_by_title["Delivered fluence (sequencing)"]
+    fluence_diff = axes_by_title["Difference (sequencing − optimization)"]
+    dose_optimized = axes_by_title["Target dose (optimization)"]
+    dose_delivered = axes_by_title["Delivered dose (sequencing)"]
+    dose_diff = axes_by_title["Difference (sequencing − optimization)"]
 
     # Compare GridSpec column spans directly (not the rendered bbox, which
     # `aspect="equal"` shrinks/centers independently for each panel based on
@@ -213,6 +230,7 @@ def test_plot_aperture_info_dose_comparison_columns_align_with_fluence(dose_comp
 
     assert colspan(fluence_target) == colspan(dose_optimized)
     assert colspan(fluence_delivered) == colspan(dose_delivered)
+    assert colspan(fluence_diff) == colspan(dose_diff)
 
 
 def test_plot_aperture_info_dose_requires_unsequenced_result(dose_comparison_setup):
@@ -231,19 +249,3 @@ def test_plot_aperture_info_dose_requires_plan_result(dose_comparison_setup):
             image_volume=ct,
             show_plot=False,
         )
-
-
-def test_plot_dose_comparison(tmp_path):
-    ct = CT(cube_hu=sitk.Image(10, 10, 5, sitk.sitkFloat32))
-    before = _make_dose_result(np.random.rand(5, 10, 10).astype(np.float32))
-    after = _make_dose_result(np.random.rand(5, 10, 10).astype(np.float32))
-
-    fig = plot_dose_comparison(
-        before,
-        after,
-        image_volume=ct,
-        show_plot=False,
-        save_filename=str(tmp_path / "dose.png"),
-    )
-    assert len(fig.axes) >= 3
-    assert (tmp_path / "dose.png").exists()

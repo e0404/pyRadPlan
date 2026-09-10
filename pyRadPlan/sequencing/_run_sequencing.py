@@ -46,5 +46,7 @@ def run_sequencing(
         return result
 
     result = sequencing_prob.sequence(result, _stf, _dij)
+    if result.sequence is not None:
+        result.sequence.sequencer = sequencing_prob.short_name
 
     return result

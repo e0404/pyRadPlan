@@ -1,5 +1,6 @@
 import pytest
 import SimpleITK as sitk
+from pyRadPlan.plan import IonPlan, PhotonPlan
 from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
@@ -43,6 +44,105 @@ def test_busy_text_shown_in_status(qapp):
     if w._thread is not None:
         w._thread.wait(2000)
     qapp.processEvents()
+
+
+def test_sequence_button_gated_on_result_stf_and_photon_mode(qapp):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    assert not w._btn_sequence.isEnabled()
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=pln, stf=object(), dij=object(), result=result)
+    assert w._btn_sequence.isEnabled()
+
+    ws.pln = IonPlan()
+    assert not w._btn_sequence.isEnabled()
+
+
+def test_sequence_button_disabled_without_sequencing_configured(qapp):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=PhotonPlan(), stf=object(), dij=object(), result=result)
+
+    assert not w._btn_sequence.isEnabled()
+    assert "Plan panel" in w._btn_sequence.toolTip()
+
+
+def test_on_sequence_runs_in_thread_and_updates_result(qapp, monkeypatch):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=pln, stf=object(), dij=object(), result=result)
+
+    sequenced = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    calls = []
+
+    def _fake_run_sequencing(passed_result, pln, stf, dij=None):
+        calls.append((passed_result, pln, stf, dij))
+        return sequenced
+
+    monkeypatch.setattr("pyRadPlan.run_sequencing", _fake_run_sequencing)
+
+    w._on_sequence()
+    if w._thread is not None:
+        w._thread.wait(2000)
+    qapp.processEvents()
+
+    assert len(calls) == 1
+    assert ws.result is sequenced
+
+
+def test_sequence_button_disabled_when_result_stale_after_radiation_mode_switch(qapp):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=IonPlan(), stf=object(), dij=object(), result=result)
+    ws.pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+
+    assert not w._btn_sequence.isEnabled()
+    assert "outdated" in w._btn_sequence.toolTip()
+
+
+def test_on_sequence_warns_when_result_stale(qapp, monkeypatch):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=IonPlan(), stf=object(), dij=object(), result=result)
+    ws.pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+
+    warned = []
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning",
+        lambda *a, **k: warned.append(a),
+    )
+
+    w._on_sequence()
+
+    assert len(warned) == 1
+    assert w._thread is None
+
+
+def test_on_sequence_warns_without_result(qapp, monkeypatch):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    warned = []
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning",
+        lambda *a, **k: warned.append(a),
+    )
+
+    w._on_sequence()
+
+    assert len(warned) == 1
+    assert w._thread is None
 
 
 def test_progress_report_drives_combined_nested_bar(qapp):
@@ -93,24 +193,44 @@ def test_indeterminate_progress_sets_busy_range(qapp):
 def test_plan_change_marks_downstream_stale(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
+    pln = PhotonPlan()
 
     def _result():
         return create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
 
     # Loading everything at once leaves the products current, not stale.
-    ws.set_many(
-        ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
-    )
+    ws.set_many(ct=object(), cst=object(), pln=pln, stf=object(), dij=object(), result=_result())
     assert not w._dij_stale and not w._result_stale
 
-    # Changing the plan invalidates the dose influence and the result.
-    ws.pln = object()
+    # Changing a dose-influence-relevant field (dose grid) invalidates both.
+    ws.pln = pln.model_copy(update={"prop_dose_calc": {"dose_grid": {"resolution": [1, 1, 1]}}})
     assert w._dij_stale and w._result_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
 
     # Recomputing the dose influence clears its flag (and the result stays stale).
     ws.set_many(stf=object(), dij=object())
     assert not w._dij_stale and w._result_stale
+
+
+def test_sequencing_only_plan_change_does_not_mark_stale(qapp):
+    """Editing prop_seq (sequencing config) doesn't require redoing dij/optimization."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    pln = PhotonPlan()
+
+    def _result():
+        return create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+
+    ws.set_many(ct=object(), cst=object(), pln=pln, stf=object(), dij=object(), result=_result())
+    assert not w._dij_stale and not w._result_stale
+
+    ws.pln = pln.model_copy(
+        update={"prop_seq": {"run_sequencing": True, "sequencer": "xia", "num_of_levels": 9}}
+    )
+
+    assert not w._dij_stale
+    assert not w._result_stale
+    assert w._btn_sequence.isEnabled()
 
     # Re-optimizing clears the result flag.
     ws.result = _result()

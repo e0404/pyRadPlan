@@ -20,13 +20,11 @@ and their potentials to determine optimal leaf positions for each segment.
 
 import logging
 
-from typing import Union
 import numpy as np
 
 from pyRadPlan.result import PlanResult, validate_result
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
-from pyRadPlan.plan import Plan
 from ._base_photon import PhotonSequencer
 
 logger = logging.getLogger(__name__)
@@ -36,10 +34,6 @@ class EngelLeafSequencer(PhotonSequencer):
     name = "engel_leaf_sequencing"
     short_name = "engel"
     possible_radiation_modes = ["photons"]
-
-    def __init__(self, pln: Union[Plan, dict] = None):
-        """Initialize the Sequencer class."""
-        super().__init__(pln)
 
     def _calculate_essential_intervals(
         self, diff_mat_row: np.ndarray, g_j: float, d_k_row: np.ndarray

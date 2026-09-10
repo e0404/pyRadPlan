@@ -300,3 +300,46 @@ def test_create_Jaw_transmission_mask():
     mask_Y = jaw_Y.calculate_transmission_mask(resolution)
 
     np.testing.assert_array_equal(mask_X, np.rot90(mask_Y))
+
+
+def _mlc_with_rows(
+    j_start: int, j_end: int, leaf_width: float = 10.0, number_of_elements: int = 40
+) -> MLC:
+    """An MLC whose shape spans global (isocenter-relative) leaf rows j_start..j_end."""
+    leaf_row_z = np.arange(j_start, j_end + 1) * leaf_width
+    n = len(leaf_row_z)
+    return MLC(
+        device_type="MLCX",
+        number_of_elements=number_of_elements,
+        leaf_width=leaf_width,
+        leaf_position_boundaries=leaf_row_z,
+        leaf_positions=np.tile([-5.0, 5.0], (n, 1)),
+    )
+
+
+def test_full_leaf_positions():
+    """A field's leaf rows must fall within the fixed window implied by
+    central_leaf_pair to be placeable -- same row count alone isn't enough.
+    """
+    # Exactly fills the device's [-central, central-1] window: every leaf
+    # pair placed, none left over.
+    mlc_1 = _mlc_with_rows(-20, 19)
+    # Same row count as mlc_1, but shifted by one leaf width off that window
+    # -- cannot be placed on every one of its own rows.
+    mlc_2 = _mlc_with_rows(-19, 20)
+    # Entirely to one side of isocenter (e.g. a beam whose native field only
+    # needs positive-z leaf rows) -- previously produced an all-inactive mask
+    # (silent, wrong) instead of an error.
+    mlc_3 = _mlc_with_rows(1, 20)
+
+    central_leaf_pair = 20  # ceil(40 / 2)
+
+    full = mlc_1.full_leaf_positions(central_leaf_pair)
+    assert full.shape == (40, 2)
+    np.testing.assert_array_equal(full, mlc_1.leaf_positions)
+
+    with pytest.raises(ValueError, match="does not fit within the physical collimator"):
+        mlc_2.full_leaf_positions(central_leaf_pair)
+
+    with pytest.raises(ValueError, match="does not fit within the physical collimator"):
+        mlc_3.full_leaf_positions(central_leaf_pair)

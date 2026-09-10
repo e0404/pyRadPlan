@@ -62,7 +62,7 @@ pln.prop_opt = {"solver": "scipy"}
 # Nondefined parameters in the regarding class will be ignored.
 pln.prop_seq = {
     "run_sequencing": True,  # False if you want to skip the sequencing step
-    "num_of_levels": 5,
+    "num_of_levels": 7,
     "sequencer": "xia",  # currently implemented: "xia" and "siochi"
     "mode": "reducing_levels",  # parameter for "xia" sequencer.
 }

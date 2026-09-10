@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 class PhotonSequencer(Sequencer):
     def __init__(self, pln: Union[Plan, dict] = None):
         self.num_of_mlc_leaf_pairs = 80
-        self.num_of_levels = 5
         self.leaf_width: Optional[float] = None
         self.mlc_orientation = "X"
         super().__init__(pln)
@@ -236,6 +235,19 @@ class PhotonSequencer(Sequencer):
         leaf_row_z = None
         if leaf_width is not None:
             leaf_row_z = self._leaf_grid_centers(min_z, max_z, leaf_width)
+            central_leaf_pair = int(math.ceil(self.num_of_mlc_leaf_pairs / 2.0))
+            j_field = np.round(leaf_row_z / leaf_width).astype(int)
+            j_min_valid = central_leaf_pair - self.num_of_mlc_leaf_pairs
+            j_max_valid = central_leaf_pair - 1
+            if j_field.min() < j_min_valid or j_field.max() > j_max_valid:
+                raise ValueError(
+                    f"Beam field (leaf rows z={leaf_row_z.min():.1f}..{leaf_row_z.max():.1f} mm) "
+                    "does not fit within the machine's MLC coverage "
+                    f"(z={j_min_valid * leaf_width:.1f}..{j_max_valid * leaf_width:.1f} mm for "
+                    f"{self.num_of_mlc_leaf_pairs} leaf pairs at {leaf_width:.1f} mm leaf width, "
+                    f"centered so leaf pair {central_leaf_pair} sits at isocenter). "
+                    "The field does not fit within the physical collimator."
+                )
             ray_map = self._interp_rows(ray_map, native_row_z, leaf_row_z)
             ray_map = (ray_map > 0.0).astype(float)
             dim_z = ray_map.shape[0]

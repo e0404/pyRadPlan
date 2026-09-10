@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 class IonSequencer(Sequencer):
     def __init__(self, pln: Union[Plan, dict] = None):
-        self.num_of_levels = 5
         raise NotImplementedError("IonSequencer has yet to be implemented.")
         super().__init__(pln)
 

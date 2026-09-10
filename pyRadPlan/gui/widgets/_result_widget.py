@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import warnings
 from typing import Optional
 
@@ -21,6 +22,7 @@ from pyRadPlan.cst import VOI
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.windows._analysis_win import show_analysis
+from pyRadPlan.gui.windows._sequence_win import show_sequence_viewer
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.result import PlanResult
 
@@ -161,6 +163,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vis_widget.isolines_set.connect(self._on_isolines_set)
         self.vis_widget.recenter_requested.connect(self._on_recenter)
         self.vis_widget.show_analysis_requested.connect(self._on_show_analysis)
+        self.vis_widget.show_sequence_requested.connect(self._on_show_sequence)
 
         self.quantity_widget = QuantityWidget(self)
 
@@ -240,6 +243,12 @@ class ViewingWidget(WorkspaceWidget):
         if data_changed:
             self._apply_ct_and_result(ct, ws.cst, ws.result)
             self._has_data = True
+            has_sequence = bool(
+                isinstance(ws.result, PlanResult)
+                and ws.result.sequence is not None
+                and ws.result.sequence.beam
+            )
+            self.vis_widget.set_sequence_enabled(has_sequence)
 
         if cst_changed:
             self._apply_vois(ws.cst)
@@ -253,6 +262,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vois_widget.set_vois([])
         self.quantity_widget.clear_data()
         self.vis_widget.update_quantity_selector([], None)
+        self.vis_widget.set_sequence_enabled(False)
 
     def _ct_array(self, ct: CT) -> np.ndarray:
         """Get the transposed CT array, reusing the cache for an unchanged image."""
@@ -523,4 +533,23 @@ class ViewingWidget(WorkspaceWidget):
             initial_quantity=initial_quantity,
             initial_vois=initial_vois,
             voi_types=voi_types,
+        )
+
+    def _on_show_sequence(self) -> None:
+        """Show the delivery sequence viewer for the workspace's sequenced result."""
+        result = self.workspace.result
+        if not isinstance(result, PlanResult) or result.sequence is None:
+            return
+
+        initial_beam_ix = None
+        active_name = self.quantity_widget._active_quantity_name or ""
+        match = re.search(r"_beam (\d+)$", active_name)
+        if match:
+            initial_beam_ix = int(match.group(1))
+
+        self._sequence_window = show_sequence_viewer(
+            result.sequence,
+            stf=self.workspace.stf,
+            parent=self,
+            initial_beam_ix=initial_beam_ix,
         )

@@ -367,7 +367,7 @@ def test_photon_single_bixel_beam_sequences_with_extra_blds(
     assert beamlet.weight == pytest.approx(1.0)
 
 
-def test_photon_single_bixel_beam_sequences_differing_extra_blds_stay_separate(
+def test_photon_single_bixel_beam_sequences_differing_extra_blds_are_merged_into_one_ray(
     sample_ct, sample_cst, sample_photon_pln_dict
 ):
     sample_photon_pln_dict["prop_stf"] = {
@@ -388,13 +388,20 @@ def test_photon_single_bixel_beam_sequences_differing_extra_blds_stay_separate(
 
     stf = stf_gen.generate(sample_ct, sample_cst)
 
-    assert len(stf[0]["rays"]) == 2
-    for m, ray in enumerate(stf[0]["rays"]):
-        beamlet = ray["beamlets"][0]
-        assert isinstance(beamlet, FieldShapeComposite)
-        assert beamlet.weight == pytest.approx(beam_sequence.shapes_weight[m])
-        blds = [shape.bld for shape in beamlet.shapes]
-        assert blds == [beam_sequence.mlc_sequence[m], beam_sequence.extra_blds[m][0]]
+    assert len(stf[0]["rays"]) == 1
+    beamlet = stf[0]["rays"][0]["beamlets"][0]
+    assert isinstance(beamlet, FieldShapeAsMask)
+    assert beamlet.weight == pytest.approx(1.0)
+
+    expected_mask = sum(
+        w
+        * FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5).resample(new_grid=beamlet.grid).mask
+        * FieldShapeAsBLD(energy=6.0, bld=jaw, resolution=0.5).resample(new_grid=beamlet.grid).mask
+        for w, mlc, jaw in zip(
+            beam_sequence.shapes_weight, beam_sequence.mlc_sequence, [jaw_a, jaw_b]
+        )
+    )
+    np.testing.assert_allclose(beamlet.mask, expected_mask, atol=1e-6)
 
 
 def test_photon_single_bixel_beam_sequences_length_mismatch(

@@ -6,9 +6,11 @@ from typing import Mapping, Optional, Union
 
 from pyRadPlan.cst._cst import StructureSet
 from pyRadPlan.ct._ct import CT
-from pyRadPlan.result import PlanResult
+from pyRadPlan.result import PlanResult, Sequence
+from pyRadPlan.stf import SteeringInformation
 
 from .windows._result_win import _launch_result_window
+from .windows._sequence_win import _launch_sequence_window
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -93,6 +95,26 @@ def launch_viewer(
         )
 
     _launch_result_window(ct=ct, cst=cst, result=result)
+
+
+def launch_sequence_viewer(
+    sequence: Union[PlanResult, Sequence],
+    stf: Optional[SteeringInformation] = None,
+) -> None:
+    """Launch the delivery sequence viewer for a sequenced (static) plan.
+
+    Parameters
+    ----------
+    sequence:
+        A sequenced :class:`~pyRadPlan.result.PlanResult` (``run_sequencing()``'s
+        return value) or its ``.sequence`` directly.
+    stf:
+        Steering information used to label each beam's tab with its gantry
+        angle, if available. Beams are labeled "Beam N" otherwise.
+    """
+    sequence = sequence.sequence if isinstance(sequence, PlanResult) else sequence
+
+    _launch_sequence_window(sequence, stf=stf)
 
 
 def analysis_viewer() -> None:

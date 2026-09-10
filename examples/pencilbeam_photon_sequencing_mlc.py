@@ -32,6 +32,7 @@ from pyRadPlan import (
     plot_dose_comparison,
     run_sequencing,
 )
+from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.machines import MLC, load_from_name
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
@@ -110,6 +111,18 @@ print(f"Full-device leaf positions shape: {full_positions.shape}")
 print(f"Closed (unused) leaf pairs: {np.sum(np.all(full_positions == 0, axis=1))}")
 
 # %% [markdown]
+# `launch_viewer` opens the interactive Qt result viewer on the sequenced
+# dose. Because `result_sequenced.sequence` is populated, its "Show
+# Sequence" button is enabled: it opens a second, non-modal window with one
+# tab per beam, each stepping through that beam's delivered segments with
+# play/pause/speed/loop controls (dwell time proportional to each segment's
+# relative weight).
+# %%
+if GUI_AVAILABLE:
+    # Use the GUI if [gui] dependencies are installed
+    launch_viewer(ct, cst, result_sequenced)
+
+# %% [markdown]
 # `plot_aperture_info` gives the full per-beam gallery: one subplot per
 # delivered segment, shaded by that segment's relative weight (light grey =
 # low, blue = high). Passing `unsequenced_result` also adds a fluence
@@ -132,10 +145,18 @@ plot_aperture_info(
 
 # %% [markdown]
 # `plot_dose_comparison` shows the same before/after story for the total
-# (all-beams) dose: the optimized (pre-sequencing) dose, the dose the
-# computed shapes/MLC positions actually deliver, and their difference.
+# (all-beams) dose: the optimized target dose, the dose the sequenced
+# shapes/MLC positions actually deliver, and their difference.
 # %%
-plot_dose_comparison(result, result_sequenced, image_volume=ct, cst=cst, view_slice=view_slice)
+plot_dose_comparison(
+    result,
+    result_sequenced,
+    title_before="Optimized",
+    title_after="Sequenced",
+    image_volume=ct,
+    cst=cst,
+    view_slice=view_slice,
+)
 
 
 # %% [markdown]
@@ -155,7 +176,10 @@ pln_forward.prop_stf = {
     "resolution": 0.5,
     "energy": 6.0,
 }
-pln_forward.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+pln_forward.prop_dose_calc = {
+    "dose_grid": {"resolution": [5.0, 5.0, 5.0]},
+    "force_uniform_fluence": True,
+}
 
 stf_forward = generate_stf(ct, cst, pln_forward)
 result_forward = calc_dose_forward(ct, cst, stf_forward, pln_forward)
@@ -165,4 +189,11 @@ result_forward = calc_dose_forward(ct, cst, stf_forward, pln_forward)
 # against the dose already stored on `result_sequenced` (computed via the
 # dij/fluence path during sequencing). They should closely agree.
 # %%
-plot_dose_comparison(result_sequenced, result_forward, image_volume=ct, cst=cst)
+plot_dose_comparison(
+    result_sequenced,
+    result_forward,
+    title_before="Sequenced (dij)",
+    title_after="Forward (field-based)",
+    image_volume=ct,
+    cst=cst,
+)

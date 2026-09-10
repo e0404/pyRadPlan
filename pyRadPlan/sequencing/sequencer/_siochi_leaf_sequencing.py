@@ -23,13 +23,11 @@ Includes tongue-and-groove underdosage removal and minimal leakage.
 
 import logging
 
-from typing import Union
 import numpy as np
 
 from pyRadPlan.result import PlanResult, validate_result
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
-from pyRadPlan.plan import Plan
 from ._base_photon import PhotonSequencer
 
 logger = logging.getLogger(__name__)
@@ -39,11 +37,6 @@ class SiochiLeafSequencer(PhotonSequencer):
     name = "siochi_leaf_sequencing"
     short_name = "siochi"
     possible_radiation_modes = ["photons"]
-
-    def __init__(self, pln: Union[Plan, dict] = None):
-        """Initialize the Sequencer class."""
-
-        super().__init__(pln)
 
     def _tongue_and_groove_correction(
         self, tops: np.ndarray, bases: np.ndarray, dk: np.ndarray, indexing: tuple

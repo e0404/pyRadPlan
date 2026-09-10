@@ -266,3 +266,23 @@ def test_leaf_width_narrower_than_bixel_width_raises(test_data_xia):
     sequencer = XiaLeafSequencer(pln_mlc)
     with pytest.raises(ValueError):
         sequencer.sequence(deepcopy(result_mat), stf_mat, dij_mat)
+
+
+def test_field_taller_than_mlc_leaf_bank_raises(test_data_xia):
+    """A field whose height needs more leaf rows than the machine's MLC has must
+    raise a clear error, rather than silently overflowing and crashing later
+    (e.g. in MLC.full_leaf_positions/is_active_leaf_pair) with a shape-mismatch
+    once the leaf-row count and the beam's central_leaf_pair disagree.
+    """
+    pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
+
+    bixel_width = stf_mat.beams[0].bixel_width
+    # Deliberately too few leaf pairs (just one) to cover the beam's native
+    # field height at this leaf width (leaf_width > bixel_width so
+    # resampling -- and the check -- actually runs; leaf_width == bixel_width
+    # is a no-resample no-op).
+    pln_mlc = _pln_with_mlc(pln_mat, leaf_width=1.5 * bixel_width, number_of_elements=1)
+
+    sequencer = XiaLeafSequencer(pln_mlc)
+    with pytest.raises(ValueError, match="does not fit within the physical collimator"):
+        sequencer.sequence(deepcopy(result_mat), stf_mat, dij_mat)

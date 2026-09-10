@@ -3,12 +3,14 @@
 import logging
 
 from abc import ABC
-from typing import ClassVar, Union
+from typing import Annotated, ClassVar, Union
 import warnings
 
+from pydantic import Field
 from pydantic.alias_generators import to_snake
 from abc import abstractmethod
 
+from pyRadPlan.core import ConfigurableAlgorithm
 from pyRadPlan.result import PlanResult
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.stf import SteeringInformation
@@ -17,11 +19,21 @@ from pyRadPlan.dij import Dij
 logger = logging.getLogger(__name__)
 
 
-class Sequencer(ABC):
+class Sequencer(ConfigurableAlgorithm, ABC):
     name: ClassVar[str]
     short_name: ClassVar[str]
 
+    num_of_levels: Annotated[
+        int,
+        Field(
+            ge=1, description="Number of fluence levels to sequence the optimized fluence into."
+        ),
+    ] = 5
+
     def __init__(self, pln: Union[Plan, dict] = None):
+        # Assign default parameters declared as class-level annotations
+        self._init_config_defaults()
+
         self.resultGUI: PlanResult
         self.aperture_info = None
         self.run_sequencing = True
