@@ -71,6 +71,38 @@ def test_sequence_button_disabled_without_sequencing_configured(qapp):
     assert "Plan panel" in w._btn_sequence.toolTip()
 
 
+def test_sequence_button_disabled_without_dij(qapp):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=pln, stf=object(), result=result)
+
+    assert not w._btn_sequence.isEnabled()
+    assert "dose influence" in w._btn_sequence.toolTip()
+
+
+def test_on_sequence_warns_without_dij(qapp, monkeypatch):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=pln, stf=object(), result=result)
+
+    warned = []
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning",
+        lambda *a, **k: warned.append(a),
+    )
+
+    w._on_sequence()
+
+    assert len(warned) == 1
+    assert w._thread is None
+
+
 def test_on_sequence_runs_in_thread_and_updates_result(qapp, monkeypatch):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
@@ -379,3 +411,25 @@ def test_result_to_dose_image_reads_the_model(qapp):
 
     result = create_result({"physical_dose": _dose_image()})
     assert WorkflowWidget._result_to_dose_image(result) is result["physical_dose"].values
+
+
+def test_sequencing_finished_is_emitted_after_the_result_lands(qapp, monkeypatch):
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    result = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    ws.set_many(pln=pln, stf=object(), dij=object(), result=result)
+
+    sequenced = create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    monkeypatch.setattr("pyRadPlan.run_sequencing", lambda *a, **k: sequenced)
+
+    seen = []
+    w.sequencing_finished.connect(lambda: seen.append(ws.result))
+
+    w._on_sequence()
+    if w._thread is not None:
+        w._thread.wait(2000)
+    qapp.processEvents()
+
+    assert seen == [sequenced]

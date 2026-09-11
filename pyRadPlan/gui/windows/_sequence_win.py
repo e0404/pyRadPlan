@@ -9,7 +9,10 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from pyRadPlan.result import Sequence
 from pyRadPlan.stf import SteeringInformation, validate_stf
-from pyRadPlan.gui.widgets.result.aperture_widget import ApertureViewerWidget
+from pyRadPlan.gui.widgets.result.aperture_widget import (
+    ApertureViewerWidget,
+    SequenceViewContext,
+)
 
 
 class SequenceWindow(QMainWindow):
@@ -32,8 +35,8 @@ class SequenceWindow(QMainWindow):
 def show_sequence_viewer(
     sequence: Sequence,
     stf: Optional[SteeringInformation] = None,
-    parent: Optional[QWidget] = None,
     initial_beam_ix: Optional[int] = None,
+    context: Optional[SequenceViewContext] = None,
 ) -> Optional[SequenceWindow]:
     """Create and show a non-modal :class:`SequenceWindow` for *sequence*.
 
@@ -44,9 +47,6 @@ def show_sequence_viewer(
     stf : SteeringInformation, optional
         Steering information used to label each beam's tab with its gantry
         angle, if available.
-    parent : QWidget, optional
-        Parent widget (keeps the window alive as long as the caller keeps a
-        reference).
     initial_beam_ix : int, optional
         Beam tab to select initially (e.g. the beam currently shown in the
         dose viewer).
@@ -62,8 +62,8 @@ def show_sequence_viewer(
     if stf is not None:
         stf = validate_stf(stf)
 
-    win = SequenceWindow(parent)
-    win.viewer.set_sequence(sequence, stf=stf)
+    win = SequenceWindow()
+    win.viewer.set_sequence(sequence, stf=stf, context=context)
     if initial_beam_ix is not None:
         win.viewer.set_current_beam(initial_beam_ix)
 

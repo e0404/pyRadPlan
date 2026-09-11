@@ -93,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Photon sequencing no longer discards the optimized dose: quantities recomputed from the sequenced (deliverable) fluence are added under their own names (`physical_dose_sequenced`, plus the per-beam equivalents) instead of replacing the pre-sequencing ones, so optimized and delivered dose can be compared after sequencing — e.g. in the GUI's overlay-quantity dropdown, which lists whatever the result holds. The shared finalization now lives in `PhotonSequencer._result_with_sequenced_quantities` instead of three copies across the Xia/Siochi/Engel sequencers
+- GUI: the aperture viewer shows the beam's fluence beside the MLC shapes, selectable between delivered (default), optimized and their difference. Checkboxes overlay the current segment's MLC boundaries, the ray/bixel grid, and the target's beam's-eye-view outline (colour configurable, red by default) on both panels and in either stacking-axis mode. The extra data the panels need — `stf`, `result`, `ct`, `cst` — is passed as a `SequenceViewContext`; without one the viewer shows aperture shapes only
+- GUI: running sequencing now opens the sequence viewer on completion (`WorkflowWidget.sequencing_finished`), and "Show Sequence" reuses the one window instead of stacking up a new one per click. That window is also top-level rather than owned by the main window, so it has its own taskbar entry and can be recovered after falling behind
+- GUI: the aperture viewer gained a "Stacking axis" selector to switch the leaf axis between leaf-pair index and physical mm
 - `plot_slice` now labels its axes with the physical LPS coordinate plotted on each — previously unlabeled
 - `StfGeneratorPhotonSingleBixel` (`photonSingleBixel`) no longer has `blds`/`field_shape`/`field_based` parameters; `beam_sequences` is now the single entry point for field-based generation (see Added). `examples/pencilbeam_photon_forward.py` updated accordingly
 - GUI: objectives table is now scoped to the VOI selected above it (dropped redundant VOI columns)
@@ -120,6 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run_sequencing` raised `UnboundLocalError` when called without a `dij`; it now sequences normally and warns that no delivered dose could be computed, so the result carries deliverable shapes but no `*_sequenced` dose quantities
+- GUI: "Run Sequencing" now requires a dose influence matrix (like "Recalculate Dose"), since without one the sequencers cannot compute the delivered dose from the sequenced fluence — sequencing would silently produce shapes with no delivered dose to compare the optimized one against
 - GUI: the "Run Sequencing" button could become enabled — and would attempt to sequence — after switching the Plan panel's radiation mode without recomputing dose influence and re-optimizing; e.g. running a proton plan, then switching to photons and enabling sequencing, would sequence the stale proton-derived `result`/`stf`/`dij`. Sequencing is now blocked, with an explanatory tooltip, while the result is outdated relative to the current plan
 - Photon sequencing now raises a clear error ("field does not fit within the physical collimator", naming the offending z-range) when a beam's field doesn't fit the machine's MLC.
 - GUI: applying a plan edit no longer blanket-marks dose influence/result as outdated for *every* field change — only edits to fields that actually feed into dose-influence calculation (`radiation_mode`, `machine`, `mult_scen`, `prop_stf`, `prop_dose_calc`) or optimization (additionally `prop_opt`) do. Editing sequencing settings (`prop_seq`) previously forced an unnecessary "recalculate dose influence" prompt even though sequencing only consumes an existing result/stf/dij and never feeds back into them

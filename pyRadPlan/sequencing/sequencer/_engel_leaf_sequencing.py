@@ -22,7 +22,7 @@ import logging
 
 import numpy as np
 
-from pyRadPlan.result import PlanResult, validate_result
+from pyRadPlan.result import PlanResult
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.dij import Dij
 from ._base_photon import PhotonSequencer
@@ -360,9 +360,6 @@ class EngelLeafSequencer(PhotonSequencer):
 
         # Finalize sequencing result
         result_tmp = result.model_dump()
-        # Pop old quantities because they are no longer correct after sequencing
-        result_tmp.pop("quantities", None)
-        result_tmp.pop("beam_quantities", None)
         # we do this so that "beam" in aperture_info does not overwrite the beam in sequencing
         result_tmp["sequence"] = sequencing
         ap_info = self.sequencing_to_aperture_info(sequencing, stf)
@@ -374,10 +371,4 @@ class EngelLeafSequencer(PhotonSequencer):
             if key != "beam":
                 result_tmp["sequence"][key] = val
 
-        # Interpolate dose
-        cubes = {}
-        if dij is not None:
-            cubes = dij.compute_result_ct_grid(sequencing["fluence"]).model_dump()
-
-        # TODO: Currently overwriting quantities in main result. In the future might need to update sequence
-        return validate_result({**cubes, **result_tmp})
+        return self._result_with_sequenced_quantities(result_tmp, sequencing["fluence"], dij)

@@ -36,8 +36,13 @@ def run_sequencing(
 
     _stf = validate_stf(stf)
     _pln = validate_pln(pln)
-    if dij is not None:
-        _dij = validate_dij(dij)
+    _dij = validate_dij(dij) if dij is not None else None
+    if _dij is None:
+        logger.warning(
+            "No dij given: sequencing will produce deliverable shapes, but no delivered dose "
+            "can be computed from the sequenced fluence, so the result carries no "
+            "'*_sequenced' dose quantities."
+        )
 
     sequencing_prob = get_sequencer_from_pln(_pln)
 
@@ -48,5 +53,6 @@ def run_sequencing(
     result = sequencing_prob.sequence(result, _stf, _dij)
     if result.sequence is not None:
         result.sequence.sequencer = sequencing_prob.short_name
+        result.sequence.num_of_levels = sequencing_prob.num_of_levels
 
     return result

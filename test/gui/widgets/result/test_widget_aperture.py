@@ -1,11 +1,15 @@
 import numpy as np
 
 from pyRadPlan.machines import create_bld
-from pyRadPlan.result import Sequence
+from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
+from pyRadPlan.stf import Beam, Ray, SteeringInformation
+from pyRadPlan.stf._beamlet import PhotonBixel
+
 from pyRadPlan.gui.widgets.result.aperture_widget import (
     ApertureViewerWidget,
     BeamApertureWidget,
+    SequenceViewContext,
 )
 
 
@@ -99,3 +103,231 @@ def test_aperture_viewer_widget_hides_sequencer_label_when_unknown(qapp):
     viewer.set_sequence(sequence)
 
     assert viewer.sequencer_label.isHidden()
+
+
+def _make_ray(x: float, z: float) -> Ray:
+    return Ray(ray_pos_bev=[x, 1000.0, z], ray_pos=[x, 0.0, z], beamlets=[PhotonBixel(energy=6.0)])
+
+
+def _make_stf(n_beams: int = 1) -> SteeringInformation:
+    rays = [_make_ray(x, z) for x, z in ((-2.5, -2.5), (2.5, -2.5), (-2.5, 2.5), (2.5, 2.5))]
+    beams = [Beam(iso_center=[0.0, 0.0, 0.0], bixel_width=5.0, rays=rays) for _ in range(n_beams)]
+    return SteeringInformation(beams=beams)
+
+
+def _fluence_context(n_beams: int = 1) -> SequenceViewContext:
+    return SequenceViewContext(
+        stf=_make_stf(n_beams), result=PlanResult(fluence=np.array([1.0, 2.0, 3.0, 4.0]))
+    )
+
+
+def _beam_with_bixels() -> BeamSequence:
+    beam = _make_beam()
+    return beam.model_copy(update={"bixel_ix": [0, 1, 2, 3]})
+
+
+def test_no_fluence_panel_without_context(qapp):
+    widget = BeamApertureWidget(_make_beam(), "Beam 0")
+
+    assert not widget.has_fluence
+
+
+def test_fluence_panel_offers_optimized_delivered_and_difference(qapp):
+    widget = BeamApertureWidget(
+        _beam_with_bixels(),
+        "Beam 0",
+        beam_ix=0,
+        context=_fluence_context(),
+        delivered_fluence=np.array([4.0, 3.0, 2.0, 1.0]),
+    )
+
+    assert widget.has_fluence
+    assert set(widget._fluence_grids) == {"optimized", "delivered", "difference"}
+    np.testing.assert_allclose(
+        widget._fluence_grids["difference"],
+        widget._fluence_grids["delivered"] - widget._fluence_grids["optimized"],
+    )
+    assert widget.fluence_mode == "delivered"
+
+
+def test_overlay_bar_hidden_when_no_beam_has_fluence(qapp):
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(Sequence(beam=[_make_beam()]))
+
+    assert viewer.overlay_bar.isHidden()
+
+
+def test_fluence_selector_applies_to_every_beam_tab(qapp):
+    context = _fluence_context(n_beams=2)
+    sequence = Sequence(
+        beam=[_beam_with_bixels(), _beam_with_bixels()],
+        fluence=np.array([4.0, 3.0, 2.0, 1.0]),
+    )
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, context=context)
+    assert all(w.fluence_mode == "delivered" for w in viewer._beam_widgets)
+
+    difference_ix = viewer.fluence_selector.findData("difference")
+    viewer.fluence_selector.setCurrentIndex(difference_ix)
+
+    assert all(w.fluence_mode == "difference" for w in viewer._beam_widgets)
+
+
+def test_overlay_checkboxes_apply_to_every_beam_tab(qapp):
+    context = _fluence_context()
+    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, context=context)
+    assert viewer._beam_widgets[0].show_mlc_borders
+    assert viewer._beam_widgets[0].show_target
+
+    viewer.mlc_borders_checkbox.setChecked(False)
+    viewer.target_checkbox.setChecked(False)
+
+    assert not viewer._beam_widgets[0].show_mlc_borders
+    assert not viewer._beam_widgets[0].show_target
+
+
+def test_leaf_coordinate_selector_applies_to_every_beam_tab(qapp):
+    sequence = Sequence(beam=[_make_beam(), _make_beam()])
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence)
+    assert all(w.leaf_coordinate == "leaf_num" for w in viewer._beam_widgets)
+
+    physical_ix = viewer.leaf_coordinate_selector.findData("physical")
+    viewer.leaf_coordinate_selector.setCurrentIndex(physical_ix)
+
+    assert all(w.leaf_coordinate == "physical" for w in viewer._beam_widgets)
+
+
+def test_leaf_coordinate_selector_reflects_caller_chosen_coordinate(qapp):
+    sequence = Sequence(beam=[_make_beam()])
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, leaf_coordinate="physical")
+
+    assert viewer.leaf_coordinate_selector.currentData() == "physical"
+    assert viewer._beam_widgets[0].leaf_coordinate == "physical"
+
+
+def test_set_leaf_coordinate_keeps_displayed_shape(qapp):
+    widget = BeamApertureWidget(_make_beam(n_shapes=3), "Beam 0")
+    widget.shape_slider.setValue(2)
+
+    widget.set_leaf_coordinate("physical")
+
+    assert widget.shape_slider.value() == 2
+    assert widget.shape_label.text() == "3 / 3"
+
+
+def test_target_outline_maps_onto_the_leaf_pair_axis(qapp):
+    context = _fluence_context()
+    widget = BeamApertureWidget(
+        _beam_with_bixels(),
+        "Beam 0",
+        beam_ix=0,
+        context=context,
+        delivered_fluence=np.array([4.0, 3.0, 2.0, 1.0]),
+    )
+    # Stand in for a projected target spanning two known leaf rows.
+    mlc = widget.beam.mlc_sequence[0]
+    boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
+    widget._target_points = np.array([[0.0, boundaries[0]], [0.0, boundaries[1]]])
+
+    widget.set_leaf_coordinate("physical")
+    np.testing.assert_allclose(widget._target_points_for_axis(0)[:, 1], boundaries[:2])
+
+    widget.set_leaf_coordinate("leaf_num")
+    # Rows are labelled 1..N ascending in z, matching _leaf_row_bounds.
+    np.testing.assert_allclose(widget._target_points_for_axis(0)[:, 1], [1.0, 2.0])
+
+
+def test_target_color_is_configurable(qapp):
+    context = _fluence_context()
+    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, context=context)
+    assert viewer._beam_widgets[0].target_color == "red"
+
+    viewer.target_color = "#00ff00"
+    for widget in viewer._beam_widgets:
+        widget.set_target_color(viewer.target_color)
+
+    assert viewer._beam_widgets[0].target_color == "#00ff00"
+
+
+def test_bixel_grid_checkbox_applies_to_every_beam_tab(qapp):
+    context = _fluence_context()
+    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, context=context)
+    assert not viewer._beam_widgets[0].show_bixel_grid
+
+    viewer.bixel_grid_checkbox.setChecked(True)
+
+    assert viewer._beam_widgets[0].show_bixel_grid
+
+
+def test_sequencer_label_includes_the_level_count(qapp):
+    sequence = Sequence(beam=[_make_beam()], sequencer="xia", num_of_levels=7)
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence)
+
+    assert viewer.sequencer_label.text() == "Sequencer: xia (7 levels)"
+
+
+def test_sequencer_label_omits_levels_when_unknown(qapp):
+    sequence = Sequence(beam=[_make_beam()], sequencer="xia")
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence)
+
+    assert viewer.sequencer_label.text() == "Sequencer: xia"
+
+
+def test_view_options_reset_for_a_newly_shown_sequence(qapp):
+    context = _fluence_context()
+    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+
+    viewer = ApertureViewerWidget()
+    viewer.set_sequence(sequence, context=context)
+
+    viewer.fluence_selector.setCurrentIndex(viewer.fluence_selector.findData("optimized"))
+    viewer.bixel_grid_checkbox.setChecked(True)
+    viewer.mlc_borders_checkbox.setChecked(False)
+    viewer.target_color = "#00ff00"
+
+    viewer.set_sequence(sequence, context=context)
+
+    assert viewer.fluence_selector.currentData() == "delivered"
+    assert not viewer.bixel_grid_checkbox.isChecked()
+    assert viewer.mlc_borders_checkbox.isChecked()
+    assert viewer.target_checkbox.isChecked()
+    assert viewer.target_color == "red"
+    assert viewer._beam_widgets[0].fluence_mode == "delivered"
+    assert viewer._beam_widgets[0].target_color == "red"
+
+
+def test_target_projection_runs_with_a_full_context(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+    context = _fluence_context()
+    context.ct = ct
+    context.cst = cst
+
+    widget = BeamApertureWidget(
+        _beam_with_bixels(),
+        "Beam 0",
+        beam_ix=0,
+        context=context,
+        delivered_fluence=np.array([4.0, 3.0, 2.0, 1.0]),
+    )
+
+    assert widget._target_points is not None
+    assert widget._target_points.shape[1] == 2
+    assert widget._target_resolution == max(float(v) for v in ct.resolution.values())

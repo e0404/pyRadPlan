@@ -6,8 +6,9 @@ import numpy as np
 from abc import abstractmethod
 from typing import Optional, Union
 
+from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan, validate_pln
-from pyRadPlan.result import PlanResult, ApertureInfo
+from pyRadPlan.result import PlanResult, ApertureInfo, validate_result
 from pyRadPlan.stf import SteeringInformation, Beam
 from pyRadPlan.machines import MLC, Jaw, load_from_name, validate_machine
 from ._base import Sequencer
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class PhotonSequencer(Sequencer):
+    SEQUENCED_SUFFIX = "_sequenced"
+
     def __init__(self, pln: Union[Plan, dict] = None):
         self.num_of_mlc_leaf_pairs = 80
         self.leaf_width: Optional[float] = None
@@ -669,3 +672,36 @@ class PhotonSequencer(Sequencer):
         aperture_info["lim_mx"] = lim_mx
 
         return aperture_info
+
+    def _result_with_sequenced_quantities(
+        self, result_data: dict, fluence: np.ndarray, dij: Optional[Dij]
+    ) -> PlanResult:
+        """Validate *result_data*, adding quantities recomputed from *fluence*.
+
+        Parameters
+        ----------
+        result_data : dict
+            The dumped result to validate, already carrying the ``sequence``.
+        fluence : np.ndarray
+            The sequenced (deliverable) fluence.
+        dij : Dij, optional
+            Dose influence matrix.
+
+        Returns
+        -------
+        PlanResult
+            The validated result.
+        """
+        if dij is None:
+            return validate_result(result_data)
+
+        sequenced = dij.compute_result_ct_grid(fluence).model_dump()
+        for field in ("quantities", "beam_quantities"):
+            delivered = {
+                f"{name}{self.SEQUENCED_SUFFIX}": value
+                for name, value in (sequenced.get(field) or {}).items()
+            }
+            if delivered:
+                result_data[field] = {**(result_data.get(field) or {}), **delivered}
+
+        return validate_result(result_data)

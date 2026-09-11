@@ -192,6 +192,10 @@ class WorkflowWidget(WorkspaceWidget):
     #: Hosts (e.g. the main window) can use it to lock other input widgets.
     busy_changed = Signal(bool)
 
+    #: Emitted once sequencing has finished and the sequenced result is in the
+    #: workspace, so a host can bring up the sequence viewer for it.
+    sequencing_finished = Signal()
+
     #: Internal: a compute report marshalled from the worker thread to the GUI
     #: thread.  Carries a :class:`~pyRadPlan.core.ComputeReport`.
     _report_received = Signal(object)
@@ -510,14 +514,15 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_optimize.setEnabled(has_stf_dij)
         self._btn_recalc.setEnabled(has_result and has_stf_dij)
         self._btn_sequence.setEnabled(
-            has_result
-            and ws.has("stf")
-            and is_photon
-            and seq_configured
-            and not self._result_stale
+            has_result and has_stf_dij and is_photon and seq_configured and not self._result_stale
         )
         if not is_photon:
             seq_tooltip = "Sequencing is only available for photon plans."
+        elif not has_stf_dij:
+            seq_tooltip = (
+                "Sequencing needs steering information and a dose influence matrix to "
+                "recompute the delivered dose — calculate or load a dose influence first."
+            )
         elif self._result_stale:
             seq_tooltip = (
                 "Result is outdated relative to the current plan (e.g. after switching "
@@ -1105,6 +1110,14 @@ class WorkflowWidget(WorkspaceWidget):
         if result is None:
             QMessageBox.warning(self, "Run Sequencing", "No result available to sequence.")
             return
+        if stf is None or dij is None:
+            QMessageBox.warning(
+                self,
+                "Run Sequencing",
+                "Sequencing needs steering information and a dose influence matrix to "
+                "recompute the delivered dose — calculate or load a dose influence first.",
+            )
+            return
         if pln is None or pln.radiation_mode != "photons":
             QMessageBox.warning(
                 self, "Run Sequencing", "Sequencing is only available for photon plans."
@@ -1140,6 +1153,7 @@ class WorkflowWidget(WorkspaceWidget):
 
         def _on_success(new_result: PlanResult) -> None:
             self._ws.result = new_result
+            self.sequencing_finished.emit()
 
         self._run_in_thread(_compute, on_success=_on_success, busy_text="Sequencing…")
 

@@ -189,3 +189,40 @@ def test_viewing_widget_show_sequence(qapp, test_data_photons):
     widget.quantity_widget._active_quantity_name = "physical_dose_beam 1"
     widget._on_show_sequence()
     assert widget._sequence_window.viewer.tabs.currentIndex() == 1
+
+
+def test_show_sequence_reuses_the_same_window(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+
+    widget._on_show_sequence()
+    first = widget._sequence_window
+    widget._on_show_sequence()
+
+    assert widget._sequence_window is first
+
+
+def test_sequence_window_is_top_level_for_its_own_taskbar_entry(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+    widget._on_show_sequence()
+
+    assert widget._sequence_window.parent() is None
+
+
+def test_reshowing_the_same_sequence_does_not_rebuild_the_viewer(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+
+    widget._on_show_sequence()
+    tabs = widget._sequence_window.viewer._beam_widgets[:]
+
+    widget._on_show_sequence()
+
+    assert widget._sequence_window.viewer._beam_widgets == tabs

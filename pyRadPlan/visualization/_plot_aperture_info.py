@@ -7,8 +7,12 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.gridspec import GridSpec
 
+from scipy import ndimage
+
+from pyRadPlan.core import np2sitk
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.geometry import lps
 from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
@@ -75,6 +79,158 @@ def _draw_aperture(ax: plt.Axes, mlc: MLC, mlc_window: list[float], leaf_coordin
     ax.set_ylim(y_low.min(), y_high.max())
     ax.set_xlabel("horiz. pos. [mm]")
     ax.set_ylabel("vert. pos. [mm]" if leaf_coordinate == "physical" else "leaf pair #")
+
+
+def _target_bev_points(
+    ct: CT, cst: StructureSet, beam: Beam, device_orientation: str
+) -> Optional[np.ndarray]:
+    """Project the target volume into *beam*'s isocenter (beam's-eye-view) plane.
+
+    Parameters
+    ----------
+    ct : CT
+        Provides the grid the target voxel indices refer to.
+    cst : StructureSet
+        Supplies the target volume (union of all TARGET VOIs).
+    beam : Beam
+        Steering-information beam, for its geometry (angles, isocenter, SAD).
+    device_orientation : str
+        "X" or "Y", from the corresponding ``MLC.device_orientation``.
+
+    Returns
+    -------
+    np.ndarray or None
+        ``(N, 2)`` array of (horizontal, vertical) positions in mm, on the same
+        axes as :func:`_native_fluence_map`'s window, or ``None`` when the
+        structure set holds no target.
+    """
+    mask = cst.target_union_mask()
+    if mask is None:
+        return None
+    voxels = np2sitk.sitk_mask_to_linear_indices(mask, order="numpy")
+    if voxels is None or np.size(voxels) == 0:
+        return None
+
+    coords = np2sitk.linear_indices_to_grid_coordinates(voxels, ct.grid, index_type="numpy").T
+    iso_center = np.asarray(beam.iso_center, dtype=float).reshape((3, 1))
+    rotation_t = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle).transpose()
+
+    bev = rotation_t @ (coords - iso_center)
+    # Divergent projection onto the isocenter plane; axis 1 is the beam's own axis.
+    bev = beam.sad * bev / (beam.sad + bev[1, :])
+
+    travel_axis, stack_axis = (0, 2) if device_orientation == "X" else (2, 0)
+    return np.column_stack((bev[travel_axis, :], bev[stack_axis, :]))
+
+
+def _leaf_num_points(points: np.ndarray, mlc: MLC) -> np.ndarray:
+    """Map BEV points' vertical coordinate from mm onto the leaf-pair index axis."""
+    boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
+    if boundaries.size == 0 or not mlc.leaf_width:
+        return points
+    rows = 1.0 + (points[:, 1] - boundaries[0]) / mlc.leaf_width
+    return np.column_stack((points[:, 0], rows))
+
+
+def _draw_bixel_grid(
+    ax: plt.Axes,
+    window: list[float],
+    bixel_width: float,
+    vertical: Optional[np.ndarray] = None,
+    color: str = "white",
+) -> None:
+    """Draw the ray/bixel grid over an axis.
+
+    Parameters
+    ----------
+    window : list[float]
+        ``[x_min, x_max, z_min, z_max]`` in mm, as returned by
+        :func:`_native_fluence_map` (already the bixel *boundaries*).
+    vertical : np.ndarray, optional
+        Pre-transformed vertical line positions, for an axis that is not in mm
+        (e.g. the leaf-pair index). Defaults to the window's own mm positions.
+    """
+    if not bixel_width:
+        return
+
+    horizontal = np.arange(window[0], window[1] + 0.5 * bixel_width, bixel_width)
+    if vertical is None:
+        vertical = np.arange(window[2], window[3] + 0.5 * bixel_width, bixel_width)
+
+    for x in horizontal:
+        ax.axvline(x, color=color, linewidth=0.4, alpha=0.6, zorder=3)
+    for y in vertical:
+        ax.axhline(y, color=color, linewidth=0.4, alpha=0.6, zorder=3)
+
+
+def _draw_target_outline(
+    ax: plt.Axes,
+    points: Optional[np.ndarray],
+    resolution: Union[float, tuple[float, float]] = 3.0,
+    color: str = "red",
+) -> None:
+    """Outline the projected target on *ax*.
+
+    Parameters
+    ----------
+    resolution : float or tuple of float
+        Bin size, per axis when the two axes are not in the same unit (e.g. mm
+        horizontally but leaf-pair index vertically). Must be at least the
+        projected voxel spacing on each axis.
+    """
+    if points is None or len(points) == 0:
+        return
+
+    res_x, res_y = resolution if isinstance(resolution, tuple) else (resolution, resolution)
+    res_x, res_y = max(float(res_x), 1e-3), max(float(res_y), 1e-3)
+    x, y = points[:, 0], points[:, 1]
+    x_edges = np.arange(x.min() - res_x, x.max() + 2 * res_x, res_x)
+    y_edges = np.arange(y.min() - res_y, y.max() + 2 * res_y, res_y)
+    if x_edges.size < 2 or y_edges.size < 2:
+        return
+
+    hist, _, _ = np.histogram2d(x, y, bins=(x_edges, y_edges))
+    occupied = hist.T > 0
+    occupied = ndimage.binary_closing(occupied, structure=np.ones((3, 3)))
+    occupied = ndimage.binary_fill_holes(occupied)
+
+    ax.contour(
+        0.5 * (x_edges[:-1] + x_edges[1:]),
+        0.5 * (y_edges[:-1] + y_edges[1:]),
+        occupied.astype(float),
+        levels=[0.5],
+        colors=color,
+        linewidths=1.2,
+        zorder=5,
+    )
+
+
+def _draw_mlc_borders(
+    ax: plt.Axes,
+    mlc: MLC,
+    mlc_window: list[float],
+    leaf_coordinate: str = "physical",
+    color: str = "black",
+) -> None:
+    """Outline one segment's leaves as lines, for overlaying on a fluence map."""
+    x_min, x_max = mlc_window[0], mlc_window[1]
+    y_low, y_high = _leaf_row_bounds(mlc, leaf_coordinate)
+
+    for (left, right), lo, hi in zip(mlc.leaf_positions, y_low, y_high):
+        for start, stop in ((x_min, left), (right, x_max)):
+            if stop <= start:
+                continue  # leaf fully retracted past the field edge
+            ax.add_patch(
+                Rectangle(
+                    (start, lo),
+                    stop - start,
+                    hi - lo,
+                    fill=False,
+                    edgecolor=color,
+                    linewidth=0.8,
+                    zorder=4,
+                )
+            )
 
 
 def _beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:

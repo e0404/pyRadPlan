@@ -32,6 +32,7 @@ class Sequence(PyRadPlanBaseModel):
     fluence: np.ndarray | None = Field(default=None, alias="w")
     beam: list[BeamSequence] | None = Field(default=None)
     sequencer: str | None = Field(default=None)
+    num_of_levels: int | None = Field(default=None)
     bixel_width: float | None = Field(default=None)
     lim_mx: np.ndarray | None = Field(default=None)
     mapping_mx: np.ndarray | None = Field(default=None)

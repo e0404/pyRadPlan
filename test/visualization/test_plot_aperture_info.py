@@ -1,14 +1,22 @@
 import numpy as np
 import SimpleITK as sitk
 import matplotlib
+import matplotlib.pyplot as plt
 import pytest
 
 from pyRadPlan import CT, plot_aperture_info
+from pyRadPlan.cst import validate_cst
+from pyRadPlan.ct import validate_ct
 from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, Ray, SteeringInformation
 from pyRadPlan.stf._beamlet import PhotonBixel
+from pyRadPlan.visualization._plot_aperture_info import (
+    _draw_mlc_borders,
+    _draw_target_outline,
+    _target_bev_points,
+)
 
 matplotlib.use("Agg")
 
@@ -249,3 +257,29 @@ def test_plot_aperture_info_dose_requires_plan_result(dose_comparison_setup):
             image_volume=ct,
             show_plot=False,
         )
+
+
+def test_target_bev_points_projects_target_onto_its_own_isocenter(test_data_photons_raw):
+    ct = validate_ct(test_data_photons_raw["ct"])
+    cst = validate_cst(test_data_photons_raw["cst"], ct=ct)
+    center_of_mass = np.asarray(cst.target_center_of_mass()).ravel()
+
+    beam = Beam(iso_center=center_of_mass.tolist(), bixel_width=5.0, rays=[])
+    points = _target_bev_points(ct, cst, beam, "X")
+
+    assert points is not None
+    assert points.ndim == 2 and points.shape[1] == 2
+    np.testing.assert_allclose(points.mean(axis=0), [0.0, 0.0], atol=1e-6)
+    # Symmetric about the isocenter it is centered on, and bounded by the target.
+    np.testing.assert_allclose(points.min(axis=0), -points.max(axis=0), rtol=1e-6)
+
+
+def test_target_bev_points_returns_none_without_target(test_data_photons_raw):
+    class _NoTargetCst:
+        def target_union_mask(self):
+            return None
+
+    ct = CT(cube_hu=sitk.Image(4, 4, 4, sitk.sitkFloat32))
+    beam = Beam(iso_center=[0.0, 0.0, 0.0], bixel_width=5.0, rays=[])
+
+    assert _target_bev_points(ct, _NoTargetCst(), beam, "X") is None
