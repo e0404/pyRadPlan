@@ -17,24 +17,25 @@ from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, SteeringInformation, validate_stf
-from pyRadPlan.visualization._plot_dose_comparison import _draw_dose_comparison_panels
+from pyRadPlan.visualization._plot_dose_comparison import (
+    _beam_label,
+    _draw_dose_comparison_panels,
+)
 
 
 def _leaf_row_bounds(mlc: MLC, leaf_coordinate: str) -> tuple[np.ndarray, np.ndarray]:
     """Lower/upper vertical edge of every active leaf row of one MLC segment.
 
-    For ``"physical"``, rows sit at their true z position with height
-    ``mlc.leaf_width``. For ``"leaf_num"``, rows are relabeled 1..N from the
-    lowest to the highest z.
+    For ``"physical"``, rows span ``[boundary, boundary + leaf_width]`` -- the
+    boundaries are the rows' lower edges. For ``"leaf_num"``, rows are relabeled
+    1..N from the lowest to the highest z.
     """
     n = len(mlc.leaf_positions)
     if leaf_coordinate == "physical":
-        centers = np.asarray(mlc.leaf_position_boundaries, dtype=float)
-        half = mlc.leaf_width / 2.0
-    else:
-        centers = np.arange(1, n + 1, dtype=float)
-        half = 0.5
-    return centers - half, centers + half
+        low = np.asarray(mlc.leaf_position_boundaries, dtype=float)
+        return low, low + mlc.leaf_width
+    centers = np.arange(1, n + 1, dtype=float)
+    return centers - 0.5, centers + 0.5
 
 
 def _weight_color(weight: float, w_max: float) -> tuple:
@@ -233,14 +234,6 @@ def _draw_mlc_borders(
             )
 
 
-def _beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:
-    if stf is not None and beam_index < len(stf.beams):
-        angle = getattr(stf.beams[beam_index], "gantry_angle", None)
-        if angle is not None:
-            return f"Beam {beam_index} ({float(angle):.0f}°)"
-    return f"Beam {beam_index}"
-
-
 def _per_beam_layout(n_shapes: int) -> tuple[int, int]:
     """Two rows of shapes, as wide as it takes."""
     cols = max(int(np.ceil(n_shapes / 2)), 1)
@@ -392,6 +385,17 @@ def _add_fluence_comparison_row(
     return [ax_target, ax_delivered, ax_diff]
 
 
+def _beam_dose(result: PlanResult, role: str, quantity: str, beam_ix: int):
+    """One beam's dose for the named quantity, or a message saying what is there."""
+    doses = (result.beam_quantities or {}).get(quantity)
+    if not doses:
+        available = ", ".join(sorted(result.beam_quantities or {})) or "none"
+        raise ValueError(
+            f"The '{role}' result holds no per-beam '{quantity}'. Available: {available}."
+        )
+    return doses[beam_ix].values
+
+
 def _add_dose_comparison_row(
     fig: Figure,
     gs: GridSpec,
@@ -411,8 +415,8 @@ def _add_dose_comparison_row(
     """Add this beam's optimized/delivered/difference dose as one extra GridSpec row."""
     axes = [fig.add_subplot(gs[row, edges[i] : edges[i + 1]]) for i in range(3)]
 
-    before = unsequenced_result.beam.physical_dose[beam_ix].values
-    after = sequenced_result.beam.physical_dose[beam_ix].values
+    before = _beam_dose(unsequenced_result, "unsequenced_result", "physical_dose", beam_ix)
+    after = _beam_dose(sequenced_result, "sequenced_result", "physical_dose_sequenced", beam_ix)
     _draw_dose_comparison_panels(
         axes,
         before,
@@ -617,7 +621,7 @@ def plot_aperture_info(
     if show_dose and sequenced_result is None:
         raise ValueError(
             "image_volume/cst (dose comparison) require result to be a PlanResult (not a bare "
-            "Sequence), so per-beam dose can be read from result.beam.physical_dose."
+            "Sequence), so per-beam dose can be read from result.beam.physical_dose_sequenced."
         )
 
     if stf is not None:

@@ -110,9 +110,7 @@ def test_shape():
     energy = 6
     resolution = 0.5
     mlc_X = sample_MLC("X")
-    mask_mlc_X = np.fliplr(
-        mlc_X.calculate_transmission_mask(resolution)
-    )  # IEC X --> BEV-LPS X (flip)
+    mask_mlc_X = mlc_X.calculate_transmission_mask(resolution)
     half_size = mask_mlc_X.shape[0] // 2
     field_grid = resolution * np.arange(-half_size, half_size + 1)
 
@@ -147,7 +145,7 @@ def test_shape_resampling():
     resolution_resampled = 1.2
     padding = 10.0
     mlc_X = sample_MLC("X")
-    mask_mlc_X = np.fliplr(mlc_X.calculate_transmission_mask(resolution))
+    mask_mlc_X = mlc_X.calculate_transmission_mask(resolution)
 
     field_shape_mask = FieldShapeAsMask(energy=energy, mask=mask_mlc_X, resolution=resolution)
     field_shape_bld = FieldShapeAsBLD(energy=energy, bld=mlc_X, resolution=resolution)

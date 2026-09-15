@@ -32,6 +32,11 @@ class BeamLimitingDevice(PyRadPlanBaseModel):
 
     Defines ...:
 
+    Notes
+    -----
+    Positions (jaw positions, MLC leaf positions and leaf-row boundaries) are in
+    **BEV-LPS**, *not* IEC. Convert at the I/O boundary (e.g. from DICOM RT).
+
     Attributes
     ----------
     device_type : str
@@ -78,15 +83,17 @@ class MLC(BeamLimitingDevice):
     Attributes
     ----------
     leaf_position_boundaries : Optional[np.ndarray]
-        Boundaries in mm (in isocenter plane) in IEC coordinates
+        Boundaries in mm (in isocenter plane) in BEV-LPS coordinates.
+        (Conversion from DICOM's n+1 Leaf Position Boundaries (300A,00BE) to
+        n leaf rows required in I/O.)
     leaf_positions : Optional[np.ndarray]
-        Leaf positions in mm (in isocenter plane) in IEC coordinates
+        Leaf positions in mm (in isocenter plane) in BEV-LPS coordinates
     leaf_width: float
         Width of the leaves (mm in isocenter plane)
     leaf_leakage: float
         Leakage of the leaves relative to open field (0-1))
     interleaf_leakage: float
-        Leakage between the leaves relative to open field (0-1))
+        Leakage between the leaves relative to open field (0-1)) [not yet implemented!]
     """
 
     # TODO: Should not overwrite Config?
@@ -118,9 +125,11 @@ class MLC(BeamLimitingDevice):
         central_leaf_pair : float
             Index of the central leaf pair in the full MLC.
         """
-        # Leaf pair positions and active leaf pairs
-        top_leaf_pair_pos = self.leaf_position_boundaries[-1]
-        bottom_leaf_pair_pos = self.leaf_position_boundaries[0]
+        # Leaf pairs are indexed by their centre, while leaf_position_boundaries
+        # are the rows' lower edges
+        half_row = self.leaf_width / 2.0
+        top_leaf_pair_pos = self.leaf_position_boundaries[-1] + half_row
+        bottom_leaf_pair_pos = self.leaf_position_boundaries[0] + half_row
         top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / self.leaf_width
         bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / self.leaf_width
         is_active_leaf_pair = np.zeros(self.number_of_elements)
@@ -191,6 +200,30 @@ class MLC(BeamLimitingDevice):
                 )
         return data
 
+    @staticmethod
+    def validate_leaf_width_consistency(
+        leaf_position_boundaries: np.ndarray, leaf_width: Optional[float]
+    ) -> float:
+        if len(leaf_position_boundaries) > 1:
+            boundary_diffs = np.unique(np.abs(np.diff(leaf_position_boundaries)))
+            if len(boundary_diffs) != 1:
+                raise ValueError(
+                    f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
+                )
+            if leaf_width is None:
+                leaf_width = boundary_diffs[0]
+            elif not math.isclose(leaf_width, boundary_diffs[0]):
+                raise ValueError(
+                    f"Distance between leaf boundary positions ({boundary_diffs[0]})"
+                    f" differs from given leaf_width ({leaf_width})"
+                )
+        elif len(leaf_position_boundaries) == 1 and leaf_width is None:
+            raise ValueError(
+                "leaf_width is required to place leaf rows when it cannot be derived "
+                "from the leaf_position_boundaries (a single row)."
+            )
+        return leaf_width
+
     @model_validator(mode="after")
     def validate_boundaries_and_positions(self) -> Self:
         has_boundaries = self.leaf_position_boundaries is not None
@@ -212,22 +245,9 @@ class MLC(BeamLimitingDevice):
                     f"Leaf boundary positions need to be sorted: {self.leaf_position_boundaries}"
                 )
 
-            if len(self.leaf_position_boundaries) > 1:
-                boundary_diffs = np.unique(np.abs(np.diff(self.leaf_position_boundaries)))
-                if len(boundary_diffs) != 1:
-                    raise ValueError(
-                        f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
-                    )
-                if self.leaf_width is None:
-                    self.leaf_width = boundary_diffs[0]
-                elif not math.isclose(self.leaf_width, boundary_diffs[0]):
-                    raise ValueError(
-                        f"Distance between leaf boundary positions ({boundary_diffs[0]})"
-                        f" differs from given leaf_width ({self.leaf_width})"
-                    )
-            # A single boundary row has no spacing to derive/cross-check a pitch
-            # from; leaf_width must already be known (set by the caller, e.g.
-            # calculate_from_shape's explicit leaf_width argument) or stays None.
+            self.leaf_width = self.validate_leaf_width_consistency(
+                self.leaf_position_boundaries, self.leaf_width
+            )
 
             self.number_of_elements = max(
                 self.number_of_elements, len(self.leaf_position_boundaries)
@@ -343,10 +363,12 @@ class MLC(BeamLimitingDevice):
             (no boundary spacing to derive it from); otherwise it is derived
             from/cross-checked against the boundary spacing as before.
         """
-        # get leaf position boundaries from unique ray positions
-        self.leaf_position_boundaries = np.unique(z_ray_pos)
-        if leaf_width is not None:
-            self.leaf_width = leaf_width
+        # get leaf position boundaries from unique ray positions (ray positions are at
+        # row centres, while leaf_position_boundaries are the rows' lower edges)
+        row_centers = np.unique(z_ray_pos)
+        leaf_width = self.validate_leaf_width_consistency(row_centers, leaf_width)
+        self.leaf_width = leaf_width
+        self.leaf_position_boundaries = row_centers - leaf_width / 2.0
 
         # compute left/right leaf positions from open bixel columns in physical coordinates
         dim_z = shape_map.shape[0]
@@ -381,7 +403,7 @@ class Jaw(BeamLimitingDevice):
     Attributes
     ----------
     positions : list[float]
-        ?? (in isocenter plane)
+        Jaw edge positions in mm (in isocenter plane) in BEV-LPS coordinates
     field_width: float
         Width of field. ??
     leakage: float
@@ -430,7 +452,7 @@ class Jaw(BeamLimitingDevice):
                     "Set device_type to 'JAWX' or 'JAWY' or device_orientation to 'X' or 'Y'"
                 )
         else:
-            expected = f"Jaw{device_orientation}"
+            expected = f"JAW{device_orientation}"
             if not device_type or device_type == "JAW":
                 data["device_type"] = expected
             elif device_type != expected:

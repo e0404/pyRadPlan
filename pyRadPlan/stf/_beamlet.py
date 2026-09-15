@@ -329,9 +329,6 @@ class FieldShapeAsBLD(FieldShape):
     @property
     def mask(self) -> np.ndarray:
         mask = self.bld.calculate_transmission_mask(spacing=self.resolution)
-        # BLDs use IEC coordinates where X points to patient's right.
-        # BEV-LPS X points to patient's left, so the X axis is inverted.
-        mask = np.fliplr(mask)
 
         if self.field_width is not None:
             bld_field_width = (mask.shape[0] - 1) * self.resolution

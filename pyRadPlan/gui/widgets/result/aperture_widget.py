@@ -421,11 +421,6 @@ class ApertureViewerWidget(QWidget):
         self.mlc_borders_checkbox.setChecked(True)
         self.mlc_borders_checkbox.toggled.connect(self._on_overlays_toggled)
 
-        self.target_checkbox = QCheckBox("Target (BEV)")
-        self.target_checkbox.setChecked(True)
-        self.target_checkbox.setToolTip("Outline of the target projected into the beam's-eye view")
-        self.target_checkbox.toggled.connect(self._on_overlays_toggled)
-
         self.target_color = "red"
         self.target_color_button = QPushButton()
         self.target_color_button.setFixedSize(12, 12)
@@ -434,6 +429,11 @@ class ApertureViewerWidget(QWidget):
         self.target_color_button.setToolTip("Colour of the projected-target outline")
         self.target_color_button.clicked.connect(self._on_pick_target_color)
         self._update_target_color_button()
+
+        self.target_checkbox = QCheckBox("Target (BEV)")
+        self.target_checkbox.setChecked(True)
+        self.target_checkbox.setToolTip("Outline of the target projected into the beam's-eye view")
+        self.target_checkbox.toggled.connect(self._on_overlays_toggled)
 
         self.bixel_grid_checkbox = QCheckBox("Bixel grid")
         self.bixel_grid_checkbox.setToolTip("Overlay the ray/bixel grid the fluence is sampled on")
@@ -451,8 +451,8 @@ class ApertureViewerWidget(QWidget):
         overlays.addWidget(QLabel("Fluence:"))
         overlays.addWidget(self.fluence_selector)
         overlays.addWidget(self.mlc_borders_checkbox)
-        overlays.addWidget(self.target_checkbox)
         overlays.addWidget(self.target_color_button)
+        overlays.addWidget(self.target_checkbox)
         overlays.addWidget(self.bixel_grid_checkbox)
         overlays.addStretch(1)
 

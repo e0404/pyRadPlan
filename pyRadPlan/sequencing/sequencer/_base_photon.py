@@ -464,7 +464,11 @@ class PhotonSequencer(Sequencer):
             # truth = MLC methods). These stay on the beam sequence for matRad interop.
             beam_aperture["left_leaf_pos"] = [mlc.leaf_positions[:, 0] for mlc in mlc_sequence]
             beam_aperture["right_leaf_pos"] = [mlc.leaf_positions[:, 1] for mlc in mlc_sequence]
-            beam_aperture["leaf_pair_pos"] = mlc_sequence[0].leaf_position_boundaries
+            # leaf pair positions (matRad's leafPairPos) holds row centres, the MLC
+            # stores boundaries (row's lower edges)
+            beam_aperture["leaf_pair_pos"] = (
+                mlc_sequence[0].leaf_position_boundaries + mlc_sequence[0].leaf_width / 2.0
+            )
             beam_aperture["is_active_leaf_pair"] = mlc_sequence[0].is_active_leaf_pair(
                 central_leaf_pair
             )
@@ -473,12 +477,23 @@ class PhotonSequencer(Sequencer):
             beam_aperture["lim_l"] = lim_l
             beam_aperture["lim_r"] = lim_r
 
-            # Define MLC window for plotting using physical coordinates
+            # Define MLC window using physical coordinates. The stack direction takes
+            # whichever reaches further, the ray extent or the leaf rows actually used
+            z_min = init["min_z"] - 0.5 * init["bixel_width"]
+            z_max = init["max_z"] + 0.5 * init["bixel_width"]
+            leaf_row_z = init.get("leaf_row_z")
+            if leaf_row_z is not None and len(leaf_row_z) > 0:
+                pitch = (
+                    float(np.diff(leaf_row_z).min()) if len(leaf_row_z) > 1 else self.leaf_width
+                )
+                z_min = min(z_min, float(leaf_row_z[0]) - 0.5 * pitch)
+                z_max = max(z_max, float(leaf_row_z[-1]) + 0.5 * pitch)
+
             beam_aperture["MLCWindow"] = [
                 init["min_x"] - 0.5 * init["bixel_width"],
                 init["max_x"] + 0.5 * init["bixel_width"],
-                init["min_z"] - 0.5 * init["bixel_width"],
-                init["max_z"] + 0.5 * init["bixel_width"],
+                z_min,
+                z_max,
             ]
 
             # Static jaw pair bounding the field

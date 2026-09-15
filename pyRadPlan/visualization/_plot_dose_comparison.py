@@ -1,6 +1,7 @@
 """Comparison of two dose distributions (before/after), with their difference."""
 
-from typing import Optional
+import os
+from typing import Literal, Optional, Union
 import numpy as np
 import SimpleITK as sitk
 import matplotlib.pyplot as plt
@@ -8,11 +9,68 @@ from matplotlib.figure import Figure
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
-from pyRadPlan.result import PlanResult
+from pyRadPlan.result import PlanResult, QuantityDistribution
+from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.visualization._plot_slice import plot_slice, _resolve_view_slices, _validate_inputs
 
 
 _DIFF_CMAP = "RdBu_r"
+
+
+def _beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:
+    if stf is not None and beam_index < len(stf.beams):
+        angle = getattr(stf.beams[beam_index], "gantry_angle", None)
+        if angle is not None:
+            return f"Beam {beam_index} ({float(angle):.0f}°)"
+    return f"Beam {beam_index}"
+
+
+def _beam_filename(save_filename: str, beam_index: int) -> str:
+    """``dose.png`` -> ``dose_beam0.png``, keeping the extension usable by savefig."""
+    root, ext = os.path.splitext(save_filename)
+    return f"{root}_beam{beam_index}{ext}"
+
+
+def _quantity(result: PlanResult, role: str, quantity: str) -> QuantityDistribution:
+    """One named quantity of a plan result."""
+    dist = result.quantities.get(quantity) if result.quantities else None
+    if dist is None:
+        available = ", ".join(sorted(result.quantities)) if result.quantities else "none"
+        raise ValueError(
+            f"The '{role}' result has no quantity '{quantity}'. Available: {available}."
+        )
+    return dist
+
+
+def _beam_doses(result: PlanResult, role: str, quantity: str) -> list[QuantityDistribution]:
+    """Per-beam dose of one plan result, for the named quantity."""
+    doses = result.beam_quantities.get(quantity) if result.beam_quantities else None
+    if not doses:
+        raise ValueError(
+            f"The '{role}' result holds no per-beam '{quantity}'. beam_indices requires "
+            "a dose calculation that stored per-beam doses under that name."
+        )
+    return doses
+
+
+def _resolve_beam_indices(
+    beam_indices: Union[int, list[int], Literal["all"]], n_beams: int
+) -> list[int]:
+    """Normalize the ``beam_indices`` argument into a list of valid beam indices."""
+    if isinstance(beam_indices, str):
+        if beam_indices != "all":
+            raise ValueError("beam_indices must be an int, a list of int, or 'all'.")
+        return list(range(n_beams))
+
+    indices = (
+        [int(beam_indices)]
+        if isinstance(beam_indices, (int, np.integer))
+        else [int(i) for i in beam_indices]
+    )
+    out_of_range = [i for i in indices if not 0 <= i < n_beams]
+    if out_of_range:
+        raise IndexError(f"beam_indices {out_of_range} out of range for {n_beams} beam(s).")
+    return indices
 
 
 def _diff_slice_max_abs(
@@ -110,6 +168,10 @@ def plot_dose_comparison(
     title_before: str = "Before",
     title_after: str = "After",
     title_diff: Optional[str] = None,
+    quantity_before: str = "physical_dose",
+    quantity_after: str = "physical_dose",
+    beam_indices: Optional[Union[int, list[int], Literal["all"]]] = None,
+    stf: Optional[SteeringInformation] = None,
     image_volume: Optional[CT] = None,
     cst: Optional[StructureSet] = None,
     view_slice: Optional[int] = None,
@@ -118,12 +180,16 @@ def plot_dose_comparison(
     overlay_cmap: str = "jet",
     save_filename: Optional[str] = None,
     show_plot: bool = True,
-) -> Figure:
+) -> list[Figure]:
     """Compare two dose distributions and their difference on one slice.
 
-    One figure, three panels on the same slice: ``before``'s dose, ``after``'s
-    dose, and their difference. At least one of ``image_volume``/``cst`` must
-    be given, same as for `~pyRadPlan.visualization.plot_slice`.
+    The first figure holds three panels on the same slice: ``before``'s dose,
+    ``after``'s dose, and their difference. At least one of
+    ``image_volume``/``cst`` must be given, same as for
+    `~pyRadPlan.visualization.plot_slice`.
+
+    With ``beam_indices``, each selected beam gets its own, separate figure of
+    the same three panels, drawn from the per-beam doses of the selected quantities.
 
     Parameters
     ----------
@@ -138,6 +204,16 @@ def plot_dose_comparison(
     title_diff : str, optional
         Title of the difference panel. Defaults to
         ``f"Difference ({title_after} − {title_before})"``.
+    quantity_before, quantity_after : str
+        Which quantity to take from each result, both defaulting to
+        ``"physical_dose"``.
+    beam_indices : int, list of int or "all", optional
+        Beams to additionally show one comparison figure each for; "all" takes
+        every beam. Requires per-beam doses in both results. Defaults to None,
+        i.e. only the total dose is shown.
+    stf : SteeringInformation, optional
+        Steering information used to title the per-beam figures with their
+        gantry angle, if available. They are titled "Beam N" otherwise.
     image_volume : CT, optional
         CT image for the grayscale background.
     cst : StructureSet, optional
@@ -151,37 +227,63 @@ def plot_dose_comparison(
     overlay_cmap : str
         Colormap for the two dose panels. Default "jet".
     save_filename : str, optional
-        If given, the figure is saved to this path.
+        If given, the total-dose figure is saved to this path, and each
+        per-beam figure next to it with a ``_beam{i}`` suffix on its stem.
     show_plot : bool
-        If True (default), show the figure.
+        If True (default), show the figure(s).
 
     Returns
     -------
-    matplotlib.figure.Figure
+    list of matplotlib.figure.Figure
+        The total-dose figure, followed by one figure per beam in
+        ``beam_indices``.
     """
-    before_dose = before.physical_dose.values
-    after_dose = after.physical_dose.values
+    before_dose = _quantity(before, "before", quantity_before).values
+    after_dose = _quantity(after, "after", quantity_after).values
+
+    beam_doses: list[tuple[int, sitk.Image, sitk.Image]] = []
+    if beam_indices is not None:
+        before_beams = _beam_doses(before, "before", quantity_before)
+        after_beams = _beam_doses(after, "after", quantity_after)
+        if len(before_beams) != len(after_beams):
+            raise ValueError(
+                "'before' and 'after' hold per-beam doses for a different number of beams "
+                f"({len(before_beams)} vs. {len(after_beams)})."
+            )
+        beam_doses = [
+            (beam_ix, before_beams[beam_ix].values, after_beams[beam_ix].values)
+            for beam_ix in _resolve_beam_indices(beam_indices, len(before_beams))
+        ]
+
+    panel_kwargs = {
+        "image_volume": image_volume,
+        "cst": cst,
+        "view_slice": view_slice,
+        "plane": plane,
+        "overlay_unit": overlay_unit,
+        "overlay_cmap": overlay_cmap,
+        "title_before": title_before,
+        "title_after": title_after,
+        "title_diff": title_diff,
+    }
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5.5))
-    _draw_dose_comparison_panels(
-        list(axes),
-        before_dose,
-        after_dose,
-        image_volume=image_volume,
-        cst=cst,
-        view_slice=view_slice,
-        plane=plane,
-        overlay_unit=overlay_unit,
-        overlay_cmap=overlay_cmap,
-        title_before=title_before,
-        title_after=title_after,
-        title_diff=title_diff,
-    )
-
+    _draw_dose_comparison_panels(list(axes), before_dose, after_dose, **panel_kwargs)
     fig.tight_layout()
     if save_filename is not None:
         fig.savefig(save_filename)
+    figures = [fig]
+
+    for beam_ix, beam_before, beam_after in beam_doses:
+        beam_fig, beam_axes = plt.subplots(1, 3, figsize=(16, 5.5))
+        beam_fig.suptitle(_beam_label(beam_ix, stf))
+        _draw_dose_comparison_panels(list(beam_axes), beam_before, beam_after, **panel_kwargs)
+        beam_fig.tight_layout()
+        if save_filename is not None:
+            beam_fig.savefig(_beam_filename(save_filename, beam_ix))
+        figures.append(beam_fig)
+
     if show_plot:
         plt.show()
 
-    return fig
+    return figures

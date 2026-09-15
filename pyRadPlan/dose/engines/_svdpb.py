@@ -110,14 +110,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
     @staticmethod
     def _open_field_extent(beamlet: FieldShape) -> float:
-        """Full width of a field shape's actually open region.
+        """Full width of a field shape."""
 
-        Returns 0 if the shape has no open region (mask never exceeds the
-        smooth-step midpoint of 0.5, e.g. a fully closed shape).
-        """
         mask = beamlet.mask
         grid = beamlet.grid
-        rows, cols = np.where(mask > 0.5)
+        rows, cols = np.where(mask > 0)
         if rows.size == 0:
             return 0.0
         return float(2 * max(np.abs(grid[rows]).max(), np.abs(grid[cols]).max()))
@@ -188,9 +185,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 stf.beams[i].rays[j].beamlets[k].model_dump()
             )
             # TODO: add mask as computed field?
-            # TODO: Why .mask.T[::-1, :] needed here?
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = (
-                stf.beams[i].rays[j].beamlets[k].mask.T[::-1, :]
+                stf.beams[i].rays[j].beamlets[k].mask
             )
 
         # Get the kernel
@@ -388,7 +384,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     * fft.fft2(kernel_mxs[c], (conv_size, conv_size))
                 )
             )
-            interpolators[c] = RegularGridInterpolator((conv_grid, conv_grid), conv_mx)
+            # conv_mx is indexed [z, x] (it inherits f/f_z/f_x's meshgrid "xy"
+            # ordering), but the interpolator is queried with iso_lat_dists, whose
+            # columns are (x, z). Transpose so the first axis is x.
+            interpolators[c] = RegularGridInterpolator((conv_grid, conv_grid), conv_mx.T)
 
         return interpolators
 

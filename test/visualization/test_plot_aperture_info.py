@@ -188,7 +188,9 @@ def dose_comparison_setup(fluence_comparison_setup):
     )
     sequenced_result = PlanResult(
         sequence=sequence,
-        beam_quantities={"physical_dose": [np.random.rand(5, 10, 10).astype(np.float32)]},
+        beam_quantities={
+            "physical_dose_sequenced": [np.random.rand(5, 10, 10).astype(np.float32)]
+        },
     )
     return stf, sequenced_result, unsequenced_result, ct
 
@@ -283,3 +285,24 @@ def test_target_bev_points_returns_none_without_target(test_data_photons_raw):
     beam = Beam(iso_center=[0.0, 0.0, 0.0], bixel_width=5.0, rays=[])
 
     assert _target_bev_points(ct, _NoTargetCst(), beam, "X") is None
+
+
+def test_dose_comparison_names_available_quantities_when_delivered_dose_missing(
+    dose_comparison_setup,
+):
+    stf, sequenced_result, unsequenced_result, ct = dose_comparison_setup
+    without_delivered = PlanResult(
+        sequence=sequenced_result.sequence,
+        beam_quantities={
+            "physical_dose": sequenced_result.beam_quantities["physical_dose_sequenced"]
+        },
+    )
+
+    with pytest.raises(ValueError, match="physical_dose_sequenced"):
+        plot_aperture_info(
+            without_delivered,
+            stf=stf,
+            unsequenced_result=unsequenced_result,
+            image_volume=ct,
+            show_plot=False,
+        )
