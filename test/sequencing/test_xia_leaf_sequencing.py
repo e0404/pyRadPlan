@@ -53,10 +53,9 @@ def test_fluence_sequencing(test_data_xia):
         "shapes",
         "sum_shapes",
         "bixel_ix",
-        "fluence",
+        "stratified_fluence",
         "is_active_leaf_pair",
         "bixel_ind_map",
-        "shape_map",
         "vector_offset",
     ]
     allclose_beam = [
@@ -66,7 +65,6 @@ def test_fluence_sequencing(test_data_xia):
         ("mlc_window", 1e-4),
         ("lim_l", 1e-4),
         ("lim_r", 1e-4),
-        ("weight", 1e-4),
         ("left_leaf_pos", 1e-4),
         ("right_leaf_pos", 1e-4),
     ]

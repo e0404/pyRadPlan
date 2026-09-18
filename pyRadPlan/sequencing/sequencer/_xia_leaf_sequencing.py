@@ -42,7 +42,7 @@ class XiaLeafSequencer(PhotonSequencer):
     mode: Literal["reducing_levels", "sliding_window"] = "reducing_levels"
 
     def _apply_reducing_levels(
-        self, opening_mx: np.ndarray, d_k: np.ndarray, dim_of_fluence_mx_z: np.ndarray
+        self, opening_mx: np.ndarray, d_k: np.ndarray, dim_of_fluence_mx_stack: np.ndarray
     ) -> np.ndarray:
         """
         Apply the reducing levels technique.
@@ -53,7 +53,7 @@ class XiaLeafSequencer(PhotonSequencer):
             The opening matrix.
         d_k : np.ndarray
             The current fluence values for each bixel.
-        dim_of_fluence_mx_z : np.ndarray
+        dim_of_fluence_mx_stack : np.ndarray
             The dimensions of the fluence matrix in the z-direction.
 
         Returns
@@ -61,7 +61,7 @@ class XiaLeafSequencer(PhotonSequencer):
         np.ndarray
             The modified opening matrix.
         """
-        for row in range(dim_of_fluence_mx_z):
+        for row in range(dim_of_fluence_mx_stack):
             row_vals = opening_mx[row, :] * d_k[row, :]
             if row_vals.max() > 0:
                 max_ix = int(np.argmax(row_vals))
@@ -80,7 +80,7 @@ class XiaLeafSequencer(PhotonSequencer):
         return opening_mx
 
     def _apply_sliding_window(
-        self, opening_mx: np.ndarray, dim_of_fluence_mx_z: np.ndarray
+        self, opening_mx: np.ndarray, dim_of_fluence_mx_stack: np.ndarray
     ) -> np.ndarray:
         """
         Apply the sliding window technique.
@@ -89,7 +89,7 @@ class XiaLeafSequencer(PhotonSequencer):
         ----------
         opening_mx : np.ndarray
             The opening matrix.
-        dim_of_fluence_mx_z : int
+        dim_of_fluence_mx_stack : int
             The number of rows in the fluence matrix.
 
         Returns
@@ -97,7 +97,7 @@ class XiaLeafSequencer(PhotonSequencer):
         np.ndarray
             The modified opening matrix.
         """
-        for row in range(dim_of_fluence_mx_z):
+        for row in range(dim_of_fluence_mx_stack):
             row_open = np.where(opening_mx[row, :])[0]
             if row_open.size > 0:
                 open_ix = row_open[0]
@@ -165,10 +165,12 @@ class XiaLeafSequencer(PhotonSequencer):
                 # Apply the appropriate technique
                 if self.mode == "reducing_levels":
                     opening_mx = self._apply_reducing_levels(
-                        opening_mx, d_k, tmp_fluence_dict["dim_z"]
+                        opening_mx, d_k, tmp_fluence_dict["dim_stack"]
                     )
                 elif self.mode == "sliding_window":
-                    opening_mx = self._apply_sliding_window(opening_mx, tmp_fluence_dict["dim_z"])
+                    opening_mx = self._apply_sliding_window(
+                        opening_mx, tmp_fluence_dict["dim_stack"]
+                    )
 
                 shape_k = opening_mx.astype(int) * d_k_value
 

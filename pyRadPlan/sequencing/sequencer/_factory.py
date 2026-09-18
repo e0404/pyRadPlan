@@ -92,7 +92,7 @@ def get_sequencer_from_pln(pln: Union[Plan, dict]) -> Sequencer:
         # but warn the user if it is not in the available engines
         sequencer_name = pln.prop_seq.short_name
         if sequencer_name not in sequencer:
-            warnings.warn(f"Engine '{sequencer_name}' seems not to be valid for Plan setup.")
+            warnings.warn(f"Sequencer '{sequencer_name}' seems not to be valid for Plan setup.")
         return pln.prop_seq
 
     if isinstance(pln.prop_seq, dict):
@@ -102,7 +102,7 @@ def get_sequencer_from_pln(pln: Union[Plan, dict]) -> Sequencer:
                 return sequencer[pln.prop_seq["sequencer"]](pln)
             warnings.warn(f"sequencer '{pln.prop_seq['sequencer']}' not available for Plan.")
 
-        # If no engine name was found, we choose the first as default
+        # If no sequencer name was found, we choose the first as default
         logger.warning(
             "No sequencer specified in Plan. Using first available sequencer %s.",
             sequencer_names[0],

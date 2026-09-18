@@ -306,13 +306,13 @@ def _mlc_with_rows(
     j_start: int, j_end: int, leaf_width: float = 10.0, number_of_elements: int = 40
 ) -> MLC:
     """An MLC whose shape spans global (isocenter-relative) leaf rows j_start..j_end."""
-    leaf_row_z = np.arange(j_start, j_end + 1) * leaf_width
-    n = len(leaf_row_z)
+    leaf_row_pos = np.arange(j_start, j_end + 1) * leaf_width
+    n = len(leaf_row_pos)
     return MLC(
         device_type="MLCX",
         number_of_elements=number_of_elements,
         leaf_width=leaf_width,
-        leaf_position_boundaries=leaf_row_z,
+        leaf_position_boundaries=leaf_row_pos,
         leaf_positions=np.tile([-5.0, 5.0], (n, 1)),
     )
 

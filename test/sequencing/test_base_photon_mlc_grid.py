@@ -116,15 +116,15 @@ def test_extra_blds_jaw_pair_matches_field_window(test_data_xia):
         assert beam.extra_blds is not None
         assert len(beam.extra_blds) == beam.num_of_shapes
 
-        x_min, x_max, z_min, z_max = beam.mlc_window
+        travel_min, travel_max, stack_min, stack_max = beam.mlc_window
         jaw_by_orientation = {jaw.device_orientation: jaw for jaw in beam.extra_blds[0]}
         assert set(jaw_by_orientation) == {"X", "Y"}
         for jaw in jaw_by_orientation.values():
             assert isinstance(jaw, Jaw)
         # test_data_xia has no configured machine MLC, so it uses the
         # default MLCX orientation: travel axis == BEV "X".
-        np.testing.assert_allclose(jaw_by_orientation["X"].positions, [x_min, x_max])
-        np.testing.assert_allclose(jaw_by_orientation["Y"].positions, [z_min, z_max])
+        np.testing.assert_allclose(jaw_by_orientation["X"].positions, [travel_min, travel_max])
+        np.testing.assert_allclose(jaw_by_orientation["Y"].positions, [stack_min, stack_max])
 
         # jaws are static: identical across every shape of the beam
         for shape_jaws in beam.extra_blds[1:]:
@@ -134,15 +134,17 @@ def test_extra_blds_jaw_pair_matches_field_window(test_data_xia):
 
 
 def test_leaf_grid_centers_are_evenly_spaced_and_cover_the_range():
-    """The MLC grid is a fixed, isocenter-centered lattice covering [min_z, max_z]."""
+    """The MLC grid is a fixed, isocenter-centered lattice covering [min_stack, max_stack]."""
     sequencer = XiaLeafSequencer()
     leaf_width = 10.0
 
     # -22 is nearest to leaf center -20, 23 is nearest to leaf center 20.
-    leaf_row_z = sequencer._leaf_grid_centers(min_z=-22.0, max_z=23.0, leaf_width=leaf_width)
+    leaf_row_pos = sequencer._leaf_grid_centers(
+        min_stack=-22.0, max_stack=23.0, leaf_width=leaf_width
+    )
 
-    np.testing.assert_allclose(leaf_row_z, [-20.0, -10.0, 0.0, 10.0, 20.0])
-    np.testing.assert_allclose(np.diff(leaf_row_z), leaf_width)
+    np.testing.assert_allclose(leaf_row_pos, [-20.0, -10.0, 0.0, 10.0, 20.0])
+    np.testing.assert_allclose(np.diff(leaf_row_pos), leaf_width)
 
 
 def test_interp_rows_reproduces_a_linear_ramp_exactly():
@@ -154,15 +156,15 @@ def test_interp_rows_reproduces_a_linear_ramp_exactly():
     _interp_rows call with src/dst swapped.
     """
     sequencer = XiaLeafSequencer()
-    src_row_z = np.arange(-40.0, 41.0, 5.0)
-    dst_row_z = np.array([-37.5, -12.3, 0.0, 8.1, 33.0])
+    src_row_pos = np.arange(-40.0, 41.0, 5.0)
+    dst_row_pos = np.array([-37.5, -12.3, 0.0, 8.1, 33.0])
 
     # Two columns: a linear ramp and a constant, exercising per-column interpolation.
-    matrix = np.stack([src_row_z, np.full_like(src_row_z, 3.0)], axis=1)
+    matrix = np.stack([src_row_pos, np.full_like(src_row_pos, 3.0)], axis=1)
 
-    resampled = sequencer._interp_rows(matrix, src_row_z, dst_row_z)
+    resampled = sequencer._interp_rows(matrix, src_row_pos, dst_row_pos)
 
-    np.testing.assert_allclose(resampled[:, 0], dst_row_z)
+    np.testing.assert_allclose(resampled[:, 0], dst_row_pos)
     np.testing.assert_allclose(resampled[:, 1], 3.0)
 
 
@@ -172,16 +174,16 @@ def test_interp_rows_round_trip_recovers_source_points():
     """
     sequencer = XiaLeafSequencer()
     native_row_z = np.arange(-40.0, 41.0, 5.0)
-    leaf_row_z = sequencer._leaf_grid_centers(
-        min_z=native_row_z.min(), max_z=native_row_z.max(), leaf_width=12.0
+    leaf_row_pos = sequencer._leaf_grid_centers(
+        min_stack=native_row_z.min(), max_stack=native_row_z.max(), leaf_width=12.0
     )
     matrix = native_row_z[:, None] * 2.0  # linear in z, one column
 
-    downsampled = sequencer._interp_rows(matrix, native_row_z, leaf_row_z)
-    upsampled = sequencer._interp_rows(downsampled, leaf_row_z, native_row_z)
+    downsampled = sequencer._interp_rows(matrix, native_row_z, leaf_row_pos)
+    upsampled = sequencer._interp_rows(downsampled, leaf_row_pos, native_row_z)
 
     # Interior points (away from the edges, where clamping can bite) round-trip exactly.
-    interior = (native_row_z > leaf_row_z.min()) & (native_row_z < leaf_row_z.max())
+    interior = (native_row_z > leaf_row_pos.min()) & (native_row_z < leaf_row_pos.max())
     np.testing.assert_allclose(upsampled[interior, 0], matrix[interior, 0])
 
 
@@ -207,10 +209,10 @@ def test_mlcy_orientation_swaps_travel_and_stack_axes(test_data_xia):
     init_y = seq_y._inititialize_beam_fluence_matrix(beam)
 
     # Swapping orientation swaps which ray_pos_bev axis plays which role.
-    assert init_x["dim_x"] == init_y["dim_z"]
-    assert init_x["dim_z"] == init_y["dim_x"]
-    np.testing.assert_allclose(init_x["min_x"], init_y["min_z"])
-    np.testing.assert_allclose(init_x["min_z"], init_y["min_x"])
+    assert init_x["dim_travel"] == init_y["dim_stack"]
+    assert init_x["dim_stack"] == init_y["dim_travel"]
+    np.testing.assert_allclose(init_x["min_travel"], init_y["min_stack"])
+    np.testing.assert_allclose(init_x["min_stack"], init_y["min_travel"])
 
     result_seq_x = run_sequencing(deepcopy(result_mat), pln_x, stf_mat, dij=dij_mat)
     result_seq_y = run_sequencing(deepcopy(result_mat), pln_y, stf_mat, dij=dij_mat)
@@ -249,12 +251,12 @@ def test_mlcy_resamples_the_stack_axis_not_the_travel_axis(test_data_xia):
     # Travel axis (columns) is ray_pos_bev[2] for an MLCY -- the same data as
     # the native grid's stack axis (rows) -- and must stay at native
     # resolution (unresampled), so the counts match exactly.
-    assert init_y["dim_x"] == init_native["dim_z"]
+    assert init_y["dim_travel"] == init_native["dim_stack"]
 
     # Stack axis (rows) is ray_pos_bev[0] for an MLCY -- the same data as the
     # native grid's travel axis (columns) -- and must be coarsened onto the
     # (wider) leaf grid, so strictly fewer rows than the native count.
-    assert init_y["dim_z"] < init_native["dim_x"]
+    assert init_y["dim_stack"] < init_native["dim_travel"]
 
 
 def test_leaf_width_narrower_than_bixel_width_raises(test_data_xia):

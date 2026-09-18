@@ -332,8 +332,8 @@ class MLC(BeamLimitingDevice):
     def calculate_from_shape(  # noqa: PLR0913
         self,
         shape_map: NDArray,
-        min_x: float,
-        z_ray_pos: np.ndarray,
+        min_travel: float,
+        stack_ray_pos: np.ndarray,
         bixel_width: float,
         lim_l: np.ndarray,
         lim_r: np.ndarray,
@@ -344,36 +344,36 @@ class MLC(BeamLimitingDevice):
         Parameters
         ----------
         shape_map : NDArray
-            Open-bixel map for the shape, shape (dim_z, dim_x).
-        min_x : float
-            Physical x coordinate of the corner bixel (mm).
-        z_ray_pos : np.ndarray
-            Ray z positions of the beam (mm), used for the leaf boundaries. These
-            are already leaf-row-resolved when the caller resamples onto a
+            Open-bixel map for the shape, shape (dim_stack, dim_travel).
+        min_travel : float
+            Physical travel-axis coordinate of the corner bixel (mm).
+        stack_ray_pos : np.ndarray
+            Ray positions along the leaf-stack axis (mm), used for the leaf boundaries.
+            These are already leaf-row-resolved when the caller resamples onto a
             physical MLC grid coarser than the ray/bixel grid.
         bixel_width : float
-            Bixel width / spot spacing (mm), used for the x-axis (leaf travel
-            direction), which is never resampled.
+            Bixel width / spot spacing (mm), used for the leaf travel axis, which is
+            never resampled.
         lim_l, lim_r : np.ndarray
             Left/right leaf travel limits per leaf row (mm), used for the closed-leaf
             fallback and to validate the resulting positions.
         leaf_width : float, optional
-            The true row pitch (mm) of ``z_ray_pos``. Needed to set
+            The true row pitch (mm) of ``stack_ray_pos``. Needed to set
             ``self.leaf_width`` correctly when there's only a single leaf row
             (no boundary spacing to derive it from); otherwise it is derived
             from/cross-checked against the boundary spacing as before.
         """
         # get leaf position boundaries from unique ray positions (ray positions are at
         # row centres, while leaf_position_boundaries are the rows' lower edges)
-        row_centers = np.unique(z_ray_pos)
+        row_centers = np.unique(stack_ray_pos)
         leaf_width = self.validate_leaf_width_consistency(row_centers, leaf_width)
         self.leaf_width = leaf_width
         self.leaf_position_boundaries = row_centers - leaf_width / 2.0
 
         # compute left/right leaf positions from open bixel columns in physical coordinates
-        dim_z = shape_map.shape[0]
-        self.leaf_positions = np.full((dim_z, 2), np.nan)
-        for n in range(dim_z):
+        dim_stack = shape_map.shape[0]
+        self.leaf_positions = np.full((dim_stack, 2), np.nan)
+        for n in range(dim_stack):
             open_cols = np.where(shape_map[n, :] > 0)[0]
             if open_cols.size == 0:
                 # If no bixel is open, use the midpoint of limits
@@ -381,8 +381,8 @@ class MLC(BeamLimitingDevice):
                 self.leaf_positions[n] = [center_pos, center_pos]
             else:
                 self.leaf_positions[n] = [
-                    (open_cols[0]) * bixel_width + min_x - 0.5 * bixel_width,
-                    (open_cols[-1]) * bixel_width + min_x + 0.5 * bixel_width,
+                    (open_cols[0]) * bixel_width + min_travel - 0.5 * bixel_width,
+                    (open_cols[-1]) * bixel_width + min_travel + 0.5 * bixel_width,
                 ]
 
         # Validate positions stay within travel limits

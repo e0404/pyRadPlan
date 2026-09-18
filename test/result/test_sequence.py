@@ -19,12 +19,12 @@ def beam_sequence_data():
     }
 
 
-def test_beam_sequence_keeps_fluence_continuous(beam_sequence_data):
-    """Fluence carries continuous weights and must not be rounded or wrapped."""
+def test_beam_sequence_keeps_stratified_fluence_unwrapped(beam_sequence_data):
+    """The level map must stay float: uint8 like shapes would wrap above 255."""
     beam = BeamSequence.model_validate(beam_sequence_data)
 
-    assert beam.fluence.dtype == float
-    np.testing.assert_allclose(beam.fluence, [[0.4, 1.7], [2.9, 300.5]])
+    assert beam.stratified_fluence.dtype == float
+    np.testing.assert_allclose(beam.stratified_fluence, [[0.4, 1.7], [2.9, 300.5]])
 
 
 def test_beam_sequence_shapes_are_compact(beam_sequence_data):
@@ -34,6 +34,29 @@ def test_beam_sequence_shapes_are_compact(beam_sequence_data):
     assert beam.shapes.dtype == np.uint8
     assert beam.num_of_shapes == 2
     np.testing.assert_array_equal(beam.sum_shapes, np.full((3, 4), 2))
+
+
+def test_beam_sequence_derives_matrad_per_shape_views(beam_sequence_data):
+    """``shape_map``/``weight`` are matRad's per-shape layout of data stored once."""
+    beam_sequence_data["shapes"] = np.dstack([np.zeros((3, 4)), np.ones((3, 4))])
+    beam = BeamSequence.model_validate(beam_sequence_data)
+
+    assert len(beam.shape_map) == 2
+    for m, shape_map in enumerate(beam.shape_map):
+        np.testing.assert_array_equal(shape_map, beam.shapes[:, :, m])
+    np.testing.assert_allclose(beam.weight, beam.shapes_weight)
+
+    # Both are computed, so matRad export still carries them under their own keys.
+    dumped = beam.model_dump(by_alias=True)
+    assert "shapeMap" in dumped and "weight" in dumped
+
+
+def test_beam_sequence_per_shape_views_without_shapes():
+    """A BeamSequence built from MLCs alone has no shapes to slice."""
+    beam = BeamSequence(shapes_weight=[1.0, 2.0])
+
+    assert beam.shape_map is None
+    np.testing.assert_allclose(beam.weight, [1.0, 2.0])
 
 
 def test_beam_sequence_adds_shape_axis_from_matrad(beam_sequence_data):
@@ -126,7 +149,7 @@ def test_beam_sequence_minimal_construction_for_forward_planning():
 
     assert beam.shapes is None
     assert beam.bixel_ix is None
-    assert beam.fluence is None
+    assert beam.stratified_fluence is None
     assert beam.num_of_shapes == 1
     np.testing.assert_array_equal(beam.sum_shapes, np.array([]))
     assert beam.mlc_sequence == [mlc]

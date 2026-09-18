@@ -48,15 +48,15 @@ def _weight_color(weight: float, w_max: float) -> tuple:
 
 def _draw_aperture(ax: plt.Axes, mlc: MLC, mlc_window: list[float], leaf_coordinate: str) -> None:
     """Draw the blocked (closed) leaf regions of one MLC segment into ax."""
-    x_min, x_max = mlc_window[0], mlc_window[1]
+    travel_min, travel_max = mlc_window[0], mlc_window[1]
     y_low, y_high = _leaf_row_bounds(mlc, leaf_coordinate)
 
     for (left, right), lo, hi in zip(mlc.leaf_positions, y_low, y_high):
         # filled blocked (closed) regions on either side of the aperture
         ax.add_patch(
             Rectangle(
-                (x_min, lo),
-                left - x_min,
+                (travel_min, lo),
+                left - travel_min,
                 hi - lo,
                 facecolor="dimgray",
                 edgecolor="black",
@@ -67,7 +67,7 @@ def _draw_aperture(ax: plt.Axes, mlc: MLC, mlc_window: list[float], leaf_coordin
         ax.add_patch(
             Rectangle(
                 (right, lo),
-                x_max - right,
+                travel_max - right,
                 hi - lo,
                 facecolor="dimgray",
                 edgecolor="black",
@@ -76,7 +76,7 @@ def _draw_aperture(ax: plt.Axes, mlc: MLC, mlc_window: list[float], leaf_coordin
             )
         )
 
-    ax.set_xlim(x_min, x_max)
+    ax.set_xlim(travel_min, travel_max)
     ax.set_ylim(y_low.min(), y_high.max())
     ax.set_xlabel("horiz. pos. [mm]")
     ax.set_ylabel("vert. pos. [mm]" if leaf_coordinate == "physical" else "leaf pair #")
@@ -145,7 +145,7 @@ def _draw_bixel_grid(
     Parameters
     ----------
     window : list[float]
-        ``[x_min, x_max, z_min, z_max]`` in mm, as returned by
+        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, as returned by
         :func:`_native_fluence_map` (already the bixel *boundaries*).
     vertical : np.ndarray, optional
         Pre-transformed vertical line positions, for an axis that is not in mm
@@ -214,11 +214,11 @@ def _draw_mlc_borders(
     color: str = "black",
 ) -> None:
     """Outline one segment's leaves as lines, for overlaying on a fluence map."""
-    x_min, x_max = mlc_window[0], mlc_window[1]
+    travel_min, travel_max = mlc_window[0], mlc_window[1]
     y_low, y_high = _leaf_row_bounds(mlc, leaf_coordinate)
 
     for (left, right), lo, hi in zip(mlc.leaf_positions, y_low, y_high):
-        for start, stop in ((x_min, left), (right, x_max)):
+        for start, stop in ((travel_min, left), (right, travel_max)):
             if stop <= start:
                 continue  # leaf fully retracted past the field edge
             ax.add_patch(
@@ -290,26 +290,31 @@ def _native_fluence_map(beam: Beam, values: np.ndarray, device_orientation: str)
     Returns
     -------
     tuple
-        ``(grid, window)``: ``grid`` is a ``(dim_z, dim_x)`` array (``nan``
+        ``(grid, window)``: ``grid`` is a ``(dim_stack, dim_travel)`` array (``nan``
         where no ray exists) and ``window`` is
-        ``[x_min, x_max, z_min, z_max]`` in mm, matching ``mlc_window``.
+        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, matching ``mlc_window``.
     """
     travel_axis, stack_axis = (0, 2) if device_orientation == "X" else (2, 0)
-    x_pos = np.array([ray.ray_pos_bev[travel_axis] for ray in beam.rays])
-    z_pos = np.array([ray.ray_pos_bev[stack_axis] for ray in beam.rays])
+    travel_pos = np.array([ray.ray_pos_bev[travel_axis] for ray in beam.rays])
+    stack_pos = np.array([ray.ray_pos_bev[stack_axis] for ray in beam.rays])
     bw = beam.bixel_width
 
-    min_x, max_x = x_pos.min(), x_pos.max()
-    min_z, max_z = z_pos.min(), z_pos.max()
-    dim_x = int((max_x - min_x) / bw + 1)
-    dim_z = int((max_z - min_z) / bw + 1)
+    min_travel, max_travel = travel_pos.min(), travel_pos.max()
+    min_stack, max_stack = stack_pos.min(), stack_pos.max()
+    dim_travel = int((max_travel - min_travel) / bw + 1)
+    dim_stack = int((max_stack - min_stack) / bw + 1)
 
-    grid = np.full((dim_z, dim_x), np.nan)
-    x_idx = ((x_pos - min_x) / bw).astype(int)
-    z_idx = ((z_pos - min_z) / bw).astype(int)
-    grid[z_idx, x_idx] = values
+    grid = np.full((dim_stack, dim_travel), np.nan)
+    travel_idx = ((travel_pos - min_travel) / bw).astype(int)
+    stack_idx = ((stack_pos - min_stack) / bw).astype(int)
+    grid[stack_idx, travel_idx] = values
 
-    window = [min_x - 0.5 * bw, max_x + 0.5 * bw, min_z - 0.5 * bw, max_z + 0.5 * bw]
+    window = [
+        min_travel - 0.5 * bw,
+        max_travel + 0.5 * bw,
+        min_stack - 0.5 * bw,
+        max_stack + 0.5 * bw,
+    ]
     return grid, window
 
 

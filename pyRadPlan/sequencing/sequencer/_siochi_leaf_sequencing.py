@@ -43,13 +43,13 @@ class SiochiLeafSequencer(PhotonSequencer):
     ) -> tuple:
         """Apply the downward + upward TnG correction loop for column i."""
         # reducing arguments in function:
-        i, max_row, min_z, max_z = indexing
+        i, max_row, min_stack, max_stack = indexing
 
         while True:
             changed = False
             # TODO: This implementation reduces branching but is less readable. Might change it in future again
-            # downward pass (j = max_row-1 … min_z)
-            for j in range(max_row - 1, min_z - 1, -1):
+            # downward pass (j = max_row-1 … min_stack)
+            for j in range(max_row - 1, min_stack - 1, -1):
                 # shorter rod above longer rod
                 check = dk[j, i] < dk[j + 1, i]
                 if check and tops[j, i] > tops[j + 1, i]:
@@ -70,8 +70,8 @@ class SiochiLeafSequencer(PhotonSequencer):
                     tops[j + 1, i] = bases[j + 1, i] + dk[j + 1, i] - 1
                     changed = True
 
-            # upward pass (j = max_row+1 … max_z)
-            for j in range(max_row + 1, max_z + 1):
+            # upward pass (j = max_row+1 … max_stack)
+            for j in range(max_row + 1, max_stack + 1):
                 # shorter rod below longer rod
                 check = dk[j, i] < dk[j - 1, i]
                 if check and tops[j, i] > tops[j - 1, i]:
@@ -97,21 +97,23 @@ class SiochiLeafSequencer(PhotonSequencer):
 
         return tops, bases
 
-    def _decompose_port(self, dk: np.ndarray, dim_z: np.ndarray, dim_x: np.ndarray) -> tuple:
+    def _decompose_port(
+        self, dk: np.ndarray, dim_stack: np.ndarray, dim_travel: np.ndarray
+    ) -> tuple:
         """Decompose the port from the stratified intensity matrix, including collision & tongue-and-groove fixes."""
-        tops = np.zeros((dim_z, dim_x), dtype=int)
-        bases = np.zeros((dim_z, dim_x), dtype=int)
+        tops = np.zeros((dim_stack, dim_travel), dtype=int)
+        bases = np.zeros((dim_stack, dim_travel), dtype=int)
 
         # replicate MATLAB's minZ/maxZ/minX/maxX over full range
-        min_z, max_z = 0, dim_z - 1
-        min_x, max_x = 0, dim_x - 1
+        min_stack, max_stack = 0, dim_stack - 1
+        min_travel, max_travel = 0, dim_travel - 1
 
-        for i in range(min_x, max_x + 1):
+        for i in range(min_travel, max_travel + 1):
             # first pass: set bases/tops and track the highest top
             max_top = -1
-            max_row = min_z
-            for j in range(min_z, max_z + 1):
-                if i == min_x:
+            max_row = min_stack
+            for j in range(min_stack, max_stack + 1):
+                if i == min_travel:
                     bases[j, i] = 1
                     tops[j, i] = bases[j, i] + dk[j, i] - 1
                 elif dk[j, i] >= dk[j, i - 1]:
@@ -131,7 +133,7 @@ class SiochiLeafSequencer(PhotonSequencer):
 
             # tongue-and-groove correction loop
             tops, bases = self._tongue_and_groove_correction(
-                tops, bases, dk, [i, max_row, min_z, max_z]
+                tops, bases, dk, [i, max_row, min_stack, max_stack]
             )
 
         return tops, bases
@@ -170,11 +172,11 @@ class SiochiLeafSequencer(PhotonSequencer):
             tmp_fluence_dict = self._inititialize_beam_fluence_matrix(beam, w_of_curr_beam)
             dk = tmp_fluence_dict["d_k"]
             # d0 = tmp_fluence_dict["d_0"]
-            dim_z = tmp_fluence_dict["dim_z"]
-            dim_x = tmp_fluence_dict["dim_x"]
+            dim_stack = tmp_fluence_dict["dim_stack"]
+            dim_travel = tmp_fluence_dict["dim_travel"]
 
             # Decompose port (rod-pushing)
-            tops, bases = self._decompose_port(dk, dim_z, dim_x)
+            tops, bases = self._decompose_port(dk, dim_stack, dim_travel)
 
             # Build segments dynamically (no preallocation)
             shapes_list = []
