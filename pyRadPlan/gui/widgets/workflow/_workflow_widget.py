@@ -79,20 +79,8 @@ def _folder_has_images(directory: str) -> bool:
 
 
 def _build_save_filter() -> str:
-    """Build a QFileDialog filter string for single-file (container) exporters."""
-    from pyRadPlan.io import get_available_formats, get_exporter  # noqa: PLC0415
-
-    entries: list[str] = []
-    for fmt in sorted(get_available_formats()):
-        try:
-            exporter_cls = get_exporter(fmt)
-        except ValueError:
-            continue  # import-only format
-        if not exporter_cls.container:
-            continue  # directory-based formats are handled by folder export
-        patterns = " ".join(f"*{ext}" for ext in exporter_cls.extensions)
-        entries.append(f"{getattr(exporter_cls, 'name', fmt.upper())} ({patterns})")
-    return ";;".join(entries)
+    """Offer the format that preserves all workspace objects and result quantities."""
+    return "pyRadPlan workspace (*.pkl *.pickle)"
 
 
 def _image_formats() -> list[tuple[str, str]]:
@@ -607,7 +595,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._on_load_dij()
 
     def save_workspace(self) -> None:
-        """Save the current workspace to a container file (.mat/.npz/.pkl)."""
+        """Save the complete workspace to a pickle file."""
         self._on_save_workspace()
 
     def save_plan(self) -> None:
@@ -630,8 +618,8 @@ class WorkflowWidget(WorkspaceWidget):
         """Load everything available from *path* and merge it into the workspace.
 
         Runs :func:`pyRadPlan.io.load_data` in the worker thread; on success the
-        recognized pipeline objects are merged into the workspace (existing objects
-        are kept, so e.g. a plan can be loaded onto an already-loaded CT).  A loaded
+        recognized pipeline objects are merged into the workspace. A supplied CT starts
+        a new patient; imports without a CT update the existing patient.  A loaded
         structure set requires a CT (in the file or already present); otherwise it
         is skipped with a warning.  A bare ``dose`` image (formats without a matRad
         ``result``) is wrapped into a result dict so the viewer can display it.
@@ -648,8 +636,9 @@ class WorkflowWidget(WorkspaceWidget):
     def _merge_loaded_data(self, data: dict) -> None:
         """Merge recognized pipeline objects from a load into the workspace.
 
-        Existing objects are kept (so e.g. a plan can be loaded onto an already
-        loaded CT). A structure set requires a CT (in the data or already present);
+        A supplied CT replaces the patient and clears objects absent from the import.
+        Imports without a CT keep existing objects, allowing a plan to be loaded
+        onto the current patient. A structure set requires a CT;
         otherwise it is skipped with a warning. A bare ``dose`` image (formats
         without a matRad ``result``) is wrapped into a result dict for the viewer.
         """
@@ -664,6 +653,15 @@ class WorkflowWidget(WorkspaceWidget):
         if "result" not in payload and data.get("dose") is not None:
             # sitk.Image values are rendered directly by the result widget.
             payload["result"] = {"physical_dose": data["dose"]}
+        if "ct" in payload or "result" in payload:
+            # A new patient or replacement result also replaces its snapshot tags.
+            self._saved_tags = [
+                tag for tag in data.get("saved_result_tags", []) if isinstance(tag, str)
+            ]
+        if "ct" in payload:
+            # Publish one complete patient state; observers must never see a new CT
+            # paired with the previous patient's structures or calculated data.
+            payload = {**dict.fromkeys(self._ws.keys), **payload}
         if payload:
             self._ws.set_many(**payload)
 
@@ -818,28 +816,58 @@ class WorkflowWidget(WorkspaceWidget):
         )
 
     def _open_dicom_import_dialog(self, directory: str) -> None:
-        """Open the DICOM import dialog (CT series / structures / dose) and load it."""
-        from ._dicom_import_dialog import DicomImportDialog  # noqa: PLC0415
+        """Scan a DICOM folder, ask what to import, and load the choice.
+
+        Both phases run in the worker thread (the scan reads one header per file,
+        the load reads the pixel data), so the progress bar and status line follow
+        them instead of the window freezing.
+        """
+        from ._dicom_import_dialog import scan_folder  # noqa: PLC0415
         from pyRadPlan.io.dicom import DicomImporter  # noqa: PLC0415
 
         importer = DicomImporter(directory)
-        dialog = DicomImportDialog(importer, self)
+
+        self._run_in_thread(
+            scan_folder,
+            importer,
+            on_success=lambda catalog: self._start_dicom_import(importer, catalog),
+            busy_text="Scanning DICOM folder…",
+        )
+
+    def _start_dicom_import(self, importer: Any, catalog: dict) -> None:
+        """Ask which series/structures/dose to import from a scanned folder, then load."""
+        from ._dicom_import_dialog import DicomImportDialog  # noqa: PLC0415
+
+        if not catalog["series"]:
+            QMessageBox.warning(self, "Import DICOM", "No CT series found in this folder.")
+            return
+
+        dialog = DicomImportDialog(importer, self, catalog=catalog)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         sel = dialog.selection()
 
         def _load() -> dict:
-            ct = importer.load_ct(series_uid=sel.get("series_uid"))
-            data: dict[str, Any] = {"ct": ct}
-            if sel.get("struct_file"):
-                cst = importer.load_cst(ct=ct, struct_file=sel["struct_file"])
-                if cst is not None:
-                    data["cst"] = cst
-            if sel.get("load_dose"):
-                # dose_file None => importer auto-selects the plan physical dose.
-                dose = importer.load_dose(dose_file=sel.get("dose_file"))
-                if dose is not None:
-                    data["dose"] = dose
+            # One step per object, so the bar reflects the whole import and each
+            # loader's own progress advances it by that step's share.
+            steps = 1 + bool(sel.get("struct_file")) + bool(sel.get("load_dose"))
+            data: dict[str, Any] = {}
+            with importer.progress("Importing DICOM", total=steps) as step:
+                data["ct"] = importer.load_ct(series_uid=sel.get("series_uid"))
+                step.advance()
+                if sel.get("struct_file"):
+                    cst = importer.load_cst(ct=data["ct"], struct_file=sel["struct_file"])
+                    if cst is not None:
+                        data["cst"] = cst
+                    step.advance()
+                if sel.get("load_dose"):
+                    # dose_file None => importer auto-selects the plan physical dose.
+                    # The CT is passed so the dose comes back on its grid, which is
+                    # what the viewer indexes the overlay with.
+                    dose = importer.load_dose(dose_file=sel.get("dose_file"), ct=data["ct"])
+                    if dose is not None:
+                        data["dose"] = dose
+                    step.advance()
             return data
 
         self._run_in_thread(
@@ -917,7 +945,7 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights)
+            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -975,8 +1003,7 @@ class WorkflowWidget(WorkspaceWidget):
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
 
-            new_dij = calc_dose_forward(ct, cst, stf, pln, weights)
-            return new_dij.compute_result_ct_grid(weights)
+            return calc_dose_forward(ct, cst, stf, pln, weights)
 
         def _on_success(new_result: dict) -> None:
             result = dict(prev_result)
@@ -1022,33 +1049,6 @@ class WorkflowWidget(WorkspaceWidget):
     # Saving / export callbacks
     # ------------------------------------------------------------------
 
-    def _result_to_dose_image(self, result: Optional[dict], ct: Any) -> Optional[Any]:
-        """Extract a physical-dose ``sitk.Image`` from the current result, if any.
-
-        Returns *None* (rather than raising) when no usable dose is present, so
-        saving still succeeds with just the CT and structures.
-        """
-        if not isinstance(result, dict) or ct is None:
-            return None
-        dose = result.get("physical_dose")
-        if dose is None:
-            return None
-
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
-
-        if isinstance(dose, sitk.Image):
-            return dose
-        arr = np.asarray(dose)
-        if arr.ndim != 3:
-            return None
-        # A raw 3-D array here comes from an imported matRad resultGUI, stored as
-        # (y, x, z); SimpleITK expects (z, y, x) (matching the matlab importer).
-        image = sitk.GetImageFromArray(np.transpose(arr, (2, 0, 1)))
-        if image.GetSize() == ct.cube_hu.GetSize():
-            image.CopyInformation(ct.cube_hu)
-        return image
-
     def _quantity_to_image(self, value: Any, ct: Any) -> Optional[Any]:
         """Convert a result quantity into a CT-aligned ``sitk.Image`` (or *None*)."""
         import numpy as np  # noqa: PLC0415
@@ -1091,23 +1091,26 @@ class WorkflowWidget(WorkspaceWidget):
         self._run_in_thread(save_fn, on_success=_on_success, busy_text=busy_text)
 
     def _on_save_workspace(self) -> None:
+        ws = self._ws
+        if not ws.has("ct"):
+            QMessageBox.warning(self, "Save Workspace", "Load a CT before saving a workspace.")
+            return
         filepath, _ = QFileDialog.getSaveFileName(self, "Save workspace", "", _build_save_filter())
         if not filepath:
             return
-        ws = self._ws
-        objects: dict[str, Any] = {"ct": ws.ct, "cst": ws.cst, "pln": ws.pln, "stf": ws.stf}
-        dij = ws.dij
-        if dij is not None:
-            objects["dij"] = dij
-        dose = self._result_to_dose_image(ws.result, ws.ct)
-        if dose is not None:
-            objects["dose"] = dose
-        objects = {k: v for k, v in objects.items() if v is not None}
+        extension = os.path.splitext(filepath)[1].lower()
+        if extension and extension not in (".pkl", ".pickle"):
+            QMessageBox.warning(
+                self, "Save Workspace", "Use .pkl or .pickle to save the complete workspace."
+            )
+            return
+        objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
+        objects["saved_result_tags"] = list(self._saved_tags)
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            return save_data(file_name=filepath, **objects)
+            return save_data(file_name=filepath, format="pickle", **objects)
 
         self._run_save(_save, "Saving workspace…", "Save Workspace")
 

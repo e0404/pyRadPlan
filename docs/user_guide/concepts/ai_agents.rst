@@ -46,24 +46,27 @@ The module exposes two high-level helper functions and a settings class:
      - Ask the LLM to propose optimization objectives for each VOI in a
        :class:`~pyRadPlan.cst.StructureSet` based on the treatment site and prescribed dose.
    * - :class:`~pyRadPlan.ai.agents.AiSettings`
-     - Pydantic-settings class that reads the default model name from the environment
-       variable ``PYRADPLAN_AI_AGENTS_MODEL`` or a ``.env`` file.
+     - The unified AI settings class (the ``ai`` sub-configuration of
+       ``pyRadPlan.settings``); its :attr:`agents_model` field selects the default LLM,
+       read from the environment variable ``PYRADPLAN_AI_AGENTS_MODEL`` or a ``.env``
+       file.
 
 Model selection
 ---------------
 
 The default model is ``claude-sonnet-4-5``.  You can override it globally via the
-environment variable ``PYRADPLAN_AI_AGENTS_MODEL``, or per-call via the ``model=`` keyword:
+environment variable ``PYRADPLAN_AI_AGENTS_MODEL`` (before importing pyRadPlan) or the
+settings singleton, or per-call via the ``model=`` keyword:
 
 .. code-block:: python
 
-    import os
-    os.environ["PYRADPLAN_AI_AGENTS_MODEL"] = "openai:gpt-4o-mini"
-
+    import pyRadPlan
     from pyRadPlan.ai import agents as ai_agents
 
+    pyRadPlan.settings.ai.agents_model = "openai:gpt-4o-mini"
+
     # Check effective settings
-    print(ai_agents.AiSettings().model)   # openai:gpt-4o-mini
+    print(pyRadPlan.settings.ai.agents_model)   # openai:gpt-4o-mini
 
     # Override for a single call
     pln = ai_agents.generate_beam_angles(pln, "prostate", model="gemini-2.0-flash")

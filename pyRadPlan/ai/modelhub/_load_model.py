@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 _SAFETENSORS_HINT = (
     "safetensors (and the torch build it loads into) is required to load model weights. "
-    "Install the optional dependencies with: pip install pyRadPlan[ai], plus a torch build "
-    "matching your platform (see https://pytorch.org/get-started/locally/)."
+    "safetensors ships with pyRadPlan; install a torch build matching your platform "
+    "(see https://pytorch.org/get-started/locally/)."
 )
 
 # Modules a model folder may expose, importable by name during loading.
@@ -215,7 +215,7 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     ----------
     name : str, optional
         Model name. A bare name is resolved to ``"<hf_org>/<name>"`` using
-        :attr:`AiModelSettings.hf_org`; a name that already contains a ``/`` is
+        :attr:`AiSettings.modelhub_hf_org`; a name that already contains a ``/`` is
         used as the repository id as-is.
     repo_id : str, optional
         Explicit HuggingFace repository id, overriding the registry lookup.
@@ -226,12 +226,12 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         Load directly from (or download into) this directory. Required for
         offline use without a prior download.
     offline : bool, optional
-        Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
+        Force offline mode. Defaults to :attr:`AiSettings.modelhub_offline`.
     device : str, optional
-        Device to place the model on. Defaults to :attr:`AiModelSettings.device`.
+        Device to place the model on. Defaults to :attr:`AiSettings.modelhub_device`.
     trust_remote_code : bool, optional
         Allow executing the Python shipped with the model. Defaults to
-        :attr:`AiModelSettings.trust_remote_code` (``False``), except for a
+        :attr:`AiSettings.modelhub_trust_remote_code` (``False``), except for a
         purely local load -- ``local_dir`` given without ``name``/``repo_id`` --
         where the code is already under the caller's control and no opt-in is
         needed. Loading fails if this resolves to ``False``.
@@ -247,18 +247,18 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
         nor a usable ``local_dir`` is provided.
     """
-    cfg = get_settings().ai_modelhub
+    cfg = get_settings().ai
     if device is None:
-        device = cfg.device
+        device = cfg.modelhub_device
 
     if name is not None and repo_id is None:
         # A name that already carries an organization is a full id; this is what
         # list_local_models() returns, so its output feeds straight back in.
-        repo_id = name if "/" in name else f"{cfg.hf_org}/{name}"
+        repo_id = name if "/" in name else f"{cfg.modelhub_hf_org}/{name}"
 
     from_hub = repo_id is not None
     if trust_remote_code is None:
-        trust_remote_code = cfg.trust_remote_code or not from_hub
+        trust_remote_code = cfg.modelhub_trust_remote_code or not from_hub
 
     # Checked before resolving: there is no reason to download code we refuse to run.
     if not trust_remote_code:

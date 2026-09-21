@@ -15,6 +15,7 @@ from typing import Optional
 import numpy as np
 import SimpleITK as sitk
 
+from pyRadPlan.core.resample import resample_image
 from pyRadPlan.cst import StructureSet, VOI, validate_voi
 
 logger = logging.getLogger(__name__)
@@ -212,12 +213,33 @@ def label_image_to_vois(label_image: sitk.Image, ct, sidecar: Optional[dict]) ->
     voi_meta: dict = (sidecar or {}).get("vois", {})
     embedded = _embedded_metadata(label_image) if not voi_meta else {}
 
+    reference = ct.cube_hu
+    if (
+        label_image.GetSize() != reference.GetSize()
+        or label_image.GetOrigin() != reference.GetOrigin()
+        or label_image.GetSpacing() != reference.GetSpacing()
+        or label_image.GetDirection() != reference.GetDirection()
+    ):
+        logger.warning("Label map grid differs from the CT; resampling labels onto the CT grid.")
+        # Preserve physical locations and discrete labels; outside the source is background.
+        label_image = resample_image(
+            label_image,
+            interpolator=sitk.sitkNearestNeighbor,
+            target_image=reference,
+            extrapolate=0,
+        )
+
     vois = []
     for label in labels:
         mask = sitk.Cast(sitk.Equal(label_image, label), sitk.sitkUInt8)
-        mask.CopyInformation(ct.cube_hu)
 
         meta = voi_meta.get(str(label)) or embedded.get(label) or {}
+        if not np.any(sitk.GetArrayViewFromImage(mask)):
+            logger.warning(
+                "Label %s (%s) is empty on the CT grid after resampling.",
+                label,
+                meta.get("name", f"Segment_{label}"),
+            )
         kwargs = {
             "name": meta.get("name", f"Segment_{label}"),
             "voi_type": meta.get("voi_type", "OAR"),

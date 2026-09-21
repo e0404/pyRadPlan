@@ -56,7 +56,47 @@ Additional matrices are available for biological dose calculation in particle th
      - Per-beamlet √β-dose for the LQ model.
 
 The set of available matrices determines which :ref:`quantities <concept_quantities>` can be
-resolved during optimization.
+resolved during optimization. Every engine, photon engines included, stores the biological model it used as
+``dij.bio_model``; for a constant-RBE model no matrices are needed and the constant is
+available as ``dij.rbe``. An engine that cannot compute a model's declared outputs (for
+example a photon engine with an LQ model) still records the model but logs a warning that
+only physical dose is available. The model decides how ``rbe_x_dose`` is derived (LQ inversion of
+the effect, or ``rbe * physical_dose``).
+
+Biological models and LET
+-------------------------
+
+Which of the additional matrices a particle engine computes follows from ``pln.bio_model``
+(see :ref:`concept_bio_model`) and the machine data:
+
+* Supported biological influence matrices are computed when the evaluator declares them. The
+  current ``Dij`` schema supports the ``alpha_dose`` / ``sqrt_beta_dose`` declared by the in-tree
+  LQ evaluators.
+* ``let_dose`` is computed when the machine provides LET kernels (pencil beam) or the model
+  requires LET (FRED, which scores LET only on request). Because FRED scores LET itself, an
+  LET-based model can be used with a machine that carries no LET kernels; the pencil-beam
+  engines interpolate the machine's LET kernels and therefore need them.
+
+Both can be overridden through the engine parameters ``calc_bio_dose`` and ``calc_let``,
+which accept ``"auto"`` (default), ``True`` or ``False``:
+
+.. code-block:: python
+
+    pln.bio_model = "MCN"
+    # keep only physical dose and LET; evaluate the LET-based model later
+    pln.prop_dose_calc = {"engine": "HongPB", "calc_bio_dose": False}
+
+Setting ``calc_bio_dose=True`` without an evaluator providing influence quantities raises an
+error. An evaluator declaring a quantity that ``Dij`` cannot currently store also fails during
+setup. Switching ``calc_let`` off does not affect LET-based models, which still receive the LET
+kernels internally. The FRED engine derives biological matrices from its scored LET and therefore
+supports LET-based models only.
+
+During the calculation the model is bound to the machine and the reference photon parameters
+of the voxels (``dij.alphax`` / ``dij.betax`` from the structure set) through a
+:class:`~pyRadPlan.bio_models.BioModelEvaluator`; kernel- and table-based models select the
+tissue class of each voxel by exact match of ``(alpha_x, beta_x)`` against the classes of the
+base data.
 
 Grid information
 ~~~~~~~~~~~~~~~~
@@ -136,6 +176,37 @@ at runtime:
 
 The ``Dij`` object can also convert its influence matrices explicitly with
 ``dij.to_namespace("cupy")`` or another supported namespace.
+
+.. _jit-compiled-kernels:
+
+Jit-compiled kernels
+~~~~~~~~~~~~~~~~~~~~
+
+A handful of hot-path computations (currently in the Siddon ray tracer) are written once
+as plain Array API code and additionally wrapped in
+:func:`pyRadPlan.core.xp_utils.jittable`. This decorator gives such a kernel jit-compiled
+execution paths per backend — a `numba <https://numba.pydata.org>`_ implementation for
+NumPy, or the backend's own tracer (``jax.jit``, ``torch.compile``) for backends where the
+kernel is written in a jit-traceable, static-shape style — while still falling back to the
+plain implementation everywhere else, and whenever a compiled path is unavailable or fails.
+
+Which backends actually take the jit-compiled path is controlled by
+``settings.xp.jit_backends``, a comma-separated list (``PYRADPLAN_XP_JIT_BACKENDS``,
+default ``"numpy,jax"``):
+
+.. code-block:: python
+
+    from pyRadPlan import settings
+
+    settings.xp.jit_backends = "numpy,jax,torch"   # also let torch.compile try
+    settings.xp.jit_backends = ""                  # disable jitting everywhere
+
+The NumPy path requires the ``[numba]`` extra (``pip install "pyRadPlan[numba]"``); without
+it, NumPy silently runs the plain implementation. If a backend's jit fails to compile or
+raises on its first execution (this can happen with ``torch.compile`` when the platform's
+Triton install is missing or incompatible), pyRadPlan emits a ``RuntimeWarning`` once and
+continues with the plain implementation for the remainder of the run — jitting is always a
+performance option, never a correctness requirement.
 
 Multi-scenario support
 -----------------------

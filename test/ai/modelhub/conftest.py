@@ -26,9 +26,9 @@ def isolated_model_settings(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data_root"))
 
-    cfg = get_settings().ai_modelhub
-    monkeypatch.setattr(cfg, "local_models_dir", tmp_path / "data_root" / "ai_models")
-    monkeypatch.setattr(cfg, "cache_dir", None)
-    monkeypatch.setattr(cfg, "offline", False)
-    monkeypatch.setattr(cfg, "trust_remote_code", False)
+    cfg = get_settings().ai
+    monkeypatch.setattr(cfg, "modelhub_local_models_dir", tmp_path / "data_root" / "ai_models")
+    monkeypatch.setattr(cfg, "modelhub_cache_dir", None)
+    monkeypatch.setattr(cfg, "modelhub_offline", False)
+    monkeypatch.setattr(cfg, "modelhub_trust_remote_code", False)
     return cfg

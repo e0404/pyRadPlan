@@ -36,6 +36,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
     name = "Non-Linear Fluence Planning Problem"
     short_name = "nonlin_fluence"
+    records_obj_history = True
 
     bypass_objective_jacobian: bool
 
@@ -60,7 +61,10 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
         if not isinstance(self.solver, NonLinearOptimizer):
-            raise ValueError("Solver must be an instance of SolverBase")
+            raise ValueError(
+                f"Problem '{self.short_name}' is non-linear and needs a NonLinearOptimizer, "
+                f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
+            )
 
         # Propagate device from quantities to solver and problem
         self._device = getattr(self._quantities[0], "device", None)
@@ -69,7 +73,6 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
-        self.solver.max_iter = 500
 
     def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions."""
@@ -109,6 +112,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         evt = xp_utils.record_event(xp)
         xp_utils.synchronize(xp)
         self._obj_times.append(xp_utils.elapsed_time(xp, t, evt))
+        if self.obj_history is not None:
+            self.obj_history.append(float(f))
         return f
 
     def _set_quantity_imtermediate_gradient_cache(self):

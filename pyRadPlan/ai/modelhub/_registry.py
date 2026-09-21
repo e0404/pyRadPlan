@@ -1,7 +1,7 @@
 """Listing of locally available pyRadPlan AI models.
 
 :func:`list_local_models` reports the model repositories present on disk, both
-under :attr:`AiModelSettings.local_models_dir` and in the HuggingFace cache (where
+under :attr:`AiSettings.modelhub_local_models_dir` and in the HuggingFace cache (where
 downloaded models land by default). A directory counts as a model when it holds
 the full model contract (see :data:`pyRadPlan.ai.modelhub._resolve.REQUIRED_FILES`). It
 touches no network.
@@ -106,7 +106,7 @@ def task_from_dir(path: Path) -> Optional[ModelTask]:
 def list_local_models(task: Optional[ModelTask] = None) -> list[str]:
     """List models available locally, optionally filtered by task.
 
-    Scans both :attr:`AiModelSettings.local_models_dir` and the HuggingFace cache for
+    Scans both :attr:`AiSettings.modelhub_local_models_dir` and the HuggingFace cache for
     directories that hold the full model contract. No network access is
     performed.
 
@@ -126,10 +126,10 @@ def list_local_models(task: Optional[ModelTask] = None) -> list[str]:
     list[str]
         Sorted model ids available on disk.
     """
-    cfg = get_settings().ai_modelhub
+    cfg = get_settings().ai
     found: dict[str, Optional[ModelTask]] = {}
 
-    base = cfg.local_models_dir
+    base = cfg.modelhub_local_models_dir
     if base is not None and Path(base).is_dir():
         found.update(_scan_local_dir(Path(base)))
 
@@ -167,7 +167,8 @@ def _scan_hf_cache(cfg) -> dict[str, Optional[ModelTask]]:
     try:
         from huggingface_hub import scan_cache_dir  # noqa: PLC0415
 
-        info = scan_cache_dir(cache_dir=str(cfg.cache_dir) if cfg.cache_dir else None)
+        cache_dir = str(cfg.modelhub_cache_dir) if cfg.modelhub_cache_dir else None
+        info = scan_cache_dir(cache_dir=cache_dir)
     except Exception as exc:  # pragma: no cover - env dependent
         logger.debug("Could not scan HuggingFace cache: %s", exc)
         return {}

@@ -760,3 +760,24 @@ def test_set_colors_predefined_order(generic_ct):
 
     assert tuple(cst.vois[0].visible_color) == DEFAULT_VOI_COLORS["TARGET"][0]
     assert tuple(cst.vois[1].visible_color) == DEFAULT_VOI_COLORS["TARGET"][1]
+
+
+def test_matrad_numpy_cell_array_validation():
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    mask = sitk.Image([5, 4, 3], sitk.sitkUInt8)
+    mask[1, 2, 1] = 1
+    voi = create_voi(
+        name="target",
+        voi_type="TARGET",
+        mask=mask,
+        ct_image=ct,
+        objectives=[{"name": "Squared Deviation", "d_ref": 60.0}],
+    )
+    cst = validate_cst([voi], ct)
+    raw = np.empty((1, 6), dtype=object)
+    raw[0, :] = cst.to_matrad()[0]
+    restored = validate_cst(raw, ct)
+    np.testing.assert_array_equal(restored.vois[0].indices_numpy, voi.indices_numpy)
+    assert restored.vois[0].name == "target"
+    assert restored.vois[0].objectives[0].d_ref == 60.0
+    assert raw.shape == (1, 6)

@@ -144,7 +144,7 @@ def test_hub_load_requires_trust_opt_in(monkeypatch):
 
 
 def test_hub_load_honours_settings_opt_in(fake_model_dir, monkeypatch, isolated_model_settings):
-    monkeypatch.setattr(isolated_model_settings, "trust_remote_code", True)
+    monkeypatch.setattr(isolated_model_settings, "modelhub_trust_remote_code", True)
     monkeypatch.setattr(_load_model, "resolve_model_dir", lambda **kw: fake_model_dir)
 
     model, _ = load_model("dosecalc-x")
@@ -161,7 +161,7 @@ def test_name_resolves_to_hf_org_repo_id(fake_model_dir, monkeypatch):
     monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
 
     load_model("dosecalc-x", trust_remote_code=True)
-    hf_org = _load_model.get_settings().ai_modelhub.hf_org
+    hf_org = _load_model.get_settings().ai.modelhub_hf_org
     assert captured["repo_id"] == f"{hf_org}/dosecalc-x"
 
 

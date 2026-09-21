@@ -41,28 +41,68 @@ def _default_ai_models_dir() -> Path:
 
 
 class AiSettings(BaseSettings):
-    """Global defaults for pyRadPlan AI agents.
+    """Global configuration of pyRadPlan's AI features.
 
-    Values are read from environment variables prefixed with
-    ``PYRADPLAN_AI_AGENTS_`` (e.g. ``PYRADPLAN_AI_AGENTS_MODEL``) or from a
-    ``.env`` file in the working directory. The pre-0.4.2 names
-    ``PYRADPLAN_AI_MODEL`` and ``PYRADPLAN_AI_DISPLAY_USAGE`` are still read as
-    legacy aliases. Note that :class:`AiModelSettings`, which configures the
-    unrelated :mod:`pyRadPlan.ai.modelhub`, uses ``PYRADPLAN_AI_MODELHUB_*``.
+    One class covers both AI subsystems, kept apart by the field-name prefix:
+    the ``agents_*`` fields configure the LLM-powered planning agents
+    (:mod:`pyRadPlan.ai.agents`), the ``modelhub_*`` fields configure model
+    loading (:mod:`pyRadPlan.ai.modelhub`). Values are read from environment
+    variables prefixed with ``PYRADPLAN_AI_`` (e.g. ``PYRADPLAN_AI_AGENTS_MODEL``,
+    ``PYRADPLAN_AI_MODELHUB_DEVICE``) or from a ``.env`` file in the working
+    directory. The pre-0.4.2 names ``PYRADPLAN_AI_MODEL`` and
+    ``PYRADPLAN_AI_DISPLAY_USAGE`` are still read as legacy aliases.
 
     API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``,
     etc.) are read directly by *pydantic-ai* from the environment — they do
     not need to be set here.
 
+    Attributes
+    ----------
+    agents_model : str
+        pydantic-ai model string the planning agents query (an LLM identifier
+        such as ``"claude-sonnet-4-5"`` or ``"openai:gpt-4o-mini"``, not a
+        modelhub model). Overridable per call via the agents' ``model=``
+        keyword.
+    agents_display_usage : bool
+        Whether agent runs log token usage and estimated cost.
+    modelhub_hf_org : str
+        HuggingFace namespace/organization the model repositories live under.
+        Combined with a friendly model name to form the full ``"<org>/<repo>"``
+        repository id.
+    modelhub_local_models_dir : Optional[Path]
+        Base directory for local models. Defaults to ``<data_dir>/ai_models``
+        (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via
+        ``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``. Models are downloaded into /
+        loaded from ``"<local_models_dir>/<org>/<repo>"``, which is used as the
+        default ``local_dir``. Set it to ``""`` to opt out and use the
+        HuggingFace cache only.
+    modelhub_cache_dir : Optional[Path]
+        Override for the HuggingFace cache directory. ``None`` uses the default
+        HuggingFace cache location (or ``HF_HOME``).
+    modelhub_offline : bool
+        Force offline mode (``local_files_only``). When ``True``, no network
+        access is attempted and only cached / local files are used.
+    modelhub_trust_remote_code : bool
+        Whether loading a model resolved from the HuggingFace Hub is allowed to
+        execute the ``model.py`` and ``preprocessor.py`` shipped with it. This
+        runs arbitrary Python from the model repository, so it defaults to
+        ``False`` and must be opted into per source you trust. Loading from a
+        directory passed explicitly as ``local_dir`` is exempt: that code is
+        already under the caller's control.
+    modelhub_device : str
+        Default device a loaded model is moved to (e.g. ``"cpu"``, ``"cuda"``).
+
     Examples
     --------
-    Configure via environment variable::
+    Configure via environment variables::
 
         export PYRADPLAN_AI_AGENTS_MODEL=gpt-4o-mini
+        export PYRADPLAN_AI_MODELHUB_OFFLINE=1
+        export PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1
 
-    Or override per call::
+    Or at runtime::
 
-        pyRadPlan.ai.agents.generate_beam_angles(pln, "prostate", model="claude-opus-4-6")
+        pyRadPlan.settings.ai.modelhub_device = "cuda"
     """
 
     model_config = SettingsConfigDict(
@@ -73,13 +113,13 @@ class AiSettings(BaseSettings):
         validate_assignment=True,
     )
 
-    # The canonical, prefix-conforming name comes first; the second entry is the
-    # name these settings shipped under up to 0.4.1.
-    model: str = Field(
+    # The canonical, prefix-conforming names come first; the second entries are
+    # the names these settings shipped under up to 0.4.1.
+    agents_model: str = Field(
         default="claude-sonnet-4-5",
         validation_alias=AliasChoices("PYRADPLAN_AI_AGENTS_MODEL", "PYRADPLAN_AI_MODEL"),
     )
-    display_usage: bool = Field(
+    agents_display_usage: bool = Field(
         default=True,
         validation_alias=AliasChoices(
             "PYRADPLAN_AI_AGENTS_DISPLAY_USAGE",
@@ -87,70 +127,14 @@ class AiSettings(BaseSettings):
         ),
     )
 
+    modelhub_hf_org: str = "DKFZ-RadOpt"
+    modelhub_local_models_dir: Optional[Path] = Field(default_factory=_default_ai_models_dir)
+    modelhub_cache_dir: Optional[Path] = None
+    modelhub_offline: bool = False
+    modelhub_trust_remote_code: bool = False
+    modelhub_device: str = "cpu"
 
-class AiModelSettings(BaseSettings):
-    """Global defaults for pyRadPlan AI model handling.
-
-    Values are read from environment variables prefixed with
-    ``PYRADPLAN_AI_MODELHUB_`` (e.g. ``PYRADPLAN_AI_MODELHUB_OFFLINE``) or from
-    a ``.env`` file in the working directory, matching the
-    :mod:`pyRadPlan.ai.modelhub` module these settings configure.
-
-    Attributes
-    ----------
-    hf_org : str
-        HuggingFace namespace/organization the model repositories live under.
-        Combined with a friendly model name to form the full ``"<org>/<repo>"``
-        repository id.
-    local_models_dir : Optional[Path]
-        Base directory for local models. Defaults to ``<data_dir>/ai_models``
-        (see :func:`pyRadPlan.core.get_data_dir`) and can be overridden via
-        ``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``. Models are downloaded into / loaded
-        from ``"<local_models_dir>/<org>/<repo>"``, which is used as the default
-        ``local_dir``. Set it to ``""`` to opt out and use the HuggingFace
-        cache only.
-    cache_dir : Optional[Path]
-        Override for the HuggingFace cache directory. ``None`` uses the default
-        HuggingFace cache location (or ``HF_HOME``).
-    offline : bool
-        Force offline mode (``local_files_only``). When ``True``, no network
-        access is attempted and only cached / local files are used.
-    trust_remote_code : bool
-        Whether loading a model resolved from the HuggingFace Hub is allowed to
-        execute the ``model.py`` and ``preprocessor.py`` shipped with it. This
-        runs arbitrary Python from the model repository, so it defaults to
-        ``False`` and must be opted into per source you trust. Loading from a
-        directory passed explicitly as ``local_dir`` is exempt: that code is
-        already under the caller's control.
-    device : str
-        Default device the loaded model is moved to (e.g. ``"cpu"``,
-        ``"cuda"``).
-
-    Examples
-    --------
-    Configure via environment variable::
-
-        export PYRADPLAN_AI_MODELHUB_OFFLINE=1
-        export PYRADPLAN_AI_MODELHUB_HF_ORG=my-org
-        export PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1
-    """
-
-    model_config = SettingsConfigDict(
-        env_prefix="PYRADPLAN_AI_MODELHUB_",
-        env_file=ENV_FILE,
-        env_file_encoding="utf-8",
-        extra="ignore",
-        validate_assignment=True,
-    )
-
-    hf_org: str = "DKFZ-RadOpt"
-    local_models_dir: Optional[Path] = Field(default_factory=_default_ai_models_dir)
-    cache_dir: Optional[Path] = None
-    offline: bool = False
-    trust_remote_code: bool = False
-    device: str = "cpu"
-
-    @field_validator("local_models_dir", "cache_dir", mode="before")
+    @field_validator("modelhub_local_models_dir", "modelhub_cache_dir", mode="before")
     @classmethod
     def _empty_str_to_none(cls, v):
         """Treat an empty/blank string (e.g. ``PATH=""``) as unset."""
@@ -211,6 +195,13 @@ class XpSettings(BaseSettings):
         "None selects the best available backend automatically. "
         "Algorithms may locally enforce a different backend.",
     )
+    jit_backends: str = Field(
+        default="numpy,jax",
+        description="Comma-separated backends that run jit-compiled kernel paths "
+        "(numba implementations for numpy, the backend's own jit like jax.jit or "
+        "torch.compile elsewhere; e.g. 'numpy,jax,torch'). An empty string "
+        "disables jitting entirely.",
+    )
 
 
 class PyRadPlanSettings(BaseSettings):
@@ -219,14 +210,10 @@ class PyRadPlanSettings(BaseSettings):
     Values are read from environment variables prefixed with ``PYRADPLAN_``
     or from a ``.env`` file in the working directory. Sub-configurations use
     extended prefixes (e.g. ``PYRADPLAN_XP_PREFER_GPU`` configures :attr:`xp`,
-    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai_agents`,
-    ``PYRADPLAN_AI_MODELHUB_DEVICE`` configures :attr:`ai_modelhub`).
+    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai`).
 
-    Note that the AI agents read :class:`AiSettings` freshly from the
-    environment at call time, so :attr:`ai_agents` reflects the environment at
-    construction of this object rather than live agent configuration. The
-    :attr:`xp` backend preferences and :attr:`ai_modelhub` handling, in
-    contrast, are read from the :data:`settings` singleton at runtime.
+    All sub-configurations are consulted from the :data:`settings` singleton at
+    runtime, so mutating them takes effect for subsequent computations.
     """
 
     model_config = SettingsConfigDict(
@@ -243,11 +230,7 @@ class PyRadPlanSettings(BaseSettings):
     )
     ai_agents: AiSettings = Field(
         default_factory=AiSettings,
-        description="AI agent sub-configuration (PYRADPLAN_AI_AGENTS_* variables).",
-    )
-    ai_modelhub: AiModelSettings = Field(
-        default_factory=AiModelSettings,
-        description="AI model handling sub-configuration (PYRADPLAN_AI_MODELHUB_* variables).",
+        description="AI sub-configuration (PYRADPLAN_AI_* variables).",
     )
 
 
