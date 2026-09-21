@@ -20,7 +20,7 @@ def restore_settings():
 def test_defaults():
     settings = PyRadPlanSettings(_env_file=None)
     assert isinstance(settings.xp, XpSettings)
-    assert isinstance(settings.ai_agents, AiSettings)
+    assert isinstance(settings.ai, AiSettings)
     assert settings.xp.prefer_gpu is True
     assert settings.xp.preferred_cpu_array_backend == "numpy"
 

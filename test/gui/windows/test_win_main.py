@@ -111,8 +111,7 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
     assert dialog._general_form is None
     assert "General" not in titles
     assert "XP (Backend)" in titles
-    assert "AI Agents" in titles
-    assert "AI Model Hub" in titles
+    assert "AI" in titles
     assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
     assert "preferred_gpu_array_backend" in dialog._sub_forms["xp"]._editors
     assert "agents_model" in dialog._sub_forms["ai"]._editors
@@ -187,7 +186,7 @@ def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path
 def test_settings_menu_has_quick_links_and_preferences(qapp):
     win = MainWindow(WorkspaceManager())
     labels = [a.text() for a in win._settings_menu.actions() if a.text()]
-    assert labels == ["XP (Backend)…", "AI Agents…", "AI Model Hub…", "Preferences…"]
+    assert labels == ["XP (Backend)…", "AI…", "Preferences…"]
 
 
 def test_inputs_locked_while_busy(qapp):

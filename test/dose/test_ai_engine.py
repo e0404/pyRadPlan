@@ -29,8 +29,8 @@ def _local_ai_models_dir(monkeypatch):
     metadata next to the committed fixture.
     """
     models_dir = Path(__file__).resolve().parents[1] / "data" / "ai_models"
-    monkeypatch.setattr(get_settings().ai_modelhub, "local_models_dir", models_dir)
-    monkeypatch.setattr(get_settings().ai_modelhub, "offline", True)
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", models_dir)
+    monkeypatch.setattr(get_settings().ai, "modelhub_offline", True)
 
 
 def test_AIBeamletEngine_init(test_data_protons):

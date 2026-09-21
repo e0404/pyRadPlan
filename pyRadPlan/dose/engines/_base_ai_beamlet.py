@@ -119,7 +119,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         """
         self.ray_num_free_gpu_memory = None
         self.max_batch_size = 32
-        self.ensemble_size = None
         self._requested_model = None
         self.assumed_sparsity = 1e-2
         self.dose_threshold = 1e-7
@@ -723,11 +722,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             A shallow copy of the input ray. Unlike the base PB engine, AI engine
             does not adapt radiological depths per scenario here.
         """
-        # Gets number of scenario
-        scen_num = self.mult_scen.scen_num(scen_idx)
-
         scen_ray = ray.copy()
-        # scen_ray["ix"] = scen_ray["ix"][ct_scen]
 
         return scen_ray
 
@@ -836,7 +831,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             )
 
         model_dir = resolve_model_dir(
-            repo_id=f"{get_settings().ai_modelhub.hf_org}/{self._requested_model}"
+            repo_id=f"{get_settings().ai.modelhub_hf_org}/{self._requested_model}"
         )
         raw_config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
         self.model_cfg = DoseCalcModelConfig.model_validate(
@@ -844,9 +839,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         )
         model_device = str(self.device) if self.device is not None else None
         self.network, self.preprocessor = load_model(local_dir=model_dir, device=model_device)
-
-        if self.ensemble_size is not None:
-            self.preprocessor.config["ensemble_size"] = self.ensemble_size
 
         dij = self._allocate_quantity_container(dij)
 

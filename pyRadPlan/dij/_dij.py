@@ -480,20 +480,7 @@ class Dij(PyRadPlanBaseModel):
             ]
 
         if self.physical_dose_var is not None:
-            var_mat = self.physical_dose_var.flat[scenario_index]
-            # Var(sum(w_i * d_i)) = sum(w_i^2 * Var(d_i)) if independent
-            var_out = var_mat @ (intensity**2)
-            out["physical_dose_var"] = var_out
-            out["physical_dose_var_beam"] = [
-                var_mat[:, idx] @ (intensity[idx] ** 2) for idx in beam_indices
-            ]
-            # expose standard deviation (sqrt of variance) as 'std'
-            xp = array_api_compat.array_namespace(var_out)
-            out["std"] = xp.sqrt(var_out)
-
-            out["std_beam"] = [
-                xp.sqrt(var_mat[:, idx] @ (intensity[idx] ** 2)) for idx in beam_indices
-            ]
+            out["physical_dose_var"] = self.physical_dose_var.flat[scenario_index] @ intensity
 
         if self.let_dose is not None:
             if self.physical_dose is None:

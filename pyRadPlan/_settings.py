@@ -2,7 +2,7 @@
 
 All configuration is read from environment variables prefixed with
 ``PYRADPLAN_`` and/or a ``.env`` file in the working directory. Sub-configurations
-extend the prefix (e.g. ``PYRADPLAN_AI_AGENTS_`` for :class:`AiSettings`).
+extend the prefix (e.g. ``PYRADPLAN_AI_`` for :class:`AiSettings`).
 
 The module-level singleton :data:`settings` (also exposed as
 ``pyRadPlan.settings``) holds the runtime configuration and can be mutated to
@@ -106,7 +106,7 @@ class AiSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="PYRADPLAN_AI_AGENTS_",
+        env_prefix="PYRADPLAN_AI_",
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
@@ -228,7 +228,7 @@ class PyRadPlanSettings(BaseSettings):
         default_factory=XpSettings,
         description="Array-API backend sub-configuration (PYRADPLAN_XP_* variables).",
     )
-    ai_agents: AiSettings = Field(
+    ai: AiSettings = Field(
         default_factory=AiSettings,
         description="AI sub-configuration (PYRADPLAN_AI_* variables).",
     )
