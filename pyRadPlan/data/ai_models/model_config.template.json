@@ -14,6 +14,8 @@
         "task": "dose_calc | outcome",
         "_task_help": "What the model does. Read by list_local_models(); falls back to the 'dosecalc-*'/'outcome-*' repository-name prefix when absent. Distinct from the radiation modality under 'training'.",
         "description": "Short human-readable description of the model.",
+        "requirements": ["torch", "safetensors"],
+        "_requirements_help": "Optional. Importable packages model.py/preprocessor.py need. The AI dose engine checks them before offering itself, so a model whose framework is not installed is not offered instead of failing mid-calculation.",
         "training": {
             "dataset": "...",
             "modality": "protons | photons | ...",

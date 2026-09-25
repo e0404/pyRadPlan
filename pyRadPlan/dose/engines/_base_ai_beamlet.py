@@ -1,16 +1,10 @@
 """AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai.modelhub`` model contract."""
 
-import json
 import logging
-from typing import Any, ClassVar, List, Optional, Tuple
+from typing import Annotated, Any, ClassVar, List, Optional, Tuple
 
 import SimpleITK as sitk
 import numpy as np
-
-try:
-    import torch
-except ImportError:
-    torch = None
 
 import array_api_compat
 from ...core.xp_utils.typing import Array
@@ -21,45 +15,26 @@ from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.core import Grid, PyRadPlanBaseModel
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import batched_interp3d, array_meshgrid
-from pyRadPlan.core.xp_utils import to_namespace
+from pyRadPlan.core.xp_utils import device_string, to_namespace
 from pyRadPlan.geometry import get_beam_rotation_matrix
-from pyRadPlan.ai.modelhub import load_model, resolve_model_dir
-from pyRadPlan._settings import get_settings
+from pyRadPlan.ai.modelhub import (
+    ModelTask,
+    hub_config_dir,
+    list_hub_models,
+    list_local_models,
+    load_model,
+    local_model_dir,
+    model_facts,
+    resolve_model_dir,
+    task_from_dir,
+    task_from_name,
+)
 from pydantic import ConfigDict, Field
 
 from ._base_pencilbeam import PencilBeamEngineAbstract
+from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
-
-
-class GridParametersConfig(PyRadPlanBaseModel):
-    """Sampling-grid parameters a dose-calc model was trained on."""
-
-    model_config = ConfigDict(frozen=True)
-
-    spacing: float = Field(..., gt=0, description="Grid spacing [mm]")
-    lateral_range: float = Field(..., gt=0, description="Total width of the lateral grid [mm]")
-    depth_offset_start: float = Field(..., description="Depth offset start [mm]")
-    depth_range: float = Field(..., gt=0, description="Total depth range [mm]")
-
-
-class DoseCalcModelConfig(PyRadPlanBaseModel):
-    """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
-
-    The generic :func:`pyRadPlan.ai.modelhub.load_model` loader only cares about
-    ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
-    covers the extra fields the AI beamlet engine needs (sampling grid, quantities
-    produced, training assumptions) which live in the free-form ``metadata`` section
-    of a model's ``model_config.json``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    grid_parameters: GridParametersConfig
-    quantities: List[str] = Field(default_factory=lambda: ["physical_dose"])
-    radiation_mode: Optional[str] = None
-    energy_range_mev: Optional[Tuple[float, float]] = None
-    trained_machine: Optional[str] = None
 
 
 class AIBeamletEngine(PencilBeamEngineAbstract):
@@ -102,6 +77,11 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     _dij_guarantee_canonical: ClassVar[bool] = True
     _dij_guarantee_nonzero: ClassVar[bool] = True
 
+    model: Annotated[
+        Optional[str],
+        Field(description="AI model as a '<org>/<model>' id, e.g. 'DKFZ-RadOpt/my-model'"),
+    ] = None
+
     def __init__(self, pln=None):
         """Initialize the AI engine.
 
@@ -117,22 +97,156 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         -------
         None
         """
-        self.ray_num_free_gpu_memory = None
         self.max_batch_size = 32
-        self._requested_model = None
+        self.ensemble_size = None
+        self.model = None
+        self._model_modality = None
         self.assumed_sparsity = 1e-2
         self.dose_threshold = 1e-7
 
+        requested_model = None
         if pln is not None:
             pdc = getattr(pln, "prop_dose_calc", None)
             if pdc is None and isinstance(pln, dict):
                 pdc = pln.get("prop_dose_calc")
 
             if pdc is not None:
-                self._requested_model = pdc.pop("model", None)
+                requested_model = pdc.pop("model", None)
 
         super().__init__(pln)
         self.pln = pln
+        if requested_model is not None:
+            self.model = requested_model
+
+    @classmethod
+    def config_choices(cls, radiation_mode: Optional[str] = None) -> dict[str, List[str]]:
+        """Suggested values per parameter, for the GUI's engine-configuration form.
+
+        Lists the dose-calculation models available locally and, unless offline,
+        those offered by the configured hub organization, leaving out the ones
+        this engine could not run: anything that does not declare itself a
+        dose-calculation model, models trained for another *radiation_mode* and
+        models whose framework is not installed. For a model
+        that is not on disk, only its ``model_config.json`` is fetched, never its
+        weights. The list is a suggestion: any other id can still be typed.
+        """
+        cfg = get_settings().ai
+        names = set(list_local_models()) | set(
+            list_hub_models(cfg.modelhub_hf_org, cfg.modelhub_offline)
+        )
+
+        models = []
+        for name in sorted(names):
+            # Only full '<org>/<model>' ids are usable; a bare folder name is not.
+            if "/" not in name:
+                continue
+            # What is not on disk is judged by its config alone, which is fetched
+            # without the weights.
+            model_dir = local_model_dir(name) or hub_config_dir(name, cfg.modelhub_offline)
+            if model_dir is None:
+                continue
+
+            config, modality, missing = model_facts(model_dir)
+            # A model must show that it does dose calculation: a declared task, the
+            # name, or the engine's own metadata section. The task of a downloaded
+            # config cannot come from its folder, which is a revision hash.
+            is_dose_calc = ModelTask.DOSE_CALC in (
+                task_from_dir(model_dir),
+                task_from_name(name),
+            ) or "dose_calc" in (config.get("metadata") or {})
+            if not is_dose_calc:
+                continue
+            if missing or (radiation_mode and modality and modality != radiation_mode):
+                continue
+            models.append(name)
+        return {"model": models}
+
+    @staticmethod
+    def is_available(pln, machine) -> Tuple[bool, str]:
+        """Whether the engine can run for *pln*, and why not.
+
+        Never raises. Only the file system is inspected, except for a named model
+        missing locally: the hub is then asked (never in offline mode) whether its
+        organization offers it. A model is usable when the packages it declares
+        under ``metadata.requirements`` are installed; the engine itself requires
+        no particular ML framework.
+
+        Parameters
+        ----------
+        pln : Plan, dict or str
+            The plan (or plan dict) to check. A bare radiation mode is accepted too,
+            in which case any local dose-calc model trained for it suffices.
+        machine : Any
+            Unused; part of the engine interface.
+
+        Returns
+        -------
+        tuple[bool, str]
+            ``(True, "")`` if available, otherwise ``(False, reason)``.
+        """
+        offline = get_settings().ai.modelhub_offline
+
+        # pln may be a Plan, a plan dict, or just a radiation mode
+        if pln is None or isinstance(pln, str):
+            radiation_mode, prop_dose_calc = pln, None
+        elif isinstance(pln, dict):
+            radiation_mode = pln.get("radiation_mode")
+            prop_dose_calc = pln.get("prop_dose_calc")
+        else:
+            radiation_mode = getattr(pln, "radiation_mode", None)
+            prop_dose_calc = getattr(pln, "prop_dose_calc", None)
+
+        if isinstance(prop_dose_calc, dict):
+            model = prop_dose_calc.get("model")
+        else:  # an already constructed engine
+            model = getattr(prop_dose_calc, "model", None)
+
+        if model:  # an empty name counts as "none given"
+            if "/" not in model:
+                return False, f"Model '{model}' is not a '<org>/<model>'."
+            model_dir = local_model_dir(model)
+            if model_dir is None:
+                if model in list_hub_models(model.split("/")[0], offline):
+                    return True, ""
+                return False, (
+                    f"Model '{model}' is not available locally and cannot be downloaded "
+                    "(offline mode, no network or unknown repository)."
+                )
+            _, modality, missing = model_facts(model_dir)
+            if radiation_mode and modality and modality != radiation_mode:
+                return False, (
+                    f"Model '{model}' was trained for '{modality}', "
+                    f"but the plan uses '{radiation_mode}'."
+                )
+            if missing:
+                return False, (
+                    f"Model '{model}' requires {', '.join(missing)}, which is not installed."
+                )
+            return True, ""
+
+        for candidate in list_local_models():
+            model_dir = local_model_dir(candidate) if "/" in candidate else None
+            if model_dir is None or task_from_dir(model_dir) == ModelTask.OUTCOME:
+                continue
+            _, modality, missing = model_facts(model_dir)
+            if (not radiation_mode or not modality or modality == radiation_mode) and not missing:
+                return True, ""
+
+        # Nothing suitable on disk: the hub decides, so a new installation without
+        # any downloaded model still sees the engine. Which of its models fit is
+        # settled in the engine's configuration dialog (see config_choices), since
+        # that would mean reading every model's metadata from the hub here.
+        org = get_settings().ai.modelhub_hf_org
+        if any(
+            task_from_name(name) != ModelTask.OUTCOME for name in list_hub_models(org, offline)
+        ):
+            return True, ""
+
+        return False, (
+            f"No AI dose-calculation model for '{radiation_mode}' is available "
+            f"locally, and none can be downloaded from '{org}' "
+            "(offline mode, no network or no models)."
+        )
 
     def _compute_bixel(self, ray: dict, k: int) -> dict:
         """Read back a precomputed bixel dose contribution.
@@ -612,18 +726,13 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             `ct_cuboid` sampled on the local grid for later model inference
             and saves the precomputed batch for this ray.
         """
-        if self.ray_num_free_gpu_memory is not None and j % self.ray_num_free_gpu_memory == 0:
-            # clear torch cache to avoid memory issues
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
         ray = beam_info["beam"]["rays"][j].copy()
         ray["beam_index"] = beam_info["beam_index"]
         ray["ray_index"] = j
         ray["iso_center"] = beam_info["beam"]["iso_center"]
 
         if "num_of_bixels_per_ray" in beam_info["beam"]:
-            ray["num_of_bixels"] = beam_info["beam"]["num_of_bixels_per_ray"][j]
+            ray["num_of_bixels"] = int(beam_info["beam"]["num_of_bixels_per_ray"][j])
         else:
             # Fallback: use the actual number of beamlets on this ray
             # This is needed for machines like "Focused" that don't precompute counts.
@@ -745,10 +854,10 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             return getattr(config, key, default)
 
         pln_radiation_mode = getattr(self.pln, "radiation_mode", None)
-        radiation_mode = _get("radiation_mode")
+        radiation_mode = self._model_modality
         if pln_radiation_mode and radiation_mode and radiation_mode != pln_radiation_mode:
             raise ValueError(
-                f"Model '{self._requested_model}' was trained for radiation mode "
+                f"Model '{self.model}' was trained for radiation mode "
                 f"'{radiation_mode}' but the plan uses '{pln_radiation_mode}'."
             )
 
@@ -824,25 +933,29 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         # Load the model + its preprocessor (using the friendly name saved in __init__
         # before the base engine popped "model" from pln.prop_dose_calc).
-        if not self._requested_model:
+        if not self.model:
             raise ValueError(
                 "AIBeamletEngine requires a model, e.g. "
                 "pln.prop_dose_calc = {'engine': 'AIBeamlet', 'model': '<name>'}."
             )
 
-        model_dir = resolve_model_dir(
-            repo_id=f"{get_settings().ai.modelhub_hf_org}/{self._requested_model}"
-        )
-        raw_config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
+        if "/" not in self.model:
+            raise ValueError(f"Model '{self.model}' is not a '<org>/<model>'.")
+
+        model_dir = resolve_model_dir(repo_id=self.model)
+        raw_config, self._model_modality, _ = model_facts(model_dir)
         self.model_cfg = DoseCalcModelConfig.model_validate(
             raw_config.get("metadata", {}).get("dose_calc", {})
         )
-        model_device = str(self.device) if self.device is not None else None
+        model_device = device_string(self.device)
         self.network, self.preprocessor = load_model(local_dir=model_dir, device=model_device)
 
-        dij = self._allocate_quantity_container(dij)
+        if self.ensemble_size is not None:
+            self.preprocessor.config["ensemble_size"] = self.ensemble_size
 
         self._check_training_data_compatibility(stf)
+
+        dij = self._allocate_quantity_container(dij)
 
         # leave numpy here for now, since linear_indices_to_grid_coordinates moves to numpy anyway
         all_idx = np.arange(self.dose_grid.num_voxels, dtype=int)
@@ -853,3 +966,33 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         self._construct_grid()
 
         return dij
+
+
+class GridParametersConfig(PyRadPlanBaseModel):
+    """Sampling-grid parameters a dose-calc model was trained on."""
+
+    model_config = ConfigDict(frozen=True)
+
+    spacing: float = Field(..., gt=0, description="Grid spacing [mm]")
+    lateral_range: float = Field(..., gt=0, description="Total width of the lateral grid [mm]")
+    depth_offset_start: float = Field(..., description="Depth offset start [mm]")
+    depth_range: float = Field(..., gt=0, description="Total depth range [mm]")
+
+
+class DoseCalcModelConfig(PyRadPlanBaseModel):
+    """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
+
+    The generic :func:`pyRadPlan.ai.modelhub.load_model` loader only cares about
+    ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
+    covers the extra fields the AI beamlet engine needs (sampling grid, quantities
+    produced, training assumptions) which live in the free-form ``metadata`` section
+    of a model's ``model_config.json``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    grid_parameters: GridParametersConfig
+    quantities: List[str] = Field(default_factory=lambda: ["physical_dose"])
+    radiation_mode: Optional[str] = None
+    energy_range_mev: Optional[Tuple[float, float]] = None
+    trained_machine: Optional[str] = None
