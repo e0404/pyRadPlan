@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 QUANTITY_META: dict[str, tuple[str, str]] = {
     "physical_dose": ("Dose", "Gy"),
     "physical_dose_beam": ("Dose", "Gy"),
-    "let": ("LET", "keV/µm"),
-    "let_beam": ("LET", "keV/µm"),
+    "let": ("LET", "keV/μm"),
+    "let_beam": ("LET", "keV/μm"),
     "effect": ("Effect", ""),
     "effect_beam": ("Effect", ""),
     "rbe_x_dose": ("RBE-weighted Dose", "Gy (RBE)"),
@@ -47,8 +47,8 @@ QUANTITY_META: dict[str, tuple[str, str]] = {
     "alpha_dose_beam": ("Alpha Dose", "Gy"),
     "sqrt_beta_dose": ("Sqrt(Beta) Dose", "Gy½"),
     "sqrt_beta_dose_beam": ("Sqrt(Beta) Dose", "Gy½"),
-    "let_dose": ("LET·Dose", "Gy·keV/µm"),
-    "let_dose_beam": ("LET·Dose", "Gy·keV/µm"),
+    "let_dose": ("LET·Dose", "Gy·keV/μm"),
+    "let_dose_beam": ("LET·Dose", "Gy·keV/μm"),
 }
 
 

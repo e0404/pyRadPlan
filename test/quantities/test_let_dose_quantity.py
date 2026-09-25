@@ -58,7 +58,8 @@ def test_LETxDose_constructor(sample_dij_dense):
     assert let_dose.scenarios == [0]
     assert let_dose._dij == sample_dij_dense.to_namespace(xp)
     assert let_dose.dim == 1
-    assert format(let_dose.unit, "~") == "Gy * keV / µm"
+    # pint >= 0.26 renders micro as Greek mu (U+03BC), older versions as micro sign (U+00B5)
+    assert format(let_dose.unit, "~").replace("μ", "µ") == "Gy * keV / µm"
     assert let_dose.identifier == "let_dose"
     assert let_dose.name == "LETxDose"
 
