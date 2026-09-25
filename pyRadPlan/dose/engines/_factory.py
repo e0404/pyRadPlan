@@ -37,9 +37,31 @@ def register_engine(engine_cls: Type[DoseEngineBase]) -> None:
         DOSE_ENGINES[engine_name] = engine_cls
 
 
+def _check_engine_available(
+    engine_cls: Type[DoseEngineBase], pln: Union[Plan, str]
+) -> tuple[bool, str]:
+    """Run an engine's ``is_available`` check without letting it raise.
+
+    Only an explicit ``False`` marks an engine as unavailable, so engines still
+    returning the legacy ``([], [])`` stub keep being offered.
+    """
+    try:
+        result = engine_cls.is_available(pln, None)
+    except Exception as exc:  # noqa: BLE001 - a broken check must not break engine listing
+        logger.warning("Availability check of engine '%s' failed: %s", engine_cls.short_name, exc)
+        return False, f"availability check failed: {exc}"
+    if isinstance(result, tuple) and len(result) == 2 and result[0] is False:
+        return False, str(result[1])
+    return True, ""
+
+
 def get_available_engines(pln: Union[Plan, dict[str], str]) -> dict[str, Type[DoseEngineBase]]:
     """
     Get a list of available engines based on the plan.
+
+    An engine is available if it supports the plan's radiation mode and its
+    ``is_available`` check does not return ``False`` (e.g. a missing optional
+    dependency or model).
 
     Parameters
     ----------
@@ -54,12 +76,19 @@ def get_available_engines(pln: Union[Plan, dict[str], str]) -> dict[str, Type[Do
     if isinstance(pln, str):
         radiation_mode = pln
     else:
-        radiation_mode = validate_pln(pln).radiation_mode
-    return {
-        name: cls
-        for name, cls in DOSE_ENGINES.items()
-        if radiation_mode in cls.possible_radiation_modes
-    }
+        pln = validate_pln(pln)
+        radiation_mode = pln.radiation_mode
+
+    engines = {}
+    for name, cls in DOSE_ENGINES.items():
+        if radiation_mode not in cls.possible_radiation_modes:
+            continue
+        available, reason = _check_engine_available(cls, pln)
+        if available:
+            engines[name] = cls
+        else:
+            logger.debug("Engine '%s' not offered: %s", name, reason)
+    return engines
 
 
 def get_engine(pln: Union[Plan, dict]) -> DoseEngineBase:
@@ -97,9 +126,15 @@ def get_engine(pln: Union[Plan, dict]) -> DoseEngineBase:
     if isinstance(pln.prop_dose_calc, dict):
         # The user provided a dictionary with engine parameters, so we need to find the engine name
         if "engine" in pln.prop_dose_calc:
-            if pln.prop_dose_calc["engine"] in engines:
-                return engines[pln.prop_dose_calc["engine"]](pln)
-            warnings.warn(f"Engine '{pln.prop_dose_calc['engine']}' not available for Plan.")
+            requested = pln.prop_dose_calc["engine"]
+            if requested in engines:
+                return engines[requested](pln)
+            reason = ""
+            if requested in DOSE_ENGINES:
+                _, reason = _check_engine_available(DOSE_ENGINES[requested], pln)
+            warnings.warn(
+                f"Engine '{requested}' not available for Plan" + (f": {reason}" if reason else ".")
+            )
 
         # If no engine name was found, we choose the first as default
         logger.warning(
