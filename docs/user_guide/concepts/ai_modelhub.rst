@@ -10,6 +10,12 @@ and offline support.  A model repository is self-contained: it carries its netwo
 definition, its preprocessor and a declarative ``model_config.json`` that drives
 instantiation, so pyRadPlan needs no per-model code.
 
+.. seealso::
+
+   The module is the model source of the ``"AIBeamlet"`` dose engine; how a dose-calculation
+   model is selected, checked and used is described under
+   :ref:`concept_ai_dose_calculation`.
+
 .. note::
 
    The Hub client (``huggingface_hub``, ``safetensors``) is installed with pyRadPlan;
@@ -214,6 +220,23 @@ define stay picklable.  Import sibling files relatively
 A working reference implementation lives in ``test/data/ai_models/dummy_model/`` and is
 exercised by the test suite.  The annotated config template is
 ``pyRadPlan/data/ai_models/model_config.template.json``.
+
+Using a model for dose calculation
+----------------------------------
+
+Dose-calculation models (``metadata.task = "dose_calc"``) are consumed by the ``"AIBeamlet"``
+engine rather than loaded by hand; it reads the same repository contract and additionally
+honours the ``metadata.dose_calc`` section (sampling grid, predicted quantities) and
+``metadata.training.modality``:
+
+.. code-block:: python
+
+    pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}
+    dij = calc_dose_influence(ct, cst, stf, pln)
+
+See :ref:`concept_ai_dose_calculation` for model selection, availability and device handling,
+and the :doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>` for a runnable
+example. AI dose calculation is a research feature and not intended for clinical use.
 
 API reference
 -------------

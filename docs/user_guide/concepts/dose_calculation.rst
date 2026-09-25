@@ -150,11 +150,100 @@ one line:
      - Hong's particle pencil-beam model. Reference implementation for protons/ions.
    * - ``"FRED"``
      - `FRED <https://www.fred-mc.org>`_ Monte Carlo engine (requires FRED installation).
+   * - ``"AIBeamlet"``
+     - AI beamlet engine: a trained model predicts each beamlet's dose (see
+       :ref:`concept_ai_dose_calculation`). Research feature.
 
 .. code-block:: python
 
     pln.prop_dose_calc = {"engine": "HongPB"}
     dij = calc_dose_influence(ct, cst, stf, pln)
+
+.. _concept_ai_dose_calculation:
+
+AI-based dose calculation
+-------------------------
+
+The ``"AIBeamlet"`` engine replaces the analytical kernel with a trained model: for every
+beamlet it samples the CT on a beamlet-local grid, lets the model predict the dose cuboid and
+interpolates that cuboid onto the dose grid. Everything around it -- steering, the ``Dij``, the
+optimization -- is unchanged, so switching engines is one line plus the model to use:
+
+.. code-block:: python
+
+    pln.prop_dose_calc = {
+        "engine": "AIBeamlet",
+        "model": "DKFZ-RadOpt/pyRadPlan-dosecalc-Det-proton-lung",
+    }
+    dij = calc_dose_influence(ct, cst, stf, pln)
+
+.. warning::
+
+   AI dose calculation is a **research feature and not intended for clinical use**. A model is
+   valid only for the anatomy, radiation mode and machine it was trained on; used outside that
+   domain it may be confidently wrong, and pyRadPlan cannot detect this for you. Verify
+   predicted dose against an established engine before drawing conclusions from it.
+
+Models and how they are found
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Models are addressed as ``"<org>/<model>"`` and resolved by
+:ref:`concept_ai_modelhub`: a copy on disk (or in the HuggingFace cache) is used as-is,
+otherwise the model is downloaded on first use.
+:func:`~pyRadPlan.ai.modelhub.list_local_models` reports what is already available offline.
+
+The engine reads the repository's ``model_config.json`` and adapts to what it declares, so
+pyRadPlan carries no per-model code:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Declaration
+     - Effect
+   * - ``metadata.dose_calc.grid_parameters``
+     - Spacing, lateral width and depth range of the beamlet-local sampling grid.
+   * - ``metadata.dose_calc.quantities``
+     - Which matrices the model fills, e.g. ``physical_dose``, ``physical_dose_var``,
+       ``let_dose``. A multi-output model returns them from its preprocessor as a dict.
+   * - ``metadata.training.modality``
+     - The radiation mode the model was trained for. A plan using another mode is rejected.
+   * - ``metadata.training.energy_range_mev`` / ``trained_machine``
+     - Checked against the plan; a mismatch is a warning, since the calculation can still run.
+   * - ``metadata.requirements``
+     - Packages the model's code needs (``torch``, ``onnxruntime``, ...). The engine itself
+       requires no particular ML framework and only checks what the model declares.
+
+Availability
+~~~~~~~~~~~~
+
+Because a model is needed to compute anything, the engine reports itself unavailable -- and is
+left out of :func:`~pyRadPlan.dose.engines.get_available_engines` and of the GUI's engine list --
+when no usable model can be found: nothing on disk for the plan's radiation mode and nothing
+offered by the configured organization, a model trained for another modality, or a model whose
+declared packages are not installed. The reason is part of the answer:
+
+.. code-block:: python
+
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    available, reason = AIBeamletEngine.is_available(pln, machine=None)
+    # e.g. (False, "Model '<org>/<model>' was trained for 'VHEE', but the plan uses 'protons'.")
+
+Only the file system is consulted while a model is on disk; the hub is contacted only when
+nothing local fits. Setting ``PYRADPLAN_AI_MODELHUB_OFFLINE=1`` keeps everything local.
+
+Devices and backends
+~~~~~~~~~~~~~~~~~~~~
+
+The engine's arrays follow ``settings.xp`` like every other engine, and the model is loaded onto
+the device those arrays live on, so no data crosses devices per beamlet. Choosing the array
+backend the model's framework uses (``settings.xp.preferred_gpu_array_backend = "torch"`` for a
+torch model) additionally avoids a conversion per ray. Without a device of its own -- NumPy, for
+instance -- the model is placed on ``PYRADPLAN_AI_MODELHUB_DEVICE`` (default ``cpu``).
+
+A runnable end-to-end plan is in the
+:doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>`.
 
 Backend-agnostic computation
 -----------------------------

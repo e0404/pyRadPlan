@@ -47,6 +47,7 @@ SKIP = {
     "utils_matrad": "needs MATLAB or Octave",
     "*ai_agent*": "needs AI API credentials",
     "*ai_model*": "downloads model repositories from the HuggingFace Hub",
+    "ai_dosecalc": "downloads a dose-calculation model from the HuggingFace Hub",
 }
 
 
