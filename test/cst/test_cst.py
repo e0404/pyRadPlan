@@ -665,6 +665,16 @@ def test_create_cst_with_float_and_empty_indices():
     assert empty_mask.sum() == 0
 
 
+def test_create_cst_single_structure_row():
+    """Regression: a single-structure matRad cst is read as a flat row, not a list of rows."""
+    ct = create_ct(cube_hu=sitk.Image(3, 3, 3, sitk.sitkInt16))
+
+    cst = create_cst([0, "Target", "TARGET", np.array([1.0, 2.0, 3.0]), {}, []], ct=ct)
+    assert len(cst.vois) == 1
+    assert cst.vois[0].name == "Target"
+    assert sitk.GetArrayViewFromImage(cst.vois[0].mask).sum() == 3
+
+
 def test_create_body_seg_default():
     ct = _make_test_ct()
     structure_set = StructureSet(ct_image=ct, vois=[])
