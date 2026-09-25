@@ -15,7 +15,13 @@ from ._registry import (
     task_from_name,
 )
 from ._resolve import resolve_model_dir, is_valid_model_dir, repo_subpath
-from ._load_model import load_model
+from ._load_model import (
+    hub_config_dir,
+    list_hub_models,
+    load_model,
+    local_model_dir,
+    model_facts,
+)
 
 __all__ = [
     "AiSettings",
@@ -28,4 +34,8 @@ __all__ = [
     "is_valid_model_dir",
     "repo_subpath",
     "load_model",
+    "hub_config_dir",
+    "list_hub_models",
+    "local_model_dir",
+    "model_facts",
 ]

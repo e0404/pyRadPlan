@@ -11,6 +11,7 @@ import logging
 import re
 import sys
 import types
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -171,6 +172,141 @@ def _find_preprocessor_class(module: types.ModuleType, name: Optional[str]) -> t
         "preprocessor.py defines multiple BasePreprocessor subclasses "
         f"({[c.__name__ for c in candidates]}); set 'preprocessor_name' in model_config.json."
     )
+
+
+def model_facts(model_dir: Path) -> tuple[dict, Optional[str], list[str]]:
+    """Read a model's configuration and pull out what callers usually need.
+
+    Unlike the read :func:`load_model` performs, this one is tolerant: a caller that
+    only inspects a model -- is it usable, what was it trained for -- should not fail
+    on a repository that is broken or not fully downloaded.
+
+    Parameters
+    ----------
+    model_dir : Path
+        A model directory.
+
+    Returns
+    -------
+    tuple[dict, str or None, list[str]]
+        The raw configuration (``{}`` when unreadable), the radiation modality the
+        model was trained for (``metadata.training.modality``, falling back to the
+        older ``metadata.dose_calc.radiation_mode``), and the packages it declares
+        under ``metadata.requirements`` that are not installed. Which packages a
+        model needs (torch, onnxruntime, ...) is declared by the model itself, so a
+        caller can tell whether it is usable without importing its code.
+    """
+    try:
+        config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read the model config in %s: %s", model_dir, exc)
+        config = {}
+
+    metadata = config.get("metadata") or {}
+    modality = (metadata.get("training") or {}).get("modality") or (
+        metadata.get("dose_calc") or {}
+    ).get("radiation_mode")
+
+    required = metadata.get("requirements") or []
+    missing = []
+    for module in [required] if isinstance(required, str) else required:
+        try:
+            found = importlib.util.find_spec(str(module).split(".")[0]) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(str(module))
+
+    return config, modality, missing
+
+
+def local_model_dir(name: str) -> Optional[Path]:
+    """Directory of a model already on disk or in the HuggingFace cache.
+
+    Resolves *name* like :func:`load_model` does, but never touches the network and
+    reports failure instead of raising.
+
+    Parameters
+    ----------
+    name : str
+        A ``"<org>/<model>"`` repository id.
+
+    Returns
+    -------
+    Path or None
+        The model directory, or ``None`` if it is not available locally.
+    """
+    try:
+        return resolve_model_dir(repo_id=name, offline=True)
+    except Exception as exc:  # noqa: BLE001 - any failure means "not available locally"
+        logger.debug("Model '%s' not found locally: %s", name, exc)
+        return None
+
+
+@lru_cache(maxsize=None)
+def hub_config_dir(name: str, offline: bool = False) -> Optional[Path]:
+    """Fetch only a hub model's ``model_config.json``, never its weights.
+
+    Lets a caller judge a model it has not downloaded. Cached for the session, so
+    *offline* is part of the key rather than read from the settings.
+
+    Parameters
+    ----------
+    name : str
+        A ``"<org>/<model>"`` repository id.
+    offline : bool, optional
+        Skip the hub entirely; pass :attr:`AiSettings.modelhub_offline`.
+
+    Returns
+    -------
+    Path or None
+        The folder the config landed in, so it can be inspected like a local model's;
+        ``None`` when offline or when the file cannot be fetched.
+    """
+    if offline:
+        return None
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        cache_dir = get_settings().ai.modelhub_cache_dir
+        path = hf_hub_download(
+            name, "model_config.json", cache_dir=str(cache_dir) if cache_dir else None
+        )
+        return Path(path).parent
+    except Exception as exc:  # noqa: BLE001 - no hub client, no network, no such file
+        logger.debug("Could not read the config of '%s' from the hub: %s", name, exc)
+        return None
+
+
+@lru_cache(maxsize=None)
+def list_hub_models(org: str, offline: bool = False) -> tuple[str, ...]:
+    """List the models an organization offers on the hub.
+
+    The hub-side counterpart of :func:`list_local_models`, cached for the session, so
+    *offline* is part of the key and a model published meanwhile needs a restart.
+
+    Parameters
+    ----------
+    org : str
+        The hub organization.
+    offline : bool, optional
+        Skip the hub entirely; pass :attr:`AiSettings.modelhub_offline`.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``"<org>/<model>"`` ids, or ``()`` when offline and when the hub cannot be
+        reached.
+    """
+    if offline:
+        return ()
+    try:
+        from huggingface_hub import HfApi  # noqa: PLC0415
+
+        return tuple(m.id for m in HfApi().list_models(author=org))
+    except Exception as exc:  # noqa: BLE001 - no hub client, no network, unknown org
+        logger.debug("Could not list the models of '%s': %s", org, exc)
+        return ()
 
 
 def _read_config(model_dir: Path) -> dict:
