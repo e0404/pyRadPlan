@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from pyRadPlan.io import load_data, save_data, load_tg119
+from pyRadPlan.io import load_data, save_data, load_tg119, phantom_path, available_phantoms
 from pyRadPlan.io._factory import detect_format, DEFAULT_SAVE_FORMAT
 from pyRadPlan.io._load_save import _normalize_format
 
@@ -77,3 +77,18 @@ def test_save_data_with_dict(tmp_path):
 def test_save_data_nothing_raises():
     with pytest.raises(ValueError):
         save_data()
+
+
+@pytest.mark.parametrize("name", ["TG119", "tg119", "TG119.mat", "tg119.MAT"])
+def test_phantom_path_resolves_by_name(name):
+    """Bundled phantoms resolve case-insensitively, with or without the extension."""
+    assert str(phantom_path(name)).lower().endswith("tg119.mat")
+
+
+def test_phantom_path_unknown_lists_available():
+    with pytest.raises(FileNotFoundError, match="TG119"):
+        phantom_path("no_such_phantom")
+
+
+def test_available_phantoms_lists_tg119():
+    assert "TG119" in available_phantoms()
