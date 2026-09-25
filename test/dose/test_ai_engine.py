@@ -15,7 +15,7 @@ pytest.importorskip("safetensors", reason="safetensors is required for AI engine
 
 from pyRadPlan._settings import get_settings  # noqa: E402
 
-DUMMY_MODEL = "dummy_dosecalc_model"
+DUMMY_MODEL = "DKFZ-RadOpt/dummy_dosecalc_model"
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +88,26 @@ def test_protons_cd_influence(test_data_protons):
     assert np.all(np.isfinite(physical_dose_var_dense))
     assert np.all(np.isfinite(let_dose_dense))
     assert np.all(physical_dose_var_dense >= 0)
+
+
+def test_forward_matches_influence_matrix(test_data_protons):
+    """A forward calculation must equal the influence matrix applied to the same weights."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
+    pln.prop_dose_calc["engine"] = "AIBeamlet"
+    pln.prop_dose_calc["model"] = DUMMY_MODEL
+
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+    weights = np.linspace(0.1, 1.0, dij_py.total_num_of_bixels, dtype=np.float32)
+
+    forward = calc_dose_forward(ct, cst, stf, pln, weights=weights)
+    expected = dij_py.compute_result_ct_grid(weights)
+
+    assert np.allclose(
+        sitk.GetArrayFromImage(forward["physical_dose"]),
+        sitk.GetArrayFromImage(expected["physical_dose"]),
+        rtol=1e-5,
+        atol=1e-8,
+    )
 
 
 def test_construct_grid_matches_model_config(test_data_protons):
@@ -175,3 +195,86 @@ def test_quantities_match_model_config(test_data_protons):
     # ...and quantities the dummy model does not declare stay unset.
     assert dij_py.alpha_dose is None
     assert dij_py.sqrt_beta_dose is None
+
+
+# --- backends and devices --------------------------------------------------
+#
+# The engine's arrays follow settings.xp, while the model runs in its own
+# framework: xp_utils.device_string bridges the two (a cupy device is not a device
+# string torch understands). Each backend must therefore place the network on
+# the device its arrays live on, and complete a dose calculation.
+
+_BACKENDS = [
+    pytest.param("numpy", None, "cpu", id="numpy"),
+    pytest.param("array_api_strict", None, "cpu", id="array_api_strict"),
+    pytest.param("numpy", "torch", "cuda", id="torch-gpu"),
+    pytest.param("numpy", "cupy", "cuda", id="cupy-gpu"),
+]
+
+
+def _use_backend(monkeypatch, cpu_backend, gpu_backend):
+    """Point settings.xp at one backend; a gpu_backend also switches the device on."""
+    if gpu_backend == "torch" and not xp_utils.pytorch_gpu_available():
+        pytest.skip("no CUDA-capable torch build available")
+    if gpu_backend == "cupy" and not xp_utils.cupy_available():
+        pytest.skip("cupy is not available")
+
+    xp_settings = get_settings().xp
+    monkeypatch.setattr(xp_settings, "prefer_gpu", gpu_backend is not None)
+    monkeypatch.setattr(xp_settings, "preferred_cpu_array_backend", cpu_backend)
+    monkeypatch.setattr(xp_settings, "preferred_gpu_array_backend", gpu_backend)
+
+
+def _ai_pln(pln, dij):
+    pln.prop_dose_calc["engine"] = "AIBeamlet"
+    pln.prop_dose_calc["model"] = DUMMY_MODEL
+    if getattr(dij, "dose_grid", None) is not None:
+        pln.prop_dose_calc["dose_grid"] = dij.dose_grid
+    return pln
+
+
+@pytest.mark.parametrize("cpu_backend,gpu_backend,expected_device", _BACKENDS)
+def test_network_follows_the_array_backend_device(
+    test_data_protons, monkeypatch, cpu_backend, gpu_backend, expected_device
+):
+    """The model must be loaded onto the device the engine's arrays live on."""
+    _use_backend(monkeypatch, cpu_backend, gpu_backend)
+    pln, ct, cst, stf, dij, _result = test_data_protons
+
+    engine = AIBeamletEngine(_ai_pln(pln, dij))
+    engine._init_dose_calc(ct, cst, stf)
+
+    assert next(engine.network.parameters()).device.type == expected_device
+
+
+@pytest.mark.parametrize("cpu_backend,gpu_backend,expected_device", _BACKENDS)
+def test_dose_influence_runs_on_every_backend(
+    test_data_protons, monkeypatch, cpu_backend, gpu_backend, expected_device
+):
+    """A full influence calculation must complete on each backend/device combination."""
+    _use_backend(monkeypatch, cpu_backend, gpu_backend)
+    pln, ct, cst, stf, dij, _result = test_data_protons
+
+    dij_py = calc_dose_influence(ct, cst, stf, _ai_pln(pln, dij))
+    dose = dij_py.physical_dose.flat[0].toarray()
+
+    assert dose.shape[0] == dij_py.dose_grid.num_voxels
+    assert np.all(np.isfinite(dose))
+    assert dose.max() > 0.0
+
+
+def test_dose_is_the_same_on_numpy_and_torch(test_data_protons, monkeypatch):
+    """Switching the array backend must not change the dose (both run the model on the CPU).
+
+    GPU runs are excluded on purpose: the dummy model's MC-dropout ensemble draws
+    from the CUDA RNG there, which does not reproduce the CPU masks.
+    """
+    pln, ct, cst, stf, dij, _result = test_data_protons
+
+    _use_backend(monkeypatch, "numpy", None)
+    reference = calc_dose_influence(ct, cst, stf, _ai_pln(pln, dij)).physical_dose.flat[0]
+
+    _use_backend(monkeypatch, "torch", None)
+    torch_dose = calc_dose_influence(ct, cst, stf, _ai_pln(pln, dij)).physical_dose.flat[0]
+
+    assert np.allclose(reference.toarray(), torch_dose.toarray(), rtol=1e-4, atol=1e-8)
