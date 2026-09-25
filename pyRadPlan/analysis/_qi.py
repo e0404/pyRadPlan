@@ -86,6 +86,26 @@ def _coerce_unit(v: Any) -> pint.Unit:
     raise ValueError(f"Unsupported unit type: {type(v).__name__}")
 
 
+def format_unit_symbol(unit: pint.Unit) -> str:
+    """Format a unit with its symbols, identically on every pint version.
+
+    pint >= 0.26 writes the micro prefix as Greek mu (U+03BC), older versions
+    as the micro sign (U+00B5). Always using Greek mu keeps metric ids, labels
+    and exported tables comparable across environments.
+
+    Parameters
+    ----------
+    unit : pint.Unit
+        Unit to format.
+
+    Returns
+    -------
+    str
+        e.g. ``"Gy"`` or ``"keV / μm"``.
+    """
+    return f"{unit:~}".replace("\u00b5", "\u03bc")
+
+
 def _validate_ref_vol(ref_vol: Any) -> float:
     """Validate a D_x reference volume percentage."""
     try:
@@ -277,7 +297,7 @@ class VX(QI):
 
     @property
     def metric(self) -> str:
-        return f"{self.metric_prefix}{self.ref_dose:g}{self.ref_unit:~}"
+        return f"{self.metric_prefix}{self.ref_dose:g}{format_unit_symbol(self.ref_unit)}"
 
     @classmethod
     def _from_voxels(
@@ -323,6 +343,35 @@ class VX(QI):
 AnyQI = Annotated[Union[Mean, Std, Max, Min, DX, VX], Field(discriminator="qi_type")]
 
 
+#: Reference volumes (in %) used for DX metrics when none are given.
+DEFAULT_REF_VOLS: tuple[float, ...] = (2.0, 5.0, 50.0, 95.0, 98.0)
+
+
+def format_metric_label(metric: str, qi: Optional[QI]) -> str:
+    """Format a metric id as a column label carrying its unit.
+
+    Parameters
+    ----------
+    metric : str
+        Metric id, e.g. ``"mean"`` or ``"D50"``.
+    qi : QI, optional
+        A QI carrying the unit to display. ``None`` yields the bare metric id.
+
+    Returns
+    -------
+    str
+        e.g. ``"D50 [Gy]"``, ``"V20Gy [%]"`` or ``"mean"``.
+    """
+    if qi is None or not isinstance(qi.unit, pint.Unit):
+        return metric
+    if str(qi.unit) == "percent":
+        return f"{metric} [%]"
+    if qi.unit.dimensionless:
+        # A dimensionless quantity would render as an empty "[]".
+        return metric
+    return f"{metric} [{format_unit_symbol(qi.unit)}]"
+
+
 class StructureQIs(PyRadPlanBaseModel):
     """Quality indicators for a single structure, keyed by metric id."""
 
@@ -330,6 +379,100 @@ class StructureQIs(PyRadPlanBaseModel):
     metrics: dict[str, AnyQI] = Field(
         default_factory=dict, description="Metrics keyed by metric id (e.g. 'mean', 'D50')"
     )
+
+    @classmethod
+    def from_voxels(
+        cls,
+        voxels: np.ndarray,
+        name: str = "",
+        ref_vols: Optional[list[float]] = None,
+        ref_doses: Optional[list[float]] = None,
+        dose_unit: Optional[pint.Unit] = None,
+        ref_unit: Optional[pint.Unit] = None,
+    ) -> Self:
+        """Compute the standard metric set from already-extracted voxel values.
+
+        Voxels are reduced as-is, so the caller is responsible for having masked
+        them. This is the shared core of :meth:`compute_from` and
+        :meth:`QICollection.from_masks`; it exists so the voxels are extracted
+        once per structure rather than once per metric.
+
+        Parameters
+        ----------
+        voxels : np.ndarray
+            1-D array of quantity values inside the structure.
+        name : str
+            Structure name.
+        ref_vols : list[float], optional
+            Reference volumes (in %) for DX metrics. Defaults to
+            :data:`DEFAULT_REF_VOLS`.
+        ref_doses : list[float], optional
+            Reference doses for VX metrics. Defaults to no VX metrics.
+        dose_unit : pint.Unit, optional
+            Unit of the values in *voxels*. Defaults to gray.
+        ref_unit : pint.Unit, optional
+            Unit of the *ref_doses* thresholds. Defaults to *dose_unit*.
+        """
+        ref_vols = list(DEFAULT_REF_VOLS) if ref_vols is None else ref_vols
+        ref_doses = [] if ref_doses is None else ref_doses
+
+        dose_unit = _coerce_unit(ureg.gray if dose_unit is None else dose_unit)
+        ref_unit = _coerce_unit(dose_unit if ref_unit is None else ref_unit)
+
+        metrics: dict[str, QI] = {}
+        for reducer_cls in (Mean, Std, Max, Min):
+            qi = reducer_cls._from_voxels(voxels, unit=dose_unit)
+            metrics[qi.metric] = qi
+        for ref_vol in ref_vols:
+            qi = DX._from_voxels(voxels, unit=dose_unit, ref_vol=float(ref_vol))
+            metrics[qi.metric] = qi
+        for ref_dose in ref_doses:
+            qi = VX._from_voxels(
+                voxels,
+                ref_dose=float(ref_dose),
+                ref_unit=ref_unit,
+                quantity_unit=dose_unit,
+            )
+            metrics[qi.metric] = qi
+
+        return cls(name=name, metrics=metrics)
+
+    @classmethod
+    def compute_from(
+        cls,
+        quantity: DoseLike,
+        mask: Optional[MaskLike] = None,
+        name: str = "",
+        ref_vols: Optional[list[float]] = None,
+        ref_doses: Optional[list[float]] = None,
+        dose_unit: Optional[pint.Unit] = None,
+        ref_unit: Optional[pint.Unit] = None,
+    ) -> Self:
+        """Compute the standard metric set for one structure.
+
+        Mirrors :meth:`pyRadPlan.analysis.DVH.compute`: it pairs a dose-like
+        quantity with a mask directly, so callers holding plain arrays do not
+        need a :class:`~pyRadPlan.cst.StructureSet`.
+
+        Parameters
+        ----------
+        quantity : DoseLike
+            Dose distribution. SimpleITK image or numpy array.
+        mask : MaskLike, optional
+            Structure mask matching *quantity*. ``None`` uses all voxels.
+        name : str
+            Structure name.
+        ref_vols, ref_doses, dose_unit, ref_unit
+            See :meth:`from_voxels`.
+        """
+        return cls.from_voxels(
+            _extract_voxels(quantity, mask),
+            name=name,
+            ref_vols=ref_vols,
+            ref_doses=ref_doses,
+            dose_unit=dose_unit,
+            ref_unit=ref_unit,
+        )
 
     def __getitem__(self, metric: str) -> QI:
         return self.metrics[metric]
@@ -370,8 +513,21 @@ class QICollection(PyRadPlanBaseModel):
         return len(self.structures)
 
     @staticmethod
-    def _default_ref_doses(dose: DoseLike) -> list[float]:
-        """Five evenly-spaced reference doses in (0, max_dose]."""
+    def default_ref_doses(dose: DoseLike) -> list[float]:
+        """Five evenly-spaced reference doses in ``(0, max(dose)]``, rounded to 0.1.
+
+        Used for VX metrics when no ``ref_doses`` are given.
+
+        Parameters
+        ----------
+        dose : DoseLike
+            Dose distribution. SimpleITK image or numpy array.
+
+        Returns
+        -------
+        list[float]
+            Distinct reference doses; empty if the dose has no positive values.
+        """
         dose_arr = _to_array(dose)
         _validate_single_scenario(dose_arr, "Dose")
         max_dose = float(np.max(dose_arr))
@@ -379,6 +535,58 @@ class QICollection(PyRadPlanBaseModel):
             return []
         doses = [round(float(d), 1) for d in np.linspace(max_dose / 5, max_dose, 5)]
         return list(dict.fromkeys(doses))
+
+    @classmethod
+    def from_masks(
+        cls,
+        masks: dict[str, MaskLike],
+        dose: DoseLike,
+        ref_vols: Optional[list[float]] = None,
+        ref_doses: Optional[list[float]] = None,
+        dose_unit: Optional[pint.Unit] = None,
+        ref_unit: Optional[pint.Unit] = None,
+    ) -> Self:
+        """Compute the standard QIs for every named mask.
+
+        The mask-level counterpart to :meth:`from_structure_set`, for callers
+        that hold plain arrays rather than a :class:`~pyRadPlan.cst.StructureSet`
+        (the GUI analysis window, for instance). QIs are order-invariant voxel
+        reductions, so any array layout works as long as *dose* and each mask
+        share it.
+
+        Parameters
+        ----------
+        masks : dict[str, MaskLike]
+            Structure masks keyed by structure name.
+        dose : DoseLike
+            Dose distribution. SimpleITK image or numpy array.
+        ref_vols : list[float], optional
+            Reference volumes (in %) for DX metrics. Defaults to
+            :data:`DEFAULT_REF_VOLS`.
+        ref_doses : list[float], optional
+            Reference doses for VX metrics. Defaults to five evenly-spaced
+            doses in ``(0, max(dose)]`` derived from the dose distribution.
+        dose_unit : pint.Unit, optional
+            Unit of the values in ``dose``. Defaults to gray.
+        ref_unit : pint.Unit, optional
+            Unit of the ``ref_doses`` thresholds. Defaults to ``dose_unit``.
+        """
+        if ref_doses is None:
+            ref_doses = cls.default_ref_doses(dose)
+
+        structures = {
+            name: StructureQIs.compute_from(
+                dose,
+                mask,
+                name=name,
+                ref_vols=ref_vols,
+                ref_doses=ref_doses,
+                dose_unit=dose_unit,
+                ref_unit=ref_unit,
+            )
+            for name, mask in masks.items()
+        }
+        return cls(structures=structures)
 
     @classmethod
     def from_structure_set(
@@ -399,7 +607,8 @@ class QICollection(PyRadPlanBaseModel):
         dose : DoseLike
             Dose distribution. SimpleITK image or numpy array.
         ref_vols : list[float], optional
-            Reference volumes (in %) for DX metrics. Defaults to ``[2, 5, 50, 95, 98]``.
+            Reference volumes (in %) for DX metrics. Defaults to
+            :data:`DEFAULT_REF_VOLS`.
         ref_doses : list[float], optional
             Reference doses for VX metrics. Defaults to five evenly-spaced
             doses in ``(0, max(dose)]`` derived from the dose distribution.
@@ -408,37 +617,42 @@ class QICollection(PyRadPlanBaseModel):
         ref_unit : pint.Unit, optional
             Unit of the ``ref_doses`` thresholds. Defaults to ``dose_unit``.
         """
-        if ref_vols is None:
-            ref_vols = [2, 5, 50, 95, 98]
-        if ref_doses is None:
-            ref_doses = cls._default_ref_doses(dose)
-
-        dose_unit = _coerce_unit(ureg.gray if dose_unit is None else dose_unit)
-        ref_unit = _coerce_unit(dose_unit if ref_unit is None else ref_unit)
-
-        structures: dict[str, StructureQIs] = {}
+        # Built explicitly rather than by comprehension so duplicate names are
+        # reported instead of silently collapsing into one entry.
+        masks: dict[str, MaskLike] = {}
         for voi in cst.vois:
-            if voi.name in structures:
+            if voi.name in masks:
                 raise ValueError(f"Duplicate VOI name in structure set: {voi.name}")
-            voxels = _extract_voxels(dose, voi.mask)
-            metrics: dict[str, QI] = {}
-            for reducer_cls in (Mean, Std, Max, Min):
-                qi = reducer_cls._from_voxels(voxels, unit=dose_unit)
-                metrics[qi.metric] = qi
-            for ref_vol in ref_vols:
-                qi = DX._from_voxels(voxels, unit=dose_unit, ref_vol=float(ref_vol))
-                metrics[qi.metric] = qi
-            for ref_dose in ref_doses:
-                qi = VX._from_voxels(
-                    voxels,
-                    ref_dose=float(ref_dose),
-                    ref_unit=ref_unit,
-                    quantity_unit=dose_unit,
-                )
-                metrics[qi.metric] = qi
-            structures[voi.name] = StructureQIs(name=voi.name, metrics=metrics)
+            masks[voi.name] = voi.mask
 
-        return cls(structures=structures)
+        return cls.from_masks(
+            masks,
+            dose,
+            ref_vols=ref_vols,
+            ref_doses=ref_doses,
+            dose_unit=dose_unit,
+            ref_unit=ref_unit,
+        )
+
+    def metric_ids(self, structures: Optional[list[str]] = None) -> list[str]:
+        """Return the metric ids present, in first-seen order.
+
+        Parameters
+        ----------
+        structures : list[str], optional
+            Structure names to consider. ``None`` considers all. Names not in
+            the collection are ignored.
+
+        Returns
+        -------
+        list[str]
+            Union of metric ids across the selected structures.
+        """
+        if structures is None:
+            selected = list(self.structures.values())
+        else:
+            selected = [self.structures[n] for n in structures if n in self.structures]
+        return self._select_metric_keys(selected, None)
 
     def plot(
         self,
@@ -466,7 +680,7 @@ class QICollection(PyRadPlanBaseModel):
         selected = self._select_structures(structures)
         metric_keys = self._select_metric_keys(selected, metrics)
         cell_text = self._build_rows(selected, metric_keys)
-        col_labels = [self._format_col_label(m, self._first_qi(selected, m)) for m in metric_keys]
+        col_labels = [format_metric_label(m, self._first_qi(selected, m)) for m in metric_keys]
         row_labels = [s.name for s in selected]
 
         table = ax.table(
@@ -523,12 +737,3 @@ class QICollection(PyRadPlanBaseModel):
                 row.append("-" if qi is None or np.isnan(qi.value) else f"{qi.value:.2f}")
             rows.append(row)
         return rows
-
-    @staticmethod
-    def _format_col_label(metric: str, qi: Optional[QI]) -> str:
-        if qi is None or not isinstance(qi.unit, pint.Unit):
-            return metric
-        unit_str = str(qi.unit)
-        if unit_str == "percent":
-            return f"{metric} [%]"
-        return f"{metric} [{qi.unit:~}]"

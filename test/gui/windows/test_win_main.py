@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -201,3 +202,43 @@ def test_inputs_locked_while_busy(qapp):
     win.workflow_widget._set_busy(False)
     assert win.plan_widget.isEnabled()
     assert win.optimization_widget.isEnabled()
+
+
+def _open_analysis_window(parent=None):
+    from pyRadPlan.gui.windows._analysis_win import show_analysis
+
+    mask = np.zeros((4, 4, 4), dtype=bool)
+    mask[1:3, 1:3, 1:3] = True
+    return show_analysis(
+        quantities={"Dose": np.ones((4, 4, 4))}, masks={"Target": mask}, parent=parent
+    )
+
+
+def test_closing_main_window_closes_analysis_windows(qapp):
+    from pyRadPlan.gui.windows._analysis_win import _OPEN_WINDOWS, close_all_analysis_windows
+
+    win = MainWindow(WorkspaceManager())
+    analysis = _open_analysis_window(parent=win._viewer)
+    try:
+        assert analysis in _OPEN_WINDOWS
+        win.close()
+        assert analysis not in _OPEN_WINDOWS
+        assert not analysis.isVisible()
+    finally:
+        close_all_analysis_windows()
+
+
+def test_cancelled_main_window_close_keeps_analysis_windows(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.gui.windows._analysis_win import _OPEN_WINDOWS, close_all_analysis_windows
+
+    win = MainWindow(WorkspaceManager())
+    analysis = _open_analysis_window(parent=win._viewer)
+    monkeypatch.setattr(type(win.workflow_widget), "is_busy", property(lambda self: True))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
+    try:
+        assert not win.close()
+        assert analysis in _OPEN_WINDOWS
+    finally:
+        close_all_analysis_windows()
