@@ -378,6 +378,28 @@ def test_engine_config_dialog_round_trip(qapp):
     assert dialog.values() == {"random_seed": 3, "enable_dij_sampling": False}
 
 
+def test_ai_engine_config_dialog_exposes_model(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    dialog = ConfigFormDialog(
+        AIBeamletEngine.config_model(),
+        initial={"model": "org/my_model"},
+        choices={"model": ["org/my_model", "org/another_model"]},
+    )
+    combo = dialog.form._editors["model"]
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "",
+        "org/my_model",
+        "org/another_model",
+    ]
+    assert combo.currentText() == "org/my_model"
+
+    # a model outside the list can still be typed
+    combo.setCurrentText("other_org/other_model")
+    assert dialog.values()["model"] == "other_org/other_model"
+
+
 def test_invalid_gantry_does_not_crash(qapp):
     widget, ws = _make_widget()
     failures = []

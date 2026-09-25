@@ -63,6 +63,9 @@ class ConfigFormWidget(QWidget):
         that are edited elsewhere).
     parent:
         Optional Qt parent widget.
+    choices:
+        Suggested values per field name, shown in an editable combo box so a
+        value outside the list can still be typed.
     """
 
     #: Emitted with (field_name, value) after a successful edit.
@@ -76,10 +79,12 @@ class ConfigFormWidget(QWidget):
         initial: Optional[Mapping[str, Any]] = None,
         exclude: Optional[set[str]] = None,
         parent: Optional[QWidget] = None,
+        choices: Optional[Mapping[str, list]] = None,
     ) -> None:
         super().__init__(parent)
         self._model_cls = model_cls
         self._exclude = set(exclude or ())
+        self._choices = dict(choices or {})
         self._draft = self._validate_initial(model_cls, dict(initial or {}))
         self._editors: dict[str, QWidget] = {}
 
@@ -162,7 +167,9 @@ class ConfigFormWidget(QWidget):
         origin = get_origin(annotation)
 
         editor: Optional[QWidget] = None
-        if annotation is bool:
+        if self._choices.get(name):
+            editor = self._make_suggestion_editor(name, value, self._choices[name], optional)
+        elif annotation is bool:
             editor = self._make_bool_editor(name, value)
         elif annotation is int:
             editor = self._make_int_editor(name, value, constraints)
@@ -221,6 +228,20 @@ class ConfigFormWidget(QWidget):
         if value is not None:
             combo.setCurrentText(str(value))
         combo.currentTextChanged.connect(lambda text: self._set_value(name, text))
+        return combo
+
+    def _make_suggestion_editor(
+        self, name: str, value: Any, choices: list, optional: bool = False
+    ) -> QComboBox:
+        """Editable combo box: pick a known value or type another one."""
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems([""] if optional else [])
+        combo.addItems([str(c) for c in choices])
+        combo.setCurrentText(str(value) if value is not None else "")
+        combo.currentTextChanged.connect(
+            lambda text: self._set_value(name, text or None if optional else text)
+        )
         return combo
 
     def _make_str_editor(self, name: str, value: Any, optional: bool = False) -> QLineEdit:
@@ -311,12 +332,13 @@ class ConfigFormDialog(QDialog):
         initial: Optional[Mapping[str, Any]] = None,
         title: str = "Configure",
         parent: Optional[QWidget] = None,
+        choices: Optional[Mapping[str, list]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
 
         root = QVBoxLayout(self)
-        self._form = ConfigFormWidget(model_cls, initial=initial)
+        self._form = ConfigFormWidget(model_cls, initial=initial, choices=choices)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

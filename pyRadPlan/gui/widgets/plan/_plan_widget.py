@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from copy import deepcopy
 from typing import Any, Optional
 
@@ -33,6 +34,8 @@ from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
 from ._tissue_dialog import TissueParametersDialog
 from ..ai import ai_disabled_reason
+
+logger = logging.getLogger(__name__)
 
 _ION_MODES = list(IonPlan.available_radiation_modes)
 _RADIATION_MODES = ["photons", *_ION_MODES]
@@ -519,11 +522,20 @@ class PlanWidget(WorkspaceWidget):
         if engine_cls is None:
             return
 
+        # Engines may suggest values for their parameters, given the radiation mode
+        choices = {}
+        if hasattr(engine_cls, "config_choices"):
+            try:
+                choices = engine_cls.config_choices(self._cmb_radiation.currentText())
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                logger.debug("Could not collect choices for %s: %s", engine_name, exc)
+
         dialog = ConfigFormDialog(
             engine_cls.config_model(),
             initial=self._engine_props.get(engine_name, {}),
             title=f"Configure {engine_cls.name}",
             parent=self,
+            choices=choices,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._engine_props[engine_name] = dialog.values()
