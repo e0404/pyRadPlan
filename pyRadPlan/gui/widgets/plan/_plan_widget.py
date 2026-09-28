@@ -41,6 +41,12 @@ _RADIATION_MODES = ["photons", *_ION_MODES]
 _MODIFIED_STYLE = "border: 1px solid #e67e22;"
 #: Persistent status note shown while the form has unapplied edits.
 _MODIFIED_NOTE = "Modified — not applied"
+#: Tooltip of the beam-count spin box (also restored after an invalid gantry entry).
+_NUM_BEAMS_TOOLTIP = (
+    "Number of beams.\n"
+    "Setting it replaces the gantry angles by that many equally spaced\n"
+    "angles starting at 0 deg."
+)
 
 
 def _plan_class(radiation_mode: str) -> type[Plan]:
@@ -206,13 +212,23 @@ class PlanWidget(WorkspaceWidget):
             "Gantry angles in the matRad coordinate system.\n"
             "Every gantry angle defines a beam; separate angles by blanks."
         )
-        self._txt_gantry.editingFinished.connect(self._update_beam_count)
+        self._txt_gantry.textChanged.connect(self._update_beam_count)
+        self._txt_gantry.editingFinished.connect(self._sync_couch_angles)
         self._txt_couch = QLineEdit("0")
         self._txt_couch.setToolTip(
             "Couch angles in the matRad coordinate system.\n"
-            "Every couch angle belongs to a gantry angle; separate angles by blanks."
+            "Every couch angle belongs to a gantry angle; separate angles by blanks.\n"
+            "The field follows the gantry angles: a single couch angle is repeated for\n"
+            "added beams, otherwise an added beam gets a couch angle of 0."
         )
-        self._lbl_beams = QLabel("1 beam")
+        self._spn_num_beams = QSpinBox()
+        self._spn_num_beams.setRange(1, 360)
+        self._spn_num_beams.setSuffix(" beams")
+        self._spn_num_beams.setToolTip(_NUM_BEAMS_TOOLTIP)
+        # Commit on focus-out/Enter only, so typing "16" does not first generate
+        # a single beam for the intermediate "1".
+        self._spn_num_beams.setKeyboardTracking(False)
+        self._spn_num_beams.valueChanged.connect(self._on_num_beams_changed)
 
         self._btn_ai_beams = QPushButton("✨ AI")
         self._btn_ai_beams.clicked.connect(self._on_ai_beam_angles)
@@ -221,12 +237,16 @@ class PlanWidget(WorkspaceWidget):
             self._ai_disabled_reason or "Suggest gantry/couch angles using an LLM"
         )
 
-        gantry_row = QHBoxLayout()
-        gantry_row.setContentsMargins(0, 0, 0, 0)
-        gantry_row.setSpacing(4)
-        gantry_row.addWidget(self._txt_gantry, 1)
-        gantry_row.addWidget(self._lbl_beams)
-        gantry_row.addWidget(self._btn_ai_beams)
+        # Both angle fields share the full row width, with the beam count and the
+        # AI button pushed to the right so neither list of angles is squeezed.
+        beam_row = QHBoxLayout()
+        beam_row.setContentsMargins(0, 0, 0, 0)
+        beam_row.setSpacing(4)
+        beam_row.addWidget(self._txt_gantry, 1)
+        beam_row.addWidget(QLabel("Couch angles [deg]:"))
+        beam_row.addWidget(self._txt_couch, 1)
+        beam_row.addWidget(self._spn_num_beams)
+        beam_row.addWidget(self._btn_ai_beams)
 
         self._spn_bixel = QDoubleSpinBox()
         self._spn_bixel.setRange(0.1, 100.0)
@@ -254,9 +274,7 @@ class PlanWidget(WorkspaceWidget):
         iso_row.addWidget(self._chk_iso_auto)
 
         grid.addWidget(QLabel("Gantry angles [deg]:"), 2, 0)
-        grid.addLayout(gantry_row, 2, 1)
-        grid.addWidget(QLabel("Couch angles [deg]:"), 2, 2)
-        grid.addWidget(self._txt_couch, 2, 3)
+        grid.addLayout(beam_row, 2, 1, 1, 3)
 
         grid.addWidget(self._lbl_bixel, 3, 0)
         grid.addWidget(self._spn_bixel, 3, 1)
@@ -291,12 +309,16 @@ class PlanWidget(WorkspaceWidget):
             self._add_disabled_item(self._cmb_scenario, model)
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
 
+        # Plan-level target/reporting quantity, as opposed to the quantities the
+        # individual objectives are evaluated on.
         self._cmb_quantity = QComboBox()
-        self._cmb_quantity.addItems(list(get_available_quantities()))
+        self._cmb_quantity.addItems(["auto", *get_available_quantities()])
+        self._cmb_quantity.setCurrentText("auto")
         self._set_not_implemented(
             self._cmb_quantity,
             "A global optimized quantity",
-            hint="The quantity is currently set per objective in the objectives table.",
+            hint="The quantity is currently set per objective in the objectives table, "
+            'where "Change all quantities…" sets it on all objectives at once.',
         )
 
         self._btn_tissue = QPushButton("Set tissue α/β")
@@ -684,12 +706,48 @@ class PlanWidget(WorkspaceWidget):
         self._txt_iso.setText(self._format_angles(iso))
 
     def _update_beam_count(self) -> None:
+        """Show the number of gantry angles in the beam-count spin box."""
         try:
             n = len(parse_number_list(self._txt_gantry.text()))
         except ValueError:
-            self._lbl_beams.setText("invalid gantry angles")
+            self._spn_num_beams.setEnabled(False)
+            self._spn_num_beams.setToolTip("Gantry angles are not a valid list of numbers.")
             return
-        self._lbl_beams.setText(f"{n} beam{'s' if n != 1 else ''}")
+        self._spn_num_beams.setEnabled(True)
+        self._spn_num_beams.setToolTip(_NUM_BEAMS_TOOLTIP)
+        if n and n != self._spn_num_beams.value():
+            self._spn_num_beams.blockSignals(True)
+            self._spn_num_beams.setValue(n)
+            self._spn_num_beams.blockSignals(False)
+
+    def _on_num_beams_changed(self, count: int) -> None:
+        """Replace the gantry angles by *count* equally spaced angles."""
+        if self._syncing:
+            return
+        self._txt_gantry.setText(
+            self._format_angles(np.linspace(0.0, 360.0, count, endpoint=False))
+        )
+        self._sync_couch_angles()
+
+    def _sync_couch_angles(self) -> None:
+        """Keep exactly one couch angle per gantry angle.
+
+        A single couch angle is repeated for every beam; otherwise an added beam
+        gets a couch angle of 0 and a removed one drops its couch angle, so the
+        two fields stay aligned while the angles already set for the remaining
+        beams are preserved.  Runs once the gantry edit is
+        finished rather than per keystroke, where the partial text would trim
+        the couch angles on the way.
+        """
+        try:
+            n = len(parse_number_list(self._txt_gantry.text()))
+            couch = parse_number_list(self._txt_couch.text())
+        except ValueError:
+            return
+        if n == 0 or len(couch) == n:
+            return
+        pad = couch[0] if len(couch) == 1 else 0.0
+        self._txt_couch.setText(format_number_list((couch + [pad] * n)[:n]))
 
     def _on_use_ct_grid(self) -> None:
         ct = self._ws.ct
@@ -757,7 +815,7 @@ class PlanWidget(WorkspaceWidget):
                 self._txt_gantry.setText(self._format_angles(gantry))
             if couch is not None:
                 self._txt_couch.setText(self._format_angles(couch))
-            self._update_beam_count()
+            self._sync_couch_angles()
 
         def _summarize(new_pln) -> str:
             n = len((new_pln.prop_stf or {}).get("gantry_angles", []))

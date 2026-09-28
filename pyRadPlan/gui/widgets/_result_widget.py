@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from pyRadPlan.cst import VOI
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.geometry import lps
 from pyRadPlan.gui.windows._analysis_win import show_analysis
 from pyRadPlan.gui.workspace import WorkspaceManager
 
@@ -153,6 +154,95 @@ def _compute_isocenter_vox(ct: CT, cst: Optional[StructureSet]) -> np.ndarray | 
     return np.array([isocenter_vox_phys[2], isocenter_vox_phys[0], isocenter_vox_phys[1]])
 
 
+def _to_viewer_vox(point_lps: np.ndarray, origin: np.ndarray, spacing: np.ndarray) -> np.ndarray:
+    """Convert an LPS point in mm to the viewer's (z, x, y) voxel coordinates."""
+    vox = (np.asarray(point_lps, dtype=float).ravel() - origin) / spacing
+    return np.array([vox[2], vox[0], vox[1]])
+
+
+def _to_viewer_direction(direction_lps: np.ndarray, spacing: np.ndarray) -> np.ndarray:
+    """Convert an LPS direction to (z, x, y) voxel space (anisotropic spacing)."""
+    vec = np.asarray(direction_lps, dtype=float).ravel() / spacing
+    return np.array([vec[2], vec[0], vec[1]])
+
+
+def _as_angle_array(value) -> np.ndarray:
+    """Flatten a ``prop_stf`` angle entry (list, scalar, array or None) to 1-D floats."""
+    if value is None:
+        return np.empty(0)
+    return np.atleast_1d(np.asarray(value, dtype=float)).ravel()
+
+
+def _beam_geometry(ct: CT, pln, stf, isocenter_vox: np.ndarray | None) -> list[dict]:
+    """Beam axes to draw, in the viewer's voxel space.
+
+    Prefers the generated steering information, which carries the exact source
+    point and target point of every beam; without it the axes are derived from
+    the plan's gantry/couch angles so the geometry can be checked before the stf
+    is generated.  Returns an empty list when neither is available.
+    """
+    origin = np.array(ct.cube_hu.GetOrigin())
+    spacing = np.array(ct.cube_hu.GetSpacing())
+
+    beams = getattr(stf, "beams", None)
+    if beams:
+        geometry = []
+        for i, beam in enumerate(beams):
+            direction = np.asarray(beam.source_point, dtype=float)
+            norm = float(np.linalg.norm(direction))
+            if norm == 0.0:
+                continue
+            geometry.append(
+                {
+                    "iso_center": _to_viewer_vox(beam.iso_center, origin, spacing),
+                    "source_direction": _to_viewer_direction(direction / norm, spacing),
+                    "name": f"#{i}",
+                    "label": f"Beam #{i}: gantry {beam.gantry_angle:g}°, "
+                    f"couch {beam.couch_angle:g}°",
+                }
+            )
+        return geometry
+
+    prop_stf = getattr(pln, "prop_stf", None) or {}
+    gantry_angles = _as_angle_array(prop_stf.get("gantry_angles"))
+    if gantry_angles.size == 0:
+        return []
+    couch_angles = _as_angle_array(prop_stf.get("couch_angles"))
+    if couch_angles.size == 0:
+        couch_angles = np.zeros_like(gantry_angles)
+    elif couch_angles.size == 1:
+        couch_angles = np.full_like(gantry_angles, couch_angles[0])
+    if couch_angles.size != gantry_angles.size:
+        return []
+
+    iso_center = prop_stf.get("iso_center")
+    iso_per_beam = None
+    if iso_center is not None and np.size(iso_center) > 0:
+        iso_per_beam = np.atleast_2d(np.asarray(iso_center, dtype=float))
+
+    geometry = []
+    for i, (gantry, couch) in enumerate(zip(gantry_angles, couch_angles)):
+        if iso_per_beam is not None:
+            iso_vox = _to_viewer_vox(iso_per_beam[min(i, len(iso_per_beam) - 1)], origin, spacing)
+        elif isocenter_vox is not None:
+            iso_vox = isocenter_vox
+        else:
+            return []
+        # Matches Beam.derive_source_points: the source sits at -y in the BEV.
+        direction = lps.get_beam_rotation_matrix(float(gantry), float(couch)) @ np.array(
+            [0.0, -1.0, 0.0]
+        )
+        geometry.append(
+            {
+                "iso_center": iso_vox,
+                "source_direction": _to_viewer_direction(direction, spacing),
+                "name": f"#{i}",
+                "label": f"Beam #{i}: gantry {float(gantry):g}°, couch {float(couch):g}°",
+            }
+        )
+    return geometry
+
+
 class ViewingWidget(WorkspaceWidget):
     """Composite slice viewer bound to a :class:`WorkspaceManager`.
 
@@ -177,9 +267,9 @@ class ViewingWidget(WorkspaceWidget):
     vois_selection_changed = Signal(list)  # list[str] of selected VOIs
     voi_metadata_changed = Signal(str)  # voi name whose metadata was edited
 
-    # Only the data and computed result drive the display; pln/stf/dij are
-    # upstream planning objects the viewer does not render.
-    _watched_keys = ("ct", "cst", "result")
+    # Only the data, the computed result and the beam geometry drive the
+    # display; dij is an upstream planning object the viewer does not render.
+    _watched_keys = ("ct", "cst", "pln", "stf", "result")
 
     def __init__(
         self,
@@ -206,6 +296,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vis_widget.overlay_toggled.connect(self.overlay_toggled)
         self.vis_widget.isolines_toggled.connect(self.isolines_toggled)
         self.vis_widget.isocenter_toggled.connect(self._on_isocenter_toggled)
+        self.vis_widget.beams_toggled.connect(self._on_beams_toggled)
         self.vis_widget.quantity_changed.connect(self._on_quantity_changed)
         self.vis_widget.isolines_set.connect(self._on_isolines_set)
         self.vis_widget.recenter_requested.connect(self._on_recenter)
@@ -285,6 +376,9 @@ class ViewingWidget(WorkspaceWidget):
         full = not changed_keys
         data_changed = full or "ct" in changed_keys or "result" in changed_keys
         cst_changed = full or "cst" in changed_keys or "ct" in changed_keys
+        # The beam axes are anchored to the (target-derived) isocenter, so a new
+        # structure set moves them as much as a new plan does.
+        beams_changed = cst_changed or "pln" in changed_keys or "stf" in changed_keys
 
         if data_changed:
             self._apply_ct_and_result(ct, ws.cst, ws.result)
@@ -292,6 +386,9 @@ class ViewingWidget(WorkspaceWidget):
 
         if cst_changed:
             self._apply_vois(ws.cst)
+
+        if data_changed or beams_changed:
+            self._apply_beams(ct, ws.cst, ws.pln, ws.stf)
 
     def _clear_data(self) -> None:
         self._has_data = False
@@ -302,6 +399,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vois_widget.set_vois([])
         self.quantity_widget.clear_data()
         self.vis_widget.update_quantity_selector([], None)
+        self.vis_widget.set_beams_available(False)
 
     def _ct_array(self, ct: CT) -> np.ndarray:
         """Get the transposed CT array, reusing the cache for an unchanged image."""
@@ -365,6 +463,16 @@ class ViewingWidget(WorkspaceWidget):
 
         mode = "quantity" if self.opts_widget.cmap_mode_btn.isChecked() else "ct"
         self._sync_ui_to_mode(mode)
+
+    def _apply_beams(self, ct: CT, cst, pln, stf) -> None:
+        """Hand the beam axes to the viewer and enable the toggle when there are any."""
+        try:
+            beams = _beam_geometry(ct, pln, stf, _compute_isocenter_vox(ct, cst))
+        except Exception:  # noqa: BLE001 - the overlay must never break the viewer
+            logger.warning("Could not derive the beam geometry for the viewer", exc_info=True)
+            beams = []
+        self.quantity_widget.set_beams(beams)
+        self.vis_widget.set_beams_available(bool(beams))
 
     def _apply_vois(self, cst: Optional[StructureSet]) -> None:
         vois = list(cst.vois) if cst is not None else []
@@ -488,6 +596,9 @@ class ViewingWidget(WorkspaceWidget):
 
     def _on_isocenter_toggled(self, checked: bool) -> None:
         self.quantity_widget.set_isocenter_visible(checked)
+
+    def _on_beams_toggled(self, checked: bool) -> None:
+        self.quantity_widget.set_beams_visible(checked)
 
     def _on_isolines_set(self, levels: list[float]) -> None:
         self.quantity_widget.set_isolines(levels)
