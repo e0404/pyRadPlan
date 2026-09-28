@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChargedBeamFocus.has_emittance` raised an `AttributeError` (checked non-existent fields)
 - `ChargedBeamFocus.from_dict` handles 2-D focus tables (one focus per row); all foci of an energy are kept instead of the first list only
 - particle pencil-beam lateral cutoff calibration no longer evaluates the biological model on a dummy bixel with hard-coded tissue parameters (failed for models without a (0.5, 0.05) tissue class)
+- FRED: the energy spread was written to the plan as the machine's spectrum FWHM divided by 2.355 (i.e. a sigma), although FRED's `EFWHM` expects the FWHM itself, so the simulated energy spread was 2.355 times too narrow
+- FRED: the −999 HU entry of the default HU lookup table had an RSP of 0.0011 instead of 0.001, inconsistent with its density and the −1024 HU entry
+- FRED: rays without a `target_point_bev` (stfs not created by the stf generators) raised a `TypeError` when writing the plan; the target point is now derived from the ray position and source point without modifying the stf
+- FRED: forward calculations with LET (`calc_let=True`, or a LET-based biological model) raised an `IndexError`, because the 3-D dose and LET cubes were indexed with flat voxel indices
+- FRED: scorer-ij voxel indices (dij formats 21 and 31) are used in FRED's order, which already matches pyRadPlan's (z, y, x) C order; the x/y permutation in `read_sparse_dij_bin_v21` / `read_sparse_dij_bin_v31` and in `_finalize_dose` was removed
 
 ## [0.5.0] - 2026-09-07
 
