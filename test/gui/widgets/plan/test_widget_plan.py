@@ -2,6 +2,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.plan import PlanWidget
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan
@@ -16,6 +19,13 @@ def tg119():
 def _make_widget():
     ws = WorkspaceManager()
     return PlanWidget(workspace=ws), ws
+
+
+def _type_gantry(widget, text):
+    """Replace the gantry angles keystroke by keystroke and commit with Enter."""
+    widget._txt_gantry.selectAll()
+    QTest.keyClicks(widget._txt_gantry, text)
+    QTest.keyClick(widget._txt_gantry, Qt.Key_Return)
 
 
 def test_constructs_with_empty_workspace(qapp):
@@ -43,7 +53,7 @@ def test_do_update_populates_fields_photon(qapp):
     assert widget._cmb_radiation.currentText() == "photons"
     assert widget._spn_fractions.value() == 25
     assert widget._cmb_machine.currentText() == "Generic"
-    assert widget._lbl_beams.text() == "3 beams"
+    assert widget._spn_num_beams.value() == 3
 
 
 def test_do_update_populates_fields_ion(qapp):
@@ -66,6 +76,89 @@ def test_switching_radiation_mode_builds_correct_subclass(qapp):
     widget._on_apply()
     assert isinstance(ws.pln, PhotonPlan)
     assert ws.pln.radiation_mode == "photons"
+
+
+def test_couch_angles_follow_gantry_angles(qapp):
+    widget, ws = _make_widget()
+
+    _type_gantry(widget, "0 90 180 270")
+    assert widget._txt_couch.text() == "0 0 0 0"
+
+    widget._on_apply()
+    assert ws.pln.prop_stf["couch_angles"] == [0.0] * 4
+
+
+def test_added_beam_gets_a_zero_couch_angle(qapp):
+    widget, _ = _make_widget()
+
+    _type_gantry(widget, "0 90")
+    widget._txt_couch.setText("0 30")
+    # an added gantry angle appends a zero couch angle, the existing ones stay
+    _type_gantry(widget, "0 90 180")
+    assert widget._txt_couch.text() == "0 30 0"
+    # a removed one drops its couch angle again
+    _type_gantry(widget, "0 90")
+    assert widget._txt_couch.text() == "0 30"
+
+
+def test_retyping_gantry_angles_keeps_couch_angles(qapp):
+    widget, _ = _make_widget()
+    _type_gantry(widget, "0 90 180")
+    widget._txt_couch.setText("10 20 30")
+
+    # the intermediate text ("", "0", "0 1", ...) must not trim the couch angles
+    _type_gantry(widget, "0 120 240")
+    assert widget._txt_couch.text() == "10 20 30"
+
+    # neither does clearing the field and leaving it
+    widget._txt_gantry.clear()
+    widget._txt_gantry.editingFinished.emit()
+    assert widget._txt_couch.text() == "10 20 30"
+
+
+def test_single_couch_angle_is_repeated_for_added_beams(qapp):
+    widget, _ = _make_widget()
+    widget._txt_couch.setText("10")
+
+    _type_gantry(widget, "0 120 240")
+    assert widget._txt_couch.text() == "10 10 10"
+
+    widget._spn_num_beams.setValue(4)
+    assert widget._txt_couch.text() == "10 10 10 0"
+
+
+def test_num_beams_generates_equally_spaced_gantry_angles(qapp):
+    widget, ws = _make_widget()
+
+    widget._spn_num_beams.setValue(8)
+    assert widget._txt_gantry.text() == "0 45 90 135 180 225 270 315"
+    # the couch angles follow along
+    assert widget._txt_couch.text() == "0 0 0 0 0 0 0 0"
+
+    widget._on_apply()
+    assert ws.pln.prop_stf["gantry_angles"] == [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+
+
+def test_num_beams_tracks_manually_entered_gantry_angles(qapp):
+    widget, _ = _make_widget()
+
+    widget._txt_gantry.setText("0 45 300")
+    assert widget._spn_num_beams.value() == 3
+    # an unparsable entry disables the spin box instead of showing a stale count
+    widget._txt_gantry.setText("0 abc")
+    assert not widget._spn_num_beams.isEnabled()
+    widget._txt_gantry.setText("0 90")
+    assert widget._spn_num_beams.isEnabled()
+    assert widget._spn_num_beams.value() == 2
+
+
+def test_sync_from_workspace_keeps_couch_angles(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        prop_stf={"gantry_angles": [0, 90], "couch_angles": [0, 45]},
+    )
+    assert widget._txt_couch.text() == "0 45"
+    assert widget._spn_num_beams.value() == 2
 
 
 def test_editing_fields_and_apply_writes_valid_pln(qapp):
@@ -105,12 +198,13 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
 
 def test_placeholder_controls_disabled(qapp):
     widget, _ = _make_widget()
-    assert not widget._cmb_quantity.isEnabled()
     assert not widget._btn_tissue.isEnabled()
     assert not widget._chk_sequencing.isEnabled()
     assert not widget._chk_dao.isEnabled()
     assert not widget._chk_conf3d.isEnabled()
-    assert widget._cmb_quantity.count() > 0  # populated from available quantities
+    assert not widget._cmb_quantity.isEnabled()
+    assert widget._cmb_quantity.currentText() == "auto"
+    assert widget._cmb_quantity.count() > 1  # "auto" plus the available quantities
 
 
 def _combo_items(combo):
