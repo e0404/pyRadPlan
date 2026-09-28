@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Importing a matRad `cst` with a single structure failed: the MATLAB reader squeezes the 1x6 cell into a flat row, which was then iterated column by column. A flat row is now recognised by the VOI name in its second column and treated as a single structure
 - GUI: the DVH/QI analysis window is now top-level, so it gets its own taskbar button instead of being an owned child window that could not be reselected; it still closes together with the viewer that opened it
 - Setting `allow_keyboard_cancel`, `cancel_key` or `allow_esc_cancel` on a solver after construction had no effect: `SolverBase.__init__` mirrored the settings onto its `KeyboardListener` once, and `solve()` then consulted the listener's stale copies, so the listener thread still started (and a disabled cancel key stayed live). The solver's current values are now applied to the listener immediately before it starts, and the listener logs when cancellation is requested but no non-blocking keyboard input is available instead of silently skipping it
 - The proton LET optimization tutorial now disables legacy objective conversion, so its `let_dose` objective is evaluated as documented instead of being silently relabelled as physical dose.
