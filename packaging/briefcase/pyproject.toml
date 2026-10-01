@@ -1,0 +1,90 @@
+# Briefcase project that packages the pyRadPlan GUI as a desktop application.
+#
+# This is deliberately separate from the repository's root pyproject.toml: the
+# root describes the pyRadPlan library (built with setuptools), while this file
+# describes the installable app that wraps it. The app package `pyradplan_app`
+# is tiny: it only starts `pyRadPlan.gui.main()`. pyRadPlan itself is installed
+# into the bundle as a regular wheel built from the repository two levels up,
+# so dynamic imports, package data and importlib.metadata keep working.
+#
+# Build locally (from this directory):
+#   briefcase create && briefcase build && briefcase run
+#   briefcase run --test            # bundled smoke test
+#   briefcase package --adhoc-sign  # unsigned installer in dist/
+#
+# Keep `version` in sync with the root pyproject.toml (scripts/sync_version.py).
+
+[tool.briefcase]
+project_name = "pyRadPlan"
+bundle = "de.dkfz.pyradplan"
+version = "0.5.0"
+url = "https://github.com/e0404/pyRadPlan"
+license.file = "../../LICENSE"
+author = "The pyRadPlan developers"
+author_email = "n.wahl@dkfz-heidelberg.de"
+
+[tool.briefcase.app.pyradplan_app]
+formal_name = "pyRadPlan"
+description = "pyRadPlan treatment planning GUI (for research and education, not for clinical use)"
+long_description = """pyRadPlan is an open-source toolkit for radiotherapy treatment planning.
+
+This application bundles the pyRadPlan GUI with a CPU-only compute stack
+(numpy, scipy, numba). It is intended for research and education only and
+must not be used for clinical treatment planning.
+"""
+icon = "src/pyradplan_app/resources/pyradplan"
+sources = ["src/pyradplan_app"]
+test_sources = ["tests"]
+
+# pyRadPlan comes from the repository checkout two directories up (a local path
+# is resolved relative to this file). CPU-only: no torch, cupy or jax.
+requires = [
+    "../..",
+    "pyside6-essentials>=6.6",
+    "pyqtgraph>=0.13",
+    "numba>=0.61.0",
+]
+test_requires = []
+
+[tool.briefcase.app.pyradplan_app.windows]
+# Per-user install under %LOCALAPPDATA%\Programs: no admin rights needed.
+system_installer = false
+
+[tool.briefcase.app.pyradplan_app.macOS]
+universal_build = false
+min_os_version = "13.0"
+requires = [
+    "std-nslog~=2.0.0",
+]
+
+[tool.briefcase.app.pyradplan_app.linux]
+requires = []
+
+[tool.briefcase.app.pyradplan_app.linux.system.debian]
+system_requires = []
+system_runtime_requires = [
+    "libgl1",
+    "libegl1",
+    "libxkbcommon-x11-0",
+    "libdbus-1-3",
+    "libfontconfig1",
+    "libxcb-cursor0",
+    "libxcb-icccm4",
+    "libxcb-keysyms1",
+    "libxcb-shape0",
+    "libxcb-xkb1",
+]
+
+[tool.briefcase.app.pyradplan_app.linux.system.rhel]
+system_runtime_requires = ["mesa-libGL", "libxkbcommon-x11", "xcb-util-cursor"]
+
+[tool.briefcase.app.pyradplan_app.linux.system.suse]
+system_runtime_requires = ["Mesa-libGL1", "libxkbcommon-x11-0", "libxcb-cursor0"]
+
+[tool.briefcase.app.pyradplan_app.linux.system.arch]
+system_runtime_requires = ["mesa", "libxkbcommon-x11", "xcb-util-cursor"]
+
+[tool.briefcase.app.pyradplan_app.linux.appimage]
+manylinux = "manylinux_2_28"
+system_requires = []
+linuxdeploy_plugins = []
