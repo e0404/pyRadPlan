@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QICollection.from_masks`, `StructureQIs.compute_from` and `StructureQIs.from_voxels`: mask- and voxel-level entry points for quality indicators, mirroring `DVH.compute`, for callers holding plain arrays rather than a `StructureSet`. Also `format_metric_label`, `QICollection.metric_ids`, `QICollection.default_ref_doses` and `DEFAULT_REF_VOLS`
 - `pyRadPlan.gui.analysis_viewer(cst=None, result=None)` launches the DVH/QI window standalone, falling back to the shared workspace; it previously raised `NotImplementedError`
 - `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a bundled phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the bundled phantoms by name
+- Desktop installers: a Briefcase project under `packaging/briefcase` packages the GUI (CPU-only) as a Windows MSI, macOS DMG and Linux .deb, with a bundled smoke test and a `Desktop installers` GitHub Actions workflow that attaches the installers to a release
 
 ### Changed
 
