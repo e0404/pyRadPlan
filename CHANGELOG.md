@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The pyRadPlan wheel no longer ships the repository's `test/`, `docs/`, `examples/` and `benchmark/` directories: package discovery is restricted to `pyRadPlan`
 - GUI: the "Change all quantities…" control uses a menu button so keyboard navigation does not apply intermediate quantities or reset to the first entry; Enter confirms the selected quantity and Escape cancels.
 - Importing a matRad `cst` with a single structure failed: the MATLAB reader squeezes the 1x6 cell into a flat row, which was then iterated column by column. A flat row is now recognised by the VOI name in its second column and treated as a single structure
 - GUI: the DVH/QI analysis window is now top-level, so it gets its own taskbar button instead of being an owned child window that could not be reselected; it still closes together with the viewer that opened it

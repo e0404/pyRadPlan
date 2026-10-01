@@ -3,6 +3,9 @@ requires = ["setuptools>=64","setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
+# Only the library itself: without `include`, setuptools' namespace-package discovery
+# also shipped test/, docs/, examples/, benchmark/ and packaging/ in the wheel.
+include = ["pyRadPlan*"]
 exclude = ["matRad","build"]
 
 [tool.setuptools.package-data]
