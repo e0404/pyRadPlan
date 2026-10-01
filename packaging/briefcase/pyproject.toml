@@ -25,7 +25,7 @@ author_email = "n.wahl@dkfz-heidelberg.de"
 
 [tool.briefcase.app.pyradplan_app]
 formal_name = "pyRadPlan"
-description = "pyRadPlan treatment planning GUI (for research and education, not for clinical use)"
+description = "pyRadPlan treatment planning GUI, for research and education only"
 long_description = """pyRadPlan is an open-source toolkit for radiotherapy treatment planning.
 
 This application bundles the pyRadPlan GUI with a CPU-only compute stack
