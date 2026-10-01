@@ -95,23 +95,23 @@ jobs:
 
       - name: Create the app scaffold
         working-directory: packaging/briefcase
-        run: briefcase create ${{ matrix.platform }} ${{ matrix.format }} --no-input
+        run: python scripts/run_briefcase.py create ${{ matrix.platform }} ${{ matrix.format }} --no-input
 
       - name: Build the app
         working-directory: packaging/briefcase
-        run: briefcase build ${{ matrix.platform }} ${{ matrix.format }} --no-input
+        run: python scripts/run_briefcase.py build ${{ matrix.platform }} ${{ matrix.format }} --no-input
 
       - name: Run the bundled smoke test
         working-directory: packaging/briefcase
         env:
           QT_QPA_PLATFORM: offscreen
-        run: briefcase run ${{ matrix.platform }} ${{ matrix.format }} --test --no-input
+        run: python scripts/run_briefcase.py run ${{ matrix.platform }} ${{ matrix.format }} --test --no-input
 
       # `run --test` copied the test sources into the bundle; refresh the app code
       # (not the requirements) so the installer ships without them.
       - name: Drop the test sources from the bundle
         working-directory: packaging/briefcase
-        run: briefcase build ${{ matrix.platform }} ${{ matrix.format }} --update --no-input
+        run: python scripts/run_briefcase.py build ${{ matrix.platform }} ${{ matrix.format }} --update --no-input
 
       - name: Collect third-party license notices
         working-directory: packaging/briefcase
@@ -119,7 +119,7 @@ jobs:
 
       - name: Package the installer
         working-directory: packaging/briefcase
-        run: briefcase package ${{ matrix.platform }} ${{ matrix.format }} ${{ matrix.package-args }} --no-input
+        run: python scripts/run_briefcase.py package ${{ matrix.platform }} ${{ matrix.format }} ${{ matrix.package-args }} --no-input
 
       - name: List the installer
         working-directory: packaging/briefcase

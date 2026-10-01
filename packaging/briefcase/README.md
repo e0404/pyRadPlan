@@ -17,6 +17,7 @@ install pyRadPlan.
 | `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project. |
 | `scripts/collect_licenses.py` | Writes the third-party license notices into the bundle. |
 | `scripts/make_icons.py` | Regenerates the `.ico`/`.icns`/`.png` icons from the pyRadPlan logo SVG. |
+| `scripts/run_briefcase.py` | Runs Briefcase with a workaround for `rcedit` failing on relative paths (see below). |
 | `build/`, `dist/`, `logs/` | Briefcase output (ignored by git). |
 
 pyRadPlan itself is installed into the bundle as a wheel built from the repository checkout
@@ -46,6 +47,12 @@ briefcase build <platform> <format> --update   # drop the test sources again
 python scripts/collect_licenses.py --check
 briefcase package <platform> <format> [--adhoc-sign]
 ```
+
+`python scripts/run_briefcase.py <briefcase arguments>` runs the same commands through a thin
+wrapper. It only matters on Windows, where `rcedit` (the tool Briefcase uses to stamp the
+version and icon into the stub executable) fails with `Fatal error: Unable to commit changes`
+on some machines when it is given the stub as a relative path, which is what Briefcase does.
+The wrapper passes the path absolutely and is otherwise transparent, so CI uses it everywhere.
 
 `<platform> <format>` is one of:
 
