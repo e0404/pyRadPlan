@@ -1,0 +1,168 @@
+name: Desktop installers
+
+# Builds the Briefcase desktop bundle of the pyRadPlan GUI (packaging/briefcase)
+# as a Windows MSI, a macOS DMG and a Linux .deb. It runs only on demand and
+# when a GitHub release is published (release.yml creates one for v* tags), so
+# the installers end up attached to that release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      attach_to_release:
+        description: Attach the installers to the GitHub release of this tag (needs a tag ref)
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} ${{ matrix.format }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            format: app
+            artifact: pyRadPlan-windows-installer
+            package-args: ""
+            timeout-minutes: 90
+          - os: macos-latest
+            platform: macOS
+            format: app
+            artifact: pyRadPlan-macos-installer
+            package-args: --adhoc-sign
+            timeout-minutes: 60
+          - os: ubuntu-latest
+            platform: linux
+            format: system
+            artifact: pyRadPlan-linux-installer
+            package-args: ""
+            timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+
+      - name: Set up Python 3.12
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/briefcase/pyproject.toml
+
+      # Briefcase builds Linux system packages with the distribution's own python3
+      # (3.12 on Ubuntu 24.04) and refuses any other interpreter, so no setup-python
+      # here. The Qt libraries are the system_runtime_requires of the Briefcase
+      # project, which Briefcase verifies, plus the ones the test suite installs.
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-dev python3-pip python3-venv build-essential dpkg-dev \
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 \
+            libglib2.0-0 libnss3 libasound2t64
+
+      - name: Install Briefcase
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # A venv of /usr/bin/python3 reports the same sys.version, which is
+            # what Briefcase checks for the system packaging format.
+            python3 -m venv "$HOME/briefcase-venv"
+            "$HOME/briefcase-venv/bin/python" -m pip install --upgrade pip
+            "$HOME/briefcase-venv/bin/python" -m pip install "briefcase==0.4.5"
+            echo "$HOME/briefcase-venv/bin" >> "$GITHUB_PATH"
+          else
+            python -m pip install --upgrade pip
+            python -m pip install "briefcase==0.4.5"
+          fi
+
+      - name: Sync the app version with pyRadPlan
+        run: python packaging/briefcase/scripts/sync_version.py
+
+      - name: Create the app scaffold
+        working-directory: packaging/briefcase
+        run: briefcase create ${{ matrix.platform }} ${{ matrix.format }} --no-input
+
+      - name: Build the app
+        working-directory: packaging/briefcase
+        run: briefcase build ${{ matrix.platform }} ${{ matrix.format }} --no-input
+
+      - name: Run the bundled smoke test
+        working-directory: packaging/briefcase
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: briefcase run ${{ matrix.platform }} ${{ matrix.format }} --test --no-input
+
+      # `run --test` copied the test sources into the bundle; refresh the app code
+      # (not the requirements) so the installer ships without them.
+      - name: Drop the test sources from the bundle
+        working-directory: packaging/briefcase
+        run: briefcase build ${{ matrix.platform }} ${{ matrix.format }} --update --no-input
+
+      - name: Collect third-party license notices
+        working-directory: packaging/briefcase
+        run: python scripts/collect_licenses.py --check
+
+      - name: Package the installer
+        working-directory: packaging/briefcase
+        run: briefcase package ${{ matrix.platform }} ${{ matrix.format }} ${{ matrix.package-args }} --no-input
+
+      - name: List the installer
+        working-directory: packaging/briefcase
+        run: ls -l dist
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: packaging/briefcase/dist/*
+          if-no-files-found: error
+
+      - name: Upload the Briefcase logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-logs
+          path: packaging/briefcase/logs/
+          if-no-files-found: ignore
+
+  attach:
+    name: Attach to release
+    needs: build
+    # A manual run from a branch has no release to attach to.
+    if: github.ref_type == 'tag' && (github.event_name == 'release' || inputs.attach_to_release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pyRadPlan-*-installer
+          path: installers
+          merge-multiple: true
+
+      - name: List the release assets
+        run: ls -l installers
+
+      - name: Attach the installers to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: installers/*
+          fail_on_unmatched_files: true
