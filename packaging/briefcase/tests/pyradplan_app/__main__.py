@@ -13,6 +13,9 @@ import sys
 import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Briefcase streams the output through its own console; the Unicode progress
+# bars are noise there and crash it on a cp1252 Windows console.
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 def _check_import():

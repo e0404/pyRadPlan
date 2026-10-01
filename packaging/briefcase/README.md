@@ -54,6 +54,9 @@ version and icon into the stub executable) fails with `Fatal error: Unable to co
 on some machines when it is given the stub as a relative path, which is what Briefcase does.
 The wrapper passes the path absolutely and is otherwise transparent, so CI uses it everywhere.
 
+On Windows, run Briefcase with `PYTHONUTF8=1` set: it re-prints the app's output through its
+own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 console otherwise.
+
 `<platform> <format>` is one of:
 
 - **Windows:** `windows app`, run on Windows. Produces `dist/pyRadPlan-<version>.msi`, a

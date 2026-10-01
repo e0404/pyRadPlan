@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Briefcase re-prints the app's output; keep that from failing on non-UTF-8 consoles.
+  PYTHONUTF8: "1"
+
 jobs:
   build:
     name: ${{ matrix.platform }} ${{ matrix.format }}
