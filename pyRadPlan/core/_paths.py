@@ -11,6 +11,8 @@ Conventional subdirectories under the data root:
     Local / downloaded AI model repositories (see :mod:`pyRadPlan.ai`).
 ``patients/``, ``phantoms/``, ``machines/``
     Reserved for datasets pyRadPlan may download in the future.
+``topas/``
+    Input and output of TOPAS Monte Carlo runs (see :mod:`pyRadPlan.dose.engines`).
 ``cache/``
     Reserved for transient caches.
 

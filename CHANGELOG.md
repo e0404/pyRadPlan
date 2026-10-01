@@ -31,9 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QICollection.from_masks`, `StructureQIs.compute_from` and `StructureQIs.from_voxels`: mask- and voxel-level entry points for quality indicators, mirroring `DVH.compute`, for callers holding plain arrays rather than a `StructureSet`. Also `format_metric_label`, `QICollection.metric_ids`, `QICollection.default_ref_doses` and `DEFAULT_REF_VOLS`
 - `pyRadPlan.gui.analysis_viewer(cst=None, result=None)` launches the DVH/QI window standalone, falling back to the shared workspace; it previously raised `NotImplementedError`
 - `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a bundled phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the bundled phantoms by name
+- GUI: a Help menu with links to the documentation and the source repository, a "Third-party Licenses…" browser listing the installed packages with their license texts, and an "About pyRadPlan…" dialog showing the version, the BSD license note and the research-and-education / not-for-clinical-use disclaimer
+- A per-user `.env` file at `<data_dir>/.env` (`~/.pyradplan/.env` by default, relocatable via `PYRADPLAN_DATA_DIR`) is read for all `PYRADPLAN_*` settings, the AI provider API keys and `KMP_DUPLICATE_LIB_OK`, so an installed desktop app can be configured without a writable working directory; a `.env` in the working directory keeps precedence, and real environment variables win over both
 
 ### Changed
 
+- The TOPAS dose engine writes its date-stamped simulation directory to `<data_dir>/topas/` (`~/.pyradplan/topas/` by default) instead of into the installed package, which may be read-only; `simu_dir` can still be set explicitly
 - Unit symbols in quality indicator metric ids (e.g. `V2keV / μm`), QI table labels and the AI QI summary always write the micro prefix as Greek mu (U+03BC), via the new `pyRadPlan.analysis.format_unit_symbol`. pint 0.26 switched from the micro sign (U+00B5) to Greek mu, so metric ids previously depended on the installed pint version
 - GUI: the secondary ("Compare") quantity of the DVH/QI analysis window is drawn as dashed curves on the primary x axis, rescaled to the primary unit, only when the units are compatible; otherwise it gets a second x axis at the top instead of sharing a mislabelled axis. The QI table follows the primary quantity. DVHs are computed when a quantity is shown rather than for every quantity when the window opens
 - Legacy optimization quantity conversion now rejects explicitly incompatible objective quantities instead of silently overwriting them, while accepting an objective that already names the inferred default; set `prop_opt["convert_dose_objectives"] = False` to preserve every objective's selected quantity literally
@@ -44,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- No more `Requested GPU device is not available ... Falling back to CPU` warning on CPU-only installs (no cupy/torch/jax): when a GPU is merely preferred but no GPU-capable backend exists, numpy is the only choice and the fallback is logged at debug level. The warning is kept for a real mismatch, i.e. an explicitly set `preferred_gpu_array_backend` or a torch/jax/cupy namespace whose GPU is unavailable
 - GUI: the "Change all quantities…" control uses a menu button so keyboard navigation does not apply intermediate quantities or reset to the first entry; Enter confirms the selected quantity and Escape cancels.
 - Importing a matRad `cst` with a single structure failed: the MATLAB reader squeezes the 1x6 cell into a flat row, which was then iterated column by column. A flat row is now recognised by the VOI name in its second column and treated as a single structure
 - GUI: the DVH/QI analysis window is now top-level, so it gets its own taskbar button instead of being an owned child window that could not be reselected; it still closes together with the viewer that opened it
