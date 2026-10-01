@@ -30,7 +30,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon
 
 from pyRadPlan.gui.assets import asset_path
-from pyRadPlan.gui.menus import FileMenu, SettingsMenu, ViewMenu
+from pyRadPlan.gui.menus import FileMenu, HelpMenu, SettingsMenu, ViewMenu
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets import (
     WorkflowWidget,
@@ -160,7 +160,8 @@ class MainWindow(QMainWindow):
         log_toggle.toggled.connect(self._log_panel.setVisible)
         self._view_menu = ViewMenu(self, panel_actions=(log_toggle,))
         self._settings_menu = SettingsMenu(self)
-        for menu in (self._file_menu, self._view_menu, self._settings_menu):
+        self._help_menu = HelpMenu(self)
+        for menu in (self._file_menu, self._view_menu, self._settings_menu, self._help_menu):
             self.menuBar().addMenu(menu)
 
     # ------------------------------------------------------------------

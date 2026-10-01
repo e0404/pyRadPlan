@@ -60,7 +60,9 @@ base_topas_folder : pathlib.Path
     Base directory containing TOPAS template and configuration files.
 
 simu_dir : str
-    Output directory for simulation runs, typically date-stamped.
+    Output directory for simulation runs, typically date-stamped. Defaults to
+    ``<data_dir>/topas/<date>`` (see :func:`pyRadPlan.core.get_data_dir`), so the
+    installed package directory is never written to.
 
 
 """
@@ -74,6 +76,7 @@ import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
 
+from pyRadPlan.core import get_data_dir
 from pyRadPlan.ct import CT, resample_ct, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.dij import Dij
@@ -189,7 +192,7 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             ]
         }
 
-        self.simu_dir: str = self.base_topas_folder.joinpath(datetime.now().strftime("%Y-%m-%d"))
+        self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
         self._computed_quantities = []

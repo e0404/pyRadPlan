@@ -62,7 +62,7 @@ def test_single_menu_bar_with_expected_menus(qapp):
     ]
     assert installed == []
     titles = [a.text() for a in win.menuBar().actions()]
-    assert "&File" in titles and "&View" in titles and "&Settings" in titles
+    assert titles == ["&File", "&View", "&Settings", "&Help"]
 
 
 def test_view_menu_stubs_disabled(qapp):

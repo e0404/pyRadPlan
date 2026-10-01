@@ -66,3 +66,14 @@ class Test_file_handling:
                 ).exists()
 
         shutil.rmtree(tmp_path)
+
+
+def test_default_simu_dir_is_in_user_data_dir(test_data_protons, tmp_path, monkeypatch):
+    """The engine must never write next to the installed package."""
+    from pyRadPlan.core import get_data_dir
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
+    engine = ParticleTOPASMCEngine(test_data_protons[0])
+    simu_dir = Path(engine.simu_dir)
+    assert simu_dir.parent == get_data_dir() / "topas"
+    assert simu_dir.name == datetime.now().strftime("%Y-%m-%d")
