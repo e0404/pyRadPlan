@@ -1,4 +1,4 @@
-"""Run Briefcase with a workaround for ``rcedit`` failing on relative paths.
+r"""Run Briefcase with a workaround for ``rcedit`` failing on relative paths.
 
 On some Windows machines (seen on Windows 11 build 26200 with rcedit 1.1.1 and
 2.0.0) ``rcedit`` aborts with ``Fatal error: Unable to commit changes`` when the
