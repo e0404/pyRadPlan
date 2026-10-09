@@ -24,7 +24,7 @@ import numpy as np
 from pydantic import Field, PrivateAttr, model_validator
 from pydantic_core import PydanticUndefined
 
-from ....ai_models import load_pyanno4rt_model
+from ....ai.modelhub import load_pyanno4rt_model
 from .._objective import Objective
 from ._features import FeatureExtractor
 
@@ -63,6 +63,10 @@ class OutcomeSklearn(Objective):
     fd_step : float
         Relative step of the finite-difference fallback used for estimators
         without an analytic feature gradient.
+    num_of_fractions : int, optional
+        The optimizer works on dose per fraction, but the model expects
+        total-course dose, so the dose is multiplied by this number first.
+        Taken from ``pln`` when given, otherwise from the pyanno4rt configuration.
     """
 
     # -- Objective metadata --
@@ -78,6 +82,7 @@ class OutcomeSklearn(Objective):
     segment_map: Optional[dict[str, str]] = Field(default=None)
     static_features: Optional[dict[str, float]] = Field(default=None)
     fd_step: float = Field(default=1e-3, gt=0.0)
+    num_of_fractions: Optional[int] = Field(default=None, gt=0)
     ntcp_history: list[float] = Field(default_factory=list)
 
     # -- Internal state (excluded from serialisation) --
@@ -111,7 +116,9 @@ class OutcomeSklearn(Objective):
         ct = data.pop("ct", None)
         cst = data.pop("cst", None)
         data.pop("stf", None)  # accepted for convenience, not used
-        data.pop("pln", None)  # the dose grid is resolved via the optimizer hook
+        pln = data.pop("pln", None)  # the dose grid is resolved via the optimizer hook
+        if pln is not None and data.get("num_of_fractions") is None:
+            data["num_of_fractions"] = pln.num_of_fractions
 
         spec_input = data.get("model")
         if not isinstance(spec_input, str):
@@ -127,6 +134,8 @@ class OutcomeSklearn(Objective):
         estimator, spec = cls._resolve_model(spec_input, data.get("component"))
 
         data.setdefault("mode", spec.outcome_type)
+        if data.get("num_of_fractions") is None:
+            data["num_of_fractions"] = getattr(spec, "num_of_fractions", 1)
         data["estimator"] = estimator
         data["spec"] = spec
         data["extractor"] = FeatureExtractor(
@@ -234,19 +243,27 @@ class OutcomeSklearn(Objective):
                     "union, with apply_overlap=None)."
                 )
 
-    def compute_objective(self, dose_values) -> float:
-        """Compute the outcome probability (0.0 when *monitor_only*)."""
+    def compute_objective(self, dose_values):
+        """Compute the outcome probability (0.0 when *monitor_only*).
+
+        Returns a 0-d array on the same backend and device as ``dose_values``,
+        because the optimizer stacks the values of all objectives.
+        """
         self._check_ready()
 
         xp = array_api_compat.array_namespace(dose_values)
-        probability = self._predict(self._to_full_grid(dose_values, xp), xp)
+        probability = self._predict(self._total_dose(self._to_full_grid(dose_values, xp)), xp)
         self.ntcp_history.append(probability)
 
         if self.monitor_only:
-            return 0.0
-
-        value = self._transform_value(probability)
-        return -value if self.mode == "TCP" else value
+            value = 0.0
+        else:
+            value = self._transform_value(probability)
+            if self.mode == "TCP":
+                value = -value
+        return xp.asarray(
+            value, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
+        )
 
     def compute_gradient(self, dose_values):
         """Compute the gradient of the outcome probability w.r.t. dose.
@@ -262,10 +279,15 @@ class OutcomeSklearn(Objective):
         if self.monitor_only:
             return xp.zeros(n, dtype=dose_values.dtype)
 
-        dose = self._to_full_grid(dose_values, xp)
+        dose = self._total_dose(self._to_full_grid(dose_values, xp))
         features = self.extractor.compute_values(dose, xp)
         probability = self._clip(self._predict_from_features(features))
-        scale = self._transform_scale(probability) * self._feature_gradient(features, probability)
+        # d total_dose / d dose = num_of_fractions
+        scale = (
+            self._transform_scale(probability)
+            * self._feature_gradient(features, probability)
+            * self._fractions
+        )
 
         grad = xp.zeros(
             array_api_compat.size(dose),
@@ -365,6 +387,14 @@ class OutcomeSklearn(Objective):
             raise RuntimeError(
                 "OutcomeSklearn not initialised -- provide ct and cst at construction."
             )
+
+    @property
+    def _fractions(self) -> int:
+        return self.num_of_fractions or 1
+
+    def _total_dose(self, dose):
+        """Turn dose per fraction into total-course dose."""
+        return dose if self._fractions == 1 else dose * self._fractions
 
     def _needs_scatter(self, dose_values) -> bool:
         """Whether ``dose_values`` is a VOI subset that must be scattered to the full grid."""

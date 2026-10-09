@@ -25,7 +25,7 @@ import array_api_compat
 import numpy as np
 import SimpleITK as sitk
 
-from ....ai_models import OutcomeFeature
+from ....ai.modelhub import OutcomeFeature
 from ....core import Grid
 from ....core.resample import resample_image
 

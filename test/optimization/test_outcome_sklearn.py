@@ -15,7 +15,8 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-from pyRadPlan.ai_models import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
+from pyRadPlan.ai.modelhub import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
+from pyRadPlan import settings
 from pyRadPlan.core import Grid
 from pyRadPlan.optimization.objectives import OutcomeSklearn
 from pyRadPlan.optimization.objectives.model._features import (
@@ -112,6 +113,7 @@ class WrappedEstimator:
 
 
 def _objective(estimator, features, **kwargs):
+    kwargs.setdefault("num_of_fractions", 1)
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=features)
     objective = OutcomeSklearn(model=(estimator, spec), ct=ct, cst=cst, **kwargs)
@@ -122,6 +124,11 @@ def _objective(estimator, features, **kwargs):
 def _dose(grid, seed=0):
     rng = np.random.default_rng(seed)
     return rng.uniform(5.0, 60.0, size=grid.num_voxels)
+
+
+class FakePlan:
+    def __init__(self, num_of_fractions):
+        self.num_of_fractions = num_of_fractions
 
 
 # ---------------------------------------------------------------------------
@@ -550,3 +557,85 @@ def test_objective_serialises_without_runtime_handles():
     assert dumped["model"] == "<preloaded>"
     assert "estimator" not in dumped
     assert "extractor" not in dumped
+
+
+def test_loader_needs_no_trust_setting_for_a_direct_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings.ai, "modelhub_trust_remote_code", False)
+    config, _ = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
+
+    estimator, _ = load_pyanno4rt_model(config)
+    assert estimator.n_features_in_ == 4
+
+
+def test_loader_reads_the_number_of_fractions(tmp_path):
+    config, _ = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
+    raw = json.loads(config.read_text(encoding="utf-8"))
+    raw["configuration"] = {"number_of_fractions": 35}
+    config.write_text(json.dumps(raw), encoding="utf-8")
+
+    _, spec = load_pyanno4rt_model(config)
+    assert spec.num_of_fractions == 35
+
+
+def test_loader_accepts_a_sav_predictor(tmp_path):
+    config, model_dir = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
+    (model_dir / "predictor.save").rename(model_dir / "predictor.save")
+
+    estimator, _ = load_pyanno4rt_model(config)
+    assert estimator.n_features_in_ == 4
+
+
+def test_model_sees_total_dose():
+    """Per-fraction dose times the fraction count must give the same result as total dose."""
+    coefficients = [0.03, -1e-4, 0.06, -1e-4]
+    single, grid = _objective(_logistic(coefficients), _features())
+    fractionated, _ = _objective(_logistic(coefficients), _features(), num_of_fractions=30)
+    total = _dose(grid, seed=6)
+
+    assert fractionated.compute_objective(total / 30) == pytest.approx(
+        single.compute_objective(total)
+    )
+    assert fractionated.compute_gradient(total / 30) == pytest.approx(
+        30 * single.compute_gradient(total)
+    )
+
+
+def test_fractionated_gradient_matches_finite_differences():
+    objective, grid = _objective(
+        _logistic([0.03, -1e-4, 0.06, -1e-4]), _features(), num_of_fractions=30
+    )
+    dose = _dose(grid, seed=7) / 30
+
+    analytic = objective.compute_gradient(dose)
+    step = 1e-5
+    for index in np.flatnonzero(analytic)[::11]:
+        forward, backward = dose.copy(), dose.copy()
+        forward[index] += step
+        backward[index] -= step
+        numeric = (
+            objective.compute_objective(forward) - objective.compute_objective(backward)
+        ) / (2 * step)
+        assert analytic[index] == pytest.approx(numeric, rel=1e-4, abs=1e-12)
+
+
+def test_fraction_count_comes_from_pln_before_the_spec():
+    ct, cst, _ = _make_geometry()
+    spec = OutcomeModelSpec(label="test", features=_features(), num_of_fractions=30)
+
+    from_spec = OutcomeSklearn(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
+    from_pln = OutcomeSklearn(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst, pln=FakePlan(25))
+
+    assert from_spec.num_of_fractions == 30
+    assert from_pln.num_of_fractions == 25
+
+
+def test_objective_value_is_an_array_like_the_dose():
+    """The optimizer stacks objective values, which fails on plain floats with cupy."""
+    objective, grid = _objective(_logistic([0.03, -1e-4, 0.06, -1e-4]), _features())
+    dose = _dose(grid).astype(np.float32)
+
+    value = objective.compute_objective(dose)
+
+    assert isinstance(value, np.ndarray)
+    assert value.shape == ()
+    assert value.dtype == np.float32

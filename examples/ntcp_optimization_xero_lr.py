@@ -58,10 +58,16 @@ cst.vois = cst.vois[:4]
 cst.create_body_seg()  # adds BODY/SKIN as vois[4]
 
 # %% [markdown]
-# Create the photon plan, mirroring the reference pyanno4rt run.
+# Create the photon plan, mirroring the reference pyanno4rt run. Objective doses are
+# given for the whole course (30 fractions), like in pyanno4rt.
 # %%
-pln = PhotonPlan(radiation_mode="photons", machine="Generic")
-pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln = PhotonPlan(
+    radiation_mode="photons",
+    machine="Generic",
+    num_of_fractions=30,
+    dose_convention="total",
+)
+pln.prop_opt = {"solver": "scipy", "max_iter": 200, "display": True}
 pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
 num_of_beams = 8
 pln.prop_stf = {
@@ -76,19 +82,23 @@ stf = generate_stf(ct, cst, pln)
 # `segment_map` translates the model's segment names to the VOI names in this structure
 # set (names are otherwise matched case-insensitively).
 #
+# The model was trained on total-course dose, so the objective multiplies the
+# per-fraction dose of the optimizer by the number of fractions taken from `pln`.
+#
 # `transform=True` reproduces pyanno4rt's SALU transform, which keeps the gradient from
 # vanishing once the predicted probability saturates. Note that `priority` is *not*
-# directly comparable to pyanno4rt's `weight`, because pyanno4rt scales its features by
-# the number of fractions without re-applying that factor to the gradient.
+# directly comparable to pyanno4rt's `weight`: pyanno4rt leaves the fraction factor out
+# of the gradient, this objective includes it.
 # %%
 PYANNO4RT_CONFIG = r"path_to_input.json"
 
 ntcp_obj = OutcomeSklearn(
-    priority=10000.0,
+    priority=100.0,
     model=PYANNO4RT_CONFIG,
     mode="NTCP",
     transform=True,
     ct=ct,  # geometry features are evaluated on the CT grid
+    pln=pln,  # provides the number of fractions
     cst=cst,  # provides the segment masks
     segment_map={"PAROTID_LT": "Parotid_LT", "PAROTID_RT": "Parotid_RT"},
 )
@@ -146,9 +156,22 @@ print(f"NTCP model-guided: {ntcp_history_active[-1]:.2%}")
 print(f"NTCP native:       {ntcp_history_native[-1]:.2%}")
 
 # %%
-# Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
-result_native = dij.compute_result_ct_grid(fluence_native)
+# Compute the result on the CT grid, as total-course dose
+result = dij.compute_result_ct_grid(fluence, num_of_fractions=pln.result_dose_factor)
+result_native = dij.compute_result_ct_grid(fluence_native, num_of_fractions=pln.result_dose_factor)
+
+
+def mean_dose(dose_image, voi):
+    """Mean total-course dose inside a VOI."""
+    dose = sitk.GetArrayViewFromImage(dose_image)
+    return float(dose[sitk.GetArrayViewFromImage(voi.mask) > 0].mean())
+
+
+for voi in cst.vois[:4]:
+    print(
+        f"Mean dose {voi.name:<12} model-guided: {mean_dose(result['physical_dose'], voi):6.2f} Gy"
+        f"   native: {mean_dose(result_native['physical_dose'], voi):6.2f} Gy"
+    )
 
 result_collective = result.copy()
 result_collective["physical_dose_native"] = result_native["physical_dose"]

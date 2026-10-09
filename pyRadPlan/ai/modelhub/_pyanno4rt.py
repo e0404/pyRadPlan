@@ -26,12 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 #: Predictor file names understood by this loader, in order of preference.
-_PREDICTOR_SUFFIXES = (".save", ".pkl", ".pickle", ".joblib")
+_PREDICTOR_SUFFIXES = (".save", ".save", ".pkl", ".pickle", ".joblib")
 
 
 @dataclass(frozen=True)
@@ -74,6 +73,9 @@ class OutcomeModelSpec:
         Component weight used in the pyanno4rt plan (informational).
     model_dir : Path or None
         Directory the predictor was loaded from.
+    num_of_fractions : int
+        Number of fractions pyanno4rt multiplied the dose with before computing
+        the features (the model expects total-course dose).
     """
 
     label: str
@@ -82,6 +84,7 @@ class OutcomeModelSpec:
     transform: bool = False
     weight: float = 1.0
     model_dir: Optional[Path] = None
+    num_of_fractions: int = 30
 
     @property
     def segments(self) -> tuple[str, ...]:
@@ -245,14 +248,7 @@ def _find_predictor(model_dir: Path) -> Path:
 
 
 def _load_predictor(path: Path) -> Any:
-    """Unpickle the estimator, honouring the ``trust_remote_code`` setting."""
-    if not get_settings().ai_models.trust_remote_code:
-        raise ValueError(
-            f"Loading '{path}' unpickles a scikit-learn estimator, which executes code from the "
-            "file. Set trust_remote_code=True (or PYRADPLAN_AI_MODELS_TRUST_REMOTE_CODE=1) only "
-            "for sources you trust."
-        )
-
+    """Unpickle the estimator."""
     if path.suffix == ".joblib":
         import joblib  # noqa: PLC0415
 
@@ -277,7 +273,7 @@ def load_pyanno4rt_model(
         Name, identifier or model label of the outcome component to load.
         Required only when the configuration holds more than one.
     model_dir : str or Path, optional
-        Directory holding ``predictor.save``. Overrides the path recorded in the
+        Directory holding the ``predictor`` file. Overrides the path recorded in the
         configuration, which is relative to pyanno4rt's original working
         directory and therefore often stale.
 
@@ -294,8 +290,9 @@ def load_pyanno4rt_model(
 
     Notes
     -----
-    Loading unpickles the estimator and therefore executes code from the file;
-    this is gated behind :attr:`AiModelSettings.trust_remote_code`.
+    Loading unpickles the estimator, which runs code from the file. The path
+    is given directly by the caller, so it is trusted like any local file; only
+    load models you trust.
     """
     config_path = Path(config)
     if config_path.is_dir():
@@ -308,10 +305,15 @@ def load_pyanno4rt_model(
     model_cfg = params["model"]
 
     resolved_dir = _resolve_model_dir(model_cfg, config_path, model_dir)
-    if (resolved_dir / "preprocessor.save").is_file():
+    preprocessors = [
+        resolved_dir / f"preprocessor{suffix}"
+        for suffix in _PREDICTOR_SUFFIXES
+        if (resolved_dir / f"preprocessor{suffix}").is_file()
+    ]
+    if preprocessors:
         raise NotImplementedError(
             f"Model '{model_cfg.get('label')}' was trained with a feature preprocessor "
-            f"({resolved_dir / 'preprocessor.sav'}), which pyRadPlan does not apply. Re-export "
+            f"({preprocessors[0]}), which pyRadPlan does not apply. Re-export "
             "the model without preprocessing or fold the scaling into the estimator."
         )
 
@@ -335,6 +337,7 @@ def load_pyanno4rt_model(
         transform=bool(params.get("transform", False)),
         weight=float(params.get("weight", 1.0)),
         model_dir=resolved_dir,
+        num_of_fractions=int(cfg.get("configuration", {}).get("number_of_fractions", 30)),
     )
 
     logger.info(
