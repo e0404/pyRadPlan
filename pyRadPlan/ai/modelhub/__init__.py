@@ -6,7 +6,7 @@ section of the user guide for the configuration and the model-repository
 contract.
 """
 
-from ._settings import AiModelSettings
+from ._settings import AiSettings
 from ._preprocessor import BasePreprocessor
 from ._registry import (
     ModelTask,
@@ -19,7 +19,7 @@ from ._load_model import load_model
 from ._pyanno4rt import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
-    "AiModelSettings",
+    "AiSettings",
     "BasePreprocessor",
     "ModelTask",
     "list_local_models",

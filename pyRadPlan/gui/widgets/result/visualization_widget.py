@@ -19,6 +19,16 @@ from PySide6.QtWidgets import (
 
 from .._base import parse_number_list
 
+#: Tooltip of the beam overlay toggle while beam angles are available.
+_BEAMS_TOOLTIP = (
+    "Draw each beam as a line running from its source towards the isocenter,\n"
+    "projected onto the displayed plane.\n"
+    "A beam leaving the plane is drawn as a wedge: its source end is wider when\n"
+    "the source lies in front of the plane and narrower when it lies behind it,\n"
+    "and its label is marked ⊙ (coming out of the screen) or ⊗ (going into it).\n"
+    "A beam along the viewing direction gets that mark at the isocenter."
+)
+
 
 class VisualizationWidget(QWidget):
     """Widget for visualization settings (overlays, isolines, etc.)."""
@@ -27,6 +37,7 @@ class VisualizationWidget(QWidget):
     overlay_toggled = Signal(str, bool)  # overlay name, checked
     isolines_toggled = Signal(bool)
     isocenter_toggled = Signal(bool)
+    beams_toggled = Signal(bool)
     quantity_changed = Signal(str)
     isolines_set = Signal(list)  # list of float levels
     recenter_requested = Signal()
@@ -73,6 +84,11 @@ class VisualizationWidget(QWidget):
             lambda s: self.isocenter_toggled.emit(bool(s))
         )
 
+        self.beams_checkbox = QCheckBox("Beams")
+        self.beams_checkbox.setEnabled(False)
+        self.beams_checkbox.setToolTip("Configure a plan with gantry angles first")
+        self.beams_checkbox.stateChanged.connect(lambda s: self.beams_toggled.emit(bool(s)))
+
         check_grid = QGridLayout()
         check_grid.setContentsMargins(0, 0, 0, 0)
         check_grid.setHorizontalSpacing(8)
@@ -82,6 +98,7 @@ class VisualizationWidget(QWidget):
         check_grid.addWidget(self.use_quantity_checkbox, 1, 0)
         check_grid.addWidget(self.isolines_checkbox, 1, 1)
         check_grid.addWidget(self.isocenter_checkbox, 2, 0)
+        check_grid.addWidget(self.beams_checkbox, 2, 1)
         parent_layout.addLayout(check_grid)
 
     def _build_quantity_row(self, parent_layout: QVBoxLayout) -> None:
@@ -117,6 +134,14 @@ class VisualizationWidget(QWidget):
         self.dvh_btn.setEnabled(True)
         self.dvh_btn.clicked.connect(self.show_analysis_requested)
         parent_layout.addWidget(self.dvh_btn)
+
+    def set_beams_available(self, available: bool) -> None:
+        """Enable the beam toggle only while the workspace defines beam angles."""
+        self.beams_checkbox.setEnabled(available)
+        if not available:
+            self.beams_checkbox.setToolTip("Configure a plan with gantry angles first")
+        else:
+            self.beams_checkbox.setToolTip(_BEAMS_TOOLTIP)
 
     def update_quantity_selector(self, quantities: list[str], active: str | None = None) -> None:
         """Update the quantity selector items."""

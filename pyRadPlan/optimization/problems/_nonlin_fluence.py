@@ -36,6 +36,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
     name = "Non-Linear Fluence Planning Problem"
     short_name = "nonlin_fluence"
+    records_obj_history = True
 
     bypass_objective_jacobian: bool
 
@@ -60,7 +61,10 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
         if not isinstance(self.solver, NonLinearOptimizer):
-            raise ValueError("Solver must be an instance of SolverBase")
+            raise ValueError(
+                f"Problem '{self.short_name}' is non-linear and needs a NonLinearOptimizer, "
+                f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
+            )
 
         # Propagate device from quantities to solver and problem
         self._device = getattr(self._quantities[0], "device", None)
@@ -69,18 +73,6 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
-        self.solver.max_iter = self.max_iter
-
-        # Propagate display setting to solver
-        if hasattr(self.solver, "display"):
-            self.solver.display = self.display
-        if hasattr(self.solver, "options"):
-            if self.solver.short_name == "ipopt" and not self.display:
-                self.solver.options["print_level"] = 0
-
-            # Merge user-provided solver options (overrides defaults)
-            if self.solver_options:
-                self.solver.options.update(self.solver_options)
 
     def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions."""
@@ -108,7 +100,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     obj.priority * obj.compute_objective(q_vectors[obj.quantity].flat[scen_ix][ix])
                     for scen_ix in q_scenarios[obj.quantity]
                 ]
-                f_vals[obj_ix] = xp.sum(xp.asarray(f_tmp_scen))
+                f_vals[obj_ix] = xp.sum(xp.stack(f_tmp_scen))
                 obj_ix += 1
 
         return f_vals

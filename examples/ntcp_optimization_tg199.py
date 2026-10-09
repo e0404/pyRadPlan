@@ -48,7 +48,7 @@ ct, cst = load_tg119()
 # %%
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
-pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln.prop_opt = {"solver": "scipy", "max_iter": 200, "display": True}
 pln.prop_dose_calc = {"dose_grid": ct.grid}
 pln.prop_stf = {
     "gantry_angles": [0.0, 120.0, 240.0],

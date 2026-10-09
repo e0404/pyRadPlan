@@ -2,6 +2,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.plan import PlanWidget
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan
@@ -16,6 +19,13 @@ def tg119():
 def _make_widget():
     ws = WorkspaceManager()
     return PlanWidget(workspace=ws), ws
+
+
+def _type_gantry(widget, text):
+    """Replace the gantry angles keystroke by keystroke and commit with Enter."""
+    widget._txt_gantry.selectAll()
+    QTest.keyClicks(widget._txt_gantry, text)
+    QTest.keyClick(widget._txt_gantry, Qt.Key_Return)
 
 
 def test_constructs_with_empty_workspace(qapp):
@@ -43,7 +53,7 @@ def test_do_update_populates_fields_photon(qapp):
     assert widget._cmb_radiation.currentText() == "photons"
     assert widget._spn_fractions.value() == 25
     assert widget._cmb_machine.currentText() == "Generic"
-    assert widget._lbl_beams.text() == "3 beams"
+    assert widget._spn_num_beams.value() == 3
 
 
 def test_do_update_populates_fields_ion(qapp):
@@ -66,6 +76,89 @@ def test_switching_radiation_mode_builds_correct_subclass(qapp):
     widget._on_apply()
     assert isinstance(ws.pln, PhotonPlan)
     assert ws.pln.radiation_mode == "photons"
+
+
+def test_couch_angles_follow_gantry_angles(qapp):
+    widget, ws = _make_widget()
+
+    _type_gantry(widget, "0 90 180 270")
+    assert widget._txt_couch.text() == "0 0 0 0"
+
+    widget._on_apply()
+    assert ws.pln.prop_stf["couch_angles"] == [0.0] * 4
+
+
+def test_added_beam_gets_a_zero_couch_angle(qapp):
+    widget, _ = _make_widget()
+
+    _type_gantry(widget, "0 90")
+    widget._txt_couch.setText("0 30")
+    # an added gantry angle appends a zero couch angle, the existing ones stay
+    _type_gantry(widget, "0 90 180")
+    assert widget._txt_couch.text() == "0 30 0"
+    # a removed one drops its couch angle again
+    _type_gantry(widget, "0 90")
+    assert widget._txt_couch.text() == "0 30"
+
+
+def test_retyping_gantry_angles_keeps_couch_angles(qapp):
+    widget, _ = _make_widget()
+    _type_gantry(widget, "0 90 180")
+    widget._txt_couch.setText("10 20 30")
+
+    # the intermediate text ("", "0", "0 1", ...) must not trim the couch angles
+    _type_gantry(widget, "0 120 240")
+    assert widget._txt_couch.text() == "10 20 30"
+
+    # neither does clearing the field and leaving it
+    widget._txt_gantry.clear()
+    widget._txt_gantry.editingFinished.emit()
+    assert widget._txt_couch.text() == "10 20 30"
+
+
+def test_single_couch_angle_is_repeated_for_added_beams(qapp):
+    widget, _ = _make_widget()
+    widget._txt_couch.setText("10")
+
+    _type_gantry(widget, "0 120 240")
+    assert widget._txt_couch.text() == "10 10 10"
+
+    widget._spn_num_beams.setValue(4)
+    assert widget._txt_couch.text() == "10 10 10 0"
+
+
+def test_num_beams_generates_equally_spaced_gantry_angles(qapp):
+    widget, ws = _make_widget()
+
+    widget._spn_num_beams.setValue(8)
+    assert widget._txt_gantry.text() == "0 45 90 135 180 225 270 315"
+    # the couch angles follow along
+    assert widget._txt_couch.text() == "0 0 0 0 0 0 0 0"
+
+    widget._on_apply()
+    assert ws.pln.prop_stf["gantry_angles"] == [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+
+
+def test_num_beams_tracks_manually_entered_gantry_angles(qapp):
+    widget, _ = _make_widget()
+
+    widget._txt_gantry.setText("0 45 300")
+    assert widget._spn_num_beams.value() == 3
+    # an unparsable entry disables the spin box instead of showing a stale count
+    widget._txt_gantry.setText("0 abc")
+    assert not widget._spn_num_beams.isEnabled()
+    widget._txt_gantry.setText("0 90")
+    assert widget._spn_num_beams.isEnabled()
+    assert widget._spn_num_beams.value() == 2
+
+
+def test_sync_from_workspace_keeps_couch_angles(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        prop_stf={"gantry_angles": [0, 90], "couch_angles": [0, 45]},
+    )
+    assert widget._txt_couch.text() == "0 45"
+    assert widget._spn_num_beams.value() == 2
 
 
 def test_editing_fields_and_apply_writes_valid_pln(qapp):
@@ -105,13 +198,142 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
 
 def test_placeholder_controls_disabled(qapp):
     widget, _ = _make_widget()
-    assert not widget._cmb_bio_model.isEnabled()
-    assert not widget._cmb_quantity.isEnabled()
     assert not widget._btn_tissue.isEnabled()
     assert not widget._chk_sequencing.isEnabled()
     assert not widget._chk_dao.isEnabled()
     assert not widget._chk_conf3d.isEnabled()
-    assert widget._cmb_quantity.count() > 0  # populated from available quantities
+    assert not widget._cmb_quantity.isEnabled()
+    assert widget._cmb_quantity.currentText() == "auto"
+    assert widget._cmb_quantity.count() > 1  # "auto" plus the available quantities
+
+
+def _combo_items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_bio_model_combo_follows_radiation_mode(qapp):
+    widget, _ = _make_widget()
+    assert widget._cmb_bio_model.isEnabled()
+
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+    assert "WED" not in _combo_items(widget._cmb_bio_model)
+
+    widget._cmb_radiation.setCurrentText("protons")
+    items = _combo_items(widget._cmb_bio_model)
+    assert items[0] == "none"
+    assert {"constant_rbe", "WED", "MCN", "CAR", "LSM"} <= set(items)
+    assert "HEL" not in items
+    assert "LEM" not in items  # aliases are not listed
+    assert widget._cmb_bio_model.currentText() == "none"  # per-mode default
+
+    widget._cmb_radiation.setCurrentText("helium")
+    assert "HEL" in _combo_items(widget._cmb_bio_model)
+    assert widget._cmb_bio_model.currentText() == "none"
+
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "kernel_based_lq"
+
+    widget._cmb_radiation.setCurrentText("oxygen")
+    assert widget._cmb_bio_model.currentText() == "none"
+
+
+def test_bio_model_selection_survives_mode_switch_when_supported(qapp):
+    widget, _ = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._cmb_bio_model.setCurrentText("LSM")
+    widget._cmb_radiation.setCurrentText("carbon")
+    assert widget._cmb_bio_model.currentText() == "LSM"
+    widget._cmb_radiation.setCurrentText("photons")
+    assert widget._cmb_bio_model.currentText() == "none"
+
+
+def test_apply_writes_bio_model_to_pln(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("MCN")
+    widget._on_apply()
+    assert isinstance(ws.pln, IonPlan)
+    assert ws.pln.bio_model.model == "MCN"
+
+
+def test_do_update_restores_bio_model_and_apply_keeps_parameters(qapp):
+    widget, ws = _make_widget()
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._cmb_bio_model.currentText() == "constant_rbe"
+
+    # unchanged selection: the parametrised instance is kept on Apply
+    widget._txt_gantry.setText("0")
+    widget._on_apply()
+    assert ws.pln.bio_model.rbe == 1.0
+
+    # changing the selection replaces the model
+    widget._cmb_bio_model.setCurrentText("WED")
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
+
+
+def test_dose_convention_round_trip(qapp):
+    widget, ws = _make_widget()
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+    widget._txt_gantry.setText("0")
+    widget._cmb_dose_convention.setCurrentIndex(widget._cmb_dose_convention.findData("total"))
+    widget._on_apply()
+    assert ws.pln.dose_convention == "total"
+
+    ws.pln = PhotonPlan(num_of_fractions=5, dose_convention="per_fraction")
+    assert widget._cmb_dose_convention.currentData() == "per_fraction"
+
+
+def test_bio_model_parameters_round_trip(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._cmb_bio_model.setCurrentText("WED")
+    assert widget._btn_bio_config.isEnabled()
+    widget._bio_params["WED"] = {"p1": 0.5}
+    widget._on_apply()
+    assert ws.pln.bio_model.model == "WED"
+    assert ws.pln.bio_model.p1_WED == 0.5
+
+    widget._cmb_bio_model.setCurrentText("none")
+    assert not widget._btn_bio_config.isEnabled()
+
+    ws.pln = IonPlan(radiation_mode="protons", bio_model={"model": "constant_rbe", "rbe": 1.0})
+    assert widget._bio_params["constant_rbe"] == {"rbe": 1.0}
+    assert widget._capture_state()["bio_params"] == '{"rbe": 1.0}'
+
+
+def test_bio_model_config_model():
+    from pyRadPlan.bio_models import ConstantRBEModel, EmptyModel, Wedenberg
+
+    assert set(Wedenberg.config_model().model_fields) == {"p0", "p1", "p2"}
+    assert Wedenberg.config_model()().p1 == 0.434
+    assert ConstantRBEModel.config_model()(rbe=1.0).rbe == 1.0
+    assert not EmptyModel.config_model().model_fields
+
+
+def test_tissue_dialog_edits_cst(qapp, test_data_protons):
+    from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
+
+    _, cst, _ = test_data_protons
+    widget, ws = _make_widget()
+    assert not widget._btn_tissue.isEnabled()
+    ws.cst = cst
+    assert widget._btn_tissue.isEnabled()
+
+    dialog = TissueParametersDialog(cst)
+    dialog.set_values(0, 0.2, 0.04)
+    dialog.accept()
+    assert dialog.changed
+    assert cst.vois[0].alpha_x == pytest.approx(0.2)
+    assert cst.vois[0].beta_x == pytest.approx(0.04)
+
+    dialog = TissueParametersDialog(cst)
+    dialog.accept()
+    assert not dialog.changed
 
 
 def test_iso_center_auto_omits_key(qapp):
@@ -293,3 +515,44 @@ def test_hold_updates_guard_prevents_recursion(qapp):
     assert isinstance(ws.pln, IonPlan)
     # apply happens inside hold_updates so the widget must not re-enter _do_update
     assert calls == []
+
+
+def test_apply_preserves_unedited_plan_settings(qapp):
+    widget, ws = _make_widget()
+    original = PhotonPlan(
+        prescribed_dose=72.0,
+        prop_opt={"solver": {"name": "scipy", "max_iter": 17}, "convert_dose_objectives": False},
+        prop_seq={"custom": 7},
+        prop_stf={"gantry_angles": [0.0], "energy": 6.0, "iso_center": [1.0, 2.0, 3.0]},
+    )
+    ws.pln = original
+    widget._txt_gantry.setText("0 180")
+    widget._chk_iso_auto.setChecked(True)
+    widget._on_apply()
+
+    assert ws.pln.prop_opt == original.prop_opt
+    assert ws.pln.prop_seq == original.prop_seq
+    assert ws.pln.prescribed_dose == 72.0
+    assert ws.pln.prop_stf["energy"] == 6.0
+    assert ws.pln.prop_stf["gantry_angles"] == [0.0, 180.0]
+    assert "iso_center" not in ws.pln.prop_stf
+    assert original.prop_stf["iso_center"] == [1.0, 2.0, 3.0]
+    assert original.prop_stf["gantry_angles"] == [0.0]
+
+
+def test_modality_switch_resets_sequencing_and_steering_settings(qapp):
+    widget, ws = _make_widget()
+    original = PhotonPlan(
+        prop_opt={"solver": "scipy"},
+        prop_seq={"custom": 7},
+        prop_stf={"gantry_angles": [0.0], "energy": 6.0},
+    )
+    ws.pln = original
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._on_apply()
+
+    assert isinstance(ws.pln, IonPlan)
+    assert ws.pln.prop_seq == {}
+    assert "energy" not in ws.pln.prop_stf
+    assert ws.pln.prop_opt == original.prop_opt
+    assert original.prop_seq == {"custom": 7}

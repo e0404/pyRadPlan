@@ -12,12 +12,12 @@ instantiation, so pyRadPlan needs no per-model code.
 
 .. note::
 
-   The ``ai.modelhub`` module is an optional feature.  Install the extra dependencies
-   together with a ``torch`` build matching your platform:
+   The Hub client (``huggingface_hub``, ``safetensors``) is installed with pyRadPlan;
+   only a ``torch`` build matching your platform must be installed separately, e.g.:
 
    .. code-block:: bash
 
-       pip install pyRadPlan[ai]
+       pip install torch
 
    See `pytorch.org <https://pytorch.org/get-started/locally/>`_ for the right ``torch``
    command for your CUDA/CPU setup.
@@ -100,10 +100,11 @@ The task (:class:`~pyRadPlan.ai.modelhub.ModelTask`) is deliberately distinct fr
 Configuration
 -------------
 
-:class:`~pyRadPlan.ai.modelhub.AiModelSettings` is the ``ai_modelhub`` sub-configuration of
-the global ``pyRadPlan.settings`` singleton (see :doc:`/api/settings`).  It reads
-environment variables prefixed with ``PYRADPLAN_AI_MODELHUB_`` (or a ``.env`` file in the
-working directory):
+The model hub is configured through :class:`~pyRadPlan.ai.modelhub.AiSettings`, the
+unified ``ai`` sub-configuration of the global ``pyRadPlan.settings`` singleton (see
+:doc:`/api/settings`), which also carries the AI agent settings.  It reads environment
+variables prefixed with ``PYRADPLAN_AI_`` (or a ``.env`` file in the working
+directory); the model-hub-related fields are:
 
 .. list-table::
    :header-rows: 1
@@ -113,29 +114,29 @@ working directory):
      - Environment variable
      - Default
      - Meaning
-   * - ``hf_org``
+   * - ``modelhub_hf_org``
      - ``PYRADPLAN_AI_MODELHUB_HF_ORG``
      - ``DKFZ-RadOpt``
      - HuggingFace org/namespace a bare model name is resolved against
-   * - ``local_models_dir``
+   * - ``modelhub_local_models_dir``
      - ``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``
      - ``<data_dir>/ai_models``
      - Base directory for local models; the default ``local_dir`` is
        ``<local_models_dir>/<org>/<repo>``.  An empty string uses the HuggingFace cache
        only
-   * - ``cache_dir``
+   * - ``modelhub_cache_dir``
      - ``PYRADPLAN_AI_MODELHUB_CACHE_DIR``
      - HuggingFace default
      - HuggingFace cache directory
-   * - ``offline``
+   * - ``modelhub_offline``
      - ``PYRADPLAN_AI_MODELHUB_OFFLINE``
      - ``False``
      - Force ``local_files_only``
-   * - ``trust_remote_code``
+   * - ``modelhub_trust_remote_code``
      - ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE``
      - ``False``
      - Allow executing the code shipped with a model fetched from the Hub
-   * - ``device``
+   * - ``modelhub_device``
      - ``PYRADPLAN_AI_MODELHUB_DEVICE``
      - ``cpu``
      - Device the model is moved to
@@ -146,8 +147,8 @@ The settings can also be inspected and changed at runtime:
 
     import pyRadPlan
 
-    print(pyRadPlan.settings.ai_modelhub.local_models_dir)
-    pyRadPlan.settings.ai_modelhub.device = "cuda"
+    print(pyRadPlan.settings.ai.modelhub_local_models_dir)
+    pyRadPlan.settings.ai.modelhub_device = "cuda"
 
 The data root (``<data_dir>``) defaults to ``~/.pyradplan`` and can be relocated with the
 ``PYRADPLAN_DATA_DIR`` environment variable (see
@@ -224,4 +225,4 @@ The full API for the ``ai.modelhub`` module is documented in the
 * :class:`~pyRadPlan.ai.modelhub.BasePreprocessor`
 * :func:`~pyRadPlan.ai.modelhub.list_local_models`
 * :class:`~pyRadPlan.ai.modelhub.ModelTask`
-* :class:`~pyRadPlan.ai.modelhub.AiModelSettings`
+* :class:`~pyRadPlan.ai.modelhub.AiSettings`

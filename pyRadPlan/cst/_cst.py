@@ -15,7 +15,7 @@ import SimpleITK as sitk
 from ..core import PyRadPlanBaseModel, Grid
 from ..core.resample import resample_numpy_array
 from ..ct import CT, validate_ct
-from . import VOI, ExternalVOI, GlobalVOI, validate_voi, DEFAULT_VOI_COLORS
+from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -32,6 +32,11 @@ class StructureSet(PyRadPlanBaseModel):
 
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
+
+        # MATLAB cell arrays can arrive as object ndarrays as well as Python lists.
+        # Normalize before format detection without mutating the caller's mapping.
+        if isinstance(data["vois"], np.ndarray):
+            data = {**data, "vois": data["vois"].tolist()}
 
         # Check input format and return the appropriate context.
         context = cls._get_context(data, info)
@@ -139,6 +144,12 @@ class StructureSet(PyRadPlanBaseModel):
         voi_list = []
         cst_data = data["vois"]
         ct = data["ct_image"]
+
+        # A cst with a single structure is a 1xN cell in MATLAB, which the reader squeezes
+        # into a flat row of columns. Column 2 is the VOI name, so a string in that position
+        # means we got a bare row; wrap it so we always iterate over rows.
+        if len(cst_data) > 1 and isinstance(cst_data[1], str):
+            cst_data = [cst_data]
 
         def get_idx_list(vdata_item):
             # Wrap a single array into a list if needed
@@ -631,22 +642,6 @@ class StructureSet(PyRadPlanBaseModel):
 
         return self.model_copy(deep=True, update={"vois": new_vois})
 
-    def add_global_voi(self, **kwargs) -> Self:
-        """Add a Global VOI spanning the entire CT grid to the StructureSet."""
-
-        mask_arr = np.ones(self.ct_image.cube_hu.GetSize()[::-1], dtype=np.uint8)
-        mask_img = sitk.GetImageFromArray(mask_arr)
-        mask_img.CopyInformation(self.ct_image.cube_hu)
-
-        name = kwargs.pop("name", "Global")
-        objectives = kwargs.pop("objectives", [])
-
-        global_voi = GlobalVOI(
-            name=name, ct_image=self.ct_image, mask=mask_img, objectives=objectives, **kwargs
-        )
-        self.vois.append(global_voi)
-        return self
-
     def create_body_seg(
         self, threshold: float = -200.0, name: str = "BODY", voi_type="OAR"
     ) -> Self:
@@ -732,8 +727,7 @@ class StructureSet(PyRadPlanBaseModel):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
 
-        if not overlap_is_applied:
-            cst = self.apply_overlap_priorities()
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
         num_voxels = np.prod(cst.ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
@@ -755,6 +749,12 @@ class StructureSet(PyRadPlanBaseModel):
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
+        beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
         return alpha, beta
 
     def set_colors(self) -> Self:

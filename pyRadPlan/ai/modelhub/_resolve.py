@@ -10,7 +10,7 @@ These helpers centralize three concerns the rest of the package relies on:
   :func:`~huggingface_hub.snapshot_download`, whose own ETag/commit check keeps
   the copy current.
 * **Offline operation** — downloads transparently fall back to cached/local
-  files when the network is unavailable or :class:`AiModelSettings.offline` is set.
+  files when the network is unavailable or :attr:`AiSettings.modelhub_offline` is set.
 """
 
 import json
@@ -35,8 +35,8 @@ REQUIRED_FILES = (
 METADATA_FILENAME = ".pyradplan_model.json"
 
 _INSTALL_HINT = (
-    "huggingface_hub is required to download models. "
-    "Install the optional dependencies with: pip install pyRadPlan[ai]"
+    "huggingface_hub is required to download models. It ships with pyRadPlan; "
+    "restore it with: pip install huggingface_hub"
 )
 
 
@@ -192,14 +192,14 @@ def resolve_model_dir(
     local_dir : str or Path, optional
         A directory to use directly (if it already holds the model) or to
         download into. Enables offline use and version tracking. When omitted
-        and :attr:`AiModelSettings.local_models_dir`
+        and :attr:`AiSettings.modelhub_local_models_dir`
         (``PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR``) is set, it defaults to
         ``"<local_models_dir>/<org>/<repo>"``.
     offline : bool, optional
-        Force offline mode. Defaults to :attr:`AiModelSettings.offline`.
+        Force offline mode. Defaults to :attr:`AiSettings.modelhub_offline`.
     cache_dir : str or Path, optional
         Override the HuggingFace cache directory. Defaults to
-        :attr:`AiModelSettings.cache_dir`.
+        :attr:`AiSettings.modelhub_cache_dir`.
 
     Returns
     -------
@@ -213,15 +213,15 @@ def resolve_model_dir(
     FileNotFoundError
         If the model can be neither found locally nor downloaded.
     """
-    cfg = get_settings().ai_modelhub
+    cfg = get_settings().ai
     if offline is None:
-        offline = cfg.offline
+        offline = cfg.modelhub_offline
     if cache_dir is None:
-        cache_dir = cfg.cache_dir
+        cache_dir = cfg.modelhub_cache_dir
     cache_dir = Path(cache_dir) if cache_dir else None
 
-    if local_dir is None and cfg.local_models_dir is not None and repo_id is not None:
-        local_dir = Path(cfg.local_models_dir) / repo_subpath(repo_id)
+    if local_dir is None and cfg.modelhub_local_models_dir is not None and repo_id is not None:
+        local_dir = Path(cfg.modelhub_local_models_dir) / repo_subpath(repo_id)
         logger.info("Using configured local models base, local_dir=%s.", local_dir)
 
     target: Optional[Path] = None

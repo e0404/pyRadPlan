@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 
-from ._settings import AiSettings, load_ai_env
+from pyRadPlan._settings import get_settings
+
+from ._settings import load_ai_env
 
 # Provider API-key env var -> a few suggested pydantic-ai model names. These are
 # suggestions only; callers may type any model string the backend understands.
@@ -20,13 +22,31 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _default_model_available(model: str) -> bool:
+    """Check credentials for recognized providers, leaving custom defaults usable."""
+    provider, separator, _ = model.partition(":")
+    if not separator:
+        if model.startswith("claude"):
+            provider = "anthropic"
+        elif model.startswith(("gpt", "chatgpt", "o1", "o3", "o4")):
+            provider = "openai"
+        elif model.startswith("gemini"):
+            provider = "google-gla"
+    keys = {
+        "anthropic": ("ANTHROPIC_API_KEY",),
+        "openai": ("OPENAI_API_KEY",),
+        "google-gla": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    }.get(provider)
+    return keys is None or any(os.environ.get(key) for key in keys)
+
+
 def available_models() -> list[str]:
     """Return suggested model names for which an API key is configured.
 
-    The configured default (:attr:`AiSettings.model`) is listed first so a
-    sensible option is preselected.  When no provider API key is configured at
-    all, an empty list is returned — including the default, since it could not
-    be used either.
+    The configured default (:attr:`AiSettings.agents_model`) is listed first if
+    its recognized provider has credentials; custom provider defaults are retained.
+    If none of the supported provider API keys is configured, no suggestions are
+    returned, including the default.
 
     Returns
     -------
@@ -43,8 +63,8 @@ def available_models() -> list[str]:
                     models.append(name)
     if not models:
         return []
-    default = AiSettings().model
-    if default:
+    default = get_settings().ai.agents_model
+    if default and _default_model_available(default):
         if default in models:
             models.remove(default)
         models.insert(0, default)

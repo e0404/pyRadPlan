@@ -22,15 +22,12 @@ from pyRadPlan.optimization.objectives import (
     SquaredOverdosing,
     OutcomeCNN,
 )
-import numpy as np
-import os
 
 from pyRadPlan.plan._plans import PhotonPlan
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
-settings.xp.preferred_cpu_array_backend = "cupy"
+settings.xp.preferred_gpu_array_backend = "cupy"
 logging.basicConfig(level=logging.INFO)
 
 
@@ -52,10 +49,10 @@ cst.create_body_seg()  # adds BODY/SKIN as vois[4]
 pln = PhotonPlan(radiation_mode="photons", machine="Generic")
 pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
 pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
-num_of_beams = 8
+
 pln.prop_stf = {
-    "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
-    "couch_angles": np.zeros((num_of_beams,)),
+    "gantry_angles": [0, 72, 144, 216, 288],
+    "couch_angles": [0, 0, 0, 0, 0],
 }
 stf = generate_stf(ct, cst, pln)
 # Optimization
@@ -65,7 +62,7 @@ stf = generate_stf(ct, cst, pln)
 # `model` accepts a HuggingFace name, a local model directory, or a preloaded
 # (model, preprocessor) tuple. A matching HF repo must exist for the name below.
 ntcp_obj = OutcomeCNN(
-    priority=150000.0,
+    priority=300000.0,
     model="pyRadPlan-outcome-ORPDenseNet-Xerostomia",
     mode="NTCP",
     warmup_iterations=5,

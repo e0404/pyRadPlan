@@ -31,6 +31,7 @@ from pyRadPlan import (
     fluence_optimization,
     plot_slice,
     DVHCollection,
+    settings,
 )
 from pyRadPlan.ai import agents as ai_agents
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
@@ -51,18 +52,18 @@ logging.basicConfig(level=logging.INFO)
 """
 ## Configuration
 
-Set the model via the environment variable `PYRADPLAN_AI_AGENTS_MODEL`, or pass `model=`
+Set the model via the `PYRADPLAN_AI_AGENTS_MODEL` environment variable (or a `.env` file)
+before importing pyRadPlan, at runtime on `pyRadPlan.settings.ai`, or pass `model=`
 explicitly to each call. Your provider API key must be set in the environment
 (e.g. `OPENAI_API_KEY`). pydantic-ai picks it up automatically.
 """
 
 # %%
-# Set the model to use (can also be set via PYRADPLAN_AI_AGENTS_MODEL env var)
-# os.environ["PYRADPLAN_AI_AGENTS_MODEL"] = "openai:gpt-5-mini"
+# Set the model to use at runtime
+# settings.ai.agents_model = "openai:gpt-5-mini"
 
 # Inspect effective settings
-settings = ai_agents.AiSettings()
-print(f"Using model: {settings.model}")
+print(f"Using model: {settings.ai.agents_model}")
 # %% [markdown]
 """
 ## Load Data

@@ -19,7 +19,6 @@ from pyRadPlan.cst import (
     Target,
     OAR,
     DEFAULT_VOI_COLORS,
-    GlobalVOI,
 )
 # @pytest.fixture
 # def sample_ct():
@@ -682,34 +681,6 @@ def test_apply_overlap_flags(generic_ct):
     assert np.array_equal(m4_out, expected_m4)
 
 
-def test_add_global_voi(generic_ct):
-    cst = StructureSet(ct_image=generic_ct, vois=[])
-
-    # add arbitrary VOI
-    mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
-    mask1[2:8, 2:8, 2:8] = 1
-    m1_img = sitk.GetImageFromArray(mask1)
-    m1_img.CopyInformation(generic_ct.cube_hu)
-    cst.vois.append(Target(name="PTV", ct_image=generic_ct, mask=m1_img, apply_overlap=True))
-
-    cst.add_global_voi(name="Global_test", objectives=["test_objective"])
-
-    assert len(cst.vois) == 2
-    global_voi = cst.vois[-1]
-    assert global_voi.voi_type == "GLOBAL"
-    assert global_voi.name == "Global_test"
-    assert global_voi.apply_overlap is None
-    assert "test_objective" in global_voi.objectives
-
-    # Needs to match CT full shape directly (10x10x10 initialized as exactly 1)
-    mask_arr = sitk.GetArrayViewFromImage(global_voi.mask)
-    assert np.all(mask_arr == 1)
-
-    # After overlapping, PTV should remain completely intact (Global bypasses overlap completely)
-    cst_overlapped = cst.apply_overlap_priorities()
-    assert np.array_equal(sitk.GetArrayViewFromImage(cst_overlapped.vois[0].mask), mask1)
-
-
 # --- Helpers for body segmentation tests ---
 def _make_test_ct():
     """Create a small CT with a main component, an internal cavity (hole), and a small extra component."""
@@ -764,6 +735,16 @@ def test_create_cst_with_float_and_empty_indices():
     # Empty VOI should have an all-zero mask
     empty_mask = sitk.GetArrayViewFromImage(cst.vois[1].mask)
     assert empty_mask.sum() == 0
+
+
+def test_create_cst_single_structure_row():
+    """Regression: a single-structure matRad cst is read as a flat row, not a list of rows."""
+    ct = create_ct(cube_hu=sitk.Image(3, 3, 3, sitk.sitkInt16))
+
+    cst = create_cst([0, "Target", "TARGET", np.array([1.0, 2.0, 3.0]), {}, []], ct=ct)
+    assert len(cst.vois) == 1
+    assert cst.vois[0].name == "Target"
+    assert sitk.GetArrayViewFromImage(cst.vois[0].mask).sum() == 3
 
 
 def test_create_body_seg_default():
@@ -861,3 +842,24 @@ def test_set_colors_predefined_order(generic_ct):
 
     assert tuple(cst.vois[0].color) == DEFAULT_VOI_COLORS["TARGET"][0]
     assert tuple(cst.vois[1].color) == DEFAULT_VOI_COLORS["TARGET"][1]
+
+
+def test_matrad_numpy_cell_array_validation():
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    mask = sitk.Image([5, 4, 3], sitk.sitkUInt8)
+    mask[1, 2, 1] = 1
+    voi = create_voi(
+        name="target",
+        voi_type="TARGET",
+        mask=mask,
+        ct_image=ct,
+        objectives=[{"name": "Squared Deviation", "d_ref": 60.0}],
+    )
+    cst = validate_cst([voi], ct)
+    raw = np.empty((1, 6), dtype=object)
+    raw[0, :] = cst.to_matrad()[0]
+    restored = validate_cst(raw, ct)
+    np.testing.assert_array_equal(restored.vois[0].indices_numpy, voi.indices_numpy)
+    assert restored.vois[0].name == "target"
+    assert restored.vois[0].objectives[0].d_ref == 60.0
+    assert raw.shape == (1, 6)

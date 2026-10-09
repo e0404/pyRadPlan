@@ -10,7 +10,11 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
+from pyRadPlan.gui.widgets.analysis._units import compare_units
+
 if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
     from pyRadPlan.analysis._dvh import DVH
 
 
@@ -30,23 +34,60 @@ class DVHPlotWidget(QWidget):
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
 
+        self.secondary_axes: Axes | None = None
+
     def plot(
         self,
-        dvhs_q1: list[DVH],
-        dvhs_q2: list[DVH] | None = None,
+        dvhs: list[DVH],
         voi_colors: dict[str, tuple[int, int, int]] | None = None,
         overlay_unit: str = "",
         overlay_label: str = "",
-        q1_label: str = "Primary",
-        q2_label: str = "Secondary",
+        secondary_dvhs: list[DVH] | None = None,
+        secondary_unit: str = "",
+        secondary_label: str = "",
+        primary_name: str = "",
+        secondary_name: str = "",
     ) -> None:
-        """Plot primary (solid) and optional secondary (dotted) DVH curves.
+        """Plot primary DVH curves solid and optional secondary curves dashed.
 
-        The legend is placed outside the axes on the right. It contains one
-        colored line per plotted VOI, plus line-style indicator rows for Q1
-        (solid black) and, when present, Q2 (dotted black).
+        Secondary curves use the same color per structure as the primary ones.
+        If the secondary unit is compatible with the primary unit (see
+        :func:`compare_units`), the secondary curves share the primary x axis
+        and are rescaled to the primary unit. Otherwise they are drawn on a
+        twin x axis shown at the top, stored in ``secondary_axes``.
+
+        The legend is placed outside the axes on the right and lists the
+        plotted VOI names in plot order. When a secondary quantity is drawn,
+        two black rows follow that identify the solid and dashed line styles.
+        No legend is drawn when nothing is plotted.
+
+        Parameters
+        ----------
+        dvhs : list[DVH]
+            Primary DVHs to plot as solid lines.
+        voi_colors : dict[str, tuple[int, int, int]] | None, optional
+            RGB colors (0-255) keyed by VOI name. VOIs without an entry are
+            drawn in gray.
+        overlay_unit : str, optional
+            Unit of the primary quantity, shown in the x-axis label.
+        overlay_label : str, optional
+            Name of the primary quantity for the x-axis label. Defaults to
+            "Dose" when empty.
+        secondary_dvhs : list[DVH] | None, optional
+            Secondary DVHs to plot as dashed lines. Nothing secondary is drawn
+            when None or empty.
+        secondary_unit : str, optional
+            Unit of the secondary quantity.
+        secondary_label : str, optional
+            Name of the secondary quantity for the twin x-axis label. Defaults
+            to "Dose" when empty. Only used when the units are incompatible.
+        primary_name : str, optional
+            Legend label of the solid line style. Defaults to "Primary".
+        secondary_name : str, optional
+            Legend label of the dashed line style. Defaults to "Secondary".
         """
         self.figure.clear()
+        self.secondary_axes = None
         ax = self.figure.add_subplot(111)
 
         def _get_color(name: str) -> tuple[float, float, float] | str:
@@ -55,45 +96,47 @@ class DVHPlotWidget(QWidget):
                 return (r / 255, g / 255, b / 255)
             return "gray"
 
-        # Track which VOI names were actually plotted (preserving order)
-        plotted: list[str] = []
+        def _axis_label(label: str, unit: str) -> str:
+            name = label or "Dose"
+            return f"{name} [{unit}]" if unit else name
 
-        # --- Q1: solid lines ---
-        for dvh in dvhs_q1:
+        plotted: list[str] = []
+        for dvh in dvhs:
             color = _get_color(dvh.name)
             ax.plot(dvh.bins, dvh.cum_volume, color=color, linewidth=2, linestyle="-")
             if dvh.name not in plotted:
                 plotted.append(dvh.name)
 
-        # --- Q2: dotted lines ---
-        if dvhs_q2:
-            for dvh in dvhs_q2:
-                color = _get_color(dvh.name)
-                ax.plot(dvh.bins, dvh.cum_volume, color=color, linewidth=2, linestyle=":")
-                if dvh.name not in plotted:
-                    plotted.append(dvh.name)
-
-        # --- Axes labels and grid ---
-        name = overlay_label or "Dose"
-        ax.set_xlabel(f"{name} [{overlay_unit}]" if overlay_unit else name)
+        ax.set_xlabel(_axis_label(overlay_label, overlay_unit))
         ax.set_ylabel("Volume [%]")
         ax.grid(True, which="both", linestyle="--", alpha=0.7)
 
-        # --- Custom external legend ---
-        # One colored line per plotted VOI
-        voi_handles = [Line2D([0], [0], color=_get_color(n), lw=2, label=n) for n in plotted]
+        if secondary_dvhs:
+            shared, scale = compare_units(overlay_unit, secondary_unit)
+            if shared:
+                sec_ax = ax
+            else:
+                sec_ax = ax.twiny()
+                sec_ax.set_xlabel(_axis_label(secondary_label, secondary_unit))
+                self.secondary_axes = sec_ax
+            for dvh in secondary_dvhs:
+                bins = dvh.bins * scale if shared else dvh.bins
+                color = _get_color(dvh.name)
+                sec_ax.plot(bins, dvh.cum_volume, color=color, linewidth=2, linestyle="--")
+                if dvh.name not in plotted:
+                    plotted.append(dvh.name)
 
-        # Line-style indicator rows
-        style_handles = [Line2D([0], [0], color="black", lw=2, linestyle="-", label=q1_label)]
-        if dvhs_q2:
-            style_handles.append(
-                Line2D([0], [0], color="black", lw=2, linestyle=":", label=q2_label)
-            )
-
-        all_handles = voi_handles + style_handles
-        if all_handles:
+        if plotted:
+            handles = [Line2D([0], [0], color=_get_color(n), lw=2, label=n) for n in plotted]
+            if secondary_dvhs:
+                handles += [
+                    Line2D([0], [0], color="black", lw=2, ls="-", label=primary_name or "Primary"),
+                    Line2D(
+                        [0], [0], color="black", lw=2, ls="--", label=secondary_name or "Secondary"
+                    ),
+                ]
             ax.legend(
-                handles=all_handles,
+                handles=handles,
                 loc="upper left",
                 bbox_to_anchor=(1.02, 1),
                 borderaxespad=0,

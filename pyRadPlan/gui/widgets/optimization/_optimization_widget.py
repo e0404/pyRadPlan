@@ -3,8 +3,9 @@
 Python translation of matRad's ``matRad_OptimizationWidget``: a per-VOI editor of
 the optimization objectives stored on the structure set (``cst``).  Each row binds
 one objective on one VOI; the user can change the objective type, its penalty
-(priority) and its numeric parameters, and add or remove objectives.  Constraints
-are intentionally out of scope because pyRadPlan currently ships objectives only.
+(priority) and its numeric parameters, and add or remove objectives. A "Change all
+quantities" selector above the table sets one quantity on the objectives of all VOIs at once.
+Constraints are intentionally out of scope because pyRadPlan currently ships objectives only.
 """
 
 from __future__ import annotations
@@ -23,9 +24,11 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -114,6 +117,24 @@ class OptimizationWidget(WorkspaceWidget):
         controls.addWidget(self._btn_add)
         controls.addWidget(self._btn_ai)
         controls.addStretch()
+        # Shortcut setting one quantity on every objective at once; the per-row
+        # Quantity column keeps individual overrides possible.
+        self._btn_all_quantity = QToolButton()
+        self._btn_all_quantity.setText("Change all quantities…")
+        self._btn_all_quantity.setFocusPolicy(Qt.StrongFocus)
+        self._btn_all_quantity.setPopupMode(QToolButton.InstantPopup)
+        self._btn_all_quantity.setToolTip(
+            "Set the quantity of the objectives of all VOIs at once.\n"
+            "Single objectives can still be changed in the Quantity column below."
+        )
+        quantity_menu = QMenu(self._btn_all_quantity)
+        for quantity in get_available_quantities():
+            action = quantity_menu.addAction(quantity)
+            action.triggered.connect(
+                lambda _checked=False, q=quantity: self._set_all_quantities(q)
+            )
+        self._btn_all_quantity.setMenu(quantity_menu)
+        controls.addWidget(self._btn_all_quantity)
         # Plan-wide objective count.
         self._lbl_count = QLabel("0 objectives")
         controls.addWidget(self._lbl_count)
@@ -200,6 +221,13 @@ class OptimizationWidget(WorkspaceWidget):
                 self._insert_row(voi_idx, obj_idx, obj, label)
         self._set_status("")
         self._update_count(cst)
+
+    def _shared_quantity(self, cst) -> Optional[str]:
+        """Return the quantity all objectives agree on, or *None* for none or a mix."""
+        if cst is None:
+            return None
+        used = {obj.quantity for voi in cst.vois for obj in self._iter_objectives(voi)}
+        return next(iter(used)) if len(used) == 1 else None
 
     def _update_count(self, cst) -> None:
         total = 0
@@ -384,6 +412,11 @@ class OptimizationWidget(WorkspaceWidget):
         if name not in self._available:
             name = self._available[0]
         new_obj = get_objective(name)
+        # Follow the quantity the objectives agree on, so a new objective does not
+        # silently reintroduce a mix after "Change all quantities".
+        quantity = self._shared_quantity(cst)
+        if quantity is not None:
+            new_obj.quantity = quantity
 
         objectives = self._iter_objectives(voi)
         objectives.append(new_obj)
@@ -530,6 +563,29 @@ class OptimizationWidget(WorkspaceWidget):
             self._set_status(f"Rejected quantity {quantity!r}: {exc}")
             return
         self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+
+    def _set_all_quantities(self, quantity: str) -> None:
+        """Set *quantity* on the objectives of every VOI in one workspace write."""
+        cst = self._ws.cst
+        if cst is None:
+            return
+
+        per_voi = {idx: self._iter_objectives(voi) for idx, voi in enumerate(cst.vois)}
+        if all(obj.quantity == quantity for objectives in per_voi.values() for obj in objectives):
+            return
+        try:
+            for idx, objectives in per_voi.items():
+                for obj in objectives:
+                    obj.quantity = quantity
+                cst.vois[idx].objectives = list(objectives)
+            cst = validate_cst(cst)
+        except (ValueError, TypeError) as exc:
+            self._set_status(f"Rejected quantity {quantity!r}: {exc}")
+            return
+
+        with self.hold_updates():
+            self._ws.cst = cst
+        self._rebuild_table(cst)
 
     def _on_param_changed(self, voi_idx: int, obj_idx: int, param: str, value: float) -> None:
         cst = self._ws.cst

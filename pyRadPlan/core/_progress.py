@@ -263,11 +263,20 @@ class ProgressReporter:
     min_report_interval: float = 0.05
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._init_reporting()
+        super().__init__(*args, **kwargs)
+
+    def _init_reporting(self) -> None:
+        """Initialize the reporting state without chaining to ``super().__init__``.
+
+        Classes whose MRO would send a cooperative ``super().__init__()`` into an
+        unrelated base (e.g. the combined import/export handlers, where the
+        exporter follows this mixin and requires arguments) call this instead.
+        """
         self._report_observers: list[ReportObserver] = []
         self._progress_stack: list[_ActiveLevel] = []
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._last_emit_monotonic: float = 0.0
-        super().__init__(*args, **kwargs)
 
     # -- observer / cancellation registration --------------------------------
 

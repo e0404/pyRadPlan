@@ -41,6 +41,7 @@ from pyRadPlan.gui.widgets import (
 )
 from pyRadPlan.gui.widgets._logo_widget import LogoWidget
 from pyRadPlan.gui.widgets._info_widget import InfoWidget
+from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 
 
 def _group(title: str, content: QWidget) -> QGroupBox:
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.workflow_widget.shutdown()
+        close_analysis_windows(self._viewer)
         # The log handler outlives the widget otherwise, and logging into a
         # destroyed QObject bridge would crash on interpreter shutdown.
         self.log_console.detach()

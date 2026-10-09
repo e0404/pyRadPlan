@@ -195,3 +195,69 @@ def test_single_file_target_rejects_ct_and_dose(tmp_path):
     dose = sitk.Cast(ct.cube_hu, sitk.sitkFloat32)
     with pytest.raises(ValueError):
         NiftiHandler(tmp_path / "image.nii.gz").save(ct=ct, dose=dose)
+
+
+@pytest.mark.parametrize(
+    "geometry, expected_index",
+    [
+        ("origin", (2, 1, 1)),
+        ("spacing", (2, 1, 1)),
+        ("direction", (5, 1, 1)),
+        ("size", (2, 1, 1)),
+    ],
+)
+def test_label_import_preserves_world_coordinates_and_metadata(tmp_path, geometry, expected_index):
+    from pyRadPlan.io import NrrdHandler
+
+    reference = sitk.Image([7, 6, 5], sitk.sitkFloat32)
+    label = sitk.Image([4, 3, 3] if geometry == "size" else [7, 6, 5], sitk.sitkUInt8)
+    label[1, 1, 1] = 5
+    if geometry in ("origin", "size"):
+        label.SetOrigin((1.0, 0.0, 0.0))
+    elif geometry == "spacing":
+        label.SetSpacing((2.0, 1.0, 1.0))
+    else:
+        label.SetOrigin((6.0, 0.0, 0.0))
+        label.SetDirection((-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    label.SetMetaData("pyradplan_voi_names", "a|b|c|d|target")
+    label.SetMetaData("pyradplan_voi_types", "OAR|OAR|OAR|OAR|TARGET")
+    sitk.WriteImage(reference, str(tmp_path / "ct.nrrd"))
+    sitk.WriteImage(label, str(tmp_path / "cst.nrrd"))
+
+    voi = NrrdHandler(tmp_path).load_data()["cst"].vois[0]
+    assert voi.name == "target" and voi.voi_type == "TARGET"
+    assert voi.mask.GetSize() == reference.GetSize()
+    assert voi.mask.GetOrigin() == reference.GetOrigin()
+    assert voi.mask.GetDirection() == reference.GetDirection()
+    assert voi.mask[expected_index] == 1
+    assert voi.mask.TransformIndexToPhysicalPoint(
+        expected_index
+    ) == label.TransformIndexToPhysicalPoint((1, 1, 1))
+    assert voi.mask[0, 0, 0] == 0
+    assert set(np.unique(sitk.GetArrayFromImage(voi.mask))) == {0, 1}
+
+
+@pytest.mark.parametrize("outside_ct", [False, True])
+def test_label_import_warns_on_resampling_and_empty_labels(caplog, outside_ct):
+    from pyRadPlan.io.sitk_based.base._serialize import label_image_to_vois
+
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    label = sitk.Image([5, 4, 3], sitk.sitkUInt8)
+    label[1, 1, 1] = 5
+    if outside_ct:
+        label.SetOrigin((100.0, 0.0, 0.0))
+    sidecar = {"vois": {"5": {"name": "target", "voi_type": "TARGET"}}}
+
+    with caplog.at_level("WARNING", logger="pyRadPlan.io.sitk_based.base._serialize"):
+        vois = label_image_to_vois(label, ct, sidecar)
+
+    assert len(vois) == 1 and vois[0].name == "target"
+    messages = [r.getMessage() for r in caplog.records if r.name.endswith("base._serialize")]
+    if outside_ct:
+        assert not np.any(sitk.GetArrayViewFromImage(vois[0].mask))
+        assert len(messages) == 2
+        assert "resampling labels onto the CT grid" in messages[0]
+        assert "Label 5 (target) is empty" in messages[1]
+    else:
+        assert np.any(sitk.GetArrayViewFromImage(vois[0].mask))
+        assert messages == []

@@ -12,13 +12,13 @@ configuration and the model-repository contract (``model.py``,
 
    Loading a model fetched from the Hub executes Python shipped inside the
    repository and therefore requires an explicit ``trust_remote_code=True``
-   (or ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``). A directory passed as
+   (or ``PYRADPLAN_AI_TRUST_REMOTE_CODE=1``). A directory passed as
    ``local_dir`` is exempt.
 
 .. autosummary::
    :toctree: generated/ai/modelhub/
 
-   AiModelSettings
+   AiSettings
 
 
 Loading

@@ -4,7 +4,7 @@ import os
 import sys
 import warnings
 import logging
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 if sys.version_info < (3, 10):
     import importlib_resources as resources  # Backport for older versions
@@ -42,6 +42,47 @@ def _normalize_format(fmt: str) -> str:
     return key
 
 
+_PHANTOM_PACKAGE = "pyRadPlan.data.phantoms"
+
+
+def available_phantoms() -> list[str]:
+    """Names of the phantoms bundled with pyRadPlan, e.g. ``["TG119"]``."""
+    root = resources.files(_PHANTOM_PACKAGE)
+    return sorted(
+        entry.name[:-4] for entry in root.iterdir() if entry.name.lower().endswith(".mat")
+    )
+
+
+def phantom_path(name: str) -> Any:
+    """
+    Resolve a bundled phantom by name.
+
+    Parameters
+    ----------
+    name : str
+        Phantom name, case-insensitive, with or without the ``.mat`` extension
+        (``"TG119"``, ``"tg119.mat"``).
+
+    Returns
+    -------
+    Traversable
+        Path-like object of the bundled ``.mat`` file, accepted by
+        :func:`load_patient` and :func:`load_data`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no bundled phantom has that name.
+    """
+    stem = name.lower().removesuffix(".mat")
+    for entry in resources.files(_PHANTOM_PACKAGE).iterdir():
+        if entry.name.lower().endswith(".mat") and entry.name.lower()[:-4] == stem:
+            return entry
+    raise FileNotFoundError(
+        f"No bundled phantom named {name!r}; available: {', '.join(available_phantoms())}"
+    )
+
+
 def load_tg119() -> tuple[CT, StructureSet]:
     """
     Load the included TG119 phantom.
@@ -51,8 +92,7 @@ def load_tg119() -> tuple[CT, StructureSet]:
     tuple[CT, StructureSet]
         The CT and StructureSet objects.
     """
-    phantom = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
-    return load_patient(phantom)
+    return load_patient(phantom_path("TG119"))
 
 
 def load_patient(
@@ -89,13 +129,16 @@ def load_patient(
     fmt = detect_format(path)
     importer = get_importer(fmt)(path)
 
-    ct = importer.load_ct()
-    if ct is None:
-        raise ValueError("ct is missing from the patient file.")
+    with importer.progress("Importing patient", total=2) as step:
+        ct = importer.load_ct()
+        if ct is None:
+            raise ValueError("ct is missing from the patient file.")
+        step.advance()
 
-    cst = importer.load_cst(ct)
-    if cst is None:
-        warnings.warn("cst/StructureSet is missing from the patient file.")
+        cst = importer.load_cst(ct)
+        if cst is None:
+            warnings.warn("cst/StructureSet is missing from the patient file.")
+        step.advance()
 
     if (isinstance(extra_plan_data, dict) or isinstance(extra_data, dict)) and fmt == "mat":
         mdict = dict(importer.mdict)

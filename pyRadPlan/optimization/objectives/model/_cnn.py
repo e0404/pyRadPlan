@@ -1,6 +1,6 @@
 """CNN-based outcome objective (NTCP / TCP).
 
-Uses a pre-trained CNN loaded via :func:`pyRadPlan.ai_models.load_model` to
+Uses a pre-trained CNN loaded via :func:`pyRadPlan.ai.modelhub.load_model` to
 predict an outcome probability and compute its gradient w.r.t. dose for use in
 optimisation. All model-specific behaviour (grid geometry, cropping, CT/mask
 resampling, dose normalisation, differentiable interpolation) lives in the
@@ -54,18 +54,26 @@ from pyRadPlan.optimization.objectives._objective import Objective
 logger = logging.getLogger(__name__)
 
 
+def _default_model_device() -> str:
+    """Device for a model the objective loads itself, when none was requested."""
+    return str(xp_utils.choose_device(array_api_compat.array_namespace(torch.empty(0))))
+
+
 class OutcomeCNN(Objective):
     """CNN-based outcome objective (NTCP or TCP).
 
     Parameters
     ----------
     model : str or tuple
-        Model identifier passed to :func:`pyRadPlan.ai_models.load_model`: a
+        Model identifier passed to :func:`pyRadPlan.ai.modelhub.load_model`: a
         HuggingFace model name, a local directory path, or a preloaded
         ``(model, preprocessor)`` tuple used directly.
     mode : ``"NTCP"`` or ``"TCP"``
         ``"NTCP"`` minimises the predicted probability; ``"TCP"`` maximises it
         (i.e. minimises the negative).
+    device : str, optional
+        Device to run the model on, e.g. ``"cuda"`` or ``"cpu"``. Defaults to following
+        :attr:`XpSettings.prefer_gpu`.
     monitor_only : bool
         When *True* the objective returns 0 to the optimiser (and a zero
         gradient) but still logs the predicted probability.
@@ -86,6 +94,10 @@ class OutcomeCNN(Objective):
 
     # -- User-facing fields --
     model: str = Field(description="Model name, local directory, or preloaded objects.")
+    device: Optional[str] = Field(
+        default=None,
+        description="Device to run the model on (e.g. 'cuda'); None follows xp.prefer_gpu.",
+    )
     mode: Literal["NTCP", "TCP"] = Field(default="NTCP")
     monitor_only: bool = Field(default=False)
     warmup_iterations: int = Field(default=0, ge=0)
@@ -138,27 +150,33 @@ class OutcomeCNN(Objective):
             return data
 
         spec = data.get("model")
-        nn_model, preprocessor = cls._resolve_model(spec)
+        nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
         if not isinstance(spec, str):
             # Preloaded objects — keep the serialised field a plain string.
             data["model"] = "<preloaded>"
 
-        device = next(nn_model.parameters()).device
-        preprocessor.configure(ct, cst, cst_masks=data.get("cst_masks"), device=device)
+        # Read back where the model actually ended up rather than trusting the request,
+        # so the preprocessor follows it even when placement came from the settings.
+        model_device = next(nn_model.parameters()).device
+        preprocessor.configure(ct, cst, cst_masks=data.get("cst_masks"), device=model_device)
 
         data["nn_model"] = nn_model
         data["preprocessor"] = preprocessor
         return data
 
     @staticmethod
-    def _resolve_model(spec: Any) -> tuple[Any, Any]:
+    def _resolve_model(spec: Any, device: Optional[str] = None) -> tuple[Any, Any]:
         """Resolve ``model`` into an ``(nn_model, preprocessor)`` pair."""
         if isinstance(spec, (tuple, list)) and len(spec) == 2 and hasattr(spec[0], "forward"):
-            return spec[0], spec[1]
+            nn_model, preprocessor = spec[0], spec[1]
+            if device is not None and hasattr(nn_model, "to"):
+                nn_model.to(device)
+            return nn_model, preprocessor
+        target = device if device is not None else _default_model_device()
         if isinstance(spec, str):
             if Path(spec).is_dir():
-                return load_model(local_dir=spec)
-            return load_model(name=spec)
+                return load_model(local_dir=spec, device=target)
+            return load_model(name=spec, device=target)
         raise TypeError(
             "OutcomeCNN 'model' must be a model name, a local directory path, "
             "or a preloaded (model, preprocessor) tuple."
@@ -226,8 +244,13 @@ class OutcomeCNN(Objective):
             self._dose_index_xp = None
             self._dose_index_key = None
 
-    def compute_objective(self, dose_values) -> float:
-        """Compute the outcome probability (0.0 when *monitor_only*)."""
+    def compute_objective(self, dose_values):
+        """Compute the outcome probability (0.0 when *monitor_only*).
+
+        Returns a 0-d array in the namespace and device of ``dose_values``, as the other
+        objectives do: the model itself yields a Python float, and backends such as cupy
+        reject scalars where the caller stacks the per-scenario values.
+        """
         self._check_ready()
 
         xp = array_api_compat.array_namespace(dose_values)
@@ -235,8 +258,12 @@ class OutcomeCNN(Objective):
         self.ntcp_history.append(prob)
 
         if self.monitor_only:
-            return 0.0
-        return -prob if self.mode == "TCP" else prob
+            value = 0.0
+        else:
+            value = -prob if self.mode == "TCP" else prob
+        return xp.asarray(
+            value, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
+        )
 
     def compute_gradient(self, dose_values):
         """Compute the gradient of the outcome probability w.r.t. dose.
@@ -250,8 +277,15 @@ class OutcomeCNN(Objective):
         self.iteration_count += 1
         n = array_api_compat.size(dose_values)
 
+        # Match what the real gradient path below returns (via _from_full_grid), so the
+        # shortcut cannot hand back an array on a different device or in a different dtype.
+        zeros_like_input = {
+            "dtype": dose_values.dtype,
+            "device": array_api_compat.device(dose_values),
+        }
+
         if self.monitor_only:
-            return xp.zeros(n, dtype=xp.float32)
+            return xp.zeros(n, **zeros_like_input)
 
         if self.iteration_count <= self.warmup_iterations:
             if self.iteration_count == self.warmup_iterations:
@@ -259,7 +293,7 @@ class OutcomeCNN(Objective):
                     "Outcome CNN warmup complete after %d iterations. Activating gradient.",
                     self.warmup_iterations,
                 )
-            return xp.zeros(n, dtype=xp.float32)
+            return xp.zeros(n, **zeros_like_input)
 
         inputs = self.preprocessor.preprocess(
             self._to_full_grid(dose_values, xp), requires_grad=True
@@ -306,8 +340,8 @@ class OutcomeCNN(Objective):
 
     # ------------------------------------------------------------------
     # Private helpers
-    # These are needed for future work where soomeone passes e.g. only the
-    # VOI dose (not the full dose grid via GlobalVoi)
+    # These are needed for future work where someone passes e.g. only the
+    # VOI dose rather than the full dose grid.
     # ------------------------------------------------------------------
 
     def _check_ready(self) -> None:
