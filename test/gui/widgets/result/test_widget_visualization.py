@@ -47,3 +47,23 @@ def test_visualization_widget_quantity_selector(qapp):
     widget.quantity_selector.setCurrentText("LET")
     assert len(received_qty) > 0
     assert received_qty[-1] == "LET"
+
+
+def test_beams_toggle_requires_available_beams(qapp):
+    widget = VisualizationWidget()
+    # Nothing to draw before a plan defines gantry angles.
+    assert not widget.beams_checkbox.isEnabled()
+
+    received = []
+    widget.beams_toggled.connect(received.append)
+
+    widget.set_beams_available(True)
+    assert widget.beams_checkbox.isEnabled()
+    widget.beams_checkbox.setChecked(True)
+    assert received[-1] is True
+
+    widget.beams_checkbox.setChecked(False)
+    assert received[-1] is False
+
+    widget.set_beams_available(False)
+    assert not widget.beams_checkbox.isEnabled()

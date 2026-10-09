@@ -145,6 +145,12 @@ class StructureSet(PyRadPlanBaseModel):
         cst_data = data["vois"]
         ct = data["ct_image"]
 
+        # A cst with a single structure is a 1xN cell in MATLAB, which the reader squeezes
+        # into a flat row of columns. Column 2 is the VOI name, so a string in that position
+        # means we got a bare row; wrap it so we always iterate over rows.
+        if len(cst_data) > 1 and isinstance(cst_data[1], str):
+            cst_data = [cst_data]
+
         def get_idx_list(vdata_item):
             # Wrap a single array into a list if needed
             arr = vdata_item[3]

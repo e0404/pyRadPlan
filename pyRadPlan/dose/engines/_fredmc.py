@@ -41,7 +41,6 @@ from ...cst import StructureSet
 from ...dij import Dij
 from ...plan import Plan
 from ...stf import SteeringInformation, Beam
-from ...util import swap_orientation_sparse_matrix
 from ...machines.particles import IonAccelerator
 
 from ._base_montecarlo import MonteCarloEngineAbstract
@@ -349,7 +348,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         file_content = textwrap.dedent("""
         matColumns: HU rho RSP Ipot Lrad C Ca H N O P Ti S
         mat: -1024  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:  -999  0.001 0.0011 78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
+        mat:  -999  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
         mat:   -90   0.95 0.95   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
         mat:   -45   0.99 0.99   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
         mat:     0      1 1      78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
@@ -847,9 +846,13 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
         for key, value in beam.energy_layers.items():
             pb_fred = []
             for i in range(len(value["beamlet_idx"])):
-                target_point = beam.rays[value["rays_idx"][i]].target_point_bev / 10
+                ray = beam.rays[value["rays_idx"][i]]
+                target_point_bev = ray.target_point_bev
+                if target_point_bev is None:
+                    target_point_bev = 2 * ray.ray_pos_bev - beam.source_point_bev
+                target_point = target_point_bev / 10
                 # source_point = beam.source_point_bev / 10 #seems to not be needed in FRED
-                ray_position = beam.rays[value["rays_idx"][i]].ray_pos_bev / 10
+                ray_position = ray.ray_pos_bev / 10
                 distance = target_point[1] - ray_position[1]
 
                 # Project the spot to the entrance plane (BAMStoISO distance)
@@ -885,8 +888,7 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
             emittance = cast(IonAccelerator, self._machine).foci[value["full_energy"]][0].emittance
             layer_dict = {
                 "energy": value["full_energy"],
-                "ESpread": cast(IonAccelerator, self._machine).spectra[value["full_energy"]].fwhm
-                / 2.355,
+                "ESpread": cast(IonAccelerator, self._machine).spectra[value["full_energy"]].fwhm,
                 "FWHM": (
                     2.355
                     * (2 * emittance.sigma_x * emittance.sigma_y)
@@ -917,7 +919,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 # LETd * dose; FRED scores LETd in MeV * cm^2 / g, hence the division by 10
                 let_dose = sparse.csc_array(
                     (
-                        (self.let_cube[self._vdose_grid] / 10) * self.dose_cube[self._vdose_grid],
+                        (self.let_cube.ravel()[self._vdose_grid] / 10)
+                        * self.dose_cube.ravel()[self._vdose_grid],
                         (self._vdose_grid, np.zeros(len(self._vdose_grid), dtype=int)),
                     ),
                     shape=(self.dose_grid.num_voxels, 1),
@@ -1346,21 +1349,11 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                         if not self._calc_dose_direct:
                             tmp_matrix = dij[q_name].flat[i]
 
-                            if self._dij_format_version in {"21", "31"}:
-                                if not isinstance(tmp_matrix, sparse.csc_array):
-                                    tmp_matrix = sparse.csc_array(tmp_matrix)
+                            if not isinstance(tmp_matrix, sparse.csc_array):
+                                tmp_matrix = sparse.csc_array(tmp_matrix)
 
-                                tmp_matrix.eliminate_zeros()
-
-                                shape = dij["dose_grid"].dimensions
-                                swapped = swap_orientation_sparse_matrix(tmp_matrix, shape, (0, 1))
-                                dij[q_name].flat[i] = swapped
-                            else:
-                                if not isinstance(tmp_matrix, sparse.csc_array):
-                                    tmp_matrix = sparse.csc_array(tmp_matrix)
-
-                                tmp_matrix.eliminate_zeros()
-                                dij[q_name].flat[i] = tmp_matrix
+                            tmp_matrix.eliminate_zeros()
+                            dij[q_name].flat[i] = tmp_matrix
                             # dij[q_name].flat[i].data *= self.scaling_factor
 
             # if self.keep_rad_depth_cubes and self._rad_depth_cubes:
@@ -1485,13 +1478,10 @@ def read_sparse_dij_bin_v21(f_name: str) -> sparse.csc_array:
             else:
                 values = values_nom
 
-            # Permute x and y components in voxel indices
-            ind_y, ind_x, ind_z = np.unravel_index(curr_voxel_indices, dims)
-            permuted_voxel_indices = np.ravel_multi_index(
-                (ind_x, ind_y, ind_z), [dims[1], dims[0], dims[2]]
-            )
-
-            all_voxel_inds_list.append(permuted_voxel_indices)
+            # FRED's raw voxel index already matches pyRadPlan's canonical (z, y, x)
+            # C-order flat-index convention (X fastest, Z slowest) for `dims` = (nx, ny, nz)
+            # taken directly from the header -- no axis permutation needed.
+            all_voxel_inds_list.append(curr_voxel_indices)
             all_values_list.append(values)
 
     # Concatenate the lists into single NumPy arrays
@@ -1560,11 +1550,10 @@ def read_sparse_dij_bin_v31(f_name: str) -> sparse.csc_array:
     else:
         values = tmp_values[0]
 
-        # Permute x and y components in voxel indices
-    ind_y, ind_x, ind_z = np.unravel_index(voxel_indices[0], dims)
-    permuted_voxel_indices = np.ravel_multi_index(
-        (ind_x, ind_y, ind_z), [dims[1], dims[0], dims[2]]
-    )
+    # FRED's raw voxel index already matches pyRadPlan's canonical (z, y, x) C-order
+    # flat-index convention (X fastest, Z slowest) for `dims` = (nx, ny, nz) taken
+    # directly from the header -- no axis permutation needed.
+    voxel_indices = voxel_indices[0]
 
     # Create sparse matrix
     total_voxels = int(np.prod(dims))
@@ -1576,7 +1565,7 @@ def read_sparse_dij_bin_v31(f_name: str) -> sparse.csc_array:
     indptr = np.concatenate(([0], np.cumsum(counts))).astype(np.int32)
 
     dij_matrix = sparse.csc_array(
-        (values, permuted_voxel_indices, indptr),
+        (values, voxel_indices, indptr),
         shape=(total_voxels, number_of_beamlets),
     )
 

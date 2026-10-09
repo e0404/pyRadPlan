@@ -4,6 +4,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
 
 from pyRadPlan.io import load_tg119
@@ -224,6 +226,81 @@ def test_change_quantity_writes_through(qapp, tg119):
 
     widget._on_quantity_changed(voi_idx, 0, new_quantity)
     assert _objectives(ws.cst.vois[voi_idx])[0].quantity == new_quantity
+
+
+def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    button = widget._btn_all_quantity
+    assert button.text() == "Change all quantities…"
+
+    current = _objectives(next(v for v in ws.cst.vois if _objectives(v)))[0].quantity
+    action = next(a for a in button.menu().actions() if a.text() != current)
+    new_quantity = action.text()
+    action.trigger()
+
+    assert _total_objectives(ws.cst) > 0
+    assert all(o.quantity == new_quantity for v in ws.cst.vois for o in _objectives(v))
+    # the per-objective column reflects the choice
+    for row in range(widget._table.rowCount()):
+        assert widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY).currentText() == (
+            new_quantity
+        )
+    assert button.text() == "Change all quantities…"
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_bulk_quantity_keyboard_navigation_waits_for_confirmation(qapp, tg119, confirm):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    button = widget._btn_all_quantity
+    menu = button.menu()
+    before = [o.quantity for v in ws.cst.vois for o in _objectives(v)]
+
+    menu.popup(button.mapToGlobal(QPoint(0, button.height())))
+    try:
+        # Navigate beyond the first quantity without applying intermediate choices.
+        QTest.keyClick(menu, Qt.Key_Down)
+        QTest.keyClick(menu, Qt.Key_Down)
+        assert menu.activeAction() == menu.actions()[1]
+        assert [o.quantity for v in ws.cst.vois for o in _objectives(v)] == before
+
+        quantity = menu.activeAction().text()
+        QTest.keyClick(menu, Qt.Key_Return if confirm else Qt.Key_Escape)
+        assert not menu.isVisible()
+        expected = [quantity] * len(before) if confirm else before
+        assert [o.quantity for v in ws.cst.vois for o in _objectives(v)] == expected
+    finally:
+        menu.close()
+
+
+def test_new_objectives_follow_the_shared_quantity(qapp, tg119):
+    from pyRadPlan.quantities import get_available_quantities
+
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    widget._cmb_voi.setCurrentIndex(widget._cmb_voi.findData(voi_idx))
+    shared = _objectives(ws.cst.vois[voi_idx])[0].quantity
+    other = next(q for q in get_available_quantities() if q != shared)
+
+    # after "Change all quantities" a new objective does not reintroduce a mix
+    next(a for a in widget._btn_all_quantity.menu().actions() if a.text() == other).trigger()
+    widget._on_add_objective()
+    assert _objectives(ws.cst.vois[voi_idx])[-1].quantity == other
+
+    # while the objectives disagree, a new one keeps its default quantity
+    widget._on_quantity_changed(voi_idx, 0, shared)
+    widget._on_add_objective()
+    assert _objectives(ws.cst.vois[voi_idx])[-1].quantity == "physical_dose"
 
 
 def _image_reference_combos(widget):
