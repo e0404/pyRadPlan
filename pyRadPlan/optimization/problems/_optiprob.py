@@ -348,10 +348,9 @@ class PlanningProblem(ProgressReporter, ABC):
 
         # Resolve all requested quantities (plus their transitive dependencies) through a
         # shared resolver so that any quantity referenced by multiple roots is instantiated
-        # exactly once.
+        # exactly once. Only the quantities the requested ones actually use are evaluated.
         resolver = QuantityResolver(self._dij)
-        resolver.resolve(quantity_ids)
-        self._quantities = list(resolver.instances.values())
+        self._quantities = resolver.reachable(resolver.resolve(quantity_ids))
 
         if len(set([q.array_backend for q in self._quantities])) == 1:
             self._array_backend = self._quantities[0].array_backend
@@ -373,7 +372,7 @@ class PlanningProblem(ProgressReporter, ABC):
                             len(self._objectives_per_quantity[q.identifier])
                         )
                         self._objectives_per_quantity[q.identifier].append(obj_ix)
-                    obj_ix += 1
+                obj_ix += 1
 
         self._num_objectives = obj_ix
 

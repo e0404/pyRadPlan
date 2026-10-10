@@ -118,3 +118,33 @@ def test_sqrt_beta_dose_sparse(sample_dij_sparse):
     assert ret_deriv.dtype == sample_dij_sparse.sqrt_beta_dose.dtype
     assert ret_deriv.shape == sample_dij_sparse.sqrt_beta_dose.shape
     assert np.allclose(ret_deriv.flat[0], dij_mat.T @ np.ones(125, dtype=np.float32))
+
+
+@pytest.fixture
+def sample_dij_without_sqrt_beta_dose(sample_base_dij_dict):
+    rng = np.random.default_rng(42)
+    del sample_base_dij_dict["alpha_dose"], sample_base_dij_dict["sqrt_beta_dose"]
+    sample_base_dij_dict["physical_dose"].flat[0] = rng.random((125, 10)).astype(np.float32)
+    sample_base_dij_dict["betax"] = rng.uniform(0.01, 0.1, (125, 1)).astype(np.float32)
+    sample_base_dij_dict["alphax"] = np.full((125, 1), 0.1, dtype=np.float32)
+    return Dij.model_validate(sample_base_dij_dict)
+
+
+def test_sqrt_beta_dose_falls_back_to_sqrt_beta_x_times_dose(sample_dij_without_sqrt_beta_dose):
+    dij = sample_dij_without_sqrt_beta_dose
+    sqrt_beta_dose = SqrtBetaDose(dij)
+    assert sqrt_beta_dose.mode == "indirect"
+    assert "physical_dose" in sqrt_beta_dose.dependencies
+
+    dose_mat = dij.physical_dose.flat[0]
+    sqrt_beta_x = np.sqrt(dij.betax[:, 0])
+    fluence = xp.arange(10, dtype=xp.float32)
+    ret = sqrt_beta_dose(fluence)
+    assert np.allclose(ret.flat[0], sqrt_beta_x * (dose_mat @ np.arange(10)), rtol=1e-5)
+
+    d_quantity = np.linspace(0.5, 1.5, 125, dtype=np.float32)
+    ret_deriv = sqrt_beta_dose.compute_chain_derivative(
+        xp.asarray(d_quantity.reshape(1, -1)), fluence
+    )
+    expected = (sqrt_beta_x * d_quantity) @ dose_mat
+    assert np.allclose(np.reshape(ret_deriv.flat[0], (-1,)), expected, rtol=1e-5)

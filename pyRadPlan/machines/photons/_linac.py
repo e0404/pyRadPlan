@@ -72,7 +72,7 @@ class PhotonLINAC(ExternalBeamMachine):
         cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> PhotonSVDKernel:
         try:
-            pb_kernels = handler(v, info)
+            pb_kernels = handler(v)
         except ValidationError as err:
             # If we have a dict, we try to convert it to a PhotonSVDKernel object
             if isinstance(v, dict):
@@ -94,7 +94,7 @@ class PhotonLINAC(ExternalBeamMachine):
                     except Exception as exc:
                         raise ValueError("Could not parse matRad kernel data") from exc
 
-                    pb_kernels = handler(v, info)
+                    pb_kernels = handler(v)
                 else:
                     # Otherwise we don't know what to do
                     raise err
