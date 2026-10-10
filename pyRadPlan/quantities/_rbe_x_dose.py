@@ -49,9 +49,16 @@ class RBExDose(FluenceDependentQuantity):
 
     def __init__(self, dij, *, mode=None, dependencies=None, scenarios=None):
         super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
-        self._path = self.choose_path(self._dij, has_effect="effect" in self._deps)
-        if self._path == "constant" and "physical_dose" not in self._deps:
-            raise ValueError("RBExDose with a constant RBE needs the 'physical_dose' quantity.")
+        # The alpha_x / beta_x fallbacks of alpha_dose / sqrt_beta_dose give a photon effect
+        # (RBE = 1), so only real LQ matrices qualify for the effect path.
+        has_lq = self._dij.alpha_dose is not None and self._dij.sqrt_beta_dose is not None
+        self._path = self.choose_path(self._dij, has_effect=has_lq and "effect" in self._deps)
+        if self._path == "constant":
+            if "physical_dose" not in self._deps:
+                raise ValueError(
+                    "RBExDose with a constant RBE needs the 'physical_dose' quantity."
+                )
+            self._deps.pop("effect", None)
 
     @property
     def path(self) -> str:
@@ -133,8 +140,9 @@ class RBExDose(FluenceDependentQuantity):
                 xp.asarray(self._dij.rbe * d_quantity), scenario_index
             )
 
-        d_quantity = xp.reshape(d_quantity, (-1,))
         alphax, betax = self._reference_params(scenario_index)
+        # One row per upstream gradient (e.g. per objective without the jacobian bypass).
+        d_quantity = xp.reshape(d_quantity, (-1, alphax.shape[0]))
         quadratic = betax > 0
         linear = (~quadratic) & (alphax > 0)
         safe_beta = xp.where(quadratic, betax, xp.ones_like(betax))
@@ -156,8 +164,6 @@ class RBExDose(FluenceDependentQuantity):
             xp.where(linear, 1 / safe_alpha, 0.0),
         )
         fgrad = d_quantity * inverse_derivative
-
-        fgrad = xp.reshape(fgrad, (1, -1))
         return self._deps["effect"]._compute_chain_derivative_single_scenario(
             fgrad, scenario_index
         )

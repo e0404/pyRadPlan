@@ -43,6 +43,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
       needed to compute this quantity. The resolver must produce them; failure raises.
     - :attr:`optional_dependencies`: identifiers of upstream quantities used as a fallback
       computation path when no direct Dij matrix is available.
+    - :attr:`indirect_dij_fields`: Dij attributes (e.g. ``alphax``) the indirect path reads
+      directly; if any is missing, the indirect path is unavailable.
 
     The resolution mode (``"direct"`` vs ``"indirect"``) is decided at instantiation time:
     if the dij carries an attribute whose name matches this quantity's ``identifier``, the
@@ -54,6 +56,14 @@ class FluenceDependentQuantity(RTQuantity, ABC):
     # ClassVar metadata describing how this quantity is computed.
     required_dependencies: ClassVar[tuple[str, ...]] = ()
     optional_dependencies: ClassVar[tuple[str, ...]] = ()
+    indirect_dij_fields: ClassVar[tuple[str, ...]] = ()
+
+    @classmethod
+    def has_indirect_path(cls, dij: Dij) -> bool:
+        """Whether the dependency-based path is available for ``dij``."""
+        if not (cls.required_dependencies or cls.optional_dependencies):
+            return False
+        return all(getattr(dij, field, None) is not None for field in cls.indirect_dij_fields)
 
     array_backend: ArrayNamespace
 
@@ -129,11 +139,11 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         """Pick the resolution mode for this dij; direct wins when both are available."""
         if getattr(self._dij, self.identifier, None) is not None:
             return "direct"
-        if self.required_dependencies or self.optional_dependencies:
+        if self.has_indirect_path(self._dij):
             return "indirect"
         raise ValueError(
             f"Quantity {type(self).__name__!r} cannot be computed: dij has no attribute "
-            f"{self.identifier!r} and no dependencies are declared."
+            f"{self.identifier!r} and no usable dependency path."
         )
 
     def _validate_dependencies(self) -> None:

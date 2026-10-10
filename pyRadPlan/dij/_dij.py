@@ -196,7 +196,7 @@ class Dij(PyRadPlanBaseModel):
             v = np.asarray(v, dtype=object)
 
         # Starting here, it should be a NDArray of objects
-        v: InfluenceMatrixContainer = handler(v, info)  # run any other validators
+        v: InfluenceMatrixContainer = handler(v)  # run any other validators
 
         [_check_influence_matrix(v.flat[i], info) for i in range(v.size) if v.flat[i] is not None]
 
@@ -347,7 +347,7 @@ class Dij(PyRadPlanBaseModel):
         context = info.context
         if context and context.get("matRad") == "mat-file":
             return value.to_matrad(context=context["matRad"])
-        return handler(value, info)
+        return handler(value)
 
     @field_serializer(
         "physical_dose",

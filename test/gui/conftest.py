@@ -1,3 +1,5 @@
+import gc
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -15,6 +17,16 @@ def qapp():
     if app is None:
         app = QApplication([])
     yield app
+
+
+# Free each test's widgets while the QApplication is still alive. Left to interpreter
+# shutdown, the PySide6/pyqtgraph wrappers are collected after Qt is torn down, which
+# segfaults on some Python versions. Never force a C++ delete here (deleteLater): pyqtgraph
+# items still referenced from Python would then be freed twice.
+@pytest.fixture(autouse=True)
+def _collect_widgets():
+    yield
+    gc.collect()
 
 
 @pytest.fixture

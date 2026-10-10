@@ -169,18 +169,22 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             self._grad_cache[:, ...] = 0.0
 
         for q in self._quantities:
-            for scen_ix in q_scenarios[q.identifier]:
-                if self.bypass_objective_jacobian:
-                    cache_ix = 0
-                else:
-                    cache_ix = self._objectives_per_quantity[q.identifier]
+            # A pure dependency has an all-zero upstream gradient; the quantities using it
+            # already differentiate it through the chain rule.
+            if not self._objectives_per_quantity[q.identifier]:
+                continue
+            if self.bypass_objective_jacobian:
+                cache_ix = [0]
+            else:
+                cache_ix = self._objectives_per_quantity[q.identifier]
 
-                self._grad_cache[cache_ix, :] += xp.squeeze(
-                    q.compute_chain_derivative(
-                        self._grad_cache_intermediate[q.identifier], x
-                    ).flat[scen_ix],
-                    axis=0,
-                )
+            for scen_ix in q_scenarios[q.identifier]:
+                derivative = q.compute_chain_derivative(
+                    self._grad_cache_intermediate[q.identifier], x
+                ).flat[scen_ix]
+                # Row by row, as the Array API has no integer-array (scatter) indexing.
+                for row, obj_ix in enumerate(cache_ix):
+                    self._grad_cache[obj_ix, :] += derivative[row, :]
 
     def _objective_jacobian(self, x: Array) -> Array:
         """Define the objective jacobian."""

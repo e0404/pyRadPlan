@@ -14,6 +14,7 @@ class AlphaDose(FluenceDependentQuantity):
     identifier = "alpha_dose"
     name = "AlphaDose"
     optional_dependencies = ("physical_dose",)
+    indirect_dij_fields = ("alphax",)
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         if self._mode == "direct":
