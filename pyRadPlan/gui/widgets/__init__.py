@@ -6,6 +6,7 @@ from ._logo_widget import LogoWidget
 from ._info_widget import InfoWidget
 from ._log_console import LogConsoleWidget
 from .workflow import WorkflowWidget
+from ._ui_mode import UIMode
 from .plan import PlanWidget
 from .optimization import OptimizationWidget
 from ._config_form import ConfigFormWidget, ConfigFormDialog
@@ -18,6 +19,7 @@ __all__ = [
     "LogConsoleWidget",
     "WorkflowWidget",
     "PlanWidget",
+    "UIMode",
     "OptimizationWidget",
     "ConfigFormWidget",
     "ConfigFormDialog",

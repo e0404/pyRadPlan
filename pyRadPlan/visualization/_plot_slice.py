@@ -6,9 +6,7 @@ import SimpleITK as sitk
 import matplotlib.pyplot as plt
 import pint
 from pyRadPlan import CT, validate_ct, StructureSet, validate_cst
-
-# Initialize Units
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class PlotSliceKwargs(TypedDict, total=False):

@@ -13,6 +13,10 @@ Global configuration read from ``PYRADPLAN_*`` environment variables or a
    :members:
    :show-inheritance:
 
+.. autoclass:: pyRadPlan.GuiSettings
+   :members:
+   :show-inheritance:
+
 .. autoclass:: pyRadPlan._settings.AiSettings
    :members:
    :show-inheritance:

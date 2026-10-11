@@ -69,3 +69,16 @@ def test_finalize_disables_controls(qapp):
     win.finalize()
     assert not win._btn_pause.isEnabled()
     assert not win._btn_stop.isEnabled()
+
+
+def test_plots_follow_palette(qapp, dark_palette):
+    palette, colors = dark_palette
+    win = OptimizationStatusWidget()
+    win.setPalette(palette)
+
+    assert win._plot_layout.backgroundBrush().color().name() == colors["window"]
+    plot = win._plot_layout.ci.getItem(0, 0)
+    assert plot.getViewBox().background.brush().color().name() == colors["base"]
+    assert plot.getAxis("left").pen().color().name() == colors["text"]
+    curve = win._metrics["objective"]["curve"]
+    assert curve.opts["symbolPen"].color().name() == colors["text"]

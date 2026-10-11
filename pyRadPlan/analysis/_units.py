@@ -1,6 +1,6 @@
-"""Unit helpers for the analysis widgets.
+"""Unit helpers for DVH and quality-indicator displays.
 
-The analysis viewer carries quantity units as display labels rather than pint
+The analysis views carry quantity units as display labels rather than pint
 expressions. These helpers resolve such labels to ``pint`` units and decide
 whether two quantities can share a plot axis.
 """
@@ -11,7 +11,7 @@ import logging
 
 import pint
 
-from pyRadPlan.analysis._dvh import ureg
+from ._dvh import ureg
 
 logger = logging.getLogger(__name__)
 

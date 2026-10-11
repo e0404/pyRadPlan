@@ -160,14 +160,19 @@ Literal quantities and legacy conversion
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The current automatic conversion is a legacy, plan-wide mode and remains enabled by default for
-compatibility with existing ion-planning workflows. It converts objectives whose quantity is
-``"physical_dose"`` to the planning problem's inferred physical- or RBE-weighted dose quantity.
-It does not convert prescription values between physical dose, effect, or other biological
-semantics.
+compatibility with existing ion-planning workflows. When the dose influence data carries a
+biological model (e.g. a constant RBE for protons or a variable RBE model for ions), it decides
+on the ``"physical_dose"`` objectives as a whole:
 
-An objective configured for a quantity other than ``"physical_dose"`` or the inferred default is
-therefore rejected while legacy conversion is enabled instead of being silently relabelled. To
-use every objective quantity literally, disable the conversion explicitly:
+- If no objective uses a biological quantity (``"rbe_x_dose"``, ``"effect"``, ...), all
+  physical-dose objectives are converted to ``"rbe_x_dose"``.
+- If some objectives already use a biological quantity, the mix is taken as intended and the
+  physical-dose objectives stay on physical dose.
+
+Both outcomes are logged as a warning, which the GUI also shows in a dialog. Objectives on any
+other quantity, such as LET, are always used literally. The conversion does not convert
+prescription values between physical dose, effect, or other biological semantics. To use every
+objective quantity literally, disable the conversion explicitly:
 
 .. code-block:: python
 

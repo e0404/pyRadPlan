@@ -1,9 +1,5 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
-
-ureg = pint.UnitRegistry()
 
 
 class Effect(FluenceDependentQuantity):
@@ -12,6 +8,7 @@ class Effect(FluenceDependentQuantity):
     unit = []
     dim = 1
     identifier = "effect"
+    biological = True
     name = "Effect"
     required_dependencies = ("alpha_dose", "sqrt_beta_dose")
 

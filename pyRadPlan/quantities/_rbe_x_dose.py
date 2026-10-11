@@ -3,12 +3,11 @@
 from typing import Any, Optional
 
 import array_api_compat
-import pint
 
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
 
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 def lq_inverse_dose(effect: Array, alpha_x: Array, beta_x: Array) -> Array:
@@ -43,6 +42,7 @@ class RBExDose(FluenceDependentQuantity):
     unit = ureg.gray
     dim = 1
     identifier = "rbe_x_dose"
+    biological = True
     name = "RBExDose"
 
     optional_dependencies = ("effect", "physical_dose")

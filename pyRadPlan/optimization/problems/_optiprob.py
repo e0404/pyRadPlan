@@ -13,7 +13,7 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import ScenarioModel
-from pyRadPlan.quantities import RTQuantity, QuantityResolver
+from pyRadPlan.quantities import RTQuantity, QuantityResolver, get_available_quantities
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
@@ -53,8 +53,10 @@ class PlanningProblem(ProgressReporter, ABC):
         Iteration cap propagated to the solver. Left unset, the solver keeps whatever it was
         configured with (its own default, or a value from the ``solver`` dict).
     convert_dose_objectives : bool, default=True
-        Legacy plan-wide conversion of physical-dose objectives to the inferred planning
-        quantity. Set to ``False`` to use every objective's quantity literally.
+        Legacy plan-wide conversion of physical-dose objectives to the RBE-weighted dose
+        when the dose influence data carries a biological model, skipped when objectives
+        already use a biological quantity. Set to ``False`` to use every objective's
+        quantity literally.
     """
 
     # Constant, Abstract properties are realized as ClassVars
@@ -255,17 +257,7 @@ class PlanningProblem(ProgressReporter, ABC):
 
     def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
         """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
-        objectives: list[tuple] = []
-        quantity_ids: list[str] = []
-
-        if self.convert_dose_objectives:
-            default_quantity = self._get_legacy_default_quantity(self._stf.beams[0].radiation_mode)
-            logger.info(
-                "Legacy objective conversion is enabled; converting physical-dose objectives "
-                "to quantity: %s",
-                default_quantity,
-            )
-
+        voi_objectives: list[tuple] = []
         for voi in self._cst.vois:
             valid_objectives = [
                 obj
@@ -278,27 +270,20 @@ class PlanningProblem(ProgressReporter, ABC):
             ]
             if not valid_objectives:
                 continue
-
-            cube_ix = voi.indices_numpy
-            linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
-            linear_mask[cube_ix] = True
             # Copy so that quantity conversion / fraction normalization below do not
             # alter the objectives stored in the user's StructureSet.
             objs = [get_objective(obj).model_copy() for obj in valid_objectives]
+            voi_objectives.append((voi, objs))
 
-            if self.convert_dose_objectives:
-                for objective_index, obj in enumerate(objs, start=1):
-                    # TODO: Replace this plan-wide legacy mode with explicit ``dose_auto``
-                    # objective intent; see docs/development/optimization_quantity_api.md.
-                    if obj.quantity not in ("physical_dose", default_quantity):
-                        raise ValueError(
-                            f"VOI {voi.name!r}, objective {objective_index} ({obj.name!r}) uses "
-                            f"quantity {obj.quantity!r}, which cannot be overwritten by legacy "
-                            "automatic dose conversion. Set convert_dose_objectives=False to "
-                            "use literal objective quantities."
-                        )
-                    obj.quantity = default_quantity
+        if self.convert_dose_objectives:
+            self._convert_dose_objectives([obj for _, objs in voi_objectives for obj in objs])
 
+        objectives: list[tuple] = []
+        quantity_ids: list[str] = []
+        for voi, objs in voi_objectives:
+            cube_ix = voi.indices_numpy
+            linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
+            linear_mask[cube_ix] = True
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
@@ -310,6 +295,48 @@ class PlanningProblem(ProgressReporter, ABC):
             quantity_ids.extend([obj.quantity for obj in objs])
 
         return objectives, quantity_ids
+
+    def _convert_dose_objectives(self, objectives: list) -> None:
+        """Legacy plan-wide conversion of physical-dose objectives to the biological dose.
+
+        Physical-dose objectives are converted only when no objective already uses a
+        biological quantity; otherwise the mix is taken as intended and kept.  Objectives
+        on any other quantity (e.g. LET) are used literally.  Either outcome is reported
+        as a warning.
+        """
+        # TODO: Replace this plan-wide legacy mode with explicit ``dose_auto``
+        # objective intent; see docs/development/optimization_quantity_api.md.
+        default_quantity = self._get_legacy_default_quantity(self._stf.beams[0].radiation_mode)
+        if default_quantity == "physical_dose":
+            return
+        physical = [obj for obj in objectives if obj.quantity == "physical_dose"]
+        if not physical:
+            return
+
+        quantities = get_available_quantities()
+        biological = sorted(
+            {
+                obj.quantity
+                for obj in objectives
+                if getattr(quantities.get(obj.quantity), "biological", False)
+            }
+        )
+        if biological:
+            message = (
+                f"{len(physical)} physical-dose objective(s) are not converted to "
+                f"{default_quantity!r} because other objectives already use the biological "
+                f"quantities {biological}; they are optimized on physical dose."
+            )
+        else:
+            for obj in physical:
+                obj.quantity = default_quantity
+            message = (
+                f"{len(physical)} physical-dose objective(s) were converted to "
+                f"{default_quantity!r} for the biological model of the dose influence data. "
+                "Set convert_dose_objectives=False to optimize physical dose instead."
+            )
+        logger.warning(message)
+        self.report_warning(message)
 
     def _initialize(self):
         """Initialize the data for the planning problem."""
