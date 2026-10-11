@@ -21,19 +21,22 @@ from ._helpers import determine_structure_type
 logger = logging.getLogger(__name__)
 
 
-def _mask_cube_to_voi(cube_xyz, name, ct, visible_color):
+def _mask_cube_to_voi(cube_xyz, name, ct, color):
     """Build a VOI from an (x, y, z) numpy mask cube aligned to the CT."""
     # SimpleITK arrays are ordered (z, y, x).
     sitk_arr = np.ascontiguousarray(np.transpose(cube_xyz, (2, 1, 0)).astype(np.uint8))
     mask = sitk.GetImageFromArray(sitk_arr)
     mask.CopyInformation(ct.cube_hu)
-    return validate_voi(
-        name=str(name),
-        voi_type=determine_structure_type(name),
-        mask=mask,
-        ct_image=ct,
-        visible_color=visible_color,
-    )
+    kwargs = {
+        "name": str(name),
+        "voi_type": determine_structure_type(name),
+        "mask": mask,
+        "ct_image": ct,
+    }
+    # A ROI without ROIDisplayColor keeps the VOI type's default color.
+    if color is not None:
+        kwargs["color"] = color
+    return validate_voi(**kwargs)
 
 
 def import_rtstruct(
@@ -85,11 +88,11 @@ def import_rtstruct(
                 logger.info("Skipping empty structure '%s'.", name)
                 continue
 
-            visible_color = None
+            color = None
             if hasattr(roi_contour, "ROIDisplayColor"):
-                visible_color = tuple(int(c) for c in roi_contour.ROIDisplayColor)
+                color = tuple(int(c) for c in roi_contour.ROIDisplayColor)
 
-            vois.append(_mask_cube_to_voi(cube_xyz, name, ct, visible_color))
+            vois.append(_mask_cube_to_voi(cube_xyz, name, ct, color))
         except Exception as exc:  # noqa: BLE001 - one bad ROI must not abort the import
             logger.warning("Failed to process ROI '%s': %s", name, exc)
             continue

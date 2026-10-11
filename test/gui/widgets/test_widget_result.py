@@ -129,7 +129,7 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
     data = dict(voi)
     data.update(voi_type=new_type)
-    data.pop("default_color", None)
+    data.pop("color", None)
     new_voi = create_voi(data)
 
     selected_before = widget.vois_widget.selected_vois()
@@ -139,6 +139,51 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     assert ws.cst.vois[0].voi_type == new_type
     # The viewer must not rebuild (and reset the selection) from its own write
     assert widget.vois_widget.selected_vois() == selected_before
+
+
+def test_voi_metadata_dialog_retype_rebinds_auto_color(qapp, test_data_photons):
+    from pyRadPlan.cst import DEFAULT_VOI_COLORS, StructureSet, create_voi
+    from pyRadPlan.gui.widgets.result.vois_widget import VOIMetadataDialog
+
+    ct, cst, _ = test_data_photons
+
+    # A VOI that never had a color picked carries its type's auto-assigned one.
+    # (The matRad fixture ships explicit visibleColors, so build a fresh VOI.)
+    # It must reach the dialog through a StructureSet, as GUI VOIs always do:
+    # set_colors() assigns the field there but keeps it out of model_fields_set,
+    # which is what tells an auto-assigned color apart from a picked one.
+    voi = create_voi(voi_type="TARGET", name="auto", ct_image=ct, mask=cst.vois[0].mask)
+    voi = StructureSet(ct_image=ct, vois=[voi]).vois[0]
+    assert tuple(voi.color) == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert "color" not in voi.model_fields_set
+    new_type = "OAR"
+
+    dialog = VOIMetadataDialog(voi)
+    dialog.type_combo.setCurrentText(new_type)
+    dialog.accept()
+
+    assert dialog.updated_voi.voi_type == new_type
+    assert tuple(dialog.updated_voi.color) == DEFAULT_VOI_COLORS[new_type][0]
+
+
+def test_voi_metadata_dialog_retype_keeps_picked_color(qapp, test_data_photons):
+    from pyRadPlan.cst import DEFAULT_VOI_COLORS
+    from pyRadPlan.gui.widgets.result.vois_widget import VOIMetadataDialog
+
+    _, cst, _ = test_data_photons
+
+    voi = cst.vois[0]
+    picked = (7, 8, 9)
+    voi.color = picked
+    new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
+
+    dialog = VOIMetadataDialog(voi)
+    dialog.type_combo.setCurrentText(new_type)
+    dialog.accept()
+
+    assert dialog.updated_voi.voi_type == new_type
+    assert tuple(dialog.updated_voi.color) == picked
+    assert picked not in DEFAULT_VOI_COLORS[new_type]
 
 
 def test_viewing_widget_deprecated_set_data(qapp):

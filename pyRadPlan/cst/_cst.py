@@ -739,27 +739,43 @@ class StructureSet(PyRadPlanBaseModel):
         return alpha, beta
 
     def set_colors(self) -> Self:
-        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``visible_color``.
+        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``color``.
 
         Colors are popped in order from the predefined list for each VOI type, skipping
         any color already taken by another VOI. If the list is exhausted the last color
-        in the list is reused. Existing ``visible_color`` values are preserved.
+        in the list is reused. Explicitly set ``color`` values are preserved, and so is an
+        auto-assigned color that is still free, so revalidating the structure set (e.g.
+        after a VOI was retyped or removed) does not recolor the remaining VOIs.
         """
         # Per-type pool of unused predefined colors.
         pool: dict[str, list[tuple[int, int, int]]] = {
             t: list(palette) for t, palette in DEFAULT_VOI_COLORS.items()
         }
         for voi in self.vois:
-            if voi.visible_color is not None:
-                color = tuple(voi.visible_color)
+            if "color" in voi.model_fields_set:
+                color = tuple(voi.color)
                 if color in pool.get(voi.voi_type, []):
                     pool[voi.voi_type].remove(color)
 
+        unassigned = []
         for voi in self.vois:
-            if voi.visible_color is None:
-                palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
-                remaining = pool.setdefault(voi.voi_type, list(palette))
-                voi.visible_color = remaining.pop(0) if remaining else palette[-1]
+            if "color" not in voi.model_fields_set:
+                remaining = pool.get(voi.voi_type, [])
+                color = tuple(voi.color)
+                if color in remaining:
+                    remaining.remove(color)
+                else:
+                    unassigned.append(voi)
+
+        for voi in unassigned:
+            palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
+            remaining = pool.setdefault(voi.voi_type, list(palette))
+            new_color = remaining.pop(0) if remaining else palette[-1]
+            if tuple(voi.color) != new_color:
+                voi.color = new_color
+                # The assignment marks the field as set; keep "set" meaning "explicitly
+                # chosen" so consumers can still tell a default color from a picked one.
+                voi.model_fields_set.discard("color")
 
         return self
 

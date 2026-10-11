@@ -261,3 +261,18 @@ def test_label_import_warns_on_resampling_and_empty_labels(caplog, outside_ct):
     else:
         assert np.any(sitk.GetArrayViewFromImage(vois[0].mask))
         assert messages == []
+
+
+def test_label_import_reads_legacy_visible_color_key():
+    """Sidecars written before the rename store the color under ``visible_color``."""
+    from pyRadPlan.io.sitk_based.base._serialize import label_image_to_vois
+
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    label = sitk.Image([5, 4, 3], sitk.sitkUInt8)
+    label[1, 1, 1] = 5
+    sidecar = {"vois": {"5": {"name": "target", "voi_type": "TARGET", "visible_color": [7, 8, 9]}}}
+
+    vois = label_image_to_vois(label, ct, sidecar)
+
+    assert tuple(vois[0].color) == (7, 8, 9)
+    assert "color" in vois[0].model_fields_set

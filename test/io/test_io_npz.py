@@ -61,6 +61,29 @@ def test_npz_roundtrip_ct_and_cst(tmp_path):
         assert voxels == after[name], f"VOI '{name}' changed after roundtrip"
 
 
+def test_npz_legacy_visible_color_key_is_read(tmp_path):
+    """Archives written before the ``visible_color`` -> ``color`` rename keep their colors."""
+    import json
+
+    ct, cst = load_tg119()
+    cst.vois[0].color = (7, 8, 9)
+    out = tmp_path / "patient.npz"
+    save_data(ct=ct, cst=cst, file_name=str(out))
+
+    # Rewrite the archive with the pre-rename metadata key.
+    with np.load(out, allow_pickle=False) as npz:
+        arrays = {k: npz[k] for k in npz.files}
+    meta = json.loads(arrays.pop("meta").item())
+    for vmeta in meta["cst"]["vois"]:
+        vmeta["visible_color"] = vmeta.pop("color")
+    np.savez_compressed(out, meta=np.array(json.dumps(meta)), **arrays)
+
+    cst2 = load_data(out)["cst"]
+    assert tuple(cst2.vois[0].color) == (7, 8, 9)
+    for before, after in zip(cst.vois, cst2.vois):
+        assert tuple(after.color) == tuple(before.color)
+
+
 def test_npz_roundtrip_dose(tmp_path):
     ct, _ = load_tg119()
     dose = _dummy_dose(ct)
