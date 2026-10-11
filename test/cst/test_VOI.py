@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import SimpleITK as sitk
-from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi
+from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi, DEFAULT_VOI_COLORS
 
 
 def test_create_voi_no_args():
@@ -1082,14 +1082,35 @@ def test_voi_geometry_in_model_dump(generic_input_3d):
         ((10, 20, 30), (10, 20, 30)),
         (np.array([40, 50, 60]), (40, 50, 60)),
         (np.array([0.5, 0.25, 0.0]), (128, 64, 0)),
-        (None, None),
     ],
 )
-def test_voi_visible_color_validator(generic_input_3d, color_in, color_expected):
+def test_voi_color_validator(generic_input_3d, color_in, color_expected):
     name, ct, mask, _, _ = generic_input_3d
     kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
-    voi = create_voi(**kwargs, visible_color=color_in)
-    assert voi.visible_color == color_expected
+    voi = create_voi(**kwargs, color=color_in)
+    assert voi.color == color_expected
+
+
+def test_voi_deprecated_visible_color_maps_to_color(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
+
+    with pytest.warns(DeprecationWarning, match="visible_color"):
+        voi = create_voi(**kwargs, visible_color=(1, 2, 3))
+    assert voi.color == (1, 2, 3)
+    assert "color" in voi.model_fields_set
+
+    with pytest.warns(DeprecationWarning, match="visible_color"):
+        voi = create_voi(**kwargs, visible_color=None)
+    assert voi.color == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert "color" not in voi.model_fields_set
+
+    with pytest.warns(DeprecationWarning, match="default_color"):
+        voi = create_voi(**kwargs, default_color=(4, 5, 6))
+    assert voi.color == DEFAULT_VOI_COLORS["TARGET"][0]
+
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="not both"):
+        create_voi(**kwargs, color=(1, 2, 3), visible_color=(4, 5, 6))
 
 
 def test_voi_objectives_from_matrad_object_array(generic_input_3d):

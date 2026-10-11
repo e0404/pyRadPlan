@@ -143,8 +143,11 @@ class VOIMetadataDialog(QDialog):
                     beta_x=self.beta_spin.value(),
                     overlap_priority=self.priority_spin.value(),
                 )
-                # Let the new type's default_factory provide its bound color
-                data.pop("default_color", None)
+                # An auto-assigned color is left unset (StructureSet.set_colors() keeps
+                # it that way), so drop it and let the new type's default_factory supply
+                # its own; an explicit pick stays.
+                if "color" not in self._voi.model_fields_set:
+                    data.pop("color", None)
                 self.updated_voi = create_voi(data)
             else:
                 self._voi.alpha_x = self.alpha_spin.value()
@@ -388,7 +391,7 @@ class VOIsWidget(QWidget):
         cb.stateChanged.connect(lambda s, n=voi.name: self._on_voi_toggled(n, bool(s)))
         cb.label_clicked.connect(lambda n=voi.name: self._edit_voi(n))
 
-        rgb = tuple(int(c) for c in (voi.visible_color or voi.default_color))
+        rgb = tuple(int(c) for c in voi.color)
         self._voi_colors[voi.name] = rgb
 
         swatch = QPushButton()
@@ -453,7 +456,7 @@ class VOIsWidget(QWidget):
             self._voi_colors[name] = rgb
             voi = self._voi_by_name.get(name)
             if voi is not None:
-                voi.visible_color = rgb
+                voi.color = rgb
             swatch = self._voi_color_swatches[name]
             swatch.setStyleSheet(
                 f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border: 1px solid #444;"

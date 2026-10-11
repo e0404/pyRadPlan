@@ -83,12 +83,10 @@ class VOI(PyRadPlanBaseModel, ABC):
     )
 
     visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
-    visible_color: Union[tuple[int, int, int], None] = Field(
-        default=None, description="RGB color for visualization in GUI applications"
-    )
-    default_color: tuple[int, int, int] = Field(
+    color: tuple[int, int, int] = Field(
         default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
-        description="Default RGB color bound to the VOI type",
+        alias="visibleColor",
+        description="RGB color for visualization in GUI applications",
     )
 
     # Annotating list[Objective] would create a circular import, so entries are converted to
@@ -181,6 +179,51 @@ class VOI(PyRadPlanBaseModel, ABC):
             return v_copy
 
         # Only Grid / no modification needed:
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_deprecated_color_fields(cls, v: Any) -> Any:
+        """
+        Map the removed ``visible_color`` / ``default_color`` inputs onto ``color``.
+
+        Without this, pydantic would silently ignore them as unknown fields.
+
+        Parameters
+        ----------
+        v : Any
+            The input data dictionary to be validated.
+
+        Returns
+        -------
+        Any
+            The input data with the deprecated color fields replaced.
+        """
+        if not isinstance(v, dict) or not {"visible_color", "default_color"} & v.keys():
+            return v
+
+        v = dict(v)
+        if "default_color" in v:
+            del v["default_color"]
+            warnings.warn(
+                "'default_color' was removed; the VOI type's default is now the default "
+                "of 'color'. The value is ignored.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if "visible_color" in v:
+            visible_color = v.pop("visible_color")
+            warnings.warn(
+                "'visible_color' is deprecated; use 'color' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if "color" in v or "visibleColor" in v:
+                raise ValueError(
+                    "Specify either 'color' or 'visible_color' (deprecated), not both."
+                )
+            if visible_color is not None:
+                v["color"] = visible_color
         return v
 
     @classmethod
@@ -345,21 +388,23 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         raise ValueError("mask must be either passed as numpy array or SimpleITK image")
 
-    @field_validator("visible_color", mode="before")
+    @field_validator("color", mode="before")
     @classmethod
-    def validate_visible_color(cls, v: Any) -> Any:
+    def validate_color(cls, v: Any) -> Any:
         """
-        Validate the visible color.
+        Convert a color to an RGB tuple of 0-255 integers.
 
         Parameters
         ----------
         v : Any
-            The visible color value to be validated.
+            The color: a matplotlib color name or hex string, an RGB triple of
+            0-255 integers, or an RGB triple of 0-1 floats.
 
         Returns
         -------
-        tuple[int, int, int]
-            The validated visible color.
+        Any
+            The color as ``tuple[int, int, int]``; other inputs are passed through
+            unchanged for the field's type validation to reject.
         """
 
         if isinstance(v, str):

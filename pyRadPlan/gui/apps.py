@@ -190,8 +190,5 @@ def analysis_viewer(
 
 
 def _voi_colors(cst: StructureSet) -> dict[str, tuple[int, int, int]]:
-    """Return RGB colors (0-255) for every VOI, falling back to its type default color."""
-    return {
-        voi.name: tuple(int(c) for c in (voi.visible_color or voi.default_color))
-        for voi in cst.vois
-    }
+    """Return RGB colors (0-255) for every VOI."""
+    return {voi.name: tuple(int(c) for c in voi.color) for voi in cst.vois}

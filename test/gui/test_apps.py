@@ -72,19 +72,18 @@ def test_analysis_viewer_reads_workspace(qapp, no_event_loop, test_data_photons,
         workspace.clear()
 
 
-def test_voi_colors_fall_back_to_default_color(test_data_photons):
-    """Every VOI gets a color: its visible_color if set, else its type default color."""
+def test_voi_colors_use_voi_color(test_data_photons):
+    """Every VOI gets its color, whether set explicitly or left at its type default."""
     _, cst, _ = test_data_photons
-    first = cst.vois[0].model_copy(update={"visible_color": (1, 2, 3)})
-    rest = [voi.model_copy(update={"visible_color": None}) for voi in cst.vois[1:]]
-    cst = cst.model_copy(update={"vois": [first, *rest]})
+    first = cst.vois[0].model_copy(update={"color": (1, 2, 3)})
+    cst = cst.model_copy(update={"vois": [first, *cst.vois[1:]]})
 
     colors = _voi_colors(cst)
 
     assert set(colors) == {voi.name for voi in cst.vois}
     assert colors[first.name] == (1, 2, 3)
-    for voi in rest:
-        assert colors[voi.name] == tuple(voi.default_color)
+    for voi in cst.vois:
+        assert colors[voi.name] == tuple(voi.color)
 
 
 def test_analysis_viewer_passes_voi_colors(qapp, no_event_loop, test_data_photons, dose):
