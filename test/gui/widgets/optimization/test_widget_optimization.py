@@ -222,13 +222,17 @@ def test_change_quantity_writes_through(qapp, tg119):
         if widget._table.cellWidget(r, OptimizationWidget._COL_QUANTITY) is not None
     )
     cmb = widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY)
-    assert cmb.currentText() == obj.quantity
+    # the display name is shown, the identifier is kept as item data
+    assert cmb.currentData() == obj.quantity
+    assert cmb.currentText() == get_available_quantities()[obj.quantity].name
 
-    widget._on_quantity_changed(voi_idx, 0, new_quantity)
+    cmb.setCurrentIndex(cmb.findData(new_quantity))
     assert _objectives(ws.cst.vois[voi_idx])[0].quantity == new_quantity
 
 
 def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
+    from pyRadPlan.quantities import get_available_quantities
+
     ct, cst = tg119
     ws = WorkspaceManager()
     widget = OptimizationWidget(workspace=ws)
@@ -238,15 +242,16 @@ def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
     assert button.text() == "Change all quantities…"
 
     current = _objectives(next(v for v in ws.cst.vois if _objectives(v)))[0].quantity
-    action = next(a for a in button.menu().actions() if a.text() != current)
-    new_quantity = action.text()
+    action = next(a for a in button.menu().actions() if a.data() != current)
+    new_quantity = action.data()
+    assert action.text() == get_available_quantities()[new_quantity].name
     action.trigger()
 
     assert _total_objectives(ws.cst) > 0
     assert all(o.quantity == new_quantity for v in ws.cst.vois for o in _objectives(v))
     # the per-objective column reflects the choice
     for row in range(widget._table.rowCount()):
-        assert widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY).currentText() == (
+        assert widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY).currentData() == (
             new_quantity
         )
     assert button.text() == "Change all quantities…"
@@ -270,7 +275,7 @@ def test_bulk_quantity_keyboard_navigation_waits_for_confirmation(qapp, tg119, c
         assert menu.activeAction() == menu.actions()[1]
         assert [o.quantity for v in ws.cst.vois for o in _objectives(v)] == before
 
-        quantity = menu.activeAction().text()
+        quantity = menu.activeAction().data()
         QTest.keyClick(menu, Qt.Key_Return if confirm else Qt.Key_Escape)
         assert not menu.isVisible()
         expected = [quantity] * len(before) if confirm else before
@@ -293,7 +298,7 @@ def test_new_objectives_follow_the_shared_quantity(qapp, tg119):
     other = next(q for q in get_available_quantities() if q != shared)
 
     # after "Change all quantities" a new objective does not reintroduce a mix
-    next(a for a in widget._btn_all_quantity.menu().actions() if a.text() == other).trigger()
+    next(a for a in widget._btn_all_quantity.menu().actions() if a.data() == other).trigger()
     widget._on_add_objective()
     assert _objectives(ws.cst.vois[voi_idx])[-1].quantity == other
 
@@ -340,21 +345,21 @@ def test_image_reference_param_shows_dropdown(mimicking_workspace):
     labels = [combos[0].itemText(i) for i in range(combos[0].count())]
     # default d_ref is not a workspace entry, so it is kept as a "Custom" line
     assert labels[0].startswith("Custom image (1×1×1")
-    assert "physical_dose" in labels
+    assert "dose" in labels  # display name of physical_dose
 
 
 def test_image_reference_selection_writes_through(mimicking_workspace):
     ws, widget, voi_idx, ref = mimicking_workspace
 
     cmb = _image_reference_combos(widget)[0]
-    cmb.setCurrentIndex(cmb.findText("physical_dose"))
+    cmb.setCurrentIndex(cmb.findText("dose"))
 
     assert _objectives(ws.cst.vois[voi_idx])[-1].d_ref is ref
 
     # after a rebuild the selection is re-identified from the workspace
     widget._rebuild_table(ws.cst)
     cmb = _image_reference_combos(widget)[0]
-    assert cmb.currentText() == "physical_dose"
+    assert cmb.currentText() == "dose"
     labels = [cmb.itemText(i) for i in range(cmb.count())]
     assert not any(label.startswith("Custom") for label in labels)
 
@@ -412,7 +417,7 @@ def test_prompt_qi_adaptation_computes_collection(qapp, tg119, monkeypatch):
     monkeypatch.setattr(
         mod.QInputDialog,
         "getItem",
-        staticmethod(lambda *a, **k: ("Adapt using QIs from 'physical_dose'", True)),
+        staticmethod(lambda *a, **k: ("Adapt using QIs from 'dose'", True)),
     )
 
     qis, accepted = widget._prompt_qi_adaptation(ws.cst)

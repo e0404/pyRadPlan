@@ -1,7 +1,7 @@
 import pytest
 
 from pyRadPlan.analysis._dvh import ureg
-from pyRadPlan.gui.widgets.analysis._units import UNIT_ALIASES, compare_units, safe_unit
+from pyRadPlan.analysis._units import UNIT_ALIASES, compare_units, safe_unit
 
 
 @pytest.mark.parametrize(

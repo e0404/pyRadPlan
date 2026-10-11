@@ -21,6 +21,7 @@ class ConstantRBEModel(BiologicalModel):
     """
 
     model = "constant_rbe"
+    name = "Constant RBE"
     model_aliases: ClassVar[tuple[str, ...]] = ("constRBE",)
     matrad_name: ClassVar[str] = "constRBE"
     required_quantities = ("physical_dose",)

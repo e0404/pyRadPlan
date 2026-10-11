@@ -42,6 +42,7 @@ from pyRadPlan.optimization.objectives import (
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
 from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
+from .._display_names import add_identified_item, result_key_labels, show_identifiers_when_open
 from ..ai import ai_disabled_reason
 
 
@@ -128,10 +129,13 @@ class OptimizationWidget(WorkspaceWidget):
             "Single objectives can still be changed in the Quantity column below."
         )
         quantity_menu = QMenu(self._btn_all_quantity)
-        for quantity in get_available_quantities():
-            action = quantity_menu.addAction(quantity)
+        quantity_menu.setToolTipsVisible(True)
+        for identifier, quantity in get_available_quantities().items():
+            action = quantity_menu.addAction(quantity.name)
+            action.setData(identifier)
+            action.setToolTip(identifier)
             action.triggered.connect(
-                lambda _checked=False, q=quantity: self._set_all_quantities(q)
+                lambda _checked=False, q=identifier: self._set_all_quantities(q)
             )
         self._btn_all_quantity.setMenu(quantity_menu)
         controls.addWidget(self._btn_all_quantity)
@@ -280,10 +284,16 @@ class OptimizationWidget(WorkspaceWidget):
         self._table.setCellWidget(row, self._COL_PENALTY, penalty)
 
         cmb_quantity = QComboBox()
-        cmb_quantity.addItems(list(get_available_quantities().keys()))
-        cmb_quantity.setCurrentText(obj.quantity)
-        cmb_quantity.currentTextChanged.connect(
-            lambda text, v=voi_idx, o=obj_idx: self._on_quantity_changed(v, o, text)
+        show_identifiers_when_open(cmb_quantity)
+        for identifier, quantity in get_available_quantities().items():
+            add_identified_item(cmb_quantity, quantity.name, identifier, identifier)
+        current = cmb_quantity.findData(obj.quantity)
+        if current >= 0:
+            cmb_quantity.setCurrentIndex(current)
+        cmb_quantity.currentIndexChanged.connect(
+            lambda idx, c=cmb_quantity, v=voi_idx, o=obj_idx: self._on_quantity_changed(
+                v, o, c.itemData(idx)
+            )
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
 
@@ -340,11 +350,12 @@ class OptimizationWidget(WorkspaceWidget):
         """
         cmb = QComboBox()
         cmb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        show_identifiers_when_open(cmb)
         current = -1
-        for label, candidate in self._reference_dose_options():
+        for label, candidate, key in self._reference_dose_options():
             if self._image_ref_matches(value, candidate):
                 current = cmb.count()
-            cmb.addItem(label, candidate)
+            add_identified_item(cmb, label, candidate, key)
         if current < 0:
             cmb.insertItem(0, self._summarize_image_reference(value), value)
             current = 0
@@ -360,21 +371,23 @@ class OptimizationWidget(WorkspaceWidget):
         )
         return cmb
 
-    def _reference_dose_options(self) -> list[tuple[str, Any]]:
+    def _reference_dose_options(self) -> list[tuple[str, Any, str]]:
         """Workspace result entries convertible to an image-reference value.
 
         Result images come out of ``Dij.compute_result_ct_grid`` as
         ``sitk.Image`` and are used directly; imported cubes are numpy arrays
         on the CT grid and are paired with the CT grid.  Weight vectors and
-        per-beam lists are skipped.
+        per-beam lists are skipped.  Returns ``(label, value, key)`` triples.
         """
-        options: list[tuple[str, Any]] = []
+        options: list[tuple[str, Any, str]] = []
         ct = self._ws.ct
-        for key, val in (self._ws.result or {}).items():
+        result = self._ws.result or {}
+        labels = result_key_labels(result)
+        for key, val in result.items():
             if isinstance(val, sitk.Image):
-                options.append((key, val))
+                options.append((labels[key], val, key))
             elif isinstance(val, np.ndarray) and val.ndim == 3 and ct is not None:
-                options.append((key, (val, ct.grid)))
+                options.append((labels[key], (val, ct.grid), key))
         return options
 
     @staticmethod
@@ -484,7 +497,7 @@ class OptimizationWidget(WorkspaceWidget):
         from pyRadPlan.analysis import QICollection  # noqa: PLC0415
 
         choices = ["No — suggest new objectives"] + [
-            f"Adapt using QIs from '{label}'" for label, _ in options
+            f"Adapt using QIs from '{label}'" for label, *_ in options
         ]
         choice, ok = QInputDialog.getItem(
             self,
@@ -501,7 +514,7 @@ class OptimizationWidget(WorkspaceWidget):
         if idx < 0:
             return None, True
 
-        label, dose = options[idx]
+        label, dose, _ = options[idx]
         if isinstance(dose, tuple):
             dose = dose[0]
         try:

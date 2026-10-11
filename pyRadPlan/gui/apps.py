@@ -2,16 +2,37 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
-from typing import Optional, Union
+from importlib.util import find_spec
+from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 import SimpleITK as sitk
 
-from pyRadPlan.cst._cst import StructureSet
-from pyRadPlan.ct._ct import CT
+# The Qt windows are imported lazily (in gui() behind the startup splash), so probe the
+# GUI dependencies here: pyRadPlan.gui derives GUI_AVAILABLE from importing this module.
+from PySide6 import QtWidgets  # noqa: F401
 
-from .windows._result_win import _launch_result_window
+if find_spec("pyqtgraph") is None:
+    raise ImportError("No module named 'pyqtgraph'")
+
+if TYPE_CHECKING:
+    from pyRadPlan.cst._cst import StructureSet
+    from pyRadPlan.ct._ct import CT
+    from pyRadPlan.gui.workspace import WorkspaceManager
+
+#: Startup imports announced on the splash as (status, module, weight), weights roughly
+#: in warm-start milliseconds.  Modules the package import already loaded are skipped.
+_STARTUP_IMPORTS = (
+    ("Detecting array backends…", "pyRadPlan.core.xp_utils", 2500.0),
+    ("Loading dose engines…", "pyRadPlan.dose", 1000.0),
+    ("Loading optimization…", "pyRadPlan.optimization", 1000.0),
+    ("Loading AI planning agents…", "pyRadPlan.ai.agents", 1200.0),
+    ("Loading GUI widgets…", "pyRadPlan.gui.widgets", 300.0),
+    ("Loading main window…", "pyRadPlan.gui.windows._main_win", 50.0),
+)
+_PATIENT_WEIGHT = 300.0
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -51,31 +72,67 @@ def gui(patient: Optional[str] = None) -> None:
         phantom such as ``"TG119"`` (see :func:`pyRadPlan.io.available_phantoms`).
         When ``None`` (the default), the GUI starts with an empty workspace.
     """
-    workspace = None
-    if patient is not None:
-        # Imports deferred: only needed when a patient file is actually given.
-        import os  # noqa: PLC0415
+    from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
-        from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
-        from pyRadPlan.io import load_data, phantom_path  # noqa: PLC0415
+    from .windows._splash_win import (  # noqa: PLC0415
+        BUILD_WINDOW_WEIGHT,
+        SHOW_WINDOW_WEIGHT,
+        StartupSplash,
+    )
 
-        if not os.path.exists(patient):
-            try:
-                patient = phantom_path(patient)
-            except FileNotFoundError as exc:
-                raise FileNotFoundError(f"Patient dataset not found: {patient}. {exc}") from None
+    patient_path = _resolve_patient(patient) if patient is not None else None
 
-        data = load_data(patient)
-        workspace = WorkspaceManager.instance()
-        payload = {k: data[k] for k in workspace.keys if data.get(k) is not None}
-        if "result" not in payload and data.get("dose") is not None:
-            payload["result"] = {"physical_dose": data["dose"]}
-        workspace.set_many(**payload)
+    _app = QApplication.instance() or QApplication(sys.argv)
+    imports = [entry for entry in _STARTUP_IMPORTS if entry[1] not in sys.modules]
+    total = sum(weight for *_, weight in imports) + BUILD_WINDOW_WEIGHT + SHOW_WINDOW_WEIGHT
+    if patient_path is not None:
+        total += _PATIENT_WEIGHT
+    splash = StartupSplash(total)
+    splash.show()
+    try:
+        for message, module, weight in imports:
+            splash.step(message, weight)
+            importlib.import_module(module)
 
-    # Deferred: avoids pulling in the full Qt main-window stack at package import time.
-    from .windows._main_win import launch_main_window  # noqa: PLC0415
+        workspace = None
+        if patient_path is not None:
+            splash.step(f"Loading patient {patient}…", _PATIENT_WEIGHT)
+            workspace = _load_patient(patient_path)
 
-    launch_main_window(workspace)
+        # Deferred: avoids pulling in the full Qt main-window stack at package import time.
+        from .windows._main_win import launch_main_window  # noqa: PLC0415
+
+        launch_main_window(workspace, splash=splash)
+    finally:
+        splash.close()
+
+
+def _resolve_patient(patient: str) -> str:
+    """Return the path of *patient*, a file/folder path or a bundled phantom name."""
+    import os  # noqa: PLC0415
+
+    from pyRadPlan.io import phantom_path  # noqa: PLC0415
+
+    if os.path.exists(patient):
+        return patient
+    try:
+        return phantom_path(patient)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Patient dataset not found: {patient}. {exc}") from None
+
+
+def _load_patient(path: str) -> WorkspaceManager:
+    """Load the patient dataset at *path* into the shared workspace and return it."""
+    from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
+    from pyRadPlan.io import load_data  # noqa: PLC0415
+
+    data = load_data(path)
+    workspace = WorkspaceManager.instance()
+    payload = {k: data[k] for k in workspace.keys if data.get(k) is not None}
+    if "result" not in payload and data.get("dose") is not None:
+        payload["result"] = {"physical_dose": data["dose"]}
+    workspace.set_many(**payload)
+    return workspace
 
 
 def launch_viewer(
@@ -106,6 +163,8 @@ def launch_viewer(
         # Wrap single array/image into dict
         result = {"quantity": result}
 
+    from .windows._result_win import _launch_result_window  # noqa: PLC0415
+
     _launch_result_window(ct=ct, cst=cst, result=result)
 
 
@@ -132,7 +191,10 @@ def analysis_viewer(
     # Deferred: keeps the Qt stack out of package import time, as in gui().
     from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
-    from pyRadPlan.gui.widgets._result_widget import QUANTITY_META  # noqa: PLC0415
+    from pyRadPlan.gui.widgets._result_widget import (  # noqa: PLC0415
+        QUANTITY_META,
+        default_quantity_key,
+    )
     from pyRadPlan.gui.windows._analysis_win import show_analysis  # noqa: PLC0415
     from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
 
@@ -180,7 +242,7 @@ def analysis_viewer(
         overlay={"voi_colors": _voi_colors(cst)},
         overlay_units=overlay_units,
         overlay_labels=overlay_labels,
-        initial_quantity=next(iter(quantities)),
+        initial_quantity=default_quantity_key(list(quantities)),
         voi_types={voi.name: getattr(voi, "voi_type", "") for voi in cst.vois},
     )
     if window is None:

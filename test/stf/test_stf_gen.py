@@ -14,7 +14,7 @@ from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
 
-from pyRadPlan.stf import Ray, get_available_generators, get_generator
+from pyRadPlan.stf import Ray, get_available_generators, get_generator, resolve_iso_centers
 from pyRadPlan.stf.generators import (
     StfGeneratorBase,
     StfGeneratorExternalBeamRayBixel,
@@ -300,3 +300,38 @@ def test_impt_tg119(tg119, sample_proton_pln):
         assert len(field["rays"]) > 0
         for ray in field["rays"]:
             assert isinstance(ray, Ray)
+
+
+class _CenterOfMassCst:
+    def target_center_of_mass(self):
+        return np.array([1.0, 2.0, 3.0])
+
+
+@pytest.mark.parametrize(
+    ("iso_center", "expected"),
+    [
+        (None, [[1.0, 2.0, 3.0]] * 3),
+        ([], [[1.0, 2.0, 3.0]] * 3),
+        (np.empty((0, 3)), [[1.0, 2.0, 3.0]] * 3),
+        ([4.0, 5.0, 6.0], [[4.0, 5.0, 6.0]] * 3),
+        ([[4.0, 5.0, 6.0]], [[4.0, 5.0, 6.0]] * 3),
+        (np.arange(9.0).reshape(3, 3), np.arange(9.0).reshape(3, 3)),
+    ],
+    ids=["none", "empty-list", "empty-array", "single", "single-row", "per-beam"],
+)
+def test_resolve_iso_centers(iso_center, expected):
+    iso = resolve_iso_centers(iso_center, _CenterOfMassCst(), 3)
+    assert iso.shape == (3, 3)
+    assert np.allclose(iso, expected)
+
+
+def test_resolve_iso_centers_without_number_of_beams():
+    iso = resolve_iso_centers([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], None)
+    assert np.allclose(iso, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert resolve_iso_centers(None, _CenterOfMassCst()).shape == (1, 3)
+
+
+@pytest.mark.parametrize("iso_center", [[1.0, 2.0], np.zeros((2, 3))], ids=["two-coords", "rows"])
+def test_resolve_iso_centers_rejects_invalid(iso_center):
+    with pytest.raises(ValueError):
+        resolve_iso_centers(iso_center, _CenterOfMassCst(), 3)

@@ -1,9 +1,5 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
-
-ureg = pint.UnitRegistry()
 
 
 class AlphaDose(FluenceDependentQuantity):
@@ -12,6 +8,7 @@ class AlphaDose(FluenceDependentQuantity):
     unit = []
     dim = 1
     identifier = "alpha_dose"
+    biological = True
     name = "AlphaDose"
     optional_dependencies = ("physical_dose",)
     indirect_dij_fields = ("alphax",)

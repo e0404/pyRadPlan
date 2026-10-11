@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 import SimpleITK as sitk
@@ -23,6 +23,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.geometry import lps
 from pyRadPlan.gui.windows._analysis_win import show_analysis
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.stf import resolve_iso_centers
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
@@ -51,6 +52,24 @@ QUANTITY_META: dict[str, tuple[str, str]] = {
     "let_dose": ("LET·Dose", "Gy·keV/μm"),
     "let_dose_beam": ("LET·Dose", "Gy·keV/μm"),
 }
+
+
+#: Result keys preferred as the initially shown quantity, in this order. A result
+#: carries an RBE-weighted dose only when it was computed with a biological model,
+#: so that is what the plan was optimized and should be judged on.
+_DEFAULT_QUANTITY_KEYS = ("rbe_x_dose", "physical_dose", "Physical quantity", "physical_quantity")
+
+
+def default_quantity_key(keys: Sequence[str]) -> Optional[str]:
+    """Return the quantity to show first: RBE-weighted dose if present, else dose.
+
+    Falls back to the first key when none of the preferred ones is present, and to
+    ``None`` for no keys.
+    """
+    for candidate in _DEFAULT_QUANTITY_KEYS:
+        if candidate in keys:
+            return candidate
+    return keys[0] if keys else None
 
 
 # --- Data derivation helpers (workspace objects -> viewer-ready arrays) -------
@@ -132,26 +151,25 @@ def _build_overlay_meta(
     return overlay_units, overlay_labels
 
 
-def _compute_isocenter_vox(ct: CT, cst: Optional[StructureSet]) -> np.ndarray | None:
-    """Compute isocenter voxel coordinates (z, x, y) from the CST target center of mass."""
-    if cst is None or not hasattr(cst, "target_center_of_mass"):
-        return None
+def _plan_iso_centers(pln, cst: Optional[StructureSet]) -> np.ndarray | None:
+    """Isocenters of *pln* in mm, shape ``(k, 3)``, resolved as the stf generators do.
+
+    ``None`` when the plan sets none and there is no target to derive it from.
+    """
+    iso_center = (getattr(pln, "prop_stf", None) or {}).get("iso_center")
     try:
-        iso = cst.target_center_of_mass()
+        return resolve_iso_centers(iso_center, cst)
     except Exception:  # noqa: BLE001 - isocenter is optional
         return None
-    if iso is None:
-        return None
 
+
+def _isocenter_vox(ct: CT, iso_centers: np.ndarray | None) -> np.ndarray | None:
+    """Viewer voxel coordinates (z, x, y) of the isocenter marker (the first beam's)."""
+    if iso_centers is None:
+        return None
     origin = np.array(ct.cube_hu.GetOrigin())
     spacing = np.array(ct.cube_hu.GetSpacing())
-    iso = np.array(iso).flatten()
-
-    # Voxel index = (physical - origin) / spacing; all are (x, y, z)
-    isocenter_vox_phys = (iso - origin) / spacing
-
-    # Viewer array is (Z, X, Y) after transpose; isocenter_vox_phys is (x, y, z)
-    return np.array([isocenter_vox_phys[2], isocenter_vox_phys[0], isocenter_vox_phys[1]])
+    return _to_viewer_vox(iso_centers[0], origin, spacing)
 
 
 def _to_viewer_vox(point_lps: np.ndarray, origin: np.ndarray, spacing: np.ndarray) -> np.ndarray:
@@ -173,71 +191,119 @@ def _as_angle_array(value) -> np.ndarray:
     return np.atleast_1d(np.asarray(value, dtype=float)).ravel()
 
 
-def _beam_geometry(ct: CT, pln, stf, isocenter_vox: np.ndarray | None) -> list[dict]:
-    """Beam axes to draw, in the viewer's voxel space.
-
-    Prefers the generated steering information, which carries the exact source
-    point and target point of every beam; without it the axes are derived from
-    the plan's gantry/couch angles so the geometry can be checked before the stf
-    is generated.  Returns an empty list when neither is available.
-    """
-    origin = np.array(ct.cube_hu.GetOrigin())
-    spacing = np.array(ct.cube_hu.GetSpacing())
-
-    beams = getattr(stf, "beams", None)
-    if beams:
-        geometry = []
-        for i, beam in enumerate(beams):
-            direction = np.asarray(beam.source_point, dtype=float)
-            norm = float(np.linalg.norm(direction))
-            if norm == 0.0:
-                continue
-            geometry.append(
-                {
-                    "iso_center": _to_viewer_vox(beam.iso_center, origin, spacing),
-                    "source_direction": _to_viewer_direction(direction / norm, spacing),
-                    "name": f"#{i}",
-                    "label": f"Beam #{i}: gantry {beam.gantry_angle:g}°, "
-                    f"couch {beam.couch_angle:g}°",
-                }
-            )
-        return geometry
-
+def _plan_beam_angles(pln) -> tuple[np.ndarray, np.ndarray] | None:
+    """Gantry and couch angle of every beam of *pln*, or None if it defines no beams."""
     prop_stf = getattr(pln, "prop_stf", None) or {}
     gantry_angles = _as_angle_array(prop_stf.get("gantry_angles"))
     if gantry_angles.size == 0:
-        return []
+        return None
     couch_angles = _as_angle_array(prop_stf.get("couch_angles"))
     if couch_angles.size == 0:
         couch_angles = np.zeros_like(gantry_angles)
     elif couch_angles.size == 1:
         couch_angles = np.full_like(gantry_angles, couch_angles[0])
     if couch_angles.size != gantry_angles.size:
-        return []
+        return None
+    return gantry_angles, couch_angles
 
-    iso_center = prop_stf.get("iso_center")
-    iso_per_beam = None
-    if iso_center is not None and np.size(iso_center) > 0:
-        iso_per_beam = np.atleast_2d(np.asarray(iso_center, dtype=float))
+
+def _same_angles(a: Sequence[float], b: Sequence[float]) -> bool:
+    difference = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    return bool(np.allclose((difference + 180.0) % 360.0 - 180.0, 0.0, atol=1e-6))
+
+
+def _source_direction(gantry: float, couch: float) -> np.ndarray:
+    # Matches Beam.derive_source_points: the source sits at -y in the BEV.
+    return lps.get_beam_rotation_matrix(float(gantry), float(couch)) @ np.array([0.0, -1.0, 0.0])
+
+
+def _beam_orbit(couch: float, spacing: np.ndarray) -> dict:
+    """Return the gantry orbit of a beam at *couch*, in the viewer's voxel space.
+
+    The source direction at gantry angle g is ``cos(g) * u + sin(g) * w``; the
+    orbit's axis is ``u x w``.
+    """
+    u = _source_direction(0.0, couch)
+    w = _source_direction(90.0, couch)
+    return {
+        "orbit": (_to_viewer_direction(u, spacing), _to_viewer_direction(w, spacing)),
+        "orbit_axis": _to_viewer_direction(np.cross(u, w), spacing),
+    }
+
+
+def _beam_geometry(ct: CT, pln, stf, iso_centers: np.ndarray | None) -> list[dict]:
+    """Beam axes to draw, in the viewer's voxel space.
+
+    Prefers the generated steering information, which carries the exact source
+    point and target point of every beam, as long as it still has the plan's
+    angles; otherwise (no stf yet, or the plan changed since) the axes are
+    derived from the plan's gantry/couch angles.  Returns an empty list when
+    neither is available.  Beams with plan angles carry their ``index`` in the
+    plan, ``gantry``/``couch`` angles and gantry orbit (see :func:`_beam_orbit`),
+    so the viewer can rotate them.
+
+    *iso_centers* are the plan's isocenters in mm (see :func:`_plan_iso_centers`).
+    With a plan, they take precedence over those of the stf, as Recalculate Dose
+    moves the beams to them.
+    """
+    origin = np.array(ct.cube_hu.GetOrigin())
+    spacing = np.array(ct.cube_hu.GetSpacing())
+    angles = _plan_beam_angles(pln)
+
+    def plan_iso(i: int) -> np.ndarray:
+        return iso_centers[min(i, len(iso_centers) - 1)]
+
+    beams = getattr(stf, "beams", None)
+    if beams and (
+        angles is None
+        or (
+            len(beams) == angles[0].size
+            and _same_angles([b.gantry_angle for b in beams], angles[0])
+            and _same_angles([b.couch_angle for b in beams], angles[1])
+        )
+    ):
+        use_plan_iso = angles is not None and iso_centers is not None
+        geometry = []
+        for i, beam in enumerate(beams):
+            direction = np.asarray(beam.source_point, dtype=float)
+            norm = float(np.linalg.norm(direction))
+            if norm == 0.0:
+                continue
+            beam_iso = plan_iso(i) if use_plan_iso else beam.iso_center
+            entry = {
+                "iso_center": _to_viewer_vox(beam_iso, origin, spacing),
+                "source_direction": _to_viewer_direction(direction / norm, spacing),
+                "name": f"#{i}",
+                "label": f"Beam #{i}: gantry {beam.gantry_angle:g}°, couch {beam.couch_angle:g}°",
+            }
+            if angles is not None:
+                entry.update(
+                    index=i,
+                    gantry=float(beam.gantry_angle),
+                    couch=float(beam.couch_angle),
+                    **_beam_orbit(beam.couch_angle, spacing),
+                )
+            geometry.append(entry)
+        return geometry
+
+    if angles is None or iso_centers is None:
+        return []
+    gantry_angles, couch_angles = angles
 
     geometry = []
     for i, (gantry, couch) in enumerate(zip(gantry_angles, couch_angles)):
-        if iso_per_beam is not None:
-            iso_vox = _to_viewer_vox(iso_per_beam[min(i, len(iso_per_beam) - 1)], origin, spacing)
-        elif isocenter_vox is not None:
-            iso_vox = isocenter_vox
-        else:
-            return []
-        # Matches Beam.derive_source_points: the source sits at -y in the BEV.
-        direction = lps.get_beam_rotation_matrix(float(gantry), float(couch)) @ np.array(
-            [0.0, -1.0, 0.0]
-        )
         geometry.append(
             {
-                "iso_center": iso_vox,
-                "source_direction": _to_viewer_direction(direction, spacing),
+                "iso_center": _to_viewer_vox(plan_iso(i), origin, spacing),
+                "source_direction": _to_viewer_direction(
+                    _source_direction(gantry, couch), spacing
+                ),
                 "name": f"#{i}",
                 "label": f"Beam #{i}: gantry {float(gantry):g}°, couch {float(couch):g}°",
+                "index": i,
+                "gantry": float(gantry),
+                "couch": float(couch),
+                **_beam_orbit(couch, spacing),
             }
         )
     return geometry
@@ -288,6 +354,9 @@ class ViewingWidget(WorkspaceWidget):
         self._ct_cache: Optional[tuple[object, np.ndarray]] = None
         self._mask_cache: dict[str, tuple[object, np.ndarray]] = {}
         self._quantity_cache: dict[str, tuple[object, object]] = {}
+        #: Beam angles edited in a plan form but not applied yet (see set_beam_editor).
+        self._edited_angles: Optional[tuple[list[float], list[float]]] = None
+        self._beam_editor: Optional[Callable[[int, float], None]] = None
 
         # Create and wire the four sub-widgets.  Whether they are arranged here
         # (standalone use) or placed individually by a host window (e.g. the
@@ -297,6 +366,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vis_widget.isolines_toggled.connect(self.isolines_toggled)
         self.vis_widget.isocenter_toggled.connect(self._on_isocenter_toggled)
         self.vis_widget.beams_toggled.connect(self._on_beams_toggled)
+        self.vis_widget.orientation_toggled.connect(self._on_orientation_toggled)
         self.vis_widget.quantity_changed.connect(self._on_quantity_changed)
         self.vis_widget.isolines_set.connect(self._on_isolines_set)
         self.vis_widget.recenter_requested.connect(self._on_recenter)
@@ -322,6 +392,7 @@ class ViewingWidget(WorkspaceWidget):
         # Wire viewer signals to quantity widget
         self.quantity_widget.connect_viewer_signals(self)
         self.quantity_widget.range_changed.connect(self._on_range_changed)
+        self.quantity_widget.beam_angle_changed.connect(self._on_beam_angle_changed)
 
         if build_layout:
             self._build_default_layout()
@@ -437,9 +508,11 @@ class ViewingWidget(WorkspaceWidget):
         ct_arr = self._ct_array(ct)
         quantity_data = self._process_result_cached(result)
         overlay_units, overlay_labels = _build_overlay_meta(quantity_data)
-        isocenter_vox = _compute_isocenter_vox(ct, cst)
+        isocenter_vox = _isocenter_vox(ct, _plan_iso_centers(self.workspace.pln, cst))
 
-        self.quantity_widget.set_ct_geometry(ct.cube_hu.GetOrigin(), ct.cube_hu.GetSpacing())
+        self.quantity_widget.set_ct_geometry(
+            ct.cube_hu.GetOrigin(), ct.cube_hu.GetSpacing(), ct.cube_hu.GetDirection()
+        )
         self.quantity_widget.set_data(
             ct_arr,
             quantity_data,
@@ -449,14 +522,8 @@ class ViewingWidget(WorkspaceWidget):
         )
 
         quantities = self.quantity_widget.get_available_quantities()
-        active_quantity = None
-        if quantities:
-            for candidate in ("physical_dose", "Physical quantity", "physical_quantity"):
-                if candidate in quantities:
-                    active_quantity = candidate
-                    break
-            else:
-                active_quantity = quantities[0]
+        active_quantity = default_quantity_key(quantities)
+        if active_quantity is not None:
             self.quantity_widget.set_active_quantity(active_quantity)
 
         self.vis_widget.update_quantity_selector(quantities, active_quantity)
@@ -465,12 +532,40 @@ class ViewingWidget(WorkspaceWidget):
         self._sync_ui_to_mode(mode)
 
     def _apply_beams(self, ct: CT, cst, pln, stf) -> None:
-        """Hand the beam axes to the viewer and enable the toggle when there are any."""
+        """Hand the beam axes to the viewer and enable the toggle when there are any.
+
+        Beam angles edited but not applied yet are drawn in place of the plan's,
+        each changed beam flagged ``pending``.
+        """
+        iso_centers = _plan_iso_centers(pln, cst)
+        self.quantity_widget.set_isocenter(_isocenter_vox(ct, iso_centers))
+        applied = _plan_beam_angles(pln)
+        edited = self._edited_angles if pln is not None else None
+        if edited is not None:
+            pln = pln.model_copy(
+                update={
+                    "prop_stf": {
+                        **pln.prop_stf,
+                        "gantry_angles": list(edited[0]),
+                        "couch_angles": list(edited[1]),
+                    }
+                }
+            )
         try:
-            beams = _beam_geometry(ct, pln, stf, _compute_isocenter_vox(ct, cst))
+            beams = _beam_geometry(ct, pln, stf, iso_centers)
         except Exception:  # noqa: BLE001 - the overlay must never break the viewer
             logger.warning("Could not derive the beam geometry for the viewer", exc_info=True)
             beams = []
+        if edited is not None:
+            for beam in beams:
+                i = beam.get("index", -1)
+                beam["pending"] = not (
+                    applied is not None
+                    and 0 <= i < applied[0].size
+                    and _same_angles(
+                        [beam["gantry"], beam["couch"]], [applied[0][i], applied[1][i]]
+                    )
+                )
         self.quantity_widget.set_beams(beams)
         self.vis_widget.set_beams_available(bool(beams))
 
@@ -599,6 +694,49 @@ class ViewingWidget(WorkspaceWidget):
 
     def _on_beams_toggled(self, checked: bool) -> None:
         self.quantity_widget.set_beams_visible(checked)
+
+    def _on_orientation_toggled(self, checked: bool) -> None:
+        self.quantity_widget.set_orientation_visible(checked)
+
+    def set_beam_editor(self, editor: Optional[Callable[[int, float], None]]) -> None:
+        """Route dragged beam angles to *editor* instead of writing them to the plan.
+
+        *editor* is called with the beam's index and new gantry angle, e.g. a plan
+        form's ``set_gantry_angle``, so a drag becomes an edit that is applied with
+        the form.  Pass the form's edited angles to :meth:`set_edited_beam_angles`
+        to draw them.  ``None`` (the default) writes drags straight to the plan.
+        """
+        self._beam_editor = editor
+
+    def set_edited_beam_angles(
+        self, angles: Optional[tuple[Sequence[float], Sequence[float]]]
+    ) -> None:
+        """Draw the beams at these ``(gantry, couch)`` angles until they are applied.
+
+        ``None`` draws the plan's beams.
+        """
+        self._edited_angles = (
+            None
+            if angles is None
+            else ([float(a) for a in angles[0]], [float(a) for a in angles[1]])
+        )
+        ct = self._ws.ct
+        if ct is not None:
+            self._apply_beams(ct, self._ws.cst, self._ws.pln, self._ws.stf)
+
+    def _on_beam_angle_changed(self, index: int, gantry: float) -> None:
+        """Hand a beam's dragged gantry angle to the beam editor, or write it to the plan."""
+        if self._beam_editor is not None:
+            self._beam_editor(index, gantry)
+            return
+        pln = self._ws.pln
+        angles = _plan_beam_angles(pln)
+        if angles is None or not 0 <= index < angles[0].size:
+            return
+        gantry_angles = [float(angle) for angle in angles[0]]
+        gantry_angles[index] = float(gantry)
+        prop_stf = {**pln.prop_stf, "gantry_angles": gantry_angles}
+        self._ws.pln = pln.model_copy(update={"prop_stf": prop_stf})
 
     def _on_isolines_set(self, levels: list[float]) -> None:
         self.quantity_widget.set_isolines(levels)

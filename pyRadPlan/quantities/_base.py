@@ -14,7 +14,6 @@ import pint
 from pyRadPlan.dij import Dij
 from pyRadPlan.core import xp_utils as compute_backend
 
-ureg = pint.UnitRegistry()
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +24,9 @@ class RTQuantity(ABC):
     identifier: ClassVar[str]
     unit: ClassVar[pint.Unit]
     dim: ClassVar[int]  # To differentiate between scalar and vector quantities
+    #: Whether the quantity describes a biological effect (e.g. RBE-weighted dose or LQ
+    #: effect) rather than a physical one.
+    biological: ClassVar[bool] = False
     precision: str
 
     def __init__(self, dij: Dij, scenarios=None):

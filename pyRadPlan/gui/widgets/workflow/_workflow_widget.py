@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+from copy import deepcopy
 from typing import Any, Callable, Optional
 
+import numpy as np
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,7 +25,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.core import ComputeControl, ProgressReport, StatusReport
+from pyRadPlan.core import (
+    ComputeCancelledError,
+    ComputeControl,
+    ProgressReport,
+    StatusReport,
+    WarningReport,
+)
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
@@ -117,6 +125,40 @@ def _build_image_save_filter() -> str:
     return ";;".join(entries)
 
 
+def _recalculation_angles_match(pln, stf) -> bool:
+    """Whether forward dose can reuse the stored beams for the plan's angles.
+
+    Plans imported without angles use the existing steering information. A
+    single couch angle applies to every beam; angles are compared modulo 360.
+    """
+    if pln is None or stf is None or not stf.beams:
+        return False
+    props = pln.prop_stf or {}
+    for field, attribute in (("gantry_angles", "gantry_angle"), ("couch_angles", "couch_angle")):
+        value = props.get(field)
+        if value is None:
+            if field == "couch_angles" and props.get("gantry_angles") is not None:
+                value = [0.0]
+            else:
+                continue
+        try:
+            angles = np.asarray(value, dtype=float).ravel()
+        except (TypeError, ValueError):
+            return False
+        if field == "couch_angles":
+            if angles.size == 0:
+                angles = np.zeros(len(stf.beams))
+            elif angles.size == 1:
+                angles = np.repeat(angles, len(stf.beams))
+        if angles.size != len(stf.beams) or not np.all(np.isfinite(angles)):
+            return False
+        stored = np.array([getattr(beam, attribute) for beam in stf.beams])
+        difference = (angles - stored + 180.0) % 360.0 - 180.0
+        if not np.allclose(difference, 0.0, atol=1e-6, rtol=0.0):
+            return False
+    return True
+
+
 class WorkflowWidget(WorkspaceWidget):
     """Guides the user through the pyRadPlan treatment-planning workflow.
 
@@ -156,6 +198,8 @@ class WorkflowWidget(WorkspaceWidget):
         self._worker: Optional[Worker] = None
         self._control: Optional[ComputeControl] = None
         self._pending_success: Optional[Callable] = None
+        #: Warnings reported by the running computation, shown once it ends.
+        self._pending_warnings: list[str] = []
         self._saved_tags: list[str] = []
         self._opt_status_win: Optional[OptimizationStatusWidget] = None
         # matRad-style staleness: a downstream product (dij/result) is "stale"
@@ -163,6 +207,9 @@ class WorkflowWidget(WorkspaceWidget):
         self._dij_stale = False
         self._result_stale = False
         self._indicators: dict[str, QLabel] = {}
+        #: Editors whose unapplied changes are offered before a computation, as
+        #: ``(name, has_pending, apply)``; see :meth:`add_pending_changes_source`.
+        self._pending_sources: list[tuple[str, Callable[[], bool], Callable[[], bool]]] = []
 
         self._setup_ui()
         # Queued (cross-thread) delivery of compute reports to the GUI thread.
@@ -190,6 +237,15 @@ class WorkflowWidget(WorkspaceWidget):
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self._on_refresh)
         row.addWidget(btn_refresh)
+        self._btn_stop = QPushButton("Stop")
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.setToolTip(
+            "Stop the running calculation.\n"
+            "An optimization keeps its last iterate; other calculations are discarded.\n"
+            "Takes effect at the next progress step (e.g. the next ray)."
+        )
+        self._btn_stop.clicked.connect(self._on_stop)
+        row.addWidget(self._btn_stop)
         root.addLayout(row)
 
         # Indeterminate "busy" bar shown while a background computation runs.
@@ -335,9 +391,9 @@ class WorkflowWidget(WorkspaceWidget):
         keys = set(changed_keys)
         if not ws.has("dij"):
             self._dij_stale = False
-        elif keys & {"stf", "dij"}:
+        elif "dij" in keys:
             self._dij_stale = False
-        elif "pln" in keys:
+        elif keys & {"pln", "stf"}:
             self._dij_stale = True
         if not ws.has("result"):
             self._result_stale = False
@@ -429,6 +485,7 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         self._pending_success = on_success
+        self._pending_warnings = []
         # Every task gets a control so shutdown() can always request a stop.
         self._control = control if control is not None else ComputeControl()
         self._worker = Worker(
@@ -452,11 +509,16 @@ class WorkflowWidget(WorkspaceWidget):
         callback, self._pending_success = self._pending_success, None
         if callback is not None:
             callback(result)
+        self._show_pending_warnings()
 
     @Slot(object)
     def _on_thread_error(self, exc: object) -> None:
         self._cleanup_thread()
         self._pending_success = None
+        self._show_pending_warnings()
+        if isinstance(exc, ComputeCancelledError):
+            self._lbl_status.setText("Stopped")
+            return
         self._show_error(exc)
 
     def _cleanup_thread(self) -> None:
@@ -480,7 +542,7 @@ class WorkflowWidget(WorkspaceWidget):
         """Stop a running background computation before the widget is destroyed.
 
         Requests a cooperative stop and waits up to *timeout_ms*.  If the
-        computation does not support cancellation (e.g. dose engines), the
+        computation does not support cancellation (e.g. an external Monte Carlo run), the
         thread is terminated as a last resort — this is only acceptable because
         the application is exiting; a destroyed-while-running QThread would
         abort the whole process instead.
@@ -497,9 +559,18 @@ class WorkflowWidget(WorkspaceWidget):
             self._thread.terminate()
             self._thread.wait()
 
+    def _on_stop(self) -> None:
+        """Request a cooperative stop of the running computation."""
+        if self._control is None:
+            return
+        self._control.request_stop()
+        self._btn_stop.setEnabled(False)
+        self._lbl_status.setText("Stopping…")
+
     def _set_busy(self, busy: bool) -> None:
         for btn in self._action_buttons:
             btn.setEnabled(not busy)
+        self._btn_stop.setEnabled(busy)
         if busy:
             self._progress.setRange(0, 0)  # indeterminate until first report
         self._progress.setVisible(busy)
@@ -514,6 +585,10 @@ class WorkflowWidget(WorkspaceWidget):
     @Slot(object)
     def _on_compute_report(self, report: object) -> None:
         """Update the progress bar/status from a compute report (GUI thread)."""
+        if isinstance(report, WarningReport):
+            if report.message not in self._pending_warnings:
+                self._pending_warnings.append(report.message)
+            return
         if isinstance(report, StatusReport):
             self._on_status_report(report)
             return
@@ -569,6 +644,11 @@ class WorkflowWidget(WorkspaceWidget):
         if self._progress.maximum() != 0:
             self._progress.setRange(0, 0)
         self._lbl_status.setText(f"Optimizing · {summary}" if summary else "Optimizing…")
+
+    def _show_pending_warnings(self) -> None:
+        warnings, self._pending_warnings = self._pending_warnings, []
+        if warnings:
+            QMessageBox.warning(self, "Warning", "\n\n".join(warnings))
 
     def _show_error(self, exc: object, title: str = "Error") -> None:
         QMessageBox.critical(self, title, f"{type(exc).__name__}: {exc}")
@@ -903,11 +983,73 @@ class WorkflowWidget(WorkspaceWidget):
     def _on_refresh(self) -> None:
         self._ws.refresh()
 
+    def add_pending_changes_source(
+        self, name: str, has_pending: Callable[[], bool], apply: Callable[[], bool]
+    ) -> None:
+        """Offer to apply an editor's pending changes before a step that uses the plan.
+
+        Parameters
+        ----------
+        name:
+            The editor as named to the user, e.g. ``"plan"``.
+        has_pending:
+            Whether the editor has changes that are not applied yet.
+        apply:
+            Applies them; returns False if that failed (the editor reports why).
+        """
+        self._pending_sources.append((name, has_pending, apply))
+
+    def _ask_pending_changes(self, step: str, names: list[str], outdates_input: bool) -> str:
+        """Ask how to handle unapplied changes: ``"apply"``, ``"continue"`` or ``"cancel"``."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(step)
+        box.setText(f"The {' and '.join(names)} has changes that are not applied yet.")
+        if outdates_input:
+            box.setInformativeText(
+                "Applying them outdates the dose influence, so it has to be "
+                f'recalculated before "{step}" can run.'
+            )
+            apply_btn = box.addButton("Apply changes", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            apply_btn = box.addButton("Apply and continue", QMessageBox.ButtonRole.AcceptRole)
+        continue_btn = box.addButton("Continue without applying", QMessageBox.ButtonRole.NoRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(apply_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is apply_btn:
+            return "apply"
+        if clicked is continue_btn:
+            return "continue"
+        return "cancel"
+
+    def _resolve_pending_changes(self, step: str, outdates_input: bool = False) -> bool:
+        """Settle unapplied editor changes before *step*; False if it must not run.
+
+        *outdates_input* marks steps working from the dose influence (e.g. the
+        optimization): applying a plan change outdates it, so such a step stops
+        after applying and the status asks for a recalculation.
+        """
+        pending = [source for source in self._pending_sources if source[1]()]
+        if not pending:
+            return True
+        choice = self._ask_pending_changes(step, [name for name, *_ in pending], outdates_input)
+        if choice == "continue":
+            return True
+        if choice == "cancel":
+            return False
+        if not all(apply() for _, _, apply in pending):
+            return False
+        return not outdates_input
+
     # ------------------------------------------------------------------
     # Dose influence callbacks
     # ------------------------------------------------------------------
 
     def _on_calc_dose(self) -> None:
+        if not self._resolve_pending_changes("Calculate Dose Influence"):
+            return
         ct, cst, pln = self._ws.ct, self._ws.cst, self._ws.pln
 
         def _compute():
@@ -931,6 +1073,8 @@ class WorkflowWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     def _on_optimize(self) -> None:
+        if not self._resolve_pending_changes("Optimize", outdates_input=True):
+            return
         ct, cst, stf, dij, pln = (
             self._ws.ct,
             self._ws.cst,
@@ -987,6 +1131,8 @@ class WorkflowWidget(WorkspaceWidget):
             self._opt_status_win.finalize()
 
     def _on_recalc_dose(self) -> None:
+        if not self._resolve_pending_changes("Recalculate Dose", outdates_input=True):
+            return
         ct, cst, stf, pln = self._ws.ct, self._ws.cst, self._ws.stf, self._ws.pln
         prev_result: dict[str, Any] = dict(self._ws.result or {})
         weights = prev_result.get("w")
@@ -999,16 +1145,43 @@ class WorkflowWidget(WorkspaceWidget):
             )
             return
 
-        def _compute() -> dict:
+        if not _recalculation_angles_match(pln, stf):
+            QMessageBox.warning(
+                self,
+                "Recalculate Dose",
+                "The plan's beam angles or beam count differ from the stored steering "
+                "information. Calculate Dose Influence and optimize again before "
+                "recalculating dose.",
+            )
+            return
+
+        def _compute() -> tuple:
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
+            from pyRadPlan.stf import resolve_iso_centers  # noqa: PLC0415
 
-            return calc_dose_forward(ct, cst, stf, pln, weights)
+            # The beams follow the plan's isocenter (the target center of mass when
+            # automatic). Move them on a copy, so a failed run leaves the stf untouched.
+            iso_centers = resolve_iso_centers(
+                (pln.prop_stf or {}).get("iso_center"), cst, len(stf.beams)
+            )
+            recalc_stf = stf
+            if not np.allclose([beam.iso_center for beam in stf.beams], iso_centers):
+                recalc_stf = deepcopy(stf)
+                for beam, iso_center in zip(recalc_stf.beams, iso_centers):
+                    beam.iso_center = iso_center
 
-        def _on_success(new_result: dict) -> None:
+            return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+
+        def _on_success(data: tuple) -> None:
+            recalc_stf, new_result = data
             result = dict(prev_result)
             result.update(new_result)
-            self._ws.result = result
+            if recalc_stf is stf:
+                self._ws.result = result
+            else:
+                # Storing the moved stf flags the dij, computed for the old one, as outdated.
+                self._ws.set_many(stf=recalc_stf, result=result)
 
         self._run_in_thread(_compute, on_success=_on_success, busy_text="Recalculating dose…")
 
@@ -1095,6 +1268,8 @@ class WorkflowWidget(WorkspaceWidget):
         if not ws.has("ct"):
             QMessageBox.warning(self, "Save Workspace", "Load a CT before saving a workspace.")
             return
+        if not self._resolve_pending_changes("Save Workspace"):
+            return
         filepath, _ = QFileDialog.getSaveFileName(self, "Save workspace", "", _build_save_filter())
         if not filepath:
             return
@@ -1131,6 +1306,8 @@ class WorkflowWidget(WorkspaceWidget):
         self._run_save(_save, f"{title}…", title)
 
     def _on_save_plan(self) -> None:
+        if not self._resolve_pending_changes("Save Plan"):
+            return
         self._save_single_object("Save Plan", "pln", self._ws.pln)
 
     def _on_save_dij(self) -> None:

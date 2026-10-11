@@ -40,6 +40,9 @@ class BiologicalModel(ABC):
     ----------
     model : str
         Canonical name identifying the biological model (e.g. ``"none"``, ``"LEM"``).
+    name : str or None
+        Human-readable model name for user interfaces (e.g. ``"Constant RBE"``);
+        ``None`` if it is ``model``.
     model_aliases : tuple[str, ...]
         Alternative names by which this model can be looked up.
     matrad_name : str or None
@@ -60,6 +63,7 @@ class BiologicalModel(ABC):
     """
 
     model: ClassVar[str]
+    name: ClassVar[Optional[str]] = None
     model_aliases: ClassVar[tuple[str, ...]] = ()
     matrad_name: ClassVar[Optional[str]] = None
     required_quantities: ClassVar[tuple[str, ...]] = ()
@@ -105,6 +109,8 @@ class BiologicalModel(ABC):
         canonical_name = getattr(cls, "model", None)
         if not isinstance(canonical_name, str) or not canonical_name:
             raise ValueError("Biological model must declare a non-empty string model name.")
+        if cls.name is not None and (not isinstance(cls.name, str) or not cls.name):
+            raise ValueError("Biological model name must be None or a non-empty string.")
 
         _validate_name_tuple(cls.model_aliases, "model_aliases", subject="Biological model")
         _validate_name_tuple(
@@ -343,6 +349,7 @@ class EmptyModel(BiologicalModel):
     """
 
     model = "none"
+    name = "None (physical dose)"
     possible_radiation_modes = ("photons", "protons", "helium", "carbon", "oxygen", "VHEE")
     default_report_quantity = "physical_dose"
 

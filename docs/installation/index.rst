@@ -56,8 +56,9 @@ the graphical user interface:
 
 This pulls in all mandatory dependencies — NumPy, SciPy, SimpleITK, pydantic,
 pydantic-ai, and everything else needed to run a full treatment planning workflow on
-the CPU with the NumPy backend — plus PySide6 and pyqtgraph for the interactive
-matRad-style GUI.  It also provides the ``pyRadPlanGUI`` command:
+the CPU with the NumPy backend — plus the core Qt modules of PySide6
+(``pyside6-essentials``) and pyqtgraph for the interactive matRad-style GUI.  It also
+provides the ``pyRadPlanGUI`` command:
 
 .. code-block:: bash
 
@@ -118,7 +119,7 @@ by appending them in brackets, e.g. ``pip install pyRadPlan[dev,gui]``.
        sphinx-autodoc-typehints)
      - Development, testing, and documentation builds
    * - ``[gui]``
-     - PySide6 ≥ 6.0.1, pyqtgraph ≥ 0.12.0
+     - PySide6-Essentials ≥ 6.4 (the core Qt modules of PySide6), pyqtgraph ≥ 0.12.0
      - The matRad-style main GUI and interactive visualization widgets — recommended
        for all desktop installs (see :ref:`installation` above); skip on headless
        systems

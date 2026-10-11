@@ -109,7 +109,11 @@ def captured_main_window(monkeypatch):
     from pyRadPlan.gui.workspace import WorkspaceManager
 
     launched = {}
-    monkeypatch.setattr(main_win, "launch_main_window", lambda ws: launched.update(ws=ws))
+    monkeypatch.setattr(
+        main_win,
+        "launch_main_window",
+        lambda ws, splash=None: launched.update(ws=ws, splash=splash),
+    )
     try:
         yield launched
     finally:
@@ -137,3 +141,17 @@ def test_main_passes_patient_to_gui(monkeypatch):
     main(["TG119"])
     main([])
     assert received == ["TG119", None]
+
+
+def test_analysis_viewer_starts_on_rbe_weighted_dose(qapp, no_event_loop, test_data_photons, dose):
+    _, cst, _ = test_data_photons
+    captured = {}
+
+    def fake_show_analysis(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    with patch("pyRadPlan.gui.windows._analysis_win.show_analysis", fake_show_analysis):
+        analysis_viewer(cst=cst, result={"physical_dose": dose, "rbe_x_dose": 1.1 * dose})
+
+    assert captured["initial_quantity"] == "rbe_x_dose"

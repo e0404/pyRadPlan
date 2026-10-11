@@ -282,17 +282,127 @@ def test_beam_overlay_items_follow_the_toggle(qapp, test_data_photons):
 
 
 def test_beam_overlay_prefers_the_steering_information(qapp, test_data_photons):
-    """Prefer generated steering information over plan-derived beam data."""
+    """Without a plan, the generated steering information provides the beams."""
+    from pyRadPlan.stf import SteeringInformation
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    iso = np.asarray(cst.target_center_of_mass(), dtype=float).ravel() + [10.0, 0.0, 0.0]
+    ws.stf = SteeringInformation(
+        beams=[
+            {"gantry_angle": angle, "couch_angle": 0.0, "iso_center": iso, "rays": []}
+            for angle in (0.0, 90.0)
+        ]
+    )
+    widget = ViewingWidget(ws)
+
+    beams = widget.quantity_widget._beams
+    spacing = np.array(ct.cube_hu.GetSpacing())
+    origin = np.array(ct.cube_hu.GetOrigin())
+    expected = (iso - origin) / spacing
+    assert len(beams) == 2
+    assert np.allclose(beams[0]["iso_center"], expected[[2, 0, 1]])
+
+
+def test_isocenter_marker_and_beams_follow_the_plan_isocenter(qapp, test_data_photons):
+    """A plan isocenter moves the marker and the beams, also those of an existing stf."""
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.stf import SteeringInformation
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    com = np.asarray(cst.target_center_of_mass(), dtype=float).ravel()
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0], "couch_angles": [0]})
+    ws.stf = SteeringInformation(
+        beams=[{"gantry_angle": 0.0, "couch_angle": 0.0, "iso_center": com, "rays": []}]
+    )
+    widget = ViewingWidget(ws)
+    spacing = np.array(ct.cube_hu.GetSpacing())
+    origin = np.array(ct.cube_hu.GetOrigin())
+    assert np.allclose(widget.quantity_widget._isocenter, ((com - origin) / spacing)[[2, 0, 1]])
+
+    iso = com + [10.0, 0.0, 0.0]
+    ws.pln = PhotonPlan(
+        prop_stf={"gantry_angles": [0], "couch_angles": [0], "iso_center": list(iso)}
+    )
+    expected = ((iso - origin) / spacing)[[2, 0, 1]]
+    assert np.allclose(widget.quantity_widget._isocenter, expected)
+    assert np.allclose(widget.quantity_widget._beams[0]["iso_center"], expected)
+
+
+def test_automatic_isocenter_moves_the_beams_of_an_existing_stf(qapp, test_data_photons):
+    """In auto mode the beams are drawn at the target center of mass, as Recalculate Dose does."""
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.stf import SteeringInformation
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    com = np.asarray(cst.target_center_of_mass(), dtype=float).ravel()
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0], "couch_angles": [0]})
+    ws.stf = SteeringInformation(
+        beams=[
+            {
+                "gantry_angle": 0.0,
+                "couch_angle": 0.0,
+                "iso_center": com + [10.0, 0.0, 0.0],
+                "rays": [],
+            }
+        ]
+    )
+    widget = ViewingWidget(ws)
+
+    expected = ((com - np.array(ct.cube_hu.GetOrigin())) / np.array(ct.cube_hu.GetSpacing()))[
+        [2, 0, 1]
+    ]
+    assert np.allclose(widget.quantity_widget._isocenter, expected)
+    assert np.allclose(widget.quantity_widget._beams[0]["iso_center"], expected)
+
+
+@pytest.mark.parametrize("iso_center", [[], np.empty((0, 3))], ids=["list", "array"])
+def test_empty_plan_isocenter_is_automatic(qapp, test_data_photons, iso_center):
+    """An empty isocenter (e.g. from a MATLAB round-trip) selects the target center of mass."""
+    from pyRadPlan.plan import PhotonPlan
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0], "iso_center": iso_center})
+    widget = ViewingWidget(ws)
+
+    com = np.asarray(cst.target_center_of_mass(), dtype=float).ravel()
+    expected = ((com - np.array(ct.cube_hu.GetOrigin())) / np.array(ct.cube_hu.GetSpacing()))[
+        [2, 0, 1]
+    ]
+    assert np.allclose(widget.quantity_widget._isocenter, expected)
+    assert np.allclose(widget.quantity_widget._beams[0]["iso_center"], expected)
+
+
+def test_per_beam_plan_isocenters(qapp, test_data_photons):
+    """Each beam is drawn at its own isocenter; the marker shows the first beam's."""
+    from pyRadPlan.plan import PhotonPlan
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    com = np.asarray(cst.target_center_of_mass(), dtype=float).ravel()
+    isos = np.array([com, com + [10.0, 0.0, 0.0]])
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0, 90], "iso_center": isos.tolist()})
+    widget = ViewingWidget(ws)
+
+    origin = np.array(ct.cube_hu.GetOrigin())
+    spacing = np.array(ct.cube_hu.GetSpacing())
+    expected = ((isos - origin) / spacing)[:, [2, 0, 1]]
+    beams = widget.quantity_widget._beams
+    assert np.allclose([beam["iso_center"] for beam in beams], expected)
+    assert np.allclose(widget.quantity_widget._isocenter, expected[0])
+
+
+def test_beam_overlay_ignores_outdated_steering_information(qapp, test_data_photons):
+    """An stf whose angles no longer match the plan is outdated; the plan's beams are drawn."""
     from pyRadPlan.plan import PhotonPlan
     from pyRadPlan.stf import SteeringInformation
 
     ct, cst, _ = test_data_photons
     ws = _make_workspace(ct, cst)
     ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0, 90], "couch_angles": [0, 0]})
-    widget = ViewingWidget(ws)
-    assert len(widget.quantity_widget._beams) == 2
-
-    # A generated stf overrides the plan angles; here it holds a single beam.
     ws.stf = SteeringInformation(
         beams=[
             {
@@ -303,6 +413,249 @@ def test_beam_overlay_prefers_the_steering_information(qapp, test_data_photons):
             }
         ]
     )
+    widget = ViewingWidget(ws)
+
     beams = widget.quantity_widget._beams
-    assert len(beams) == 1
-    assert "45" in beams[0]["label"]
+    assert [beam["gantry"] for beam in beams] == [0.0, 90.0]
+
+
+class _DragEvent:
+    """Stand-in for a pyqtgraph drag event at *pos* (view coordinates)."""
+
+    def __init__(self, pos, start=False, finish=False):
+        self._pos, self._start, self._finish = pos, start, finish
+
+    def isStart(self):  # noqa: N802
+        return self._start
+
+    def isFinish(self):  # noqa: N802
+        return self._finish
+
+    def pos(self):
+        from PySide6.QtCore import QPointF
+
+        return QPointF(*self._pos)
+
+
+def _beam_sources(quantity_widget):
+    from pyRadPlan.gui.widgets.result.quantity_widget import _BeamSourceItem
+
+    return [item for item in quantity_widget._beam_items if isinstance(item, _BeamSourceItem)]
+
+
+def test_dragging_a_beam_changes_its_gantry_angle(qapp, test_data_photons):
+    from pyRadPlan.plan import PhotonPlan
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0, 180], "couch_angles": [0]})
+    widget = ViewingWidget(ws)
+    quantity_widget = widget.quantity_widget
+    widget.vis_widget.beams_checkbox.setChecked(True)
+    quantity_widget.set_plane("Axial")
+    assert all(source._on_drag is not None for source in _beam_sources(quantity_widget))
+
+    # Gantry 90 has its source at the patient's left, to the right in the axial view.
+    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    tip = quantity_widget._beam_parts[0]["tip"]
+    quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
+    assert quantity_widget._beam_drag is not None  # the orbit is shown
+    # Slightly downwards, i.e. posterior, is past 90 towards 180.
+    quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso + 0.1)))
+    assert _beam_labels(quantity_widget)[0] == "#0  91°"
+    quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso), finish=True))
+    assert quantity_widget._beam_drag is None
+    source = quantity_widget._beam_parts[0]["source"]
+    dropped = (source.data["x"][0], source.data["y"][0])
+    qapp.processEvents()
+
+    # Redrawn from the plan, the source stays where it was dropped.
+    assert quantity_widget._beam_parts[0]["tip"] == pytest.approx(dropped)
+    assert ws.pln.prop_stf["gantry_angles"] == [90.0, 180.0]
+    assert [beam["gantry"] for beam in quantity_widget._beams] == [90.0, 180.0]
+    assert _beam_labels(quantity_widget) == ["#0", "#1"]
+
+
+def test_beams_drag_only_where_their_orbit_is_visible(qapp, test_data_photons):
+    from pyRadPlan.plan import PhotonPlan
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    # The gantry of a couch-90 beam rotates in the sagittal plane.
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0, 45], "couch_angles": [0, 90]})
+    widget = ViewingWidget(ws)
+    quantity_widget = widget.quantity_widget
+    widget.vis_widget.beams_checkbox.setChecked(True)
+
+    quantity_widget.set_plane("Axial")
+    coplanar, rotated = _beam_sources(quantity_widget)
+    assert coplanar._on_drag is not None and rotated._on_drag is None
+    assert "Drag it in the Sagittal view" in rotated.toolTip()
+
+    # The sagittal view sees the coplanar beam's orbit edge-on.
+    quantity_widget.set_plane("Sagittal")
+    coplanar, rotated = _beam_sources(quantity_widget)
+    assert coplanar._on_drag is None and rotated._on_drag is not None
+    assert "Drag it in the Axial view" in coplanar.toolTip()
+
+
+def test_dragged_beams_go_to_the_beam_editor(qapp, test_data_photons):
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.gui.widgets.result.quantity_widget import _BeamWedgeItem
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0, 180], "couch_angles": [0]})
+    widget = ViewingWidget(ws)
+    edits = []
+    widget.set_beam_editor(lambda index, angle: edits.append((index, angle)))
+    quantity_widget = widget.quantity_widget
+    widget.vis_widget.beams_checkbox.setChecked(True)
+    quantity_widget.set_plane("Axial")
+
+    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    tip = quantity_widget._beam_parts[0]["tip"]
+    quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
+    quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso), finish=True))
+    qapp.processEvents()
+    assert edits == [(0, 90.0)]
+    assert ws.pln.prop_stf["gantry_angles"] == [0, 180]
+
+    # The editor's (not yet applied) angles are drawn, the changed beam marked.
+    widget.set_edited_beam_angles(([90.0, 180.0], [0.0, 0.0]))
+    assert [beam["gantry"] for beam in quantity_widget._beams] == [90.0, 180.0]
+    assert [beam["pending"] for beam in quantity_widget._beams] == [True, False]
+    assert _beam_labels(quantity_widget) == ["#0*", "#1"]
+    wedges = [i for i in quantity_widget._beam_items if isinstance(i, _BeamWedgeItem)]
+    assert [wedge.pending for wedge in wedges] == [True, False]
+
+    widget.set_edited_beam_angles(None)
+    assert [beam["gantry"] for beam in quantity_widget._beams] == [0.0, 180.0]
+    assert _beam_labels(quantity_widget) == ["#0", "#1"]
+
+
+def test_escape_cancels_a_beam_drag(qapp, test_data_photons):
+    from pyRadPlan.plan import PhotonPlan
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst)
+    ws.pln = PhotonPlan(prop_stf={"gantry_angles": [0], "couch_angles": [0]})
+    widget = ViewingWidget(ws)
+    quantity_widget = widget.quantity_widget
+    widget.vis_widget.beams_checkbox.setChecked(True)
+    quantity_widget.set_plane("Axial")
+
+    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    tip = quantity_widget._beam_parts[0]["tip"]
+    quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
+    quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso)))
+    assert quantity_widget._cancel_drag_shortcut.isEnabled()
+    quantity_widget._cancel_drag_shortcut.activated.emit()
+
+    assert quantity_widget._beam_drag is None
+    assert not quantity_widget._cancel_drag_shortcut.isEnabled()
+    assert _beam_labels(quantity_widget) == ["#0"]
+    source = quantity_widget._beam_parts[0]["source"]
+    assert (source.data["x"][0], source.data["y"][0]) == pytest.approx(tip)
+    # The rest of the drag is ignored.
+    quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso), finish=True))
+    qapp.processEvents()
+    assert ws.pln.prop_stf["gantry_angles"] == [0]
+
+
+def test_orientation_marker_follows_the_plane_and_toggle(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+    widget = ViewingWidget(_make_workspace(ct, cst))
+    quantity_widget = widget.quantity_widget
+    marker = quantity_widget._orientation_marker
+    assert not marker.isHidden()
+
+    # Axial is seen from the feet with anterior up; sagittal and coronal show the
+    # patient lying with the head to the right, seen from the left and from anterior.
+    expected = {
+        "Axial": {"right": "L", "left": "R", "top": "A", "bottom": "P"},
+        "Sagittal": {"right": "S", "left": "I", "top": "A", "bottom": "P"},
+        "Coronal": {"right": "S", "left": "I", "top": "R", "bottom": "L"},
+    }
+    for plane, letters in expected.items():
+        quantity_widget.set_plane(plane)
+        assert marker.edge_letters() == letters
+        assert not marker.grab().isNull()
+
+    widget.vis_widget.orientation_checkbox.setChecked(False)
+    assert marker.isHidden()
+    widget.vis_widget.orientation_checkbox.setChecked(True)
+    assert not marker.isHidden()
+
+    widget.workspace.clear()
+    assert marker.isHidden()
+
+
+@pytest.mark.parametrize("angle", [30.0, 180.0])
+def test_orientation_marker_uses_ct_direction(qapp, angle):
+    from pyRadPlan.ct import validate_ct
+
+    theta = np.radians(angle)
+    c, s = np.cos(theta), np.sin(theta)
+    direction = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    image = sitk.GetImageFromArray(np.zeros((5, 6, 7), dtype=np.float32))
+    image.SetDirection(direction.ravel().tolist())
+    ws = WorkspaceManager()
+    widget = ViewingWidget(ws)
+    ws.ct = validate_ct({"cube_hu": image})
+    viewer = widget.quantity_widget
+    marker = viewer._orientation_marker
+
+    for plane, right_axis, down_axis in [("Axial", 0, 1), ("Sagittal", 2, 1), ("Coronal", 2, 0)]:
+        viewer.set_plane(plane)
+        np.testing.assert_allclose(marker._right, direction[:, right_axis])
+        np.testing.assert_allclose(marker._down, direction[:, down_axis])
+        assert not marker.grab().isNull()
+
+    viewer.set_plane("Axial")
+    if angle == 180.0:
+        assert marker.edge_letters() == {"right": "R", "left": "L", "top": "P", "bottom": "A"}
+
+    # Loading another CT must not retain the previous patient's orientation.
+    image.SetDirection(np.eye(3).ravel().tolist())
+    ws.ct = validate_ct({"cube_hu": image})
+    assert marker.edge_letters() == {"right": "L", "left": "R", "top": "A", "bottom": "P"}
+
+
+def test_orientation_geometry_defaults_to_identity(qapp):
+    from pyRadPlan.gui.widgets.result.quantity_widget import QuantityWidget
+
+    viewer = QuantityWidget()
+    viewer.set_ct_geometry((0, 0, 0), (1, 1, 1), np.diag([-1, -1, 1]).ravel())
+    assert viewer._orientation_marker.edge_letters()["right"] == "R"
+    viewer.set_ct_geometry((0, 0, 0), (1, 1, 1))
+    assert viewer._orientation_marker.edge_letters()["right"] == "L"
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        (["physical_dose", "rbe_x_dose", "let"], "rbe_x_dose"),
+        (["let", "physical_dose"], "physical_dose"),
+        (["let", "alpha_dose"], "let"),
+        ([], None),
+    ],
+)
+def test_default_quantity_prefers_rbe_weighted_dose(keys, expected):
+    from pyRadPlan.gui.widgets._result_widget import default_quantity_key
+
+    assert default_quantity_key(keys) == expected
+
+
+def test_viewer_shows_rbe_weighted_dose_of_a_biological_result(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+    dose = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
+
+    widget = ViewingWidget(_make_workspace(ct, cst, {"physical_dose": dose}))
+    assert widget.quantity_widget._active_quantity_name == "physical_dose"
+
+    widget = ViewingWidget(
+        _make_workspace(ct, cst, {"physical_dose": dose, "rbe_x_dose": 1.1 * dose})
+    )
+    assert widget.quantity_widget._active_quantity_name == "rbe_x_dose"
+    assert widget.vis_widget.quantity_selector.current_key() == "rbe_x_dose"

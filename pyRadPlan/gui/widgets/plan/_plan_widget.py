@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any, Optional
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,26 +16,48 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from pyRadPlan.bio_models import BiologicalModel, available_bio_models
 from pyRadPlan.dose.engines import get_available_engines
+from pyRadPlan._settings import get_settings
+from pyRadPlan.gui.widgets._ui_mode import UIMode
 from pyRadPlan.gui.workspace import WorkspaceManager
-from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, validate_pln, default_bio_models
-from pyRadPlan.quantities import get_available_quantities
+from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, validate_pln
 from pyRadPlan.scenarios import available_scenario_models
+from pyRadPlan.stf import get_beam_angle_presets
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
+from .._display_names import (
+    add_identified_item,
+    bio_model_display_name,
+    show_identifiers_when_open,
+)
 from ._tissue_dialog import TissueParametersDialog
 from ..ai import ai_disabled_reason
 
 _ION_MODES = list(IonPlan.available_radiation_modes)
 _RADIATION_MODES = ["photons", *_ION_MODES]
+
+#: Biological model preselected when switching to a radiation mode.  Deliberately
+#: GUI-only: the library defaults (:data:`pyRadPlan.plan.default_bio_models`)
+#: stay physical-dose based for scripted plans.
+_DEFAULT_BIO_MODELS: dict[str, str] = {
+    "photons": "none",
+    "protons": "constant_rbe",
+    "helium": "HEL",
+    "carbon": "kernel_based_lq",
+    "oxygen": "kernel_based_lq",
+    "VHEE": "none",
+}
 
 #: Orange border marking a field whose value differs from the applied plan.
 _MODIFIED_STYLE = "border: 1px solid #e67e22;"
@@ -69,14 +91,36 @@ class PlanWidget(WorkspaceWidget):
         process-wide singleton when *None*.
     parent:
         Optional Qt parent widget.
+    ui_mode:
+        Initial presentation mode, see :class:`UIMode`; *None* follows the
+        configured ``pyRadPlan.settings.gui.ui_mode``.
+
+    Notes
+    -----
+    :meth:`set_ui_mode` / :meth:`ui_mode` switch the form between the full
+    editor and a simplified presentation for non-expert users that only offers
+    the basic operations (radiation mode, beam angles, isocenter, bixel width,
+    biological model and dose-grid resolution); the main window drives them
+    from the GUI settings.  The advanced controls are registered by the
+    form-building methods when the form is built and stay visible but locked;
+    locked fields keep their values and keep taking part in workspace
+    synchronisation, dirty tracking and plan construction, so switching modes
+    never changes the plan that *Apply* builds.
     """
 
     _watched_keys = ("ct", "cst", "pln")
+
+    #: Emitted after the presentation mode changed, with the new :class:`UIMode`.
+    mode_changed = Signal(object)
+    #: Emitted when the form's beam angles change, applied or not: ``(gantry, couch)``
+    #: lists with one couch angle per beam, or ``None`` while they do not parse.
+    beam_angles_edited = Signal(object)
 
     def __init__(
         self,
         workspace: Optional[WorkspaceManager] = None,
         parent: Optional[QWidget] = None,
+        ui_mode: UIMode | str | None = None,
     ) -> None:
         super().__init__(workspace, parent)
         #: Tooltip explaining why AI features are disabled, or None if usable.
@@ -91,13 +135,22 @@ class PlanWidget(WorkspaceWidget):
         #: True while syncing the form *from* the workspace, so programmatic
         #: widget changes don't register as user edits.
         self._syncing = False
+        #: The plan's per-beam iso centers, which the iso field cannot show; kept
+        #: on Apply until the iso setting is changed.
+        self._per_beam_iso_center: Optional[list] = None
         #: UI field values at the last sync point; the form is "modified" when
         #: the live values differ from this snapshot.
         self._clean_snapshot: dict[str, Any] = {}
+        self._modified = False
         #: Whether the status label currently shows the modified note (so real
         #: messages aren't mistaken for it and vice versa).
         self._status_is_modified_note = False
         self._status_is_error = False
+        #: Active presentation mode; affects visibility only, never plan data.
+        self._ui_mode = UIMode(get_settings().gui.ui_mode if ui_mode is None else ui_mode)
+        #: Containers of the controls locked (shown greyed out) in educational
+        #: mode, registered by the form-building methods through _add_advanced.
+        self._advanced_items: list[QWidget] = []
         self._setup_ui()
         #: Maps each tracked field key to the editor widget to border.
         self._field_widgets: dict[str, QWidget] = {
@@ -113,6 +166,7 @@ class PlanWidget(WorkspaceWidget):
             "couch": self._txt_couch,
             "bixel": self._spn_bixel,
             "iso_auto": self._txt_iso,
+            "iso_per_beam": self._txt_iso,
             "iso": self._txt_iso,
             "scenario": self._cmb_scenario,
             "res_x": self._spn_res_x,
@@ -120,6 +174,7 @@ class PlanWidget(WorkspaceWidget):
             "res_z": self._spn_res_z,
         }
         self._connect_dirty_signals()
+        self._apply_ui_mode()
         self.initialize()
 
     # ------------------------------------------------------------------
@@ -145,6 +200,11 @@ class PlanWidget(WorkspaceWidget):
         self._lbl_status = QLabel("")
         bottom.addWidget(self._lbl_status)
         bottom.addStretch()
+        self._btn_discard = QPushButton("Discard")
+        self._btn_discard.setToolTip("Reset the form to the applied plan")
+        self._btn_discard.setEnabled(False)
+        self._btn_discard.clicked.connect(self._on_discard)
+        bottom.addWidget(self._btn_discard)
         self._btn_apply = QPushButton("Apply")
         self._btn_apply.clicked.connect(self._on_apply)
         bottom.addWidget(self._btn_apply)
@@ -155,6 +215,7 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(self._cmb_radiation.currentText())
         self._refresh_engines(self._cmb_radiation.currentText())
         self._refresh_bio_models(self._cmb_radiation.currentText())
+        self._refresh_angle_presets(self._cmb_radiation.currentText())
         self._update_mode_dependent_fields()
         self._update_beam_count()
 
@@ -184,6 +245,9 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_dose_convention = QComboBox()
         self._cmb_dose_convention.addItem("per fraction", "per_fraction")
         self._cmb_dose_convention.addItem("total", "total")
+        # Total-course doses keep objectives meaningful for fraction-size dependent
+        # biological models (ions); per fraction is the plan model's default.
+        self._cmb_dose_convention.setCurrentIndex(self._cmb_dose_convention.findData("total"))
         self._cmb_dose_convention.setToolTip(
             "Convention for dose values in objectives and results:\n"
             "per fraction - objective doses and reported doses refer to one fraction;\n"
@@ -198,13 +262,13 @@ class PlanWidget(WorkspaceWidget):
 
         grid.addWidget(QLabel("Radiation mode:"), 0, 0)
         grid.addWidget(self._cmb_radiation, 0, 1)
-        grid.addWidget(QLabel("Machine:"), 0, 2)
-        grid.addWidget(self._cmb_machine, 0, 3)
+        self._add_advanced(grid, QLabel("Machine:"), 0, 2)
+        self._add_advanced(grid, self._cmb_machine, 0, 3)
 
-        grid.addWidget(QLabel("Dose engine:"), 1, 0)
-        grid.addLayout(self._engine_row, 1, 1)
-        grid.addWidget(QLabel("Fractions:"), 1, 2)
-        grid.addLayout(fractions_row, 1, 3)
+        self._add_advanced(grid, QLabel("Dose engine:"), 1, 0)
+        self._add_advanced(grid, self._engine_row, 1, 1)
+        self._add_advanced(grid, QLabel("Fractions:"), 1, 2)
+        self._add_advanced(grid, fractions_row, 1, 3)
 
     def _build_geometry_rows(self, grid: QGridLayout) -> None:
         self._txt_gantry = QLineEdit("0")
@@ -230,6 +294,19 @@ class PlanWidget(WorkspaceWidget):
         self._spn_num_beams.setKeyboardTracking(False)
         self._spn_num_beams.valueChanged.connect(self._on_num_beams_changed)
 
+        self._btn_angle_preset = QToolButton()
+        self._btn_angle_preset.setText("Choose preset…")
+        self._btn_angle_preset.setFocusPolicy(Qt.StrongFocus)
+        self._btn_angle_preset.setPopupMode(QToolButton.InstantPopup)
+        self._btn_angle_preset.setToolTip(
+            "Set gantry and couch angles from a preset;\n"
+            "presets typical for the radiation mode are listed first."
+        )
+        preset_menu = QMenu(self._btn_angle_preset)
+        preset_menu.setToolTipsVisible(True)
+        preset_menu.triggered.connect(self._on_angle_preset_activated)
+        self._btn_angle_preset.setMenu(preset_menu)
+
         self._btn_ai_beams = QPushButton("✨ AI")
         self._btn_ai_beams.clicked.connect(self._on_ai_beam_angles)
         self._btn_ai_beams.setEnabled(self._ai_disabled_reason is None)
@@ -246,6 +323,7 @@ class PlanWidget(WorkspaceWidget):
         beam_row.addWidget(QLabel("Couch angles [deg]:"))
         beam_row.addWidget(self._txt_couch, 1)
         beam_row.addWidget(self._spn_num_beams)
+        beam_row.addWidget(self._btn_angle_preset)
         beam_row.addWidget(self._btn_ai_beams)
 
         self._spn_bixel = QDoubleSpinBox()
@@ -296,7 +374,8 @@ class PlanWidget(WorkspaceWidget):
         self._btn_bio_config.setFixedWidth(28)
         self._btn_bio_config.setToolTip("Edit the parameters of the selected biological model")
         self._btn_bio_config.clicked.connect(self._on_bio_config)
-        self._cmb_bio_model.currentTextChanged.connect(self._update_bio_config_button)
+        show_identifiers_when_open(self._cmb_bio_model)
+        self._cmb_bio_model.currentIndexChanged.connect(self._update_bio_config_button)
         bio_row = QHBoxLayout()
         bio_row.setContentsMargins(0, 0, 0, 0)
         bio_row.setSpacing(4)
@@ -312,12 +391,11 @@ class PlanWidget(WorkspaceWidget):
         # Plan-level target/reporting quantity, as opposed to the quantities the
         # individual objectives are evaluated on.
         self._cmb_quantity = QComboBox()
-        self._cmb_quantity.addItems(["auto", *get_available_quantities()])
-        self._cmb_quantity.setCurrentText("auto")
+        self._cmb_quantity.addItem("auto")
         self._set_not_implemented(
             self._cmb_quantity,
-            "A global optimized quantity",
-            hint="The quantity is currently set per objective in the objectives table, "
+            "Choosing a global optimized quantity",
+            hint="The optimizer derives the quantity from the objectives table, "
             'where "Change all quantities…" sets it on all objectives at once.',
         )
 
@@ -330,11 +408,11 @@ class PlanWidget(WorkspaceWidget):
 
         grid.addWidget(QLabel("Biological model:"), 4, 0)
         grid.addLayout(bio_row, 4, 1)
-        grid.addWidget(QLabel("Scenario model:"), 4, 2)
-        grid.addWidget(self._cmb_scenario, 4, 3)
+        self._add_advanced(grid, QLabel("Scenario model:"), 4, 2)
+        self._add_advanced(grid, self._cmb_scenario, 4, 3)
 
-        grid.addWidget(QLabel("Optimized quantity:"), 5, 0)
-        grid.addWidget(self._cmb_quantity, 5, 1)
+        self._add_advanced(grid, QLabel("Optimized quantity:"), 5, 0)
+        self._add_advanced(grid, self._cmb_quantity, 5, 1)
         grid.addWidget(self._btn_tissue, 5, 3)
 
     def _build_sequencing_row(self, grid: QGridLayout) -> None:
@@ -361,8 +439,8 @@ class PlanWidget(WorkspaceWidget):
         opt_row.addWidget(self._chk_dao)
         opt_row.addWidget(self._chk_conf3d)
 
-        grid.addLayout(seq_row, 6, 0, 1, 2)
-        grid.addLayout(opt_row, 6, 2, 1, 2)
+        self._add_advanced(grid, seq_row, 6, 0, 1, 2)
+        self._add_advanced(grid, opt_row, 6, 2, 1, 2)
 
     def _build_dose_grid_row(self, grid: QGridLayout) -> None:
         self._spn_res_x = self._make_res_spin()
@@ -385,6 +463,31 @@ class PlanWidget(WorkspaceWidget):
 
         grid.addWidget(QLabel("Dose grid res. [mm]:"), 7, 0)
         grid.addLayout(res_row, 7, 1, 1, 3)
+
+    def _add_advanced(
+        self,
+        grid: QGridLayout,
+        item: QWidget | QLayout,
+        row: int,
+        col: int,
+        row_span: int = 1,
+        col_span: int = 1,
+    ) -> None:
+        """Place *item* in the form grid and mark it locked in educational mode.
+
+        The item is wrapped in a container widget that is disabled as a whole,
+        so the item's own enabled state (e.g. not-implemented controls) is
+        preserved when the lock is lifted again.
+        """
+        container = QWidget()
+        if isinstance(item, QLayout):
+            container.setLayout(item)
+        else:
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(item)
+        grid.addWidget(container, row, col, row_span, col_span)
+        self._advanced_items.append(container)
 
     @staticmethod
     def _set_not_implemented(widget: QWidget, feature: str, hint: str = "") -> None:
@@ -423,6 +526,44 @@ class PlanWidget(WorkspaceWidget):
         return spin
 
     # ------------------------------------------------------------------
+    # Presentation mode (default / educational)
+    # ------------------------------------------------------------------
+
+    def ui_mode(self) -> UIMode:
+        """Return the currently active presentation mode."""
+        return self._ui_mode
+
+    def set_ui_mode(self, mode: UIMode | str) -> None:
+        """Switch between the default and the educational presentation.
+
+        Parameters
+        ----------
+        mode:
+            :attr:`UIMode.DEFAULT` (``"default"``) shows every plan field;
+            :attr:`UIMode.EDUCATIONAL` (``"educational"``) restricts editing
+            to the basic operations and shows the advanced fields greyed out.
+            Locked advanced fields keep their values, so switching modes never
+            changes the plan that *Apply* builds.  Emits :attr:`mode_changed`
+            when the mode actually changed; no-op otherwise.
+        """
+        mode = UIMode(mode)
+        if mode is self._ui_mode:
+            return
+        self._ui_mode = mode
+        self._apply_ui_mode()
+        self.mode_changed.emit(mode)
+
+    def _apply_ui_mode(self) -> None:
+        """Apply the visibility policy of the active mode to the form.
+
+        Pure presentation: locked fields keep their values and keep taking
+        part in synchronisation, dirty tracking and plan construction.
+        """
+        educational = self._ui_mode is UIMode.EDUCATIONAL
+        for container in self._advanced_items:
+            container.setEnabled(not educational)
+
+    # ------------------------------------------------------------------
     # Machine / mode handling
     # ------------------------------------------------------------------
 
@@ -446,6 +587,7 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(radiation_mode)
         self._refresh_engines(radiation_mode)
         self._refresh_bio_models(radiation_mode)
+        self._refresh_angle_presets(radiation_mode)
         self._update_mode_dependent_fields()
         self._update_dirty_state()
 
@@ -457,8 +599,8 @@ class PlanWidget(WorkspaceWidget):
         """List the models supporting ``radiation_mode``; keep or default the selection."""
         # Keep an explicit choice if the new mode supports it; a selection that merely
         # was the previous mode's default follows the new mode's default instead.
-        current = self._cmb_bio_model.currentText()
-        previous_default = default_bio_models.get(getattr(self, "_bio_models_mode", None))
+        current = self._bio_model_name()
+        previous_default = _DEFAULT_BIO_MODELS.get(getattr(self, "_bio_models_mode", None))
         if current == previous_default:
             current = ""
         self._bio_models_mode = radiation_mode
@@ -468,7 +610,9 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_bio_model.blockSignals(True)
         self._cmb_bio_model.clear()
         for cls in models:
-            self._cmb_bio_model.addItem(cls.model)
+            add_identified_item(
+                self._cmb_bio_model, bio_model_display_name(cls), cls.model, cls.model
+            )
             doc = (cls.__doc__ or "").strip().splitlines()
             tooltip = doc[0].strip() if doc else cls.model
             if cls.required_quantities:
@@ -476,26 +620,36 @@ class PlanWidget(WorkspaceWidget):
             self._cmb_bio_model.setItemData(
                 self._cmb_bio_model.count() - 1, tooltip, Qt.ItemDataRole.ToolTipRole
             )
-        if current in names:
-            self._cmb_bio_model.setCurrentText(current)
-        else:
-            self._cmb_bio_model.setCurrentText(default_bio_models.get(radiation_mode, "none"))
+        if current not in names:
+            current = _DEFAULT_BIO_MODELS.get(radiation_mode, "none")
+        self._select_bio_model(current)
         self._cmb_bio_model.blockSignals(False)
         self._update_bio_config_button()
 
     def _update_bio_config_button(self, *_args) -> None:
-        cls = self._bio_model_classes.get(self._cmb_bio_model.currentText())
+        cls = self._bio_model_classes.get(self._bio_model_name())
         self._btn_bio_config.setEnabled(cls is not None and bool(cls.config_model().model_fields))
 
+    def _bio_model_name(self) -> str:
+        """Canonical ``model`` name of the selected biological model (``""`` if none)."""
+        return self._cmb_bio_model.currentData() or ""
+
+    def _select_bio_model(self, name: str) -> bool:
+        """Select the biological model with canonical *name*; return whether it is listed."""
+        index = self._cmb_bio_model.findData(name)
+        if index >= 0:
+            self._cmb_bio_model.setCurrentIndex(index)
+        return index >= 0
+
     def _on_bio_config(self) -> None:
-        name = self._cmb_bio_model.currentText()
+        name = self._bio_model_name()
         cls = self._bio_model_classes.get(name)
         if cls is None:
             return
         dialog = ConfigFormDialog(
             cls.config_model(),
             initial=self._bio_params.get(name, {}),
-            title=f"Configure {name}",
+            title=f"Configure {bio_model_display_name(cls)}",
             parent=self,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -512,7 +666,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _selected_bio_model(self) -> Any:
         """Model spec for the plan: the workspace instance if its name is still selected."""
-        name = self._cmb_bio_model.currentText() or "none"
+        name = self._bio_model_name() or "none"
         params = self._bio_params.get(name)
         if params:
             return {"model": name, **params}
@@ -595,6 +749,7 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_machines(pln.radiation_mode)
         self._refresh_engines(pln.radiation_mode)
         self._refresh_bio_models(pln.radiation_mode)
+        self._refresh_angle_presets(pln.radiation_mode)
         self._update_mode_dependent_fields()
 
         self._restore_engine_from_pln(pln)
@@ -603,8 +758,7 @@ class PlanWidget(WorkspaceWidget):
         self._pln_bio_model = bio_model
         if bio_model is not None:
             self._bio_params[bio_model.model] = dict(bio_model.parameters)
-            if self._cmb_bio_model.findText(bio_model.model) >= 0:
-                self._cmb_bio_model.setCurrentText(bio_model.model)
+            self._select_bio_model(bio_model.model)
 
         machine = pln.machine if isinstance(pln.machine, str) else "Generic"
         self._cmb_machine.setEditText(machine)
@@ -649,18 +803,19 @@ class PlanWidget(WorkspaceWidget):
 
     def _restore_engine_from_pln(self, pln: Plan) -> None:
         prop_dose_calc = pln.prop_dose_calc if isinstance(pln.prop_dose_calc, dict) else {}
-        engine_name = prop_dose_calc.get("engine")
+        engine_name = prop_dose_calc.get("engine") or next(iter(self._engines), None)
         if engine_name not in self._engines:
             return
         self._cmb_engine.setCurrentText(engine_name)
         engine_props = {
             k: v for k, v in prop_dose_calc.items() if k not in ("engine", "dose_grid")
         }
-        if engine_props:
-            self._engine_props[engine_name] = engine_props
+        # An empty override mapping means defaults, not "keep the form's edits".
+        self._engine_props[engine_name] = deepcopy(engine_props)
 
     def _restore_iso_center(self, iso_center) -> None:
-        if iso_center is None:
+        self._per_beam_iso_center = None
+        if iso_center is None or np.size(iso_center) == 0:
             self._chk_iso_auto.setChecked(True)
             self._update_auto_iso_center()
             return
@@ -669,9 +824,10 @@ class PlanWidget(WorkspaceWidget):
             self._txt_iso.setText(self._format_angles(iso[0]))
             self._chk_iso_auto.setChecked(False)
         else:
-            # per-beam iso centers cannot be edited here; fall back to auto
-            # (setChecked first so the toggle's auto-fill cannot overwrite the note)
+            # per-beam iso centers cannot be edited here; show auto, but keep them
+            # (setChecked first, as the toggle drops them and auto-fills the field)
             self._chk_iso_auto.setChecked(True)
+            self._per_beam_iso_center = iso.tolist()
             self._txt_iso.setText("multiple iso centers")
 
     @staticmethod
@@ -684,6 +840,7 @@ class PlanWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     def _on_iso_auto_toggled(self, checked: bool) -> None:
+        self._per_beam_iso_center = None
         self._txt_iso.setEnabled(not checked)
         if checked:
             self._update_auto_iso_center()
@@ -694,7 +851,7 @@ class PlanWidget(WorkspaceWidget):
         Mirrors what the stf generators compute when no explicit iso center is
         set, so the disabled field previews the value that will actually be used.
         """
-        if not self._chk_iso_auto.isChecked():
+        if not self._chk_iso_auto.isChecked() or self._per_beam_iso_center is not None:
             return
         cst = self._ws.cst
         if cst is None:
@@ -704,6 +861,26 @@ class PlanWidget(WorkspaceWidget):
         except Exception:  # noqa: BLE001 - e.g. no target structures defined
             return
         self._txt_iso.setText(self._format_angles(iso))
+
+    def _refresh_angle_presets(self, radiation_mode: str) -> None:
+        """List the angle presets, those typical for ``radiation_mode`` first."""
+        presets = get_beam_angle_presets(radiation_mode)
+        menu = self._btn_angle_preset.menu()
+        menu.clear()
+        for preset in presets:
+            angles = self._format_angles(preset.gantry_angles)
+            if any(preset.couch_angles):
+                angles += f" / couch {self._format_angles(preset.couch_angles)}"
+            action = menu.addAction(f"{preset.name} ({angles})")
+            action.setData(preset)
+            action.setToolTip(preset.description or preset.name)
+
+    def _on_angle_preset_activated(self, action) -> None:
+        """Overwrite the gantry/couch angles after a preset is explicitly activated."""
+        preset = action.data()
+        self._txt_gantry.setText(self._format_angles(preset.gantry_angles))
+        self._txt_couch.setText(self._format_angles(preset.couch_angles))
+        self._update_beam_count()
 
     def _update_beam_count(self) -> None:
         """Show the number of gantry angles in the beam-count spin box."""
@@ -772,6 +949,83 @@ class PlanWidget(WorkspaceWidget):
             self._ws.pln = pln
         self._mark_clean()
         self._set_status("Plan applied.")
+
+    def has_pending_changes(self) -> bool:
+        """Whether the form has edits that are not applied to the plan yet."""
+        return self._modified
+
+    def apply_changes(self) -> bool:
+        """Apply the form to the plan, as *Apply* does; False if it does not validate."""
+        self._on_apply()
+        return not self._modified
+
+    def _on_discard(self) -> None:
+        """Reset the form to the plan in the workspace."""
+        if self._ws.pln is None:
+            return
+        self._syncing = True
+        try:
+            # Imported plans can omit geometry fields (or individual grid axes).
+            # Sync only writes their explicit values, so first restore the last
+            # clean form values instead of letting discarded edits become defaults.
+            state = self._clean_snapshot
+            for key, edit in (("gantry", self._txt_gantry), ("couch", self._txt_couch)):
+                value = state[key]
+                edit.setText(value if isinstance(value, str) else self._format_angles(value))
+            for key, spin in (
+                ("bixel", self._spn_bixel),
+                ("res_x", self._spn_res_x),
+                ("res_y", self._spn_res_y),
+                ("res_z", self._spn_res_z),
+            ):
+                spin.setValue(state[key])
+            self._sync_from_workspace()
+        finally:
+            self._syncing = False
+        self._mark_clean()
+        self._set_status("Changes discarded.")
+
+    def set_gantry_angle(self, index: int, angle: float) -> None:
+        """Set the gantry angle of beam *index* in the form, without applying it.
+
+        Used e.g. by the viewer when a beam is dragged.  Ignored while the gantry
+        field does not parse or has no beam *index*.
+        """
+        try:
+            gantry = parse_number_list(self._txt_gantry.text())
+        except ValueError:
+            return
+        if not 0 <= index < len(gantry):
+            return
+        gantry[index] = float(angle)
+        self._txt_gantry.setText(self._format_angles(gantry))
+
+    def _form_beam_angles(self) -> tuple[list[float], list[float]]:
+        """Gantry and couch angle of every beam in the form, one couch angle per beam.
+
+        Raises ``ValueError`` when the fields do not describe a valid set of beams.
+        """
+        gantry = parse_number_list(self._txt_gantry.text())
+        if not gantry:
+            raise ValueError("at least one gantry angle is required")
+        couch = parse_number_list(self._txt_couch.text())
+        if len(couch) == 1:
+            couch = couch * len(gantry)
+        elif len(couch) not in (0, len(gantry)):
+            raise ValueError("number of couch angles must be 1 or match gantry angles")
+        if not couch:
+            couch = [0.0] * len(gantry)
+        return gantry, couch
+
+    def edited_beam_angles(self) -> Optional[tuple[list[float], list[float]]]:
+        """Return the form's ``(gantry, couch)`` angles, applied or not; ``None`` if invalid."""
+        try:
+            return self._form_beam_angles()
+        except ValueError:
+            return None
+
+    def _emit_beam_angles(self, *_args) -> None:
+        self.beam_angles_edited.emit(self.edited_beam_angles())
 
     def _on_ai_beam_angles(self) -> None:
         radiation_mode = self._cmb_radiation.currentText()
@@ -845,16 +1099,7 @@ class PlanWidget(WorkspaceWidget):
     def _build_plan(self) -> Plan:
         radiation_mode = self._cmb_radiation.currentText()
 
-        gantry = parse_number_list(self._txt_gantry.text())
-        if not gantry:
-            raise ValueError("at least one gantry angle is required")
-        couch = parse_number_list(self._txt_couch.text())
-        if len(couch) == 1:
-            couch = couch * len(gantry)
-        elif len(couch) not in (0, len(gantry)):
-            raise ValueError("number of couch angles must be 1 or match gantry angles")
-        if not couch:
-            couch = [0.0] * len(gantry)
+        gantry, couch = self._form_beam_angles()
 
         is_ion = radiation_mode in _ION_MODES
         spacing_key = "longitudinal_spot_spacing" if is_ion else "bixel_width"
@@ -875,6 +1120,14 @@ class PlanWidget(WorkspaceWidget):
             if len(iso) != 3:
                 raise ValueError("iso center requires exactly three coordinates (x y z)")
             prop_stf["iso_center"] = iso
+        elif self._per_beam_iso_center is not None:
+            if len(self._per_beam_iso_center) != len(gantry):
+                raise ValueError(
+                    f"the plan's {len(self._per_beam_iso_center)} per-beam iso centers do not "
+                    f"match {len(gantry)} beams; enter an iso center, or untick and re-tick "
+                    "Auto to use the target center of mass"
+                )
+            prop_stf["iso_center"] = deepcopy(self._per_beam_iso_center)
         else:
             prop_stf.pop("iso_center", None)
 
@@ -935,11 +1188,13 @@ class PlanWidget(WorkspaceWidget):
         # ``_cmb_radiation`` is handled by ``_on_radiation_changed``.
         self._cmb_machine.editTextChanged.connect(self._on_field_edited)
         self._cmb_engine.currentTextChanged.connect(self._on_field_edited)
-        self._cmb_bio_model.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_bio_model.currentIndexChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
         self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
         self._txt_gantry.textChanged.connect(self._on_field_edited)
         self._txt_couch.textChanged.connect(self._on_field_edited)
+        self._txt_gantry.textChanged.connect(self._emit_beam_angles)
+        self._txt_couch.textChanged.connect(self._emit_beam_angles)
         self._spn_bixel.valueChanged.connect(self._on_field_edited)
         self._chk_iso_auto.toggled.connect(self._on_field_edited)
         self._txt_iso.textChanged.connect(self._on_field_edited)
@@ -959,9 +1214,9 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine.currentText(),
             "engine": engine,
             "engine_props": dict(self._engine_props.get(engine, {})),
-            "bio_model": self._cmb_bio_model.currentText(),
+            "bio_model": self._bio_model_name(),
             "bio_params": json.dumps(
-                self._bio_params.get(self._cmb_bio_model.currentText(), {}),
+                self._bio_params.get(self._bio_model_name(), {}),
                 default=str,
                 sort_keys=True,
             ),
@@ -971,6 +1226,7 @@ class PlanWidget(WorkspaceWidget):
             "couch": self._safe_parse(self._txt_couch.text()),
             "bixel": self._spn_bixel.value(),
             "iso_auto": self._chk_iso_auto.isChecked(),
+            "iso_per_beam": self._per_beam_iso_center is not None,
             "iso": self._txt_iso.text() if not_auto else None,
             "scenario": self._cmb_scenario.currentText(),
             "res_x": self._spn_res_x.value(),
@@ -1016,7 +1272,9 @@ class PlanWidget(WorkspaceWidget):
         widget.setStyleSheet(_MODIFIED_STYLE if modified else "")
 
     def _set_global_modified(self, modified: bool) -> None:
+        self._modified = modified
         self._btn_apply.setText("Apply *" if modified else "Apply")
+        self._btn_discard.setEnabled(modified and self._ws.pln is not None)
         self._btn_apply.setStyleSheet("font-weight: bold;" if modified else "")
         if modified:
             if not self._status_is_error:

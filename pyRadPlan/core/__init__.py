@@ -19,6 +19,7 @@ from ._progress import (
     ProgressReport,
     ProgressReporter,
     StatusReport,
+    WarningReport,
     observe_control,
     observe_reports,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "ProgressReport",
     "ProgressLevel",
     "StatusReport",
+    "WarningReport",
     "ComputeReport",
     "ComputeCancelledError",
     "ComputeControl",

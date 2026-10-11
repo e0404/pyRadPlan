@@ -82,3 +82,16 @@ def test_data_oxygen(test_data_oxygen_raw):
     result = tmp["resultGUI"]
 
     return ct, cst, result
+
+
+@pytest.fixture
+def dark_palette():
+    """A dark palette with distinct Window/Base/WindowText colors, returned with them."""
+    from PySide6.QtGui import QColor, QPalette
+
+    colors = {"window": "#202020", "base": "#101010", "text": "#f0f0f0"}
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(colors["window"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(colors["base"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(colors["text"]))
+    return palette, colors

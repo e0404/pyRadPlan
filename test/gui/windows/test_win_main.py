@@ -11,6 +11,10 @@ from PySide6.QtWidgets import QToolBar
 from pyRadPlan.gui.windows._main_win import MainWindow
 from pyRadPlan.gui.workspace import WorkspaceManager
 
+# Widget methods are patched on the class: undoing a patch on an instance leaves
+# the bound method behind as an attribute, a reference cycle whose garbage
+# collection segfaults PySide (Linux, Python 3.14).
+
 
 def test_main_window_constructs_empty(qapp):
     win = MainWindow(WorkspaceManager())
@@ -113,6 +117,8 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
     assert "General" not in titles
     assert "XP (Backend)" in titles
     assert "AI" in titles
+    assert "GUI" in titles
+    assert "ui_mode" in dialog._sub_forms["gui"]._editors
     assert "prefer_gpu" in dialog._sub_forms["xp"]._editors
     assert "preferred_gpu_array_backend" in dialog._sub_forms["xp"]._editors
     assert "agents_model" in dialog._sub_forms["ai"]._editors
@@ -187,7 +193,7 @@ def test_settings_dialog_writes_the_env_var_that_is_actually_read(qapp, tmp_path
 def test_settings_menu_has_quick_links_and_preferences(qapp):
     win = MainWindow(WorkspaceManager())
     labels = [a.text() for a in win._settings_menu.actions() if a.text()]
-    assert labels == ["XP (Backend)…", "AI…", "Preferences…"]
+    assert labels == ["XP (Backend)…", "AI…", "GUI…", "Preferences…"]
 
 
 def test_inputs_locked_while_busy(qapp):
@@ -202,6 +208,72 @@ def test_inputs_locked_while_busy(qapp):
     win.workflow_widget._set_busy(False)
     assert win.plan_widget.isEnabled()
     assert win.optimization_widget.isEnabled()
+
+
+@pytest.fixture
+def gui_settings(monkeypatch):
+    """Hand out the GUI settings with a clean environment and restore them afterwards."""
+    from pyRadPlan._settings import get_settings
+
+    settings = get_settings().gui
+    snapshot = settings.model_dump()
+    monkeypatch.delenv("PYRADPLAN_GUI_UI_MODE", raising=False)
+    yield settings
+    os.environ.pop("PYRADPLAN_GUI_UI_MODE", None)
+    for name, value in snapshot.items():
+        setattr(settings, name, value)
+
+
+def test_file_menu_ui_mode_switches_settings_and_plan_widget(qapp, gui_settings):
+    from pyRadPlan.gui.widgets import UIMode
+
+    gui_settings.ui_mode = "default"
+    win = MainWindow(WorkspaceManager())
+    actions = win._file_menu._ui_mode_actions
+    assert list(actions) == ["default", "educational"]
+    assert actions["default"].isChecked()
+    assert win.plan_widget.ui_mode() is UIMode.DEFAULT
+
+    actions["educational"].trigger()
+    assert gui_settings.ui_mode == "educational"
+    assert os.environ["PYRADPLAN_GUI_UI_MODE"] == "educational"
+    assert win.plan_widget.ui_mode() is UIMode.EDUCATIONAL
+    assert actions["educational"].isChecked()
+
+    actions["default"].trigger()
+    assert gui_settings.ui_mode == "default"
+    assert win.plan_widget.ui_mode() is UIMode.DEFAULT
+
+
+def test_main_window_starts_in_configured_ui_mode(qapp, gui_settings):
+    from pyRadPlan.gui.widgets import UIMode
+
+    gui_settings.ui_mode = "educational"
+    win = MainWindow(WorkspaceManager())
+    assert win.plan_widget.ui_mode() is UIMode.EDUCATIONAL
+    assert win._file_menu._ui_mode_actions["educational"].isChecked()
+
+
+def test_settings_menu_applies_ui_mode_after_dialog(qapp, gui_settings, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.gui.menus._settings import SettingsDialog
+    from pyRadPlan.gui.widgets import UIMode
+
+    gui_settings.ui_mode = "default"
+    win = MainWindow(WorkspaceManager())
+
+    def fake_exec(dialog):
+        dialog._sub_forms["gui"]._set_value("ui_mode", "educational")
+        dialog.apply()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(SettingsDialog, "exec", fake_exec)
+    win._settings_menu._edit_settings("gui")
+
+    assert gui_settings.ui_mode == "educational"
+    assert win.plan_widget.ui_mode() is UIMode.EDUCATIONAL
+    assert win._file_menu._ui_mode_actions["educational"].isChecked()
 
 
 def _open_analysis_window(parent=None):
@@ -242,3 +314,42 @@ def test_cancelled_main_window_close_keeps_analysis_windows(qapp, monkeypatch):
         assert analysis in _OPEN_WINDOWS
     finally:
         close_all_analysis_windows()
+
+
+def test_dragged_beams_are_plan_edits_applied_with_the_plan(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    applied = list(ws.pln.prop_stf["gantry_angles"])
+
+    win._viewer.quantity_widget.beam_angle_changed.emit(0, 33.0)
+
+    assert ws.pln.prop_stf["gantry_angles"] == applied
+    assert win.plan_widget.edited_beam_angles()[0][0] == 33.0
+    beam = win._viewer.quantity_widget._beams[0]
+    assert beam["gantry"] == 33.0 and beam["pending"]
+
+    win.plan_widget._btn_apply.click()
+    assert ws.pln.prop_stf["gantry_angles"][0] == 33.0
+    assert not win._viewer.quantity_widget._beams[0]["pending"]
+
+
+def test_workflow_offers_the_pending_plan_changes(qapp, test_data_photons, monkeypatch):
+    ct, cst, _ = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    win.plan_widget.set_gantry_angle(0, 33.0)
+    assert win.plan_widget.has_pending_changes()
+
+    monkeypatch.setattr(
+        type(win.workflow_widget), "_ask_pending_changes", staticmethod(lambda *a: "apply")
+    )
+    monkeypatch.setattr(
+        type(win.workflow_widget), "_run_in_thread", staticmethod(lambda fn, **kw: None)
+    )
+    win.workflow_widget._on_calc_dose()
+
+    assert ws.pln.prop_stf["gantry_angles"][0] == 33.0
+    assert not win.plan_widget.has_pending_changes()

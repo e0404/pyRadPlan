@@ -33,6 +33,7 @@ class KernelBasedLQModel(LQModel):
     """
 
     model = "kernel_based_lq"
+    name = "Kernel-based LQ"
     model_aliases: ClassVar[tuple[str, ...]] = ("LEM",)
     matrad_name: ClassVar[str] = "LEM"
     required_quantities = ("physical_dose", "alpha", "beta")

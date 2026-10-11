@@ -4,6 +4,10 @@ from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
 
+# Widget methods are patched on the class: undoing a patch on an instance leaves
+# the bound method behind as an attribute, a reference cycle whose garbage
+# collection segfaults PySide (Linux, Python 3.14).
+
 
 def test_workflow_widget_init(qapp):
     w = WorkflowWidget(WorkspaceManager())
@@ -107,6 +111,11 @@ def test_plan_change_marks_downstream_stale(qapp):
     # Re-optimizing clears the result flag.
     ws.result = {"w": 1}
     assert not w._result_stale
+
+    # Moved beams (stf without dij) outdate the dose influence as well.
+    ws.set_many(stf=object(), dij=object())
+    ws.stf = object()
+    assert w._dij_stale and w._result_stale
 
 
 def test_cst_export_options_resolve_against_registry(qapp):
@@ -215,31 +224,149 @@ def test_import_without_ct_keeps_current_patient(qapp):
     assert ws.ct is ct and ws.cst is cst and ws.pln is new_plan
 
 
-def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch):
+def _recalc_setup(monkeypatch, prop_stf, beam_isos, forward):
+    """A workflow widget with a result to recalculate, run synchronously."""
     import numpy as np
-    from unittest.mock import Mock
+    from types import SimpleNamespace
 
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    weights = np.array([2.0, 3.0])
-    snapshot, fresh_dose = object(), object()
     ws.set_many(
         ct=object(),
-        cst=object(),
-        pln=object(),
-        stf=object(),
-        result={"w": weights, "physical_dose": object(), "physical_dose_saved": snapshot},
+        cst=SimpleNamespace(target_center_of_mass=lambda: np.array([1.0, 2.0, 3.0])),
+        pln=SimpleNamespace(prop_stf=prop_stf),
+        stf=SimpleNamespace(
+            beams=[SimpleNamespace(iso_center=np.asarray(iso, dtype=float)) for iso in beam_isos]
+        ),
+        dij=object(),
+        result={
+            "w": np.array([2.0, 3.0]),
+            "physical_dose": object(),
+            "physical_dose_saved": object(),
+        },
     )
-    forward = Mock(return_value={"physical_dose": fresh_dose})
     monkeypatch.setattr("pyRadPlan.calc_dose_forward", forward)
-    monkeypatch.setattr(w, "_run_in_thread", lambda fn, on_success, **kw: on_success(fn()))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    return ws, w
+
+
+@pytest.mark.parametrize(
+    ("prop_stf", "isos"),
+    [
+        ({"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]] * 2),
+        ({"iso_center": [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]}, [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]),
+        ({}, [[1.0, 2.0, 3.0]] * 2),
+        ({"iso_center": []}, [[1.0, 2.0, 3.0]] * 2),
+    ],
+    ids=["plan-isocenter", "per-beam", "automatic", "empty"],
+)
+def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, prop_stf, isos):
+    import numpy as np
+    from unittest.mock import Mock
+
+    fresh_dose = object()
+    forward = Mock(return_value={"physical_dose": fresh_dose})
+    ws, w = _recalc_setup(monkeypatch, prop_stf, [np.zeros(3)] * 2, forward)
+    old_stf, weights = ws.stf, ws.result["w"]
+    snapshot = ws.result["physical_dose_saved"]
 
     w._on_recalc_dose()
 
+    # The beams moved on a copy, which is stored with the result and outdates the dij.
     forward.assert_called_once_with(ws.ct, ws.cst, ws.stf, ws.pln, weights)
+    assert ws.stf is not old_stf
+    assert np.allclose([beam.iso_center for beam in ws.stf.beams], isos)
+    assert np.allclose([beam.iso_center for beam in old_stf.beams], 0.0)
+    assert w._dij_stale and not w._result_stale
     assert ws.result["physical_dose"] is fresh_dose
     assert ws.result["w"] is weights
     assert ws.result["physical_dose_saved"] is snapshot
+
+
+def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value={"physical_dose": object()})
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    stf = ws.stf
+
+    w._on_recalc_dose()
+
+    forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result["w"])
+    assert ws.stf is stf
+    assert not w._dij_stale
+
+
+def test_failed_recalculation_leaves_the_stf_untouched(qapp, monkeypatch):
+    import numpy as np
+    from unittest.mock import Mock
+
+    forward = Mock(side_effect=RuntimeError("engine failed"))
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [np.zeros(3)], forward)
+    stf, result = ws.stf, ws.result
+
+    with pytest.raises(RuntimeError):
+        w._on_recalc_dose()
+
+    assert ws.stf is stf and ws.result is result
+    assert np.allclose(stf.beams[0].iso_center, 0.0)
+
+
+@pytest.mark.parametrize(
+    "angles",
+    [
+        {"gantry_angles": [90, 180], "couch_angles": [0, 0]},
+        {"gantry_angles": [0, 180], "couch_angles": [0, 45]},
+        {"gantry_angles": [0], "couch_angles": [0]},
+        {"gantry_angles": [0, 180, 270], "couch_angles": [0]},
+        {"gantry_angles": []},
+        {"gantry_angles": [float("nan"), 180]},
+    ],
+    ids=["gantry", "couch", "removed-beam", "added-beam", "empty", "nonfinite"],
+)
+def test_recalculate_rejects_changed_beam_geometry(qapp, monkeypatch, angles):
+    from unittest.mock import Mock
+
+    forward = Mock()
+    ws, w = _recalc_setup(monkeypatch, {}, [[1, 2, 3]] * 2, forward)
+    for beam, gantry in zip(ws.stf.beams, [0.0, 180.0]):
+        beam.gantry_angle, beam.couch_angle = gantry, 0.0
+    ws.pln.prop_stf.update(angles)
+    ws.pln = ws.pln  # Applying a geometry edit marks the old result stale.
+    original_stf, original_result = ws.stf, ws.result
+    warning = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
+    )
+
+    w._on_recalc_dose()
+
+    forward.assert_not_called()
+    warning.assert_called_once()
+    assert "Calculate Dose Influence" in warning.call_args.args[2]
+    assert ws.stf is original_stf and ws.result is original_result
+    assert w._result_stale and w._dij_stale
+
+
+@pytest.mark.parametrize("couch", [None, [], [0], [0, 360]])
+def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value={"physical_dose": object()})
+    angles = {"gantry_angles": [360, -180], "couch_angles": couch}
+    ws, w = _recalc_setup(monkeypatch, angles, [[1, 2, 3]] * 2, forward)
+    for beam, gantry in zip(ws.stf.beams, [0.0, 180.0]):
+        beam.gantry_angle, beam.couch_angle = gantry, 0.0
+    original_stf = ws.stf
+
+    w._on_recalc_dose()
+
+    forward.assert_called_once_with(ws.ct, ws.cst, original_stf, ws.pln, ws.result["w"])
+    assert ws.stf is original_stf
 
 
 @pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
@@ -279,7 +406,7 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName", choose_file
     )
-    monkeypatch.setattr(w, "_run_save", lambda fn, *args: fn())
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
 
     w._on_save_workspace()
     data = load_data(path if suffix else path.with_suffix(".pkl"))
@@ -317,7 +444,7 @@ def test_save_workspace_rejects_lossy_extension(qapp, tmp_path, monkeypatch, suf
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
     )
     save = Mock()
-    monkeypatch.setattr(w, "_run_save", save)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", save)
     w._on_save_workspace()
     warning.assert_called_once()
     save.assert_not_called()
@@ -335,7 +462,7 @@ def test_save_workspace_without_ct_stops_before_file_dialog(qapp, monkeypatch):
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
     )
-    monkeypatch.setattr(w, "_run_save", save)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", save)
 
     w._on_save_workspace()
 
@@ -343,3 +470,151 @@ def test_save_workspace_without_ct_stops_before_file_dialog(qapp, monkeypatch):
     assert "Load a CT" in warning.call_args.args[2]
     dialog.assert_not_called()
     save.assert_not_called()
+
+
+def test_computation_warnings_shown_once_after_run(qapp, monkeypatch):
+    import time
+    from unittest.mock import Mock
+
+    from pyRadPlan.core import ProgressReporter
+
+    w = WorkflowWidget(WorkspaceManager())
+    warning = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
+    )
+
+    def _compute():
+        reporter = ProgressReporter()
+        reporter.report_warning("objectives converted")
+        reporter.report_warning("objectives converted")
+        reporter.report_warning("objectives kept")
+        return 1
+
+    done = []
+    w._run_in_thread(_compute, on_success=done.append)
+    deadline = time.monotonic() + 5.0
+    while not done and time.monotonic() < deadline:
+        qapp.processEvents()
+
+    assert done == [1]
+    warning.assert_called_once()
+    assert warning.call_args.args[2] == "objectives converted\n\nobjectives kept"
+    assert w._pending_warnings == []
+
+
+def test_stop_button_cancels_running_computation(qapp, monkeypatch):
+    import time
+    from unittest.mock import Mock
+
+    from pyRadPlan.core import ProgressReporter
+
+    w = WorkflowWidget(WorkspaceManager())
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    assert not w._btn_stop.isEnabled()
+
+    def _compute():
+        reporter = ProgressReporter()
+        reporter.console_progress = False
+        for _ in reporter.track(range(10_000), name="Ray"):
+            time.sleep(0.001)
+        return "finished"
+
+    done = []
+    w._run_in_thread(_compute, on_success=done.append)
+    assert w._btn_stop.isEnabled()
+
+    w._btn_stop.click()
+    assert not w._btn_stop.isEnabled()
+    assert w._lbl_status.text() == "Stopping…"
+
+    deadline = time.monotonic() + 5.0
+    while w.is_busy and time.monotonic() < deadline:
+        qapp.processEvents()
+    qapp.processEvents()
+
+    assert done == []
+    critical.assert_not_called()
+    assert w._lbl_status.text() == "Stopped"
+    assert not w._btn_stop.isEnabled()
+
+
+class _Editor:
+    """An editor with pending changes, applying successfully unless told otherwise."""
+
+    def __init__(self, applies=True):
+        self.pending, self.applies, self.applied = True, applies, 0
+
+    def has_pending(self):
+        return self.pending
+
+    def apply(self):
+        self.applied += 1
+        self.pending = not self.applies
+        return self.applies
+
+
+def _workflow_with_editor(monkeypatch, choice, applies=True):
+    w = WorkflowWidget(WorkspaceManager())
+    editor = _Editor(applies)
+    w.add_pending_changes_source("plan", editor.has_pending, editor.apply)
+    asked = []
+
+    def ask(step, names, outdates_input):
+        asked.append((step, names, outdates_input))
+        return choice
+
+    monkeypatch.setattr(WorkflowWidget, "_ask_pending_changes", staticmethod(ask))
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    return w, editor, asked, runs
+
+
+@pytest.mark.parametrize(
+    ("choice", "applied", "runs"),
+    [("apply", 1, 1), ("continue", 0, 1), ("cancel", 0, 0)],
+)
+def test_pending_plan_changes_are_offered_before_the_dose_influence(
+    qapp, monkeypatch, choice, applied, runs
+):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, choice)
+
+    w._on_calc_dose()
+
+    assert asked == [("Calculate Dose Influence", ["plan"], False)]
+    assert editor.applied == applied
+    assert len(started) == runs
+
+
+@pytest.mark.parametrize(
+    ("handler", "step"), [("_on_optimize", "Optimize"), ("_on_recalc_dose", "Recalculate Dose")]
+)
+def test_applying_pending_changes_stops_steps_using_the_dose_influence(
+    qapp, monkeypatch, handler, step
+):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, "apply")
+    w._ws.set_many(result={"w": [1.0]})
+
+    getattr(w, handler)()
+
+    assert asked == [(step, ["plan"], True)]
+    assert editor.applied == 1
+    assert started == []  # the dose influence is outdated after applying
+
+
+def test_no_question_without_pending_changes_or_after_a_failed_apply(qapp, monkeypatch):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, "apply", applies=False)
+
+    w._on_calc_dose()
+    assert editor.applied == 1 and started == []  # the plan did not validate
+
+    editor.pending = False
+    w._on_calc_dose()
+    assert len(asked) == 1 and len(started) == 1

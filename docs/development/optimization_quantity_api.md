@@ -46,7 +46,7 @@ Out of scope:
 
 | Location | Current behavior relevant to this change |
 |---|---|
-| [`_optiprob.py`](../../pyRadPlan/optimization/problems/_optiprob.py) | Defaults `convert_dose_objectives` to `True`; `_collect_objectives()` overwrites quantities using modality and available matrices; makes shallow objective copies; preprocesses images before scalar fraction normalization. |
+| [`_optiprob.py`](../../pyRadPlan/optimization/problems/_optiprob.py) | Defaults `convert_dose_objectives` to `True`; `_collect_objectives()` converts physical-dose objectives to the quantity inferred from modality and available matrices unless biological objectives are present, warning either way; makes shallow objective copies; preprocesses images before scalar fraction normalization. |
 | [`_objective.py`](../../pyRadPlan/optimization/objectives/_objective.py) | Defaults quantity to `physical_dose`; validates against the concrete registry; divides all scalar `reference` parameters by fractions; skips `image_reference` parameters during normalization. |
 | [`_resolver.py`](../../pyRadPlan/quantities/_resolver.py) | Resolves dependencies, deduplicates instances, and reports unavailable computation paths. |
 | [`_plans.py`](../../pyRadPlan/plan/_plans.py) | Stores optimization configuration in `prop_opt`; defaults `dose_convention` to `per_fraction`; provides `result_dose_factor`. |

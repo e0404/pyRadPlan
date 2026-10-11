@@ -74,6 +74,7 @@ class Wedenberg(RBEMinMax):
     """Wedenberg model (https://www.ncbi.nlm.nih.gov/pubmed/22909391)."""
 
     model = "WED"
+    name = "Wedenberg"
     possible_radiation_modes = ("protons",)
 
     def __init__(self, p0: float = 1.0, p1: float = 0.434, p2: float = 1.0):
@@ -97,6 +98,7 @@ class MCNamara(RBEMinMax):
     """
 
     model = "MCN"
+    name = "McNamara"
     possible_radiation_modes = ("protons",)
     requires_positive_reference = ("alpha_x", "beta_x")
 
@@ -129,6 +131,7 @@ class Carabe(RBEMinMax):
     """
 
     model = "CAR"
+    name = "Carabe"
     possible_radiation_modes = ("protons",)
 
     def __init__(
@@ -161,6 +164,7 @@ class HeliumMairani(RBEMinMax):
     """
 
     model = "HEL"
+    name = "Mairani (helium)"
     possible_radiation_modes = ("helium",)
 
     def __init__(self, p0: float = 1.36938e-1, p1: float = 9.73154e-3, p2: float = 1.51998e-2):
@@ -186,6 +190,7 @@ class LinearScaling(RBEMinMax):
     """
 
     model = "LSM"
+    name = "Linear scaling"
     possible_radiation_modes = ("protons", "helium", "carbon")
 
     def __init__(

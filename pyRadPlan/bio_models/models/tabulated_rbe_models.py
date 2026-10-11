@@ -278,6 +278,7 @@ class TabulatedAlphaBetaModel(TabulatedRBEModel):
     """
 
     model = "dose_average_alpha_beta"
+    name = "Dose-averaged α/β (tabulated)"
     quantities_in_table = ("alpha", "beta")
     quantities_in_kernel = ("alpha", "sqrt_beta")
     required_quantities = ("fluence",)
