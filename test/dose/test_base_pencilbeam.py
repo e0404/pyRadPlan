@@ -18,7 +18,11 @@ from typing import Iterator
 
 import pytest
 
+from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
+from pyRadPlan.plan import create_pln
+
 import pyRadPlan.dose.engines
+from pyRadPlan.stf import Beam, IonSpot, Ray, validate_stf
 
 
 def _import_all_engine_submodules() -> None:
@@ -61,6 +65,26 @@ def _pyradplan_pb_engines():
     return result
 
 
+def _stf_with_density_flags(
+    use_given_eq_density_cube, ignore_outside_densities, radiation_mode="protons"
+):
+    """Minimal single-beam stf carrying the generator's density assumptions."""
+
+    ray = Ray(
+        ray_pos=[0.0, 0.0, 0.0],
+        ray_pos_bev=[0.0, 0.0, 0.0],
+        beamlets=[IonSpot(energy=100.0)],
+    )
+    beam = Beam(
+        iso_center=[0.0, 0.0, 0.0],
+        rays=[ray],
+        radiation_mode=radiation_mode,
+        use_given_eq_density_cube=use_given_eq_density_cube,
+        ignore_outside_densities=ignore_outside_densities,
+    )
+    return validate_stf({"beams": [beam]})
+
+
 @pytest.mark.parametrize(
     "engine_cls",
     _pyradplan_pb_engines(),
@@ -95,3 +119,49 @@ class TestGuaranteeFlagsPresent:
         assert isinstance(val, bool), (
             f"{engine_cls.__qualname__}._dij_guarantee_nonzero must be a plain bool, got {type(val)!r}"
         )
+
+
+class TestStfDensityConsistency:
+    """The engine warns when the stf was built on differently prepared densities."""
+
+    @pytest.fixture
+    def engine(self):
+        return ParticleHongPencilBeamEngine(
+            create_pln({"radiation_mode": "protons", "machine": "Generic"})
+        )
+
+    def test_matching_flags_do_not_warn(self, engine, recwarn):
+        engine.use_given_eq_density_cube = False
+        engine.ignore_outside_densities = False
+        engine._check_stf_density_consistency(_stf_with_density_flags(False, False))
+        assert not [w for w in recwarn if "densities" in str(w.message)]
+
+    def test_mismatched_ignore_outside_densities_warns(self, engine):
+        engine.use_given_eq_density_cube = False
+        engine.ignore_outside_densities = False
+        with pytest.warns(UserWarning, match="generated with ignore_outside_densities=True"):
+            engine._check_stf_density_consistency(_stf_with_density_flags(False, True))
+
+    def test_mismatched_use_given_eq_density_cube_warns(self, engine):
+        engine.use_given_eq_density_cube = False
+        engine.ignore_outside_densities = True
+        with pytest.warns(UserWarning, match="generated with use_given_eq_density_cube=True"):
+            engine._check_stf_density_consistency(_stf_with_density_flags(True, True))
+
+    def test_unrecorded_flags_warn_as_unknown(self, engine, recwarn):
+        engine._check_stf_density_consistency(_stf_with_density_flags(None, False))
+        messages = [str(w.message) for w in recwarn if "stf" in str(w.message)]
+        assert len(messages) == 1
+        assert "does not record use_given_eq_density_cube" in messages[0]
+        assert "ignore_outside_densities" not in messages[0]
+
+    def test_beam_records_nothing_by_default(self):
+        beam = _stf_with_density_flags(None, None).beams[0]
+        assert beam.use_given_eq_density_cube is None
+        assert beam.ignore_outside_densities is None
+
+    def test_photon_beams_are_not_checked(self, engine, recwarn):
+        engine.ignore_outside_densities = True
+        engine._check_stf_density_consistency(_stf_with_density_flags(None, None, "photons"))
+        engine._check_stf_density_consistency(_stf_with_density_flags(False, False, "photons"))
+        assert not [w for w in recwarn if "densities" in str(w.message)]

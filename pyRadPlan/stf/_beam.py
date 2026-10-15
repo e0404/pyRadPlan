@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import numpy as np
 from pydantic import (
     Field,
@@ -53,6 +53,12 @@ class Beam(PyRadPlanBaseModel):
         The number of bixels per ray in an array (1 x num_of_rays).
     longitudinal_spot_spacing :
         The longitudinal spot spacing in (mm).
+    use_given_eq_density_cube :
+        Whether the generator took the equivalent density cube from the ct instead of
+        converting cube_hu. ``None`` if the generator did not record it.
+    ignore_outside_densities :
+        Whether the generator zeroed densities outside the cst contours before
+        determining the beam geometry. ``None`` if the generator did not record it.
     total_number_of_bixels :
         The total number of bixels in the beam.
 
@@ -82,6 +88,12 @@ class Beam(PyRadPlanBaseModel):
         default=([0, 0, 0]), validate_default=True
     )
     longitudinal_spot_spacing: float = Field(default=2.0)
+
+    # Density assumptions the generator used to place the beam's beamlets / energy layers.
+    # ``None`` means they were not recorded (e.g. an stf imported from matRad), so the dose
+    # engine cannot verify them and warns for ion beams.
+    use_given_eq_density_cube: Optional[bool] = Field(default=None)
+    ignore_outside_densities: Optional[bool] = Field(default=None)
 
     @model_validator(mode="before")
     @classmethod

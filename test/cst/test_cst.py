@@ -839,3 +839,66 @@ def test_matrad_numpy_cell_array_validation():
     assert restored.vois[0].name == "target"
     assert restored.vois[0].objectives[0].d_ref == 60.0
     assert raw.shape == (1, 6)
+
+
+# ---------------------------------------------------------------------------
+# matRad-compatible target selection (targets carrying objectives)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cst_mixed_targets():
+    """Two targets, only one of which carries an objective, plus an OAR."""
+    from pyRadPlan.optimization.objectives import SquaredDeviation
+
+    ct = create_ct(cube_hu=sitk.Image(10, 10, 10, sitk.sitkInt16))
+
+    with_obj = np.zeros((10, 10, 10), dtype=np.uint8)
+    with_obj[1, 1, 1] = 1
+    without_obj = np.zeros((10, 10, 10), dtype=np.uint8)
+    without_obj[5, 5, 5] = 1
+    oar_mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    oar_mask[8, 8, 8] = 1
+
+    target_a = create_voi(voi_type="TARGET", name="with_obj", ct_image=ct, mask=with_obj)
+    target_a.objectives = [SquaredDeviation(priority=100.0, d_ref=2.0)]
+    target_b = create_voi(voi_type="TARGET", name="without_obj", ct_image=ct, mask=without_obj)
+    oar = create_voi(voi_type="OAR", name="oar", ct_image=ct, mask=oar_mask)
+
+    return ct, StructureSet(vois=[target_a, target_b, oar], ct_image=ct)
+
+
+def test_optimization_targets_are_those_with_objectives(cst_mixed_targets):
+    _, cst = cst_mixed_targets
+
+    assert [v.name for v in cst._target_vois()] == ["with_obj", "without_obj"]
+    assert [v.name for v in cst.optimization_target_vois()] == ["with_obj"]
+
+
+def test_optimization_targets_fall_back_to_all_targets(cst_mixed_targets):
+    """matRad uses every target when none of them carries an objective."""
+    _, cst = cst_mixed_targets
+    cst.vois[0].objectives = []
+
+    assert [v.name for v in cst.optimization_target_vois()] == ["with_obj", "without_obj"]
+    assert np.allclose(
+        cst.target_center_of_mass(), cst.target_center_of_mass(optimization_targets_only=False)
+    )
+
+
+def test_isocenter_uses_optimization_targets(cst_mixed_targets):
+    """matRad_getIsoCenter only averages targets that carry objectives."""
+    _, cst = cst_mixed_targets
+
+    assert np.allclose(cst.target_center_of_mass(), [1.0, 1.0, 1.0])
+    assert np.allclose(cst.target_center_of_mass(optimization_targets_only=False), [3.0, 3.0, 3.0])
+
+
+def test_optimization_target_union(cst_mixed_targets):
+    _, cst = cst_mixed_targets
+
+    assert cst.target_union_voxels().size == 2
+    assert cst.optimization_target_voxels().size == 1
+
+    assert sitk.GetArrayFromImage(cst.target_union_mask()).sum() == 2
+    assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1

@@ -216,7 +216,6 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_engines(self._cmb_radiation.currentText())
         self._refresh_bio_models(self._cmb_radiation.currentText())
         self._refresh_angle_presets(self._cmb_radiation.currentText())
-        self._update_mode_dependent_fields()
         self._update_beam_count()
 
     def _build_fields(self, grid: QGridLayout) -> None:
@@ -578,17 +577,11 @@ class PlanWidget(WorkspaceWidget):
         else:
             self._cmb_machine.setEditText("Generic")
 
-    def _update_mode_dependent_fields(self) -> None:
-        is_ion = self._cmb_radiation.currentText() in _ION_MODES
-        label = "Spot spacing [mm]:" if is_ion else "Bixel width [mm]:"
-        self._lbl_bixel.setText(label)
-
     def _on_radiation_changed(self, radiation_mode: str) -> None:
         self._refresh_machines(radiation_mode)
         self._refresh_engines(radiation_mode)
         self._refresh_bio_models(radiation_mode)
         self._refresh_angle_presets(radiation_mode)
-        self._update_mode_dependent_fields()
         self._update_dirty_state()
 
     # ------------------------------------------------------------------
@@ -750,7 +743,6 @@ class PlanWidget(WorkspaceWidget):
         self._refresh_engines(pln.radiation_mode)
         self._refresh_bio_models(pln.radiation_mode)
         self._refresh_angle_presets(pln.radiation_mode)
-        self._update_mode_dependent_fields()
 
         self._restore_engine_from_pln(pln)
 
@@ -781,9 +773,7 @@ class PlanWidget(WorkspaceWidget):
         if scenario and self._cmb_scenario.findText(scenario) >= 0:
             self._cmb_scenario.setCurrentText(scenario)
 
-        is_ion = pln.radiation_mode in _ION_MODES
-        spacing_key = "longitudinal_spot_spacing" if is_ion else "bixel_width"
-        spacing = stf.get(spacing_key, stf.get("bixel_width"))
+        spacing = stf.get("bixel_width")
         if spacing is not None:
             self._spn_bixel.setValue(float(spacing))
 
@@ -1101,9 +1091,6 @@ class PlanWidget(WorkspaceWidget):
 
         gantry, couch = self._form_beam_angles()
 
-        is_ion = radiation_mode in _ION_MODES
-        spacing_key = "longitudinal_spot_spacing" if is_ion else "bixel_width"
-
         current = self._ws.pln
         same_mode = current is not None and current.radiation_mode == radiation_mode
         prop_stf = deepcopy(current.prop_stf) if same_mode else {}
@@ -1112,8 +1099,6 @@ class PlanWidget(WorkspaceWidget):
             couch_angles=couch,
             bixel_width=float(self._spn_bixel.value()),
         )
-        if is_ion:
-            prop_stf[spacing_key] = float(self._spn_bixel.value())
 
         if not self._chk_iso_auto.isChecked():
             iso = parse_number_list(self._txt_iso.text())

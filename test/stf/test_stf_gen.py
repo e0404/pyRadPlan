@@ -22,6 +22,7 @@ from pyRadPlan.stf.generators import (
     StfGeneratorPhotonCollimatedSquareFields,
     StfGeneratorIonSingleSpot,
     StfGeneratorIMPT,
+    StfGeneratorVHEE,
 )
 
 
@@ -300,6 +301,125 @@ def test_impt_tg119(tg119, sample_proton_pln):
         assert len(field["rays"]) > 0
         for ray in field["rays"]:
             assert isinstance(ray, Ray)
+
+
+def test_ion_generators_use_no_pb_margin(sample_proton_pln, sample_photon_pln):
+    """matRad adds a bixel-width margin for photon IMRT only; ion generators use none."""
+    assert StfGeneratorIMPT(sample_proton_pln)._computed_target_margin() == 0.0
+    assert StfGeneratorIonSingleSpot(sample_proton_pln)._computed_target_margin() == 0.0
+
+    photon_gen = StfGeneratorPhotonIMRT(sample_photon_pln)
+    assert photon_gen._computed_target_margin() == photon_gen.bixel_width
+
+
+def test_impt_longitudinal_spot_spacing_thins_energy_layers(tg119, sample_proton_pln):
+    """Energy layers must be spaced by at least longitudinal_spot_spacing in peak position."""
+    ct, cst = tg119["ct"], tg119["cst"]
+
+    def spots_and_layers(spacing):
+        stf_gen = StfGeneratorIMPT(sample_proton_pln)
+        stf_gen.bixel_width = 5.0
+        stf_gen.longitudinal_spot_spacing = spacing
+        beams = stf_gen.generate(ct, cst)
+        spots = sum(len(ray.beamlets) for beam in beams for ray in beam["rays"])
+        layers = np.unique(
+            np.concatenate([ray.energies for beam in beams for ray in beam["rays"]])
+        )
+        return spots, layers, stf_gen
+
+    dense_spots, dense_layers, gen = spots_and_layers(0.0)
+    sparse_spots, sparse_layers, _ = spots_and_layers(10.0)
+
+    # A wider spacing must remove layers, not add them
+    assert sparse_spots < dense_spots
+    assert sparse_layers.size < dense_layers.size
+
+    # The surviving layers really are at least the requested distance apart
+    peak_pos = np.sort(
+        [
+            gen._available_peak_positions[np.argmin(np.abs(gen._available_energies - e))]
+            for e in sparse_layers
+        ]
+    )
+    assert np.all(np.diff(peak_pos) >= 10.0 - 1.0)
+
+
+def test_impt_zero_spot_spacing_keeps_all_layers(tg119, sample_proton_pln):
+    """A spacing of zero disables the thinning entirely."""
+    ct, cst = tg119["ct"], tg119["cst"]
+
+    counts = []
+    for spacing in (0.0, 1e-9):
+        stf_gen = StfGeneratorIMPT(sample_proton_pln)
+        stf_gen.bixel_width = 5.0
+        stf_gen.longitudinal_spot_spacing = spacing
+        beams = stf_gen.generate(ct, cst)
+        counts.append(sum(len(ray.beamlets) for beam in beams for ray in beam["rays"]))
+
+    assert counts[0] == counts[1]
+
+
+def test_target_margin_stays_inside_the_patient(sample_ct, sample_cst):
+    """matRad_addMargin only grows the target into voxels that belong to some VOI."""
+    pln = create_pln(
+        {"radiation_mode": "photons", "machine": "Generic", "prop_stf": {"bixel_width": 5.0}}
+    )
+    stf_gen = StfGeneratorPhotonIMRT(pln)
+    stf_gen._ct = sample_ct
+    stf_gen._cst = sample_cst
+    stf_gen._initialize()
+    stf_gen._initialize_patient_geometry()
+
+    target = sitk.GetArrayFromImage(stf_gen._target_mask).astype(bool)
+    patient = sitk.GetArrayFromImage(stf_gen._patient_mask).astype(bool)
+
+    assert target.any()
+    assert not (target & ~patient).any()
+
+
+def test_ion_energy_selection_ignores_densities_outside_patient(
+    sample_ct, sample_cst, sample_proton_pln
+):
+    """With ignore_outside_densities, densities outside every contour are zeroed."""
+    stf_gen = StfGeneratorIMPT(sample_proton_pln)
+    stf_gen.ignore_outside_densities = True
+    stf_gen._ct = sample_ct
+    stf_gen._cst = sample_cst
+    stf_gen._initialize()
+    stf_gen._initialize_patient_geometry()
+
+    wet = sitk.GetArrayFromImage(stf_gen._wet_image)
+    patient = sitk.GetArrayFromImage(stf_gen._patient_mask).astype(bool)
+
+    assert (wet[~patient] == 0).all()
+    assert (wet[patient] > 0).any()
+
+
+def test_ion_energy_selection_traces_outside_densities_by_default(
+    sample_ct, sample_cst, sample_proton_pln
+):
+    """By default the energy selection traces all densities, as the dose engines do."""
+    stf_gen = StfGeneratorIMPT(sample_proton_pln)
+    assert stf_gen.ignore_outside_densities is False
+    stf_gen._ct = sample_ct
+    stf_gen._cst = sample_cst
+    stf_gen._initialize()
+    stf_gen._initialize_patient_geometry()
+
+    wet = sitk.GetArrayFromImage(stf_gen._wet_image)
+    patient = sitk.GetArrayFromImage(stf_gen._patient_mask).astype(bool)
+
+    assert (wet[~patient] > 0).any()
+
+
+@pytest.mark.parametrize("generator_cls", [StfGeneratorIMPT, StfGeneratorVHEE])
+def test_use_given_wet_image_is_deprecated_alias(generator_cls):
+    stf_gen = generator_cls()
+    with pytest.warns(DeprecationWarning, match="use_given_eq_density_cube"):
+        stf_gen.use_given_wet_image = True
+    assert stf_gen.use_given_eq_density_cube is True
+    with pytest.warns(DeprecationWarning):
+        assert stf_gen.use_given_wet_image is True
 
 
 class _CenterOfMassCst:

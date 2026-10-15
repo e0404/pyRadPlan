@@ -1,4 +1,5 @@
 import math
+import warnings
 from typing import Union
 import numpy as np
 from numpy.typing import ArrayLike
@@ -6,6 +7,21 @@ from numpy.typing import ArrayLike
 from pyRadPlan.geometry import lps
 from pyRadPlan.plan import Plan
 from ._base import StfGeneratorBase
+
+
+def _deprecated_alias(old: str, new: str) -> property:
+    """Property forwarding the deprecated attribute *old* to *new*."""
+    message = f"{old} is deprecated, use {new} instead."
+
+    def fget(self):
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
+        return getattr(self, new)
+
+    def fset(self, value):
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
+        setattr(self, new, value)
+
+    return property(fget, fset, doc=f"Deprecated alias for {new}.")
 
 
 def resolve_iso_centers(iso_center, cst, num_of_beams: int | None = None) -> np.ndarray:
@@ -114,6 +130,10 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
     def _computed_target_margin(self) -> float:
         """Target margin to apply for beamlet placing."""
         return self.bixel_width
+
+    def _finalize_beam(self, beam: dict) -> dict:
+        """Post-process a beam after its rays were created (matRad's ``finalizeBeam``)."""
+        return beam
 
     def _create_rays(self, beam) -> list[dict]:
         """Get the rays on a beam / stf element."""
@@ -225,6 +245,7 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
             beam["source_point"] = rotation_matrix @ beam["source_point_bev"]
 
             beam["rays"] = self._create_rays(beam)
+            beam = self._finalize_beam(beam)
 
             stf.append(beam)
         return stf
