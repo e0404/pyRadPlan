@@ -617,6 +617,40 @@ def test_modality_switch_resets_sequencing_and_steering_settings(qapp):
     assert original.prop_seq == {"custom": 7}
 
 
+def test_ion_bixel_width_round_trip(qapp):
+    widget, ws = _make_widget()
+
+    widget._cmb_radiation.setCurrentText("protons")
+    assert widget._lbl_bixel.text() == "Bixel width / spot spacing [mm]:"
+    widget._txt_gantry.setText("0")
+    widget._spn_bixel.setValue(3.0)
+    widget._on_apply()
+
+    assert ws.pln.prop_stf["bixel_width"] == 3.0
+    assert "longitudinal_spot_spacing" not in ws.pln.prop_stf
+
+    reloaded, _ = _make_widget()
+    reloaded.workspace.pln = ws.pln
+    assert reloaded._spn_bixel.value() == 3.0
+
+
+def test_preset_longitudinal_spacing_is_kept(qapp):
+    widget, ws = _make_widget()
+
+    widget._cmb_radiation.setCurrentText("protons")
+    widget._txt_gantry.setText("0")
+    widget._on_apply()
+    pln = ws.pln
+    pln.prop_stf["longitudinal_spot_spacing"] = 1.5
+    ws.pln = pln
+
+    widget._spn_bixel.setValue(4.0)
+    widget._on_apply()
+
+    assert ws.pln.prop_stf["bixel_width"] == 4.0
+    assert ws.pln.prop_stf["longitudinal_spot_spacing"] == 1.5
+
+
 # ----------------------------------------------------------------------
 # Presentation mode (default / educational)
 # ----------------------------------------------------------------------

@@ -122,10 +122,10 @@ class StfGeneratorBase(ProgressReporter, ABC):
 
         # now process target
 
-        self._target_mask = self._cst.target_union_mask()
+        self._target_mask = self._cst.optimization_target_mask()
         # Add margin if desired, otherwise take the indices directly
         if not self.add_margin:
-            self._target_voxels = self._cst.target_union_voxels(order="numpy")
+            self._target_voxels = self._cst.optimization_target_voxels(order="numpy")
         if self.add_margin:
             added_margin = self._computed_target_margin()  # pbMargin in matRad
 
@@ -152,7 +152,11 @@ class StfGeneratorBase(ProgressReporter, ABC):
             dilation.SetKernelType(sitk.sitkBox)
             dilation.SetKernelRadius(voxel_margin.astype(int).tolist())
 
-            self._target_mask = dilation.Execute(self._target_mask)
+            # matRad_addMargin only grows into voxels that belong to some VOI
+            self._target_mask = sitk.And(
+                sitk.Cast(dilation.Execute(self._target_mask), sitk.sitkUInt8),
+                sitk.Cast(self._patient_mask, sitk.sitkUInt8),
+            )
 
             # Update target voxels
             self._target_voxels = np2sitk.sitk_mask_to_linear_indices(

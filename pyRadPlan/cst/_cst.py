@@ -331,6 +331,11 @@ class StructureSet(PyRadPlanBaseModel):
     def _target_vois(self) -> list[VOI]:
         return [v for v in self.vois if v.voi_type == "TARGET"]
 
+    def optimization_target_vois(self) -> list[VOI]:
+        """Targets carrying objectives, or all targets if none has any (matRad's rule)."""
+        targets = self._target_vois()
+        return [v for v in targets if v.objectives] or targets
+
     def _patient_contributing_vois(self) -> list[VOI]:
         """VOIs that define the patient outline.
 
@@ -339,6 +344,69 @@ class StructureSet(PyRadPlanBaseModel):
         """
         external = [v for v in self.vois if isinstance(v, ExternalVOI)]
         return external if external else list(self.vois)
+
+    def _union_voxels(
+        self,
+        vois: list[VOI],
+        order: str,
+        scenario: Union[int, Literal["any", "each"]],
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """Union of the voxel indices of ``vois``; see :meth:`target_union_voxels`."""
+        self._validate_scenario_arg(scenario)
+        if not vois:
+            empty = np.array([], dtype=np.int64)
+            if scenario == "each" and self.num_of_scenarios > 1:
+                return [empty.copy() for _ in range(self.num_of_scenarios)]
+            return empty
+
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            per_voi = [v.scenario_indices(scenario=int(scenario), order=order) for v in vois]
+            return np.unique(np.concatenate(per_voi))
+
+        if scenario == "any":
+            per_voi: list[np.ndarray] = []
+            for v in vois:
+                per_voi.extend(v.scenario_indices(order=order))
+            return np.unique(np.concatenate(per_voi))
+
+        # scenario == "each"
+        per_scen: list[np.ndarray] = []
+        for s in range(n_scen):
+            per_voi = [v.scenario_indices(scenario=s, order=order) for v in vois]
+            per_scen.append(np.unique(np.concatenate(per_voi)))
+        if n_scen == 1:
+            return per_scen[0]
+        return per_scen
+
+    def _union_mask(
+        self,
+        vois: list[VOI],
+        scenario: Union[int, Literal["any", "each"]],
+    ) -> sitk.Image:
+        """Union mask of the non-empty ``vois``; see :meth:`target_union_mask`."""
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            return self._union_3d_masks(
+                [self._voi_scenario_mask_3d(v, int(scenario)) for v in vois]
+            )
+
+        if scenario == "any":
+            slices_3d: list[sitk.Image] = []
+            for s in range(n_scen):
+                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in vois)
+            return self._union_3d_masks(slices_3d)
+
+        # scenario == "each"
+        per_scen = [
+            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in vois])
+            for s in range(n_scen)
+        ]
+        if n_scen == 1:
+            return per_scen[0]
+        return sitk.JoinSeries(per_scen)
 
     def target_union_voxels(
         self,
@@ -370,36 +438,7 @@ class StructureSet(PyRadPlanBaseModel):
         list[np.ndarray]
             For ``"each"`` on a 4D CT.
         """
-        self._validate_scenario_arg(scenario)
-        target_vois = self._target_vois()
-        if not target_vois:
-            empty = np.array([], dtype=np.int64)
-            if scenario == "each" and self.num_of_scenarios > 1:
-                return [empty.copy() for _ in range(self.num_of_scenarios)]
-            return empty
-
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            per_voi = [
-                v.scenario_indices(scenario=int(scenario), order=order) for v in target_vois
-            ]
-            return np.unique(np.concatenate(per_voi))
-
-        if scenario == "any":
-            per_voi: list[np.ndarray] = []
-            for v in target_vois:
-                per_voi.extend(v.scenario_indices(order=order))
-            return np.unique(np.concatenate(per_voi))
-
-        # scenario == "each"
-        per_scen: list[np.ndarray] = []
-        for s in range(n_scen):
-            per_voi = [v.scenario_indices(scenario=s, order=order) for v in target_vois]
-            per_scen.append(np.unique(np.concatenate(per_voi)))
-        if n_scen == 1:
-            return per_scen[0]
-        return per_scen
+        return self._union_voxels(self._target_vois(), order, scenario)
 
     def target_union_mask(
         self,
@@ -426,28 +465,36 @@ class StructureSet(PyRadPlanBaseModel):
         target_vois = self._target_vois()
         if not target_vois:
             raise ValueError("No TARGET VOI in StructureSet")
+        return self._union_mask(target_vois, scenario)
 
-        n_scen = self.num_of_scenarios
+    def optimization_target_voxels(
+        self,
+        order: str = "sitk",
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """
+        Return the voxel indices of the targets used for beam placement.
 
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            return self._union_3d_masks(
-                [self._voi_scenario_mask_3d(v, int(scenario)) for v in target_vois]
-            )
+        Like :meth:`target_union_voxels`, but only targets carrying objectives count,
+        or all targets if none has any, as in matRad.
+        """
+        return self._union_voxels(self.optimization_target_vois(), order, scenario)
 
-        if scenario == "any":
-            slices_3d: list[sitk.Image] = []
-            for s in range(n_scen):
-                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in target_vois)
-            return self._union_3d_masks(slices_3d)
+    def optimization_target_mask(
+        self,
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> sitk.Image:
+        """
+        Return the mask of the targets used for beam placement.
 
-        # scenario == "each"
-        per_scen = [
-            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in target_vois])
-            for s in range(n_scen)
-        ]
-        if n_scen == 1:
-            return per_scen[0]
-        return sitk.JoinSeries(per_scen)
+        Like :meth:`target_union_mask`, but only targets carrying objectives count,
+        or all targets if none has any, as in matRad.
+        """
+        self._validate_scenario_arg(scenario)
+        target_vois = self.optimization_target_vois()
+        if not target_vois:
+            raise ValueError("No TARGET VOI in StructureSet")
+        return self._union_mask(target_vois, scenario)
 
     def patient_voxels(
         self,
@@ -461,36 +508,7 @@ class StructureSet(PyRadPlanBaseModel):
         otherwise every VOI contributes. Index semantics and the ``scenario``
         argument mirror :meth:`target_union_voxels`.
         """
-        self._validate_scenario_arg(scenario)
-        contributing = self._patient_contributing_vois()
-        if not contributing:
-            empty = np.array([], dtype=np.int64)
-            if scenario == "each" and self.num_of_scenarios > 1:
-                return [empty.copy() for _ in range(self.num_of_scenarios)]
-            return empty
-
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            per_voi = [
-                v.scenario_indices(scenario=int(scenario), order=order) for v in contributing
-            ]
-            return np.unique(np.concatenate(per_voi))
-
-        if scenario == "any":
-            per_voi: list[np.ndarray] = []
-            for v in contributing:
-                per_voi.extend(v.scenario_indices(order=order))
-            return np.unique(np.concatenate(per_voi))
-
-        # scenario == "each"
-        per_scen: list[np.ndarray] = []
-        for s in range(n_scen):
-            per_voi = [v.scenario_indices(scenario=s, order=order) for v in contributing]
-            per_scen.append(np.unique(np.concatenate(per_voi)))
-        if n_scen == 1:
-            return per_scen[0]
-        return per_scen
+        return self._union_voxels(self._patient_contributing_vois(), order, scenario)
 
     def patient_mask(
         self,
@@ -506,32 +524,13 @@ class StructureSet(PyRadPlanBaseModel):
         contributing = self._patient_contributing_vois()
         if not contributing:
             raise ValueError("No VOIs in StructureSet")
+        return self._union_mask(contributing, scenario)
 
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            return self._union_3d_masks(
-                [self._voi_scenario_mask_3d(v, int(scenario)) for v in contributing]
-            )
-
-        if scenario == "any":
-            slices_3d: list[sitk.Image] = []
-            for s in range(n_scen):
-                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in contributing)
-            return self._union_3d_masks(slices_3d)
-
-        # scenario == "each"
-        per_scen = [
-            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in contributing])
-            for s in range(n_scen)
-        ]
-        if n_scen == 1:
-            return per_scen[0]
-        return sitk.JoinSeries(per_scen)
-
-    def target_center_of_mass(self, scenario: int = 0) -> np.ndarray:
+    def target_center_of_mass(
+        self, scenario: int = 0, optimization_targets_only: bool = True
+    ) -> np.ndarray:
         """
-        Return the center of mass of the target union mask for one scenario.
+        Return the center of mass of the targets for one scenario.
 
         Parameters
         ----------
@@ -539,16 +538,30 @@ class StructureSet(PyRadPlanBaseModel):
             Scenario index in ``[0, num_of_scenarios)``. Defaults to ``0``,
             which preserves the legacy 3D behavior and the prior 4D
             behavior of implicitly using scenario 0.
+        optimization_targets_only : bool, optional
+            If ``True`` (default), use :meth:`optimization_target_mask`, giving the
+            default isocenter as in ``matRad_getIsoCenter``. If ``False``, use
+            :meth:`target_union_mask`, i.e. all targets.
 
         Returns
         -------
         np.ndarray
             World-space coordinates of the center of mass, shape ``(3,)``.
         """
+        self._validate_int_scenario(scenario, "target_center_of_mass")
+        if optimization_targets_only:
+            mask = self.optimization_target_mask(scenario=int(scenario))
+        else:
+            mask = self.target_union_mask(scenario=int(scenario))
+        return self._center_of_mass(mask)
+
+    def _validate_int_scenario(self, scenario: int, method: str) -> None:
         self._validate_scenario_arg(scenario)
         if not isinstance(scenario, (int, np.integer)) or isinstance(scenario, bool):
-            raise ValueError(f"target_center_of_mass requires an int scenario, got {scenario!r}")
-        mask_image = self.target_union_mask(scenario=int(scenario))
+            raise ValueError(f"{method} requires an int scenario, got {scenario!r}")
+
+    @staticmethod
+    def _center_of_mass(mask_image: sitk.Image) -> np.ndarray:
         # Transpose so axes go (x, y, z) for sitk-style continuous indexing.
         mask = sitk.GetArrayViewFromImage(mask_image).T
 

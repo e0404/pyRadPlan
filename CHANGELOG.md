@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Dij sampling in the photon SVD pencil beam engine (`enable_dij_sampling`, on by default, configured through `dij_sampling`). The low-dose tail of each bixel is sampled stochastically (reproducible through `random_seed`), so photon dose influence matrices are sparser and their tail values differ from earlier versions
+- Ion stf generators gained `use_given_eq_density_cube` (replacing `use_given_wet_image`) and `ignore_outside_densities`, mirroring the pencil beam dose engines. Both are recorded on every generated ion beam, and the dose engines warn if they differ from their own settings, or, separately, if an ion stf does not record them (e.g. an imported one), since its energy selection then cannot be verified
 - Beam angle presets: `pyRadPlan.stf.BeamAnglePreset` with a registry (`register_beam_angle_preset`, `get_beam_angle_presets`) listing presets typical for a radiation mode first. Built-in presets: single field, lateral opposing, AP/PA opposing, 3 equidistant fields, 4-field box and 5/7/9/12-field IMRT stars. The GUI plan widget offers them in a "Choose preset…" menu next to the couch angles that overwrites the gantry and couch angles; arrow keys move through the menu without changing the form, Enter applies a preset and Escape cancels, and the order follows the radiation mode, also for imported plans
 - A documented and engine-tested custom biological-model extension contract. `register_model` is usable as a decorator, validates model declarations, and checks every name before modifying the registry; dose engines validate custom evaluator bindings, declarations, per-energy kernel fields and returned quantity names at their public boundaries.
 - Biological models declare the reference photon parameters their formulation needs to be positive (`BiologicalModel.requires_positive_reference`); the dose engines validate that declaration against the `alpha_x` / `beta_x` of all structures before a calculation starts. The RBEmin/RBEmax models need `alpha_x > 0`, McNamara additionally `beta_x > 0`
@@ -42,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The pencil beam dose engines and the ion stf generators no longer ignore densities outside the patient contours by default (`ignore_outside_densities=False`), so air outside the patient is traced for dose calculation and energy selection alike. Set it to `True` on both to restore the previous dose engine behaviour
+- `StfGeneratorIMPT` defaults to a `longitudinal_spot_spacing` of 2 mm (was 3 mm); together with the energy layer thinning below, ion plans get different energy layers than before
 - **Breaking:** the two VOI color fields are collapsed into one. `VOI.visible_color` (optional, `None` when unset) and `VOI.default_color` (the type-bound default) are replaced by a single non-optional `VOI.color` (alias `visibleColor`, so the matRad/camelCase serialization name is unchanged), defaulting to the VOI type's first entry in `DEFAULT_VOI_COLORS`. Consumers no longer need `voi.visible_color or voi.default_color`, and "did the user pick a color?" is now `"color" in voi.model_fields_set` rather than a `None` check; colors that `StructureSet.set_colors()` assigns stay out of `model_fields_set` and are kept when the structure set is revalidated. Passing `visible_color=` when creating a VOI still works but emits a `DeprecationWarning` (`None` selects the type default), `default_color=` is ignored with a `DeprecationWarning`, and reading `voi.visible_color` / `voi.default_color` raises `AttributeError`. The `visible_color` key in the npz and SimpleITK-sidecar VOI metadata is renamed to `color`; the former key is still read, so files written by earlier versions keep their colors
 - GUI: changing a VOI's type in the VOI dialog gives it the new type's default color unless a color was picked for it, instead of always keeping the color of the former type
 - All modules share one pint unit registry (`pyRadPlan.core._units.ureg`) instead of creating eleven; once the numerical stack is loaded each registry took about half a second to build, so `import pyRadPlan` is several seconds faster; units from different modules (e.g. quantities and quality indicators) can now be compared and converted into each other
@@ -58,8 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExactClassLookup` converts the reference tissue classes into the caller's namespace/device/dtype once instead of per bixel, and skips the redundant per-bixel match check (and its device synchronization) once the whole dose grid has been validated. It also rejects empty or inconsistent class declarations
 - `calc_let` and `calc_bio_dose` of the particle engines accept `"auto"` (new default): supported biological influence matrices are computed whenever the evaluator declares them and LET whenever the machine provides it (pencil beam) or the model requires it (FRED); `False` switches the matrices off explicitly (LET-based models still receive the LET kernel in the pencil-beam engines), `calc_bio_dose=True` without an evaluator providing influence quantities raises. FRED sets `Dij.rbe` for constant-RBE models; the unused `calc_bio_dose` of the TOPAS engine was removed
 
+### Deprecated
+
+- `use_given_wet_image` of the ion and VHEE stf generators; use `use_given_eq_density_cube`
+
 ### Fixed
 
+- GUI: the single spot spacing field of the plan widget wrote its value to both `bixel_width` and `longitudinal_spot_spacing` for ion plans, silently overriding the longitudinal spacing with the lateral one. The field ("Bixel width / spot spacing") now only sets `bixel_width`; a `longitudinal_spot_spacing` set in the plan is kept
+- GUI: optimizations started from the GUI ignored the quantity selected for `physical_dose` objectives of ion plans with a biological model, silently optimizing `rbe_x_dose` instead, and failed for other quantities such as `let_dose`, because the legacy `convert_dose_objectives` conversion was active. The GUI now optimizes with `convert_dose_objectives=False` unless the plan's `prop_opt` sets it, so every objective uses the quantity selected in the objectives table; ion objectives meant to optimize RBE-weighted dose need `rbe_x_dose` selected
+- `PhotonPencilBeamSVDEngine` cut off penumbra dose in bixel-based calculations: the lateral cutoff now includes half the bixel diagonal, as for field-based ones
+- Isocenter and beamlet placement ignore targets without objectives, falling back to all targets if none has any (`StructureSet.target_center_of_mass()`, `optimization_target_mask()`, `optimization_target_voxels()`)
+- The target margin for beamlet placement no longer extends outside the patient
+- `StfGeneratorIMPT` ignored `longitudinal_spot_spacing`; energy layers are now thinned to it
+- Ion stf generators no longer add a bixel-width margin around the target
+- Ion energy selection traced densities outside the patient, unlike the dose engine; they are now masked
 - GUI: Recalculate Dose rejects changed beam angles or beam counts until the dose influence and optimization are rebuilt, preventing a result computed with the old geometry from appearing current beside the new beam preview.
 - GUI: Discard restores beam angles, bixel/spot spacing and dose-grid spacing even when an imported plan leaves those fields implicit.
 - GUI: the "Change all quantities…" control uses a menu button so keyboard navigation does not apply intermediate quantities or reset to the first entry; Enter confirms the selected quantity and Escape cancels.
