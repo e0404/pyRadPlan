@@ -261,6 +261,20 @@ Building the documentation locally:
 
    sphinx-build -b html docs docs/_build/html
 
+The tutorials are generated from the scripts in ``examples/`` and rendered without outputs;
+neither CI nor Read the Docs executes the examples. Run
+``python docs/execute_examples.py [name ...]`` to check that examples run without building
+the documentation (the executed notebooks go to ``docs/_build/executed_examples``). Set
+``PYRADPLAN_DOCS_NB_EXECUTION=cache`` to execute them during a local build instead; outputs
+are cached in ``docs/_build/.jupyter_cache``, so only changed examples run again.
+
+Only release commits carry executed notebooks: while preparing a release, the release
+manager runs ``python docs/execute_examples.py --release`` on the ``rc/X.Y.Z`` branch and
+commits the notebooks it writes and stages in ``docs/tutorials/examples/``. The build
+renders these as they are while their script is unchanged and warns about (and shows without
+outputs) those whose script changed since, so the documentation of a release shows the
+outputs of its examples.
+
 ----
 
 .. _benchmarks-profiling:

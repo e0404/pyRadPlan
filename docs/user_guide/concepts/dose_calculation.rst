@@ -92,11 +92,35 @@ setup. Switching ``calc_let`` off does not affect LET-based models, which still 
 kernels internally. The FRED engine derives biological matrices from its scored LET and therefore
 supports LET-based models only.
 
-During the calculation the model is bound to the machine and the reference photon parameters
-of the voxels (``dij.alphax`` / ``dij.betax`` from the structure set) through a
-:class:`~pyRadPlan.bio_models.BioModelEvaluator`; kernel- and table-based models select the
-tissue class of each voxel by exact match of ``(alpha_x, beta_x)`` against the classes of the
-base data.
+During the calculation the model is bound to the machine and the tissue properties of the
+voxels (from the structure set, with ``dij.alphax`` / ``dij.betax`` holding their reference
+parameters) through a :class:`~pyRadPlan.biology.models.BioModelEvaluator`. Kernel- and
+table-based models carry base data for a finite set of tissue classes, and select the class
+of each voxel by exact match against them
+(:class:`~pyRadPlan.biology.models.ExactClassLookup`). What is compared are the fields
+identifying a tissue class of the model, not always the reference parameters: LEM base data
+is tabulated per ``(alpha_x, beta_x, d_t, r_nucleus, version)``, while the MKM z\* kernels
+only depend on the ``(r_nucleus, r_domain)`` geometry — its ``alpha_0`` / ``beta_0`` are taken
+from the tissue per voxel. Only the tissue classes of the kernel set a model resolves to are
+considered, and a tissue of another provenance (e.g. MKM parameters for LEM I kernels) is
+rejected, so a machine carrying classes for several models cannot serve the base data of
+one through the tissue class of another. The engine runs
+:meth:`~pyRadPlan.biology.models.BiologicalModel.check_tissues` before the calculation. LEM
+kernels identify their rows by the reference ``alpha_x`` / ``beta_x`` stored with them; the
+machine's declared tissue classes are matched onto these rows by value, and a machine without
+declared classes uses the kernels' own. See :ref:`voi_tissue_properties` for setting the
+structures up and :ref:`biological_base_data` for the kernel sets and their metadata.
+
+A model that cannot be applied to a calculation — the machine lacks its kernel quantities, a
+voxel's tissue matches no class of the base data, or the reference parameters are outside the
+model's domain — only fails the calculation when biological dose is requested explicitly
+(``calc_bio_dose=True``). With ``"auto"`` or ``False`` a warning names the reason and the
+physical dose influence is computed alone: the dij then records no model
+(``dij.bio_model is None``) and carries no biological matrices, so ``rbe_x_dose`` is reported
+as unavailable and the legacy objective conversion keeps physical-dose objectives on physical
+dose. This keeps physical-dose workflows working with the per-modality default models.
+Invalid reference coefficients (negative, infinite or NaN ``alpha_x`` / ``beta_x``) always
+raise.
 
 Grid information
 ~~~~~~~~~~~~~~~~
@@ -150,6 +174,8 @@ one line:
      - Hong's particle pencil-beam model. Reference implementation for protons/ions.
    * - ``"FRED"``
      - `FRED <https://www.fred-mc.org>`_ Monte Carlo engine (requires FRED installation).
+       Validated for protons only; ion calculations warn that their doses do not yet
+       reproduce the reference.
 
 .. code-block:: python
 

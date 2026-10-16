@@ -94,6 +94,23 @@ def test_legacy_conversion_converts_physical_dose_and_warns(proton_case, caplog)
     assert cst.vois[0].objectives[0].quantity == "physical_dose"
 
 
+@pytest.mark.parametrize("partial_lq", [False, True])
+def test_legacy_conversion_skipped_when_dij_cannot_provide_rbe_x_dose(
+    proton_case, caplog, partial_lq
+):
+    """An alpha/beta model without (complete) LQ matrices cannot yield rbe_x_dose."""
+    pln, ct, cst, dij, stf = proton_case
+    dij.bio_model = "kernel_based_lq"
+    if partial_lq:
+        dij.alpha_dose = dij.physical_dose.copy()
+
+    quantities, warnings = _collect_with_warnings(pln, ct, cst, dij, stf)
+
+    assert quantities == ["physical_dose", "physical_dose"]
+    assert warnings == []
+    assert "physical-dose objective" not in caplog.text
+
+
 @pytest.mark.parametrize("biological", ["rbe_x_dose", "effect"])
 def test_legacy_conversion_keeps_physical_dose_next_to_biological_objectives(
     proton_case, caplog, biological

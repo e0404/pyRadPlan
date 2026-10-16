@@ -1,7 +1,7 @@
 import pytest
 from PySide6.QtWidgets import QComboBox
 
-from pyRadPlan.bio_models import available_bio_models
+from pyRadPlan.biology.models import available_bio_models
 from pyRadPlan.gui.widgets._display_names import (
     IDENTIFIER_ROLE,
     add_identified_item,
@@ -97,7 +97,7 @@ def test_bio_models_have_display_names():
     for cls in available_bio_models("protons"):
         assert bio_model_display_name(cls)
     names = {cls.model: bio_model_display_name(cls) for cls in available_bio_models("helium")}
-    assert names["HEL"] == "Mairani (helium)"
+    assert names["HEL"] == "Mairani (LET)"
 
 
 def test_identifier_only_widens_the_popup(qapp):

@@ -27,6 +27,7 @@ from pyRadPlan.stf import resolve_iso_centers
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
+from ._tissue_params import load_machine_quietly, plan_dose_engine
 from .result.quantity_widget import QuantityWidget
 from .result.visualization_widget import VisualizationWidget
 from .result.viewer_options_widget import ViewerOptionsWidget
@@ -383,6 +384,9 @@ class ViewingWidget(WorkspaceWidget):
         self.opts_widget.local_range_requested.connect(self._on_use_local_min_max)
 
         self.vois_widget = VOIsWidget()
+        self.vois_widget.set_machine_provider(self._plan_machine)
+        self.vois_widget.set_bio_model_provider(self._plan_bio_model)
+        self.vois_widget.set_engine_provider(self._plan_engine)
         self.vois_widget.voi_toggled.connect(self._on_voi_toggled)
         self.vois_widget.selection_changed.connect(self.vois_selection_changed)
         self.vois_widget.color_changed.connect(self._on_voi_color_changed)
@@ -531,6 +535,30 @@ class ViewingWidget(WorkspaceWidget):
         mode = "quantity" if self.opts_widget.cmap_mode_btn.isChecked() else "ct"
         self._sync_ui_to_mode(mode)
 
+    def _plan_machine(self) -> Optional[object]:
+        """
+        Machine base data of the workspace plan, whose tissue classes the editor offers.
+
+        None if there is no plan or the base data cannot be loaded. Resolved on demand,
+        since this widget does not watch the plan; a machine named by the plan is reduced
+        to what the editor reads off it, see
+        :func:`~pyRadPlan.gui.widgets._tissue_params.load_machine_quietly`.
+        """
+        machine = getattr(self._ws.pln, "machine", None)
+        if machine is None:
+            return None
+        if not isinstance(machine, str):
+            return machine  # the plan already carries the loaded machine
+        return load_machine_quietly(getattr(self._ws.pln, "radiation_mode", ""), machine)
+
+    def _plan_bio_model(self) -> Optional[object]:
+        """Biological model of the workspace plan, whose own tissue classes the editor offers."""
+        return getattr(self._ws.pln, "bio_model", None)
+
+    def _plan_engine(self) -> Optional[type]:
+        """Dose engine class of the workspace plan (its own or the default), None if none."""
+        return plan_dose_engine(self._ws.pln)
+
     def _apply_beams(self, ct: CT, cst, pln, stf) -> None:
         """Hand the beam axes to the viewer and enable the toggle when there are any.
 
@@ -660,13 +688,13 @@ class ViewingWidget(WorkspaceWidget):
         # selection_changed is emitted by vois_widget directly
 
     def _on_voi_replaced(self, name: str, new_voi) -> None:
-        """Write a recreated (type-changed) VOI back to the workspace ``cst``.
+        """Write a VOI recreated by the metadata editor back to the workspace ``cst``.
 
-        Plain metadata edits mutate the shared VOI objects in place, but a type
-        change produces a new instance that must replace the old one in the
-        structure set. The write is wrapped in :meth:`hold_updates` so this
-        widget does not rebuild (and reset the VOI selection) from its own
-        change, while peer widgets refresh.
+        Metadata edits recreate the VOI (its type and tissue properties are bound to
+        the model class), so the new instance must replace the old one in the structure
+        set. The write is wrapped in :meth:`hold_updates` so this widget does not
+        rebuild (and reset the VOI selection) from its own change, while peer widgets
+        refresh.
         """
         self._vois = [new_voi if v.name == name else v for v in self._vois]
         cst = self._ws.cst

@@ -16,6 +16,7 @@ from ..core import PyRadPlanBaseModel, Grid
 from ..core.resample import resample_numpy_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
+from ..biology.tissues._base import TissueProperties
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -707,8 +708,7 @@ class StructureSet(PyRadPlanBaseModel):
             "ct_image": self.ct_image,
             "mask": body_segmentation,
             "voi_type": voi_type,
-            "alpha_x": 0.1,
-            "beta_x": 0.05,
+            "tissue_properties": TissueProperties(),
         }
 
         body_voi = validate_voi(body_voi_data)
@@ -726,8 +726,8 @@ class StructureSet(PyRadPlanBaseModel):
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
         for voi in cst.vois:
-            alpha[voi.indices_numpy] = voi.alpha_x
-            beta[voi.indices_numpy] = voi.beta_x
+            alpha[voi.indices_numpy] = voi.tissue_properties.alpha_x
+            beta[voi.indices_numpy] = voi.tissue_properties.beta_x
 
         if resample_grid is not None:
             original_grid = cst.ct_image.grid
@@ -750,6 +750,70 @@ class StructureSet(PyRadPlanBaseModel):
         alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
         beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
         return alpha, beta
+
+    def get_tissue_class_indices(
+        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
+    ) -> np.ndarray:
+        """
+        Get the tissue class index of every voxel of the CT.
+
+        Indices refer to :meth:`get_tissue_classes`. Overlapping VOIs are resolved by
+        their overlap priority; voxels outside every VOI get index 0.
+
+        Parameters
+        ----------
+        overlap_is_applied : bool, optional
+            Whether overlap priorities were already applied to this structure set.
+        resample_grid : Grid, optional
+            Grid to resample the indices onto (nearest neighbor), e.g. the dose grid.
+
+        Returns
+        -------
+        np.ndarray
+            Indices of shape (num_voxels, num_ct_scenarios), voxels in numpy order.
+        """
+
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
+        num_voxels = np.prod(cst.ct_image.size)
+        ix = np.zeros(num_voxels, dtype=np.int64)
+        tissue_classes = list(self.get_tissue_classes())
+        for voi in cst.vois:
+            ix[voi.indices_numpy] = tissue_classes.index(voi.tissue_properties)
+
+        if resample_grid is not None:
+            original_grid = cst.ct_image.grid
+            ix = resample_numpy_array(
+                ix.reshape(original_grid.dimensions[::-1]),
+                reference_grid=original_grid,
+                interpolator=sitk.sitkNearestNeighbor,
+                target_grid=resample_grid,
+            ).ravel()
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        ix = np.repeat(ix[:, None], num_ct_scen, axis=1)
+        return ix
+
+    def get_tissue_classes(self) -> np.ndarray:
+        """
+        Get the distinct tissue properties of the VOIs, in order of first occurrence.
+
+        Tissues are told apart by (NaN-aware) equality, so VOIs whose tissue properties
+        are equal share one class.
+
+        Returns
+        -------
+        np.ndarray
+            1D object array of :class:`TissueProperties`.
+        """
+        classes: list[TissueProperties] = []
+        for voi in self.vois:
+            if voi.tissue_properties not in classes:
+                classes.append(voi.tissue_properties)
+        tissue_classes = np.empty(len(classes), dtype=object)
+        tissue_classes[:] = classes
+        return tissue_classes
 
     def set_colors(self) -> Self:
         """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``color``.

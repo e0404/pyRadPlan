@@ -616,9 +616,9 @@ Primary files:
 - `pyRadPlan/optimization/objectives/_objective.py` and affected objective implementations
 - `pyRadPlan/quantities/_base.py` and concrete quantity classes
 - `pyRadPlan/cst/_cst.py` where tissue-field validation helpers are needed
-- `pyRadPlan/bio_models/_base.py` (documentation only unless integration requires more)
+- `pyRadPlan/biology/models/_base.py` (documentation only unless integration requires more)
 - New strategy/preparation tests under `test/optimization/`
-- Existing `test/quantities/` and `test/bio_models/` integration fixtures
+- Existing `test/quantities/` and `test/biology/models/` integration fixtures
 
 Acceptance: documented scalar/image conversions and fraction ordering hold, unavailable or
 ambiguous requests fail before solve, and the quantity graph remains owned by `QuantityResolver`.
@@ -664,7 +664,7 @@ never silently claims unsupported matRad equivalence.
 - [ ] Run `pytest test/gui` for data-model and algorithm API changes.
 - [ ] Run the full required suite and formatting/lint checks; do not reduce coverage.
 - [ ] Build documentation if user-guide/API changes require it.
-- [ ] If examples change, refresh committed executed notebooks with `python docs/execute_examples.py`.
+- [ ] If examples change, check that they run with `python docs/execute_examples.py`.
 - [ ] Reconcile this design note with the final public API and mark implementation status.
 
 ## 14. Alternatives considered

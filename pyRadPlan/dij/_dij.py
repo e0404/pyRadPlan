@@ -27,7 +27,7 @@ import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.bio_models import BiologicalModel, ConstantRBEModel, create_bio_model
+from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, create_bio_model
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
@@ -90,6 +90,7 @@ class Dij(PyRadPlanBaseModel):
 
     alphax: Annotated[Optional[Array], Field(default=None)]
     betax: Annotated[Optional[Array], Field(default=None)]
+    tissue_class_ix: Annotated[Optional[Array], Field(default=None)]
 
     rad_depth_cubes: Optional[list[Array]] = Field(default=None)
 
@@ -297,6 +298,7 @@ class Dij(PyRadPlanBaseModel):
     @field_validator(
         "alphax",
         "betax",
+        "tissue_class_ix",
         mode="before",
     )
     @classmethod
@@ -784,6 +786,8 @@ class Dij(PyRadPlanBaseModel):
             dij_copy.alphax = to_namespace(xp_new, self.alphax, device=device)
         if self.betax is not None:
             dij_copy.betax = to_namespace(xp_new, self.betax, device=device)
+        if self.tissue_class_ix is not None:
+            dij_copy.tissue_class_ix = to_namespace(xp_new, self.tissue_class_ix, device=device)
         name = xp_new.__name__ if not isinstance(xp_new, str) else xp_new
 
         logger.info(f"Converted Dij to namespace '{name}'")

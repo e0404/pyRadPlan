@@ -13,20 +13,22 @@ from pydantic import (
     field_validator,
     field_serializer,
     SerializationInfo,
+    SerializerFunctionWrapHandler,
     ValidationError,
     model_validator,
 )
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
-from pyRadPlan.bio_models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
+from pyRadPlan.biology.models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
+from pyRadPlan.machines import Machine
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
-    "protons": "none",
-    "helium": "none",
-    "carbon": "kernel_based_lq",
-    "oxygen": "none",
+    "protons": "constant_rbe",
+    "helium": "HEL",
+    "carbon": "alpha_beta_kernels",
+    "oxygen": "alpha_beta_kernels",
     "VHEE": "none",
 }
 
@@ -47,8 +49,9 @@ class Plan(PyRadPlanBaseModel, ABC):
         Properties for the sequencer
     num_of_fractions : int
         Number of fractions in the plan.
-    machine : str
-        Machine used for the plan.
+    machine : str, dict or Machine
+        Machine used for the plan: the name of a machine in the base data search paths, or
+        its (loaded) base data.
     dose_convention : {"per_fraction", "total"}
         Whether objective dose parameters and reported result doses refer to one fraction
         or to the total course. The dose influence matrix is always per fraction; with
@@ -71,7 +74,7 @@ class Plan(PyRadPlanBaseModel, ABC):
         "interpreted and result doses reported either per fraction or for the total course "
         "(num_of_fractions times the per-fraction dose of the influence matrix).",
     )
-    machine: Union[Dict, str] = Field(default="Generic")
+    machine: Union[Machine, Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
     bio_model: Optional[Any] = Field(
@@ -127,6 +130,14 @@ class Plan(PyRadPlanBaseModel, ABC):
         if context.get("matRad"):
             return value.to_matrad()
         return value.to_dict()
+
+    @field_serializer("machine", mode="wrap")
+    def _serialize_machine(
+        self, value: Any, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> Any:
+        if isinstance(value, Machine) and (info.context or {}).get("matRad"):
+            return value.name  # matRad's pln.machine names the base data file
+        return handler(value)
 
     @field_validator("mult_scen", mode="before")
     @classmethod

@@ -20,6 +20,7 @@ from pyRadPlan.cst import (
     OAR,
     DEFAULT_VOI_COLORS,
 )
+from pyRadPlan.biology.tissues import LEMTissueProperties, TissueProperties
 # @pytest.fixture
 # def sample_ct():
 #     image = sitk.GetImageFromArray(np.random.rand(5, 15, 25) * 1000)  # Random HU values
@@ -839,6 +840,105 @@ def test_matrad_numpy_cell_array_validation():
     assert restored.vois[0].name == "target"
     assert restored.vois[0].objectives[0].d_ref == 60.0
     assert raw.shape == (1, 6)
+
+
+def _mask(ct: CT, region) -> sitk.Image:
+    mask = np.zeros(sitk.GetArrayViewFromImage(ct.cube_hu).shape, dtype=np.uint8)
+    mask[region] = 1
+    image = sitk.GetImageFromArray(mask)
+    image.CopyInformation(ct.cube_hu)
+    return image
+
+
+def test_tissue_classes_merge_equal_tissues_with_unset_parameters(generic_ct):
+    first = LEMTissueProperties(alpha_x=0.1, beta_x=0.05, d_t=float("nan"))
+    second = LEMTissueProperties(alpha_x=0.1, beta_x=0.05, d_t=float("nan"))
+    other = LEMTissueProperties(alpha_x=0.2, beta_x=0.05, d_t=float("nan"))
+    vois = [
+        OAR(
+            name="A",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[0:3]),
+            tissue_properties=first,
+        ),
+        OAR(
+            name="B",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[3:6]),
+            tissue_properties=second,
+        ),
+        OAR(
+            name="C",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[6:9]),
+            tissue_properties=other,
+        ),
+    ]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+
+    classes = cst.get_tissue_classes()
+    assert classes.dtype == object
+    assert list(classes) == [first, other]
+
+    ix = cst.get_tissue_class_indices()
+    assert ix.shape == (generic_ct.grid.num_voxels, 1)
+    z_profile = ix[:, 0].reshape(10, 10, 10)[:, 0, 0]
+    assert z_profile.tolist() == [0, 0, 0, 0, 0, 0, 1, 1, 1, 0]
+
+
+@pytest.mark.parametrize("target_first", [True, False])
+def test_tissue_class_indices_follow_overlap_priority(generic_ct, target_first):
+    target_tissue = TissueProperties.from_preset("HSG", "LEM_II")
+    oar_tissue = TissueProperties.from_preset("CHO", "LEM_II")
+    target = Target(
+        name="PTV",
+        ct_image=generic_ct,
+        mask=_mask(generic_ct, np.s_[2:6]),
+        tissue_properties=target_tissue,
+    )
+    oar = OAR(
+        name="OAR",
+        ct_image=generic_ct,
+        mask=_mask(generic_ct, np.s_[4:8]),
+        tissue_properties=oar_tissue,
+    )
+    vois = [target, oar] if target_first else [oar, target]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+
+    classes = list(cst.get_tissue_classes())
+    ix = cst.get_tissue_class_indices()[:, 0].reshape(10, 10, 10)
+    target_ix, oar_ix = classes.index(target_tissue), classes.index(oar_tissue)
+    assert (ix[2:6] == target_ix).all()
+    assert (ix[6:8] == oar_ix).all()
+
+
+def test_tissue_class_indices_resampled_onto_a_dose_grid(generic_ct):
+    upper = TissueProperties.from_preset("HSG", "MKM")
+    lower = TissueProperties.from_preset("CHO", "MKM")
+    vois = [
+        OAR(
+            name="A",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[0:5]),
+            tissue_properties=upper,
+        ),
+        OAR(
+            name="B",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[5:10]),
+            tissue_properties=lower,
+        ),
+    ]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+    dose_grid = generic_ct.grid.resample({"x": 2.0, "y": 2.0, "z": 2.0})
+
+    ix = cst.get_tissue_class_indices(resample_grid=dose_grid)
+
+    assert ix.shape == (dose_grid.num_voxels, 1)
+    ix = ix[:, 0].reshape(dose_grid.dimensions[::-1])
+    assert set(np.unique(ix)) == {0, 1}
+    assert (ix[0] == 0).all()
+    assert (ix[-1] == 1).all()
 
 
 # ---------------------------------------------------------------------------

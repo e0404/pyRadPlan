@@ -118,6 +118,37 @@ def test_plan_change_marks_downstream_stale(qapp):
     assert w._dij_stale and w._result_stale
 
 
+def test_tissue_parameter_change_marks_dij_stale(qapp):
+    """Tissue parameters feed the biological model, so the dose influence goes stale."""
+    from pyRadPlan.cst import create_voi
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.biology.tissues import MKMTissueProperties
+
+    ct, cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    assert not w._dij_stale and not w._result_stale
+
+    # Other structure set edits leave the dose influence valid, only the result stale
+    cst.vois[0].objectives = []
+    ws.cst = cst
+    assert not w._dij_stale
+    assert w._result_stale
+
+    # Changing a structure's tissue properties invalidates the dose influence as well
+    voi = cst.vois[0]
+    tissue = MKMTissueProperties(alpha_x=0.2, beta_x=0.04, r_nucleus=3.9, r_domain=0.32)
+    data = dict(voi)
+    data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+    cst.vois = [create_voi(data), *cst.vois[1:]]
+    ws.cst = cst
+
+    assert w._dij_stale
+    assert w._indicators["dij"].toolTip().startswith("Outdated")
+    assert "recalculate" in w._lbl_status.text().lower()
+
+
 def test_cst_export_options_resolve_against_registry(qapp):
     """Every offered CST export format has a registered exporter.
 
@@ -618,3 +649,282 @@ def test_no_question_without_pending_changes_or_after_a_failed_apply(qapp, monke
     editor.pending = False
     w._on_calc_dose()
     assert len(asked) == 1 and len(started) == 1
+
+
+def test_renaming_a_structure_keeps_the_dose_influence(qapp):
+    """A rename leaves every tissue untouched, so the dose influence stays valid."""
+    from pyRadPlan.io import load_tg119
+
+    ct, cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+
+    cst.vois = [cst.vois[0].model_copy(update={"name": "renamed"}), *cst.vois[1:]]
+    ws.cst = cst
+
+    assert not w._dij_stale
+
+
+# ----------------------------------------------------------------------
+# Biological model checks before a calculation
+# ----------------------------------------------------------------------
+
+
+def _answer_message_boxes(monkeypatch, button_text):
+    """Answer every message box by clicking the button labelled `button_text`."""
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+
+    def exec_(box):
+        shown.append(f"{box.text()}\n{box.informativeText()}")
+        next(b for b in box.buttons() if b.text() == button_text).click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    return shown
+
+
+def _bio_workflow(monkeypatch, bio_model, cst=None, prop_dose_calc=None):
+    """A workflow on TG119 with an oxygen plan, whose calculations are only recorded."""
+    import numpy as np
+    from types import SimpleNamespace
+
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.plan import IonPlan
+
+    ct, tg119_cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    pln = IonPlan(
+        radiation_mode="oxygen",
+        machine="Generic",
+        bio_model=bio_model,
+        prop_stf={"gantry_angles": [0.0], "couch_angles": [0.0]},
+        prop_dose_calc=prop_dose_calc or {},
+    )
+    stf = SimpleNamespace(
+        beams=[SimpleNamespace(gantry_angle=0.0, couch_angle=0.0, iso_center=np.zeros(3))]
+    )
+    ws.set_many(
+        ct=ct, cst=cst or tg119_cst, pln=pln, stf=stf, result={"w": np.ones(2)}, dij=object()
+    )
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    return ws, w, runs
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler):
+    from pyRadPlan.gui.widgets.plan import PlanWidget
+
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    plan_widget = PlanWidget(workspace=ws)
+    assert plan_widget._cmb_bio_model.currentText() == "z* kernels · mMKM"
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    getattr(w, handler)()
+
+    assert len(shown) == 1 and "No matching tissue class" in shown[0]
+    assert ws.pln.bio_model.model == "none"
+    assert ws.pln.radiation_mode == "oxygen" and ws.pln.prop_stf["gantry_angles"] == [0.0]
+    assert len(runs) == 1
+    # The plan widget follows the reconfigured plan
+    assert plan_widget._cmb_bio_model.currentText() == "None (physical dose)"
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_cancelling_the_tissue_check_runs_nothing(qapp, monkeypatch, handler):
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    pln = ws.pln
+    shown = _answer_message_boxes(monkeypatch, "Cancel")
+
+    getattr(w, handler)()
+
+    assert len(shown) == 1
+    assert ws.pln is pln and ws.pln.bio_model.model == "zstar_kernels"
+    assert runs == []
+
+
+def test_matching_tissues_calculate_without_asking(qapp, monkeypatch):
+    ws, w, runs = _bio_workflow(monkeypatch, "alpha_beta_kernels")
+    pln = ws.pln
+    shown = _answer_message_boxes(monkeypatch, "Cancel")
+
+    w._on_calc_dose()
+
+    assert shown == []
+    assert ws.pln is pln
+    assert runs == ["Calculating dose influence…"]
+
+
+def test_the_check_uses_the_dose_engine_of_the_plan(qapp, monkeypatch):
+    """TOPAS does not use the machine's α/β kernels: the same plan now needs a decision."""
+    ws, w, runs = _bio_workflow(
+        monkeypatch, "alpha_beta_kernels", prop_dose_calc={"engine": "TOPAS"}
+    )
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    w._on_calc_dose()
+
+    assert len(shown) == 1
+    assert "TOPAS does not use the machine's α/β kernels" in shown[0]
+    assert "dose engine" in shown[0]
+    assert ws.pln.bio_model.model == "none"
+    assert ws.pln.prop_dose_calc["engine"] == "TOPAS"
+    assert runs == ["Calculating dose influence…"]
+
+
+def test_invalid_reference_parameters_block_the_calculation(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.biology.tissues import TissueProperties
+
+    tissue = TissueProperties.model_construct(alpha_x=-0.1, beta_x=0.05)
+    cst = SimpleNamespace(vois=[SimpleNamespace(name="PTV", tissue_properties=tissue)])
+    ws, w, runs = _bio_workflow(monkeypatch, "alpha_beta_kernels", cst=cst)
+    pln = ws.pln
+    critical = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: critical.append(args[2]))
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    w._on_calc_dose()
+
+    assert len(critical) == 1 and "PTV" in critical[0]
+    assert shown == []  # no way around it
+    assert ws.pln is pln
+    assert runs == []
+
+
+@pytest.mark.parametrize(
+    ("quantity", "bio_model", "blocked"),
+    [
+        ("rbe_x_dose", None, True),
+        ("physical_dose", None, False),
+        ("rbe_x_dose", "constant_rbe", False),
+    ],
+)
+def test_optimize_explains_biological_objectives_without_a_biological_dij(
+    qapp, monkeypatch, quantity, bio_model, blocked
+):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.biology.models import create_bio_model
+    from pyRadPlan.plan import PhotonPlan
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    objective = SimpleNamespace(quantity=quantity)
+    ws.set_many(
+        pln=PhotonPlan(),
+        cst=SimpleNamespace(vois=[SimpleNamespace(name="PTV", objectives=[objective])]),
+        dij=SimpleNamespace(
+            bio_model=create_bio_model(bio_model) if bio_model else None, alpha_dose=None
+        ),
+    )
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+
+    w._on_optimize()
+
+    if blocked:
+        assert len(warnings) == 1
+        assert "PTV: RBExDose" in warnings[0]
+        assert "without a biological model" in warnings[0]
+        assert runs == []
+    else:
+        assert warnings == []
+        assert len(runs) == 1
+
+
+def _mkm_cst(model="MKM"):
+    """TG119 structures whose tissues have the geometry of the oxygen machine's MKM class."""
+    from pyRadPlan.cst import StructureSet, create_voi
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.biology.tissues import MKMTissueProperties
+
+    ct, cst = load_tg119()
+    tissue = MKMTissueProperties(
+        model=model,
+        alpha_x=0.1,
+        beta_x=0.05,
+        r_nucleus=3.9,
+        r_domain=0.32,
+        alpha_0=0.1,
+        beta_0=0.05,
+    )
+    vois = []
+    for voi in cst.vois:
+        data = dict(voi)
+        data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+        vois.append(create_voi(data))
+    return StructureSet(ct_image=ct, vois=vois)
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_tissue_warnings_calculate_with_the_model_without_asking(
+    qapp, monkeypatch, caplog, handler
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.gui.widgets.plan import PlanWidget
+
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels", cst=_mkm_cst())
+    plan_widget = PlanWidget(workspace=ws)
+    pln, cst = ws.pln, ws.cst
+    assert plan_widget.tissue_marker_state == "warning"
+
+    def no_box(*_args, **_kwargs):
+        raise AssertionError("unexpected message box")
+
+    monkeypatch.setattr(QMessageBox, "exec", no_box)
+    monkeypatch.setattr(QMessageBox, "warning", no_box)
+    monkeypatch.setattr(QMessageBox, "critical", no_box)
+
+    with caplog.at_level("WARNING"):
+        getattr(w, handler)()
+
+    # The plan keeps its biological model and the structures their labels
+    assert ws.pln is pln and ws.pln.bio_model.model == "zstar_kernels"
+    assert ws.cst is cst
+    assert all(voi.tissue_properties.model == "MKM" for voi in ws.cst.vois)
+    assert len(runs) == 1
+    # Shown without blocking: logged, and in the status line
+    assert any("is labelled MKM" in record.getMessage() for record in caplog.records)
+    assert "tissue warning" in w._lbl_status.text()
+
+
+def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    shown = []
+
+    def exec_(box):
+        shown.append([b.text() for b in box.buttons()])
+        next(b for b in box.buttons() if b.text() == "Cancel").click()
+        return 0
+
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+
+    w._on_calc_dose()
+
+    assert len(shown) == 1
+    assert not any(text.startswith("Use the base data's model") for text in shown[0])
+    assert runs == []

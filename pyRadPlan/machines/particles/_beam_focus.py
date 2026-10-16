@@ -56,7 +56,12 @@ class ChargedBeamFocus(PyRadPlanBaseModel):
             focuses = []
             fwhm_iso = data.get("SisFWHMAtIso", None)
             if fwhm_iso is not None:
-                fwhm_iso = np.broadcast_to(np.asarray(fwhm_iso, dtype=float), (dist.shape[0],))
+                fwhm_iso = np.asarray(fwhm_iso, dtype=float).reshape(-1)
+                # Accelerator settings beyond the simulated foci (e.g. HIT lists more focus
+                # sizes than it provides beam optics for) have no focus to belong to.
+                if fwhm_iso.size > dist.shape[0]:
+                    fwhm_iso = fwhm_iso[: dist.shape[0]]
+                fwhm_iso = np.broadcast_to(fwhm_iso, (dist.shape[0],))
             sigma = np.asarray(data["sigma"], dtype=np.float64)
             for i in range(dist.shape[0]):
                 single_emittance = ChargedBeamEmittance(

@@ -60,8 +60,9 @@ class NpzExporter(BaseExporter):
                     {
                         "name": voi.name,
                         "voi_type": voi.voi_type,
-                        "alpha_x": voi.alpha_x,
-                        "beta_x": voi.beta_x,
+                        "alpha_x": voi.tissue_properties.alpha_x,
+                        "beta_x": voi.tissue_properties.beta_x,
+                        "tissue_properties": voi.tissue_properties.model_dump(),
                         "overlap_priority": voi.overlap_priority,
                         "visible": voi.visible,
                         "color": list(voi.color),

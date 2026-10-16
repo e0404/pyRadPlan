@@ -10,6 +10,21 @@ from ._configurable import (
 )
 from .resample import resample_image, resample_numpy_array
 from ._paths import DEFAULT_DATA_DIR, get_data_dir, get_data_subdir
+from ._base_data import (
+    BASE_DATA_KINDS,
+    BaseDataFile,
+    BaseDataKind,
+    add_base_data_file,
+    base_data_dirs,
+    base_data_generation,
+    bundled_base_data_dir,
+    check_base_data_file_name,
+    find_base_data,
+    get_base_data_kind,
+    list_base_data,
+    remove_base_data_file,
+    user_base_data_dir,
+)
 from ._grids import Grid
 from ._progress import (
     ComputeCancelledError,
@@ -34,6 +49,19 @@ __all__ = [
     "DEFAULT_DATA_DIR",
     "get_data_dir",
     "get_data_subdir",
+    "BASE_DATA_KINDS",
+    "BaseDataFile",
+    "BaseDataKind",
+    "add_base_data_file",
+    "base_data_generation",
+    "base_data_dirs",
+    "bundled_base_data_dir",
+    "check_base_data_file_name",
+    "find_base_data",
+    "get_base_data_kind",
+    "list_base_data",
+    "remove_base_data_file",
+    "user_base_data_dir",
     "PyRadPlanBaseModel",
     "AlgorithmConfig",
     "AlgorithmParameterMetadata",
