@@ -37,9 +37,9 @@ ct, cst = load_tg119()
 # %% [markdown]
 # In this section, we create an oxygen ion therapy plan with biological effect calculation.
 # %%
-# Create a plan object. Unlike carbon, oxygen defaults to no biological model, so the
-# kernel-based LQ model of the Generic oxygen base data is selected explicitly here.
-pln = IonPlan(radiation_mode="oxygen", machine="Generic", bio_model="kernel_based_lq")
+# Create a plan object. The Generic oxygen machine ships alpha/beta kernels computed with
+# LEM I; "alpha_beta_kernels" (the oxygen default) evaluates them and is selected explicitly.
+pln = IonPlan(radiation_mode="oxygen", machine="Generic", bio_model="alpha_beta_kernels")
 pln.prop_stf = {"bixel_width": 4}
 pln.prop_dose_calc = {"dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
 

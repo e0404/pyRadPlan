@@ -70,10 +70,14 @@ Releases are cut from a release candidate branch, never from `develop` directly,
 stays open for regular work while the candidate is stabilised:
 
 1. Branch `rc/X.Y.Z` from `develop`.
-2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog, re-executed example notebooks.
+2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog. Last, commit the executed
+   example notebooks: `python docs/execute_examples.py --release` runs the examples and stages
+   them in `docs/tutorials/examples/`.
 3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
 4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
-   `main` back into `develop`, and delete `rc/X.Y.Z`.
+   `main` back into `develop` while untracking the executed notebooks (`git merge --no-ff
+   --no-commit main`, `git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples`,
+   `git commit`), and delete `rc/X.Y.Z`.
 
 When proposing or preparing a release, follow
 [.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
@@ -84,7 +88,7 @@ platform hosts the release. Do not tag, publish, or push a release without expli
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
 
-The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. They are **never executed during a docs build or in CI**. The executed notebooks (with outputs) are committed in `docs/tutorials/examples/`; refresh them locally with `python docs/execute_examples.py` and commit the result when examples change and as part of the release recipe.
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. On `develop` and feature branches they are the only committed form of the examples: never commit `.ipynb` files there. The docs build converts them into `docs/tutorials/examples/` (git-ignored) without outputs; neither CI nor Read the Docs ever executes them. Only release commits (`rc/X.Y.Z`, hence `main` and the tags) carry executed notebooks there, written and staged by `python docs/execute_examples.py --release`, so the docs show outputs for releases only. The docs build renders an executed notebook as is while its script is unchanged (it records the script hash) and otherwise falls back to a conversion without outputs with a warning. Examples needing external tools (`SKIP` in `docs/execute_examples.py`) are never executed. Check that changed examples run with `python docs/execute_examples.py [name ...]` (writes to `docs/_build/executed_examples`); `PYRADPLAN_DOCS_NB_EXECUTION=cache` is a local opt-in to execute them during a docs build.
 
 ## Key Architecture Notes
 

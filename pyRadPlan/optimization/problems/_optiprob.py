@@ -13,7 +13,12 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import ScenarioModel
-from pyRadPlan.quantities import RTQuantity, QuantityResolver, get_available_quantities
+from pyRadPlan.quantities import (
+    RBExDose,
+    RTQuantity,
+    QuantityResolver,
+    get_available_quantities,
+)
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
@@ -171,10 +176,18 @@ class PlanningProblem(ProgressReporter, ABC):
             self.solver = fallback
 
     def _get_legacy_default_quantity(self, radiation_mode: str) -> str:
-        """Return the quantity used by the legacy plan-wide objective conversion."""
-        use_rbe = (hasattr(self._dij, "rbe") and self._dij.rbe is not None) or (
-            hasattr(self._dij, "alpha_dose") and self._dij.alpha_dose is not None
+        """
+        Return the quantity used by the legacy plan-wide objective conversion.
+
+        Ion objectives are converted to ``rbe_x_dose`` only if the dij can provide it, as
+        decided by :meth:`RBExDose.choose_path`; a dij computed without (applicable)
+        biological model keeps its physical-dose objectives.
+        """
+        has_effect = (
+            getattr(self._dij, "alpha_dose", None) is not None
+            and getattr(self._dij, "sqrt_beta_dose", None) is not None
         )
+        use_rbe = RBExDose.choose_path(self._dij, has_effect=has_effect, strict=False) is not None
         default_quantities = {
             "photons": "physical_dose",
             "protons": "rbe_x_dose" if use_rbe else "physical_dose",

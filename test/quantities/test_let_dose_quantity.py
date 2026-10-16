@@ -1,3 +1,5 @@
+import unicodedata
+
 import pytest
 
 import numpy as np

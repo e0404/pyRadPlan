@@ -27,13 +27,21 @@ def pytest_sessionfinish(session, exitstatus):
 # versions (GC order is not deterministic), turning a green run into exit code 139. All
 # reports (junit, coverage) are written by now, so skip the teardown, as pyqtgraph.exit()
 # recommends.
+#
+# On Windows, os._exit still runs the DLLs' detach handlers (ExitProcess); with the
+# QApplication alive, PySide6's then faults (access violation in pyside6.abi3.dll) after the
+# summary, ending with exit code 0 or a crash code. Deleting the application first avoids it.
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
     qt_widgets = sys.modules.get("PySide6.QtWidgets")
-    if qt_widgets is None or qt_widgets.QApplication.instance() is None:
+    app = None if qt_widgets is None else qt_widgets.QApplication.instance()
+    if app is None:
         return
     sys.stdout.flush()
     sys.stderr.flush()
+    if sys.platform == "win32":
+        app.processEvents()
+        app.shutdown()
     os._exit(getattr(config, "_pyradplan_exitstatus", 0))
 
 

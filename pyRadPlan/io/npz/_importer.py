@@ -61,11 +61,14 @@ class NpzImporter(BaseImporter):
                 "voi_type": vmeta["voi_type"],
                 "mask": mask,
                 "ct_image": ct,
-                "alpha_x": vmeta["alpha_x"],
-                "beta_x": vmeta["beta_x"],
                 "overlap_priority": vmeta["overlap_priority"],
                 "visible": vmeta["visible"],
             }
+            # Archives written before tissue properties were stored only carry alpha/beta.
+            if vmeta.get("tissue_properties") is not None:
+                kwargs["tissue_properties"] = vmeta["tissue_properties"]
+            else:
+                kwargs.update(alpha_x=vmeta["alpha_x"], beta_x=vmeta["beta_x"])
             # Files written before the rename carry the color under "visible_color",
             # where it may also be null; either way a VOI without one falls back to
             # its type's default.

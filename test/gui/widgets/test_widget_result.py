@@ -141,6 +141,34 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     assert widget.vois_widget.selected_vois() == selected_before
 
 
+def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
+    """A tissue edit in the VOI popup must reach the workflow widget's indicators."""
+    from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+    from pyRadPlan.gui.widgets.result.vois_widget import VOIMetadataDialog
+    from PySide6.QtWidgets import QDialog
+
+    ct, cst, result = test_data_photons
+
+    ws = _make_workspace(ct, cst)
+    widget = ViewingWidget(ws)
+    workflow = WorkflowWidget(ws)
+    ws.set_many(pln=object(), stf=object(), dij=object(), result={})
+    assert not workflow._dij_stale
+
+    def fake_exec(self):
+        self.alpha_spin.setValue(0.42)
+        self.accept()
+        return QDialog.DialogCode.Accepted
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(VOIMetadataDialog, "exec", fake_exec)
+        widget.vois_widget._edit_voi(ws.cst.vois[0].name)
+
+    assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.42)
+    assert workflow._dij_stale
+    assert "recalculate" in workflow._lbl_status.text().lower()
+
+
 def test_voi_metadata_dialog_retype_rebinds_auto_color(qapp, test_data_photons):
     from pyRadPlan.cst import DEFAULT_VOI_COLORS, StructureSet, create_voi
     from pyRadPlan.gui.widgets.result.vois_widget import VOIMetadataDialog

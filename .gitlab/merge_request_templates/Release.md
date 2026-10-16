@@ -34,7 +34,7 @@ Version: `vX.Y.Z`
 - [ ] `CHANGELOG.md` `[Unreleased]` section renamed to `[X.Y.Z] - YYYY-MM-DD` and a fresh empty `[Unreleased]` section added on top.
 - [ ] `CITATION.cff` updated (version, date-released, authors if applicable).
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
-- [ ] Example notebooks re-executed locally (`python docs/execute_examples.py`) and the updated `docs/tutorials/examples/*.ipynb` committed.
+- [ ] Executed example notebooks committed on `rc/X.Y.Z` as the last step before merging (examples are never executed in CI or on Read the Docs): `python docs/execute_examples.py --release` executes all runnable examples without errors into `docs/tutorials/examples/` and stages them (`git add -f`, the folder is git-ignored); commit them on `rc/X.Y.Z`. A local docs build shows their outputs and no "older than its script" warning (rerun `--release <name>` for an example changed afterwards).
 
 ## Post-Merge Actions
 
@@ -44,7 +44,16 @@ Version: `vX.Y.Z`
 - [ ] Push the tag to trigger the release workflow (`.github/workflows/release.yml`).
 - [ ] Verify the release was published with the correct notes from `CHANGELOG.md` and the tag annotation.
 - [ ] Once the release is published, verify the PyPI release: version `X.Y.Z` is listed, the sdist and wheel are present, and `pip install pyRadPlan==X.Y.Z` resolves in a clean environment.
-- [ ] Merge `main` back into `develop` to keep branches in sync, then delete the `rc/X.Y.Z` branch.
+- [ ] Verify Read the Docs built the release (`stable` / `vX.Y.Z`) with the example outputs.
+- [ ] Merge `main` back into `develop` to keep branches in sync, without the executed notebooks (they are tracked on `main` and the tags only):
+  ```bash
+  git switch develop
+  git merge --no-ff --no-commit main
+  git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples
+  git commit
+  ```
+  `git ls-files docs/tutorials/examples` must print nothing on `develop` afterwards.
+- [ ] Delete the `rc/X.Y.Z` branch.
 
 ## Additional Notes
 

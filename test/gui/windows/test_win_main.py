@@ -67,6 +67,89 @@ def test_single_menu_bar_with_expected_menus(qapp):
     assert installed == []
     titles = [a.text() for a in win.menuBar().actions()]
     assert "&File" in titles and "&View" in titles and "&Settings" in titles
+    assert "&Base Data" in titles
+
+
+def test_base_data_menu_add_and_remove_refresh_plan_widget(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.gui.menus import BaseDataDialog
+    from pyRadPlan.machines import find_machine_file
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: QMessageBox.Ok)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    win = MainWindow(WorkspaceManager())
+    win.plan_widget._cmb_radiation.setCurrentText("photons")
+    menu = win._base_data_menu
+
+    def listed():
+        combo = win.plan_widget._cmb_machine
+        return [combo.itemText(i) for i in range(combo.count())]
+
+    bundled = str(find_machine_file("photons", "Generic"))
+    # The bundled name is taken, so the menu asks for another one.
+    monkeypatch.setattr(
+        "pyRadPlan.gui.menus._base_data.QInputDialog.getText",
+        lambda *a, **k: ("MyLinac", True),
+    )
+    target = menu.add("machines", bundled)
+    assert target == tmp_path / "machines" / "photons_MyLinac.mat"
+    assert "MyLinac" in listed()
+
+    dialog = BaseDataDialog(win)
+    dialog.base_data_changed.connect(menu.base_data_changed)
+    tab = dialog.kind_tabs["machines"]
+    sources = [tab.table.item(row, 2).text() for row in range(tab.table.rowCount())]
+    names = [tab.table.item(row, 1).text() for row in range(tab.table.rowCount())]
+    assert sources.count("User") == 1 and "pyRadPlan" in sources
+
+    tab.table.selectRow(names.index("Generic"))
+    assert not tab.btn_remove.isEnabled()
+    tab.table.selectRow(names.index("MyLinac"))
+    assert tab.btn_remove.isEnabled()
+    assert tab.remove_selected()
+    assert not target.exists()
+    assert "MyLinac" not in listed()
+    assert tab.table.rowCount() == len(names) - 1
+
+
+def test_base_data_dialog_lists_and_adds_rbe_tables(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.core import find_base_data
+    from pyRadPlan.gui.menus import BaseDataDialog
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
+    critical = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: critical.append(a[2]))
+    dialog = BaseDataDialog()
+    tab = dialog.kind_tabs["rbe_tables"]
+    assert tab.table.rowCount() == 1
+    assert tab.table.item(0, 1).text() == "LEM I"
+
+    shipped = find_base_data("rbe_tables", "RBEtable_LEMI_Scholz06_AX01_BX005.mat").path
+    copy = tmp_path / "RBEtable_mine.mat"
+    copy.write_bytes(shipped.read_bytes())
+    assert tab.add(str(copy)) == tmp_path / "rbe" / "RBEtable_mine.mat"
+    assert tab.table.rowCount() == 2
+
+    # The Add button asks for the file instead of taking the clicked flag for it
+    second = tmp_path / "RBEtable_clicked.mat"
+    second.write_bytes(copy.read_bytes())
+    monkeypatch.setattr(
+        "pyRadPlan.gui.menus._base_data.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(second), ""),
+    )
+    tab.btn_add.click()
+    assert (tmp_path / "rbe" / "RBEtable_clicked.mat").is_file()
+    assert tab.table.rowCount() == 3
+
+    # A machine file is no RBE table and is reported instead of added
+    bad = find_base_data("machines", "photons_Generic.mat").path
+    assert tab.add(str(bad)) is None
+    assert critical and "RBEtable" in critical[0]
+    assert dialog.kind_tabs["stopping_power_tables"].table.rowCount() == 1
 
 
 def test_view_menu_stubs_disabled(qapp):

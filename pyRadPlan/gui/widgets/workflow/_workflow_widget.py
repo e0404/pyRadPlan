@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from copy import deepcopy
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.biology.models import BiologicalModel
 from pyRadPlan.core import (
     ComputeCancelledError,
     ComputeControl,
@@ -35,7 +37,20 @@ from pyRadPlan.core import (
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
+from pyRadPlan.plan import validate_pln
+from pyRadPlan.quantities import get_available_quantities
 from .._base import WorkspaceWidget, Worker
+from .._display_names import bio_model_display_name, quantity_display_name
+from .._tissue_params import (
+    load_machine_quietly,
+    plan_dose_engine,
+    tissue_errors,
+    tissue_issues_quietly,
+    tissue_issues_text,
+    tissue_warnings,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _human_name(fmt: str, importer_cls) -> str:
@@ -206,6 +221,9 @@ class WorkflowWidget(WorkspaceWidget):
         # once an upstream object it was computed from changes.
         self._dij_stale = False
         self._result_stale = False
+        # Only some parts of the structure set feed the dose influence; objectives, for
+        # instance, only affect the optimization. Tracked to spot the ones that do.
+        self._tissue_signature: Optional[tuple] = None
         self._indicators: dict[str, QLabel] = {}
         #: Editors whose unapplied changes are offered before a computation, as
         #: ``(name, has_pending, apply)``; see :meth:`add_pending_changes_source`.
@@ -380,6 +398,19 @@ class WorkflowWidget(WorkspaceWidget):
         """Whether *key* is a snapshot key created by :meth:`_on_save_result`."""
         return any(key.endswith(f"_{tag}") for tag in self._saved_tags)
 
+    @staticmethod
+    def _tissue_classes_signature(cst) -> Optional[tuple]:
+        """
+        Per-structure tissue properties, as far as they influence the dose influence.
+
+        Keyed by the structure's position rather than its name, so renaming a structure
+        leaves the signature unchanged.
+        """
+        vois = getattr(cst, "vois", None)
+        if vois is None:
+            return None
+        return tuple(voi.tissue_properties.model_dump_json() for voi in vois)
+
     def _update_staleness(self, changed_keys: list) -> None:
         """Flag downstream products as outdated when an upstream object changes.
 
@@ -389,11 +420,19 @@ class WorkflowWidget(WorkspaceWidget):
         """
         ws = self._ws
         keys = set(changed_keys)
+
+        # Editing the tissue parameters changes the alpha/beta the biological model
+        # yields per voxel, so the dose influence has to be recalculated. Other structure
+        # set edits (objectives, colors, names) leave it valid.
+        signature = self._tissue_classes_signature(ws.cst)
+        tissue_changed = self._tissue_signature is not None and signature != self._tissue_signature
+        self._tissue_signature = signature
+
         if not ws.has("dij"):
             self._dij_stale = False
         elif "dij" in keys:
             self._dij_stale = False
-        elif keys & {"pln", "stf"}:
+        elif keys & {"pln", "stf"} or ("cst" in keys and tissue_changed):
             self._dij_stale = True
         if not ws.has("result"):
             self._result_stale = False
@@ -419,7 +458,7 @@ class WorkflowWidget(WorkspaceWidget):
         elif stale:
             dot.setText("●")
             dot.setStyleSheet("color: #e67e22;")
-            dot.setToolTip("Outdated — plan parameters changed since this was computed")
+            dot.setToolTip("Outdated — inputs changed since this was computed")
         else:
             dot.setText("●")
             dot.setStyleSheet("color: #27ae60;")
@@ -1047,8 +1086,102 @@ class WorkflowWidget(WorkspaceWidget):
     # Dose influence callbacks
     # ------------------------------------------------------------------
 
+    def _ask_physical_dose_only(self, step: str, model_name: str, issues: list) -> str:
+        """
+        Offer to calculate the physical dose only, for the errors among tissue issues.
+
+        Returns ``"physical"`` if the user accepts the physical dose and ``"cancel"``
+        otherwise.
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(step)
+        box.setText(
+            f"The biological model '{model_name}' cannot be evaluated for the structures, "
+            "machine and dose engine of the plan:"
+        )
+        box.setInformativeText(
+            tissue_issues_text(issues) + "\n\nThe plan's biological model can be set to "
+            "none to calculate the physical dose only, or the calculation cancelled to fix "
+            "the tissue parameters or choose another model first."
+        )
+        physical_btn = box.addButton(
+            "Calculate physical dose only", QMessageBox.ButtonRole.AcceptRole
+        )
+        cancel_btn = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        return "physical" if box.clickedButton() is physical_btn else "cancel"
+
+    def _check_bio_model(self, step: str) -> bool:
+        """
+        Check the plan's biological model against its machine, dose engine and tissues.
+
+        Runs the check the plan's dose engine (its own, or the default engine of the
+        radiation mode) runs, before *step* starts. Invalid reference
+        α_x / β_x block the calculation; other errors offer to calculate the physical dose
+        only, which sets the plan's model to ``none`` in the workspace. Warnings (e.g. MKM
+        tissues matching mMKM kernels, which are evaluated with the base data's model) never
+        ask: they are logged, shown in the status line, and the calculation runs with the
+        biological model, whose dose engine reports them again. Returns whether *step* may
+        run.
+        """
+        pln, cst = self._ws.pln, self._ws.cst
+        model = getattr(pln, "bio_model", None)
+        if not isinstance(model, BiologicalModel) or model.model == "none" or cst is None:
+            return True
+        machine = getattr(pln, "machine", None)
+        if isinstance(machine, str) or machine is None:
+            machine = load_machine_quietly(
+                getattr(pln, "radiation_mode", ""), machine or "Generic"
+            )
+        name = bio_model_display_name(model)
+        issues = tissue_issues_quietly(machine, model, cst, plan_dose_engine(pln))
+        errors = tissue_errors(issues)
+        if not errors:
+            self._show_tissue_warnings(step, name, tissue_warnings(issues))
+            return True
+        invalid = [issue for issue in errors if issue.kind == "invalid_reference"]
+        if invalid:
+            QMessageBox.critical(
+                self,
+                step,
+                "Invalid reference photon parameters α_x / β_x, which no biological "
+                f"model can be evaluated with:\n\n{tissue_issues_text(invalid)}\n\n"
+                "Correct the tissue parameters of these structures first.",
+            )
+            return False
+        if self._ask_physical_dose_only(step, name, errors) != "physical":
+            return False
+        try:
+            data = {field: deepcopy(getattr(pln, field)) for field in type(pln).model_fields}
+            data["bio_model"] = "none"
+            physical_pln = validate_pln(type(pln)(**data))
+        except Exception as exc:  # noqa: BLE001 - surface, never crash
+            self._show_error(exc, step)
+            return False
+        self._ws.pln = physical_pln
+        return True
+
+    def _show_tissue_warnings(self, step: str, model_name: str, warnings: list) -> None:
+        """
+        Log tissue warnings and show them in the status line, without asking anything.
+
+        The log reaches the log panel; the dose engine reports the warnings again once the
+        calculation has run, like any engine warning.
+        """
+        if not warnings:
+            return
+        for issue in warnings:
+            logger.warning("%s, biological model '%s': %s", step, model_name, issue)
+        self._lbl_status.setText(
+            f"{len(warnings)} tissue warning(s): evaluated with the base data's model"
+        )
+
     def _on_calc_dose(self) -> None:
         if not self._resolve_pending_changes("Calculate Dose Influence"):
+            return
+        if not self._check_bio_model("Calculate Dose Influence"):
             return
         ct, cst, pln = self._ws.ct, self._ws.cst, self._ws.pln
 
@@ -1072,8 +1205,52 @@ class WorkflowWidget(WorkspaceWidget):
     # Optimization callbacks
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _biological_objectives(cst: Any) -> list[str]:
+        """``"<structure>: <quantity>"`` of each objective on a biological quantity."""
+        quantities = get_available_quantities()
+        found = []
+        for voi in getattr(cst, "vois", None) or []:
+            for objective in getattr(voi, "objectives", None) or []:
+                identifier = getattr(objective, "quantity", None)
+                quantity = quantities.get(identifier) if isinstance(identifier, str) else None
+                if quantity is not None and quantity.biological:
+                    entry = f"{voi.name}: {quantity_display_name(identifier)}"
+                    if entry not in found:
+                        found.append(entry)
+        return found
+
+    def _check_objective_quantities(self) -> bool:
+        """
+        Explain upfront that biological objectives need a biological dose influence.
+
+        Without a biological model the dose influence carries no α/β or RBE data, and the
+        optimization could not compute a biological quantity. Returns whether it may run.
+        """
+        dij = self._ws.dij
+        if dij is None or getattr(dij, "bio_model", None) is not None:
+            return True
+        if getattr(dij, "alpha_dose", None) is not None:
+            return True
+        objectives = self._biological_objectives(self._ws.cst)
+        if not objectives:
+            return True
+        QMessageBox.warning(
+            self,
+            "Optimize",
+            "These objectives are evaluated on biological quantities:\n\n"
+            + "\n".join(f"• {entry}" for entry in objectives)
+            + "\n\nbut the dose influence was calculated without a biological model, so it "
+            "holds the physical dose only. Select a biological model in the plan and "
+            "calculate the dose influence again, or evaluate the objectives on the physical "
+            "dose.",
+        )
+        return False
+
     def _on_optimize(self) -> None:
         if not self._resolve_pending_changes("Optimize", outdates_input=True):
+            return
+        if not self._check_objective_quantities():
             return
         ct, cst, stf, dij, pln = (
             self._ws.ct,
@@ -1160,6 +1337,11 @@ class WorkflowWidget(WorkspaceWidget):
             )
             return
 
+        if not self._check_bio_model("Recalculate Dose"):
+            return
+        # The check may have switched the plan to physical dose or fixed the structures
+        cst, pln = self._ws.cst, self._ws.pln
+
         def _compute() -> tuple:
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
@@ -1176,6 +1358,7 @@ class WorkflowWidget(WorkspaceWidget):
                 for beam, iso_center in zip(recalc_stf.beams, iso_centers):
                     beam.iso_center = iso_center
 
+            # Already returns the weight-applied result quantities on the CT grid.
             return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
 
         def _on_success(data: tuple) -> None:

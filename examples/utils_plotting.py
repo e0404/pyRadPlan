@@ -37,7 +37,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="carbon", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
-# The default carbon bio_model (kernel_based_lq) computes the biological dose
+# The default carbon bio_model (alpha_beta_kernels) computes the biological dose
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)

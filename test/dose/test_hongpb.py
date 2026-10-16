@@ -257,12 +257,30 @@ def test_oxygen_cd_influence(test_data_oxygen):
 
 
 def test_carbon_cd_influence_bio_model_unavailable(test_data_carbon):
-    """LET-based models must fail loudly on a machine without LET kernels."""
+    """A requested biological dose fails loudly for a model the machine cannot serve."""
     pln, ct, cst, stf, dij, result = test_data_carbon
     pln.bio_model = "LSM"
+    pln.prop_dose_calc["calc_bio_dose"] = True
 
     with pytest.raises(ValueError, match="not available"):
         calc_dose_influence(ct, cst, stf, pln)
+
+
+def test_carbon_cd_influence_bio_model_unavailable_keeps_physical_dose(test_data_carbon, caplog):
+    """Without calc_bio_dose=True, an unavailable model leaves a physical-dose dij."""
+    pln, ct, cst, stf, dij, result = test_data_carbon
+    pln.bio_model = "LSM"
+
+    with caplog.at_level("WARNING"):
+        dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    assert "'LSM' not available" in caplog.text
+    assert dij_py.bio_model is None
+    assert dij_py.alpha_dose is None and dij_py.sqrt_beta_dose is None
+    physical_dose_py_dense = dij_py.physical_dose.flat[0].toarray()
+    physical_dose_mat_dense = dij.physical_dose.flat[0].toarray()
+    mask = (physical_dose_py_dense > 0) & (physical_dose_mat_dense > 0)
+    assert np.allclose(physical_dose_py_dense[mask], physical_dose_mat_dense[mask], atol=1e-3)
 
 
 def test_carbon_cd_influence_bio_model_unknown(test_data_carbon):

@@ -46,16 +46,24 @@ Contract at a glance
 
 The particle pencil-beam path has the following data flow::
 
-    engine.provided_quantities() -> model availability check
+    model.check_tissues(machine, cst, engine=engine) -> model availability check
     model.validate_reference_parameters(voxel_params) -> parameter domain check
     model.evaluator(machine, voxel_params) -> one validated evaluator
     machine kernel -> kernel_quantities() -> depth interpolation
     standard inputs + interpolated fields -> BioEvaluationContext
     evaluate_influence() -> additive Dij matrices
 
-``engine.provided_quantities()`` is the machine's ``provided_quantities()`` plus the engine's own
-``engine_provided_quantities()``, so an engine that scores a quantity itself is not restricted to
-machines tabulating it. The FRED engine declares ``let`` this way and rejects, before running a
+What a model may require depends on the dose engine as well as on the machine. Each engine
+class declares it (``DoseEngineBase.bio_capability()``): the machine quantities it evaluates
+from the pencil-beam kernels (``bio_kernel_quantities``; the particle pencil-beam engines read
+all of them), the quantities it scores itself (``bio_scored_quantities``, e.g.
+``"let:LETd"``) and whether it computes biological influence matrices at all
+(``computes_bio_influence``). ``engine.provided_quantities()`` -- or, without an engine
+instance, ``EngineClass.bio_quantities(machine)`` -- is the resulting set. A Monte Carlo engine
+therefore offers no kernel formalism, and a LET-based model needs an engine reading the
+machine's LET kernels or scoring LET. :func:`~pyRadPlan.biology.models.bio_model_options` and
+``check_tissues`` take the engine as ``engine=`` and name it in the reason when it cannot
+compute a model. The FRED engine scores LET and rejects, before running a
 simulation, any evaluator that also declares ``kernel_field_names`` it cannot interpolate --
 judged from the evaluator, so an evaluator that produces the influence quantities directly and
 declares no intrinsic ``output_quantities`` is checked in the same way.
@@ -77,7 +85,7 @@ so the evaluator follows the backend selected by the dose engine.
 
     import array_api_compat
 
-    from pyRadPlan.bio_models import (
+    from pyRadPlan.biology.models import (
         BioEvaluationContext,
         BiologicalModel,
         BioModelEvaluator,
@@ -144,7 +152,7 @@ to a matRad model.
 Registration behavior
 ---------------------
 
-:func:`~pyRadPlan.bio_models.register_model` is both a normal function and a class decorator.
+:func:`~pyRadPlan.biology.models.register_model` is both a normal function and a class decorator.
 Registration is process-global and idempotent for the same class. Canonical names and aliases must
 be distinct. If any name belongs to another class, registration raises before adding any names, so
 an alias cannot be left partially registered.
@@ -154,8 +162,8 @@ collision. Restart the process or notebook kernel before registering the replace
 silently retaining the stale class in registry-based model lookup.
 
 The registry validates model declarations, not numerical validity. Evaluators should use
-:meth:`~pyRadPlan.bio_models.BioEvaluationContext.require` and
-:meth:`~pyRadPlan.bio_models.BioModelResult.require` so missing inputs or outputs produce
+:meth:`~pyRadPlan.biology.models.BioEvaluationContext.require` and
+:meth:`~pyRadPlan.biology.models.BioModelResult.require` so missing inputs or outputs produce
 model-facing diagnostics. Declaration validation also runs when a model instance is passed
 directly without registry lookup.
 
@@ -181,8 +189,8 @@ energy. Each value may have shape ``(n_depths,)`` or ``(n_classes, n_depths)``. 
 interpolation, the evaluator reads the field under the same name from the context. Names colliding
 with standard context inputs or dose-engine lateral/depth kernels are rejected during setup.
 
-:class:`~pyRadPlan.bio_models.KernelBasedEvaluator` provides the existing exact tissue-class
-lookup workflow for alpha/beta depth kernels. :class:`~pyRadPlan.bio_models.TabulatedSpectrumEvaluator`
+:class:`~pyRadPlan.biology.models.KernelBasedEvaluator` provides the existing exact tissue-class
+lookup workflow for alpha/beta depth kernels. :class:`~pyRadPlan.biology.models.TabulatedSpectrumEvaluator`
 provides the spectrum workflow: it dose-averages energy tables over fragment fluence spectra once
 when the evaluator is created, then exposes the resulting depth kernels through the same context.
 Their model-side protocols are documented on those classes and the built-in kernel and tabulated

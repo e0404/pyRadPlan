@@ -10,10 +10,13 @@ import pathlib
 import shutil
 import sys
 
-import jupytext
 from sphinx.util import logging
 
 from pyRadPlan import __version__
+
+DOCS_DIR = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(DOCS_DIR))
+import execute_examples  # noqa: E402 - shared with the standalone example runner
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +47,25 @@ extensions = [
 autosummary_generate = True
 
 # -- Example notebooks (myst-nb) ---------------------------------------------
-# The scripts in ../examples are jupytext "percent" notebooks. They are converted to .ipynb
-# at build time (see setup() below) and rendered by myst-nb.
-#
-# Execution is OFF by default: several examples need external tools (MATLAB/Octave, FRED,
-# TOPAS, a Qt display, AI credentials) and the remaining ones take far too long for a
-# readthedocs build. Executed notebooks (with outputs) are committed in docs/tutorials/examples/;
-# refresh them locally with `python docs/execute_examples.py` (never in CI). Scripts without a
-# committed notebook are converted at build time without outputs (see setup() below).
-# Set PYRADPLAN_DOCS_NB_EXECUTION=force (or auto/cache) to execute during a local build instead.
-jupytext_formats = "ipynb,py:percent"
+# The scripts in ../examples (jupytext percent format) are the source of the examples. When the
+# build starts (see setup() below) they are converted to notebooks without outputs in
+# tutorials/examples/ (ignored by git), and nothing is executed: neither Read the Docs nor CI run
+# the examples. Release commits instead carry executed notebooks there, written by
+# `python docs/execute_examples.py --release`; they are rendered as is while their script is
+# unchanged (they opt out of execution in their metadata), and replaced by a conversion without
+# outputs, with a warning, once their script changed. PYRADPLAN_DOCS_NB_EXECUTION=cache is a
+# local opt-in to execute the notebooks without outputs with myst-nb (cached in
+# _build/.jupyter_cache); examples needing tools a build system lacks (Qt display, FRED/TOPAS,
+# MATLAB/Octave, AI credentials, see execute_examples.SKIP) are never executed.
+execute_examples.set_example_environment()  # kernels inherit it: no GUI, inline figures
 nb_execution_mode = os.environ.get("PYRADPLAN_DOCS_NB_EXECUTION", "off")
-nb_execution_timeout = -1  # No per-cell timeout when execution is enabled
-nb_execution_raise_on_error = False
+nb_execution_cache_path = str(DOCS_DIR / "_build" / ".jupyter_cache")
+nb_execution_excludepatterns = [
+    f"tutorials/examples/{pattern}.ipynb" for pattern in execute_examples.SKIP
+]
+nb_execution_timeout = 1800  # per cell; guards the build against a hanging example
+nb_execution_raise_on_error = False  # a failing example is reported, the build goes on
+nb_execution_show_tb = True
 nb_output_stderr = "remove"
 
 templates_path = ["_templates"]
@@ -88,29 +97,20 @@ autodoc_pydantic_model_show_json = False
 autodoc_pydantic_model_show_config_summary = False
 
 # -- Example notebook generation ---------------------------------------------
-DOCS_DIR = pathlib.Path(__file__).resolve().parent
-EXAMPLES_DIR = DOCS_DIR.parent / "examples"
-NOTEBOOKS_DIR = DOCS_DIR / "tutorials" / "examples"
-NOTEBOOK_METADATA = {  # lets myst-nb pick the python lexer for notebooks converted without execution
-    "kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"},
-    "language_info": {"name": "python"},
-}
 
 
 def generate_example_notebooks(app):
-    """Convert example scripts without a committed (executed) notebook to output-less notebooks."""
-    NOTEBOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    generated = []
-    for py_file in sorted(EXAMPLES_DIR.glob("*.py")):
-        target = NOTEBOOKS_DIR / f"{py_file.stem}.ipynb"
-        if not target.is_file():
-            nb = jupytext.read(py_file)
-            nb.metadata.update(NOTEBOOK_METADATA)
-            jupytext.write(nb, target)
-            generated.append(target.name)
-    if generated:
-        logger.info(
-            "Generated %d example notebooks without outputs: %s", len(generated), generated
+    """Convert the example scripts to the notebooks of the tutorials section."""
+    written, stale = execute_examples.write_notebooks()
+    if written:
+        logger.info("Converted %d example scripts to notebooks: %s", len(written), written)
+    for name in stale:
+        logger.warning(
+            "The executed notebook tutorials/examples/%s is older than its script and is shown "
+            "without outputs; rerun `python docs/execute_examples.py --release %s` on the "
+            "release branch.",
+            name,
+            name.removesuffix(".ipynb"),
         )
 
 

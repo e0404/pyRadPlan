@@ -142,6 +142,49 @@ def test_matlab_roundtrip_preserves_ct_and_cst(tmp_path):
         assert voxels == sets_after[name], f"VOI '{name}' changed after roundtrip"
 
 
+def test_matlab_roundtrip_preserves_tissue_properties(tmp_path):
+    """Full tissue properties ride along in cst{i,5} next to matRad's alphaX / betaX."""
+    from pyRadPlan.biology.tissues import MKMTissueProperties, TissueProperties  # noqa: PLC0415
+
+    ct, cst = load_tg119()
+    tissues = [
+        TissueProperties.from_preset("HSG", "LEM_II"),
+        MKMTissueProperties(r_domain=0.2, alpha_0=0.228, beta_0=0.02, alpha_x=0.3),
+        TissueProperties(),
+    ]
+    vois = [
+        voi.model_copy(update={"tissue_properties": tissues[i % len(tissues)]})
+        for i, voi in enumerate(cst.vois)
+    ]
+    cst = StructureSet(vois=vois, ct_image=ct)
+    out = tmp_path / "tissues.mat"
+
+    save_data(ct=ct, cst=cst, file_name=str(out))
+    raw_props = matfile.load(out)["cst"][0][4]
+    assert raw_props["alphaX"] == pytest.approx(tissues[0].alpha_x)
+    assert raw_props["betaX"] == pytest.approx(tissues[0].beta_x)
+
+    cst2 = load_data(out)["cst"]
+    for before, after in zip(cst.vois, cst2.vois):
+        assert type(after.tissue_properties) is type(before.tissue_properties)
+        assert after.tissue_properties == before.tissue_properties
+        assert (
+            after.tissue_properties.reference_sources == before.tissue_properties.reference_sources
+        )
+        assert (
+            after.tissue_properties.cell_line_source == before.tissue_properties.cell_line_source
+        )
+    assert raw_props["tissueProperties"]["referenceSources"]["alpha_x"] == "published"
+    assert {voi.tissue_properties.reference_source for voi in cst2.vois} == {
+        "published",
+        "estimated",
+        "default",
+    }
+    assert {"alpha_x": "explicit", "beta_x": "estimated"} in [
+        voi.tissue_properties.reference_sources for voi in cst2.vois
+    ]
+
+
 def test_matlab_exporter_requires_data(tmp_path):
     with pytest.raises(ValueError):
         MatlabExporter(tmp_path / "empty.mat").save()
