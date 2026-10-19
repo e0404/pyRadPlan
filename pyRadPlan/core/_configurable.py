@@ -8,20 +8,23 @@ Python classes; the generated model is a companion used for validation,
 and dynamic GUI generation.
 """
 
+import dataclasses
 import inspect
 import logging
 import warnings
 from copy import deepcopy
 from typing import (
+    Annotated,
     Any,
     ClassVar,
     Optional,
     Type,
     Union,
+    get_args,
     get_origin,
     get_type_hints,
 )
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 import annotated_types
 import numpy as np
@@ -57,6 +60,10 @@ class AlgorithmParameterMetadata:
         Whether the parameter is an advanced setting (GUIs may fold it away).
     label : str, optional
         Human-readable label. If None, interfaces derive one from the name.
+    hidden_entries : Collection[str], optional
+        For a parameter holding a nested structure (e.g. an options dataclass), the
+        dot-separated paths of entries interfaces should not offer, e.g. because the
+        algorithm sets them itself.
     """
 
     def __init__(
@@ -65,11 +72,13 @@ class AlgorithmParameterMetadata:
         kind: str = "numeric",
         advanced: bool = False,
         label: Optional[str] = None,
+        hidden_entries: Collection[str] = (),
     ):
         self.configurable = configurable
         self.kind = kind
         self.advanced = advanced
         self.label = label
+        self.hidden_entries = frozenset(hidden_entries)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.__dict__})"
@@ -189,7 +198,11 @@ class ConfigurableAlgorithm:
             default = PydanticUndefined
         if default is PydanticUndefined or default is NotImplemented:
             # Parameters without class-level default (e.g. still set in
-            # __init__) become optional with default None
+            # __init__) become optional with default None. Annotated metadata stays
+            # outermost, where pydantic exposes it as the field's metadata.
+            if get_origin(annotation) is Annotated:
+                inner, *metadata = get_args(annotation)
+                return (Annotated[(Optional[inner], *metadata)], None)
             return (Optional[annotation], None)
         return (annotation, _wrap_mutable_default(default))
 
@@ -371,3 +384,42 @@ def field_constraints(info: FieldInfo) -> dict[str, Any]:
         elif isinstance(meta, AlgorithmParameterMetadata):
             out["param_meta"] = meta
     return out
+
+
+def replace_nested(obj: Any, overrides: Mapping[str, Any]) -> Any:
+    """
+    Return a copy of a dataclass with overrides applied, recursing into nested dataclasses.
+
+    Lets a (possibly frozen) options tree, such as ``ipax.Options``, be configured from a
+    plain nested dictionary that only names the entries to change.
+
+    Parameters
+    ----------
+    obj : dataclass instance
+        The dataclass to start from; it is not modified.
+    overrides : Mapping[str, Any]
+        Field values to replace. A mapping given for a field holding a dataclass is applied
+        to that dataclass in turn.
+
+    Returns
+    -------
+    dataclass instance
+        The updated copy.
+
+    Raises
+    ------
+    TypeError
+        If an override names a field the dataclass does not have.
+    """
+    changes = {}
+    for key, value in overrides.items():
+        current = getattr(obj, key, None)
+        if (
+            isinstance(value, Mapping)
+            and dataclasses.is_dataclass(current)
+            and not isinstance(current, type)
+        ):
+            changes[key] = replace_nested(current, value)
+        else:
+            changes[key] = value
+    return dataclasses.replace(obj, **changes)

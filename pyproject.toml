@@ -52,6 +52,7 @@ dependencies = [
     "array_api_strict",
     "array_api_extra",
     "types-array-api",
+    "ipax>=0.12.0",
     "pymatreader>=1.0.0",
     "h5py>=3.11.0",
     "regex>=2024.5.15",

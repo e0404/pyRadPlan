@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Union, ClassVar
+from typing import Annotated, Any, Optional, Union, ClassVar
 import logging
 
 from ...core.xp_utils.typing import Array, ArrayNamespace
@@ -22,13 +22,13 @@ from pyRadPlan.quantities import (
 
 from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
-from ...core import ProgressReporter, xp_utils
+from ...core import AlgorithmParameterMetadata, ConfigurableAlgorithm, ProgressReporter, xp_utils
 
 
 logger = logging.getLogger(__name__)
 
 
-class PlanningProblem(ProgressReporter, ABC):
+class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     """
     Abstract class for all planning problems.
 
@@ -78,7 +78,7 @@ class PlanningProblem(ProgressReporter, ABC):
     #: ``opt_info["obj_history"]`` absent instead of handing back an empty list that reads as
     #: "the solver never evaluated the objective".
     records_obj_history: ClassVar[bool] = False
-    possible_radiation_modes: list[str] = [
+    possible_radiation_modes: ClassVar[list[str]] = [
         "photons",
         "protons",
         "helium",
@@ -88,11 +88,15 @@ class PlanningProblem(ProgressReporter, ABC):
     ]
     # right now only kernel based rbe model which is only standard in the carbon machine
 
-    apply_overlap: bool
-    display: Optional[bool]
-    max_iter: Optional[int]
-    solver: Union[str, dict, SolverBase]
-    obj_history: Optional[list]
+    apply_overlap: bool = True
+    # Unset by default so that a value configured on the solver itself - including one
+    # coming from a prop_opt["solver"] dict - is not overwritten by a top-level default.
+    # Only an explicitly assigned top-level value takes precedence over the solver's.
+    display: Optional[bool] = None
+    max_iter: Optional[int] = None
+    solver: Union[str, dict, SolverBase] = "ipopt"
+    obj_history: Annotated[Optional[list], AlgorithmParameterMetadata(configurable=False)] = None
+    convert_dose_objectives: bool = True
 
     # Private properties
     _ct: CT
@@ -119,20 +123,8 @@ class PlanningProblem(ProgressReporter, ABC):
         super().__init__()
 
         self._scenario_model = None
-
-        self.solver = "ipopt"
         self._solver_explicit = False
-        self.apply_overlap = True
-
-        # Unset by default so that a value configured on the solver itself - including one
-        # coming from a prop_opt["solver"] dict - is not overwritten by a top-level default.
-        # Only an explicitly assigned top-level value takes precedence over the solver's.
-        self.display = None
-        self.max_iter = None
-
-        self.obj_history = None
-
-        self.convert_dose_objectives = True
+        self._init_config_defaults()
 
         if pln is not None:
             pln = validate_pln(pln)
@@ -231,17 +223,17 @@ class PlanningProblem(ProgressReporter, ABC):
         if hasattr(pln, "prop_opt") and isinstance(
             pln.prop_opt, dict
         ):  # TODO: This is not tested yet
-            prop_dict = pln.prop_opt
-            if (
-                "opti_prob" in prop_dict
-                and prop_dict["opti_prob"]
-                and prop_dict["opti_prob"] != self.short_name
-            ):
+            # A copy, so that popping the selector keys leaves the plan untouched.
+            prop_dict = dict(pln.prop_opt)
+            # "problem" selects the class in get_problem_from_pln, which already warns when
+            # it cannot honour it.
+            prop_dict.pop("problem", None)
+            requested = prop_dict.pop("opti_prob", None)
+            if requested and requested != self.short_name:
                 raise ValueError(
-                    f"Inconsistent dose opti_probs given! pln asks for '{prop_dict['opti_prob']}'"
+                    f"Inconsistent dose opti_probs given! pln asks for '{requested}'"
                     f", but you are using '{self.short_name}'!"
                 )
-            prop_dict.pop("opti_prob", None)
         else:
             prop_dict = {}
 

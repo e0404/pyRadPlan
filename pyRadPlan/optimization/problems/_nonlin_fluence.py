@@ -38,11 +38,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
     short_name = "nonlin_fluence"
     records_obj_history = True
 
-    bypass_objective_jacobian: bool
+    bypass_objective_jacobian: bool = True
 
     def __init__(self, pln: Union[Plan, dict] = None):
-        self.bypass_objective_jacobian = True
-
         self._target_voxels = None
         self._patient_voxels = None
 
