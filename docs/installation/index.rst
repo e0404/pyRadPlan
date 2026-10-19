@@ -214,6 +214,58 @@ JAX is auto-detected when present.  A CPU build can be installed via the extra
 `JAX install guide <https://jax.readthedocs.io/en/latest/installation.html>`_, since the
 right wheel depends on your CUDA version.
 
+.. _ipax-accelerations:
+
+Optional accelerations for the ipax solver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :ref:`ipax <concept_ipax>` interior-point solver is installed with pyRadPlan and works
+without further packages.  Its sparse-direct linear-solve route can use faster or more robust
+factorizations when the packages providing them are installed.  ipax looks for them at solve
+time and falls back to what is available, so none of them is required.  They come as extras of
+ipax itself:
+
+.. code-block:: bash
+
+   pip install "ipax[sparse-cpu]"   # CPU: SciPy assembly + Feral sparse LDLᵀ
+   pip install "ipax[sparse-cuda]"  # CUDA: nvmath-python bindings for cuDSS / cuSOLVER
+   pip install "ipax[sparse]"       # both
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 30 48
+
+   * - Package
+     - Installed by
+     - What it enables
+   * - ``feral-solver``
+     - ``ipax[sparse-cpu]``
+     - Sparse LDLᵀ factorization of the symmetric KKT systems on the CPU, with certified
+       inertia.  Without it, ipax falls back to SciPy's ``splu``.
+   * - ``PyMUMPS`` (``mumps``)
+     - installed manually
+     - Inertia from MUMPS on the SciPy fallback path; without it (and without Feral) the inertia
+       is only computed densely at small scale.  Few platforms provide wheels.
+   * - ``nvmath-python``
+     - ``ipax[sparse-cuda]``
+     - On CuPy, the NVIDIA cuDSS sparse direct solver for the sparse-direct route and the
+       cuSOLVER dense bindings for the augmented dense route.  Requires CuPy and, for cuDSS, its
+       runtime (see below).
+
+The CUDA packages are user-managed, as for the backends above: install the CuPy wheel matching
+your CUDA version first, then the cuDSS runtime, e.g. for CUDA 12:
+
+.. code-block:: bash
+
+   pip install cupy-cuda12x nvidia-cudss-cu12
+   pip install "ipax[sparse-cuda]"
+
+Without a cuDSS runtime, the CuPy route falls back to ``cupyx.scipy.sparse.linalg.spsolve``,
+which cannot report inertia.  cuDSS factorizations are not reproducible run to run by default;
+setting ``options.sparse.deterministic`` makes repeated solves bitwise identical on the same
+machine at some cost per factorization.  See the ipax guide on
+`backends and hardware <https://ipax.readthedocs.io/>`_ for the details.
+
 Verifying backend detection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -2792,3 +2792,64 @@ def test_tissue_dialog_preset_selects_its_reference_radiation(
     assert reference_radiation_value(dialog._radiation_combos[1]) == "test_photons"
     tissue = dialog.tissue_properties(1)
     assert (tissue.cell_line, tissue.reference_radiation) == ("TestCells", "test_photons")
+
+
+def test_optimization_row_restores_and_keeps_prop_opt(qapp):
+    widget, ws = _make_widget()
+    assert widget._cmb_problem.currentText() == "nonlin_fluence"
+    ws.pln = PhotonPlan(prop_opt={"solver": "scipy"})
+    assert widget._problem_props["nonlin_fluence"] == {"solver": "scipy"}
+    widget._on_apply()
+    assert ws.pln.prop_opt == {"solver": "scipy"}
+
+
+def test_plan_naming_its_problem_keeps_naming_it(qapp):
+    widget, ws = _make_widget()
+    prop_opt = {"problem": "nonlin_fluence", "apply_overlap": False}
+    ws.pln = PhotonPlan(prop_opt=dict(prop_opt))
+    widget._txt_gantry.setText("0 90")
+    widget._on_apply()
+    assert ws.pln.prop_opt == prop_opt
+
+
+def test_optimization_config_dialog_result_is_applied(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.gui.widgets.plan import _plan_widget
+
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(prop_opt={"max_iter": 40})
+    opened = []
+
+    class _Dialog:
+        def __init__(self, problem_cls, initial, parent):
+            opened.append((problem_cls.short_name, initial))
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def values(self):
+            return {"solver": {"name": "scipy", "max_iter": 40}}
+
+    monkeypatch.setattr(_plan_widget, "OptimizationConfigDialog", _Dialog)
+    widget._btn_problem_config.click()
+
+    assert opened == [("nonlin_fluence", {"max_iter": 40})]
+    assert widget.has_pending_changes()
+    widget._on_apply()
+    assert ws.pln.prop_opt == {"solver": {"name": "scipy", "max_iter": 40}}
+
+
+def test_optimization_keeps_a_live_solver_instance(qapp):
+    from pyRadPlan.optimization.solvers import get_solver
+
+    widget, ws = _make_widget()
+    solver = get_solver("scipy")
+    ws.pln = PhotonPlan(prop_opt={"solver": solver, "prescription": {"dose": 2.0}})
+    assert widget._problem_props["nonlin_fluence"]["solver"] is solver
+    copied = widget._form_prop_opt()
+    copied["prescription"]["dose"] = 3.0
+    assert ws.pln.prop_opt["prescription"]["dose"] == 2.0
+    widget._txt_gantry.setText("0 90")
+    widget._on_apply()
+    assert ws.pln.prop_opt["solver"] is solver

@@ -72,6 +72,10 @@ A *solver* implements the mathematical optimization algorithm. The solver is sel
      - (default) `IPOPT <https://coin-or.github.io/Ipopt/>`_ interior-point optimizer.
        Handles large-scale nonlinear programs efficiently. Suitable for the full fluence
        optimization problem.
+   * - ``"ipax"``
+     - `ipax <https://github.com/wahln/ipax>`_ interior-point optimizer. Array-API-native,
+       so it can keep the fluence vector on the compute backend (e.g. a GPU) instead of
+       round-tripping it through NumPy.
    * - ``"scipy"``
      - SciPy minimization (``scipy.optimize.minimize``). Multiple sub-methods available
        (L-BFGS-B, SLSQP, etc.). Lighter dependency, good for smaller problems.
@@ -98,6 +102,58 @@ The currently registered fluence problem constrains fluence weights to be non-ne
    To use IPOPT anyway, set ``KMP_DUPLICATE_LIB_OK=TRUE`` *before* starting Python.  Intel
    documents this as unsafe -- the process may still crash or silently produce wrong results --
    so prefer an environment with a single OpenMP runtime where you can.
+
+.. _concept_ipax:
+
+The ipax solver
+~~~~~~~~~~~~~~~
+
+`ipax <https://github.com/wahln/ipax>`_ is a primal-dual interior-point solver for large-scale
+nonlinear constrained optimization, written against the
+`Python Array API standard <https://data-apis.org/array-api/latest/>`_.  It is developed by
+Niklas Wahl as a separate project under the Apache-2.0 license, with its own
+`documentation <https://ipax.readthedocs.io/>`_.  Its globalization (filter line search,
+restoration) follows IPOPT (Wächter & Biegler, 2006), and its primal-dual formulation draws on
+the radiotherapy-tuned interior-point method of Breedveld et al. (2017).  ipax is in beta: the
+algorithm is feature-complete and tested, while its public API is still being hardened.
+
+Because ipax never imports a concrete array library, it solves in whatever namespace the
+starting point lives in.  pyRadPlan hands it the fluence vector on the compute backend chosen
+for the quantities (see `Compute backend`_ below), so on a GPU backend the whole solve,
+including the dose projections, can stay on the device.
+
+ipax is installed with pyRadPlan.  pyRadPlan's interface,
+:class:`~pyRadPlan.optimization.solvers.OptimizerIpax`, starts from defaults tuned for fluence
+optimization: an L-BFGS Hessian, the adaptive barrier-parameter schedule, Gondzio corrections,
+interpolated backtracking in the line search, and an acceptable-stopping band loosened for
+radiotherapy objectives, which stops a solve once further iterations no longer improve the
+plan noticeably.  The iteration and time limits come from the solver's ``max_iter`` and
+``max_time``; everything else is taken from its ``options`` (an ``ipax.Options`` tree), which a
+plan configures with a nested dictionary naming only the entries to change:
+
+.. code-block:: python
+
+    pln.prop_opt = {
+        "solver": {
+            "name": "ipax",
+            "max_iter": 300,
+            "options": {"lbfgs": {"memory": 20}, "acceptable": {"n_iter": 8}},
+        },
+    }
+
+The built-in fluence problem supplies an objective and gradient, so keep a quasi-Newton
+Hessian (``"lbfgs"`` or ``"auto"``).  ``"exact"`` requires an analytic Lagrangian Hessian,
+which this interface does not currently provide.
+
+In the GUI, the "…" button next to the planning problem in the plan widget offers the same
+settings, with ipax's options as collapsible groups.
+
+``force_cpu_inner_solve`` (default ``False``) runs ipax's own linear algebra in NumPy while the
+objective and gradient evaluations stay on the compute backend.  Which linear-solve route ipax
+takes (dense, matrix-free Krylov, or sparse-direct) depends on the size and structure of the
+problem (``options.linsolve``, ``"auto"`` by default).  The sparse-direct route can use the
+optional solvers described in :ref:`ipax-accelerations`; with ``force_cpu_inner_solve`` it
+factors on the host, so it reaches the GPU solver cuDSS only without it.
 
 Objectives
 ----------

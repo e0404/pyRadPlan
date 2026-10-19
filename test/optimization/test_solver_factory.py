@@ -1,6 +1,7 @@
 import pytest
 import logging
 
+from pyRadPlan.core import field_constraints
 from pyRadPlan.optimization.solvers import get_available_solvers, get_solver, SolverBase
 
 
@@ -51,23 +52,23 @@ def test_get_solver_from_dict_assigns_attributes():
     assert solver.display is False
 
 
-def test_get_solver_from_dict_merges_options():
-    # Needs a solver that actually ships default options to merge into; OptimizerSciPy has
-    # none, because its tolerances come from `abs_obj_tol` rather than from `options`.
-    with_defaults = [
-        name for name, cls in get_available_solvers().items() if getattr(cls(), "options", None)
-    ]
-    if not with_defaults:
-        pytest.skip("no registered solver ships default options")
+def test_get_solver_from_dict_merges_options(monkeypatch):
+    from pyRadPlan.optimization.solvers import OptimizerSciPy
+    from pyRadPlan.optimization.solvers._factory import SOLVERS
 
-    name = with_defaults[0]
-    untouched = next(iter(get_solver(name).options))
+    # Exercise dictionary merging even when optional IPOPT is absent. ipax's
+    # dataclass options have a separate test below.
+    class SolverWithOptions(OptimizerSciPy):
+        short_name = "test-options"
 
-    solver = get_solver({"name": name, "options": {"print_level": 1}})
+        def __init__(self):
+            super().__init__()
+            self.options = {"ftol": 1e-8, "maxls": 20}
 
-    # The user-provided key should be set, and unrelated defaults should be preserved.
-    assert solver.options["print_level"] == 1
-    assert untouched in solver.options
+    monkeypatch.setitem(SOLVERS, SolverWithOptions.short_name, SolverWithOptions)
+    solver = get_solver({"name": SolverWithOptions.short_name, "options": {"ftol": 1e-6}})
+    assert solver.options == {"ftol": 1e-6, "maxls": 20}
+    assert get_solver(SolverWithOptions.short_name).options == {"ftol": 1e-8, "maxls": 20}
 
 
 def test_get_solver_from_dict_warns_on_unknown_attribute(caplog):
@@ -77,3 +78,28 @@ def test_get_solver_from_dict_warns_on_unknown_attribute(caplog):
     with caplog.at_level(logging.WARNING, logger="pyRadPlan.optimization.solvers._factory"):
         get_solver({"name": "scipy", "not_a_real_attribute": 123})
     assert any("not_a_real_attribute" in m for m in caplog.messages)
+
+
+def test_solver_dict_merges_into_dataclass_options():
+    if "ipax" not in get_available_solvers():
+        pytest.skip("ipax not available")
+    default = get_solver("ipax").options
+    solver = get_solver(
+        {"name": "ipax", "options": {"hessian": "exact", "krylov": {"method": "minres"}}}
+    )
+    assert solver.options.hessian == "exact"
+    assert solver.options.krylov.method == "minres"
+    assert solver.options.krylov.preconditioner == default.krylov.preconditioner
+    assert solver.options.acceptable == default.acceptable
+
+
+def test_solver_config_models_hide_the_wiring():
+    for solver_cls in get_available_solvers().values():
+        fields = solver_cls.config_model().model_fields
+        hidden = {
+            name
+            for name, info in fields.items()
+            if (meta := field_constraints(info).get("param_meta")) and not meta.configurable
+        }
+        assert {"objective", "gradient", "bounds", "status_callback"} <= hidden
+        assert "max_iter" in fields and "max_iter" not in hidden

@@ -38,6 +38,8 @@ from pyRadPlan._settings import get_settings
 from pyRadPlan.gui.widgets._ui_mode import UIMode
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.machines import Machine, get_available_machines
+from pyRadPlan.optimization.problems import get_available_problems
+from pyRadPlan.optimization.solvers import SolverBase
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, default_bio_models
 from pyRadPlan.scenarios import available_scenario_models
 from pyRadPlan.stf import get_beam_angle_presets
@@ -62,6 +64,7 @@ from .._tissue_params import (
     tissue_issues_quietly,
     tissue_issues_text,
 )
+from ._optimization_dialog import OptimizationConfigDialog
 from ._tissue_dialog import TissueParametersDialog
 from ..ai import ai_disabled_reason
 
@@ -149,6 +152,13 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: ``pln.prop_opt`` entries per planning problem short name (without the
+        #: ``"problem"`` key), edited via the [...] popup.
+        self._problem_props: dict[str, dict] = {}
+        self._problems: dict[str, type] = {}
+        #: Whether the applied plan names its planning problem; Apply then keeps naming it,
+        #: while a plan relying on the default problem stays without the key.
+        self._plan_names_problem = False
         #: Parameter overrides per biological model name (edited via the "…" button).
         self._bio_params: dict[str, dict] = {}
         self._bio_model_classes: dict[str, type[BiologicalModel]] = {}
@@ -192,6 +202,8 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine,
             "engine": self._cmb_engine,
             "engine_props": self._btn_engine_config,
+            "problem": self._cmb_problem,
+            "problem_props": self._btn_problem_config,
             "bio_model": self._cmb_bio_model,
             "bio_params": self._btn_bio_config,
             "fractions": self._spn_fractions,
@@ -248,6 +260,7 @@ class PlanWidget(WorkspaceWidget):
 
         self._refresh_machines(self._cmb_radiation.currentText())
         self._refresh_engines(self._cmb_radiation.currentText())
+        self._refresh_problems(self._cmb_radiation.currentText())
         self._refresh_bio_models(self._cmb_radiation.currentText())
         self._refresh_angle_presets(self._cmb_radiation.currentText())
         self._update_beam_count()
@@ -258,6 +271,7 @@ class PlanWidget(WorkspaceWidget):
         self._build_setup_rows(grid)
         self._build_geometry_rows(grid)
         self._build_model_rows(grid)
+        self._build_optimization_row(grid)
         self._build_sequencing_row(grid)
         self._build_dose_grid_row(grid)
 
@@ -463,6 +477,25 @@ class PlanWidget(WorkspaceWidget):
         self._add_advanced(grid, self._cmb_quantity, 5, 1)
         grid.addLayout(tissue_row, 5, 3)
 
+    def _build_optimization_row(self, grid: QGridLayout) -> None:
+        self._cmb_problem = QComboBox()
+        self._cmb_problem.setToolTip("Planning problem formulation used by the optimization")
+        self._btn_problem_config = QPushButton("…")
+        self._btn_problem_config.setFixedWidth(28)
+        self._btn_problem_config.setToolTip(
+            "Configure the selected planning problem and choose its solver"
+        )
+        self._btn_problem_config.clicked.connect(self._on_problem_config)
+
+        problem_row = QHBoxLayout()
+        problem_row.setContentsMargins(0, 0, 0, 0)
+        problem_row.setSpacing(4)
+        problem_row.addWidget(self._cmb_problem, 1)
+        problem_row.addWidget(self._btn_problem_config)
+
+        self._add_advanced(grid, QLabel("Optimization:"), 6, 0)
+        self._add_advanced(grid, problem_row, 6, 1)
+
     def _build_sequencing_row(self, grid: QGridLayout) -> None:
         self._chk_sequencing = QCheckBox("Run sequencing")
         self._spn_seq_levels = QSpinBox()
@@ -487,8 +520,8 @@ class PlanWidget(WorkspaceWidget):
         opt_row.addWidget(self._chk_dao)
         opt_row.addWidget(self._chk_conf3d)
 
-        self._add_advanced(grid, seq_row, 6, 0, 1, 2)
-        self._add_advanced(grid, opt_row, 6, 2, 1, 2)
+        self._add_advanced(grid, seq_row, 7, 0, 1, 2)
+        self._add_advanced(grid, opt_row, 7, 2, 1, 2)
 
     def _build_dose_grid_row(self, grid: QGridLayout) -> None:
         self._spn_res_x = self._make_res_spin()
@@ -509,8 +542,8 @@ class PlanWidget(WorkspaceWidget):
             res_row.addWidget(spin)
         res_row.addWidget(self._btn_ct_grid)
 
-        grid.addWidget(QLabel("Dose grid res. [mm]:"), 7, 0)
-        grid.addLayout(res_row, 7, 1, 1, 3)
+        grid.addWidget(QLabel("Dose grid res. [mm]:"), 8, 0)
+        grid.addLayout(res_row, 8, 1, 1, 3)
 
     def _add_advanced(
         self,
@@ -680,6 +713,7 @@ class PlanWidget(WorkspaceWidget):
     def _on_radiation_changed(self, radiation_mode: str) -> None:
         self._refresh_machines(radiation_mode)
         self._refresh_engines(radiation_mode)
+        self._refresh_problems(radiation_mode)
         note = self._refresh_bio_models(radiation_mode)
         self._refresh_angle_presets(radiation_mode)
         self._update_dirty_state()
@@ -1140,6 +1174,72 @@ class PlanWidget(WorkspaceWidget):
             self._update_dirty_state()
 
     # ------------------------------------------------------------------
+    # Optimization (planning problem / solver) handling
+    # ------------------------------------------------------------------
+
+    def _refresh_problems(self, radiation_mode: str) -> None:
+        self._problems = {
+            name: cls
+            for name, cls in get_available_problems().items()
+            if radiation_mode in cls.possible_radiation_modes
+        }
+        current = self._cmb_problem.currentText()
+        self._cmb_problem.blockSignals(True)
+        self._cmb_problem.clear()
+        for name, cls in self._problems.items():
+            self._cmb_problem.addItem(name)
+            self._cmb_problem.setItemData(
+                self._cmb_problem.count() - 1, cls.name, Qt.ItemDataRole.ToolTipRole
+            )
+        if current in self._problems:
+            self._cmb_problem.setCurrentText(current)
+        self._cmb_problem.blockSignals(False)
+        self._btn_problem_config.setEnabled(bool(self._problems))
+
+    def _on_problem_config(self) -> None:
+        problem_name = self._cmb_problem.currentText()
+        problem_cls = self._problems.get(problem_name)
+        if problem_cls is None:
+            return
+
+        dialog = OptimizationConfigDialog(
+            problem_cls, initial=self._problem_props.get(problem_name, {}), parent=self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._problem_props[problem_name] = dialog.values()
+            self._update_dirty_state()
+
+    def _restore_problem_from_pln(self, pln: Plan) -> None:
+        prop_opt = pln.prop_opt if isinstance(pln.prop_opt, dict) else {}
+        requested = prop_opt.get("problem") or prop_opt.get("opti_prob")
+        self._plan_names_problem = bool(requested)
+        # An unavailable problem falls back to the default, as get_problem_from_pln does.
+        default = next(iter(self._problems), None)
+        problem_name = requested if requested in self._problems else default
+        if problem_name is None:
+            return
+        self._cmb_problem.setCurrentText(problem_name)
+        self._problem_props[problem_name] = self._copy_prop_opt(
+            {k: v for k, v in prop_opt.items() if k not in ("problem", "opti_prob")}
+        )
+
+    @staticmethod
+    def _copy_prop_opt(prop_opt: dict) -> dict:
+        """Copy configuration values while retaining a live solver and its thread state."""
+        solver = prop_opt.get("solver")
+        memo = {id(solver): solver} if isinstance(solver, SolverBase) else {}
+        return deepcopy(prop_opt, memo)
+
+    def _form_prop_opt(self) -> dict:
+        """``pln.prop_opt`` described by the optimization fields."""
+        problem_name = self._cmb_problem.currentText()
+        prop_opt = self._copy_prop_opt(self._problem_props.get(problem_name, {}))
+        default = next(iter(self._problems), None)
+        if problem_name and (self._plan_names_problem or problem_name != default):
+            prop_opt = {"problem": problem_name, **prop_opt}
+        return prop_opt
+
+    # ------------------------------------------------------------------
     # Workspace → UI synchronisation
     # ------------------------------------------------------------------
 
@@ -1194,6 +1294,8 @@ class PlanWidget(WorkspaceWidget):
             self._plan_machine_summary = machine_summary(pln.machine)
         self._refresh_machines(pln.radiation_mode)
         self._refresh_engines(pln.radiation_mode)
+        self._refresh_problems(pln.radiation_mode)
+        self._restore_problem_from_pln(pln)
         if self._plan_machine is not None:
             machine = self._plan_machine_label(pln.radiation_mode) or self._plan_machine.name
         else:
@@ -1586,14 +1688,14 @@ class PlanWidget(WorkspaceWidget):
             }
         }
 
-        # Keep settings this form does not edit (solver configuration, prescription,
-        # sequencing, etc.). Read field values directly to retain arbitrary model types. The
+        # Keep settings this form does not edit (prescription, sequencing, etc.).
+        # Read field values directly to retain arbitrary model types. The
         # machine is set below and never copied: base data runs to hundreds of megabytes.
         plan_data = (
             {
                 name: deepcopy(getattr(current, name))
                 for name in type(current).model_fields
-                if name != "machine"
+                if name not in ("machine", "prop_opt")
             }
             if current is not None
             else {}
@@ -1612,6 +1714,7 @@ class PlanWidget(WorkspaceWidget):
                 "prop_stf": prop_stf,
                 "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
                 "prop_dose_calc": prop_dose_calc,
+                "prop_opt": self._form_prop_opt(),
             }
         )
 
@@ -1637,6 +1740,7 @@ class PlanWidget(WorkspaceWidget):
         # ``_cmb_radiation`` and ``_cmb_engine`` are handled by ``_on_radiation_changed`` and
         # ``_on_engine_changed``.
         self._cmb_machine.editTextChanged.connect(self._on_field_edited)
+        self._cmb_problem.currentTextChanged.connect(self._on_field_edited)
         self._cmb_bio_model.currentIndexChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
         self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
@@ -1657,6 +1761,7 @@ class PlanWidget(WorkspaceWidget):
     def _capture_state(self) -> dict[str, Any]:
         """Snapshot the tracked field values for modified-state comparison."""
         engine = self._cmb_engine.currentText()
+        problem = self._cmb_problem.currentText()
         not_auto = not self._chk_iso_auto.isChecked()
         bio_params = self._bio_params.get(self._bio_model_name(), {})
         unsupported = self._option_at(self._cmb_bio_model.currentIndex()) is None
@@ -1665,6 +1770,8 @@ class PlanWidget(WorkspaceWidget):
             "machine": self._cmb_machine.currentText(),
             "engine": engine,
             "engine_props": dict(self._engine_props.get(engine, {})),
+            "problem": problem,
+            "problem_props": dict(self._problem_props.get(problem, {})),
             # The base data the selected entry reads belongs to the model choice, not to
             # the parameters configured through the "…" button.
             "bio_model": json.dumps(
