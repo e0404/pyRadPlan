@@ -1,18 +1,21 @@
 # %% [markdown]
-"""# Example for proton dose calculation using pencilbeam engine."""
+"""# Example for CNN-based NTCP optimization on the TG119 phantom."""
 # %% [markdown]
-# This example demonstrates how to use the pyRadPlan library to perform proton dose calculations.
+# This example demonstrates how to optimize a proton plan with a CNN-predicted NTCP for the Core.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/pencilbeam_proton.py
+# jupytext --to notebook path/to/this/file/ntcp_optimization_tg119.py
 
 # %%
 # Import necessary libraries
 import logging
+
+import SimpleITK as sitk
+
 from pyRadPlan import (
     IonPlan,
     generate_stf,
@@ -22,7 +25,7 @@ from pyRadPlan import (
     load_tg119,
     settings,
 )
-
+from pyRadPlan.cst import HelperVOI
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
     SquaredOverdosing,
@@ -34,9 +37,8 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
-settings.xp.preferred_cpu_array_backend = "cupy"
+settings.xp.preferred_gpu_array_backend = "cupy"
 logging.basicConfig(level=logging.INFO)
-# os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 
 # %%
@@ -48,46 +50,54 @@ ct, cst = load_tg119()
 # %%
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
-pln.prop_opt = {"solver": "scipy", "max_iter": 200, "display": True}
+# The CNN was trained on physical dose, so keep the objectives on physical dose.
+pln.prop_opt = {
+    "solver": "scipy",
+    "max_iter": 200,
+    "display": True,
+    "convert_dose_objectives": False,
+}
 pln.prop_dose_calc = {"dose_grid": ct.grid}
 pln.prop_stf = {
     "gantry_angles": [0.0, 120.0, 240.0],
     "couch_angles": [0.0, 0.0, 0.0],
 }
 stf = generate_stf(ct, cst, pln)
-# Optimization
-# Configure CNN-based NTCP objective for an OAR
 
-# Create the CNN objective (channels order for the model: [ct, dose, mask])
-# Keep handle to the CNN objective to access NTCP history after optimization
+# %%
+# Configure the CNN-based NTCP objective for the Core.
+# Keep a handle to it to access the NTCP history after optimization.
 ntcp_obj = OutcomeCNN(
     priority=10000.0,
     model="pyRadPlan-outcome-ORPDenseNet-tg119",  # HF name, local dir, or (model, preprocessor)
-    mode="NTCP",
     warmup_iterations=5,
     ct=ct,
     cst=cst,
     cst_masks=["Core"],  # channel order matters unless the model collapses masks
-    # debug_plots="debug_grads",
 )
 
-cst.vois[0].objectives = [
-    SquaredOverdosing(priority=10.0, d_max=30.0),
-]
-# Keep remaining objectives as in the baseline example
+cst.vois[0].objectives = [SquaredOverdosing(priority=10.0, d_max=30.0)]  # Core
 cst.vois[1].objectives = [SquaredDeviation(priority=100.0, d_ref=70.0)]  # Target
-cst.vois[2].objectives = [
-    # MeanDose(priority=100.0, d_ref=0.0),
-    SquaredOverdosing(priority=50.0, d_max=20.0),
-]  # BODY
+cst.vois[2].objectives = [SquaredOverdosing(priority=50.0, d_max=20.0)]  # BODY
 
 
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# The CNN reads the dose over the whole patient, which BODY already covers -- the
-# objective restricts to its VOI and scatters back onto the dose grid internally.
-cst.vois[2].objectives.append(ntcp_obj)
+# The CNN sees the dose of the VOI it is attached to. A helper VOI over the whole grid,
+# excluded from overlap priorities, hands it the full dose including Core and Target.
+cnn_mask = sitk.Image(ct.cube_hu.GetSize(), sitk.sitkUInt8) + 1
+cnn_mask.CopyInformation(ct.cube_hu)
+cst.vois = cst.vois + [
+    HelperVOI(
+        name="NTCP_CNN",
+        ct_image=ct,
+        mask=cnn_mask,
+        apply_overlap=None,
+        objectives=[ntcp_obj],
+    )
+]
+
 opt_info = {}
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
@@ -110,7 +120,7 @@ ntcp_history_native = list(ntcp_obj.ntcp_history)
 result = dij.compute_result_ct_grid(fluence)
 result_native = dij.compute_result_ct_grid(fluence_native)
 # %% [markdown]
-# Native plots: dose, native dose, signed difference; NTCP curve; DVHs
+# Signed difference between the native and the CNN-guided dose.
 # %%
 
 diff = result_native["physical_dose"] - result["physical_dose"]

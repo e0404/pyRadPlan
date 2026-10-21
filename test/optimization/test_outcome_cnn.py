@@ -30,7 +30,7 @@ if _HAS_TORCH:
 
     from pyRadPlan.ai.modelhub import BasePreprocessor
 
-_CNN_MODULE = "pyRadPlan.optimization.objectives.model._cnn"
+_CNN_MODULE = "pyRadPlan.optimization.objectives.model._ntcp_cnn"
 
 # Minimal preprocessing config (the dummy preprocessor barely uses it).
 DUMMY_CONFIG = {
@@ -144,9 +144,9 @@ def _make_obj(ct, cst, **overrides):
     dummy_pp = DummyOutcomePreprocessor(DUMMY_CONFIG)
 
     with patch(f"{_CNN_MODULE}.load_model", return_value=(dummy_model, dummy_pp)):
-        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+        from pyRadPlan.optimization.objectives.model._ntcp_cnn import OutcomeCNN
 
-        params = dict(priority=100.0, model="dummy", mode="NTCP", ct=ct, cst=cst)
+        params = dict(priority=100.0, model="dummy", ct=ct, cst=cst)
         params.update(overrides)
         obj = OutcomeCNN(**params)
 
@@ -174,7 +174,6 @@ def _dose():
 class TestOutcomeCNN:
     def test_construction(self, outcome_obj):
         assert outcome_obj.model == "dummy"
-        assert outcome_obj.mode == "NTCP"
         assert outcome_obj.warmup_iterations == 2
         assert outcome_obj.nn_model is not None
         assert outcome_obj.preprocessor is not None
@@ -185,16 +184,15 @@ class TestOutcomeCNN:
         dummy_model = DummyNet()
         dummy_pp = DummyOutcomePreprocessor(DUMMY_CONFIG)
 
-        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+        from pyRadPlan.optimization.objectives.model._ntcp_cnn import OutcomeCNN
 
         obj = OutcomeCNN(
             priority=1.0,
             model=(dummy_model, dummy_pp),
-            mode="NTCP",
             ct=ct,
             cst=cst,
         )
-        obj.set_dose_grid(FakeGrid(dimensions=(8, 8, 4)))
+        obj.preprocess_image_reference_parameters(target_grid=FakeGrid(dimensions=(8, 8, 4)))
         assert obj.model == "<preloaded>"
         assert obj.nn_model is dummy_model
         assert obj.preprocessor is dummy_pp
@@ -202,11 +200,11 @@ class TestOutcomeCNN:
 
     def _load_device_used(self, ct, cst, **overrides):
         """Build an objective with load_model patched and report the device it got."""
-        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+        from pyRadPlan.optimization.objectives.model._ntcp_cnn import OutcomeCNN
 
         dummies = (DummyNet().eval(), DummyOutcomePreprocessor(DUMMY_CONFIG))
         with patch(f"{_CNN_MODULE}.load_model", return_value=dummies) as loader:
-            OutcomeCNN(priority=1.0, model="dummy", mode="NTCP", ct=ct, cst=cst, **overrides)
+            OutcomeCNN(priority=1.0, model="dummy", ct=ct, cst=cst, **overrides)
         return loader.call_args.kwargs["device"]
 
     def test_device_defaults_to_the_backend_preference(self, ct_and_cst, monkeypatch):
@@ -229,7 +227,7 @@ class TestOutcomeCNN:
 
     def test_preloaded_model_is_moved_only_when_a_device_is_given(self, ct_and_cst):
         """A caller-supplied model is left where it is unless a device is named."""
-        from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+        from pyRadPlan.optimization.objectives.model._ntcp_cnn import OutcomeCNN
 
         ct, cst = ct_and_cst
         moved = []
@@ -246,7 +244,6 @@ class TestOutcomeCNN:
             OutcomeCNN(
                 priority=1.0,
                 model=(model, DummyOutcomePreprocessor(DUMMY_CONFIG)),
-                mode="NTCP",
                 ct=ct,
                 cst=cst,
                 **overrides,
@@ -309,26 +306,33 @@ class TestOutcomeCNN:
         grad = obj.compute_gradient(dose)
         assert array_api_compat.is_numpy_array(grad)
 
-    def test_tcp_mode_negates(self, ct_and_cst):
+    def test_voi_subset_is_scattered_with_zeros(self, ct_and_cst):
+        """A VOI subset is seen as zero dose elsewhere; the gradient comes back on the subset."""
         ct, cst = ct_and_cst
-        obj_ntcp = _make_obj(ct, cst, warmup_iterations=0, mode="NTCP")
-        obj_tcp = _make_obj(ct, cst, warmup_iterations=0, mode="TCP")
-
-        dose = _dose()
-        assert obj_tcp.compute_objective(dose) == pytest.approx(
-            -obj_ntcp.compute_objective(dose), abs=1e-6
+        obj = _make_obj(ct, cst, warmup_iterations=0)
+        index = np.arange(0, N_VOXELS, 2)
+        obj.preprocess_image_reference_parameters(
+            target_grid=FakeGrid(dimensions=(8, 8, 4)), index_list=index
         )
 
-        grad_ntcp = obj_ntcp.compute_gradient(dose)
-        grad_tcp = obj_tcp.compute_gradient(dose)
-        np.testing.assert_allclose(grad_tcp, -grad_ntcp, atol=1e-6)
+        dose = _dose()
+        full = np.zeros(N_VOXELS, dtype=np.float32)
+        full[index] = dose[index]
+        reference = _make_obj(ct, cst, warmup_iterations=0)
+
+        assert float(obj.compute_objective(dose[index])) == pytest.approx(
+            float(reference.compute_objective(full))
+        )
+        grad = obj.compute_gradient(dose[index])
+        assert grad.shape == index.shape
+        assert np.any(grad != 0.0)
 
     def test_ntcp_history_and_reset(self, outcome_obj):
         dose = _dose()
         for _ in range(3):
             outcome_obj.compute_objective(dose)
 
-        hist = outcome_obj.get_ntcp_history()
+        hist = outcome_obj.ntcp_history
         assert len(hist) == 3
         assert all(isinstance(v, float) for v in hist)
 
@@ -352,9 +356,9 @@ class TestOutcomeCNN:
     def test_not_initialised_raises(self):
         """Constructing without ct/cst then calling compute should raise."""
         with patch(f"{_CNN_MODULE}.load_model"):
-            from pyRadPlan.optimization.objectives.model._cnn import OutcomeCNN
+            from pyRadPlan.optimization.objectives.model._ntcp_cnn import OutcomeCNN
 
-            obj = OutcomeCNN(model="dummy", mode="NTCP")
+            obj = OutcomeCNN(model="dummy")
 
         with pytest.raises(RuntimeError, match="not initialised"):
             obj.compute_objective(np.zeros(N_VOXELS, dtype=np.float32))

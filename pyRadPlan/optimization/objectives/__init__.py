@@ -10,7 +10,7 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
-from .model._cnn import OutcomeCNN
+from .model._ntcp_cnn import OutcomeCNN
 
 from ._factory import (
     get_available_objectives,
