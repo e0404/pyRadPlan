@@ -34,7 +34,7 @@ from pyRadPlan.optimization.objectives import (
 )
 
 # HEAD_AND_NECK.mat ships with matRad (matRad/phantoms), not with pyRadPlan.
-HN_PHANTOM = r"C:\Users\f687r\Projects\matRad\matRad\phantoms\HEAD_AND_NECK.mat"
+HN_PHANTOM = r"path/to/matRad/default_hn_phantom.mat"
 
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
@@ -74,7 +74,7 @@ stf = generate_stf(ct, cst, pln)
 # (model, preprocessor) tuple.
 ntcp_obj = OutcomeCNN(
     priority=300000.0,
-    model=r"C:\Users\f687r\Projects\ml_models_git\pyRadPlan-outcome-ORPDenseNet-Xerostomia",
+    model=r"pyRadPlan-outcome-ORPDenseNet-Xerostomia",
     warmup_iterations=5,
     ct=ct,  # needed as model input
     cst=cst,  # needed as model input
