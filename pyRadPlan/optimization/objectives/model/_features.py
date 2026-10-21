@@ -194,12 +194,12 @@ GEOMETRY_FEATURES: dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
 
 
 class FeatureExtractor:
-    """Turn a dose vector on the dose grid into an outcome model's input vector.
+    """Turn a dose vector on the dose grid into an outcome model's feature vector.
 
     Parameters
     ----------
     features : Iterable[OutcomeFeature]
-        Model inputs, in the order the estimator expects them.
+        Model inputs, in the order the model expects them.
     ct : CT
         Planning CT; geometry features are evaluated on its grid, matching how
         the model was trained.
@@ -208,10 +208,6 @@ class FeatureExtractor:
     segment_map : dict[str, str], optional
         Mapping from the feature's segment name to the VOI name in ``cst``.
         Names are otherwise matched case-insensitively.
-    static_features : dict[str, float], optional
-        Overrides for geometry feature values, keyed by feature name. Use this
-        when the training data used a different geometry convention than the
-        one reproduced here.
     """
 
     def __init__(
@@ -220,36 +216,25 @@ class FeatureExtractor:
         ct: Any,
         cst: Any,
         segment_map: Optional[dict[str, str]] = None,
-        static_features: Optional[dict[str, float]] = None,
     ) -> None:
         self.features = list(features)
-        self._segment_map = dict(segment_map or {})
-        self._overrides = dict(static_features or {})
-
-        self._masks = {segment: self._find_mask(cst, segment) for segment in self._segments_used()}
+        segment_map = segment_map or {}
+        self._masks = {
+            segment: self._find_mask(cst, segment_map.get(segment, segment), segment)
+            for segment in dict.fromkeys(feature.segment for feature in self.features)
+        }
         self._static = self._compute_geometry(ct)
-
         self.dose_feature_indices = tuple(
             position
             for position, feature in enumerate(self.features)
             if feature.function in DOSE_FEATURES
         )
+        #: Dose-grid voxel indices per segment, filled by :meth:`set_dose_grid`.
+        self.segment_indices: dict[str, np.ndarray] = {}
 
-        self._indices: dict[str, np.ndarray] = {}
-        self._index_cache: dict[str, tuple[Any, Any]] = {}
-        self._num_voxels: Optional[int] = None
-
-    # -- setup ---------------------------------------------------------------
-
-    def _segments_used(self) -> tuple[str, ...]:
-        seen: dict[str, None] = {}
-        for feature in self.features:
-            seen.setdefault(feature.segment, None)
-        return tuple(seen)
-
-    def _find_mask(self, cst: Any, segment: str) -> sitk.Image:
+    @staticmethod
+    def _find_mask(cst: Any, wanted: str, segment: str) -> sitk.Image:
         """Resolve a feature's segment name to a VOI mask in ``cst``."""
-        wanted = self._segment_map.get(segment, segment)
         for voi in cst.vois:
             if voi.name == wanted:
                 return voi.mask
@@ -264,16 +249,12 @@ class FeatureExtractor:
 
     def _compute_geometry(self, ct: Any) -> dict[int, float]:
         """Evaluate all dose-independent features once, on the CT grid."""
-        # sitk images come out of GetArrayViewFromImage as (z, y, x), so the resolution
-        # vector (x, y, z) has to be reversed to line up with the array axes.
+        # sitk arrays are (z, y, x), so the (x, y, z) resolution has to be reversed.
         resolution = np.asarray(ct.grid.resolution_vector, dtype=np.float64)[::-1]
 
         static = {}
         for position, feature in enumerate(self.features):
             if feature.function in DOSE_FEATURES:
-                continue
-            if feature.name in self._overrides:
-                static[position] = float(self._overrides[feature.name])
                 continue
             if feature.function not in GEOMETRY_FEATURES:
                 raise ValueError(
@@ -292,10 +273,7 @@ class FeatureExtractor:
 
     def set_dose_grid(self, dose_grid: Grid) -> None:
         """Resample the segment masks onto the optimization dose grid."""
-        self._num_voxels = int(dose_grid.num_voxels)
-        self._indices = {}
-        self._index_cache = {}
-
+        self.segment_indices = {}
         for segment, mask in self._masks.items():
             resampled = resample_image(
                 input_image=mask,
@@ -303,58 +281,34 @@ class FeatureExtractor:
                 target_grid=dose_grid,
                 extrapolate=0,
             )
-            # Linear indices in numpy (C) order, matching VOI.indices_numpy and the
-            # dose vector the optimizer hands to objectives.
-            flat = sitk.GetArrayFromImage(resampled).reshape(-1)
-            indices = np.flatnonzero(flat > 0.5)
+            # numpy (C) order, matching the dose vector the optimizer hands to objectives
+            indices = np.flatnonzero(sitk.GetArrayFromImage(resampled).reshape(-1) > 0.5)
             if indices.size == 0:
-                raise ValueError(
-                    f"Segment '{segment}' is empty on the dose grid; the outcome model "
-                    "cannot be evaluated."
-                )
-            self._indices[segment] = indices
+                raise ValueError(f"Segment '{segment}' is empty on the dose grid.")
+            self.segment_indices[segment] = indices
 
-    @property
-    def segment_indices(self) -> dict[str, np.ndarray]:
-        """dict[str, np.ndarray]: Dose-grid voxel indices per segment, after ``set_dose_grid``."""
-        return dict(self._indices)
-
-    # -- evaluation ----------------------------------------------------------
-
-    def _index_on(self, segment: str, values, xp):
-        """Segment indices in the namespace/device of ``values`` (cached)."""
-        device = array_api_compat.device(values)
-        key = (getattr(xp, "__name__", str(xp)), str(device))
-        cached = self._index_cache.get(segment)
-        if cached is None or cached[0] != key:
-            cached = (key, xp.asarray(self._indices[segment], device=device))
-            self._index_cache[segment] = cached
-        return cached[1]
-
-    def _check_ready(self) -> None:
-        if not self._indices:
+    def _segment_dose(self, dose, xp, segment: str):
+        if not self.segment_indices:
             raise RuntimeError("FeatureExtractor has no dose grid; call set_dose_grid() first.")
+        indices = xp.asarray(self.segment_indices[segment], device=array_api_compat.device(dose))
+        return indices, dose[indices]
 
     def compute_values(self, dose, xp) -> np.ndarray:
-        """Return the model input vector of shape ``(1, n_features)``."""
-        self._check_ready()
-
-        values = np.empty((1, len(self.features)), dtype=np.float64)
+        """Return the feature vector of shape ``(n_features,)``."""
+        values = np.empty(len(self.features), dtype=np.float64)
         for position, feature in enumerate(self.features):
             if position in self._static:
-                values[0, position] = self._static[position]
+                values[position] = self._static[position]
                 continue
             value_fn, _ = DOSE_FEATURES[feature.function]
-            segment_dose = dose[self._index_on(feature.segment, dose, xp)]
-            values[0, position] = float(value_fn(segment_dose, xp, feature.argument))
+            _, segment_dose = self._segment_dose(dose, xp, feature.segment)
+            values[position] = float(value_fn(segment_dose, xp, feature.argument))
         return values
 
     def compute_dose_gradients(self, dose, xp):
         """Yield ``(feature_index, voxel_indices, d feature / d dose)`` per dose feature."""
-        self._check_ready()
-
         for position in self.dose_feature_indices:
             feature = self.features[position]
             _, gradient_fn = DOSE_FEATURES[feature.function]
-            indices = self._index_on(feature.segment, dose, xp)
-            yield position, indices, gradient_fn(dose[indices], xp, feature.argument)
+            indices, segment_dose = self._segment_dose(dose, xp, feature.segment)
+            yield position, indices, gradient_fn(segment_dose, xp, feature.argument)

@@ -1,4 +1,4 @@
-"""Tests for the OutcomeSklearn objective and the pyanno4rt outcome-model loader.
+"""Tests for the OutcomeLR objective and the pyanno4rt outcome-model loader.
 
 No repository model is required: the tests build a tiny two-segment geometry and a
 LogisticRegression whose coefficients are set by hand, so every expected value can be
@@ -18,7 +18,7 @@ import SimpleITK as sitk
 from pyRadPlan.ai.modelhub import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 from pyRadPlan import settings
 from pyRadPlan.core import Grid
-from pyRadPlan.optimization.objectives import OutcomeSklearn
+from pyRadPlan.optimization.objectives import OutcomeLR
 from pyRadPlan.optimization.objectives.model._features import (
     DOSE_FEATURES,
     FeatureExtractor,
@@ -102,21 +102,11 @@ def _logistic(coefficients, intercept=0.05):
     return estimator
 
 
-class WrappedEstimator:
-    """Opaque estimator that forces the finite-difference gradient path."""
-
-    def __init__(self, inner):
-        self._inner = inner
-
-    def predict_proba(self, features):
-        return self._inner.predict_proba(features)
-
-
 def _objective(estimator, features, **kwargs):
     kwargs.setdefault("num_of_fractions", 1)
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=features)
-    objective = OutcomeSklearn(model=(estimator, spec), ct=ct, cst=cst, **kwargs)
+    objective = OutcomeLR(model=(estimator, spec), ct=ct, cst=cst, **kwargs)
     objective.preprocess_image_reference_parameters(grid, index_list=None)
     return objective, grid
 
@@ -124,11 +114,6 @@ def _objective(estimator, features, **kwargs):
 def _dose(grid, seed=0):
     rng = np.random.default_rng(seed)
     return rng.uniform(5.0, 60.0, size=grid.num_voxels)
-
-
-class FakePlan:
-    def __init__(self, num_of_fractions):
-        self.num_of_fractions = num_of_fractions
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +183,7 @@ def test_loader_orders_features_by_training_table(tmp_path):
         tmp_path, _logistic([0.1, 0.2, 0.3, 0.4]), JSON_COLUMNS, str(csv_path)
     )
 
-    estimator, spec = load_pyanno4rt_model(config)
+    estimator, spec = load_pyanno4rt_model(config.parent)
 
     assert isinstance(estimator, LogisticRegression)
     assert [feature.name for feature in spec.features] == [
@@ -207,18 +192,15 @@ def test_loader_orders_features_by_training_table(tmp_path):
         "right_dose",
         "right_volume",
     ]
-    assert spec.segments == ("PAROTID_LT", "PAROTID_RT")
     assert spec.transform is True
     assert spec.model_dir == model_dir
 
 
-def test_loader_accepts_a_directory(tmp_path):
-    csv_path = tmp_path / "train.csv"
-    csv_path.write_text("left_dose,left_volume,right_dose,right_volume\n", encoding="utf-8")
-    _write_snapshot(tmp_path, _logistic([0.1, 0.2, 0.3, 0.4]), JSON_COLUMNS, str(csv_path))
+def test_loader_needs_a_snapshot_folder(tmp_path):
+    config, _ = _write_snapshot(tmp_path, _logistic([0.1, 0.2, 0.3, 0.4]), JSON_COLUMNS, None)
 
-    _, spec = load_pyanno4rt_model(tmp_path)
-    assert spec.features[0].name == "left_dose"
+    with pytest.raises(FileNotFoundError, match="input.json"):
+        load_pyanno4rt_model(config)
 
 
 def test_loader_falls_back_to_json_order_with_warning(tmp_path, caplog):
@@ -228,7 +210,7 @@ def test_loader_falls_back_to_json_order_with_warning(tmp_path, caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        _, spec = load_pyanno4rt_model(config)
+        _, spec = load_pyanno4rt_model(config.parent)
 
     assert [feature.name for feature in spec.features] == [name for name, _, _ in JSON_COLUMNS]
     assert "feature order" in caplog.text
@@ -246,7 +228,7 @@ def test_loader_resolves_stale_model_path(tmp_path):
         model_path="../gone/somewhere/lrNTCP",
     )
 
-    _, spec = load_pyanno4rt_model(config)
+    _, spec = load_pyanno4rt_model(config.parent)
     assert spec.model_dir == model_dir
 
 
@@ -254,7 +236,7 @@ def test_loader_rejects_feature_count_mismatch(tmp_path):
     config, _ = _write_snapshot(tmp_path, _logistic([0.1, 0.2]), JSON_COLUMNS, None)
 
     with pytest.raises(ValueError, match="expects 2 features"):
-        load_pyanno4rt_model(config)
+        load_pyanno4rt_model(config.parent)
 
 
 def test_loader_rejects_a_fitted_preprocessor(tmp_path):
@@ -264,7 +246,7 @@ def test_loader_rejects_a_fitted_preprocessor(tmp_path):
     (model_dir / "preprocessor.save").write_bytes(b"")
 
     with pytest.raises(NotImplementedError, match="feature preprocessor"):
-        load_pyanno4rt_model(config)
+        load_pyanno4rt_model(config.parent)
 
 
 def test_loader_requires_component_selection_when_ambiguous(tmp_path):
@@ -279,9 +261,9 @@ def test_loader_requires_component_selection_when_ambiguous(tmp_path):
     config.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="2 outcome components"):
-        load_pyanno4rt_model(config)
+        load_pyanno4rt_model(config.parent)
 
-    _, spec = load_pyanno4rt_model(config, component="lrNTCP")
+    _, spec = load_pyanno4rt_model(config.parent, component="lrNTCP")
     assert spec.label == "lrNTCP"
 
 
@@ -366,11 +348,11 @@ def test_extractor_reports_segment_means_and_geometry():
 
     values = extractor.compute_values(dose, np)
 
-    assert values.shape == (1, 4)
-    assert values[0, 0] == pytest.approx(10.0)  # left mean dose
-    assert values[0, 2] == pytest.approx(20.0)  # right mean dose
+    assert values.shape == (4,)
+    assert values[0] == pytest.approx(10.0)  # left mean dose
+    assert values[2] == pytest.approx(20.0)  # right mean dose
     # Each half holds 3 * 6 * 4 voxels of 2 x 2 x 3 mm.
-    assert values[0, 1] == pytest.approx(72 * 12.0)
+    assert values[1] == pytest.approx(72 * 12.0)
     assert extractor.dose_feature_indices == (0, 2)
 
 
@@ -388,16 +370,7 @@ def test_extractor_maps_segment_names():
     extractor = FeatureExtractor(features, ct, cst, segment_map={"parotid_lt_alias": "PAROTID_LT"})
     extractor.set_dose_grid(grid)
 
-    assert extractor.compute_values(np.full(grid.num_voxels, 7.0), np)[0, 0] == pytest.approx(7.0)
-
-
-def test_extractor_honours_static_feature_overrides():
-    ct, cst, grid = _make_geometry()
-    features = _features()
-    extractor = FeatureExtractor(features, ct, cst, static_features={features[1].name: 1234.0})
-    extractor.set_dose_grid(grid)
-
-    assert extractor.compute_values(np.zeros(grid.num_voxels), np)[0, 1] == pytest.approx(1234.0)
+    assert extractor.compute_values(np.full(grid.num_voxels, 7.0), np)[0] == pytest.approx(7.0)
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +386,7 @@ def test_objective_matches_the_hand_computed_probability():
     probability = objective.compute_objective(dose)
 
     features = objective.extractor.compute_values(dose, np)
-    logit = float((features @ np.asarray(coefficients))[0] + 0.05)
+    logit = float(features @ np.asarray(coefficients) + 0.05)
     assert probability == pytest.approx(1.0 / (1.0 + np.exp(-logit)))
     assert objective.ntcp_history == [pytest.approx(probability)]
     assert objective.report_info()["ntcp_history"] == [pytest.approx(probability)]
@@ -462,18 +435,6 @@ def test_geometry_features_do_not_contribute_to_the_gradient():
     assert gradient_a == pytest.approx(gradient_b)
 
 
-def test_finite_difference_path_matches_the_analytic_one():
-    coefficients = [0.03, -1e-4, 0.06, -1e-4]
-    analytic, grid = _objective(_logistic(coefficients), _features())
-    wrapped, _ = _objective(WrappedEstimator(_logistic(coefficients)), _features())
-    dose = _dose(grid, seed=3)
-
-    assert wrapped.compute_gradient(dose) == pytest.approx(
-        analytic.compute_gradient(dose), rel=1e-5
-    )
-    assert wrapped.compute_objective(dose) == pytest.approx(analytic.compute_objective(dose))
-
-
 def test_monitor_only_reports_but_does_not_steer():
     objective, grid = _objective(
         _logistic([0.03, -1e-4, 0.06, -1e-4]), _features(), monitor_only=True
@@ -483,16 +444,6 @@ def test_monitor_only_reports_but_does_not_steer():
     assert objective.compute_objective(dose) == 0.0
     assert objective.ntcp_history  # still recorded
     assert np.all(objective.compute_gradient(dose) == 0.0)
-
-
-def test_tcp_mode_flips_value_and_gradient():
-    features = _features()
-    ntcp, grid = _objective(_logistic([0.03, -1e-4, 0.06, -1e-4]), features)
-    tcp, _ = _objective(_logistic([0.03, -1e-4, 0.06, -1e-4]), features, mode="TCP")
-    dose = _dose(grid, seed=4)
-
-    assert tcp.compute_objective(dose) == pytest.approx(-ntcp.compute_objective(dose))
-    assert tcp.compute_gradient(dose) == pytest.approx(-ntcp.compute_gradient(dose))
 
 
 def test_transform_switches_to_the_salu_branch():
@@ -521,28 +472,19 @@ def test_transform_switches_to_the_salu_branch():
 
 def test_uninitialised_objective_raises():
     spec = OutcomeModelSpec(label="test", features=_features())
-    objective = OutcomeSklearn(model=(_logistic([0.1] * 4), spec))
+    objective = OutcomeLR(model=(_logistic([0.1] * 4), spec))
 
     with pytest.raises(RuntimeError, match="not initialised"):
         objective.compute_objective(np.zeros(4))
 
 
-def test_mode_defaults_to_the_spec_outcome_type():
-    ct, cst, _ = _make_geometry()
-    spec = OutcomeModelSpec(label="test", outcome_type="TCP", features=_features())
-
-    objective = OutcomeSklearn(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
-    assert objective.mode == "TCP"
-
-
-def test_deepcopy_shares_the_estimator_and_extractor():
+def test_deepcopy_shares_the_extractor():
     """The optimizer deep-copies the whole cst; the runtime handles must survive that."""
     import copy
 
     objective, grid = _objective(_logistic([0.03, -1e-4, 0.06, -1e-4]), _features())
     clone = copy.deepcopy(objective)
 
-    assert clone.estimator is objective.estimator
     assert clone.extractor is objective.extractor
     assert clone.ntcp_history is not objective.ntcp_history
 
@@ -555,7 +497,7 @@ def test_objective_serialises_without_runtime_handles():
     dumped = objective.model_dump()
 
     assert dumped["model"] == "<preloaded>"
-    assert "estimator" not in dumped
+    assert "coef" not in dumped
     assert "extractor" not in dumped
 
 
@@ -563,7 +505,7 @@ def test_loader_needs_no_trust_setting_for_a_direct_path(tmp_path, monkeypatch):
     monkeypatch.setattr(settings.ai, "modelhub_trust_remote_code", False)
     config, _ = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
 
-    estimator, _ = load_pyanno4rt_model(config)
+    estimator, _ = load_pyanno4rt_model(config.parent)
     assert estimator.n_features_in_ == 4
 
 
@@ -573,7 +515,7 @@ def test_loader_reads_the_number_of_fractions(tmp_path):
     raw["configuration"] = {"number_of_fractions": 35}
     config.write_text(json.dumps(raw), encoding="utf-8")
 
-    _, spec = load_pyanno4rt_model(config)
+    _, spec = load_pyanno4rt_model(config.parent)
     assert spec.num_of_fractions == 35
 
 
@@ -581,7 +523,7 @@ def test_loader_accepts_a_sav_predictor(tmp_path):
     config, model_dir = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
     (model_dir / "predictor.save").rename(model_dir / "predictor.save")
 
-    estimator, _ = load_pyanno4rt_model(config)
+    estimator, _ = load_pyanno4rt_model(config.parent)
     assert estimator.n_features_in_ == 4
 
 
@@ -618,15 +560,31 @@ def test_fractionated_gradient_matches_finite_differences():
         assert analytic[index] == pytest.approx(numeric, rel=1e-4, abs=1e-12)
 
 
-def test_fraction_count_comes_from_pln_before_the_spec():
+def test_fraction_count_defaults_to_the_spec():
     ct, cst, _ = _make_geometry()
     spec = OutcomeModelSpec(label="test", features=_features(), num_of_fractions=30)
 
-    from_spec = OutcomeSklearn(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
-    from_pln = OutcomeSklearn(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst, pln=FakePlan(25))
+    from_spec = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
+    explicit = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst, num_of_fractions=25)
 
     assert from_spec.num_of_fractions == 30
-    assert from_pln.num_of_fractions == 25
+    assert explicit.num_of_fractions == 25
+
+
+def test_rejects_models_that_are_not_a_logistic_regression():
+    ct, cst, _ = _make_geometry()
+    spec = OutcomeModelSpec(label="test", features=_features())
+
+    with pytest.raises(TypeError, match="binary LogisticRegression"):
+        OutcomeLR(model=(object(), spec), ct=ct, cst=cst)
+
+
+def test_rejects_tcp_models():
+    ct, cst, _ = _make_geometry()
+    spec = OutcomeModelSpec(label="test", outcome_type="TCP", features=_features())
+
+    with pytest.raises(ValueError, match="minimises NTCP"):
+        OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
 
 
 def test_objective_value_is_an_array_like_the_dose():
@@ -639,3 +597,12 @@ def test_objective_value_is_an_array_like_the_dose():
     assert isinstance(value, np.ndarray)
     assert value.shape == ()
     assert value.dtype == np.float32
+
+
+def test_rejects_a_voi_that_misses_part_of_a_segment():
+    ct, cst, grid = _make_geometry()
+    spec = OutcomeModelSpec(label="test", features=_features())
+    objective = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
+
+    with pytest.raises(ValueError, match="misses"):
+        objective.preprocess_image_reference_parameters(grid, index_list=np.arange(10))

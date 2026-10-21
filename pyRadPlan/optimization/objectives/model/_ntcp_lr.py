@@ -1,233 +1,143 @@
-r"""Feature-based outcome objective (NTCP / TCP) backed by a scikit-learn model.
+r"""Logistic-regression NTCP objective on dose and geometry features.
+
+The model is fully described by its coefficients: ``p = sigmoid(w . x + b)`` with
+``dp/dx = p (1 - p) w``. Only loading depends on where the model comes from; the
+optimization itself needs neither scikit-learn nor torch.
 
 Example
 -------
->>> ntcp_obj = OutcomeSklearn(
-...     priority=1000.0,
-...     model=r"...\\Head-and-neck-linear-lr\\input.json",
-...     mode="NTCP",
+>>> ntcp_obj = OutcomeLR(
+...     priority=100.0,
+...     model=r"...\\Head-and-neck-linear-lr",
 ...     transform=True,
 ...     ct=ct,
 ...     cst=cst,
-...     segment_map={"PAROTID_LT": "Parotid_LT", "PAROTID_RT": "Parotid_RT"},
 ... )
 """
 
 from __future__ import annotations
 
-import copy
-import logging
 from typing import Any, ClassVar, Literal, Optional
 
 import array_api_compat
 import numpy as np
 from pydantic import Field, PrivateAttr, model_validator
-from pydantic_core import PydanticUndefined
 
 from ....ai.modelhub import load_pyanno4rt_model
 from .._objective import Objective
 from ._features import FeatureExtractor
 
-logger = logging.getLogger(__name__)
-
-#: Probabilities are clipped to this margin before the transform / gradient rescale.
 _PROBABILITY_EPS = 1e-6
 
 
-class OutcomeSklearn(Objective):
-    """Feature-based outcome objective (NTCP or TCP).
+def _logistic_coefficients(estimator: Any) -> tuple[np.ndarray, float]:
+    """Return ``(w, b)`` of a binary scikit-learn ``LogisticRegression``."""
+    coef = getattr(estimator, "coef_", None)
+    if type(estimator).__name__ != "LogisticRegression" or coef is None or coef.shape[0] != 1:
+        raise TypeError(
+            f"OutcomeLR needs a binary LogisticRegression, got {type(estimator).__name__}."
+        )
+    return np.asarray(coef[0], dtype=np.float64), float(estimator.intercept_[0])
+
+
+class OutcomeLR(Objective):
+    """Logistic-regression NTCP objective.
+
+    The features see the dose of the VOI the objective is attached to, with 0 Gy
+    everywhere else. Attach it to a HELPER VOI covering every segment the model
+    uses, with ``apply_overlap=None``.
 
     Parameters
     ----------
-    model : str
-        Path to a pyanno4rt ``input.json`` (or its directory), or a preloaded
-        ``(estimator, spec)`` tuple used directly.
+    model : str or tuple
+        pyanno4rt snapshot folder (holding ``input.json``), or a preloaded
+        ``(estimator, spec)`` tuple.
     component : str, optional
-        Name, identifier or label of the outcome component to use. Required
-        only when the configuration holds more than one.
-    mode : ``"NTCP"`` or ``"TCP"``
-        ``"NTCP"`` minimises the predicted probability, ``"TCP"`` maximises it.
+        Outcome component to use when the configuration holds more than one.
     monitor_only : bool
         When *True* the objective returns 0 (and a zero gradient) to the
         optimizer but still records the predicted probability.
     transform : bool
-        Apply pyanno4rt's SALU transform to the objective value: above
-        ``p = 0.5`` the probability is replaced by ``0.25 * logit(p) + 0.5``,
-        which keeps the gradient from vanishing once the probability saturates.
+        Apply pyanno4rt's SALU transform: above ``p = 0.5`` the value becomes
+        ``0.25 * logit(p) + 0.5``, which keeps the gradient from vanishing.
     segment_map : dict[str, str], optional
-        Mapping from the model's segment names to VOI names in the structure
-        set. Names are otherwise matched case-insensitively.
-    static_features : dict[str, float], optional
-        Overrides for the dose-independent (geometry) features, keyed by
-        feature name.
-    fd_step : float
-        Relative step of the finite-difference fallback used for estimators
-        without an analytic feature gradient.
+        Mapping from the model's segment names to VOI names. Names are otherwise
+        matched case-insensitively.
     num_of_fractions : int, optional
-        The optimizer works on dose per fraction, but the model expects
-        total-course dose, so the dose is multiplied by this number first.
-        Taken from ``pln`` when given, otherwise from the pyanno4rt configuration.
+        The model expects total-course dose, so the per-fraction dose of the
+        optimizer is multiplied by this. Defaults to the pyanno4rt configuration.
     """
 
-    # -- Objective metadata --
-    name: Literal["Outcome Sklearn"] = "Outcome Sklearn"
+    name: Literal["Outcome LR"] = "Outcome LR"
     has_hessian: ClassVar[bool] = False
 
-    # -- User-facing fields --
-    model: str = Field(description="Path to a pyanno4rt input.json, or preloaded objects.")
+    model: str = Field(description="pyanno4rt snapshot folder, or preloaded objects.")
     component: Optional[str] = Field(default=None)
-    mode: Literal["NTCP", "TCP"] = Field(default="NTCP")
     monitor_only: bool = Field(default=False)
     transform: bool = Field(default=False)
     segment_map: Optional[dict[str, str]] = Field(default=None)
-    static_features: Optional[dict[str, float]] = Field(default=None)
-    fd_step: float = Field(default=1e-3, gt=0.0)
     num_of_fractions: Optional[int] = Field(default=None, gt=0)
-    ntcp_history: list[float] = Field(default_factory=list)
+    ntcp_history: list[float] = Field(default_factory=list, exclude=True)
 
-    # -- Internal state (excluded from serialisation) --
-    estimator: Any = Field(default=None, exclude=True)
-    spec: Any = Field(default=None, exclude=True)
+    coef: Any = Field(default=None, exclude=True)
+    intercept: float = Field(default=0.0, exclude=True)
     extractor: Any = Field(default=None, exclude=True)
 
-    # Mapping of the (VOI-restricted) optimization vector onto the full dose grid.
+    # VOI voxel indices on the dose grid; None when the VOI covers the whole grid.
     _dose_index: Any = PrivateAttr(default=None)
     _dose_n: Optional[int] = PrivateAttr(default=None)
-    _dose_index_xp: Any = PrivateAttr(default=None)
-    _dose_index_key: Any = PrivateAttr(default=None)
 
     model_config = {"arbitrary_types_allowed": True}
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
 
     @model_validator(mode="before")
     @classmethod
     def _init(cls, data: Any) -> Any:
-        """Load the estimator and configure the feature extractor with CT / structures."""
-        if not isinstance(data, dict):
-            return data
-
-        # Already initialised (copy / re-validation).
-        if data.get("extractor") is not None:
+        """Read the coefficients and set up the feature extractor."""
+        if not isinstance(data, dict) or data.get("extractor") is not None:
             return data
 
         ct = data.pop("ct", None)
         cst = data.pop("cst", None)
-        data.pop("stf", None)  # accepted for convenience, not used
-        pln = data.pop("pln", None)  # the dose grid is resolved via the optimizer hook
-        if pln is not None and data.get("num_of_fractions") is None:
-            data["num_of_fractions"] = pln.num_of_fractions
-
-        spec_input = data.get("model")
-        if not isinstance(spec_input, str):
-            # Preloaded objects -- keep the serialised field a plain string. This has to
-            # happen even without planning data, or validation trips over the tuple.
+        model = data.get("model")
+        if not isinstance(model, str):
             data["model"] = "<preloaded>"
-
-        # Without planning data the extractor cannot be built (e.g. on deserialisation).
-        # Leave the objective uninitialised; _check_ready() guards its use.
         if ct is None or cst is None:
             return data
 
-        estimator, spec = cls._resolve_model(spec_input, data.get("component"))
+        if isinstance(model, str):
+            estimator, spec = load_pyanno4rt_model(model, component=data.get("component"))
+        else:
+            estimator, spec = model
+        if spec.outcome_type != "NTCP":
+            raise ValueError(f"OutcomeLR minimises NTCP, got a {spec.outcome_type} model.")
 
-        data.setdefault("mode", spec.outcome_type)
-        if data.get("num_of_fractions") is None:
-            data["num_of_fractions"] = getattr(spec, "num_of_fractions", 1)
-        data["estimator"] = estimator
-        data["spec"] = spec
+        data["coef"], data["intercept"] = _logistic_coefficients(estimator)
+        data.setdefault("num_of_fractions", spec.num_of_fractions)
         data["extractor"] = FeatureExtractor(
-            spec.features,
-            ct,
-            cst,
-            segment_map=data.get("segment_map"),
-            static_features=data.get("static_features"),
+            spec.features, ct, cst, segment_map=data.get("segment_map")
         )
         return data
 
-    @staticmethod
-    def _resolve_model(spec: Any, component: Optional[str]) -> tuple[Any, Any]:
-        """Resolve ``model`` into an ``(estimator, spec)`` pair."""
-        if isinstance(spec, (tuple, list)) and len(spec) == 2:
-            return spec[0], spec[1]
-        if isinstance(spec, str):
-            return load_pyanno4rt_model(spec, component=component)
-        raise TypeError(
-            "OutcomeSklearn 'model' must be a path to a pyanno4rt input.json or a preloaded "
-            "(estimator, spec) tuple."
-        )
-
     def __deepcopy__(self, memo=None):
-        """Deep-copy without duplicating the estimator and the feature extractor.
+        """Share the extractor: it holds the resampled masks and never changes."""
+        return self.model_copy(update={"ntcp_history": list(self.ntcp_history)})
 
-        The optimizer deep-copies the whole ``cst`` (e.g. in
-        ``apply_overlap_priorities``). Estimator and extractor are read-only
-        runtime handles holding the resampled masks, so the copy shares them;
-        transient index caches are reset.
-        """
-        if memo is None:
-            memo = {}
-        new = self.__class__.__new__(self.__class__)
-        memo[id(self)] = new
-
-        shared = {"estimator", "spec", "extractor"}
-        new_dict = {
-            k: (v if k in shared else copy.deepcopy(v, memo)) for k, v in self.__dict__.items()
-        }
-        object.__setattr__(new, "__dict__", new_dict)
-        object.__setattr__(new, "__pydantic_fields_set__", set(self.__pydantic_fields_set__))
-        object.__setattr__(
-            new,
-            "__pydantic_extra__",
-            None
-            if self.__pydantic_extra__ is None
-            else copy.deepcopy(self.__pydantic_extra__, memo),
-        )
-        if self.__pydantic_private__ is None:
-            object.__setattr__(new, "__pydantic_private__", None)
-        else:
-            reset = {"_dose_index_xp", "_dose_index_key"}
-            private = {
-                k: (None if k in reset else copy.deepcopy(v, memo))
-                for k, v in self.__pydantic_private__.items()
-                if v is not PydanticUndefined
-            }
-            object.__setattr__(new, "__pydantic_private__", private)
-        return new
-
-    # ------------------------------------------------------------------
-    # Objective interface
-    # ------------------------------------------------------------------
+    @property
+    def feature_names(self) -> list[str]:
+        """list[str]: Model inputs, in the order of the coefficients."""
+        self._check_ready()
+        return [feature.name for feature in self.extractor.features]
 
     def preprocess_image_reference_parameters(self, target_grid, index_list=None) -> None:
-        """Wire the optimization dose grid into the feature extractor.
-
-        Called once by the planning problem for every objective with
-        ``target_grid=dij.dose_grid``; this is where the objective learns the
-        grid its dose vector lives on.
-        """
+        """Resample the segments onto the dose grid and check the VOI covers them."""
         super().preprocess_image_reference_parameters(target_grid, index_list)
-        if self.extractor is not None:
-            self.extractor.set_dose_grid(target_grid)
-            self._dose_n = int(target_grid.num_voxels)
-            # The optimizer hands us only the voxels inside this objective's VOI
-            # (index_list); remember them so we can scatter onto the full dose grid
-            # the features are computed on, and gather the gradient back.
-            self._dose_index = None if index_list is None else np.asarray(index_list)
-            self._dose_index_xp = None
-            self._dose_index_key = None
-            self._check_segment_coverage()
-
-    def _check_segment_coverage(self) -> None:
-        """Reject a VOI that does not cover every segment the features read.
-
-        Dose outside the objective's VOI is zero-filled by :meth:`_to_full_grid`, so an
-        uncovered segment would contribute a zero dose feature instead of failing.
-        """
+        if self.extractor is None:
+            return
+        self.extractor.set_dose_grid(target_grid)
+        self._dose_n = int(target_grid.num_voxels)
+        self._dose_index = None if index_list is None else np.asarray(index_list)
         if self._dose_index is None:
-            return  # objective sees the full grid, which covers every segment
+            return
 
         covered = np.zeros(self._dose_n, dtype=bool)
         covered[self._dose_index] = True
@@ -235,196 +145,73 @@ class OutcomeSklearn(Objective):
             missing = int(np.count_nonzero(~covered[indices]))
             if missing:
                 raise ValueError(
-                    f"The VOI this objective is attached to misses {missing} of "
-                    f"{indices.size} dose-grid voxels of segment '{segment}'. Dose "
-                    "outside the VOI is treated as zero, so that segment's features "
-                    "would be silently wrong. Attach the objective to a VOI covering "
-                    "every segment the model uses (e.g. a helper VOI spanning their "
-                    "union, with apply_overlap=None)."
+                    f"The VOI of this objective misses {missing} of {indices.size} voxels of "
+                    f"segment '{segment}', whose dose would be taken as 0. Attach it to a "
+                    "helper VOI covering all segments, with apply_overlap=None."
                 )
 
     def compute_objective(self, dose_values):
-        """Compute the outcome probability (0.0 when *monitor_only*).
-
-        Returns a 0-d array on the same backend and device as ``dose_values``,
-        because the optimizer stacks the values of all objectives.
-        """
+        """Compute the (transformed) NTCP; 0 when *monitor_only*."""
         self._check_ready()
-
         xp = array_api_compat.array_namespace(dose_values)
-        probability = self._predict(self._total_dose(self._to_full_grid(dose_values, xp)), xp)
+        probability = self._probability(self._features(dose_values, xp))
         self.ntcp_history.append(probability)
 
-        if self.monitor_only:
-            value = 0.0
-        else:
-            value = self._transform_value(probability)
-            if self.mode == "TCP":
-                value = -value
+        value = 0.0 if self.monitor_only else self._transform(probability)[0]
         return xp.asarray(
             value, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
         )
 
     def compute_gradient(self, dose_values):
-        """Compute the gradient of the outcome probability w.r.t. dose.
-
-        Returns a 1-D array matching ``dose_values`` in the same array namespace
-        and device as the input.
-        """
+        """Compute the gradient w.r.t. the dose per fraction."""
         self._check_ready()
-
         xp = array_api_compat.array_namespace(dose_values)
-        n = array_api_compat.size(dose_values)
-
         if self.monitor_only:
-            return xp.zeros(n, dtype=dose_values.dtype)
+            return xp.zeros_like(dose_values)
 
-        dose = self._total_dose(self._to_full_grid(dose_values, xp))
-        features = self.extractor.compute_values(dose, xp)
-        probability = self._clip(self._predict_from_features(features))
-        # d total_dose / d dose = num_of_fractions
-        scale = (
-            self._transform_scale(probability)
-            * self._feature_gradient(features, probability)
-            * self._fractions
-        )
+        dose = self._full_total_dose(dose_values, xp)
+        probability = self._probability(self.extractor.compute_values(dose, xp))
+        slope = self._transform(probability)[1]
+        # d value/dp * dp/dx * d total dose / d dose per fraction
+        scale = slope * probability * (1.0 - probability) * self.coef * self.num_of_fractions
 
-        grad = xp.zeros(
-            array_api_compat.size(dose),
-            dtype=dose_values.dtype,
-            device=array_api_compat.device(dose_values),
-        )
-        for position, indices, feature_gradient in self.extractor.compute_dose_gradients(dose, xp):
-            grad[indices] += float(scale[position]) * feature_gradient
-
-        if self.mode == "TCP":
-            grad = -grad
-
-        return self._from_full_grid(grad, dose_values, xp)
+        grad = xp.zeros_like(dose)
+        for position, indices, feature_grad in self.extractor.compute_dose_gradients(dose, xp):
+            grad[indices] += float(scale[position]) * feature_grad
+        if self._dose_index is None:
+            return grad
+        return grad[xp.asarray(self._dose_index, device=array_api_compat.device(dose_values))]
 
     def report_info(self) -> dict:
         """Return the NTCP history collected during optimization."""
-        if self.ntcp_history:
-            return {"ntcp_history": list(self.ntcp_history)}
-        return {}
+        return {"ntcp_history": list(self.ntcp_history)} if self.ntcp_history else {}
 
     def reset_history(self) -> None:
-        """Clear the recorded probability history."""
+        """Clear the recorded NTCP history."""
         self.ntcp_history.clear()
 
-    def get_ntcp_history(self) -> list[float]:
-        """Return a copy of the probability history."""
-        return list(self.ntcp_history)
-
-    @property
-    def feature_names(self) -> list[str]:
-        """list[str]: Names of the model inputs, in the order the estimator expects them."""
-        self._check_ready()
-        return [feature.name for feature in self.spec.features]
-
-    # ------------------------------------------------------------------
-    # Model evaluation
-    # ------------------------------------------------------------------
-
-    def _predict(self, dose, xp) -> float:
-        """Evaluate the model on a full-grid dose vector."""
-        return self._clip(self._predict_from_features(self.extractor.compute_values(dose, xp)))
-
-    def _predict_from_features(self, features: np.ndarray) -> float:
-        """Predict the outcome probability from a ``(1, n_features)`` input vector."""
-        if hasattr(self.estimator, "predict_proba"):
-            probabilities = self.estimator.predict_proba(features)
-            return float(probabilities[0, -1])
-        return float(np.ravel(self.estimator.predict(features))[0])
-
-    @staticmethod
-    def _clip(probability: float) -> float:
-        return min(max(probability, _PROBABILITY_EPS), 1.0 - _PROBABILITY_EPS)
-
-    def _feature_gradient(self, features: np.ndarray, probability: float) -> np.ndarray:
-        """Return ``dp / dfeature`` for all features."""
-        coefficients = getattr(self.estimator, "coef_", None)
-        if (
-            type(self.estimator).__name__ == "LogisticRegression"
-            and coefficients is not None
-            and coefficients.shape[0] == 1
-        ):
-            return probability * (1.0 - probability) * coefficients[0]
-
-        # Generic estimators: central differences, but only along the features that
-        # actually move with the dose (typically two out of eight).
-        gradient = np.zeros(features.shape[1], dtype=np.float64)
-        for position in self.extractor.dose_feature_indices:
-            step = self.fd_step * max(abs(float(features[0, position])), 1.0)
-            forward = features.copy()
-            forward[0, position] += step
-            backward = features.copy()
-            backward[0, position] -= step
-            gradient[position] = (
-                self._predict_from_features(forward) - self._predict_from_features(backward)
-            ) / (2.0 * step)
-        return gradient
-
-    def _transform_value(self, probability: float) -> float:
-        """Map the probability to the objective value (see ``transform``)."""
-        if not self.transform or probability <= 0.5:
-            return probability
-        clipped = self._clip(probability)
-        return 0.25 * float(np.log(clipped / (1.0 - clipped))) + 0.5
-
-    def _transform_scale(self, probability: float) -> float:
-        """Differentiate :meth:`_transform_value` w.r.t. the probability."""
-        if not self.transform or probability <= 0.5:
-            return 1.0
-        return 0.25 / (probability - probability**2)
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _check_ready(self) -> None:
-        if self.extractor is None or self.estimator is None:
-            raise RuntimeError(
-                "OutcomeSklearn not initialised -- provide ct and cst at construction."
-            )
+        if self.extractor is None:
+            raise RuntimeError("OutcomeLR not initialised -- provide ct and cst at construction.")
 
-    @property
-    def _fractions(self) -> int:
-        return self.num_of_fractions or 1
+    def _full_total_dose(self, dose_values, xp):
+        """Scatter the VOI dose onto the full grid (0 elsewhere) and scale to total dose."""
+        if self._dose_index is not None:
+            device = array_api_compat.device(dose_values)
+            full = xp.zeros(self._dose_n, dtype=dose_values.dtype, device=device)
+            full[xp.asarray(self._dose_index, device=device)] = dose_values
+            dose_values = full
+        return dose_values * self.num_of_fractions
 
-    def _total_dose(self, dose):
-        """Turn dose per fraction into total-course dose."""
-        return dose if self._fractions == 1 else dose * self._fractions
+    def _features(self, dose_values, xp) -> np.ndarray:
+        return self.extractor.compute_values(self._full_total_dose(dose_values, xp), xp)
 
-    def _needs_scatter(self, dose_values) -> bool:
-        """Whether ``dose_values`` is a VOI subset that must be scattered to the full grid."""
-        return (
-            self._dose_index is not None
-            and self._dose_n is not None
-            and array_api_compat.size(dose_values) != self._dose_n
-        )
+    def _probability(self, features: np.ndarray) -> float:
+        p = 1.0 / (1.0 + np.exp(-(float(features @ self.coef) + self.intercept)))
+        return min(max(p, _PROBABILITY_EPS), 1.0 - _PROBABILITY_EPS)
 
-    def _index_on(self, dose_values, xp):
-        """VOI indices in the namespace/device of ``dose_values`` (cached)."""
-        device = array_api_compat.device(dose_values)
-        key = (getattr(xp, "__name__", str(xp)), str(device))
-        if self._dose_index_key != key:
-            self._dose_index_xp = xp.asarray(self._dose_index, device=device)
-            self._dose_index_key = key
-        return self._dose_index_xp
-
-    def _to_full_grid(self, dose_values, xp):
-        """Scatter VOI-restricted dose onto the full dose grid (zeros elsewhere)."""
-        if not self._needs_scatter(dose_values):
-            return dose_values
-        full = xp.zeros(
-            self._dose_n, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
-        )
-        full[self._index_on(dose_values, xp)] = dose_values
-        return full
-
-    def _from_full_grid(self, grad_full, dose_values, xp):
-        """Gather a full-grid gradient back to the objective's VOI voxels."""
-        if not self._needs_scatter(dose_values):
-            return grad_full
-        return grad_full[self._index_on(dose_values, xp)]
+    def _transform(self, p: float) -> tuple[float, float]:
+        """Return the objective value and its derivative w.r.t. ``p``."""
+        if not self.transform or p <= 0.5:
+            return p, 1.0
+        return 0.25 * float(np.log(p / (1.0 - p))) + 0.5, 0.25 / (p - p**2)

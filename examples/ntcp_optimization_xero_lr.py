@@ -4,9 +4,8 @@
 # This example steers a photon plan with a logistic-regression NTCP model trained in
 # pyanno4rt. Unlike the CNN in `ntcp_optimization_xero.py`, the model does not see dose
 # volumes: it consumes eight scalar features -- the mean dose in each parotid plus six
-# dose-independent geometry descriptors -- that the optimization chain computes itself.
-# The model therefore stays a plain scikit-learn estimator and its dose gradient is
-# analytic.
+# dose-independent geometry descriptors. Only the coefficients of the regression are
+# read from the model, so value and gradient are analytic.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
@@ -25,6 +24,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan import (
+    PhotonPlan,
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
@@ -34,11 +34,10 @@ from pyRadPlan.cst import HelperVOI
 from pyRadPlan.gui.apps import launch_viewer
 from pyRadPlan.io import load_patient
 from pyRadPlan.optimization.objectives import (
-    OutcomeSklearn,
+    OutcomeLR,
     SquaredDeviation,
     SquaredOverdosing,
 )
-from pyRadPlan.plan._plans import PhotonPlan
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 settings.xp.prefer_gpu = True
@@ -46,9 +45,12 @@ settings.xp.preferred_cpu_array_backend = "numpy"
 settings.xp.preferred_gpu_array_backend = "cupy"
 logging.basicConfig(level=logging.INFO)
 
+# The matRad head-and-neck phantom and the pyanno4rt snapshot of the trained model.
+HN_PHANTOM = r"path/to/matRad/phantoms/HEAD_AND_NECK.mat"
+PYANNO4RT_MODEL = r"path/to/pyanno4rt/Head-and-neck-linear-lr"
+
 # %%
-# Load the head-and-neck patient the model was configured for.
-ct, cst = load_patient(r"path_to_hn")
+ct, cst = load_patient(HN_PHANTOM)
 
 cst.vois[0] = cst.vois[12]  # PAROTID_LT
 cst.vois[1] = cst.vois[13]  # PAROTID_RT
@@ -77,30 +79,25 @@ pln.prop_stf = {
 stf = generate_stf(ct, cst, pln)
 
 # %% [markdown]
-# Configure the NTCP objective. `model` points straight at the pyanno4rt `input.json`:
-# it carries the feature definitions, the model label and the path to `predictor.save`.
-# `segment_map` translates the model's segment names to the VOI names in this structure
-# set (names are otherwise matched case-insensitively).
+# Configure the NTCP objective. `model` points at the pyanno4rt snapshot folder: its
+# `input.json` holds the feature definitions, `lrNTCP/` the pickled regression. Segment
+# names are matched to the VOIs case-insensitively (use `segment_map` if they differ).
 #
 # The model was trained on total-course dose, so the objective multiplies the
-# per-fraction dose of the optimizer by the number of fractions taken from `pln`.
+# per-fraction dose of the optimizer by `num_of_fractions`.
 #
 # `transform=True` reproduces pyanno4rt's SALU transform, which keeps the gradient from
-# vanishing once the predicted probability saturates. Note that `priority` is *not*
-# directly comparable to pyanno4rt's `weight`: pyanno4rt leaves the fraction factor out
-# of the gradient, this objective includes it.
+# vanishing once the predicted probability saturates. `priority` is *not* directly
+# comparable to pyanno4rt's `weight`: pyanno4rt leaves the fraction factor out of the
+# gradient, this objective includes it.
 # %%
-PYANNO4RT_CONFIG = r"path_to_input.json"
-
-ntcp_obj = OutcomeSklearn(
+ntcp_obj = OutcomeLR(
     priority=100.0,
-    model=PYANNO4RT_CONFIG,
-    mode="NTCP",
+    model=PYANNO4RT_MODEL,
     transform=True,
+    num_of_fractions=pln.num_of_fractions,
     ct=ct,  # geometry features are evaluated on the CT grid
-    pln=pln,  # provides the number of fractions
     cst=cst,  # provides the segment masks
-    segment_map={"PAROTID_LT": "Parotid_LT", "PAROTID_RT": "Parotid_RT"},
 )
 print("Model features:", ntcp_obj.feature_names)
 

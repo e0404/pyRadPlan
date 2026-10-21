@@ -69,8 +69,6 @@ class OutcomeModelSpec:
         Model inputs, in the order the estimator expects them.
     transform : bool
         Whether pyanno4rt embedded the model with its SALU objective transform.
-    weight : float
-        Component weight used in the pyanno4rt plan (informational).
     model_dir : Path or None
         Directory the predictor was loaded from.
     num_of_fractions : int
@@ -82,17 +80,8 @@ class OutcomeModelSpec:
     outcome_type: str = "NTCP"
     features: list[OutcomeFeature] = field(default_factory=list)
     transform: bool = False
-    weight: float = 1.0
     model_dir: Optional[Path] = None
     num_of_fractions: int = 30
-
-    @property
-    def segments(self) -> tuple[str, ...]:
-        """tuple[str, ...]: Segments referenced by the features, first use first."""
-        seen: dict[str, None] = {}
-        for feature in self.features:
-            seen.setdefault(feature.segment, None)
-        return tuple(seen)
 
 
 def _outcome_components(config: dict) -> list[tuple[str, dict]]:
@@ -200,34 +189,25 @@ def _order_features(
     return ordered
 
 
-def _resolve_model_dir(
-    model_cfg: dict, config_path: Path, model_dir: Optional[Union[str, Path]]
-) -> Path:
-    """Locate the directory holding the pickled predictor."""
-    if model_dir is not None:
-        path = Path(model_dir)
-        if not path.is_dir():
-            raise FileNotFoundError(f"Model directory '{path}' does not exist.")
-        return path
-
+def _resolve_model_dir(model_cfg: dict, snapshot_dir: Path) -> Path:
+    """Locate the directory holding the pickled predictor inside the snapshot."""
     label = model_cfg.get("label")
     raw = model_cfg.get("model_path")
 
-    # 'model_path' is stored relative to the working directory pyanno4rt ran in, which is
-    # usually gone by now; the snapshot layout '<config dir>/<label>' is the reliable fallback.
+    # 'model_path' is relative to the working directory pyanno4rt ran in, so only its last
+    # part is reliable; the snapshot stores the predictor in '<snapshot>/<label>'.
     candidates = []
     if raw:
-        candidates.extend((Path(raw), config_path.parent / Path(raw).name))
+        candidates.append(snapshot_dir / Path(raw).name)
     if label:
-        candidates.append(config_path.parent / label)
+        candidates.append(snapshot_dir / label)
 
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
 
     raise FileNotFoundError(
-        f"Could not locate the model directory for '{label}'. Tried {[str(c) for c in candidates]}"
-        "; pass 'model_dir' explicitly."
+        f"Could not locate the model directory for '{label}'. Tried {[str(c) for c in candidates]}."
     )
 
 
@@ -259,23 +239,19 @@ def _load_predictor(path: Path) -> Any:
 
 
 def load_pyanno4rt_model(
-    config: Union[str, Path],
+    snapshot_dir: Union[str, Path],
     component: Optional[str] = None,
-    model_dir: Optional[Union[str, Path]] = None,
 ) -> tuple[Any, OutcomeModelSpec]:
-    """Load a pyanno4rt outcome model from its ``input.json``.
+    """Load a pyanno4rt outcome model from its snapshot folder.
 
     Parameters
     ----------
-    config : str or Path
-        Path to the pyanno4rt ``input.json`` (or the directory containing it).
+    snapshot_dir : str or Path
+        pyanno4rt snapshot folder, holding ``input.json`` and the model's
+        ``<label>/predictor.*``.
     component : str, optional
         Name, identifier or model label of the outcome component to load.
         Required only when the configuration holds more than one.
-    model_dir : str or Path, optional
-        Directory holding the ``predictor`` file. Overrides the path recorded in the
-        configuration, which is relative to pyanno4rt's original working
-        directory and therefore often stale.
 
     Returns
     -------
@@ -294,17 +270,16 @@ def load_pyanno4rt_model(
     is given directly by the caller, so it is trusted like any local file; only
     load models you trust.
     """
-    config_path = Path(config)
-    if config_path.is_dir():
-        config_path = config_path / "input.json"
+    snapshot_dir = Path(snapshot_dir)
+    config_path = snapshot_dir / "input.json"
     if not config_path.is_file():
-        raise FileNotFoundError(f"pyanno4rt configuration '{config_path}' not found.")
+        raise FileNotFoundError(f"No pyanno4rt configuration '{config_path}' found.")
 
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     name, params = _select_component(cfg, component)
     model_cfg = params["model"]
 
-    resolved_dir = _resolve_model_dir(model_cfg, config_path, model_dir)
+    resolved_dir = _resolve_model_dir(model_cfg, snapshot_dir)
     preprocessors = [
         resolved_dir / f"preprocessor{suffix}"
         for suffix in _PREDICTOR_SUFFIXES
@@ -335,7 +310,6 @@ def load_pyanno4rt_model(
         outcome_type=params.get("outcome_type", "NTCP"),
         features=features,
         transform=bool(params.get("transform", False)),
-        weight=float(params.get("weight", 1.0)),
         model_dir=resolved_dir,
         num_of_fractions=int(cfg.get("configuration", {}).get("number_of_fractions", 30)),
     )
