@@ -1,7 +1,7 @@
 """SciPy solver Class."""
 
 import logging
-from typing import Callable, Union
+from typing import Any, Callable, Literal, Union
 
 import array_api_compat
 import numpy as np
@@ -14,6 +14,12 @@ from ._base_solvers import NonLinearOptimizer
 from ...core import xp_utils
 
 logger = logging.getLogger(__name__)
+
+#: :func:`scipy.optimize.minimize` methods that honour variable bounds, which fluence
+#: optimization relies on. Any other method name SciPy knows is accepted as well.
+ScipyMethod = Literal[
+    "L-BFGS-B", "TNC", "SLSQP", "trust-constr", "Powell", "Nelder-Mead", "COBYLA", "COBYQA"
+]
 
 
 class OptimizerSciPy(NonLinearOptimizer):
@@ -48,8 +54,8 @@ class OptimizerSciPy(NonLinearOptimizer):
 
     allow_keyboard_cancel = True
 
-    options: dict[str]
-    method: Union[str, Callable]
+    options: dict[str, Any]
+    method: Union[ScipyMethod, str, Callable]
     display: bool
 
     #: Default objective tolerance. Deliberately not the base class' 1e-6: it is the tolerance

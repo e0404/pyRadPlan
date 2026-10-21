@@ -366,6 +366,6 @@ class ScenarioModel(PyRadPlanBaseModel):
             The serialized model.
         """
 
-        output = wrap(self, info)
+        output = wrap(self)
         output["model"] = self.short_name
         return output

@@ -2,7 +2,7 @@
 
 The photon engine computes physical dose only, but it must still record which biological
 model produced the dij so that a constant RBE keeps working through the common result
-assembly, and it must say so when a model declares outputs it cannot compute.
+assembly. A model declaring outputs it cannot compute is unavailable with this engine.
 """
 
 import logging
@@ -12,7 +12,7 @@ import pytest
 import SimpleITK as sitk
 
 from pyRadPlan import calc_dose_influence
-from pyRadPlan.bio_models import BioModelEvaluator, ConstantRBEModel, EmptyModel, LQModel
+from pyRadPlan.biology.models import BioModelEvaluator, ConstantRBEModel, EmptyModel, LQModel
 from pyRadPlan.quantities._rbe_x_dose import RBExDose
 
 
@@ -54,17 +54,17 @@ class _PhotonLQModel(LQModel):
         return BioModelEvaluator(self)
 
 
-def test_photon_engine_reports_model_outputs_it_cannot_compute(test_data_photons, caplog):
-    """An unsupported model is not silently dropped: it is stored and reported."""
+def test_photon_engine_drops_a_model_it_cannot_compute(test_data_photons, caplog):
+    """A model with outputs the engine cannot compute falls back to physical dose, reported."""
     pln, ct, cst, stf, _dij, _result = test_data_photons
     pln.bio_model = _PhotonLQModel()
 
     with caplog.at_level(logging.WARNING):
         dij_py = calc_dose_influence(ct, cst, stf, pln)
 
-    assert "cannot compute the biological quantities" in caplog.text
-    assert dij_py.bio_model == _PhotonLQModel()
+    assert "SVDPB does not compute biological influence matrices" in caplog.text
+    assert dij_py.bio_model is None
     assert dij_py.alpha_dose is None and dij_py.sqrt_beta_dose is None
 
-    with pytest.raises(ValueError, match="needs alpha_dose / sqrt_beta_dose"):
+    with pytest.raises(ValueError):
         RBExDose(dij_py)

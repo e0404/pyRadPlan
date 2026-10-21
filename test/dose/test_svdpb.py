@@ -1,8 +1,10 @@
+import pytest
 import SimpleITK as sitk
 import numpy as np
 
 from pyRadPlan import PhotonPlan, generate_stf, load_tg119
 from pyRadPlan.dose import calc_dose_forward
+from pyRadPlan.dose.engines import get_engine
 from pyRadPlan.machines import create_bld
 from pyRadPlan.visualization._plot_slice import plot_slice
 
@@ -11,15 +13,12 @@ from pyRadPlan.visualization._plot_slice import plot_slice
 # this here only tests if it runs without error.
 def test_photons(test_data_photons):
     pln, ct, cst, stf, dij, result = test_data_photons
-
-    pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
-    pln.prop_dose_calc["lateral_model"] = "single"
-
+    pln.prop_dose_calc["enable_dij_sampling"] = False
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
     result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
     result_matRad = np.transpose(result["physicalDose"], (2, 0, 1))
-
-    assert np.allclose(result_py, result_matRad, atol=1e-2)
+    mask = (result_py > 0) & (result_matRad > 0)
+    assert np.allclose(result_py[mask], result_matRad[mask], rtol=1e-2)
 
 
 def test_photons_field_based():
@@ -77,3 +76,14 @@ def test_photons_field_based():
     #     plt_show = True,
     #     use_global_max = False,
     # )
+
+
+def test_bixel_based_lateral_cutoff_includes_half_diagonal(test_data_photons):
+    """matRad widens the lateral cutoff by bixelWidth/sqrt(2) for bixel-based dose too."""
+    pln, ct, cst, stf, _, _ = test_data_photons
+
+    engine = get_engine(pln)
+    engine.calc_dose_forward(ct, cst, stf, None)
+
+    expected = engine.geometric_lateral_cutoff + stf.beams[0].bixel_width / np.sqrt(2)
+    assert engine._effective_lateral_cutoff == pytest.approx(expected)

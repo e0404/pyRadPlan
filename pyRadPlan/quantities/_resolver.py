@@ -86,6 +86,25 @@ class QuantityResolver:
         """Resolve every identifier and return them in input order."""
         return [self.get(i) for i in identifiers]
 
+    def reachable(
+        self, roots: Iterable[FluenceDependentQuantity]
+    ) -> list[FluenceDependentQuantity]:
+        """
+        Return the instances ``roots`` depend on (including themselves), in resolution order.
+
+        A quantity may drop a resolved optional dependency once it has chosen its computation
+        path (e.g. the ``effect`` of a constant-RBE ``rbe_x_dose``). Such instances remain in
+        :attr:`instances`, but are not reachable from any root and need not be evaluated.
+        """
+        seen: set[int] = set()
+        stack = list(roots)
+        while stack:
+            quantity = stack.pop()
+            if id(quantity) not in seen:
+                seen.add(id(quantity))
+                stack.extend(quantity.dependencies.values())
+        return [q for q in self._instances.values() if id(q) in seen]
+
     def try_get(self, identifier: str) -> Optional[FluenceDependentQuantity]:
         """Resolve ``identifier`` or return ``None`` if it cannot be computed for this dij."""
         try:
@@ -97,11 +116,11 @@ class QuantityResolver:
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:
             return "direct"
-        if cls.required_dependencies or cls.optional_dependencies:
+        if cls.has_indirect_path(self._dij):
             return "indirect"
         raise ValueError(
             f"Cannot resolve quantity {identifier!r}: dij has no attribute "
-            f"{identifier!r} and no dependencies are declared."
+            f"{identifier!r} and no usable dependency path."
         )
 
     def _resolve_dependencies(

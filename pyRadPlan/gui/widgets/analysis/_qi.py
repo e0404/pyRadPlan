@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -45,17 +45,26 @@ class QITableWidget(QWidget):
     derived from the metric ids actually present in the collection, so they
     follow whatever reference volumes and doses were used to compute them.
 
+    A single cell can be selected; :attr:`cell_selected` reports its structure
+    and metric, and :meth:`select` sets it programmatically.  The selection
+    survives re-rendering as long as its structure and metric are still shown.
+
     Parameters
     ----------
     parent : QWidget or None, optional
         Parent widget.
     """
 
+    #: Structure and metric id of the selected cell; ``""`` for the structure
+    #: column, ``("", "")`` when the selection is cleared.
+    cell_selected = Signal(str, str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._headers: list[str] = []
         self._rows: list[list[str]] = []
+        self._metric_keys: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -63,7 +72,9 @@ class QITableWidget(QWidget):
 
         self.table = QTableWidget()
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         if hasattr(header, "setSectionResizeMode"):
@@ -153,7 +164,35 @@ class QITableWidget(QWidget):
             )
             colors.append((voi_colors or {}).get(name))
 
-        self._set_content(headers, rows, colors)
+        self._set_content(headers, rows, colors, metric_keys)
+
+    def selected(self) -> tuple[str, str]:
+        """Return the structure and metric id of the selected cell (see :attr:`cell_selected`)."""
+        items = self.table.selectedItems()
+        if not items:
+            return "", ""
+        row, col = items[0].row(), items[0].column()
+        return self._rows[row][0], "" if col == 0 else self._metric_keys[col - 1]
+
+    def select(self, structure: str | None, metric: str | None = None) -> None:
+        """Select *structure*'s cell of *metric* (or its name) without emitting a signal.
+
+        Unknown structures clear the selection; an unknown metric selects the
+        structure's name cell.
+        """
+        structures = [row[0] for row in self._rows]
+        self.table.blockSignals(True)
+        try:
+            self.table.clearSelection()
+            if structure in structures:
+                col = 1 + self._metric_keys.index(metric) if metric in self._metric_keys else 0
+                self.table.setCurrentCell(structures.index(structure), col)
+        finally:
+            self.table.blockSignals(False)
+
+    @Slot()
+    def _on_selection_changed(self) -> None:
+        self.cell_selected.emit(*self.selected())
 
     def to_rows(self) -> list[list[str]]:
         """Return the table as rows of strings, header first.
@@ -247,29 +286,37 @@ class QITableWidget(QWidget):
         headers: list[str],
         rows: list[list[str]],
         colors: list[tuple[int, int, int] | None] | None = None,
+        metric_keys: list[str] | None = None,
     ) -> None:
-        """Replace the whole table content."""
+        """Replace the whole table content, keeping the selected cell if still shown."""
+        selection = self.selected()
         self._headers = headers
         self._rows = rows
+        self._metric_keys = list(metric_keys or [])
 
-        self.table.clearContents()
-        self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
-        self.table.setRowCount(len(rows))
+        # Rebuilding drops the selection; that is not a user selection change.
+        self.table.blockSignals(True)
+        try:
+            self.table.clearContents()
+            self.table.setColumnCount(len(headers))
+            self.table.setHorizontalHeaderLabels(headers)
+            self.table.setRowCount(len(rows))
 
-        for r, row in enumerate(rows):
-            for c, text in enumerate(row):
-                item = QTableWidgetItem(text)
-                if c == 0:
-                    rgb = (colors or [None] * len(rows))[r]
-                    if rgb is not None:
-                        item.setIcon(_swatch_icon(rgb))
-                    item.setToolTip(text)
-                else:
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
-                self.table.setItem(r, c, item)
+            for r, row in enumerate(rows):
+                for c, text in enumerate(row):
+                    item = QTableWidgetItem(text)
+                    if c == 0:
+                        rgb = (colors or [None] * len(rows))[r]
+                        if rgb is not None:
+                            item.setIcon(_swatch_icon(rgb))
+                        item.setToolTip(text)
+                    else:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    self.table.setItem(r, c, item)
+        finally:
+            self.table.blockSignals(False)
 
         # Spare width goes to the structure column; the metric columns keep the
         # width their labels need, and a scrollbar appears once they exceed it.
@@ -277,6 +324,7 @@ class QITableWidget(QWidget):
         if headers and hasattr(header, "setSectionResizeMode"):
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
 
+        self.select(*selection)
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
