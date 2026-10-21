@@ -18,7 +18,16 @@ from .particles import (
     VHEEAccelerator,
 )
 from ._validate import validate_machine
-from ._load import load_from_name, load_machine_from_mat, load_machine
+from ._load import (
+    find_machine_file,
+    load_from_name,
+    load_machine_from_mat,
+    load_machine,
+    get_available_machines,
+    add_machine_file,
+    remove_machine_file,
+    user_machine_dir,
+)
 
 register_machine(PhotonLINAC)
 register_machine(IonAccelerator)
@@ -38,8 +47,13 @@ __all__ = [
     "LateralCutOff",
     "IonAccelerator",
     "validate_machine",
+    "find_machine_file",
     "load_from_name",
     "load_machine_from_mat",
     "load_machine",
+    "get_available_machines",
+    "add_machine_file",
+    "remove_machine_file",
+    "user_machine_dir",
     "register_machine",
 ]

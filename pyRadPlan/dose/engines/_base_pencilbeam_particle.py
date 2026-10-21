@@ -19,13 +19,15 @@ from pyRadPlan.machines.particles import (
     ParticleAccelerator,
     LateralCutOff,
 )
-from pyRadPlan.bio_models import (
+from pyRadPlan.biology.models import (
     BioEvaluationContext,
     BiologicalModel,
     BioModelEvaluator,
     BioModelResult,
+    BioModelUnavailableError,
 )
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
@@ -63,12 +65,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     """
 
     computes_bio_influence: ClassVar[bool] = True
+    # Interpolates every biological kernel quantity of the machine (alpha/beta, z*, LET,
+    # fluence spectra).
+    bio_kernel_quantities: ClassVar[Optional[tuple[str, ...]]] = None
 
     calc_let: Union[Literal["auto"], bool] = "auto"
     calc_bio_dose: Union[Literal["auto"], bool] = "auto"
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
     cut_off_method: Literal["integral", "relative"] = "integral"
+    tissue_classes: list[TissueProperties] = []  # list of tissues used in the cst
 
     _dij_guarantee_canonical: ClassVar[bool]
     _dij_guarantee_nonzero: ClassVar[bool]
@@ -77,6 +83,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Protected properties with public get access
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
         self._v_beta_x = None  # Reference photon beta per voxel and CT scenario
+        self._v_tissue_class_ix = None  # Tissue class per voxel and CT scenario
         self._bio_evaluator: Optional[BioModelEvaluator] = None  # per-calculation model state
         self._bio_kernel_names: tuple[str, ...] = ()
         self._bio_influence_names: tuple[str, ...] = ()
@@ -301,6 +308,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         inputs = {
             "alpha_x": bixel["v_alpha_x"],
             "beta_x": bixel["v_beta_x"],
+            "tissue_class_ix": bixel["v_tissue_class_ix"],
             "physical_dose": bixel["physical_dose"],
         }
         if self._bio_evaluator.model.requires("let"):
@@ -339,7 +347,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 f"Biological kernel inputs collide with dose-engine kernels: {names}."
             )
 
-        context_names = {"alpha_x", "beta_x", "physical_dose"}
+        context_names = {"alpha_x", "beta_x", "tissue_class_ix", "physical_dose"}
         if self._bio_evaluator.model.requires("let"):
             context_names.add("let")
         collisions = context_names.intersection(self._bio_kernel_names)
@@ -436,6 +444,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self._calc_bio_dose:
             curr_bixel["v_alpha_x"] = curr_ray["v_alpha_x"][curr_ix]
             curr_bixel["v_beta_x"] = curr_ray["v_beta_x"][curr_ix]
+            curr_bixel["v_tissue_class_ix"] = curr_ray["v_tissue_class_ix"][curr_ix]
 
         return curr_bixel
 
@@ -595,10 +604,25 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if model is not None:
             self._v_alpha_x = self.xp.asarray(dij["alphax"], device=self.device)
             self._v_beta_x = self.xp.asarray(dij["betax"], device=self.device)
-            self._bio_evaluator = self._create_bio_evaluator(
-                model, {"alpha_x": self._v_alpha_x, "beta_x": self._v_beta_x}
-            )
-            self._bio_influence_names = self._bio_evaluator.influence_quantity_names
+            self._v_tissue_class_ix = self.xp.asarray(dij["tissue_class_ix"], device=self.device)
+            try:
+                self._bio_evaluator = self._create_bio_evaluator(
+                    model,
+                    {
+                        "alpha_x": self._v_alpha_x,
+                        "beta_x": self._v_beta_x,
+                        "tissue_class_ix": self._v_tissue_class_ix,
+                        "tissue_class": self._tissue_classes,
+                    },
+                )
+            except BioModelUnavailableError as exc:
+                if self.calc_bio_dose is True:
+                    raise
+                self._drop_bio_model(dij, model, str(exc))
+                model = None
+            else:
+                self._bio_influence_names = self._bio_evaluator.influence_quantity_names
+                dij["bio_model"] = model
 
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
             self.calc_bio_dose,
@@ -607,6 +631,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             let_available=has_let,
             let_auto=has_let,
         )
+
+        if model is None:
+            self._bio_evaluator = None
+            return dij
 
         if self._calc_bio_dose:
             self._bio_kernel_names = self._bio_evaluator.kernel_field_names
@@ -946,9 +974,13 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self._calc_bio_dose:
             ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
             ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
+            ray["v_tissue_class_ix"] = [None] * self.mult_scen.num_of_ct_scen
             for s in range(self.mult_scen.num_of_ct_scen):
                 ray["v_alpha_x"][s] = xp.take(self._v_alpha_x[:, s], ray["ix"][0], axis=0)
                 ray["v_beta_x"][s] = xp.take(self._v_beta_x[:, s], ray["ix"][0], axis=0)
+                ray["v_tissue_class_ix"][s] = xp.take(
+                    self._v_tissue_class_ix[:, s], ray["ix"][0], axis=0
+                )
 
         return ray
 
@@ -961,6 +993,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if self._calc_bio_dose:
             scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
             scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
+            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_scen]
 
         return scen_ray
 

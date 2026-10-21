@@ -15,11 +15,49 @@ import SimpleITK as sitk
 import matplotlib.pyplot as plt
 
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core._units import ureg
 from pyRadPlan.cst import StructureSet
 
 logger = logging.getLogger(__name__)
 
-ureg = pint.UnitRegistry()
+
+def dose_at_volume(
+    bins: NDArray, cum_volume: NDArray, y: Union[float, NDArray]
+) -> Union[float, NDArray]:
+    """Return the dose (or other quantity) value covering *y* percent of the volume.
+
+    Parameters
+    ----------
+    bins : NDArray
+        Left bin edges of a cumulative DVH.
+    cum_volume : NDArray
+        Cumulative volume percentages at *bins*, decreasing with dose.
+    y : float or NDArray
+        Volume percentage(s) between 0 and 100.
+
+    Returns
+    -------
+    float or NDArray
+        The largest bin value still covering at least *y* percent of the volume.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    if np.any(y < 0) or np.any(y > 100):
+        raise ValueError("Volume percentage must be between 0 and 100.")
+
+    # Dy is the largest quantity value still covering at least y percent of the
+    # volume, matching the "at least" reading of the cumulative DVH documented on
+    # :attr:`DVH.cumulative`. cum_volume decreases with dose, so the search runs
+    # over the reversed (increasing) array and the index is mapped back.
+    #
+    # This is deliberately not an interpolation across the cumulative curve: a
+    # uniformly irradiated region is a plateau in the DVH, and interpolating over
+    # it reports the dose at the wrong end of that plateau.
+    reversed_volume = np.asarray(cum_volume)[::-1]
+    last = reversed_volume.size - 1
+    index = last - np.searchsorted(reversed_volume, y, side="left")
+    index = np.clip(index, 0, last)
+    values = np.asarray(bins)[index]
+    return float(values) if values.ndim == 0 else values
 
 
 class DVH(PyRadPlanBaseModel):
@@ -224,24 +262,7 @@ class DVH(PyRadPlanBaseModel):
         -------
             float: Dose/quantity value corresponding to the given volume percentage.
         """
-        y = np.asarray(y, dtype=np.float64)
-        if np.any(y < 0) or np.any(y > 100):
-            raise ValueError("Volume percentage must be between 0 and 100.")
-
-        # Dy is the largest quantity value still covering at least y percent of the
-        # volume, matching the "at least" reading of the cumulative DVH documented
-        # on :attr:`cumulative`. cum_volume decreases with dose, so the search runs
-        # over the reversed (increasing) array and the index is mapped back.
-        #
-        # This is deliberately not an interpolation across the cumulative curve: a
-        # uniformly irradiated region is a plateau in the DVH, and interpolating
-        # over it reports the dose at the wrong end of that plateau.
-        reversed_volume = self.cum_volume[::-1]
-        last = self.cum_volume.size - 1
-        index = last - np.searchsorted(reversed_volume, y, side="left")
-        index = np.clip(index, 0, last)
-        values = self.bins[index]
-        return float(values) if values.ndim == 0 else values
+        return dose_at_volume(self.bins, self.cum_volume, y)
 
     @classmethod
     def compute(

@@ -33,20 +33,31 @@ def test_visualization_widget_signals(qapp):
 
 def test_visualization_widget_quantity_selector(qapp):
     widget = VisualizationWidget()
+    keys = [
+        "physical_dose",
+        "rbe_x_dose",
+        "physical_dose_beam 0",
+        "physical_dose_beam 1",
+        "alpha",
+    ]
+    widget.update_quantity_selector(keys, active="physical_dose_beam 1")
+    selector = widget.quantity_selector
 
-    quantities = ["Dose 1", "Dose 2", "LET"]
-    widget.update_quantity_selector(quantities, active="Dose 2")
+    groups = [selector.quantity_combo.itemText(i) for i in range(selector.quantity_combo.count())]
+    assert groups == ["dose", "RBExDose", "alpha"]
+    components = [
+        selector.component_combo.itemText(i) for i in range(selector.component_combo.count())
+    ]
+    assert components == ["full", "beam 0", "beam 1"]
+    assert selector.current_key() == "physical_dose_beam 1"
 
-    assert widget.quantity_selector.count() == 3
-    assert widget.quantity_selector.currentText() == "Dose 2"
-
-    # Test signal
-    received_qty = []
-    widget.quantity_changed.connect(received_qty.append)
-
-    widget.quantity_selector.setCurrentText("LET")
-    assert len(received_qty) > 0
-    assert received_qty[-1] == "LET"
+    received = []
+    widget.quantity_changed.connect(received.append)
+    selector.component_combo.setCurrentIndex(0)
+    selector.quantity_combo.setCurrentIndex(1)
+    assert received == ["physical_dose", "rbe_x_dose"]
+    # a group without beams disables the component selector
+    assert not selector.component_combo.isEnabled()
 
 
 def test_beams_toggle_requires_available_beams(qapp):

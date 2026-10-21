@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -18,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .._base import parse_number_list
+from .._quantity_selector import QuantitySelector
 
 #: Tooltip of the beam overlay toggle while beam angles are available.
 _BEAMS_TOOLTIP = (
@@ -26,7 +26,8 @@ _BEAMS_TOOLTIP = (
     "A beam leaving the plane is drawn as a wedge: its source end is wider when\n"
     "the source lies in front of the plane and narrower when it lies behind it,\n"
     "and its label is marked ⊙ (coming out of the screen) or ⊗ (going into it).\n"
-    "A beam along the viewing direction gets that mark at the isocenter."
+    "A beam along the viewing direction gets that mark at the isocenter.\n"
+    "Drag a beam's source marker along its dashed orbit to change its gantry angle."
 )
 
 
@@ -38,6 +39,7 @@ class VisualizationWidget(QWidget):
     isolines_toggled = Signal(bool)
     isocenter_toggled = Signal(bool)
     beams_toggled = Signal(bool)
+    orientation_toggled = Signal(bool)
     quantity_changed = Signal(str)
     isolines_set = Signal(list)  # list of float levels
     recenter_requested = Signal()
@@ -89,6 +91,16 @@ class VisualizationWidget(QWidget):
         self.beams_checkbox.setToolTip("Configure a plan with gantry angles first")
         self.beams_checkbox.stateChanged.connect(lambda s: self.beams_toggled.emit(bool(s)))
 
+        self.orientation_checkbox = QCheckBox("Orientation")
+        self.orientation_checkbox.setChecked(True)
+        self.orientation_checkbox.setToolTip(
+            "Show a small figure of the patient in the corner of the viewer,\n"
+            "lying as the patient does in the displayed plane."
+        )
+        self.orientation_checkbox.stateChanged.connect(
+            lambda s: self.orientation_toggled.emit(bool(s))
+        )
+
         check_grid = QGridLayout()
         check_grid.setContentsMargins(0, 0, 0, 0)
         check_grid.setHorizontalSpacing(8)
@@ -99,6 +111,7 @@ class VisualizationWidget(QWidget):
         check_grid.addWidget(self.isolines_checkbox, 1, 1)
         check_grid.addWidget(self.isocenter_checkbox, 2, 0)
         check_grid.addWidget(self.beams_checkbox, 2, 1)
+        check_grid.addWidget(self.orientation_checkbox, 3, 0)
         parent_layout.addLayout(check_grid)
 
     def _build_quantity_row(self, parent_layout: QVBoxLayout) -> None:
@@ -107,8 +120,8 @@ class VisualizationWidget(QWidget):
         quantity_row.setContentsMargins(0, 0, 0, 0)
         quantity_row.setSpacing(4)
         quantity_row.addWidget(QLabel("Overlay Quantity:"))
-        self.quantity_selector = QComboBox()
-        self.quantity_selector.currentTextChanged.connect(self.quantity_changed)
+        self.quantity_selector = QuantitySelector()
+        self.quantity_selector.key_changed.connect(self.quantity_changed)
         quantity_row.addWidget(self.quantity_selector, 1)
         parent_layout.addLayout(quantity_row)
 
@@ -144,15 +157,8 @@ class VisualizationWidget(QWidget):
             self.beams_checkbox.setToolTip(_BEAMS_TOOLTIP)
 
     def update_quantity_selector(self, quantities: list[str], active: str | None = None) -> None:
-        """Update the quantity selector items."""
-        self.quantity_selector.blockSignals(True)
-        self.quantity_selector.clear()
-        self.quantity_selector.addItems(quantities)
-        if active and active in quantities:
-            self.quantity_selector.setCurrentText(active)
-        elif quantities:
-            self.quantity_selector.setCurrentIndex(0)
-        self.quantity_selector.blockSignals(False)
+        """Update the selectable result keys, grouped by quantity and beam."""
+        self.quantity_selector.set_keys(quantities, active)
 
     def _on_set_isolines(self) -> None:
         dialog = QDialog(self)

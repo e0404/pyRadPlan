@@ -34,7 +34,7 @@ import numpy as np
 import SimpleITK as sitk
 from scipy import sparse
 
-from ...bio_models import BiologicalModel, bio_influence_from_let
+from ...biology.models import bio_influence_from_let
 from ...core import Grid
 from ...ct import CT, resample_ct
 from ...cst import StructureSet
@@ -43,19 +43,25 @@ from ...plan import Plan
 from ...stf import SteeringInformation, Beam
 from ...machines.particles import IonAccelerator
 
-from ._base_montecarlo import MonteCarloEngineAbstract
+from ._base_montecarlo import MonteCarloEngineAbstract, ScoredLETBioMixin
 
 logger = logging.getLogger(__name__)
 
+#: FRED's name of the primary particle of each radiation mode (FRED names ions by nuclide).
+FRED_PARTICLES = {"protons": "proton", "helium": "He4", "carbon": "C12", "oxygen": "O16"}
 
-class ParticleFredMCEngine(MonteCarloEngineAbstract):
+
+class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     # constants
 
     short_name = "FRED"
     name = "FRED"
-    possible_radiation_modes = ["protons", "helium", "carbon", "oxygen16"]  # add more if needed
+    possible_radiation_modes = list(FRED_PARTICLES)
 
     computes_bio_influence = True
+    # FRED scores the dose-averaged LET itself and does not use the machine's kernels.
+    bio_kernel_quantities = ()
+    bio_scored_quantities = ("let:LETd",)
 
     available_source_models = ["gaussian", "emittance", "sigmaSqrModel"]
 
@@ -405,10 +411,16 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                         ")},${currSQr_a},${currSQr_b}, ${currSQr_c}]
                         """
 
-        if self._machine.radiation_mode == "protons":
-            particle = """proton"""
-        elif self._machine.radiation_mode == "carbon":
-            particle = """C12"""
+        radiation_mode = self._machine.radiation_mode
+        if radiation_mode not in FRED_PARTICLES:
+            raise ValueError(
+                f"FRED cannot simulate radiation mode '{radiation_mode}', only "
+                f"{list(FRED_PARTICLES)}."
+            )
+        particle = FRED_PARTICLES[radiation_mode]
+        # The machine tabulates ion energies and their spread per nucleon, which FRED reads
+        # from Tu / EuFWHM; T / EFWHM are the kinetic energy of the whole ion.
+        energy_key, spread_key = ("T", "EFWHM") if particle == "proton" else ("Tu", "EuFWHM")
 
         file_content = textwrap.dedent(f"""
         #Include file defining fields and layers geometry
@@ -461,8 +473,8 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                         ID      = ${{beamlet.get('beamletID')}}
                         fieldID = $fieldIdx
                         particle = {particle}
-                        T    = $currEnergy
-                        EFWHM  = $currEspread
+                        {energy_key:<4} = $currEnergy
+                        {spread_key:<6} = $currEspread
                         {beamlet_case_parameters}
                         P    = ${{beamlet.get('P')}}
                         v    = ${{beamlet.get('v')}}
@@ -885,10 +897,17 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
 
                 pb_fred.append(pb_dict)
 
-            emittance = cast(IonAccelerator, self._machine).foci[value["full_energy"]][0].emittance
+            machine = cast(IonAccelerator, self._machine)
+            emittance = machine.foci[value["full_energy"]][0].emittance
+            if emittance is None:
+                raise ValueError(
+                    f"FRED needs the beam emittance of the machine's foci, which the "
+                    f"{machine.radiation_mode} machine '{machine.name}' does not provide "
+                    f"(energy {value['full_energy']} MeV/u)."
+                )
             layer_dict = {
                 "energy": value["full_energy"],
-                "ESpread": cast(IonAccelerator, self._machine).spectra[value["full_energy"]].fwhm,
+                "ESpread": machine.spectra[value["full_energy"]].fwhm,
                 "FWHM": (
                     2.355
                     * (2 * emittance.sigma_x * emittance.sigma_y)
@@ -1220,100 +1239,25 @@ class ParticleFredMCEngine(MonteCarloEngineAbstract):
                 process.returncode, execute_cmd, output=stdout, stderr=stderr
             )
 
-    def engine_provided_quantities(self) -> list[str]:
-        """FRED scores LET itself, independently of the machine's pencil-beam kernels."""
-        return ["let"]
-
-    @staticmethod
-    def _unsupported_evaluator_reason(model, evaluator) -> Optional[str]:
-        """Why FRED cannot drive ``evaluator``, or ``None`` if it can."""
-        # bio_influence_from_let supplies alpha_x, beta_x, physical_dose and LET only; FRED
-        # has no pencil-beam kernels to interpolate any further model input from.
-        if evaluator.kernel_field_names:
-            names = ", ".join(evaluator.kernel_field_names)
-            return (
-                f"the evaluator of {model!r} additionally requires the machine kernel inputs "
-                f"{names}, which FRED cannot supply"
-            )
-        if not evaluator.influence_quantity_names:
-            return f"the evaluator of {model!r} declares no biological influence quantities"
-        return None
-
-    def _unsupported_bio_reason(self, model, evaluator) -> Optional[str]:
-        """Why FRED cannot evaluate ``model``, or ``None`` if it can."""
-        if model is None:
-            return None
-
-        # Judge an existing evaluator by what it actually needs and produces rather than by
-        # the model's intrinsic output declaration: an evaluator may build the additive
-        # influence quantities directly, without declaring any intrinsic outputs.
-        if evaluator is not None:
-            return self._unsupported_evaluator_reason(model, evaluator)
-
-        # No evaluator was built: either nothing biological was asked of the model, or it is
-        # not LET-based and therefore outside what FRED can derive from its scored LET.
-        if model.output_quantities and not model.requires("let"):
-            return (
-                "FRED derives biological influence matrices from the scored LET and therefore "
-                f"only supports LET-based evaluators, not {model!r}"
-            )
-        return None
-
-    def _init_bio_model(self, dij: dict[str, Any]) -> dict[str, Any]:
-        """Configure biological and LET outputs without constructing unsupported evaluators."""
-        # Biological influence matrices are derived from the scored LET, so only models
-        # whose evaluator consumes LET are supported.
-        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
-        model_requires_let = model is not None and model.requires("let")
-        self._bio_evaluator = None
-        self._bio_influence_names = ()
-
-        evaluator = None
-        if model_requires_let and self.calc_bio_dose is not False:
-            evaluator = self._create_bio_evaluator(
-                model,
-                {"alpha_x": np.asarray(dij["alphax"]), "beta_x": np.asarray(dij["betax"])},
-            )
-        reason = self._unsupported_bio_reason(model, evaluator)
-        supported = reason is None and evaluator is not None
-        if supported:
-            self._bio_evaluator = evaluator
-            self._bio_influence_names = evaluator.influence_quantity_names
-
-        if self.calc_bio_dose is True and not supported:
-            raise NotImplementedError(
-                reason
-                or "FRED cannot compute biological influence matrices for "
-                f"{model!r} (no biological model requiring LET was selected)."
-            )
-        if self.calc_bio_dose == "auto" and reason is not None:
-            logger.warning(
-                "%s; influence matrices are skipped (set calc_bio_dose=False to silence this).",
-                reason,
-            )
-        self._calc_bio_dose, self._calc_let, self._use_let_kernel = self._resolve_quantity_flags(
-            self.calc_bio_dose if supported else False,
-            self.calc_let,
-            bio_influence_quantities=self._bio_influence_names,
-            let_available=True,
-            let_auto=model_requires_let,
-        )
-        if self._calc_bio_dose:
-            self._validate_bio_influence_names(dij, self._bio_influence_names)
-            dij = self._allocate_quantity_matrices(dij, list(self._bio_influence_names))
-
-        if self._use_let_kernel:
-            self.scorers.extend(["LETd"])
-        if self._calc_let:
-            dij = self._allocate_quantity_matrices(dij, ["let_dose"])
-
-        return dij
+    def _request_let_scoring(self) -> None:
+        if "LETd" not in self.scorers:
+            self.scorers = [*self.scorers, "LETd"]
 
     def _init_dose_calc(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation
     ) -> dict[str, Any]:
         dij = super()._init_dose_calc(ct, cst, stf)
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
+
+        radiation_mode = self._machine.radiation_mode
+        if radiation_mode != "protons":
+            message = (
+                f"FRED's {radiation_mode} simulations are not validated: their doses do not "
+                "reproduce the matRad / pencil-beam reference (the oxygen test case is about 20 "
+                "times too high). Use the results with caution."
+            )
+            logger.warning(message)
+            self.report_warning(message)
 
         if dij["num_of_scenarios"] > 1:
             raise NotImplementedError(

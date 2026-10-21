@@ -36,11 +36,20 @@ else:
         IPOPT_DISABLED_REASON,
     )
 
+try:
+    from ._ipax_solver import OptimizerIpax
+
+    register_solver(OptimizerIpax)
+
+except ImportError:
+    OptimizerIpax = None
+
 register_solver(OptimizerSciPy)
 
 
 __all__ = [
     "OptimizerIpopt",
+    "OptimizerIpax",
     "OptimizerSciPy",
     "IPOPT_DISABLED_REASON",
     "SolverBase",

@@ -53,7 +53,7 @@ class SteeringInformation(PyRadPlanBaseModel):
         try to convert the data to the right format.
         """
         try:
-            return handler(data, info)
+            return handler(data)
         except ValidationError:
             # Check if import is from matlab
             # If from matlab but stf already chosen, the code is executed as normal
@@ -67,7 +67,7 @@ class SteeringInformation(PyRadPlanBaseModel):
                 try:
                     length_lists = [len(v) for v in data.values()]
                 except (TypeError, ValueError):
-                    return handler({"beams": [data]}, info)  # TODO: only works if its a list??
+                    return handler({"beams": [data]})  # TODO: only works if its a list??
 
                 if len(set(length_lists)) == 1 and len(length_lists) > 1:
                     beam_list = []
@@ -90,12 +90,12 @@ class SteeringInformation(PyRadPlanBaseModel):
 
                         beam_list.append(dict(beam))
 
-                    return handler({"beams": beam_list}, info)
+                    return handler({"beams": beam_list})
 
             if isinstance(data, list):
-                return handler({"beams": data}, info)
+                return handler({"beams": data})
 
-            return handler(data, info)
+            return handler(data)
         except Exception as exc:
             raise exc
 

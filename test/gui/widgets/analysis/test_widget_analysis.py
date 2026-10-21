@@ -2,6 +2,10 @@ from pyRadPlan.gui.widgets._analysis_widget import _NONE_LABEL, AnalysisWidget
 import numpy as np
 import SimpleITK as sitk
 
+# Widget methods are patched on the class: undoing a patch on an instance leaves
+# the bound method behind as an attribute, a reference cycle whose garbage
+# collection segfaults PySide (Linux, Python 3.14).
+
 
 def _masks(cst):
     return {
@@ -292,12 +296,12 @@ def test_analysis_widget_quantity_switch_updates_units(qapp, test_data_photons):
     ct, cst, result = test_data_photons
     widget = _dose_and_let(cst, result)
 
-    assert widget.quantity_combo.currentText() == "Dose"
-    assert "Gy" in widget.dvh_widget.figure.axes[0].get_xlabel()
+    assert widget.quantity_selector.current_key() == "Dose"
+    assert "Gy" in widget.dvh_widget.shown_plot.x_label
 
-    widget.quantity_combo.setCurrentText("LET")
+    widget.quantity_selector.set_current_key("LET")
 
-    assert "keV" in widget.dvh_widget.figure.axes[0].get_xlabel()
+    assert "keV" in widget.dvh_widget.shown_plot.x_label
     header = widget.qi_widget.to_rows()[0]
     assert "mean [keV / \u03bcm]" in header
     assert not any("Gy" in h for h in header)
@@ -318,7 +322,7 @@ def test_analysis_widget_vx_label_unit(qapp, test_data_photons):
     )
     assert widget._ref_doses_label.text() == "V_x [Gy]:"
 
-    widget.quantity_combo.setCurrentText("Other")
+    widget.quantity_selector.set_current_key("Other")
     assert widget._ref_doses_label.text() == "V_x:"
 
 
@@ -331,17 +335,17 @@ def test_analysis_widget_vx_remembered_per_quantity(qapp, test_data_photons):
     widget.ref_doses_edit.editingFinished.emit()
     assert widget.ref_doses_edit.text() == "1 2"
 
-    widget.quantity_combo.setCurrentText("LET")
+    widget.quantity_selector.set_current_key("LET")
     let_doses = widget.ref_doses_edit.text().split()
     assert len(let_doses) == 5
     assert let_doses != ["1", "2"]
 
-    widget.quantity_combo.setCurrentText("Dose")
+    widget.quantity_selector.set_current_key("Dose")
     assert widget.ref_doses_edit.text() == "1 2"
     columns = [h.split(" [")[0] for h in widget.qi_widget.to_rows()[0][1:]]
     assert "V1Gy" in columns and "V2Gy" in columns
 
-    widget.quantity_combo.setCurrentText("LET")
+    widget.quantity_selector.set_current_key("LET")
     assert widget.ref_doses_edit.text().split() == let_doses
 
 
@@ -353,7 +357,7 @@ def test_analysis_widget_dvhs_computed_lazily(qapp, test_data_photons):
     assert widget._dvh_cache
     assert {qty for qty, _ in widget._dvh_cache} == {"Dose"}
 
-    widget.quantity_combo.setCurrentText("LET")
+    widget.quantity_selector.set_current_key("LET")
     assert {qty for qty, _ in widget._dvh_cache} == {"Dose", "LET"}
 
 
@@ -371,7 +375,7 @@ def test_analysis_widget_voi_toggle_reuses_qi_cache(qapp, test_data_photons):
 
 
 def _linestyles(widget):
-    return {line.get_linestyle() for line in widget.dvh_widget.figure.axes[0].get_lines()}
+    return {curve.line_style for curve in widget.dvh_widget.shown_plot.curves}
 
 
 def test_analysis_widget_secondary_defaults_to_none(qapp, test_data_photons):
@@ -379,12 +383,12 @@ def test_analysis_widget_secondary_defaults_to_none(qapp, test_data_photons):
     ct, cst, result = test_data_photons
     widget = _dose_and_let(cst, result)
 
-    items = [widget.secondary_combo.itemText(i) for i in range(widget.secondary_combo.count())]
+    combo = widget.secondary_selector.quantity_combo
+    items = [combo.itemText(i) for i in range(combo.count())]
     assert items == [_NONE_LABEL, "Dose", "LET"]
-    assert widget.secondary_combo.currentText() == _NONE_LABEL
-    assert all(
-        line.get_linestyle() == "-" for line in widget.dvh_widget.figure.axes[0].get_lines()
-    )
+    assert combo.currentText() == _NONE_LABEL
+    assert widget.secondary_selector.current_key() == ""
+    assert _linestyles(widget) == {"solid"}
 
 
 def test_analysis_widget_secondary_compatible_unit_shares_axis(qapp, test_data_photons):
@@ -401,11 +405,10 @@ def test_analysis_widget_secondary_compatible_unit_shares_axis(qapp, test_data_p
     )
     vx_label = widget._ref_doses_label.text()
 
-    widget.secondary_combo.setCurrentText("RBExDose")
+    widget.secondary_selector.set_current_key("RBExDose")
 
-    assert len(widget.dvh_widget.figure.axes) == 1
-    assert widget.dvh_widget.secondary_axes is None
-    assert {"-", "--"} <= _linestyles(widget)
+    assert widget.dvh_widget.shown_plot.secondary_x_label is None
+    assert _linestyles(widget) == {"solid", "dashed"}
     assert "mean [Gy]" in widget.qi_widget.to_rows()[0]
     assert widget._ref_doses_label.text() == vx_label
 
@@ -415,11 +418,10 @@ def test_analysis_widget_secondary_incompatible_unit_gets_twin_axis(qapp, test_d
     ct, cst, result = test_data_photons
     widget = _dose_and_let(cst, result)
 
-    widget.secondary_combo.setCurrentText("LET")
+    widget.secondary_selector.set_current_key("LET")
 
-    assert widget.dvh_widget.secondary_axes is not None
-    assert "keV" in widget.dvh_widget.secondary_axes.get_xlabel()
-    assert "Gy" in widget.dvh_widget.figure.axes[0].get_xlabel()
+    assert "keV" in widget.dvh_widget.shown_plot.secondary_x_label
+    assert "Gy" in widget.dvh_widget.shown_plot.x_label
     assert not any("keV" in h for h in widget.qi_widget.to_rows()[0])
 
 
@@ -428,11 +430,11 @@ def test_analysis_widget_secondary_equal_to_primary_is_ignored(qapp, test_data_p
     ct, cst, result = test_data_photons
     widget = _dose_and_let(cst, result)
 
-    widget.secondary_combo.setCurrentText("Dose")
+    widget.secondary_selector.set_current_key("Dose")
 
     assert widget._secondary_quantity() == ""
-    assert "--" not in _linestyles(widget)
-    assert widget.dvh_widget.secondary_axes is None
+    assert "dashed" not in _linestyles(widget)
+    assert widget.dvh_widget.shown_plot.secondary_x_label is None
 
 
 def test_analysis_widget_secondary_caches_dvhs_only(qapp, test_data_photons):
@@ -441,7 +443,157 @@ def test_analysis_widget_secondary_caches_dvhs_only(qapp, test_data_photons):
     widget = _dose_and_let(cst, result)
     n_qi_cached = len(widget._qi_cache)
 
-    widget.secondary_combo.setCurrentText("LET")
+    widget.secondary_selector.set_current_key("LET")
 
     assert {qty for qty, _ in widget._dvh_cache} == {"Dose", "LET"}
     assert len(widget._qi_cache) == n_qi_cached
+
+
+def test_analysis_widget_shows_quantity_names(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    dose = np.swapaxes(result["physicalDose"], 0, 1)
+    widget = AnalysisWidget()
+    widget.set_data(
+        quantities={"physical_dose": dose, "rbe_x_dose": dose * 1.1},
+        masks=_masks(cst),
+        initial_quantity="rbe_x_dose",
+    )
+
+    assert widget.quantity_selector.quantity_combo.currentText() == "RBExDose"
+    assert widget.quantity_selector.current_key() == "rbe_x_dose"
+
+    widget.secondary_selector.set_current_key("physical_dose")
+    assert widget.secondary_selector.quantity_combo.currentText() == "dose"
+    assert widget._secondary_quantity() == "physical_dose"
+    widget.close()
+
+
+# ---------------------------------------------------------------------------
+# DVH / QI table interaction
+# ---------------------------------------------------------------------------
+
+
+def _first_structure(widget):
+    return widget.qi_widget.to_rows()[1][0]
+
+
+def test_qi_cell_selection_highlights_the_dvh_point(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    name = _first_structure(widget)
+    table = widget.qi_widget
+
+    table.table.setCurrentCell(0, 1 + table._metric_keys.index("D98"))
+    assert widget.dvh_widget.highlighted() == (name, "D98")
+    assert widget.dvh_widget.parameter_line is not None
+
+    table.table.setCurrentCell(0, 1 + table._metric_keys.index("mean"))
+    assert widget.dvh_widget.highlighted() == (name, None)
+
+
+def test_dvh_clicks_select_in_the_qi_table(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    name = _first_structure(widget)
+
+    widget.dvh_widget.structure_clicked.emit(name)
+    assert widget.qi_widget.selected() == (name, "")
+    assert widget.dvh_widget.highlighted() == (name, None)
+
+    widget.dvh_widget.marker_clicked.emit(name, "D50")
+    assert widget.qi_widget.selected() == (name, "D50")
+    assert widget.dvh_widget.highlighted() == (name, "D50")
+
+    widget.dvh_widget.structure_clicked.emit("")
+    assert widget.qi_widget.selected() == ("", "")
+    assert widget.dvh_widget.highlighted() == (None, None)
+
+
+def test_show_in_dvh_checkboxes_toggle_marker_kinds(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    assert len(widget.dvh_widget.marker_item.points()) == 0
+
+    def kinds():
+        return {p.data().kind for p in widget.dvh_widget.marker_item.points()}
+
+    widget.show_markers_checkboxes["vx"].setChecked(True)
+    assert kinds() == {"vx"}
+    widget.show_markers_checkboxes["dx"].setChecked(True)
+    assert kinds() == {"dx", "vx"}
+    widget.show_markers_checkboxes["vx"].setChecked(False)
+    assert kinds() == {"dx"}
+
+
+def test_double_click_point_is_added_after_confirmation(qapp, test_data_photons, monkeypatch):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    asked = []
+    monkeypatch.setattr(
+        widget, "_ask_qi_point", lambda *args, **kwargs: asked.append(args) or ("dx", 90.0, False)
+    )
+
+    widget._add_point(1.2, 90.0)
+
+    assert asked == [(1.2, 90.0)]
+    assert "90" in widget.ref_vols_edit.text().split()
+    assert "98" in widget.ref_vols_edit.text().split()
+    assert "D90" in widget.qi_widget._metric_keys
+    assert widget.show_markers_checkboxes["dx"].isChecked()
+    assert not widget.show_markers_checkboxes["vx"].isChecked()
+
+
+def test_added_vx_point_is_remembered_for_the_quantity(qapp, test_data_photons, monkeypatch):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    monkeypatch.setattr(
+        AnalysisWidget,
+        "_ask_qi_point",
+        staticmethod(lambda *args, **kwargs: ("vx", 1.25, False)),
+    )
+
+    widget._add_point(1.25, 50.0)
+
+    assert "1.25" in widget.ref_doses_edit.text().split()
+    assert "1.25" in widget._ref_doses_by_quantity["Dose"]
+    assert widget.show_markers_checkboxes["vx"].isChecked()
+    assert not widget.show_markers_checkboxes["dx"].isChecked()
+
+
+def test_dragged_point_replaces_its_metric(qapp, test_data_photons, monkeypatch):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    name = _first_structure(widget)
+    widget.dvh_widget.marker_clicked.emit(name, "D98")
+    asked = []
+
+    def ask(*args, **kwargs):
+        asked.append(kwargs)
+        return ("dx", 90.0, True)
+
+    monkeypatch.setattr(AnalysisWidget, "_ask_qi_point", staticmethod(ask))
+    widget._move_point(name, "D98", 90.0)
+
+    assert asked == [{"kind": "dx", "replace": "D98"}]
+    values = widget.ref_vols_edit.text().split()
+    assert "90" in values and "98" not in values
+    assert widget.dvh_widget.highlighted() == (name, "D90")
+    assert widget.qi_widget.selected() == (name, "D90")
+
+
+def test_cancelled_drag_snaps_back(qapp, test_data_photons, monkeypatch):
+    ct, cst, result = test_data_photons
+    widget = _dose_and_let(cst, result)
+    name = _first_structure(widget)
+    widget.dvh_widget.marker_clicked.emit(name, "D98")
+    before = widget.ref_vols_edit.text()
+    widget.dvh_widget.parameter_line.setValue(60.0)
+    monkeypatch.setattr(
+        AnalysisWidget, "_ask_qi_point", staticmethod(lambda *args, **kwargs: None)
+    )
+
+    widget._move_point(name, "D98", 60.0)
+
+    assert widget.ref_vols_edit.text() == before
+    assert widget.dvh_widget.highlighted() == (name, "D98")
+    assert widget.dvh_widget.parameter_line.value() == 98.0

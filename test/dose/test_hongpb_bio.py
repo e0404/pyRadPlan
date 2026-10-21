@@ -13,10 +13,29 @@ import SimpleITK as sitk
 
 import pyRadPlan
 from pyRadPlan import calc_dose_influence
-from pyRadPlan.bio_models import BiologicalModel, BioModelEvaluator, Wedenberg
+from pyRadPlan.biology.models import (
+    BiologicalModel,
+    BioModelEvaluator,
+    BioModelUnavailableError,
+    Wedenberg,
+)
 from pyRadPlan.dose.engines._base import DoseEngineBase
 from pyRadPlan.dose.engines._hongpb import ParticleHongPencilBeamEngine
 from pyRadPlan.machines import load_machine_from_mat, validate_machine
+from pyRadPlan.biology.tissues import TissueProperties
+
+
+def _with_reference_params(cst, index=0, **params):
+    """Replace a VOI's reference LQ parameters.
+
+    ``tissue_properties`` is the source of truth and the legacy ``alpha_x`` / ``beta_x``
+    mirror it, so the two have to be replaced together -- assigning either alone is
+    rejected by the VOI validator.
+    """
+    voi = cst.vois[index]
+    tissue_properties = voi.tissue_properties.model_copy(update=params)
+    cst.vois[index] = voi.model_copy(update={**params, "tissue_properties": tissue_properties})
+    return cst
 
 
 def _bio_engine(kernel_names=()):
@@ -33,6 +52,7 @@ def test_bio_context_is_curated():
     bixel = {
         "v_alpha_x": "alpha_x",
         "v_beta_x": "beta_x",
+        "v_tissue_class_ix": "tissue_class_ix",
         "physical_dose": "dose",
         "sigma_ini_sq": "engine detail",
         "kernel": "raw kernel",
@@ -45,6 +65,7 @@ def test_bio_context_is_curated():
     assert dict(context) == {
         "alpha_x": "alpha_x",
         "beta_x": "beta_x",
+        "tissue_class_ix": "tissue_class_ix",
         "physical_dose": "dose",
         "let": "LET",
         "alpha": "kernel alpha",
@@ -336,6 +357,26 @@ def test_carbon_kernel_based_lq_alpha_beta_matrices(test_data_carbon):
     assert np.allclose(np.asarray(res["rbe_x_dose"]).ravel(), expected, rtol=1e-5, atol=1e-8)
 
 
+def test_tissue_classes_reach_the_evaluator_but_not_the_dij(test_data_carbon, monkeypatch):
+    """The tissue classes ``tissue_class_ix`` refers to are engine state, not a dij field."""
+    pln, ct, cst, stf, _dij, _result = test_data_carbon
+    pln.bio_model = "kernel_based_lq"
+    seen = {}
+    create = DoseEngineBase._create_bio_evaluator
+
+    def _spy(self, model, voxel_params):
+        seen.update(voxel_params)
+        return create(self, model, voxel_params)
+
+    monkeypatch.setattr(DoseEngineBase, "_create_bio_evaluator", _spy)
+    engine = ParticleHongPencilBeamEngine(pln)
+    dij = engine._init_dose_calc(ct, cst, stf)
+
+    assert "tissue_class" not in dij
+    assert list(seen["tissue_class"]) == list(cst.get_tissue_classes())
+    assert engine._bio_evaluator is not None
+
+
 def _attach_synthetic_spectra(machine, n_energies=20, seed=0):
     """Give every kernel a random fragment fluence spectrum (H, C and electrons)."""
     rng = np.random.default_rng(seed)
@@ -373,7 +414,11 @@ def test_carbon_tabulated_alpha_beta_matrices(test_data_carbon, monkeypatch):
 
     # entries are depth-interpolated rows of the dose-averaged tables of the voxels' class
     evaluator = pln.bio_model.evaluator(
-        machine, {"alpha_x": dij_py.alphax, "beta_x": dij_py.betax}
+        machine,
+        {
+            "tissue_class_ix": dij_py.tissue_class_ix,
+            "tissue_class": cst.get_tissue_classes(),
+        },
     )
     tissue = np.flatnonzero(
         (pln.bio_model.table_alpha_x == np.unique(e["alpha_x"]))
@@ -401,8 +446,15 @@ def test_bio_tissue_arrays_use_the_selected_device(test_data_protons):
     engine.xp = array_api_strict
     engine.device = device
     engine._machine = DoseEngineBase.load_machine(pln.radiation_mode, pln.machine)
+    engine._tissue_classes = np.asarray([TissueProperties(alpha_x=0.1, beta_x=0.05)])
 
-    engine._init_bio_model({"alphax": np.full((4, 1), 0.1), "betax": np.full((4, 1), 0.05)})
+    engine._init_bio_model(
+        {
+            "alphax": np.full((4, 1), 0.1),
+            "betax": np.full((4, 1), 0.05),
+            "tissue_class_ix": np.zeros((4, 1), dtype=int),
+        }
+    )
 
     assert array_api_compat.device(engine._v_alpha_x) == device
     assert array_api_compat.device(engine._v_beta_x) == device
@@ -421,10 +473,25 @@ def test_out_of_domain_reference_parameters_fail_before_dose_calculation(test_da
     """A structure whose beta_x is zero is rejected by McNamara during setup."""
     pln, ct, cst, stf, _dij, _result = test_data_protons
     pln.bio_model = "MCN"
-    cst.vois[0].beta_x = 0.0
+    pln.prop_dose_calc["calc_bio_dose"] = True
+    _with_reference_params(cst, beta_x=0.0)
 
-    with pytest.raises(ValueError, match="only defined for beta_x > 0"):
+    with pytest.raises(BioModelUnavailableError, match="only defined for beta_x > 0"):
         calc_dose_influence(ct, cst, stf, pln)
+
+
+def test_out_of_domain_reference_parameters_without_bio_request_keep_physical_dose(
+    test_data_protons,
+):
+    """Outside the model's domain, only a requested biological dose is an error."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "MCN"
+    _with_reference_params(cst, beta_x=0.0)
+
+    dij_py = calc_dose_influence(ct, cst, stf, pln)
+
+    assert dij_py.bio_model is None
+    assert dij_py.alpha_dose is None
 
 
 @pytest.mark.parametrize(
@@ -446,7 +513,7 @@ def test_invalid_reference_coefficients_fail_before_dose_calculation(
     """The public dose calculation rejects invalid LQ reference rates during setup."""
     pln, ct, cst, stf, _dij, _result = test_data_protons
     pln.bio_model = model
-    setattr(cst.vois[0], field, value)
+    _with_reference_params(cst, **{field: value})
 
     with pytest.raises(ValueError, match=f"{name} must be finite and non-negative"):
         calc_dose_influence(ct, cst, stf, pln)

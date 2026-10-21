@@ -5,6 +5,7 @@ import logging
 from typing import cast
 
 import numpy as np
+import SimpleITK as sitk
 
 from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.machines import IonAccelerator
@@ -13,7 +14,7 @@ from pyRadPlan.ct import default_hlut
 from .._rangeshifter import RangeShifter
 from .._beamlet import IonSpot
 from .._ray import Ray
-from ._externalbeam import StfGeneratorExternalBeamRayBixel
+from ._externalbeam import StfGeneratorExternalBeamRayBixel, _deprecated_alias
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +27,52 @@ class StfGeneratorIonRayBixel(StfGeneratorExternalBeamRayBixel):
     ----------
     use_range_shifter : bool
         Use range shifter when finding energies for irradiation.
-    use_given_wet_image : bool
-        Use a provided WET image for range determination.
+    use_given_eq_density_cube : bool
+        Use the equivalent density cube given in ``ct.cube`` for range determination and
+        omit the conversion from ``ct.cube_hu``.
+    ignore_outside_densities : bool
+        Zero the densities outside of the cst contours before tracing for energy selection.
+
+    Notes
+    -----
+    ``use_given_eq_density_cube`` and ``ignore_outside_densities`` mirror the properties of
+    the same name on the pencil beam dose engines. The energies selected here only make
+    sense if the engine later traces the same densities, so both are recorded on every
+    generated beam and checked by the engine.
     """
 
     use_range_shifter: bool
-    use_given_wet_image: bool
+    use_given_eq_density_cube: bool
+    ignore_outside_densities: bool
 
     def __init__(self, pln=None):
         self.use_range_shifter = False
-        self.use_given_wet_image = False
+        self.use_given_eq_density_cube = False
+        self.ignore_outside_densities = False
         self._wet_image = None
         super().__init__(pln)
+
+    use_given_wet_image = _deprecated_alias("use_given_wet_image", "use_given_eq_density_cube")
+
+    def _computed_target_margin(self) -> float:
+        """Ion generators place spots without a bixel-width margin, like matRad."""
+        return 0.0
+
+    def _initialize_patient_geometry(self):
+        super()._initialize_patient_geometry()
+
+        # matRad zeroes densities outside the contours before tracing for energy selection
+        if self.ignore_outside_densities:
+            self._wet_image = sitk.Mask(
+                self._wet_image, sitk.Cast(self._patient_mask, sitk.sitkUInt8), outsideValue=0
+            )
+
+    def _finalize_beam(self, beam: dict) -> dict:
+        """Record the density assumptions the energy selection was based on."""
+        beam = super()._finalize_beam(beam)
+        beam["use_given_eq_density_cube"] = self.use_given_eq_density_cube
+        beam["ignore_outside_densities"] = self.ignore_outside_densities
+        return beam
 
     def _initialize(self):
         super()._initialize()
@@ -60,12 +95,14 @@ class StfGeneratorIonRayBixel(StfGeneratorExternalBeamRayBixel):
                 "the minimum energy in the machine."
             )
 
-        if self.use_given_wet_image:
-            if self._ct.cube is None:
-                warnings.warn("No WET CT provided provided in CT. Cannot use given WET image.")
-                self.use_given_wet_image = False
+        if self.use_given_eq_density_cube and getattr(self._ct, "cube", None) is None:
+            warnings.warn(
+                "HU conversion requested to be omitted but no ct.cube exists! "
+                "Will override and do the conversion anyway!"
+            )
+            self.use_given_eq_density_cube = False
 
-        if self.use_given_wet_image:
+        if self.use_given_eq_density_cube:
             self._wet_image = self._ct.cube
         else:
             # TODO: load HLUT for given scanner
@@ -181,7 +218,7 @@ class StfGeneratorIMPT(StfGeneratorIonRayBixel):
 
     def __init__(self, pln=None):
         self.radiation_mode = "protons"
-        self.longitudinal_spot_spacing = 3.0  # Longitudinal spot spacing in mm
+        self.longitudinal_spot_spacing = 2.0  # Longitudinal spot spacing in mm
         super().__init__(pln)
 
     def _generate_source_geometry(self):
@@ -190,6 +227,48 @@ class StfGeneratorIMPT(StfGeneratorIonRayBixel):
         # TODO: Get available Energies
         stf = super()._generate_source_geometry()
         return stf
+
+    def _finalize_beam(self, beam: dict) -> dict:
+        """Thin the beam's energy layers down to ``longitudinal_spot_spacing``."""
+        beam = super()._finalize_beam(beam)
+
+        energies = np.unique([b.energy for r in beam["rays"] for b in r.beamlets])
+        min_energy = min(energies)
+        max_energy = max(energies)
+
+        min_peak_pos = self.machine.peak_positions[self.machine.energies == min_energy][0]
+        max_peak_pos = self.machine.peak_positions[self.machine.energies == max_energy][0]
+
+        tolerance = self.longitudinal_spot_spacing / 10.0
+
+        use_energy = (self._available_peak_positions >= min_peak_pos) & (
+            self._available_peak_positions <= max_peak_pos
+        )
+        use_energy = np.asarray(use_energy, dtype=bool)
+
+        ix_curr = np.argmax(use_energy)  # first True
+        ix_end = len(use_energy) - 1 - np.argmax(use_energy[::-1])  # last True
+        ix_run = ix_curr + 1
+
+        while ix_run <= ix_end:
+            if abs(
+                self._available_peak_positions[ix_run] - self._available_peak_positions[ix_curr]
+            ) < (self.longitudinal_spot_spacing - tolerance):
+                use_energy[ix_run] = False
+            else:
+                ix_curr = ix_run
+            ix_run += 1
+
+        # Iterate rays in reverse
+        for j in range(len(beam["rays"]) - 1, -1, -1):
+            for k in range(len(beam["rays"][j].beamlets) - 1, -1, -1):
+                mask_energy = beam["rays"][j].beamlets[k].energy == self._available_energies
+                if not use_energy[mask_energy]:
+                    del beam["rays"][j].beamlets[k]
+
+            if len(beam["rays"][j].beamlets) == 0:
+                del beam["rays"][j]
+        return beam
 
     def _create_rays(self, beam: dict) -> list[dict]:
         rays = super()._create_rays(beam)

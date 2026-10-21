@@ -5,8 +5,8 @@ This module provides a light-weight, GUI-agnostic observability layer that any
 can mix in to report what it is doing, without taking a dependency on a console
 (``tqdm``) or a GUI (``Qt``).
 
-Two kinds of reports are emitted, kept deliberately separate so that consumers
-can react to one without being confused by the other:
+Three kinds of reports are emitted, kept deliberately separate so that consumers
+can react to one without being confused by the others:
 
 * :class:`ProgressReport` -- a *stack* of :class:`ProgressLevel` entries
   describing nested, (optionally) determinate progress (e.g. ``Beam 1/2`` ->
@@ -15,6 +15,8 @@ can react to one without being confused by the other:
   (e.g. ``{"iteration": 5, "objective": 12.3}``).  Suitable for live metric
   plots.  Algorithms without iterative progress (optimization) can push these
   *without* implying any bar progress.
+* :class:`WarningReport` -- a message the user should see, e.g. about an
+  automatic change of the input; a GUI can show it in a dialog.
 
 Algorithms mix in :class:`ProgressReporter` and call :meth:`ProgressReporter.track`
 (a drop-in replacement for ``tqdm``) and/or :meth:`ProgressReporter.report_status`.
@@ -111,6 +113,13 @@ class StatusReport(ComputeReport):
 
     message: str = ""
     data: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WarningReport(ComputeReport):
+    """A warning addressed to the user, emitted in addition to logging it."""
+
+    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +241,21 @@ class ProgressHandle:
         """Advance the current count by *n* and emit a report.
 
         Throttled, except the completing update (``current >= total``) is always
-        emitted so consumers see the level reach 100%.
+        emitted so consumers see the level reach 100%.  Every step is also a
+        cooperative pause/stop point (see :meth:`ProgressReporter.checkpoint`).
+
+        Raises
+        ------
+        ComputeCancelledError
+            If a stop has been requested.
         """
+        self._reporter._raise_if_cancelled()
         self._level.current += n
         self._reporter._emit_progress(force=self._is_complete())
 
     def update(self, current: int) -> None:
         """Set the absolute current count and emit a report (see :meth:`advance`)."""
+        self._reporter._raise_if_cancelled()
         self._level.current = current
         self._reporter._emit_progress(force=self._is_complete())
 
@@ -315,6 +332,11 @@ class ProgressReporter:
             control.wait_if_paused()
         return not self.should_cancel()
 
+    def _raise_if_cancelled(self) -> None:
+        """Stop an all-or-nothing computation at a progress step when requested."""
+        if not self.checkpoint():
+            raise ComputeCancelledError(f"{type(self).__name__} was stopped on request.")
+
     # -- progress reporting --------------------------------------------------
 
     @contextmanager
@@ -339,7 +361,8 @@ class ProgressReporter:
         """Iterate *iterable* as a progress level (a ``tqdm`` drop-in).
 
         Pushes a level named *name*, yields each item, and advances the level
-        after each.  When :attr:`console_progress` is ``True`` a nested ``tqdm``
+        after each, raising :class:`ComputeCancelledError` there once a stop is
+        requested.  When :attr:`console_progress` is ``True`` a nested ``tqdm``
         bar is also shown (extra ``tqdm_kwargs`` such as ``unit`` are forwarded).
         """
         if total is None:
@@ -364,6 +387,10 @@ class ProgressReporter:
     def report_status(self, message: str = "", **data: Any) -> None:
         """Emit a :class:`StatusReport` with arbitrary metric *data*."""
         self._dispatch(StatusReport(message=message, data=dict(data)))
+
+    def report_warning(self, message: str) -> None:
+        """Emit a :class:`WarningReport`; the caller still logs the warning itself."""
+        self._dispatch(WarningReport(message=message))
 
     # -- internals -----------------------------------------------------------
 

@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from pyRadPlan.scenarios import NominalScenario
 from pyRadPlan.plan import create_pln, PhotonPlan, IonPlan
-from pyRadPlan.bio_models import BiologicalModel, ConstantRBEModel, Wedenberg
+from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, Wedenberg
 
 
 def test_create_pln_no_args():
@@ -176,10 +176,10 @@ def test_plan_to_matrad():
 @pytest.mark.parametrize(
     "radiation_mode, expected",
     [
-        ("protons", "none"),
-        ("helium", "none"),
-        ("carbon", "kernel_based_lq"),
-        ("oxygen", "none"),
+        ("protons", "constant_rbe"),
+        ("helium", "HEL"),
+        ("carbon", "alpha_beta_kernels"),
+        ("oxygen", "alpha_beta_kernels"),
     ],
 )
 def test_ion_plan_default_bio_model(radiation_mode, expected):
@@ -281,4 +281,79 @@ def test_plan_bio_model_from_matrad_struct_drops_metadata():
     assert pln.bio_model.rbe == 1.0
 
     # the default of the radiation mode is applied for camelCase input as well
-    assert create_pln({"radiationMode": "carbon"}).bio_model.model == "kernel_based_lq"
+    assert create_pln({"radiationMode": "carbon"}).bio_model.model == "alpha_beta_kernels"
+
+
+@pytest.mark.parametrize(
+    ("stored", "identifier"),
+    [
+        ("kernel_based_lq", "alpha_beta_kernels"),
+        ("LEM", "alpha_beta_kernels"),
+        ("MKM", "zstar_kernels"),
+        ("zs_based_lq", "zstar_kernels"),
+        ("dose_average_alpha_beta", "alpha_beta_tables"),
+    ],
+)
+def test_plan_with_old_bio_model_identifier_loads(stored, identifier):
+    """Plans and workspaces serialized before the formalism renaming keep loading."""
+    dumped = IonPlan(radiation_mode="oxygen").model_dump()
+    dumped["bio_model"] = {"model": stored}
+    pln = create_pln(dumped)
+    assert pln.bio_model.model == identifier
+    assert pln.model_dump()["bio_model"]["model"] == identifier
+    assert create_pln({"radiation_mode": "oxygen", "bio_model": stored}).bio_model.model == (
+        identifier
+    )
+
+
+def test_plan_serializes_bio_model_data_selection():
+    pln = IonPlan(
+        radiation_mode="carbon",
+        bio_model={"model": "alpha_beta_kernels", "data_model": "LEM_I", "kernel_set": "lem1"},
+    )
+    dumped = pln.model_dump()
+    assert dumped["bio_model"] == {
+        "model": "alpha_beta_kernels",
+        "data_model": "LEM_I",
+        "kernel_set": "lem1",
+    }
+    restored = create_pln(dumped)
+    assert restored.bio_model == pln.bio_model
+    assert restored.to_matrad()["bioModel"] == "LEM"
+    assert restored.to_matrad()["bioModelParameters"] == {
+        "data_model": "LEM_I",
+        "kernel_set": "lem1",
+    }
+
+    let_plan = IonPlan(
+        radiation_mode="protons", bio_model={"model": "WED", "quantity_variants": {"let": "LETd"}}
+    )
+    assert create_pln(let_plan.model_dump()).bio_model.quantity_variant("let") == "LETd"
+
+
+def test_dij_with_old_bio_model_identifier_loads():
+    from pyRadPlan.dij import Dij
+
+    dij = Dij.model_validate(
+        {
+            "dose_grid": {"resolution": {"x": 1, "y": 1, "z": 1}, "dimensions": [2, 2, 2]},
+            "ct_grid": {"resolution": {"x": 1, "y": 1, "z": 1}, "dimensions": [2, 2, 2]},
+            "num_of_beams": 1,
+            "bixel_num": [0],
+            "ray_num": [0],
+            "beam_num": [0],
+            "bio_model": {"model": "kernel_based_lq"},
+        }
+    )
+    assert dij.bio_model.model == "alpha_beta_kernels"
+
+
+def test_plan_carries_a_loaded_machine():
+    from pyRadPlan.machines import load_from_name
+
+    machine = load_from_name("protons", "Generic")
+    plan = create_pln(radiation_mode="protons", machine=machine)
+    assert plan.machine is machine
+    # matRad's pln.machine names the base data file
+    assert plan.to_matrad()["machine"] == "Generic"
+    assert create_pln(radiation_mode="protons", machine={"name": "x"}).machine == {"name": "x"}
