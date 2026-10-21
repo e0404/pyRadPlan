@@ -73,9 +73,9 @@ Key fields
      - Total prescribed dose in Gy. Used as the reference dose for normalization.
    * - ``bio_model``
      - per mode
-     - Biological model (see :ref:`concept_bio_model`). Defaults to ``"kernel_based_lq"``
-       for carbon, preserving its established RBE-weighted workflow, and ``"none"`` for
-       other radiation modes. Select proton, helium, or oxygen models explicitly.
+     - Biological model (see :ref:`concept_bio_model`). Defaults to ``"constant_rbe"`` for
+       protons, ``"HEL"`` for helium, ``"alpha_beta_kernels"`` for carbon and oxygen, and
+       ``"none"`` for photons and VHEE.
    * - ``mult_scen``
      - nominal
      - Uncertainty / robustness scenario model
@@ -89,12 +89,12 @@ Biological model
 ``pln.bio_model`` selects the model that turns physical dose into RBE-weighted dose (see
 :ref:`concept_dose_calculation` for what the dose engines compute from it). It accepts a model
 name, a ``{"model": name, **parameters}`` dict, or a model instance from
-:mod:`pyRadPlan.bio_models`; the plan validates it against the radiation mode and stores the
+:mod:`pyRadPlan.biology.models`; the plan validates it against the radiation mode and stores the
 model instance:
 
 .. code-block:: python
 
-    from pyRadPlan.bio_models import Wedenberg, available_bio_models
+    from pyRadPlan.biology.models import Wedenberg, available_bio_models
 
     pln.bio_model = "MCN"                                  # McNamara, default parameters
     pln.bio_model = {"model": "constant_rbe", "rbe": 1.0}  # parametrised
@@ -146,17 +146,36 @@ complete extension contract and a registered external model example.
    * - ``"HEL"``
      - helium
      - Mairani helium model.
-   * - ``"kernel_based_lq"`` (``"LEM"``)
+   * - ``"alpha_beta_kernels"`` (``"kernel_based_lq"``, ``"LEM"``)
      - protons, helium, carbon, oxygen
-     - α/β depth kernels per tissue class from the machine data (e.g. LEM tables).
-   * - ``"dose_average_alpha_beta"``
+     - α/β depth kernels per tissue class from the machine data, of whatever provenance
+       (e.g. LEM I) the machine declares.
+   * - ``"alpha_beta_tables"`` (``"dose_average_alpha_beta"``)
      - protons, helium, carbon, oxygen
      - α/β dose-averaged from RBE tables over the machine's fragment fluence spectra.
+   * - ``"zstar_kernels"`` (``"MKM"``, ``"zs_based_lq"``)
+     - protons, helium, carbon, oxygen
+     - α = α₀ + β₀·z\* from the machine's z\* kernels, α₀/β₀ from the tissue.
 
 Models are lightweight parameter objects: ``pln.bio_model.parameters`` and
 ``pln.bio_model.to_dict()`` give the constructor arguments, so a plan with a model serialises
 and round-trips like any other field. matRad names (``constRBE``, ``LEM``) are understood on
-import and written by :meth:`~pyRadPlan.plan.Plan.to_matrad`.
+import and written by :meth:`~pyRadPlan.plan.Plan.to_matrad`. The former identifiers in
+parentheses keep loading plans and workspaces.
+
+Three models read per-tissue-class base data: ``"alpha_beta_kernels"`` and
+``"zstar_kernels"`` read kernels from the machine file, while ``"alpha_beta_tables"`` reads an
+RBE table (see :ref:`base_data_folders`) and averages it over the fragment fluence spectra
+of the machine. Each structure's tissue properties must match a tissue class of that data;
+see :ref:`voi_tissue_properties`. A machine may carry several sets of one kind of base data
+(e.g. α/β kernels computed with LEM I and with mMKM); ``data_model`` (the provenance, e.g.
+``"LEM_I"``) or ``kernel_set`` (the set's id) selects one, ``quantity_variants`` a LET or z\*
+definition, e.g. ``{"model": "WED", "quantity_variants": {"let": "LETd"}}``. If none is
+given, the set the structures' tissues resolve to, the machine's default set or its only set
+is used. :func:`~pyRadPlan.biology.models.bio_model_options` lists what a machine offers, and
+:meth:`~pyRadPlan.biology.models.BiologicalModel.check_tissues` reports structures that do not
+resolve. :ref:`biological_base_data` explains formalisms, provenances and the metadata the
+base data carries.
 
 Algorithm configuration dictionaries
 -------------------------------------

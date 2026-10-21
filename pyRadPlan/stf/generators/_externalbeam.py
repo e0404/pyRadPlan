@@ -1,4 +1,5 @@
 import math
+import warnings
 from typing import Union
 import numpy as np
 from numpy.typing import ArrayLike
@@ -6,6 +7,64 @@ from numpy.typing import ArrayLike
 from pyRadPlan.geometry import lps
 from pyRadPlan.plan import Plan
 from ._base import StfGeneratorBase
+
+
+def _deprecated_alias(old: str, new: str) -> property:
+    """Property forwarding the deprecated attribute *old* to *new*."""
+    message = f"{old} is deprecated, use {new} instead."
+
+    def fget(self):
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
+        return getattr(self, new)
+
+    def fset(self, value):
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
+        setattr(self, new, value)
+
+    return property(fget, fset, doc=f"Deprecated alias for {new}.")
+
+
+def resolve_iso_centers(iso_center, cst, num_of_beams: int | None = None) -> np.ndarray:
+    """
+    Resolve the isocenter of every beam as the stf generators use it.
+
+    Parameters
+    ----------
+    iso_center : ArrayLike or None
+        One isocenter (x, y, z) for all beams, or one per beam. ``None`` or an
+        empty array selects the target center of mass of ``cst``.
+    cst : StructureSet
+        Structure set providing the target center of mass.
+    num_of_beams : int, optional
+        Number of beams. A single isocenter is repeated for all of them, per-beam
+        isocenters have to match their number. If omitted, the isocenters are
+        returned as given.
+
+    Returns
+    -------
+    np.ndarray
+        The isocenters in mm, shape ``(num_of_beams, 3)``, or ``(k, 3)`` without
+        ``num_of_beams``.
+    """
+    if iso_center is None or np.size(iso_center) == 0:
+        iso_center = cst.target_center_of_mass()
+    iso_center = np.asarray(iso_center, dtype=np.float64)
+    if iso_center.size % 3 != 0:
+        raise ValueError(
+            "Iso center needs to have three coordinates (1x3 array) "
+            "or a set of 3D coordinates for each beam (nx3 array)."
+        )
+    iso_center = iso_center.reshape((-1, 3))
+    if num_of_beams is None:
+        return iso_center
+    if iso_center.shape[0] == 1:
+        return np.repeat(iso_center, num_of_beams, axis=0)
+    if iso_center.shape[0] != num_of_beams:
+        raise ValueError(
+            f"Got {iso_center.shape[0]} iso centers for {num_of_beams} beams; "
+            "give one iso center or one per beam."
+        )
+    return iso_center
 
 
 class StfGeneratorExternalBeam(StfGeneratorBase):
@@ -71,6 +130,10 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
     def _computed_target_margin(self) -> float:
         """Target margin to apply for beamlet placing."""
         return self.bixel_width
+
+    def _finalize_beam(self, beam: dict) -> dict:
+        """Post-process a beam after its rays were created (matRad's ``finalizeBeam``)."""
+        return beam
 
     def _create_rays(self, beam) -> list[dict]:
         """Get the rays on a beam / stf element."""
@@ -152,23 +215,7 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
                 "Bixel width (spot distance) needs to be a real number [mm] larger than zero."
             )
 
-        # Validate iso center
-        if self.iso_center is None:
-            self.iso_center = self._cst.target_center_of_mass().reshape((1, 3))
-        else:
-            self.iso_center = np.asarray(self.iso_center, dtype=np.float64).reshape((-1, 3))
-
-        # Now check isocenter
-        if (
-            self.iso_center.shape[0] != self.num_of_beams or self.iso_center.shape[0] != 1
-        ) and self.iso_center.shape[1] != 3:
-            raise ValueError(
-                "Iso center needs to have three coordinates (1x3 array) ",
-                " or a set of 3D coordinates for each beam (nx3 array).",
-            )
-
-        if self.iso_center.shape[0] == 1:
-            self.iso_center = np.repeat(self.iso_center, self.num_of_beams, axis=0)
+        self.iso_center = resolve_iso_centers(self.iso_center, self._cst, self.num_of_beams)
 
         stf = []
 
@@ -198,6 +245,7 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
             beam["source_point"] = rotation_matrix @ beam["source_point_bev"]
 
             beam["rays"] = self._create_rays(beam)
+            beam = self._finalize_beam(beam)
 
             stf.append(beam)
         return stf
@@ -231,23 +279,7 @@ class StfGeneratorSingleBixel(StfGeneratorExternalBeam):
     def _generate_source_geometry(self):
         """Generate the source geometry for the STF."""
 
-        # Validate iso center
-        if self.iso_center is None:
-            self.iso_center = self._cst.target_center_of_mass().reshape((1, 3))
-        else:
-            self.iso_center = np.asarray(self.iso_center, dtype=np.float64).reshape((-1, 3))
-
-        # Now check isocenter
-        if (
-            self.iso_center.shape[0] != self.num_of_beams or self.iso_center.shape[0] != 1
-        ) and self.iso_center.shape[1] != 3:
-            raise ValueError(
-                "Iso center needs to have three coordinates (1x3 array) ",
-                " or a set of 3D coordinates for each beam (nx3 array).",
-            )
-
-        if self.iso_center.shape[0] == 1:
-            self.iso_center = np.repeat(self.iso_center, self.num_of_beams, axis=0)
+        self.iso_center = resolve_iso_centers(self.iso_center, self._cst, self.num_of_beams)
 
         stf = []
 

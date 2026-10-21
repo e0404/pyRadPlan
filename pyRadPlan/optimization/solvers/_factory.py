@@ -1,7 +1,10 @@
 """Factory methods to manage available solver implementations."""
 
+import dataclasses
 import logging
 from typing import Union, Type
+
+from ...core import replace_nested
 from ._base_solvers import SolverBase
 
 SOLVERS = {}
@@ -56,7 +59,8 @@ def get_solver(solver_desc: Union[str, dict, SolverBase]):
         A string with the solver name, a dictionary with the solver configuration or a solver
         instance. When a dictionary is given, the ``"name"`` key selects the solver and any other
         keys are assigned as attributes. Dict-typed attributes (e.g. ``options``) are merged into
-        the solver's defaults rather than replacing them.
+        the solver's defaults rather than replacing them; so is a dictionary given for a
+        dataclass-typed attribute (e.g. ipax's ``options``), recursing into nested dataclasses.
 
     Returns
     -------
@@ -88,6 +92,12 @@ def get_solver(solver_desc: Union[str, dict, SolverBase]):
                 merged = dict(current)
                 merged.update(value)
                 setattr(solver, key, merged)
+            elif (
+                isinstance(value, dict)
+                and dataclasses.is_dataclass(current)
+                and not isinstance(current, type)
+            ):
+                setattr(solver, key, replace_nested(current, value))
             else:
                 setattr(solver, key, value)
         return solver

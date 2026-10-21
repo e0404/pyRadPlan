@@ -4,6 +4,10 @@ from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
 
+# Widget methods are patched on the class: undoing a patch on an instance leaves
+# the bound method behind as an attribute, a reference cycle whose garbage
+# collection segfaults PySide (Linux, Python 3.14).
+
 
 def test_workflow_widget_init(qapp):
     w = WorkflowWidget(WorkspaceManager())
@@ -107,6 +111,42 @@ def test_plan_change_marks_downstream_stale(qapp):
     # Re-optimizing clears the result flag.
     ws.result = {"w": 1}
     assert not w._result_stale
+
+    # Moved beams (stf without dij) outdate the dose influence as well.
+    ws.set_many(stf=object(), dij=object())
+    ws.stf = object()
+    assert w._dij_stale and w._result_stale
+
+
+def test_tissue_parameter_change_marks_dij_stale(qapp):
+    """Tissue parameters feed the biological model, so the dose influence goes stale."""
+    from pyRadPlan.cst import create_voi
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.biology.tissues import MKMTissueProperties
+
+    ct, cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    assert not w._dij_stale and not w._result_stale
+
+    # Other structure set edits leave the dose influence valid, only the result stale
+    cst.vois[0].objectives = []
+    ws.cst = cst
+    assert not w._dij_stale
+    assert w._result_stale
+
+    # Changing a structure's tissue properties invalidates the dose influence as well
+    voi = cst.vois[0]
+    tissue = MKMTissueProperties(alpha_x=0.2, beta_x=0.04, r_nucleus=3.9, r_domain=0.32)
+    data = dict(voi)
+    data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+    cst.vois = [create_voi(data), *cst.vois[1:]]
+    ws.cst = cst
+
+    assert w._dij_stale
+    assert w._indicators["dij"].toolTip().startswith("Outdated")
+    assert "recalculate" in w._lbl_status.text().lower()
 
 
 def test_cst_export_options_resolve_against_registry(qapp):
@@ -215,31 +255,149 @@ def test_import_without_ct_keeps_current_patient(qapp):
     assert ws.ct is ct and ws.cst is cst and ws.pln is new_plan
 
 
-def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch):
+def _recalc_setup(monkeypatch, prop_stf, beam_isos, forward):
+    """A workflow widget with a result to recalculate, run synchronously."""
     import numpy as np
-    from unittest.mock import Mock
+    from types import SimpleNamespace
 
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    weights = np.array([2.0, 3.0])
-    snapshot, fresh_dose = object(), object()
     ws.set_many(
         ct=object(),
-        cst=object(),
-        pln=object(),
-        stf=object(),
-        result={"w": weights, "physical_dose": object(), "physical_dose_saved": snapshot},
+        cst=SimpleNamespace(target_center_of_mass=lambda: np.array([1.0, 2.0, 3.0])),
+        pln=SimpleNamespace(prop_stf=prop_stf),
+        stf=SimpleNamespace(
+            beams=[SimpleNamespace(iso_center=np.asarray(iso, dtype=float)) for iso in beam_isos]
+        ),
+        dij=object(),
+        result={
+            "w": np.array([2.0, 3.0]),
+            "physical_dose": object(),
+            "physical_dose_saved": object(),
+        },
     )
-    forward = Mock(return_value={"physical_dose": fresh_dose})
     monkeypatch.setattr("pyRadPlan.calc_dose_forward", forward)
-    monkeypatch.setattr(w, "_run_in_thread", lambda fn, on_success, **kw: on_success(fn()))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    return ws, w
+
+
+@pytest.mark.parametrize(
+    ("prop_stf", "isos"),
+    [
+        ({"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]] * 2),
+        ({"iso_center": [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]}, [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]),
+        ({}, [[1.0, 2.0, 3.0]] * 2),
+        ({"iso_center": []}, [[1.0, 2.0, 3.0]] * 2),
+    ],
+    ids=["plan-isocenter", "per-beam", "automatic", "empty"],
+)
+def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, prop_stf, isos):
+    import numpy as np
+    from unittest.mock import Mock
+
+    fresh_dose = object()
+    forward = Mock(return_value={"physical_dose": fresh_dose})
+    ws, w = _recalc_setup(monkeypatch, prop_stf, [np.zeros(3)] * 2, forward)
+    old_stf, weights = ws.stf, ws.result["w"]
+    snapshot = ws.result["physical_dose_saved"]
 
     w._on_recalc_dose()
 
+    # The beams moved on a copy, which is stored with the result and outdates the dij.
     forward.assert_called_once_with(ws.ct, ws.cst, ws.stf, ws.pln, weights)
+    assert ws.stf is not old_stf
+    assert np.allclose([beam.iso_center for beam in ws.stf.beams], isos)
+    assert np.allclose([beam.iso_center for beam in old_stf.beams], 0.0)
+    assert w._dij_stale and not w._result_stale
     assert ws.result["physical_dose"] is fresh_dose
     assert ws.result["w"] is weights
     assert ws.result["physical_dose_saved"] is snapshot
+
+
+def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value={"physical_dose": object()})
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    stf = ws.stf
+
+    w._on_recalc_dose()
+
+    forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result["w"])
+    assert ws.stf is stf
+    assert not w._dij_stale
+
+
+def test_failed_recalculation_leaves_the_stf_untouched(qapp, monkeypatch):
+    import numpy as np
+    from unittest.mock import Mock
+
+    forward = Mock(side_effect=RuntimeError("engine failed"))
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [np.zeros(3)], forward)
+    stf, result = ws.stf, ws.result
+
+    with pytest.raises(RuntimeError):
+        w._on_recalc_dose()
+
+    assert ws.stf is stf and ws.result is result
+    assert np.allclose(stf.beams[0].iso_center, 0.0)
+
+
+@pytest.mark.parametrize(
+    "angles",
+    [
+        {"gantry_angles": [90, 180], "couch_angles": [0, 0]},
+        {"gantry_angles": [0, 180], "couch_angles": [0, 45]},
+        {"gantry_angles": [0], "couch_angles": [0]},
+        {"gantry_angles": [0, 180, 270], "couch_angles": [0]},
+        {"gantry_angles": []},
+        {"gantry_angles": [float("nan"), 180]},
+    ],
+    ids=["gantry", "couch", "removed-beam", "added-beam", "empty", "nonfinite"],
+)
+def test_recalculate_rejects_changed_beam_geometry(qapp, monkeypatch, angles):
+    from unittest.mock import Mock
+
+    forward = Mock()
+    ws, w = _recalc_setup(monkeypatch, {}, [[1, 2, 3]] * 2, forward)
+    for beam, gantry in zip(ws.stf.beams, [0.0, 180.0]):
+        beam.gantry_angle, beam.couch_angle = gantry, 0.0
+    ws.pln.prop_stf.update(angles)
+    ws.pln = ws.pln  # Applying a geometry edit marks the old result stale.
+    original_stf, original_result = ws.stf, ws.result
+    warning = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
+    )
+
+    w._on_recalc_dose()
+
+    forward.assert_not_called()
+    warning.assert_called_once()
+    assert "Calculate Dose Influence" in warning.call_args.args[2]
+    assert ws.stf is original_stf and ws.result is original_result
+    assert w._result_stale and w._dij_stale
+
+
+@pytest.mark.parametrize("couch", [None, [], [0], [0, 360]])
+def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value={"physical_dose": object()})
+    angles = {"gantry_angles": [360, -180], "couch_angles": couch}
+    ws, w = _recalc_setup(monkeypatch, angles, [[1, 2, 3]] * 2, forward)
+    for beam, gantry in zip(ws.stf.beams, [0.0, 180.0]):
+        beam.gantry_angle, beam.couch_angle = gantry, 0.0
+    original_stf = ws.stf
+
+    w._on_recalc_dose()
+
+    forward.assert_called_once_with(ws.ct, ws.cst, original_stf, ws.pln, ws.result["w"])
+    assert ws.stf is original_stf
 
 
 @pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
@@ -279,7 +437,7 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName", choose_file
     )
-    monkeypatch.setattr(w, "_run_save", lambda fn, *args: fn())
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
 
     w._on_save_workspace()
     data = load_data(path if suffix else path.with_suffix(".pkl"))
@@ -317,7 +475,7 @@ def test_save_workspace_rejects_lossy_extension(qapp, tmp_path, monkeypatch, suf
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
     )
     save = Mock()
-    monkeypatch.setattr(w, "_run_save", save)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", save)
     w._on_save_workspace()
     warning.assert_called_once()
     save.assert_not_called()
@@ -335,7 +493,7 @@ def test_save_workspace_without_ct_stops_before_file_dialog(qapp, monkeypatch):
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
     )
-    monkeypatch.setattr(w, "_run_save", save)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", save)
 
     w._on_save_workspace()
 
@@ -343,3 +501,430 @@ def test_save_workspace_without_ct_stops_before_file_dialog(qapp, monkeypatch):
     assert "Load a CT" in warning.call_args.args[2]
     dialog.assert_not_called()
     save.assert_not_called()
+
+
+def test_computation_warnings_shown_once_after_run(qapp, monkeypatch):
+    import time
+    from unittest.mock import Mock
+
+    from pyRadPlan.core import ProgressReporter
+
+    w = WorkflowWidget(WorkspaceManager())
+    warning = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning", warning
+    )
+
+    def _compute():
+        reporter = ProgressReporter()
+        reporter.report_warning("objectives converted")
+        reporter.report_warning("objectives converted")
+        reporter.report_warning("objectives kept")
+        return 1
+
+    done = []
+    w._run_in_thread(_compute, on_success=done.append)
+    deadline = time.monotonic() + 5.0
+    while not done and time.monotonic() < deadline:
+        qapp.processEvents()
+
+    assert done == [1]
+    warning.assert_called_once()
+    assert warning.call_args.args[2] == "objectives converted\n\nobjectives kept"
+    assert w._pending_warnings == []
+
+
+def test_stop_button_cancels_running_computation(qapp, monkeypatch):
+    import time
+    from unittest.mock import Mock
+
+    from pyRadPlan.core import ProgressReporter
+
+    w = WorkflowWidget(WorkspaceManager())
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    assert not w._btn_stop.isEnabled()
+
+    def _compute():
+        reporter = ProgressReporter()
+        reporter.console_progress = False
+        for _ in reporter.track(range(10_000), name="Ray"):
+            time.sleep(0.001)
+        return "finished"
+
+    done = []
+    w._run_in_thread(_compute, on_success=done.append)
+    assert w._btn_stop.isEnabled()
+
+    w._btn_stop.click()
+    assert not w._btn_stop.isEnabled()
+    assert w._lbl_status.text() == "Stopping…"
+
+    deadline = time.monotonic() + 5.0
+    while w.is_busy and time.monotonic() < deadline:
+        qapp.processEvents()
+    qapp.processEvents()
+
+    assert done == []
+    critical.assert_not_called()
+    assert w._lbl_status.text() == "Stopped"
+    assert not w._btn_stop.isEnabled()
+
+
+class _Editor:
+    """An editor with pending changes, applying successfully unless told otherwise."""
+
+    def __init__(self, applies=True):
+        self.pending, self.applies, self.applied = True, applies, 0
+
+    def has_pending(self):
+        return self.pending
+
+    def apply(self):
+        self.applied += 1
+        self.pending = not self.applies
+        return self.applies
+
+
+def _workflow_with_editor(monkeypatch, choice, applies=True):
+    w = WorkflowWidget(WorkspaceManager())
+    editor = _Editor(applies)
+    w.add_pending_changes_source("plan", editor.has_pending, editor.apply)
+    asked = []
+
+    def ask(step, names, outdates_input):
+        asked.append((step, names, outdates_input))
+        return choice
+
+    monkeypatch.setattr(WorkflowWidget, "_ask_pending_changes", staticmethod(ask))
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    return w, editor, asked, runs
+
+
+@pytest.mark.parametrize(
+    ("choice", "applied", "runs"),
+    [("apply", 1, 1), ("continue", 0, 1), ("cancel", 0, 0)],
+)
+def test_pending_plan_changes_are_offered_before_the_dose_influence(
+    qapp, monkeypatch, choice, applied, runs
+):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, choice)
+
+    w._on_calc_dose()
+
+    assert asked == [("Calculate Dose Influence", ["plan"], False)]
+    assert editor.applied == applied
+    assert len(started) == runs
+
+
+@pytest.mark.parametrize(
+    ("handler", "step"), [("_on_optimize", "Optimize"), ("_on_recalc_dose", "Recalculate Dose")]
+)
+def test_applying_pending_changes_stops_steps_using_the_dose_influence(
+    qapp, monkeypatch, handler, step
+):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, "apply")
+    w._ws.set_many(result={"w": [1.0]})
+
+    getattr(w, handler)()
+
+    assert asked == [(step, ["plan"], True)]
+    assert editor.applied == 1
+    assert started == []  # the dose influence is outdated after applying
+
+
+def test_no_question_without_pending_changes_or_after_a_failed_apply(qapp, monkeypatch):
+    w, editor, asked, started = _workflow_with_editor(monkeypatch, "apply", applies=False)
+
+    w._on_calc_dose()
+    assert editor.applied == 1 and started == []  # the plan did not validate
+
+    editor.pending = False
+    w._on_calc_dose()
+    assert len(asked) == 1 and len(started) == 1
+
+
+def test_renaming_a_structure_keeps_the_dose_influence(qapp):
+    """A rename leaves every tissue untouched, so the dose influence stays valid."""
+    from pyRadPlan.io import load_tg119
+
+    ct, cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+
+    cst.vois = [cst.vois[0].model_copy(update={"name": "renamed"}), *cst.vois[1:]]
+    ws.cst = cst
+
+    assert not w._dij_stale
+
+
+# ----------------------------------------------------------------------
+# Biological model checks before a calculation
+# ----------------------------------------------------------------------
+
+
+def _answer_message_boxes(monkeypatch, button_text):
+    """Answer every message box by clicking the button labelled `button_text`."""
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+
+    def exec_(box):
+        shown.append(f"{box.text()}\n{box.informativeText()}")
+        next(b for b in box.buttons() if b.text() == button_text).click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    return shown
+
+
+def _bio_workflow(monkeypatch, bio_model, cst=None, prop_dose_calc=None):
+    """A workflow on TG119 with an oxygen plan, whose calculations are only recorded."""
+    import numpy as np
+    from types import SimpleNamespace
+
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.plan import IonPlan
+
+    ct, tg119_cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    pln = IonPlan(
+        radiation_mode="oxygen",
+        machine="Generic",
+        bio_model=bio_model,
+        prop_stf={"gantry_angles": [0.0], "couch_angles": [0.0]},
+        prop_dose_calc=prop_dose_calc or {},
+    )
+    stf = SimpleNamespace(
+        beams=[SimpleNamespace(gantry_angle=0.0, couch_angle=0.0, iso_center=np.zeros(3))]
+    )
+    ws.set_many(
+        ct=ct, cst=cst or tg119_cst, pln=pln, stf=stf, result={"w": np.ones(2)}, dij=object()
+    )
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    return ws, w, runs
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler):
+    from pyRadPlan.gui.widgets.plan import PlanWidget
+
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    plan_widget = PlanWidget(workspace=ws)
+    assert plan_widget._cmb_bio_model.currentText() == "z* kernels · mMKM"
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    getattr(w, handler)()
+
+    assert len(shown) == 1 and "No matching tissue class" in shown[0]
+    assert ws.pln.bio_model.model == "none"
+    assert ws.pln.radiation_mode == "oxygen" and ws.pln.prop_stf["gantry_angles"] == [0.0]
+    assert len(runs) == 1
+    # The plan widget follows the reconfigured plan
+    assert plan_widget._cmb_bio_model.currentText() == "None (physical dose)"
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_cancelling_the_tissue_check_runs_nothing(qapp, monkeypatch, handler):
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    pln = ws.pln
+    shown = _answer_message_boxes(monkeypatch, "Cancel")
+
+    getattr(w, handler)()
+
+    assert len(shown) == 1
+    assert ws.pln is pln and ws.pln.bio_model.model == "zstar_kernels"
+    assert runs == []
+
+
+def test_matching_tissues_calculate_without_asking(qapp, monkeypatch):
+    ws, w, runs = _bio_workflow(monkeypatch, "alpha_beta_kernels")
+    pln = ws.pln
+    shown = _answer_message_boxes(monkeypatch, "Cancel")
+
+    w._on_calc_dose()
+
+    assert shown == []
+    assert ws.pln is pln
+    assert runs == ["Calculating dose influence…"]
+
+
+def test_the_check_uses_the_dose_engine_of_the_plan(qapp, monkeypatch):
+    """TOPAS does not use the machine's α/β kernels: the same plan now needs a decision."""
+    ws, w, runs = _bio_workflow(
+        monkeypatch, "alpha_beta_kernels", prop_dose_calc={"engine": "TOPAS"}
+    )
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    w._on_calc_dose()
+
+    assert len(shown) == 1
+    assert "TOPAS does not use the machine's α/β kernels" in shown[0]
+    assert "dose engine" in shown[0]
+    assert ws.pln.bio_model.model == "none"
+    assert ws.pln.prop_dose_calc["engine"] == "TOPAS"
+    assert runs == ["Calculating dose influence…"]
+
+
+def test_invalid_reference_parameters_block_the_calculation(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.biology.tissues import TissueProperties
+
+    tissue = TissueProperties.model_construct(alpha_x=-0.1, beta_x=0.05)
+    cst = SimpleNamespace(vois=[SimpleNamespace(name="PTV", tissue_properties=tissue)])
+    ws, w, runs = _bio_workflow(monkeypatch, "alpha_beta_kernels", cst=cst)
+    pln = ws.pln
+    critical = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: critical.append(args[2]))
+    shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+
+    w._on_calc_dose()
+
+    assert len(critical) == 1 and "PTV" in critical[0]
+    assert shown == []  # no way around it
+    assert ws.pln is pln
+    assert runs == []
+
+
+@pytest.mark.parametrize(
+    ("quantity", "bio_model", "blocked"),
+    [
+        ("rbe_x_dose", None, True),
+        ("physical_dose", None, False),
+        ("rbe_x_dose", "constant_rbe", False),
+    ],
+)
+def test_optimize_explains_biological_objectives_without_a_biological_dij(
+    qapp, monkeypatch, quantity, bio_model, blocked
+):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.biology.models import create_bio_model
+    from pyRadPlan.plan import PhotonPlan
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    objective = SimpleNamespace(quantity=quantity)
+    ws.set_many(
+        pln=PhotonPlan(),
+        cst=SimpleNamespace(vois=[SimpleNamespace(name="PTV", objectives=[objective])]),
+        dij=SimpleNamespace(
+            bio_model=create_bio_model(bio_model) if bio_model else None, alpha_dose=None
+        ),
+    )
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    runs = []
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, **kw: runs.append(kw["busy_text"])),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+
+    w._on_optimize()
+
+    if blocked:
+        assert len(warnings) == 1
+        assert "PTV: RBExDose" in warnings[0]
+        assert "without a biological model" in warnings[0]
+        assert runs == []
+    else:
+        assert warnings == []
+        assert len(runs) == 1
+
+
+def _mkm_cst(model="MKM"):
+    """TG119 structures whose tissues have the geometry of the oxygen machine's MKM class."""
+    from pyRadPlan.cst import StructureSet, create_voi
+    from pyRadPlan.io import load_tg119
+    from pyRadPlan.biology.tissues import MKMTissueProperties
+
+    ct, cst = load_tg119()
+    tissue = MKMTissueProperties(
+        model=model,
+        alpha_x=0.1,
+        beta_x=0.05,
+        r_nucleus=3.9,
+        r_domain=0.32,
+        alpha_0=0.1,
+        beta_0=0.05,
+    )
+    vois = []
+    for voi in cst.vois:
+        data = dict(voi)
+        data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+        vois.append(create_voi(data))
+    return StructureSet(ct_image=ct, vois=vois)
+
+
+@pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
+def test_tissue_warnings_calculate_with_the_model_without_asking(
+    qapp, monkeypatch, caplog, handler
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.gui.widgets.plan import PlanWidget
+
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels", cst=_mkm_cst())
+    plan_widget = PlanWidget(workspace=ws)
+    pln, cst = ws.pln, ws.cst
+    assert plan_widget.tissue_marker_state == "warning"
+
+    def no_box(*_args, **_kwargs):
+        raise AssertionError("unexpected message box")
+
+    monkeypatch.setattr(QMessageBox, "exec", no_box)
+    monkeypatch.setattr(QMessageBox, "warning", no_box)
+    monkeypatch.setattr(QMessageBox, "critical", no_box)
+
+    with caplog.at_level("WARNING"):
+        getattr(w, handler)()
+
+    # The plan keeps its biological model and the structures their labels
+    assert ws.pln is pln and ws.pln.bio_model.model == "zstar_kernels"
+    assert ws.cst is cst
+    assert all(voi.tissue_properties.model == "MKM" for voi in ws.cst.vois)
+    assert len(runs) == 1
+    # Shown without blocking: logged, and in the status line
+    assert any("is labelled MKM" in record.getMessage() for record in caplog.records)
+    assert "tissue warning" in w._lbl_status.text()
+
+
+def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
+    ws, w, runs = _bio_workflow(monkeypatch, "zstar_kernels")
+    shown = []
+
+    def exec_(box):
+        shown.append([b.text() for b in box.buttons()])
+        next(b for b in box.buttons() if b.text() == "Cancel").click()
+        return 0
+
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+
+    w._on_calc_dose()
+
+    assert len(shown) == 1
+    assert not any(text.startswith("Use the base data's model") for text in shown[0])
+    assert runs == []

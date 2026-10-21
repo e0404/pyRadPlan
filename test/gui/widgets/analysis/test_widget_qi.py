@@ -227,3 +227,64 @@ def test_qi_table_export_cancelled_dialog(qapp, test_data_photons, monkeypatch):
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
     assert widget.export_csv() is None
+
+
+def test_qi_table_cell_selection(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    qis = _collection(cst, _dose(result), ref_vols=[50], ref_doses=[1.0])
+    widget = QITableWidget()
+    widget.set_qis(qis)
+    name = widget.to_rows()[1][0]
+    selected = []
+    widget.cell_selected.connect(lambda *args: selected.append(args))
+
+    widget.table.setCurrentCell(0, 1 + widget._metric_keys.index("D50"))
+    assert selected == [(name, "D50")]
+    widget.table.setCurrentCell(0, 0)
+    assert selected[-1] == (name, "")
+
+    # programmatic selection does not echo back
+    widget.select(name, "mean")
+    assert widget.selected() == (name, "mean")
+    assert len(selected) == 2
+    widget.select(None)
+    assert widget.selected() == ("", "")
+
+
+def test_qi_table_selection_survives_rerender(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    dose = _dose(result)
+    widget = QITableWidget()
+    widget.set_qis(_collection(cst, dose, ref_vols=[50], ref_doses=[1.0]))
+    name = widget.to_rows()[1][0]
+    widget.select(name, "D50")
+    selected = []
+    widget.cell_selected.connect(lambda *args: selected.append(args))
+
+    widget.set_qis(_collection(cst, dose, ref_vols=[50, 90], ref_doses=[1.0]))
+    assert widget.selected() == (name, "D50")
+
+    widget.set_qis(_collection(cst, dose, ref_vols=[90], ref_doses=[1.0]))
+    assert widget.selected() == (name, "")
+    assert selected == []
+
+
+def test_qi_point_dialog_choices(qapp):
+    from pyRadPlan.gui.widgets.analysis._qi_point_dialog import QIPointDialog
+
+    dialog = QIPointDialog(1.5, 40.0, dose_unit="Gy")
+    assert dialog.replace_button is None
+    assert dialog.chosen() == ("dx", 40.0, False)
+    dialog.vx_radio.setChecked(True)
+    assert dialog.chosen() == ("vx", 1.5, False)
+
+    dialog = QIPointDialog(0.0, 90.0, kind="dx", replace="D98")
+    assert dialog.windowTitle() == "Change D98"
+    assert dialog.vx_radio.isHidden()
+    dialog.replace_button.click()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.chosen() == ("dx", 90.0, True)
+
+    dialog = QIPointDialog(0.0, 90.0, kind="dx", replace="D98")
+    dialog.add_button.click()
+    assert dialog.chosen() == ("dx", 90.0, False)

@@ -77,7 +77,7 @@ class Ray(PyRadPlanBaseModel):
             if not np.issubdtype(v.dtype, np.floating):
                 v = v.astype(float)
             v = v.reshape((3,))
-        return handler(v, info)
+        return handler(v)
 
     # Custom validator to convert list to np.ndarray
     @model_validator(mode="wrap")
@@ -98,7 +98,7 @@ class Ray(PyRadPlanBaseModel):
         #             data[i] = np.array(data[i])
 
         try:
-            return handler(data, info)
+            return handler(data)
         except ValidationError:
             if isinstance(data, dict):
                 # We obtain some meta information about the Beamlet model
@@ -177,7 +177,7 @@ class Ray(PyRadPlanBaseModel):
                         field_dump.values(), names=list(field_dump)
                     )
             return beamlets_dump
-        return handler(v, info)
+        return handler(v)
 
     def to_matrad(self, context: Union[str, dict] = "mat-file") -> Any:
         """Serialize rays for matRad structure."""

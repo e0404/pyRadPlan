@@ -1,9 +1,7 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
 
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class LETxDose(FluenceDependentQuantity):
