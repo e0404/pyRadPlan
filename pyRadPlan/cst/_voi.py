@@ -1279,12 +1279,7 @@ class ExternalVOI(VOI):
         return v
 
 
-__VOITYPES__ = {
-    "OAR": OAR,
-    "TARGET": Target,
-    "HELPER": HelperVOI,
-    "EXTERNAL": ExternalVOI,
-}
+__VOITYPES__ = {"OAR": OAR, "TARGET": Target, "HELPER": HelperVOI, "EXTERNAL": ExternalVOI}
 
 
 def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:

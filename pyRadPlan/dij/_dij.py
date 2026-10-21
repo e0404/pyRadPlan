@@ -757,7 +757,6 @@ class Dij(PyRadPlanBaseModel):
         for q in self.quantities:
             q_container: InfluenceMatrixContainer = getattr(self, q)
             if q_container is not None:
-                new_container = q_container.copy()
                 for i in range(q_container.size):
                     mat = q_container.flat[i]
                     if mat is None:

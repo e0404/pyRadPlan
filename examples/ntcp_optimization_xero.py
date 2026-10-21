@@ -1,20 +1,30 @@
 # %% [markdown]
-"""# Example for proton dose calculation using pencilbeam engine."""
+"""# Example for CNN-based xerostomia NTCP optimization on the matRad head-and-neck phantom."""
 # %% [markdown]
-# This example demonstrates how to use the pyRadPlan library to perform proton dose calculations.
+# This example demonstrates how to optimize a photon plan with a CNN-predicted xerostomia NTCP
+# for both parotids.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/pencilbeam_proton.py
+# jupytext --to notebook path/to/this/file/ntcp_optimization_xero.py
 
 # %%
 # Import necessary libraries
 import logging
-from pyRadPlan import generate_stf, calc_dose_influence, fluence_optimization, settings
 
+import SimpleITK as sitk
+
+from pyRadPlan import (
+    PhotonPlan,
+    generate_stf,
+    calc_dose_influence,
+    fluence_optimization,
+    settings,
+)
+from pyRadPlan.cst import HelperVOI
 from pyRadPlan.gui.apps import launch_viewer
 from pyRadPlan.io import load_patient
 from pyRadPlan.optimization.objectives import (
@@ -23,7 +33,8 @@ from pyRadPlan.optimization.objectives import (
     OutcomeCNN,
 )
 
-from pyRadPlan.plan._plans import PhotonPlan
+# HEAD_AND_NECK.mat ships with matRad (matRad/phantoms), not with pyRadPlan.
+HN_PHANTOM = r"C:\Users\f687r\Projects\matRad\matRad\phantoms\HEAD_AND_NECK.mat"
 
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
@@ -32,8 +43,8 @@ logging.basicConfig(level=logging.INFO)
 
 
 # %%
-# Load TG119 (provided within pyRadPlan)
-ct, cst = load_patient(r"path/to/hn_patient.mat")
+# Load the head-and-neck phantom and keep the structures used below
+ct, cst = load_patient(HN_PHANTOM)
 
 cst.vois[0] = cst.vois[12]  # PAROTID_LT
 cst.vois[1] = cst.vois[13]  # PAROTID_RT
@@ -43,7 +54,7 @@ cst.vois = cst.vois[:4]
 cst.create_body_seg()  # adds BODY/SKIN as vois[4]
 
 # %% [markdown]
-# In this section, we create a proton therapy plan using the ParticleHongPencilBeamEngine.
+# In this section, we create a photon IMRT plan.
 # %%
 # Create a plan object
 pln = PhotonPlan(radiation_mode="photons", machine="Generic")
@@ -55,32 +66,26 @@ pln.prop_stf = {
     "couch_angles": [0, 0, 0, 0, 0],
 }
 stf = generate_stf(ct, cst, pln)
-# Optimization
-# Configure CNN-based NTCP objective for an OAR
 
-# Keep handle to the CNN objective to access NTCP history after optimization.
+# %%
+# Configure the CNN-based xerostomia NTCP objective.
+# Keep a handle to it to access the NTCP history after optimization.
 # `model` accepts a HuggingFace name, a local model directory, or a preloaded
-# (model, preprocessor) tuple. A matching HF repo must exist for the name below.
+# (model, preprocessor) tuple.
 ntcp_obj = OutcomeCNN(
     priority=300000.0,
-    model="pyRadPlan-outcome-ORPDenseNet-Xerostomia",
-    mode="NTCP",
+    model=r"C:\Users\f687r\Projects\ml_models_git\pyRadPlan-outcome-ORPDenseNet-Xerostomia",
     warmup_iterations=5,
     ct=ct,  # needed as model input
     cst=cst,  # needed as model input
     cst_masks=[
-        "Parotid_LT",
-        "Parotid_RT",
+        "PAROTID_LT",
+        "PAROTID_RT",
     ],  # channel order matters unless the model collapses masks
-    # debug_plots="debug_grads",
 )
 
-cst.vois[0].objectives = [  # PAROTID_LT
-    SquaredOverdosing(priority=100.0, d_max=25.0),
-]
-cst.vois[1].objectives = [  # PAROTID_RT
-    SquaredOverdosing(priority=100.0, d_max=25.0),
-]
+cst.vois[0].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_LT
+cst.vois[1].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_RT
 cst.vois[2].objectives = [SquaredDeviation(priority=1000.0, d_ref=63.0)]  # PTV63
 cst.vois[3].objectives = [SquaredDeviation(priority=1000.0, d_ref=70.0)]  # PTV70
 cst.vois[4].objectives = [SquaredOverdosing(priority=800.0, d_max=30.0)]  # SKIN/BODY
@@ -89,9 +94,20 @@ cst.vois[4].objectives = [SquaredOverdosing(priority=800.0, d_max=30.0)]  # SKIN
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# The CNN reads the dose over the whole patient, which SKIN/BODY already covers -- the
-# objective restricts to its VOI and scatters back onto the dose grid internally.
-cst.vois[4].objectives.append(ntcp_obj)
+# The CNN sees the dose of the VOI it is attached to. A helper VOI over the whole grid,
+# excluded from overlap priorities, hands it the full dose including parotids and PTVs.
+cnn_mask = sitk.Image(ct.cube_hu.GetSize(), sitk.sitkUInt8) + 1
+cnn_mask.CopyInformation(ct.cube_hu)
+cst.vois = cst.vois + [
+    HelperVOI(
+        name="NTCP_CNN",
+        ct_image=ct,
+        mask=cnn_mask,
+        apply_overlap=None,
+        objectives=[ntcp_obj],
+    )
+]
+
 opt_info = {}
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
@@ -114,7 +130,7 @@ ntcp_history_native = list(ntcp_obj.ntcp_history)
 result = dij.compute_result_ct_grid(fluence)
 result_native = dij.compute_result_ct_grid(fluence_native)
 # %% [markdown]
-# Native plots: dose, native dose, signed difference; NTCP curve; DVHs
+# CNN-guided dose, native dose and their difference in the viewer; NTCP curve.
 # %%
 
 
