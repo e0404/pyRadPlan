@@ -13,6 +13,12 @@ from pyRadPlan.io import load_patient
 from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
+from pyRadPlan.scenarios import (
+    CTPhaseUncertainty,
+    RangeUncertainty,
+    ScenarioSet,
+    SetupUncertainty,
+)
 
 from pyRadPlan.stf import Ray, get_available_generators, get_generator, resolve_iso_centers
 from pyRadPlan.stf.generators import (
@@ -455,3 +461,65 @@ def test_resolve_iso_centers_without_number_of_beams():
 def test_resolve_iso_centers_rejects_invalid(iso_center):
     with pytest.raises(ValueError):
         resolve_iso_centers(iso_center, _CenterOfMassCst(), 3)
+
+
+def _imrt_target_mask(ct, cst, pln, scenarios):
+    stf_gen = StfGeneratorPhotonIMRT(pln)
+    stf_gen.mult_scen = scenarios
+    stf_gen._ct = ct
+    stf_gen._cst = cst
+    stf_gen._initialize()
+    stf_gen._initialize_patient_geometry()
+    return stf_gen, sitk.GetArrayFromImage(stf_gen._target_mask).astype(bool)
+
+
+def _num_rays(ct, cst, pln, scenarios):
+    stf_gen = StfGeneratorPhotonIMRT(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+    stf_gen.mult_scen = scenarios
+    return sum(len(beam["rays"]) for beam in stf_gen.generate(ct, cst))
+
+
+def _scenario_set(points):
+    return ScenarioSet.from_points(
+        (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()), points
+    )
+
+
+def test_target_margin_uses_setup_extent(sample_ct, sample_cst, sample_photon_pln):
+    """A 5 mm x shift widens the target margin along x only (numpy axis 2)."""
+    _, nominal = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, "nomScen")
+    shift_set = _scenario_set({"setup": [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)]})
+    stf_gen, shifted = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, shift_set)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, [5.0, 0.0, 0.0])
+    assert range_margin == 0.0
+
+    assert not (nominal & ~shifted).any()
+    assert shifted.sum() > nominal.sum()
+    np.testing.assert_array_equal(shifted.any(axis=2), nominal.any(axis=2))
+
+    rays_nominal = _num_rays(sample_ct, sample_cst, sample_photon_pln, "nomScen")
+    rays_shifted = _num_rays(sample_ct, sample_cst, sample_photon_pln, shift_set)
+    assert rays_shifted > rays_nominal
+
+
+def test_range_margin_uses_both_range_components(sample_ct, sample_cst, sample_photon_pln):
+    """The relative component enters with its own magnitude, not the absolute one."""
+    range_set = _scenario_set({"range": [(0.0, 0.0), (-1.0, 0.05), (0.5, -0.02)]})
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, range_set)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, np.zeros(3))
+    assert range_margin == pytest.approx(1.0 + 0.05)
+
+
+def test_margins_without_setup_and_range_dimensions(sample_ct, sample_cst, sample_photon_pln):
+    phase_only = ScenarioSet.from_points((CTPhaseUncertainty(),), {"ct_phase": [0]})
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, phase_only)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, np.zeros(3))
+    assert range_margin == 0.0
