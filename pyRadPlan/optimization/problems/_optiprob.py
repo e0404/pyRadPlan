@@ -103,7 +103,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     _cst: StructureSet
     _stf: SteeringInformation
     _dij: Dij
-    _mult_scen: ScenarioModel
+    _scenarios: ScenarioModel
 
     _objective_list: list[tuple]
     _constraint_list: list
@@ -209,7 +209,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._dose_convention = pln.dose_convention
 
         # Set Scenario Model
-        self._mult_scen = pln.mult_scen
+        self._scenarios = pln.scenarios
 
         # Assign Biologival Model
         if hasattr(pln, "bio_param"):

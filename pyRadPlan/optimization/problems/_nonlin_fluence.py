@@ -126,7 +126,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         xp = self._array_backend
 
-        # Check & get Caches
+        # One cotangent block per scenario the quantity evaluates, so that each scenario's
+        # objective gradient is back-projected through its own influence matrix.
         for q in self._quantities:
             if initialize_cache:
                 if self.bypass_objective_jacobian:
@@ -136,6 +137,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
                 self._grad_cache_intermediate[q.identifier] = xp.zeros(
                     (
+                        len(q.scenarios),
                         cache_rows,
                         self._dij.dose_grid.num_voxels,
                     ),
@@ -176,10 +178,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             else:
                 cache_ix = self._objectives_per_quantity[q.identifier]
 
+            cotangents = np.empty_like(q._q_cache)
+            for pos, scen_ix in enumerate(q_scenarios[q.identifier]):
+                cotangents.flat[scen_ix] = self._grad_cache_intermediate[q.identifier][pos, ...]
+            derivatives = q.compute_chain_derivative(cotangents, x)
             for scen_ix in q_scenarios[q.identifier]:
-                derivative = q.compute_chain_derivative(
-                    self._grad_cache_intermediate[q.identifier], x
-                ).flat[scen_ix]
+                derivative = derivatives.flat[scen_ix]
                 # Row by row, as the Array API has no integer-array (scatter) indexing.
                 for row, obj_ix in enumerate(cache_ix):
                     self._grad_cache[obj_ix, :] += derivative[row, :]
@@ -203,16 +207,13 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     q_cache_index = 0
                 else:
                     q_cache_index = self._q_cache_index[cnt]
-                for scen_ix in q_scenarios[obj.quantity]:
-                    self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][ix] += (
-                        xp.astype(
-                            obj.priority
-                            * obj.compute_gradient(q_vectors[obj.quantity].flat[scen_ix][ix]),
-                            self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][
-                                ix
-                            ].dtype,
-                            copy=False,
-                        )
+                for pos, scen_ix in enumerate(q_scenarios[obj.quantity]):
+                    block = self._grad_cache_intermediate[obj.quantity][pos, q_cache_index, ...]
+                    block[ix] += xp.astype(
+                        obj.priority
+                        * obj.compute_gradient(q_vectors[obj.quantity].flat[scen_ix][ix]),
+                        block.dtype,
+                        copy=False,
                     )
                 cnt += 1
 

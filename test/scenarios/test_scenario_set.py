@@ -337,3 +337,55 @@ def test_table_and_str(wc_like_set):
 def test_points_are_read_only(wc_like_set):
     with pytest.raises(ValueError):
         wc_like_set.values("setup")[0, 0] = 5.0
+
+
+def test_alias_of_and_matrad_compatibility():
+    s = ScenarioSet.from_points(
+        _dims(),
+        {"setup": [[0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 0, 0]]},
+        bases=[None, None, {"coefficients": {0: 1.0}}, {"coefficients": {0: 0.5, 1: 0.5}}],
+    )
+    assert s.alias_of(0) is None
+    assert s.alias_of(2) == 0
+    assert s.alias_of(3) is None
+    with pytest.raises(ValueError, match="Derived scenarios \[3\]"):
+        s.require_matrad_compatible(allow_alias=True)
+    with pytest.raises(ValueError, match="Derived scenarios \[2, 3\]"):
+        s.require_matrad_compatible(allow_alias=False)
+    s.subset([0, 1, 2]).require_matrad_compatible(allow_alias=True)
+    only_setup = ScenarioSet.from_points((SetupUncertainty(),), {"setup": [[0, 0, 0], [1, 0, 0]]})
+    shape, position = only_setup.matrad_layout()
+    assert shape == (1, 2, 1)
+    assert np.array_equal(position, [[0, 0, 0], [0, 1, 0]])
+
+
+def test_matrad_layout_matches_matrad_axes(wc_like_set):
+    shape, position = wc_like_set.matrad_layout()
+    assert shape == (2, 2, 2)
+    assert np.array_equal(position, wc_like_set.layout.position)
+
+
+def test_matrad_layout_rejects_foreign_dimensions():
+    from pyRadPlan.scenarios import UncertaintyDimension, register_dimension
+    from pyRadPlan.scenarios import _dimensions as dims_module
+
+    @register_dimension
+    class _Bio(UncertaintyDimension):
+        name = "bio_test_layout"
+        components = ("factor",)
+        kind = "continuous"
+        units = ("",)
+        affects = frozenset({"voxel_params"})
+
+        def mean(self):
+            return np.zeros(1)
+
+        def std(self):
+            return np.ones(1)
+
+    try:
+        s = ScenarioSet.from_points((SetupUncertainty(), _Bio()), {"bio_test_layout": [[0], [1]]})
+        with pytest.raises(ValueError, match="bio_test_layout"):
+            s.matrad_layout()
+    finally:
+        dims_module._DIMENSION_REGISTRY.pop("bio_test_layout", None)

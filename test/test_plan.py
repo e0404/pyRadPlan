@@ -100,7 +100,7 @@ def test_create_pln_dict_photons_snake():
     pln_from_dict = pln.model_dump()
     # print(set(pln_dict) ^ set(pln_from_dict))
     pln_dict.pop("mult_scen")
-    pln_from_dict.pop("mult_scen")
+    pln_from_dict.pop("scenarios")
     assert pln_from_dict.pop("bio_model") == {"model": "none"}
     assert pln_from_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict == pln_from_dict
@@ -151,7 +151,7 @@ def test_create_pln_dict_photons_camel():
     pln_dict_camel.pop("multScen")
 
     pln_to_dict = pln.model_dump()
-    pln_to_dict.pop("mult_scen")
+    pln_to_dict.pop("scenarios")
     assert pln_to_dict.pop("bio_model") == {"model": "none"}
     assert pln_to_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict_snake == pln_to_dict

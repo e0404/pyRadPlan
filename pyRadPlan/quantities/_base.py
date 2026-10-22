@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, Optional, Union
+from typing import Any, ClassVar, Optional, Union
 
 import logging
 
@@ -39,12 +39,13 @@ class RTQuantity(ABC):
         """
         Scenario indices a quantity evaluates when none are given.
 
-        With a scenario set on the dij, all computed (non-derived) scenarios. Without, every
-        non-empty slot of the ``physical_dose`` container (``[0]`` if there is none).
+        With a scenario set on the dij, every scenario of the set (computed and derived).
+        Without, every non-empty slot of the ``physical_dose`` container (``[0]`` if there is
+        none).
         """
         scenario_set = getattr(dij, "scenarios", None)
         if scenario_set is not None:
-            return [int(i) for i in scenario_set.computed_indices()]
+            return list(range(len(scenario_set)))
         container = getattr(dij, "physical_dose", None)
         if container is None:
             return [0]
@@ -235,18 +236,23 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         Parameters
         ----------
-        d_quantity : ArrayLike
-            Derivative of w.r.t. to the quantity.
+        d_quantity : ArrayLike or object ndarray
+            Derivative w.r.t. the quantity, either one array applied to every scenario or an
+            object array in the scenario container layout holding one cotangent per slot.
         fluence : ArrayLike
             Fluence vector.
 
         Returns
         -------
         NDArray
-            Derivative of the quantity w.r.t. the fluence.
+            Derivative of the quantity w.r.t. the fluence per scenario slot.
         """
 
-        xp = array_api_compat.array_namespace(d_quantity, fluence)
+        per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
+        if per_slot:
+            xp = array_api_compat.array_namespace(fluence)
+        else:
+            xp = array_api_compat.array_namespace(d_quantity, fluence)
 
         if not xp.isdtype(fluence.dtype, self._dtype):
             fluence = xp.asarray(fluence, dtype=self._dtype)
@@ -319,18 +325,39 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             else:
                 self._q_cache.flat[scenario_index] = self._combine(self._q_cache, coefficients)
 
-    def _compute_chain_derivative_cache(self, d_quantity: Array) -> Array:
-        """Compute the fluence derivative from the quantity derivative into the cache."""
+    def _compute_chain_derivative_cache(self, d_quantity: Any) -> None:
+        """
+        Compute the fluence derivative from the quantity derivative into the cache.
+
+        With one cotangent per slot (object array), a derived slot is
+        ``sum(c_k * chain_k(cotangent_s))`` with its own cotangent; with a single cotangent the
+        combination of the computed slots' derivatives is used instead.
+        """
+        per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
+
+        def cotangent(index: int) -> Array:
+            return d_quantity.flat[index] if per_slot else d_quantity
 
         for scenario_index, kind, coefficients in self._evaluation_plan:
             if kind == "compute":
                 self._qgrad_cache.flat[scenario_index] = (
-                    self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
+                    self._compute_chain_derivative_single_scenario(
+                        cotangent(scenario_index), scenario_index
+                    )
                 )
-            else:
+            elif not per_slot:
                 self._qgrad_cache.flat[scenario_index] = self._combine(
                     self._qgrad_cache, coefficients
                 )
+            else:
+                result = None
+                for k, c in coefficients.items():
+                    term = self._compute_chain_derivative_single_scenario(
+                        cotangent(scenario_index), k
+                    )
+                    term = term if c == 1.0 else c * term
+                    result = term if result is None else result + term
+                self._qgrad_cache.flat[scenario_index] = result
 
     @staticmethod
     def _combine(cache: np.ndarray, coefficients: dict[int, float]) -> Array:

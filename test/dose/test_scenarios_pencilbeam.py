@@ -7,7 +7,6 @@ import pytest
 import SimpleITK as sitk
 from scipy import sparse
 
-import pyRadPlan.dose.engines._base as engine_base
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.ct import CT
 from pyRadPlan.dose import calc_dose_influence
@@ -47,17 +46,6 @@ SHIFT_Y = (0.0, 3.0, 0.0)
 RANGE_ABS = (2.0, 0.0)
 
 
-@pytest.fixture
-def raw_dij(monkeypatch):
-    """
-    Return the engines' dij dictionaries unvalidated.
-
-    Dij validation does not accept several scenarios on one CT phase yet (alphax columns are
-    checked against the container size).
-    """
-    monkeypatch.setattr(engine_base, "validate_dij", lambda dij: dij)
-
-
 @pytest.fixture(params=["protons", "photons"])
 def case(request):
     pln, ct, cst, stf, _, _ = request.getfixturevalue(f"test_data_{request.param}")
@@ -84,7 +72,7 @@ def _scenario_set(*, setup=None, range_=None, ct_phase=None, phases=(0,), bases=
 def _calc(pln, ct, cst, stf, scenarios=None, quantity="physical_dose"):
     engine = get_engine(pln)
     dij = engine.calc_dose_influence(ct, cst, stf, scenarios=scenarios)
-    return engine, dij, list(dij[quantity])
+    return engine, dij, list(getattr(dij, quantity))
 
 
 def _shifted(stf, shift):
@@ -104,13 +92,13 @@ def _assert_differs(a, b):
     assert (sparse.csc_array(a) != sparse.csc_array(b)).nnz > 0
 
 
-def test_nominal_set_has_one_flat_slot(case, raw_dij):
+def test_nominal_set_has_one_flat_slot(case):
     pln, ct, cst, stf = case
     engine, dij, slots = _calc(pln, ct, cst, stf)
 
-    assert dij["physical_dose"].shape == (1,)
-    assert dij["num_of_scenarios"] == 1
-    assert dij["scenarios"] is engine._scenarios
+    assert dij.physical_dose.shape == (1,)
+    assert dij.num_of_scenarios == 1
+    assert dij.scenarios is engine._scenarios
     assert len(engine._scenarios) == 1
     assert slots[0] is not None
 
@@ -123,7 +111,7 @@ def test_scenarios_are_recorded_on_the_dij(case):
     assert recorded is None or recorded is engine._scenarios
 
 
-def test_setup_and_range_scenarios(case, raw_dij, monkeypatch):
+def test_setup_and_range_scenarios(case, monkeypatch):
     pln, ct, cst, stf = case
     scen_set = _scenario_set(
         setup=[(0.0, 0.0, 0.0), SHIFT_X, (0.0, 0.0, 0.0)],
@@ -132,8 +120,8 @@ def test_setup_and_range_scenarios(case, raw_dij, monkeypatch):
 
     engine, dij, slots = _calc(pln, ct, cst, stf, scenarios=scen_set)
     assert engine._scenarios is scen_set
-    assert dij["scenarios"] is scen_set
-    assert dij["num_of_scenarios"] == 3
+    assert dij.scenarios is scen_set
+    assert dij.num_of_scenarios == 3
     assert engine.mult_scen is not scen_set
 
     _, _, nominal = _calc(pln, ct, cst, stf)
@@ -157,19 +145,19 @@ def test_setup_and_range_scenarios(case, raw_dij, monkeypatch):
     np.testing.assert_allclose(range_slot, reference, rtol=1e-4, atol=1e-6 * reference.max())
 
 
-def test_proton_range_shift_pulls_the_dose_upstream(test_data_protons, raw_dij):
+def test_proton_range_shift_pulls_the_dose_upstream(test_data_protons):
     """A larger radiological depth stops the protons earlier, closer to the source."""
     pln, ct, cst, stf, _, _ = test_data_protons
     scen_set = _scenario_set(range_=[(0.0, 0.0), (10.0, 0.0)])
     _, dij, slots = _calc(pln, ct, cst, stf, scenarios=scen_set)
 
-    grid = dij["dose_grid"]
+    grid = dij.dose_grid
     coords = linear_indices_to_grid_coordinates(
         np.arange(grid.num_voxels), grid, index_type="numpy"
     )
     beam = stf.beams[0]
     distance = np.linalg.norm(coords - (beam.iso_center + beam.source_point), axis=1)
-    columns = np.flatnonzero(dij["beam_num"] == 0)
+    columns = np.flatnonzero(dij.beam_num == 0)
 
     mean_distance = []
     for slot in slots:
@@ -179,7 +167,7 @@ def test_proton_range_shift_pulls_the_dose_upstream(test_data_protons, raw_dij):
     assert mean_distance[1] < mean_distance[0] - 1.0
 
 
-def test_shifts_do_not_accumulate(case, raw_dij):
+def test_shifts_do_not_accumulate(case):
     pln, ct, cst, stf = case
     iso_before = [beam.iso_center.copy() for beam in stf.beams]
     dump_before = stf.model_dump()
@@ -211,14 +199,14 @@ def _two_phase_ct(ct: CT, hu_offset: float = 300.0) -> tuple[CT, CT]:
     return CT(cube_hu=sitk.JoinSeries([ct.cube_hu, phase1])), CT(cube_hu=phase1)
 
 
-def test_ct_phase_selection(case, raw_dij):
+def test_ct_phase_selection(case):
     pln, ct, cst, stf = case
     ct2, ct_phase1 = _two_phase_ct(ct)
     assert ct2.num_of_ct_scen == 2
 
     scen_set = _scenario_set(ct_phase=[1, 0], phases=(0, 1))
     _, dij, slots = _calc(pln, ct2, cst, stf, scenarios=scen_set)
-    assert dij["physical_dose"].shape == (2,)
+    assert dij.physical_dose.shape == (2,)
 
     _, _, nominal = _calc(pln, ct, cst, stf)
     _, _, nominal_phase1 = _calc(pln, ct_phase1, cst, stf)
@@ -228,18 +216,18 @@ def test_ct_phase_selection(case, raw_dij):
     _assert_equal(slots[1], nominal[0])
 
 
-def test_ct_phase_selection_bio(test_data_protons, raw_dij):
+def test_ct_phase_selection_bio(test_data_protons):
     pln, ct, cst, stf, _, _ = test_data_protons
     pln.bio_model = "MCN"
     ct2, ct_phase1 = _two_phase_ct(ct)
 
     scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
     _, dij, _ = _calc(pln, ct2, cst, stf, scenarios=scen_set)
-    assert dij["alphax"].shape[1] == 2
+    assert dij.alphax.shape[1] == 2
 
     _, ref, _ = _calc(pln, ct_phase1, cst, stf)
     for quantity in ("physical_dose", "alpha_dose", "sqrt_beta_dose"):
-        _assert_equal(dij[quantity][1], ref[quantity][0])
+        _assert_equal(getattr(dij, quantity)[1], getattr(ref, quantity)[0])
 
 
 def test_two_phase_nominal_model_validates(test_data_protons):
@@ -256,7 +244,7 @@ def test_two_phase_nominal_model_validates(test_data_protons):
     _assert_differs(dij.physical_dose[0], dij.physical_dose[1])
 
 
-def test_derived_scenarios_are_not_computed(case, raw_dij):
+def test_derived_scenarios_are_not_computed(case):
     pln, ct, cst, stf = case
     scen_set = _scenario_set(
         setup=[(0.0, 0.0, 0.0), SHIFT_X, (0.0, 0.0, 0.0)],
@@ -264,12 +252,14 @@ def test_derived_scenarios_are_not_computed(case, raw_dij):
     )
     engine, dij, slots = _calc(pln, ct, cst, stf, scenarios=scen_set)
 
-    assert dij["physical_dose"].shape == (3,)
+    assert dij.physical_dose.shape == (3,)
     assert slots[0] is not None and slots[1] is not None
-    assert slots[2] is None
+    # the alias scenario is not computed: its slot shares the referenced matrix object
+    assert slots[2] is slots[0]
+    assert engine._scenarios.alias_of(2) == 0
 
 
-def test_explicit_model_is_accepted(test_data_protons, raw_dij):
+def test_explicit_model_is_accepted(test_data_protons):
     pln, ct, cst, stf, _, _ = test_data_protons
     scen_set = _scenario_set(setup=[(0.0, 0.0, 0.0), SHIFT_X])
     pln.mult_scen = ExplicitScenarioModel.from_set(scen_set)
@@ -278,7 +268,7 @@ def test_explicit_model_is_accepted(test_data_protons, raw_dij):
     dij = engine.calc_dose_influence(ct, cst, stf)
 
     np.testing.assert_array_equal(engine._scenarios.values("setup"), scen_set.values("setup"))
-    assert dij["physical_dose"].shape == (2,)
+    assert dij.physical_dose.shape == (2,)
 
 
 def test_unsupported_dimension_is_refused(test_data_protons):
@@ -320,13 +310,13 @@ def test_ct_phase_out_of_range_is_refused(test_data_protons):
         engine.calc_dose_influence(ct, cst, stf, scenarios=scen_set)
 
 
-def test_public_entry_point_scenario_override(test_data_protons, raw_dij):
+def test_public_entry_point_scenario_override(test_data_protons):
     pln, ct, cst, stf, _, _ = test_data_protons
     model_before = pln.mult_scen.model_dump()
     scen_set = _scenario_set(setup=[(0.0, 0.0, 0.0), SHIFT_X])
 
     dij = calc_dose_influence(ct, cst, stf, pln, scenarios=scen_set)
 
-    assert dij["scenarios"] is scen_set
-    assert dij["physical_dose"].shape == (2,)
+    assert dij.scenarios is scen_set
+    assert dij.physical_dose.shape == (2,)
     assert pln.mult_scen.model_dump() == model_before

@@ -1,8 +1,10 @@
 # Scenario models: design and implementation plan
 
-Status: plan (branch `feature/secnario_models`), first pass targets dose calculation and
-quantities. Robust optimization, composite scenarios and adaptive (PCE-driven) scenario sets are
-designed for but not implemented in this pass.
+Status: first pass implemented on branch `feature/secnario_models` (2026-10-22): steps 0 to 4
+below are done; dose calculation, the Dij, the quantities and the plan use scenario sets. Robust
+optimization strategies, models emitting composite scenarios and adaptive (PCE-driven) drivers
+remain open; the hooks for them (`ScenarioBasis`, `ScenarioSet.from_points` / `extend`,
+`Dij.extend_scenarios`, the `scenarios=` override of the dose calculation) are in place.
 
 ## 1. Goals
 

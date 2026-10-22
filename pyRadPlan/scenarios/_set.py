@@ -24,6 +24,8 @@ from ._distributions import create_distribution
 
 #: Axis tying matRad uses: CT phase, setup shift (x, y, z tied) and range (abs, rel tied).
 MATRAD_AXES: tuple[tuple[str, ...], ...] = (("ct_phase",), ("setup",), ("range",))
+#: The dimensions matRad's ``(ct, shift, range)`` cell layout can express.
+MATRAD_DIMENSIONS: tuple[str, ...] = tuple(axis[0] for axis in MATRAD_AXES)
 
 #: Tag of the nominal (unperturbed) scenario.
 TAG_NOMINAL = "nominal"
@@ -666,6 +668,13 @@ class ScenarioSet(PyRadPlanBaseModel):
                 return int(i)
         raise ValueError("Scenario set has no nominal scenario")
 
+    def alias_of(self, index: int) -> Optional[int]:
+        """Index of the scenario whose matrices scenario ``index`` shares, if it is an alias."""
+        basis = self.bases[index]
+        if basis is None or not basis.is_alias:
+            return None
+        return next(iter(basis.coefficients))
+
     def tagged(self, tag: str) -> np.ndarray:
         """Flat indices of the scenarios carrying ``tag``."""
         return np.asarray([i for i, t in enumerate(self.tags) if tag in t], dtype=int)
@@ -862,6 +871,49 @@ class ScenarioSet(PyRadPlanBaseModel):
     def grid_view(self, container: Any) -> np.ndarray:
         """Arrange a flat per-scenario container on the default layout grid."""
         return self.layout.grid_view(container)
+
+    def require_matrad_compatible(self, *, allow_alias: bool = True) -> None:
+        """
+        Raise ``ValueError`` if the set cannot be written as matRad ``(ct, shift, range)`` cells.
+
+        Only the ``ct_phase``, ``setup`` and ``range`` dimensions are expressible, and derived
+        scenarios have no matrices of their own (aliases share one and are allowed unless
+        ``allow_alias`` is False).
+        """
+        unsupported = [d for d in self.dimension_names if d not in MATRAD_DIMENSIONS]
+        if unsupported:
+            raise ValueError(
+                f"Scenario dimension(s) {unsupported} cannot be expressed in matRad's "
+                f"(ct_phase, setup, range) cell layout"
+            )
+        derived = [
+            i
+            for i, b in enumerate(self.bases)
+            if b is not None and not (allow_alias and b.is_alias)
+        ]
+        if derived:
+            raise ValueError(
+                f"Derived scenarios {derived} have no influence matrices and cannot be "
+                "exported to matRad"
+            )
+
+    def matrad_layout(self) -> tuple[tuple[int, int, int], np.ndarray]:
+        """
+        Return the matRad cell shape ``(ct, shift, range)`` and per-scenario subscripts.
+
+        Dimensions the set lacks have extent one and subscript zero. Raises ``ValueError``
+        for dimensions matRad cannot express.
+        """
+        self.require_matrad_compatible(allow_alias=True)
+        present = [d for d in MATRAD_DIMENSIONS if self.has_dimension(d)]
+        layout = self.layout_for(*((d,) for d in present))
+        shape = [1, 1, 1]
+        position = np.zeros((len(self), 3), dtype=int)
+        for k, dim in enumerate(present):
+            column = MATRAD_DIMENSIONS.index(dim)
+            shape[column] = layout.shape[k]
+            position[:, column] = layout.position[:, k]
+        return (shape[0], shape[1], shape[2]), position
 
     def to_xarray(self):
         """Flat scenario indices as an ``xarray.DataArray`` over the default layout (optional)."""

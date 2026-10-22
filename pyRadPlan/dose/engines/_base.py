@@ -836,6 +836,14 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             for key in ("alphax", "betax", "tissue_class_ix"):
                 if dij[key].shape[1] == 1:
                     dij[key] = np.repeat(dij[key], ct.num_of_ct_scen, axis=1)
+        # One column per voxel parameter set of the scenario set (today: per used CT phase)
+        phase_columns = [
+            int(round(float(values["ct_phase"][0]))) if "ct_phase" in values else 0
+            for values, _ in self._scenarios.voxel_param_sets()
+        ]
+        for key in ("alphax", "betax", "tissue_class_ix"):
+            if dij[key] is not None:
+                dij[key] = np.ascontiguousarray(dij[key][:, phase_columns])
         self._tissue_classes = cst.get_tissue_classes()
 
         # TODO: this function has not yet been implemented

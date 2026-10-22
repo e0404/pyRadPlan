@@ -1326,7 +1326,7 @@ class PlanWidget(WorkspaceWidget):
 
         self._restore_iso_center(stf.get("iso_center"))
 
-        scenario = getattr(pln.mult_scen, "short_name", None)
+        scenario = getattr(pln.scenarios, "short_name", None)
         if scenario and self._cmb_scenario.findText(scenario) >= 0:
             self._cmb_scenario.setCurrentText(scenario)
 
@@ -1702,8 +1702,8 @@ class PlanWidget(WorkspaceWidget):
             else {}
         )
         scenario = self._cmb_scenario.currentText()
-        if current is not None and getattr(current.mult_scen, "short_name", None) == scenario:
-            scenario = deepcopy(current.mult_scen)
+        if current is not None and getattr(current.scenarios, "short_name", None) == scenario:
+            scenario = deepcopy(current.scenarios)
         plan_data.update(
             {
                 "radiation_mode": radiation_mode,
@@ -1711,7 +1711,7 @@ class PlanWidget(WorkspaceWidget):
                 "num_of_fractions": int(self._spn_fractions.value()),
                 "dose_convention": self._cmb_dose_convention.currentData(),
                 "bio_model": self._selected_bio_model(),
-                "mult_scen": scenario,
+                "scenarios": scenario,
                 "prop_stf": prop_stf,
                 "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
                 "prop_dose_calc": prop_dose_calc,

@@ -294,7 +294,8 @@ def test_default_scenarios():
 
     d["scenarios"] = _phase_set([0, 1, 0], bases=[None, None, {"coefficients": {0: 1.0}}])
     d["physical_dose"] = _container(*_random_mats(np.random.default_rng(0), 2), None)
-    assert list(Dose(Dij.model_validate(d)).scenarios) == [0, 1]
+    # derived (here: alias) scenarios are part of the set, so they are evaluated by default
+    assert list(Dose(Dij.model_validate(d)).scenarios) == [0, 1, 2]
 
 
 def test_rbe_x_dose_uses_voxel_param_column(two_scenario_dij):

@@ -47,7 +47,15 @@ from ._gridded import GriddedScenarioModel
 from ._importance import ImportanceScenarioModel
 from ._nominal import NominalScenarioModel
 from ._random import RandomScenarioModel
-from ._set import MATRAD_AXES, TAG_NOMINAL, Scenario, ScenarioBasis, ScenarioLayout, ScenarioSet
+from ._set import (
+    MATRAD_AXES,
+    MATRAD_DIMENSIONS,
+    TAG_NOMINAL,
+    Scenario,
+    ScenarioBasis,
+    ScenarioLayout,
+    ScenarioSet,
+)
 from ._worst_case import WorstCaseScenarioModel
 
 logger = logging.getLogger(__name__)
@@ -186,6 +194,7 @@ __all__ = [
     "AFFECTS_RANGE",
     "AFFECTS_VOXEL_PARAMS",
     "MATRAD_AXES",
+    "MATRAD_DIMENSIONS",
     "TAG_NOMINAL",
     "CTPhaseUncertainty",
     "ExplicitScenarioModel",

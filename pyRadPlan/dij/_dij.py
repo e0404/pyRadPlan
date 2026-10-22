@@ -28,7 +28,7 @@ import scipy.sparse as sp
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, create_bio_model
-from pyRadPlan.scenarios import MATRAD_AXES, ScenarioModel, ScenarioSet
+from pyRadPlan.scenarios import ScenarioModel, ScenarioSet
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
@@ -45,7 +45,6 @@ _QUANTITY_FIELDS: tuple[str, ...] = (
     "sqrt_beta_dose",
 )
 _VOXEL_FIELDS: tuple[str, ...] = ("alphax", "betax", "tissue_class_ix")
-_MATRAD_DIMENSIONS: tuple[str, ...] = tuple(axis[0] for axis in MATRAD_AXES)
 
 
 logger = logging.getLogger(__name__)
@@ -138,7 +137,7 @@ def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.nd
             flat[i] = entry
         return flat
 
-    layout, shape = _matrad_layout(scenarios)
+    shape, position = scenarios.matrad_layout()
     if cells.shape != shape:
         squeezed = tuple(d for d in shape if d != 1)
         if tuple(d for d in cells.shape if d != 1) != squeezed:
@@ -147,7 +146,6 @@ def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.nd
                 f"{shape}"
             )
         cells = cells.reshape(shape)
-    position = _matrad_positions(layout, scenarios)
     flat = np.empty((len(scenarios),), dtype=object)
     used = 0
     for i in range(len(scenarios)):
@@ -166,45 +164,9 @@ def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.nd
     return flat
 
 
-def _matrad_layout(scenarios: ScenarioSet):
-    """Return the matRad-axes layout of ``scenarios`` and the 3-D matRad cell shape."""
-    unsupported = [d for d in scenarios.dimension_names if d not in _MATRAD_DIMENSIONS]
-    if unsupported:
-        raise ValueError(
-            f"Scenario dimension(s) {unsupported} cannot be expressed in matRad's "
-            f"(ct_phase, setup, range) cell layout"
-        )
-    axes = [axis for axis in MATRAD_AXES if scenarios.has_dimension(axis[0])]
-    layout = scenarios.layout_for(*axes)
-    by_dim = dict(zip((axis[0] for axis in axes), layout.shape))
-    shape = tuple(by_dim.get(d, 1) for d in _MATRAD_DIMENSIONS)
-    return layout, shape
-
-
-def _matrad_positions(layout: Any, scenarios: ScenarioSet) -> np.ndarray:
-    """Per-scenario 3-D matRad cell subscripts (missing dimensions at position 0)."""
-    position = np.zeros((len(scenarios), len(_MATRAD_DIMENSIONS)), dtype=int)
-    present = [d for d in _MATRAD_DIMENSIONS if scenarios.has_dimension(d)]
-    for k, dim in enumerate(present):
-        position[:, _MATRAD_DIMENSIONS.index(dim)] = layout.position[:, k]
-    return position
-
-
-def _check_matrad_exportable(scenarios: ScenarioSet) -> None:
-    """Raise if ``scenarios`` cannot be written as matRad cells."""
-    derived = [i for i, b in enumerate(scenarios.bases) if b is not None and not b.is_alias]
-    if derived:
-        raise ValueError(
-            f"Derived scenarios {derived} have no influence matrices and cannot be exported to "
-            "matRad"
-        )
-    _matrad_layout(scenarios)
-
-
 def _flat_to_matrad_cells(container: np.ndarray, scenarios: ScenarioSet) -> np.ndarray:
     """Arrange a flat container on matRad's ``(ct, shift, range)`` cells, empty off-mask."""
-    layout, shape = _matrad_layout(scenarios)
-    position = _matrad_positions(layout, scenarios)
+    shape, position = scenarios.matrad_layout()
     cells = np.empty(shape, dtype=object)
     for i, entry in enumerate(container.flat):
         cells[tuple(position[i])] = entry
@@ -734,7 +696,7 @@ class Dij(PyRadPlanBaseModel):
         context = info.context
         if context and context.get("matRad") == "mat-file" and value is not None:
             if self.scenarios is not None:
-                _check_matrad_exportable(self.scenarios)
+                self.scenarios.require_matrad_compatible(allow_alias=True)
             shape = (
                 int(self.dose_grid.dimensions[2]),
                 int(self.dose_grid.dimensions[0]),
