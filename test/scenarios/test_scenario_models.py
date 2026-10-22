@@ -220,10 +220,9 @@ def test_factory_and_registry():
         create_scenario_model("unknown")
     with pytest.raises(ValueError):
         create_scenario_model(5)
+    assert {"wcScen", "impScen", "rndScen"} <= set(available_scenario_models())
     for name in ("wcScen", "impScen", "rndScen"):
-        if name not in available_scenario_models():
-            with pytest.raises(NotImplementedError):
-                create_scenario_model(name)
+        assert create_scenario_model(name).short_name == name
     created = create_scenario_model("nomScen", ct=_FakeCT(3))
     assert created.num_available_ct_phases == 3
     assert NominalScenario is NominalScenarioModel

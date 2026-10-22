@@ -254,8 +254,10 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
     items = [widget._cmb_scenario.itemText(i) for i in range(widget._cmb_scenario.count())]
     assert items[0] == "nomScen"
     assert {"wcScen", "impScen", "rndScen"} <= set(items)
-    # unimplemented scenario models are listed but not selectable
-    assert not widget._cmb_scenario.model().item(items.index("wcScen")).isEnabled()
+    assert len(items) == len(set(items))
+    # implemented scenario models are selectable
+    for name in ("wcScen", "impScen", "rndScen"):
+        assert widget._cmb_scenario.model().item(items.index(name)).isEnabled()
 
     widget._on_apply()
     assert ws.pln.mult_scen.short_name == "nomScen"
