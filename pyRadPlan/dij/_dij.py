@@ -28,6 +28,7 @@ import scipy.sparse as sp
 from pyRadPlan.core import Grid
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, create_bio_model
+from pyRadPlan.scenarios import MATRAD_AXES, ScenarioModel, ScenarioSet
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
 from ..core.xp_utils import to_namespace
@@ -35,6 +36,16 @@ from ..core.xp_utils.helpers import _rebuild_scipy_csc_in_namespace
 
 InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
 InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
+
+_QUANTITY_FIELDS: tuple[str, ...] = (
+    "physical_dose",
+    "physical_dose_var",
+    "let_dose",
+    "alpha_dose",
+    "sqrt_beta_dose",
+)
+_VOXEL_FIELDS: tuple[str, ...] = ("alphax", "betax", "tissue_class_ix")
+_MATRAD_DIMENSIONS: tuple[str, ...] = tuple(axis[0] for axis in MATRAD_AXES)
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +68,152 @@ def _check_influence_matrix(mat: Any, info: ValidationInfo):
         raise ValueError(f"{info.field_name} shape inconsistent with ct grid")
 
 
+def _as_scenario_set(scenarios: Any) -> Optional[ScenarioSet]:
+    """Coerce a scenario model, set or serialized set to a :class:`ScenarioSet`."""
+    if scenarios is None or isinstance(scenarios, ScenarioSet):
+        return scenarios
+    if isinstance(scenarios, ScenarioModel):
+        return scenarios.scenarios()
+    if isinstance(scenarios, dict):
+        return ScenarioSet.model_validate(scenarios)
+    raise ValueError(f"Cannot interpret {type(scenarios).__name__} as a scenario set")
+
+
+def _is_empty_cell(entry: Any) -> bool:
+    """Whether a matRad cell entry is empty (``[]``, a scalar placeholder or ``None``)."""
+    if entry is None:
+        return True
+    if isinstance(entry, (sp.spmatrix, sp.sparray)):
+        return False
+    shape = getattr(entry, "shape", None)
+    if shape is None:
+        return np.ndim(entry) != 2
+    return len(shape) != 2 or int(np.prod(shape)) == 0
+
+
+def _is_matrad_placeholder(value: Any) -> bool:
+    """Whether ``value`` is the numeric scalar matRad export writes in place of ``None``."""
+    if isinstance(value, (int, float, np.number)):
+        return True
+    return isinstance(value, np.ndarray) and value.dtype != np.dtype(object) and value.size <= 1
+
+
+def _nested_to_object_array(value: Any) -> np.ndarray:
+    """Turn (nested) lists of cell entries, e.g. from pymatreader, into an object array."""
+    if isinstance(value, np.ndarray) and value.dtype == np.dtype(object):
+        return value
+    if not isinstance(value, (list, tuple)):
+        container = np.empty((1,), dtype=object)
+        container[0] = value
+        return container
+    shape = []
+    level = value
+    while isinstance(level, (list, tuple)):
+        shape.append(len(level))
+        if len(level) == 0:
+            break
+        level = level[0]
+    cells = np.empty(tuple(shape), dtype=object)
+    for index in np.ndindex(cells.shape):
+        entry = value
+        for k in index:
+            entry = entry[k]
+        cells[index] = entry
+    return cells
+
+
+def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.ndarray:
+    """
+    Flatten a matRad ``(ct, shift, range)`` cell array into a flat scenario container.
+
+    Without ``scenarios``, the non-empty cells are taken in MATLAB (column-major) order. With
+    a set, every computed scenario takes the cell at its position in the set's matRad layout,
+    so the cell array may be squeezed (as pymatreader loads it).
+    """
+    cells = _nested_to_object_array(value)
+    if scenarios is None:
+        entries = [c for c in cells.flatten(order="F") if not _is_empty_cell(c)]
+        flat = np.empty((len(entries),), dtype=object)
+        for i, entry in enumerate(entries):
+            flat[i] = entry
+        return flat
+
+    layout, shape = _matrad_layout(scenarios)
+    if cells.shape != shape:
+        squeezed = tuple(d for d in shape if d != 1)
+        if tuple(d for d in cells.shape if d != 1) != squeezed:
+            raise ValueError(
+                f"matRad cell array of shape {cells.shape} does not match the scenario layout "
+                f"{shape}"
+            )
+        cells = cells.reshape(shape)
+    position = _matrad_positions(layout, scenarios)
+    flat = np.empty((len(scenarios),), dtype=object)
+    used = 0
+    for i in range(len(scenarios)):
+        if scenarios.bases[i] is not None:
+            continue
+        entry = cells[tuple(position[i])]
+        if _is_empty_cell(entry):
+            raise ValueError(f"matRad cell of scenario {i} at {tuple(position[i])} is empty")
+        flat[i] = entry
+        used += 1
+    num_filled = sum(not _is_empty_cell(c) for c in cells.flat)
+    if num_filled != used:
+        raise ValueError(
+            f"matRad cell array holds {num_filled} matrices, but the scenario set computes {used}"
+        )
+    return flat
+
+
+def _matrad_layout(scenarios: ScenarioSet):
+    """Return the matRad-axes layout of ``scenarios`` and the 3-D matRad cell shape."""
+    unsupported = [d for d in scenarios.dimension_names if d not in _MATRAD_DIMENSIONS]
+    if unsupported:
+        raise ValueError(
+            f"Scenario dimension(s) {unsupported} cannot be expressed in matRad's "
+            f"(ct_phase, setup, range) cell layout"
+        )
+    axes = [axis for axis in MATRAD_AXES if scenarios.has_dimension(axis[0])]
+    layout = scenarios.layout_for(*axes)
+    by_dim = dict(zip((axis[0] for axis in axes), layout.shape))
+    shape = tuple(by_dim.get(d, 1) for d in _MATRAD_DIMENSIONS)
+    return layout, shape
+
+
+def _matrad_positions(layout: Any, scenarios: ScenarioSet) -> np.ndarray:
+    """Per-scenario 3-D matRad cell subscripts (missing dimensions at position 0)."""
+    position = np.zeros((len(scenarios), len(_MATRAD_DIMENSIONS)), dtype=int)
+    present = [d for d in _MATRAD_DIMENSIONS if scenarios.has_dimension(d)]
+    for k, dim in enumerate(present):
+        position[:, _MATRAD_DIMENSIONS.index(dim)] = layout.position[:, k]
+    return position
+
+
+def _check_matrad_exportable(scenarios: ScenarioSet) -> None:
+    """Raise if ``scenarios`` cannot be written as matRad cells."""
+    derived = [i for i, b in enumerate(scenarios.bases) if b is not None and not b.is_alias]
+    if derived:
+        raise ValueError(
+            f"Derived scenarios {derived} have no influence matrices and cannot be exported to "
+            "matRad"
+        )
+    _matrad_layout(scenarios)
+
+
+def _flat_to_matrad_cells(container: np.ndarray, scenarios: ScenarioSet) -> np.ndarray:
+    """Arrange a flat container on matRad's ``(ct, shift, range)`` cells, empty off-mask."""
+    layout, shape = _matrad_layout(scenarios)
+    position = _matrad_positions(layout, scenarios)
+    cells = np.empty(shape, dtype=object)
+    for i, entry in enumerate(container.flat):
+        cells[tuple(position[i])] = entry
+    for index in np.ndindex(shape):
+        if cells[index] is None:
+            cells[index] = np.zeros((0, 0))
+    return cells
+
+
 class Dij(PyRadPlanBaseModel):
     """
     Collection of Dose (or other quantity) Influence Matrices.
@@ -71,10 +228,21 @@ class Dij(PyRadPlanBaseModel):
         Total number of bixels in the matrix.
     num_of_voxels : int
         Total number of voxels in the matrix.
+    scenarios : ScenarioSet, optional
+        Scenario set the influence matrices were computed for. Scenario ``i`` of the set lives
+        in ``container.flat[i]`` of every quantity container, and the per-voxel parameter arrays
+        (``alphax``, ``betax``, ``tissue_class_ix``) carry one column per voxel parameter set
+        of the set. ``None`` keeps the implicit layout: one slot per container entry and one
+        column per slot (or a single shared column).
     """
 
     dose_grid: Annotated[Grid, Field(default=None)]
     ct_grid: Annotated[Grid, Field(default=None)]
+
+    scenarios: Optional[ScenarioSet] = Field(
+        default=None,
+        description="Scenario set addressing the flat container slots (None: implicit).",
+    )
 
     physical_dose: Annotated[InfluenceMatrixContainer, Field(default=None)]
     physical_dose_var: Annotated[Optional[InfluenceMatrixContainer], Field(default=None)]
@@ -116,12 +284,209 @@ class Dij(PyRadPlanBaseModel):
             data["bio_model"] = {"model": "constant_rbe", "rbe": rbe}
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_matrad_placeholders(cls, data: Any, info: ValidationInfo) -> Any:
+        """Drop the scalar placeholders matRad export writes for absent optional fields."""
+        if not isinstance(data, dict) or not (info.context or {}).get("from_matRad"):
+            return data
+        optional = (*_QUANTITY_FIELDS[1:], *_VOXEL_FIELDS, "rad_depth_cubes")
+        keys = {name for f in optional for name in (f, cls.model_fields[f].alias) if name}
+        return {k: v for k, v in data.items() if not (k in keys and _is_matrad_placeholder(v))}
+
     @field_validator("bio_model", mode="before")
     @classmethod
     def _validate_bio_model(cls, v: Any) -> Optional[BiologicalModel]:
         if v is None:
             return None
         return create_bio_model(v)
+
+    @field_validator("scenarios", mode="before")
+    @classmethod
+    def _validate_scenarios(cls, v: Any) -> Optional[ScenarioSet]:
+        return _as_scenario_set(v)
+
+    @field_serializer("scenarios")
+    def _serialize_scenarios(self, value: Optional[ScenarioSet], info: SerializationInfo) -> Any:
+        if value is None or (info.context or {}).get("matRad"):
+            return None
+        return value.model_dump(mode=info.mode)
+
+    @model_validator(mode="after")
+    def _check_scenarios(self, info: ValidationInfo) -> Self:
+        """Attach a scenario set from the validation context and check the containers."""
+        context = info.context or {}
+        if self.scenarios is None and context.get("scenario_model") is not None:
+            object.__setattr__(self, "scenarios", _as_scenario_set(context["scenario_model"]))
+        if self.scenarios is not None:
+            self._check_scenario_consistency(self.scenarios)
+        return self
+
+    def _check_scenario_consistency(self, scenarios: ScenarioSet) -> None:
+        """Check container sizes, derived slots and voxel parameter columns against a set."""
+        n = len(scenarios)
+        for q in _QUANTITY_FIELDS:
+            container = getattr(self, q)
+            if container is None:
+                continue
+            if container.size != n:
+                raise ValueError(
+                    f"{q} holds {container.size} scenario slot(s), the scenario set has {n}"
+                )
+            for i, basis in enumerate(scenarios.bases):
+                entry = container.flat[i]
+                if basis is None:
+                    if entry is None:
+                        raise ValueError(f"{q} has no matrix for computed scenario {i}")
+                elif basis.is_alias:
+                    ref = container.flat[next(iter(basis.coefficients))]
+                    if entry is None:
+                        container.flat[i] = ref
+                    elif entry is not ref:
+                        raise ValueError(
+                            f"{q} slot {i} must share the matrix of the scenario its alias "
+                            "basis references (same object) or be empty"
+                        )
+                elif entry is not None:
+                    raise ValueError(
+                        f"{q} slot {i} belongs to a derived scenario and must be empty"
+                    )
+        num_cols = scenarios.num_voxel_param_sets
+        for field in _VOXEL_FIELDS:
+            arr = getattr(self, field)
+            if arr is not None and arr.shape[1] != num_cols:
+                raise ValueError(
+                    f"{field} has {arr.shape[1]} column(s), but the scenario set has "
+                    f"{num_cols} voxel parameter set(s)"
+                )
+
+    @computed_field
+    @property
+    def num_of_scenarios(self) -> int:
+        """Number of scenario slots (the set's length, else the container size)."""
+        if self.scenarios is not None:
+            return len(self.scenarios)
+        for q in _QUANTITY_FIELDS:
+            container = getattr(self, q)
+            if container is not None:
+                return int(container.size)
+        return 0
+
+    def voxel_param_column(self, scenario_index: int) -> int:
+        """
+        Column of the per-voxel parameter arrays used by a scenario.
+
+        With a scenario set, this is :meth:`ScenarioSet.voxel_param_set`. Without, scenario
+        ``i`` uses column ``i``, clipped to the last column so that a single column is shared
+        by all scenarios.
+        """
+        if self.scenarios is not None:
+            return self.scenarios.voxel_param_set(int(scenario_index))
+        for field in _VOXEL_FIELDS:
+            arr = getattr(self, field)
+            if arr is not None:
+                return min(int(scenario_index), int(arr.shape[1]) - 1)
+        return 0
+
+    def attach_scenarios(self, scenarios: Union[ScenarioSet, ScenarioModel]) -> Self:
+        """
+        Attach a scenario set (or a model's set) to this Dij after construction.
+
+        The containers must hold one slot per scenario and the per-voxel parameter arrays one
+        column per voxel parameter set. Returns ``self``.
+        """
+        scenarios = _as_scenario_set(scenarios)
+        if scenarios is not None:
+            self._check_scenario_consistency(scenarios)
+        self.scenarios = scenarios
+        return self
+
+    def extend_scenarios(self, other: "Dij") -> "Dij":
+        """
+        Concatenate the scenarios of two Dijs computed for the same plan geometry.
+
+        Both Dijs need a scenario set over the same dimensions, identical grids, bixel
+        bookkeeping and quantities. The containers of ``other`` are appended (its scenario
+        indices shift by ``len(self.scenarios)``), the sets are merged with
+        :meth:`ScenarioSet.extend` and the per-voxel parameter columns are rebuilt for the
+        voxel parameter sets of the merged set. Matrices are shared, not copied.
+
+        Parameters
+        ----------
+        other : Dij
+            Dij whose scenarios are appended.
+
+        Returns
+        -------
+        Dij
+            New Dij holding the scenarios of both.
+        """
+        if self.scenarios is None or other.scenarios is None:
+            raise ValueError("extend_scenarios needs a scenario set on both Dijs")
+        if self.dose_grid != other.dose_grid or self.ct_grid != other.ct_grid:
+            raise ValueError("Dijs to extend must have identical dose and CT grids")
+        if self.num_of_beams != other.num_of_beams or any(
+            not np.array_equal(np.asarray(getattr(self, f)), np.asarray(getattr(other, f)))
+            for f in ("bixel_num", "ray_num", "beam_num")
+        ):
+            raise ValueError("Dijs to extend must have identical bixel bookkeeping")
+        if set(self.quantities) != set(other.quantities):
+            raise ValueError(
+                f"Dijs to extend must carry the same quantities, got {self.quantities} and "
+                f"{other.quantities}"
+            )
+        for field in _VOXEL_FIELDS:
+            if (getattr(self, field) is None) != (getattr(other, field) is None):
+                raise ValueError(f"{field} is present on only one of the Dijs to extend")
+
+        merged = self.scenarios.extend(other.scenarios)
+        n_self = len(self.scenarios)
+
+        data: dict[str, Any] = {
+            "ct_grid": self.ct_grid,
+            "dose_grid": self.dose_grid,
+            "scenarios": merged,
+            "num_of_beams": self.num_of_beams,
+            "bixel_num": np.array(self.bixel_num, copy=True),
+            "ray_num": np.array(self.ray_num, copy=True),
+            "beam_num": np.array(self.beam_num, copy=True),
+            "bio_model": self.bio_model,
+        }
+        for q in self.quantities:
+            container = np.empty((len(merged),), dtype=object)
+            for i, entry in enumerate(getattr(self, q).flat):
+                container[i] = entry
+            for i, entry in enumerate(getattr(other, q).flat):
+                container[n_self + i] = entry
+            data[q] = container
+
+        for field in _VOXEL_FIELDS:
+            if getattr(self, field) is not None:
+                data[field] = self._merged_voxel_columns(other, field, merged, n_self)
+
+        return Dij.model_validate(data)
+
+    def _merged_voxel_columns(
+        self, other: "Dij", field: str, merged: ScenarioSet, n_self: int
+    ) -> Array:
+        """Per-voxel parameter columns of ``field`` for the voxel parameter sets of ``merged``."""
+        own, theirs = getattr(self, field), getattr(other, field)
+        xp = array_api_compat.array_namespace(own, theirs)
+        columns = []
+        for _, indices in merged.voxel_param_sets():
+            sources = [
+                own[:, self.voxel_param_column(i)]
+                if i < n_self
+                else theirs[:, other.voxel_param_column(i - n_self)]
+                for i in indices
+            ]
+            if any(not bool(xp.all(src == sources[0])) for src in sources[1:]):
+                raise ValueError(
+                    f"Scenarios {indices} share their voxel parameter realization, but their "
+                    f"{field} columns differ"
+                )
+            columns.append(sources[0])
+        return xp.stack(columns, axis=1)
 
     @field_serializer("bio_model")
     def _serialize_bio_model(self, value: Any, info: SerializationInfo) -> Any:
@@ -186,6 +551,15 @@ class Dij(PyRadPlanBaseModel):
         if v is None:
             return v
 
+        from_matrad = bool(info.context and info.context.get("from_matRad"))
+        if from_matrad and (
+            isinstance(v, (list, tuple))
+            or (isinstance(v, np.ndarray) and v.dtype == np.dtype(object))
+        ):
+            v = _matrad_cells_to_flat(
+                v, _as_scenario_set((info.context or {}).get("scenario_model"))
+            )
+
         if not (isinstance(v, np.ndarray) and v.dtype == np.dtype(object)) and (
             isinstance(v, (sp.spmatrix, sp.sparray, np.ndarray))
             or array_api_compat.is_array_api_obj(v)
@@ -201,9 +575,11 @@ class Dij(PyRadPlanBaseModel):
 
         [_check_influence_matrix(v.flat[i], info) for i in range(v.size) if v.flat[i] is not None]
 
-        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
+        if from_matrad:
             if v is not None:
                 for i in range(v.size):
+                    if v.flat[i] is None:
+                        continue
                     shape = (
                         int(info.data["dose_grid"].dimensions[2]),
                         int(info.data["dose_grid"].dimensions[0]),
@@ -314,30 +690,26 @@ class Dij(PyRadPlanBaseModel):
             return v
         if not hasattr(v, "ndim"):
             v = np.asarray(v)
-        # Voxel arrays carry one column per CT scenario; accept plain 1-D input
-        # (e.g. matRad-imported alphaX/betaX) as a single scenario. Keep the array
-        # namespace, since this also runs on assignment in to_namespace().
+        # Accept plain 1-D input (e.g. matRad-imported alphaX/betaX) as a single column. Keep
+        # the array namespace, since this also runs on assignment in to_namespace().
         if v.ndim == 1:
             v = array_api_compat.array_namespace(v).reshape(v, (-1, 1))
         if v.ndim != 2:
-            raise ValueError("Voxel arrays must have shape (num_voxels, num_ct_scenarios)")
-        # Check if the voxel arrays have the correct shape
-        if info.data.get("physical_dose") is not None:
-            dij_matrices = cast(np.ndarray, info.data["physical_dose"])
-            for i in range(dij_matrices.size):
-                if dij_matrices.flat[i] is not None:
-                    mat = cast(Union[sp.spmatrix, sp.sparray, np.ndarray], dij_matrices.flat[i])
-
-                    vox_num = mat.shape[0]
-
-                    scen_num = dij_matrices.size
-
-                    if v.shape[0] != vox_num:
-                        raise ValueError("Voxel arrays shape inconsistent with number of voxels")
-                    if v.shape[1] != scen_num:
-                        raise ValueError(
-                            "Voxel arrays shape inconsistent with number of scenarios"
-                        )
+            raise ValueError("Voxel arrays must have shape (num_voxels, num_voxel_param_sets)")
+        dij_matrices = info.data.get("physical_dose")
+        if dij_matrices is not None:
+            dij_matrices = cast(np.ndarray, dij_matrices)
+            mats = [m for m in dij_matrices.flat if m is not None]
+            if mats and v.shape[0] != mats[0].shape[0]:
+                raise ValueError("Voxel arrays shape inconsistent with number of voxels")
+            # With a scenario set, the column count is checked against its voxel parameter
+            # sets in the model validator.
+            if info.data.get("scenarios") is None and v.shape[1] not in (1, dij_matrices.size):
+                raise ValueError(
+                    "Voxel arrays need one column or one column per scenario slot "
+                    f"({dij_matrices.size}), got {v.shape[1]}: inconsistent with number of "
+                    "scenarios"
+                )
 
         return v
 
@@ -361,19 +733,26 @@ class Dij(PyRadPlanBaseModel):
     def physical_dose_serializer(self, value: np.ndarray, info: SerializationInfo) -> np.ndarray:
         context = info.context
         if context and context.get("matRad") == "mat-file" and value is not None:
+            if self.scenarios is not None:
+                _check_matrad_exportable(self.scenarios)
+            shape = (
+                int(self.dose_grid.dimensions[2]),
+                int(self.dose_grid.dimensions[0]),
+                int(self.dose_grid.dimensions[1]),
+            )
+            swapped: dict[int, Any] = {}
             for i in range(value.size):
-                shape = (
-                    int(self.dose_grid.dimensions[2]),
-                    int(self.dose_grid.dimensions[0]),
-                    int(self.dose_grid.dimensions[1]),
-                )
-                value.flat[i] = swap_orientation_sparse_matrix(
-                    value.flat[i],
-                    shape,
-                    (1, 2),  # (65, 100, 100) example
-                )
-                if value.flat[i] is not None and not isinstance(value.flat[i], sp.csc_matrix):
-                    value.flat[i] = sp.csc_matrix(value.flat[i])
+                mat = value.flat[i]
+                if mat is None:
+                    continue
+                if id(mat) not in swapped:
+                    new = swap_orientation_sparse_matrix(mat, shape, (1, 2))  # (65, 100, 100)
+                    if not isinstance(new, sp.csc_matrix):
+                        new = sp.csc_matrix(new)
+                    swapped[id(mat)] = new
+                value.flat[i] = swapped[id(mat)]
+            if self.scenarios is not None:
+                value = _flat_to_matrad_cells(value, self.scenarios)
         # return 0 if value is None. savemat() can't handle 'None'
         elif context and context.get("matRad") == "mat-file" and value is None:
             value = np.array([0])
@@ -404,6 +783,7 @@ class Dij(PyRadPlanBaseModel):
 
         dij_dict = super().to_matrad(context=context)
         dij_dict.pop("bioModel", None)
+        dij_dict.pop("scenarios", None)
         if self.rbe is not None:
             dij_dict["RBE"] = float(self.rbe)
 
@@ -460,6 +840,14 @@ class Dij(PyRadPlanBaseModel):
         dict[str,sitk.Image]
             A dictionary containing the quantity images for each scenario.
         """
+
+        if self.scenarios is not None:
+            basis = self.scenarios[scenario_index].basis
+            if basis is not None and not basis.is_alias:
+                raise ValueError(
+                    f"Scenario {scenario_index} is derived from a linear combination and has no "
+                    "influence matrices; evaluate it through the quantities instead"
+                )
 
         out = {}
         xp = array_api_compat.array_namespace(intensity)
@@ -519,8 +907,9 @@ class Dij(PyRadPlanBaseModel):
         rbe_path = RBExDose.choose_path(self, has_effect=has_lq, strict=False)
 
         if has_lq:
-            alphax = self.alphax[:, scenario_index]
-            betax = self.betax[:, scenario_index]
+            column = self.voxel_param_column(scenario_index)
+            alphax = self.alphax[:, column]
+            betax = self.betax[:, column]
             alpha_mat = self.alpha_dose.flat[scenario_index]
             sqrt_beta_mat = self.sqrt_beta_dose.flat[scenario_index]
             out["effect"] = alpha_mat @ intensity + (sqrt_beta_mat @ intensity) ** 2
@@ -754,12 +1143,17 @@ class Dij(PyRadPlanBaseModel):
                 _fresh.flat[:] = None
                 object.__setattr__(dij_copy, _q, _fresh)
 
+        # Scenarios sharing a matrix (alias bases) keep sharing the converted one.
+        converted: dict[int, Any] = {}
         for q in self.quantities:
             q_container: InfluenceMatrixContainer = getattr(self, q)
             if q_container is not None:
                 for i in range(q_container.size):
                     mat = q_container.flat[i]
                     if mat is None:
+                        continue
+                    if id(mat) in converted:
+                        getattr(dij_copy, q).flat[i] = converted[id(mat)]
                         continue
 
                     # scipy CSC matrices whose index arrays may be shared
@@ -776,11 +1170,13 @@ class Dij(PyRadPlanBaseModel):
                             getattr(dij_copy, q).flat[i] = _rebuild_scipy_csc_in_namespace(
                                 xp_new, conv_data, conv_indices, conv_indptr, mat.shape
                             )
+                            converted[id(mat)] = getattr(dij_copy, q).flat[i]
                             continue
 
                     getattr(dij_copy, q).flat[i] = to_namespace(
                         xp_new, mat, keep_sparse_compat=keep_sparse_compat, device=device
                     )
+                    converted[id(mat)] = getattr(dij_copy, q).flat[i]
 
         if self.alphax is not None:
             dij_copy.alphax = to_namespace(xp_new, self.alphax, device=device)
@@ -795,7 +1191,12 @@ class Dij(PyRadPlanBaseModel):
         return dij_copy
 
 
-def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
+def create_dij(
+    data: Union[dict[str, Any], Dij, None] = None,
+    *,
+    scenario_model: Union[ScenarioModel, ScenarioSet, None] = None,
+    **kwargs,
+) -> Dij:
     """
     Create a Dij object from raw data or keyword arguments.
 
@@ -803,6 +1204,9 @@ def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
     ----------
     data : Union[dict[str, Any], Dij, None]
         Dictionary containing the data to create the Dij object.
+    scenario_model : ScenarioModel or ScenarioSet, optional
+        Scenario model / set the data was computed for. Its set is attached to the Dij and, for
+        matRad data, used to place the ``(ct, shift, range)`` cells on the flat containers.
     **kwargs
         Arbitrary keyword arguments.
 
@@ -815,6 +1219,8 @@ def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
     if data:
         # If data is already a Dij object, return it directly
         if isinstance(data, Dij):
+            if scenario_model is not None and data.scenarios is None:
+                data.attach_scenarios(scenario_model)
             return data
 
         if "beamNum" in data and np.min(data["beamNum"]) != 0:
@@ -822,12 +1228,21 @@ def create_dij(data: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
             context = {"from_matRad": True}
         else:
             context = {"from_matRad": False}
+        if scenario_model is not None:
+            context["scenario_model"] = scenario_model
         return Dij.model_validate(data, context=context)
 
+    if scenario_model is not None:
+        return Dij.model_validate(kwargs, context={"scenario_model": scenario_model})
     return Dij(**kwargs)
 
 
-def validate_dij(dij: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
+def validate_dij(
+    dij: Union[dict[str, Any], Dij, None] = None,
+    *,
+    scenario_model: Union[ScenarioModel, ScenarioSet, None] = None,
+    **kwargs,
+) -> Dij:
     """
     Validate and creates a Dij object.
 
@@ -837,6 +1252,8 @@ def validate_dij(dij: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
     ----------
     dij : Union[dict[str, Any], Dij, None], optional
         Dictionary containing the data to create the Dij object, by default None.
+    scenario_model : ScenarioModel or ScenarioSet, optional
+        See :func:`create_dij`.
     **kwargs
         Arbitrary keyword arguments.
 
@@ -846,4 +1263,4 @@ def validate_dij(dij: Union[dict[str, Any], Dij, None] = None, **kwargs) -> Dij:
         A validated Dij object.
 
     """
-    return create_dij(dij, **kwargs)
+    return create_dij(dij, scenario_model=scenario_model, **kwargs)

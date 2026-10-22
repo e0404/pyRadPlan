@@ -37,9 +37,14 @@ def compose_beam_dijs(dijs: list[Dij]) -> Dij:
 
         new_matrix = np.empty_like(tmp_matrices[0], dtype=object)
 
+        # Slots sharing their matrices (alias scenarios) keep sharing the composed one.
+        composed = {}
         for i, scen_matrix in enumerate(tmp_matrices[0].flat):
             if scen_matrix is not None:
-                new_matrix.flat[i] = hstack([tmp_matrix.flat[i] for tmp_matrix in tmp_matrices])
+                key = tuple(id(tmp_matrix.flat[i]) for tmp_matrix in tmp_matrices)
+                if key not in composed:
+                    composed[key] = hstack([tmp_matrix.flat[i] for tmp_matrix in tmp_matrices])
+                new_matrix.flat[i] = composed[key]
 
         matrices.update({q: new_matrix})
 
@@ -51,5 +56,6 @@ def compose_beam_dijs(dijs: list[Dij]) -> Dij:
         beam_num=beam_num,
         ray_num=ray_num,
         bixel_num=bixel_num,
+        scenarios=dijs[0].scenarios,
         **matrices,
     )

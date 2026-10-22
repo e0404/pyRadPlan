@@ -31,8 +31,25 @@ class RTQuantity(ABC):
 
     def __init__(self, dij: Dij, scenarios=None):
         if scenarios is None:
-            scenarios = [0]
+            scenarios = self.default_scenarios(dij)
         self.scenarios = np.asarray(scenarios, dtype=np.int64)
+
+    @staticmethod
+    def default_scenarios(dij: Dij) -> list[int]:
+        """
+        Scenario indices a quantity evaluates when none are given.
+
+        With a scenario set on the dij, all computed (non-derived) scenarios. Without, every
+        non-empty slot of the ``physical_dose`` container (``[0]`` if there is none).
+        """
+        scenario_set = getattr(dij, "scenarios", None)
+        if scenario_set is not None:
+            return [int(i) for i in scenario_set.computed_indices()]
+        container = getattr(dij, "physical_dose", None)
+        if container is None:
+            return [0]
+        filled = [i for i in range(container.size) if container.flat[i] is not None]
+        return filled or [0]
 
 
 class FluenceDependentQuantity(RTQuantity, ABC):
@@ -126,6 +143,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         # Quantity vector cache (shape mirrors the scenario container layout)
         self._q_cache = np.empty_like(getattr(self._dij, "physical_dose"), dtype=object)
         self._qgrad_cache = np.empty_like(self._q_cache)
+        self._evaluation_plan_cache: Optional[list] = None
 
     @property
     def mode(self) -> str:
@@ -239,21 +257,92 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self._qgrad_cache
 
+    def uses_voxel_params(self) -> bool:
+        """
+        Whether the quantity reads per-voxel parameters (``alphax``, ``betax``, ...).
+
+        Scenarios sharing their influence matrices through an alias basis evaluate to the same
+        result unless the quantity (or one of its dependencies) uses per-voxel parameters,
+        which may differ between such scenarios.
+        """
+        return any(dep.uses_voxel_params() for dep in self._deps.values())
+
+    @property
+    def _evaluation_plan(self) -> list[tuple[int, str, Optional[dict[int, float]]]]:
+        # Built lazily: subclasses settle their computation path after the base __init__.
+        if self._evaluation_plan_cache is None:
+            self._evaluation_plan_cache = self._plan_evaluation()
+        return self._evaluation_plan_cache
+
+    def _plan_evaluation(self) -> list[tuple[int, str, Optional[dict[int, float]]]]:
+        """
+        Order in which the scenario slots of the cache are filled.
+
+        Each entry is ``(index, kind, coefficients)`` with kind ``"compute"`` (evaluate the
+        scenario), ``"alias"`` (reuse the referenced slot) or ``"combine"`` (linear combination
+        of computed slots). Computed slots come first, including the basis scenarios a
+        requested derived scenario needs.
+        """
+        scenario_set = getattr(self._dij, "scenarios", None)
+        requested = [int(i) for i in self.scenarios]
+        if scenario_set is None:
+            return [(i, "compute", None) for i in requested]
+
+        uses_voxel_params = self.uses_voxel_params()
+        computed: list[int] = []
+        derived: list[tuple[int, str, Optional[dict[int, float]]]] = []
+        for i in requested:
+            basis = scenario_set.bases[i]
+            if basis is None:
+                computed.append(i)
+                continue
+            if basis.is_alias:
+                ref = next(iter(basis.coefficients))
+                same_params = self._dij.voxel_param_column(i) == self._dij.voxel_param_column(ref)
+                if uses_voxel_params and not same_params:
+                    computed.append(i)
+                    continue
+            derived.append((i, "alias" if basis.is_alias else "combine", dict(basis.coefficients)))
+        for _, _, coefficients in derived:
+            computed.extend(k for k in coefficients if k not in computed)
+        unique = list(dict.fromkeys(computed))
+        return [(i, "compute", None) for i in unique] + derived
+
     def _compute_quantity_cache(self):
         """Compute the quantity from the fluence and write it into the cache."""
 
-        for scenario_index in self.scenarios:
-            self._q_cache.flat[scenario_index] = self._compute_quantity_single_scenario(
-                scenario_index
-            )
+        for scenario_index, kind, coefficients in self._evaluation_plan:
+            if kind == "compute":
+                self._q_cache.flat[scenario_index] = self._compute_quantity_single_scenario(
+                    scenario_index
+                )
+            else:
+                self._q_cache.flat[scenario_index] = self._combine(self._q_cache, coefficients)
 
     def _compute_chain_derivative_cache(self, d_quantity: Array) -> Array:
         """Compute the fluence derivative from the quantity derivative into the cache."""
 
-        for scenario_index in self.scenarios:
-            self._qgrad_cache.flat[scenario_index] = (
-                self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
-            )
+        for scenario_index, kind, coefficients in self._evaluation_plan:
+            if kind == "compute":
+                self._qgrad_cache.flat[scenario_index] = (
+                    self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
+                )
+            else:
+                self._qgrad_cache.flat[scenario_index] = self._combine(
+                    self._qgrad_cache, coefficients
+                )
+
+    @staticmethod
+    def _combine(cache: np.ndarray, coefficients: dict[int, float]) -> Array:
+        """``sum(c_k * cache[k])`` over the basis of a derived scenario."""
+        items = list(coefficients.items())
+        if len(items) == 1 and items[0][1] == 1.0:
+            return cache.flat[items[0][0]]
+        result = None
+        for k, c in items:
+            term = c * cache.flat[k]
+            result = term if result is None else result + term
+        return result
 
     @abstractmethod
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
