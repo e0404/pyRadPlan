@@ -389,3 +389,19 @@ def test_matrad_layout_rejects_foreign_dimensions():
             s.matrad_layout()
     finally:
         dims_module._DIMENSION_REGISTRY.pop("bio_test_layout", None)
+
+
+def test_equality_ignores_caches_and_compares_content(wc_like_set):
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    model = WorstCaseScenarioModel(combinations="none")
+    a = model.scenarios()
+    b = model.scenarios(refresh=True)
+    assert a == b
+    _ = b.layout, b.group_by("ct_phase", "setup"), b[0], b.voxel_param_sets()
+    assert a == b  # populated caches on one side do not matter
+    assert a[0] == b[0]
+    assert a != wc_like_set
+    assert a.with_weights(np.ones(len(a))) != a
+    assert a.with_axes("ct_phase", ("setup", "range")) != a
+    assert a != "nomScen"

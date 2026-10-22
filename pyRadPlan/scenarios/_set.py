@@ -148,6 +148,22 @@ class Scenario(PyRadPlanBaseModel):
         arr = self.values.get("ct_phase")
         return 0 if arr is None else int(round(float(arr[0])))
 
+    def __eq__(self, other: object) -> bool:
+        """Compare by content (index, values, probability, weight, tags, basis)."""
+        if not isinstance(other, Scenario):
+            return NotImplemented
+        return (
+            self.index == other.index
+            and self.values.keys() == other.values.keys()
+            and all(np.array_equal(v, other.values[k]) for k, v in self.values.items())
+            and self.probability == other.probability
+            and self.weight == other.weight
+            and self.tags == other.tags
+            and self.basis == other.basis
+        )
+
+    __hash__ = None
+
     def __repr__(self) -> str:
         vals = ", ".join(f"{k}={np.round(v, 6).tolist()}" for k, v in self.values.items())
         extra = f", tags={sorted(self.tags)}" if self.tags else ""
@@ -944,6 +960,24 @@ class ScenarioSet(PyRadPlanBaseModel):
             cells = [str(row[0])] + [f"{v:.4g}" for v in row[1:-1]] + [row[-1]]
             lines.append("\t".join(cells))
         return "\n".join(lines)
+
+    def __eq__(self, other: object) -> bool:
+        """Compare by content; derived caches and layout views do not take part."""
+        if not isinstance(other, ScenarioSet):
+            return NotImplemented
+        return (
+            self.dimensions == other.dimensions
+            and self.points.keys() == other.points.keys()
+            and all(np.array_equal(v, other.points[k]) for k, v in self.points.items())
+            and np.array_equal(self.probabilities, other.probabilities)
+            and np.array_equal(self.weights, other.weights)
+            and self.tags == other.tags
+            and self.bases == other.bases
+            and self.axes == other.axes
+            and self.distribution == other.distribution
+        )
+
+    __hash__ = None
 
     def __repr__(self) -> str:
         return (
