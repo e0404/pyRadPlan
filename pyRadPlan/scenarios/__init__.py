@@ -1,90 +1,160 @@
-"""Scenario Models for uncertainty quantification, robust optimization and robustness analysis."""
+"""
+Scenario models for uncertainty quantification, robust optimization and robustness analysis.
 
-from typing import Union, Optional, Type
-import numpy as np
-from pyRadPlan.ct import CT, validate_ct
-from ._base import ScenarioModel
-from ._nominal import NominalScenario
+The module separates three concerns:
+
+- :class:`UncertaintyDimension` subclasses (:class:`SetupUncertainty`,
+  :class:`RangeUncertainty`, :class:`CTPhaseUncertainty`) describe *what* is uncertain and with
+  which parameters, together with a :class:`JointDistribution`.
+- A :class:`ScenarioSet` is a concrete, immutable list of realizations with probabilities,
+  weights and a flat index into Dij containers; it is what dose calculation and the quantities
+  consume. It can be built from a model or from explicit points.
+- A :class:`ScenarioModel` (``nomScen``, ``wcScen``, ...) is the pydantic configuration that
+  generates a set lazily.
+"""
+
+from __future__ import annotations
+
 import logging
 from copy import deepcopy
+from typing import Any, Optional, Type, Union
+
+import numpy as np
+
+from ._base import ScenarioModel
+from ._dimensions import (
+    AFFECTS_GEOMETRY,
+    AFFECTS_RANGE,
+    AFFECTS_VOXEL_PARAMS,
+    CTPhaseUncertainty,
+    RangeUncertainty,
+    SetupUncertainty,
+    UncertaintyDimension,
+    available_dimensions,
+    create_dimension,
+    register_dimension,
+)
+from ._distributions import (
+    IndependentGaussian,
+    JointDistribution,
+    MultivariateGaussian,
+    available_distributions,
+    create_distribution,
+    register_distribution,
+)
+from ._explicit import ExplicitScenarioModel
+from ._nominal import NominalScenarioModel
+from ._set import MATRAD_AXES, TAG_NOMINAL, Scenario, ScenarioBasis, ScenarioLayout, ScenarioSet
 
 logger = logging.getLogger(__name__)
 
+#: Deprecated alias of :class:`NominalScenarioModel` (removed after one release).
+NominalScenario = NominalScenarioModel
+
+_MODEL_REGISTRY: dict[str, Type[ScenarioModel]] = {}
+
+#: matRad model names known but not (yet) available; reported as not implemented.
+_KNOWN_MATRAD_MODELS: dict[str, str] = {
+    "wcScen": "Worst Case Scenarios",
+    "impScen": "Gridded Importance Weighted Scenarios",
+    "rndScen": "Random Scenarios",
+}
+
+
+def register_scenario_model(cls: Type[ScenarioModel]) -> Type[ScenarioModel]:
+    """Register a scenario model class under its ``short_name`` (class decorator)."""
+    _MODEL_REGISTRY[cls.short_name] = cls
+    return cls
+
+
+register_scenario_model(NominalScenarioModel)
+register_scenario_model(ExplicitScenarioModel)
+
 
 def available_scenario_models() -> list[str]:
-    """Return a list of available scenario models."""
+    """Short names of the available scenario models (nominal first)."""
+    names = [n for n in _MODEL_REGISTRY if n not in ("nomScen", "explicit")]
+    return ["nomScen", *names]
 
-    return ["nomScen"]
+
+def get_scenario_model_class(model_name: str) -> Type[ScenarioModel]:
+    """Return the scenario model class registered under ``model_name``."""
+    if model_name in _MODEL_REGISTRY:
+        return _MODEL_REGISTRY[model_name]
+    if model_name in _KNOWN_MATRAD_MODELS:
+        raise NotImplementedError(
+            f"{_KNOWN_MATRAD_MODELS[model_name]} ({model_name!r}) are not implemented yet"
+        )
+    raise ValueError(f"Unknown scenario model: {model_name}")
+
+
+_get_model_class_by_name = get_scenario_model_class
 
 
 def create_scenario_model(
-    model_def: Union[ScenarioModel, Union[str, dict]] = "nomScen",
-    ct: Optional[Union[CT, dict]] = None,
+    model_def: Union[ScenarioModel, ScenarioSet, str, dict, None] = "nomScen",
+    ct: Optional[Any] = None,
 ) -> ScenarioModel:
     """
-    Create a scenario model object.
+    Create a scenario model.
 
     Parameters
     ----------
-    model_name : str
-        The name of the scenario model.
+    model_def : ScenarioModel or ScenarioSet or str or dict, optional
+        A model (returned as is), a scenario set (wrapped in an
+        :class:`ExplicitScenarioModel`), a model short name, or a dictionary with a ``"model"``
+        key and model parameters (nested dimensions or the flat matRad names). Default: nominal.
+    ct : CT or dict, optional
+        CT to validate the CT phases against.
 
     Returns
     -------
     ScenarioModel
-        The scenario model object.
     """
+    from pyRadPlan.ct import validate_ct  # noqa: PLC0415
 
     if isinstance(ct, dict):
         ct = validate_ct(ct)
 
-    if isinstance(model_def, str):
-        model_class = _get_model_class_by_name(model_def)
-        return model_class(ct)
+    if model_def is None:
+        model_def = "nomScen"
 
     if isinstance(model_def, ScenarioModel):
-        return model_def
-
-    if isinstance(model_def, dict):
-        model_name = model_def.pop("model", None)
+        model = model_def
+    elif isinstance(model_def, ScenarioSet):
+        model = ExplicitScenarioModel.from_set(model_def)
+    elif isinstance(model_def, str):
+        model = get_scenario_model_class(model_def)()
+    elif isinstance(model_def, dict):
+        params = dict(model_def)
+        model_name = params.pop("model", None)
         if model_name is None:
             raise ValueError("Scenario model name not provided in the model definition")
+        model = get_scenario_model_class(model_name).model_validate(params)
+    else:
+        raise ValueError("Invalid scenario model definition")
 
-        model_class = _get_model_class_by_name(model_name)
-        return model_class(ct, **model_def)
-
-    raise ValueError("Invalid scenario model definition")
-
-
-def _get_model_class_by_name(model_name: str) -> Type[ScenarioModel]:
-    """Return the scenario model class by name."""
-
-    if model_name == "nomScen":
-        return NominalScenario
-    if model_name == "wcScen":
-        raise NotImplementedError("Worst Case Scenarios are not implemented yet")
-    if model_name == "impScen":
-        raise NotImplementedError("Gridded Importance Weighted Scenarios are not implemented yet")
-    if model_name == "rndScen":
-        raise NotImplementedError("Random Scenarios are not implemented yet")
-    raise ValueError(f"Unknown scenario model: {model_name}")
+    if ct is not None:
+        model.validate_ct(ct)
+    return model
 
 
 def validate_scenario_model(
-    model_def: Union[ScenarioModel, Union[str, dict]], ct: Union[CT, dict] = None
+    model_def: Union[ScenarioModel, ScenarioSet, str, dict], ct: Optional[Any] = None
 ) -> ScenarioModel:
     """
-    Validate a scenario model object.
+    Validate a scenario model definition, converting matRad's 1-based ``ctScenProb``.
 
     Parameters
     ----------
-    model_def : Union[ScenarioModel, Union[str, dict]]
-        The scenario model object.
+    model_def : ScenarioModel or ScenarioSet or str or dict
+        See :func:`create_scenario_model`.
+    ct : CT or dict, optional
+        CT to validate against.
 
     Returns
     -------
     ScenarioModel
-        The scenario model object.
     """
     model_def = deepcopy(model_def)
     if isinstance(model_def, dict) and "ctScenProb" in model_def:
@@ -109,9 +179,35 @@ def validate_scenario_model(
 
 
 __all__ = [
-    "ScenarioModel",
+    "AFFECTS_GEOMETRY",
+    "AFFECTS_RANGE",
+    "AFFECTS_VOXEL_PARAMS",
+    "MATRAD_AXES",
+    "TAG_NOMINAL",
+    "CTPhaseUncertainty",
+    "ExplicitScenarioModel",
+    "IndependentGaussian",
+    "JointDistribution",
+    "MultivariateGaussian",
     "NominalScenario",
-    "create_scenario_model",
+    "NominalScenarioModel",
+    "RangeUncertainty",
+    "Scenario",
+    "ScenarioBasis",
+    "ScenarioLayout",
+    "ScenarioModel",
+    "ScenarioSet",
+    "SetupUncertainty",
+    "UncertaintyDimension",
+    "available_dimensions",
+    "available_distributions",
     "available_scenario_models",
+    "create_dimension",
+    "create_distribution",
+    "create_scenario_model",
+    "get_scenario_model_class",
+    "register_dimension",
+    "register_distribution",
+    "register_scenario_model",
     "validate_scenario_model",
 ]

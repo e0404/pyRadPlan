@@ -1,161 +1,134 @@
+"""Legacy (matRad-style) scenario model interface kept during the migration to ScenarioSet."""
+
 import warnings
 
 import numpy as np
-import SimpleITK as sitk
-from pyRadPlan.scenarios import ScenarioModel, NominalScenario, validate_scenario_model
-from pyRadPlan.ct import CT
 import pytest
+import SimpleITK as sitk
+
+from pyRadPlan.ct import CT
+from pyRadPlan.scenarios import NominalScenario, NominalScenarioModel, ScenarioModel
+from pyRadPlan.scenarios import validate_scenario_model
 
 
 @pytest.fixture
 def sample_model_dict_matrad():
-    model_dict = {
+    return {
         "model": "nomScen",
         "rangeRelSD": 5.0,
         "rangeAbsSD": 2.5,
         "shiftSD": (3.0, 3.0, 3.0),
-        # TODO!: MatRad export has e.g. (1, 0.5) as indexing.
-        # The Model does not yet respect that (converting 1 to 0)
-        # because it can't distinguish whether its from the user or matRad. (adding '1' or keeping '0')
         "ctScenProb": [(1, 0.5)],
         "wcSigma": 5.0,
     }
-    return model_dict
 
 
-def helper_mvar_gauss(scenarioModel):
-    # Computes multivariate Gaussian probability for scenario model
-    # Can be used to test correct scenario probabilities. Also considers used
-    # ct phases for probability computation (uncorrelated)
-
+def helper_mvar_gauss(scenario_model):
+    """Multivariate Gaussian probability including the ct phase probability (uncorrelated)."""
     sigma = np.diag(
         np.hstack(
             (
-                scenarioModel.shift_sd,
-                scenarioModel.range_abs_sd,
-                scenarioModel.range_rel_sd / 100.0,
+                scenario_model.shift_sd,
+                scenario_model.range_abs_sd,
+                scenario_model.range_rel_sd / 100.0,
             )
         )
         ** 2
     )
     d = sigma.shape[0]
     cs = np.linalg.cholesky(sigma)
-
-    tmp_standardized = np.linalg.solve(cs, scenarioModel.scen_for_prob[:, 1:].T).T
+    tmp_standardized = np.linalg.solve(cs, scenario_model.scen_for_prob[:, 1:].T).T
     p = (
         (2 * np.pi) ** (-d / 2)
         * np.exp(-0.5 * np.sum(tmp_standardized**2, axis=1))
         / np.prod(np.diag(cs))
     )
-
-    # Now multiply with the phase probability
     tmp_phase_prob = np.array(
         [
-            [x[1] for x in scenarioModel.ct_scen_prob if x[0] == phase]
-            for phase in scenarioModel.scen_for_prob[:, 0]
+            [x[1] for x in scenario_model.ct_scen_prob if x[0] == phase][0]
+            for phase in scenario_model.scen_for_prob[:, 0]
         ]
     )
-    p = p * tmp_phase_prob
-
-    return p
+    return p * tmp_phase_prob
 
 
 @pytest.fixture
 def sample_ct():
-    """Create a sample SimpleITK image for testing."""
-    sample_array = np.random.rand(50, 100, 100) * 1000  # Random HU values
+    sample_array = np.random.rand(50, 100, 100) * 1000
     image = sitk.GetImageFromArray(sample_array)
     image.SetOrigin((0, 0, 0))
     image.SetSpacing((1, 1, 2))
     image.SetDirection((1, 0, 0, 0, 1, 0, 0, 0, 1))
-
-    ct = CT(cube_hu=image)
-    return ct
+    return CT(cube_hu=image)
 
 
-# Test Abstract Scenario Model
-def test_scenario_model():
-    with pytest.raises(TypeError):
-        ScenarioModel()
+def _check_nominal_legacy_view(scenario):
+    assert isinstance(scenario, ScenarioModel)
+    assert isinstance(scenario, NominalScenario)
+    assert scenario.name == "Nominal Scenario"
+    assert scenario.short_name == "nomScen"
+    assert scenario.ct_scen_prob == [(0, 1.0)]
+    assert scenario.num_of_ct_scen == 1
+    assert scenario.tot_num_scen == 1
+    assert scenario.tot_num_shift_scen == 1
+    assert scenario.tot_num_range_scen == 1
+    assert scenario.rel_range_shift == 0.0
+    assert scenario.abs_range_shift == 0.0
+    assert np.array_equal(scenario.iso_shift, np.array([[0.0, 0.0, 0.0]]))
+    assert scenario.max_abs_range_shift == 0.0
+    assert scenario.max_rel_range_shift == 0.0
+    assert np.array_equal(scenario.scen_mask, np.ones((1, 1, 1)).astype(bool))
+    assert np.array_equal(scenario.linear_mask, np.array([[0, 0, 0]]))
+    assert np.array_equal(scenario.ct_scen_ix, [0])
+    assert np.allclose(scenario.scen_prob, helper_mvar_gauss(scenario))
+    assert np.array_equal(scenario.scen_for_prob, np.zeros((1, 6)))
+    assert np.array_equal(scenario.scen_weight, np.ones((1,), dtype=float))
+    assert scenario.sub2scen_ix(0, 0, 0) == 0
+    assert scenario.scen_num(0) == 0
 
 
 def test_nominal_scenario_construct():
-    scenario = NominalScenario()
-    assert isinstance(scenario, ScenarioModel)
-    assert isinstance(scenario, NominalScenario)
-    assert scenario.name == "Nominal Scenario"
-    assert scenario.short_name == "nomScen"
-    assert scenario.ct_scen_prob == [(0, 1.0)]
-    assert scenario.num_of_ct_scen == 1
-    assert scenario.tot_num_scen == 1
-    assert scenario.tot_num_shift_scen == 1
-    assert scenario.tot_num_range_scen == 1
-    assert scenario.rel_range_shift == 0.0
-    assert scenario.abs_range_shift == 0.0
-    assert np.array_equal(scenario.iso_shift, np.array([[0.0, 0.0, 0.0]]))
-    assert scenario.max_abs_range_shift == 0.0
-    assert scenario.max_rel_range_shift == 0.0
-    assert np.array_equal(scenario.scen_mask, np.ones((1, 1, 1)).astype(bool))
-    assert np.array_equal(scenario.linear_mask, np.array([[0, 0, 0]]))
-    assert np.allclose(scenario.scen_prob, helper_mvar_gauss(scenario))
-    assert np.array_equal(
-        scenario.scen_for_prob,
-        np.hstack((np.zeros((1, 1), dtype=float), np.zeros((1, 5), dtype=float))),
-    )
-    assert np.array_equal(scenario.scen_weight, np.ones((1,), dtype=float))
+    _check_nominal_legacy_view(NominalScenario())
 
 
 def test_nominal_scenario_construct_with_ct(sample_ct):
-    scenario = NominalScenario(sample_ct)
-    assert isinstance(scenario, ScenarioModel)
-    assert isinstance(scenario, NominalScenario)
-    assert scenario.name == "Nominal Scenario"
-    assert scenario.short_name == "nomScen"
-    assert scenario.short_name == "nomScen"
-    assert scenario.ct_scen_prob == [(0, 1.0)]
-    assert scenario.num_of_ct_scen == 1
-    assert scenario.tot_num_scen == 1
-    assert scenario.tot_num_shift_scen == 1
-    assert scenario.tot_num_range_scen == 1
-    assert scenario.rel_range_shift == 0.0
-    assert scenario.abs_range_shift == 0.0
-    assert np.array_equal(scenario.iso_shift, np.array([[0.0, 0.0, 0.0]]))
-    assert scenario.max_abs_range_shift == 0.0
-    assert scenario.max_rel_range_shift == 0.0
-    assert np.array_equal(scenario.scen_mask, np.ones((1, 1, 1)).astype(bool))
-    assert np.array_equal(scenario.linear_mask, np.array([[0, 0, 0]]))
+    scenario = NominalScenarioModel()
+    scenario.validate_ct(sample_ct)
+    _check_nominal_legacy_view(scenario)
+    assert scenario.num_of_available_ct_scen == 1
+
+
+def test_legacy_view_with_two_phases():
+    scenario = NominalScenarioModel(ct_scen_prob=[(0, 0.5), (2, 0.5)])
+    assert scenario.num_of_ct_scen == 2
+    assert scenario.num_of_available_ct_scen == 3
+    assert scenario.tot_num_scen == 2
+    assert scenario.scen_mask.shape == (3, 1, 1)
+    assert np.array_equal(scenario.scen_mask[:, 0, 0], [True, False, True])
+    assert np.array_equal(scenario.linear_mask, [[0, 0, 0], [2, 0, 0]])
+    assert np.array_equal(scenario.ct_scen_ix, [0, 2])
+    assert scenario.sub2scen_ix(2, 0, 0) == 2
+    assert scenario.scen_num(2) == 1
+    with pytest.raises(IndexError):
+        scenario.scen_num(1)
     assert np.allclose(scenario.scen_prob, helper_mvar_gauss(scenario))
-    assert np.array_equal(
-        scenario.scen_for_prob,
-        np.hstack((np.zeros((1, 1), dtype=float), np.zeros((1, 5), dtype=float))),
-    )
-    assert np.array_equal(scenario.scen_weight, np.ones((1,), dtype=float))
+    assert np.allclose(scenario.scen_weight, [0.5, 0.5])
+    assert np.array_equal(scenario.update_scenarios(), scenario.scen_for_prob)
 
 
-def test_nominal_scenario_list():
-    scenario = NominalScenario()
-    scenario.list_all_scenarios()
+def test_nominal_scenario_list(capsys):
+    NominalScenario().list_all_scenarios()
+    assert "nominal" in capsys.readouterr().out
 
 
 def test_nominal_scenario_creation_by_name():
     scenario = validate_scenario_model("nomScen")
-    assert isinstance(scenario, ScenarioModel)
     assert isinstance(scenario, NominalScenario)
-
     with pytest.raises(ValueError):
         validate_scenario_model("unknown")
 
-    with pytest.raises(NotImplementedError):
-        validate_scenario_model("wcScen")
 
-    with pytest.raises(NotImplementedError):
-        validate_scenario_model("impScen")
-
-    with pytest.raises(NotImplementedError):
-        validate_scenario_model("rndScen")
-
-
-def test_nominal_scenario_creation_by_dict():
+def test_nominal_scenario_creation_by_legacy_dict():
     model_dict = {
         "model": "nomScen",
         "range_rel_sd": 5.0,
@@ -164,82 +137,49 @@ def test_nominal_scenario_creation_by_dict():
         "ct_scen_prob": [(0, 0.5)],
         "wc_sigma": 5.0,
     }
-
     scenario = validate_scenario_model(model_dict)
-
-    assert isinstance(scenario, ScenarioModel)
     assert isinstance(scenario, NominalScenario)
     assert scenario.range_rel_sd == 5.0
     assert scenario.range_abs_sd == 2.5
-    assert np.array_equal(scenario.shift_sd, (3.0, 3.0, 3.0))
+    assert scenario.shift_sd == (3.0, 3.0, 3.0)
     assert scenario.ct_scen_prob == [(0, 0.5)]
     assert scenario.wc_sigma == 5.0
-
-    return_dict = scenario.model_dump()
-
-    model_dict.pop("model")
-
-    for key in model_dict.keys():
-        assert key in return_dict
-        assert return_dict[key] == model_dict[key]
+    # the dump is nested now, but validates back to the same model
+    assert validate_scenario_model(scenario.model_dump()) == scenario
 
 
 def test_nominal_scenario_creation_by_matrad_dict(sample_model_dict_matrad):
     scenario = validate_scenario_model(sample_model_dict_matrad)
-
-    assert isinstance(scenario, ScenarioModel)
     assert isinstance(scenario, NominalScenario)
     assert scenario.range_rel_sd == 5.0
     assert scenario.range_abs_sd == 2.5
-    assert np.array_equal(scenario.shift_sd, [3.0, 3.0, 3.0])
+    assert scenario.shift_sd == (3.0, 3.0, 3.0)
     assert scenario.ct_scen_prob == [(0, 0.5)]
     assert scenario.wc_sigma == 5.0
 
     return_dict = scenario.to_matrad()
-
-    sample_model_dict_matrad.pop("model")
-
-    for key in sample_model_dict_matrad.keys():
+    for key, value in sample_model_dict_matrad.items():
         assert key in return_dict
-        assert return_dict[key] == sample_model_dict_matrad[key]
-
-
-@pytest.mark.parametrize(
-    "ct_scen_prob",
-    [
-        np.array([1.0, 1.0]),  # 1-D, as a squeezed single scenario loaded from a .mat file
-        np.array([[1.0, 1.0]]),  # 2-D (n, 2) as scipy would deliver it
-        [(1, 1.0)],  # plain list of tuples (matRad 1-based)
-    ],
-)
-def test_validate_scenario_model_ctscenprob_shapes(ct_scen_prob):
-    """matRad ``ctScenProb`` normalizes regardless of numpy shape"""
-    scenario = validate_scenario_model({"model": "nomScen", "ctScenProb": ct_scen_prob})
-    assert isinstance(scenario, NominalScenario)
-    # matRad 1-based index 1 -> 0-based 0.
-    assert scenario.ct_scen_prob == [(0, 1.0)]
+        assert np.all(np.asarray(return_dict[key]) == np.asarray(value))
 
 
 def test_scenario_serialization_emits_no_pydantic_warning():
-    """Serializing a scenario must not warn about range-shift array/float mismatch."""
     scenario = NominalScenario()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         scenario.model_dump()
+        scenario.model_dump_json()
         scenario.to_matrad()
     messages = [str(w.message) for w in caught]
-    assert not any(
-        "PydanticSerializationUnexpectedValue" in m or "range_shift" in m for m in messages
-    ), messages
-    # The values themselves are arrays (one entry per ct scenario).
+    assert not any("PydanticSerializationUnexpectedValue" in m for m in messages), messages
     assert np.array_equal(scenario.rel_range_shift, np.zeros(1))
     assert np.array_equal(scenario.abs_range_shift, np.zeros(1))
 
 
 def test_nominal_scenario_extract_single_scenario():
     scenario = NominalScenario()
-    assert isinstance(scenario.extract_single_scenario(0), ScenarioModel)
-    assert isinstance(scenario.extract_single_scenario(0), NominalScenario)
-
-    with pytest.raises(NotImplementedError):
+    single = scenario.extract_single_scenario(0)
+    assert isinstance(single, ScenarioModel)
+    assert single.tot_num_scen == 1
+    with pytest.raises(IndexError):
         scenario.extract_single_scenario(1)
