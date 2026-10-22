@@ -74,6 +74,8 @@ class ScenarioModel(LegacyScenarioInterface, PyRadPlanBaseModel, ABC):
 
     name: ClassVar[str]
     short_name: ClassVar[str]
+    #: Legacy flat parameter names mapped onto top-level fields; subclasses extend this.
+    legacy_aliases: ClassVar[dict[str, str]] = {}
 
     setup: SetupUncertainty = Field(default_factory=SetupUncertainty)
     range: RangeUncertainty = Field(default_factory=RangeUncertainty)
@@ -104,6 +106,9 @@ class ScenarioModel(LegacyScenarioInterface, PyRadPlanBaseModel, ABC):
         for key in ("wcFactor", "wc_factor"):
             if key in data:
                 data.setdefault("wc_sigma", data.pop(key))
+        for key, target in cls.legacy_aliases.items():
+            if key in data:
+                data.setdefault(target, data.pop(key))
         for key, (field, attr) in _LEGACY_FIELD_MAP.items():
             if key in data:
                 _nested_set(data, field, attr, data.pop(key))

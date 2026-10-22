@@ -435,7 +435,8 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_scenario = QComboBox()
         self._cmb_scenario.addItems(available_scenario_models())
         for model in ("wcScen", "impScen", "rndScen"):
-            self._add_disabled_item(self._cmb_scenario, model)
+            if model not in available_scenario_models():
+                self._add_disabled_item(self._cmb_scenario, model)
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
 
         # Plan-level target/reporting quantity, as opposed to the quantities the

@@ -43,8 +43,12 @@ from ._distributions import (
     register_distribution,
 )
 from ._explicit import ExplicitScenarioModel
+from ._gridded import GriddedScenarioModel
+from ._importance import ImportanceScenarioModel
 from ._nominal import NominalScenarioModel
+from ._random import RandomScenarioModel
 from ._set import MATRAD_AXES, TAG_NOMINAL, Scenario, ScenarioBasis, ScenarioLayout, ScenarioSet
+from ._worst_case import WorstCaseScenarioModel
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +58,7 @@ NominalScenario = NominalScenarioModel
 _MODEL_REGISTRY: dict[str, Type[ScenarioModel]] = {}
 
 #: matRad model names known but not (yet) available; reported as not implemented.
-_KNOWN_MATRAD_MODELS: dict[str, str] = {
-    "wcScen": "Worst Case Scenarios",
-    "impScen": "Gridded Importance Weighted Scenarios",
-    "rndScen": "Random Scenarios",
-}
+_KNOWN_MATRAD_MODELS: dict[str, str] = {}
 
 
 def register_scenario_model(cls: Type[ScenarioModel]) -> Type[ScenarioModel]:
@@ -69,6 +69,9 @@ def register_scenario_model(cls: Type[ScenarioModel]) -> Type[ScenarioModel]:
 
 register_scenario_model(NominalScenarioModel)
 register_scenario_model(ExplicitScenarioModel)
+register_scenario_model(WorstCaseScenarioModel)
+register_scenario_model(ImportanceScenarioModel)
+register_scenario_model(RandomScenarioModel)
 
 
 def available_scenario_models() -> list[str]:
@@ -186,11 +189,14 @@ __all__ = [
     "TAG_NOMINAL",
     "CTPhaseUncertainty",
     "ExplicitScenarioModel",
+    "GriddedScenarioModel",
+    "ImportanceScenarioModel",
     "IndependentGaussian",
     "JointDistribution",
     "MultivariateGaussian",
     "NominalScenario",
     "NominalScenarioModel",
+    "RandomScenarioModel",
     "RangeUncertainty",
     "Scenario",
     "ScenarioBasis",
@@ -199,6 +205,7 @@ __all__ = [
     "ScenarioSet",
     "SetupUncertainty",
     "UncertaintyDimension",
+    "WorstCaseScenarioModel",
     "available_dimensions",
     "available_distributions",
     "available_scenario_models",
