@@ -1115,26 +1115,24 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         # Loop over all requested quantities
         for q_name in names:
             # Create dij list for each quantity
-            dij[q_name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+            dij[q_name] = np.empty((len(self._scenarios),), dtype=object)
 
             # Loop over all scenarios and preallocate quantity containers
             # TODO: write test for this
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    if self._calc_dose_direct:
-                        dij[q_name].flat[i] = np.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                        )
-                    # else:
-                    #     # This could probably be optimized by using direct access to the
-                    #     # lil_matrix's data structures
-                    #     # TODO: we could store a single sparse pattern matrix and then only store
-                    #     # the values for all quantities for better memory management
-                    #     dij[q_name].flat[i] = lil_matrix(
-                    #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
-                    #         dtype=np.float32,
-                    #     )
+            for i in self._scenarios.computed_indices():
+                if self._calc_dose_direct:
+                    dij[q_name].flat[i] = np.zeros(
+                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                    )
+                # else:
+                #     # This could probably be optimized by using direct access to the
+                #     # lil_matrix's data structures
+                #     # TODO: we could store a single sparse pattern matrix and then only store
+                #     # the values for all quantities for better memory management
+                #     dij[q_name].flat[i] = lil_matrix(
+                #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
+                #         dtype=np.float32,
+                #     )
 
             self._computed_quantities.append(q_name)
 
@@ -1285,20 +1283,18 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         """
         if not self.external_calculation:
             # Loop over all scenarios and remove dose influence for voxels outside of segmentations
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    # Loop over all used quantities
-                    for q_name in self._computed_quantities:
-                        if not self._calc_dose_direct:
-                            tmp_matrix = dij[q_name].flat[i]
+            for i in self._scenarios.computed_indices():
+                # Loop over all used quantities
+                for q_name in self._computed_quantities:
+                    if not self._calc_dose_direct:
+                        tmp_matrix = dij[q_name].flat[i]
 
-                            if not isinstance(tmp_matrix, sparse.csc_array):
-                                tmp_matrix = sparse.csc_array(tmp_matrix)
+                        if not isinstance(tmp_matrix, sparse.csc_array):
+                            tmp_matrix = sparse.csc_array(tmp_matrix)
 
-                            tmp_matrix.eliminate_zeros()
-                            dij[q_name].flat[i] = tmp_matrix
-                            # dij[q_name].flat[i].data *= self.scaling_factor
+                        tmp_matrix.eliminate_zeros()
+                        dij[q_name].flat[i] = tmp_matrix
+                        # dij[q_name].flat[i].data *= self.scaling_factor
 
             # if self.keep_rad_depth_cubes and self._rad_depth_cubes:
             #     dij["rad_depth_cubes"] = self._rad_depth_cubes

@@ -27,6 +27,7 @@ from pyRadPlan.biology.models import (
     BioModelUnavailableError,
 )
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.scenarios import Scenario
 from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -969,31 +970,33 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         else:
             ray["rad_depth_offset"] = 0
 
-        # Reference LQ parameters of the voxels found by the ray tracer, per CT scenario
-        # TODO: multi-scenario support (ray["ix"] currently only carries the first CT scenario)
+        # Reference LQ parameters of the voxels found by the ray tracer, per CT phase
         if self._calc_bio_dose:
-            ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_tissue_class_ix"] = [None] * self.mult_scen.num_of_ct_scen
-            for s in range(self.mult_scen.num_of_ct_scen):
-                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x[:, s], ray["ix"][0], axis=0)
-                ray["v_beta_x"][s] = xp.take(self._v_beta_x[:, s], ray["ix"][0], axis=0)
-                ray["v_tissue_class_ix"][s] = xp.take(
-                    self._v_tissue_class_ix[:, s], ray["ix"][0], axis=0
+            num_phases = len(ray["ix"])
+            ray["v_alpha_x"] = [None] * num_phases
+            ray["v_beta_x"] = [None] * num_phases
+            ray["v_tissue_class_ix"] = [None] * num_phases
+            for p in range(num_phases):
+                ray["v_alpha_x"][p] = xp.take(self._v_alpha_x[:, p], ray["ix"][p], axis=0)
+                ray["v_beta_x"][p] = xp.take(self._v_beta_x[:, p], ray["ix"][p], axis=0)
+                ray["v_tissue_class_ix"][p] = xp.take(
+                    self._v_tissue_class_ix[:, p], ray["ix"][p], axis=0
                 )
 
         return ray
 
-    def _extract_single_scenario_ray(self, ray, scen_idx):
-        scen_ray = super()._extract_single_scenario_ray(ray, scen_idx)
-        # TODO: Add multscen support
-        # Gets number of scenario
-        ct_scen = self.mult_scen.linear_mask[0][scen_idx]
+    def _init_geometry_group(self) -> None:
+        # Cached kernels carry lateral cutoffs computed for an earlier geometry (SSDs)
+        self._kernel_cache.clear()
+
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
+        scen_ray = super()._apply_scenario_to_ray(ray, scenario)
 
         if self._calc_bio_dose:
-            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
-            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
-            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_scen]
+            ct_phase = scenario.ct_phase
+            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_phase]
+            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_phase]
+            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_phase]
 
         return scen_ray
 

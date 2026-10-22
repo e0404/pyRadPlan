@@ -1,5 +1,5 @@
 import logging
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, ClassVar, Optional
 
 import numpy as np
 from pydantic import Field
@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 class MonteCarloEngineAbstract(DoseEngineBase):
     """Abstract base for Monte Carlo dose calculation engines."""
+
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("ct_phase",)
 
     num_histories_per_beamlet: Annotated[float, Field(gt=0.0)] = 2e2
     num_histories_direct: Annotated[float, Field(gt=0.0)] = 1e6

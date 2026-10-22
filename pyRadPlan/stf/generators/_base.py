@@ -53,7 +53,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
             True  # Add margins to target (for numerical stability and robustness)
         )
 
-        self.mult_scen: Any = None  # Scenario Model, #TODO: Merge Scenario Model Developments
+        self.mult_scen: Any = None  # Scenario model, its name / definition, or a ScenarioSet
         self.bio_param: Any = None  # Biological Model #TODO: Merge Biological Model Developments
         self.machine: Union[str, Machine] = None  # Machine name
         self._ct: CT = None  # CT Object
@@ -129,10 +129,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
         if self.add_margin:
             added_margin = self._computed_target_margin()  # pbMargin in matRad
 
-            max_iso_shift = np.max(self._mult_scen.iso_shift, axis=0)
-            range_margin = (
-                self._mult_scen.max_abs_range_shift + self._mult_scen.max_rel_range_shift
-            )
+            max_iso_shift, range_margin = self._scenario_margins()
 
             constant_margin = added_margin + range_margin
 
@@ -179,6 +176,30 @@ class StfGeneratorBase(ProgressReporter, ABC):
         # Multiply with target mask to ignore densities outside of target
         apply_mask = sitk.MaskImageFilter()
         self._cube_hu = apply_mask.Execute(self._cube_hu, self._patient_mask)
+
+    def _scenario_margins(self) -> tuple[np.ndarray, float]:
+        """
+        Target margins required by the scenarios.
+
+        Returns
+        -------
+        tuple[np.ndarray, float]
+            The largest setup shift magnitude per direction in mm, and the range margin, the
+            sum of the largest absolute (mm) and relative range shift magnitudes. Dimensions
+            the scenario set does not realize contribute zero.
+        """
+        scen_set = self._mult_scen.scenarios(self._ct)
+
+        max_iso_shift = np.zeros(3)
+        if scen_set.has_dimension("setup"):
+            max_iso_shift = np.asarray(scen_set.extent("setup"), dtype=float)
+
+        range_margin = 0.0
+        if scen_set.has_dimension("range"):
+            range_extent = scen_set.extent("range")
+            range_margin = float(range_extent[0] + range_extent[1])
+
+        return max_iso_shift, range_margin
 
     @abstractmethod
     def _generate_source_geometry(self):
