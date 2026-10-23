@@ -212,3 +212,14 @@ def test_track_raises_once_a_stop_is_requested():
     assert seen == [0, 1]
     # without a stop request the loop completes
     assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+
+
+def test_track_without_stderr_skips_the_console_bar(monkeypatch):
+    """Windowed processes (pythonw, the desktop bundle) have no stderr for tqdm to write to."""
+    algo = _Algo()
+    algo.console_progress = True
+    reports = _collect(algo)
+    monkeypatch.setattr("sys.stderr", None)
+
+    assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+    assert any(isinstance(r, ProgressReport) and r.levels for r in reports)

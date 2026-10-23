@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GUI: started without a console (e.g. with `pythonw`), dose calculations failed with `AttributeError: 'NoneType' object has no attribute 'write'` and the GUI froze after the error dialog: the console progress bar wrote to the missing `sys.stderr` and left tqdm's lock held. The GUI now discards console output when there is no console, and `ProgressReporter.track` draws no console bar without a `sys.stderr`
 - No more `Requested GPU device is not available ... Falling back to CPU` warning on CPU-only installs (no cupy/torch/jax): when a GPU is merely preferred but no GPU-capable backend exists, numpy is the only choice and the fallback is logged at debug level. The warning is kept for a real mismatch, i.e. an explicitly set `preferred_gpu_array_backend` or a torch/jax/cupy namespace whose GPU is unavailable
 - The pyRadPlan wheel no longer ships the repository's `test/`, `docs/`, `examples/` and `benchmark/` directories: package discovery is restricted to `pyRadPlan`
 - Ion machine files listing more focus sizes (`initFocus.SisFWHMAtIso`) than foci with beam optics, as the HIT base data with fluence spectra does, load again; the surplus sizes are ignored. Energy spectra given as a histogram (`energySpectrum.type = 'histogram'` with `energy_MeVpN` and `weight`) are read as well; the Monte Carlo engines use their weighted mean and spread
