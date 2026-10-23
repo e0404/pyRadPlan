@@ -49,6 +49,12 @@ test_requires = []
 [tool.briefcase.app.pyradplan_app.windows]
 # Per-user install under %LOCALAPPDATA%\Programs: no admin rights needed.
 system_installer = false
+# Install into ...\Programs\pyRadPlan rather than ...\Programs\<author>\pyRadPlan.
+use_full_install_path = false
+# Installer bitmaps (493x312 welcome/finish side panel, 493x58 banner), rendered by
+# scripts/make_icons.py; the .bmp suffix is added by Briefcase.
+installer_background = "src/pyradplan_app/resources/installer-dialog"
+installer_banner = "src/pyradplan_app/resources/installer-banner"
 
 [tool.briefcase.app.pyradplan_app.macOS]
 universal_build = false

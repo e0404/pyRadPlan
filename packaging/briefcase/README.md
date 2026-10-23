@@ -16,7 +16,7 @@ install pyRadPlan.
 | `tests/pyradplan_app/__main__.py` | Smoke test that runs inside the built bundle (`briefcase run --test`). |
 | `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project. |
 | `scripts/collect_licenses.py` | Writes the third-party license notices into the bundle. |
-| `scripts/make_icons.py` | Regenerates the `.ico`/`.icns`/`.png` icons from the pyRadPlan logo SVG. |
+| `scripts/make_icons.py` | Regenerates the `.ico`/`.icns`/`.png` icons and the Windows installer's side panel and banner bitmaps from the pyRadPlan logo SVGs. |
 | `scripts/run_briefcase.py` | Runs Briefcase with a workaround for `rcedit` failing on relative paths (see below). |
 | `build/`, `dist/`, `logs/` | Briefcase output (ignored by git). |
 
