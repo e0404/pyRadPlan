@@ -10,6 +10,8 @@ helper, so it can appear before the heavy modules are loaded.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -37,7 +39,8 @@ class StartupSplash(QWidget):
 
     Startup is split into weighted phases.  Each :meth:`step` completes the
     running phase and starts the next one, so the bar shows the share of the
-    expected startup work already done.
+    expected startup work already done, and the status line counts the phases
+    (``n/N``).
 
     A frameless window rather than a ``QSplashScreen``: on Windows,
     ``QSplashScreen.show()`` blocks for about a second waiting for the window
@@ -47,15 +50,20 @@ class StartupSplash(QWidget):
     ----------
     total_weight:
         Sum of the weights of all phases that will be announced via :meth:`step`.
+    total_steps:
+        Number of phases that will be announced via :meth:`step`.  When ``None``,
+        the status line shows the completed percentage instead of a phase count.
     """
 
-    def __init__(self, total_weight: float = 1.0) -> None:
+    def __init__(self, total_weight: float = 1.0, total_steps: Optional[int] = None) -> None:
         super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)
         self._background = _splash_pixmap()
         self._total = max(float(total_weight), 1e-9)
         self._done = 0.0
         self._current = 0.0
         self._message = ""
+        self._steps = 0
+        self._total_steps = total_steps
         self.setFixedSize(_WIDTH, _HEIGHT)
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
@@ -68,6 +76,17 @@ class StartupSplash(QWidget):
     def message(self) -> str:
         """Return the status line of the running phase."""
         return self._message
+
+    def counter(self) -> str:
+        """Return the phase count (``n/N``), or the percentage without a step total."""
+        if self._total_steps is None:
+            return f"{round(100 * self.progress())} %"
+        return f"{min(self._steps, self._total_steps)}/{self._total_steps}"
+
+    def set_message(self, message: str) -> None:
+        """Update the status line of the running phase, e.g. with its progress."""
+        self._message = message
+        self._refresh()
 
     def step(self, message: str, weight: float = 1.0) -> None:
         """Complete the running phase and start a new one.
@@ -82,6 +101,7 @@ class StartupSplash(QWidget):
         self._done += self._current
         self._current = max(float(weight), 0.0)
         self._message = message
+        self._steps += 1
         self._refresh()
 
     def finish(self, window: QWidget) -> None:
@@ -115,7 +135,7 @@ class StartupSplash(QWidget):
         painter.drawText(
             text,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            f"{round(100 * self.progress())} %",
+            self.counter(),
         )
 
         radius = _BAR_HEIGHT / 2

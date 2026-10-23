@@ -441,14 +441,16 @@ class OptimizationWidget(WorkspaceWidget):
         if cst is None or pln is None:
             return
 
+        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog, busy_cursor  # noqa: PLC0415
+
         # Deferred: keeps the optional ai.agents stack out of widget construction.
-        from pyRadPlan.ai.agents import (  # noqa: PLC0415
-            available_models,
-            cst_context_summary,
-            generate_voi_objectives,
-            objectives_system_prompt,
-        )
-        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+        with busy_cursor():
+            from pyRadPlan.ai.agents import (  # noqa: PLC0415
+                available_models,
+                cst_context_summary,
+                generate_voi_objectives,
+                objectives_system_prompt,
+            )
 
         qis, accepted = self._prompt_qi_adaptation(cst)
         if not accepted:
