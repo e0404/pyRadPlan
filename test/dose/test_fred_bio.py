@@ -12,12 +12,14 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from pyRadPlan.bio_models import (
+from pyRadPlan.biology.models import (
     BioModelEvaluator,
+    BioModelUnavailableError,
     KernelBasedLQModel,
     LQModel,
     ParametricEvaluator,
     Wedenberg,
+    create_bio_model,
 )
 from pyRadPlan.dose.engines import (
     DoseEngineBase,
@@ -117,7 +119,7 @@ def test_fred_accepts_let_model_without_pencil_beam_let_kernels(test_data_proton
     dij = engine._init_dose_calc(ct, cst, stf)
 
     assert engine.provided_quantities() == ["physical_dose", "let"]
-    assert engine.engine_provided_quantities() == ["let"]
+    assert engine.bio_capability().scored_quantities == ("let:LETd",)
     assert "LETd" in engine.scorers
     assert engine._calc_bio_dose
     assert engine._bio_influence_names == ("alpha_dose", "sqrt_beta_dose")
@@ -133,10 +135,31 @@ def test_pencil_beam_engine_still_needs_tabulated_let(test_data_protons, monkeyp
     machine = _machine_without_let()
     monkeypatch.setattr(DoseEngineBase, "load_machine", staticmethod(lambda *a, **k: machine))
 
+    pln.prop_dose_calc = {**pln.prop_dose_calc, "calc_bio_dose": True}
     engine = ParticleHongPencilBeamEngine(pln)
-    assert engine.engine_provided_quantities() == []
+    assert engine.bio_capability().scored_quantities == ()
     with pytest.raises(ValueError, match="Required quantities not provided"):
         engine._init_dose_calc(ct, cst, stf)
+
+
+def test_pencil_beam_engine_without_let_falls_back_to_physical_dose(
+    test_data_protons, monkeypatch, caplog
+):
+    """Without an explicit biological request, the unavailable model only drops biology."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln.bio_model = "WED"
+    machine = _machine_without_let()
+    monkeypatch.setattr(DoseEngineBase, "load_machine", staticmethod(lambda *a, **k: machine))
+
+    engine = ParticleHongPencilBeamEngine(pln)
+    with caplog.at_level(logging.WARNING):
+        dij = engine._init_dose_calc(ct, cst, stf)
+
+    assert "Required quantities not provided" in caplog.text
+    assert "RBExDose" in caplog.text
+    assert dij["bio_model"] is None
+    assert not engine._calc_bio_dose
+    assert engine._bio_evaluator is None
 
 
 def test_fred_setup_stores_constant_rbe(test_data_protons):
@@ -277,3 +300,50 @@ def test_fred_stores_biological_matrices_derived_from_the_scored_let():
     assert np.allclose(np.sort(dij["alpha_dose"].flat[0].data), np.sort(d * rbe_max * 0.1))
     assert np.allclose(np.sort(dij["sqrt_beta_dose"].flat[0].data), np.sort(d * np.sqrt(0.05)))
     assert (dij["let_dose"].flat[0] != let_dose).nnz == 0
+
+
+# ------------------------------------------- engine capability: same check as the GUI
+def test_fred_rejects_kernel_formalisms_like_the_check(test_data_carbon):
+    """FRED does not use the machine's α/β kernels: setup raises what check_tissues reports."""
+    pln, ct, cst, stf, _dij, _result = test_data_carbon
+    pln.bio_model = "alpha_beta_kernels"
+    pln.prop_dose_calc = {"engine": "FRED", "external_calculation": True, "calc_bio_dose": True}
+
+    machine = DoseEngineBase.load_machine("carbon", "Generic")
+    issues = create_bio_model("alpha_beta_kernels").check_tissues(machine, cst, engine="FRED")
+    assert [issue.kind for issue in issues] == ["model_unavailable"]
+
+    engine = ParticleFredMCEngine(pln)
+    with pytest.raises(BioModelUnavailableError) as info:
+        engine._init_dose_calc(ct, cst, stf)
+    assert "The dose engine FRED does not use the machine's α/β kernels." in str(info.value)
+    assert issues[0].message in str(info.value)
+
+
+def test_fred_falls_back_to_physical_dose_for_kernel_formalisms(test_data_carbon, caplog):
+    pln, ct, cst, stf, _dij, _result = test_data_carbon
+    pln.bio_model = "alpha_beta_kernels"
+    pln.prop_dose_calc = {"engine": "FRED", "external_calculation": True}
+
+    engine = ParticleFredMCEngine(pln)
+    with caplog.at_level(logging.WARNING):
+        dij = engine._init_dose_calc(ct, cst, stf)
+
+    assert "FRED does not use the machine's α/β kernels" in caplog.text
+    assert dij["bio_model"] is None
+    assert not engine._calc_bio_dose
+    assert "LETd" not in engine.scorers
+
+
+def test_fred_accepts_let_model_on_a_machine_without_let(test_data_carbon):
+    """The carbon machine tabulates no LET, which FRED scores itself."""
+    pln, ct, cst, stf, _dij, _result = test_data_carbon
+    pln.bio_model = "LSM"
+    pln.prop_dose_calc = {"engine": "FRED", "external_calculation": True}
+
+    engine = ParticleFredMCEngine(pln)
+    dij = engine._init_dose_calc(ct, cst, stf)
+
+    assert dij["bio_model"] == create_bio_model("LSM")
+    assert engine._calc_bio_dose
+    assert "LETd" in engine.scorers

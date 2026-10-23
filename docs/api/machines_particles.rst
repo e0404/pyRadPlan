@@ -24,4 +24,5 @@ Beam Kernels
     ~_beam_emittance.ChargedBeamEmittance
     ~_beam_energy.ChargedEnergySpectrum
     ~_beam_energy.ChargedEnergySpectrumGaussian
+    ~_beam_energy.ChargedEnergySpectrumHistogram
     ~_beam_focus.ChargedBeamFocus

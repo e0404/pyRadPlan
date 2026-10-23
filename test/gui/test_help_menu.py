@@ -55,7 +55,8 @@ def test_licenses_dialog_lists_numpy_and_shows_its_license(qapp):
     dialog = ThirdPartyLicensesDialog()
     names = [n.lower() for n in dialog.distribution_names()]
     assert "numpy" in names
-    assert "pyside6" in names
+    # the gui extra installs pyside6-essentials, not the pyside6 meta-distribution
+    assert any(n.replace("_", "-").startswith("pyside6") for n in names)
 
     dialog.select("numpy")
     text = dialog.current_license_text()

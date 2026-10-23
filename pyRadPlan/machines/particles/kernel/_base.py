@@ -42,6 +42,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         Union[NDArray[Shape["1-*"], np.float64], NDArray[Shape["1-*,1-*"], np.float64]]
     ] = None
     let: Optional[NDArray[Shape["1-*"], np.float64]] = Field(alias="LET", default=None)
+    zs: Optional[NDArray[Shape["1-*"], np.float64]] = None
     alpha_x: Optional[NDArray[Shape["1-*"], np.float64]] = None
     beta_x: Optional[NDArray[Shape["1-*"], np.float64]] = None
     alpha: Optional[NDArray[Shape["1-*,1-*"], np.float64]] = None
@@ -52,6 +53,30 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         serialization_alias="Fluence",
         default=None,
     )
+    additional_data: dict[str, NDArray] = Field(
+        default_factory=dict,
+        description="Depth-dependent arrays of declared kernel sets stored in fields of their "
+        "own (e.g. a second set of alpha/beta kernels), keyed by field name. Tissue-dependent "
+        "arrays are stored as (n_tissue_classes, n_depths).",
+    )
+
+    @field_validator("additional_data", mode="before")
+    @classmethod
+    def validate_additional_data(cls, v: Any, info: ValidationInfo) -> Any:
+        """Cast to float64 arrays, as (n_columns, n_depths) for tissue-dependent data."""
+        if v is None:
+            return {}
+        n_depths = np.shape(info.data.get("depths", ()))[0] if "depths" in info.data else None
+        arrays = {}
+        for name, values in dict(v).items():
+            array = np.array(values, dtype=np.float64)
+            if array.ndim == 2 and n_depths is not None:
+                if array.shape[1] != n_depths and array.shape[0] == n_depths:
+                    array = np.ascontiguousarray(array.T)
+            if n_depths is not None and array.shape[-1] != n_depths:
+                raise ValueError(f"Kernel data '{name}' does not match the depth data length.")
+            arrays[name] = array
+        return arrays
 
     @model_validator(mode="before")
     @classmethod
@@ -89,6 +114,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         "sigma_multi",
         "weight_multi",
         "let",
+        "zs",
         "alpha",
         "beta",
         "alpha_x",
@@ -124,7 +150,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
         return v
 
     @field_validator(
-        "idd", "sigma", "sigma_1", "sigma_2", "sigma_x", "sigma_y", "let", mode="after"
+        "idd", "sigma", "sigma_1", "sigma_2", "sigma_x", "sigma_y", "let", "zs", mode="after"
     )
     @classmethod
     def validate_kernel_lengths(
@@ -272,6 +298,7 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
             "sigma_multi",
             "weight_multi",
             "let",
+            "zs",
             "alpha_x",
             "beta_x",
             "alpha",
@@ -280,6 +307,9 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
             val = getattr(self, field)
             if val is not None:
                 data[field] = xp_to_namespace(xp, val, device=device)
+
+        for name, val in self.additional_data.items():
+            data.setdefault(name, xp_to_namespace(xp, val, device=device))
 
         if self.lateral_cut_off is not None:
             data["lateral_cut_off"] = {

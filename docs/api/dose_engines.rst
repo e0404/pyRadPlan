@@ -31,5 +31,6 @@ Other Functions
     :toctree: generated/dose/engines/
 
     get_engine
+    get_engine_class
     get_available_engines
     register_engine

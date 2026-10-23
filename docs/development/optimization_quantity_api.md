@@ -46,7 +46,7 @@ Out of scope:
 
 | Location | Current behavior relevant to this change |
 |---|---|
-| [`_optiprob.py`](../../pyRadPlan/optimization/problems/_optiprob.py) | Defaults `convert_dose_objectives` to `True`; `_collect_objectives()` overwrites quantities using modality and available matrices; makes shallow objective copies; preprocesses images before scalar fraction normalization. |
+| [`_optiprob.py`](../../pyRadPlan/optimization/problems/_optiprob.py) | Defaults `convert_dose_objectives` to `True`; `_collect_objectives()` converts physical-dose objectives to the quantity inferred from modality and available matrices unless biological objectives are present, warning either way; makes shallow objective copies; preprocesses images before scalar fraction normalization. |
 | [`_objective.py`](../../pyRadPlan/optimization/objectives/_objective.py) | Defaults quantity to `physical_dose`; validates against the concrete registry; divides all scalar `reference` parameters by fractions; skips `image_reference` parameters during normalization. |
 | [`_resolver.py`](../../pyRadPlan/quantities/_resolver.py) | Resolves dependencies, deduplicates instances, and reports unavailable computation paths. |
 | [`_plans.py`](../../pyRadPlan/plan/_plans.py) | Stores optimization configuration in `prop_opt`; defaults `dose_convention` to `per_fraction`; provides `result_dose_factor`. |
@@ -616,9 +616,9 @@ Primary files:
 - `pyRadPlan/optimization/objectives/_objective.py` and affected objective implementations
 - `pyRadPlan/quantities/_base.py` and concrete quantity classes
 - `pyRadPlan/cst/_cst.py` where tissue-field validation helpers are needed
-- `pyRadPlan/bio_models/_base.py` (documentation only unless integration requires more)
+- `pyRadPlan/biology/models/_base.py` (documentation only unless integration requires more)
 - New strategy/preparation tests under `test/optimization/`
-- Existing `test/quantities/` and `test/bio_models/` integration fixtures
+- Existing `test/quantities/` and `test/biology/models/` integration fixtures
 
 Acceptance: documented scalar/image conversions and fraction ordering hold, unavailable or
 ambiguous requests fail before solve, and the quantity graph remains owned by `QuantityResolver`.
@@ -664,7 +664,7 @@ never silently claims unsupported matRad equivalence.
 - [ ] Run `pytest test/gui` for data-model and algorithm API changes.
 - [ ] Run the full required suite and formatting/lint checks; do not reduce coverage.
 - [ ] Build documentation if user-guide/API changes require it.
-- [ ] If examples change, refresh committed executed notebooks with `python docs/execute_examples.py`.
+- [ ] If examples change, check that they run with `python docs/execute_examples.py`.
 - [ ] Reconcile this design note with the final public API and mark implementation status.
 
 ## 14. Alternatives considered

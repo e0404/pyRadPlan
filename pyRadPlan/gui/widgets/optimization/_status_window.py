@@ -16,6 +16,10 @@ from PySide6.QtWidgets import (
 )
 
 from pyRadPlan.core import ComputeControl
+from .._plot_theme import apply_pyqtgraph_colors, plot_colors
+
+#: Width of the metric marker crosses.
+_SYMBOL_WIDTH = 2.5
 
 #: Default metrics plotted as ``(key, axis title, log_y)``.  The widget is agnostic to
 #: which keys a report actually carries, so extra metrics (e.g. constraint violation,
@@ -143,9 +147,23 @@ class OptimizationStatusWidget(QWidget):
                 pen=None,
                 symbol="+",
                 symbolSize=12,
-                symbolPen=pg.mkPen(width=2.5),
+                symbolPen=pg.mkPen(width=_SYMBOL_WIDTH),
             )
             self._metrics[key] = {"curve": curve, "xs": [], "ys": []}
+        self._apply_plot_colors()
+
+    def _apply_plot_colors(self) -> None:
+        """Match the plots to the current (light or dark) palette."""
+        colors = plot_colors(self)
+        apply_pyqtgraph_colors(self._plot_layout, colors)
+        for metric in self._metrics.values():
+            metric["curve"].setSymbolPen(pg.mkPen(colors.foreground, width=_SYMBOL_WIDTH))
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        """Restyle the plots when the application palette/theme changes."""
+        if event.type() == event.Type.PaletteChange and hasattr(self, "_plot_layout"):
+            self._apply_plot_colors()
+        super().changeEvent(event)
 
     # ------------------------------------------------------------------
     # Control binding

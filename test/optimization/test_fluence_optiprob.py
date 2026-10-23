@@ -1,8 +1,15 @@
 import logging
 
+import numpy as np
 import pytest
 
-from pyRadPlan.core import ComputeControl, ProgressReporter, StatusReport, observe_control
+from pyRadPlan.core import (
+    ComputeControl,
+    ProgressReporter,
+    StatusReport,
+    observe_control,
+    xp_utils,
+)
 from pyRadPlan.optimization.problems import (
     NonLinearFluencePlanningProblem,
     NonLinearPlanningProblem,
@@ -160,3 +167,72 @@ def test_supported_properties_still_reach_the_solver():
 
     assert prob.solver.max_iter == 200
     assert prob.solver.display is False
+
+
+def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, monkeypatch):
+    """The photon LQ effect a dij with alphax / betax allows is not evaluated for a constant RBE."""
+    pln, ct, cst, stf, dij = small_proton_case
+    num_voxels = dij.dose_grid.num_voxels
+    dij.alphax = np.full((num_voxels, 1), 0.1)
+    dij.betax = np.full((num_voxels, 1), 0.05)
+    dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
+
+    prob = NonLinearFluencePlanningProblem(pln)
+    prob.solve(ct, cst, stf, dij)
+
+    assert sorted(q.identifier for q in prob._quantities) == ["physical_dose", "rbe_x_dose"]
+
+    # The physical dose has no objective of its own, so it is differentiated only through the
+    # chain rule of rbe_x_dose: one backprojection per scenario and gradient evaluation.
+    dose = next(q for q in prob._quantities if q.identifier == "physical_dose")
+    calls = []
+    backprojection = dose._compute_chain_derivative_single_scenario
+    monkeypatch.setattr(
+        dose,
+        "_compute_chain_derivative_single_scenario",
+        lambda *args, **kwargs: calls.append(1) or backprojection(*args, **kwargs),
+    )
+    xp = prob._array_backend
+    prob._objective_gradient(xp.full((dij.total_num_of_bixels,), 0.5, dtype=xp.float64))
+    assert len(calls) == len(dose.scenarios)
+
+
+@pytest.mark.parametrize("rbe_path", ["constant", "effect"])
+def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_path):
+    """Without the bypass, each objective gets its own gradient row, also across quantities."""
+    pln, ct, cst, stf, dij = small_proton_case
+    if rbe_path == "constant":
+        dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
+    else:
+        num_voxels = dij.dose_grid.num_voxels
+        dij.alphax = np.full((num_voxels, 1), 0.1)
+        dij.betax = np.full((num_voxels, 1), 0.05)
+        alpha_dose = np.empty_like(dij.physical_dose)
+        sqrt_beta_dose = np.empty_like(dij.physical_dose)
+        for i, mat in enumerate(dij.physical_dose.flat):
+            alpha_dose.flat[i] = 0.12 * mat
+            sqrt_beta_dose.flat[i] = np.sqrt(0.05) * mat
+        dij.alpha_dose = alpha_dose
+        dij.sqrt_beta_dose = sqrt_beta_dose
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
+
+    prob = NonLinearFluencePlanningProblem(pln)
+    prob.solve(ct, cst, stf, dij)
+    rbe_x_dose = next(q for q in prob._quantities if q.identifier == "rbe_x_dose")
+    assert rbe_x_dose.path == rbe_path
+    xp = prob._array_backend
+    x = xp.full((dij.total_num_of_bixels,), 0.5, dtype=xp.float64)
+    gradient = xp_utils.to_numpy(prob._objective_gradient(x))
+
+    prob.bypass_objective_jacobian = False
+    prob._grad_cache = prob._grad_cache_intermediate = None
+    for q in prob._quantities:
+        q._w_grad_cache = None
+    num_objectives = sum(len(obj_info[1]) for obj_info in prob._objective_list)
+    jacobian = xp_utils.to_numpy(prob._objective_jacobian(x))
+
+    assert num_objectives > 1
+    assert prob._num_objectives == num_objectives
+    assert jacobian.shape == (num_objectives, dij.total_num_of_bixels)
+    assert np.allclose(jacobian.sum(axis=0), gradient, rtol=1e-5)

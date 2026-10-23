@@ -51,4 +51,9 @@ Loading and validating
     load_machine
     load_machine_from_mat
     load_from_name
+    find_machine_file
+    get_available_machines
     validate_machine
+    add_machine_file
+    remove_machine_file
+    user_machine_dir

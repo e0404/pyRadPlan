@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from scipy.sparse import csc_array
 
-from pyRadPlan.bio_models import ConstantRBEModel, Wedenberg
+from pyRadPlan.biology.models import ConstantRBEModel, Wedenberg
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import FluenceDependentQuantity
 from pyRadPlan.quantities._rbe_x_dose import RBExDose, lq_inverse_dose

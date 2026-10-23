@@ -1,9 +1,15 @@
+import unicodedata
+
 import pytest
 import numpy as np
 import array_api_strict as xp
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import DoseWeightedLET, FluenceDependentQuantity
+
+
+def _nfkc(s):
+    return unicodedata.normalize("NFKC", s)
 
 
 @pytest.fixture

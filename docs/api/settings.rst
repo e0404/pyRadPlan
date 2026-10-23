@@ -15,6 +15,10 @@ the mutable singleton ``pyRadPlan.settings``.
    :members:
    :show-inheritance:
 
+.. autoclass:: pyRadPlan.GuiSettings
+   :members:
+   :show-inheritance:
+
 .. autoclass:: pyRadPlan._settings.AiSettings
    :members:
    :show-inheritance:

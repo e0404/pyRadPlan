@@ -27,7 +27,7 @@ change behavior of a running session::
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -270,13 +270,61 @@ class XpSettings(_PyRadPlanBaseSettings):
     )
 
 
+#: Presentation modes of the GUI, see :attr:`GuiSettings.ui_mode`.
+GuiUiMode = Literal["default", "educational"]
+
+
+class GuiSettings(_PyRadPlanBaseSettings):
+    """Configuration of the graphical user interface (:mod:`pyRadPlan.gui`).
+
+    Values are read from environment variables prefixed with ``PYRADPLAN_GUI_``
+    (e.g. ``PYRADPLAN_GUI_UI_MODE``) or from the ``.env`` files described in
+    the module docstring. The main window consults them when it is built and
+    re-applies them whenever they are changed through its menus, so mutating them on the
+    :data:`settings` singleton before the GUI starts also takes effect.
+
+    Attributes
+    ----------
+    ui_mode : {"default", "educational"}
+        Presentation mode of the widgets. ``"default"`` shows every control;
+        ``"educational"`` reduces the widgets to the basic operations (e.g.
+        radiation mode and beam angles in the plan editor) for teaching.
+        Presentation only: hidden fields keep their values.
+
+    Examples
+    --------
+    Configure via environment variables or ``.env``::
+
+        export PYRADPLAN_GUI_UI_MODE=educational
+
+    Or at runtime, before starting the GUI::
+
+        pyRadPlan.settings.gui.ui_mode = "educational"
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="PYRADPLAN_GUI_",
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        validate_assignment=True,
+    )
+
+    ui_mode: GuiUiMode = Field(
+        default="default",
+        description="Presentation mode of the GUI widgets: 'default' shows every control, "
+        "'educational' reduces the widgets to the basic operations for teaching.",
+    )
+
+
 class PyRadPlanSettings(_PyRadPlanBaseSettings):
     """Top-level pyRadPlan configuration.
 
     Values are read from environment variables prefixed with ``PYRADPLAN_``
     or from the ``.env`` files described in the module docstring. Sub-configurations use
     extended prefixes (e.g. ``PYRADPLAN_XP_PREFER_GPU`` configures :attr:`xp`,
-    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai`).
+    ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai`, ``PYRADPLAN_GUI_UI_MODE``
+    configures :attr:`gui`).
 
     All sub-configurations are consulted from the :data:`settings` singleton at
     runtime, so mutating them takes effect for subsequent computations.
@@ -297,6 +345,10 @@ class PyRadPlanSettings(_PyRadPlanBaseSettings):
     ai: AiSettings = Field(
         default_factory=AiSettings,
         description="AI sub-configuration (PYRADPLAN_AI_* variables).",
+    )
+    gui: GuiSettings = Field(
+        default_factory=GuiSettings,
+        description="GUI sub-configuration (PYRADPLAN_GUI_* variables).",
     )
 
 

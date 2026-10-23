@@ -72,19 +72,18 @@ def test_analysis_viewer_reads_workspace(qapp, no_event_loop, test_data_photons,
         workspace.clear()
 
 
-def test_voi_colors_fall_back_to_default_color(test_data_photons):
-    """Every VOI gets a color: its visible_color if set, else its type default color."""
+def test_voi_colors_use_voi_color(test_data_photons):
+    """Every VOI gets its color, whether set explicitly or left at its type default."""
     _, cst, _ = test_data_photons
-    first = cst.vois[0].model_copy(update={"visible_color": (1, 2, 3)})
-    rest = [voi.model_copy(update={"visible_color": None}) for voi in cst.vois[1:]]
-    cst = cst.model_copy(update={"vois": [first, *rest]})
+    first = cst.vois[0].model_copy(update={"color": (1, 2, 3)})
+    cst = cst.model_copy(update={"vois": [first, *cst.vois[1:]]})
 
     colors = _voi_colors(cst)
 
     assert set(colors) == {voi.name for voi in cst.vois}
     assert colors[first.name] == (1, 2, 3)
-    for voi in rest:
-        assert colors[voi.name] == tuple(voi.default_color)
+    for voi in cst.vois:
+        assert colors[voi.name] == tuple(voi.color)
 
 
 def test_analysis_viewer_passes_voi_colors(qapp, no_event_loop, test_data_photons, dose):
@@ -110,7 +109,11 @@ def captured_main_window(monkeypatch):
     from pyRadPlan.gui.workspace import WorkspaceManager
 
     launched = {}
-    monkeypatch.setattr(main_win, "launch_main_window", lambda ws: launched.update(ws=ws))
+    monkeypatch.setattr(
+        main_win,
+        "launch_main_window",
+        lambda ws, splash=None: launched.update(ws=ws, splash=splash),
+    )
     try:
         yield launched
     finally:
@@ -138,3 +141,17 @@ def test_main_passes_patient_to_gui(monkeypatch):
     main(["TG119"])
     main([])
     assert received == ["TG119", None]
+
+
+def test_analysis_viewer_starts_on_rbe_weighted_dose(qapp, no_event_loop, test_data_photons, dose):
+    _, cst, _ = test_data_photons
+    captured = {}
+
+    def fake_show_analysis(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    with patch("pyRadPlan.gui.windows._analysis_win.show_analysis", fake_show_analysis):
+        analysis_viewer(cst=cst, result={"physical_dose": dose, "rbe_x_dose": 1.1 * dose})
+
+    assert captured["initial_quantity"] == "rbe_x_dose"

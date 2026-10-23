@@ -156,7 +156,28 @@ class RayTracerBase(ABC):
         Abstract Method to be implemented in subclasses.
         """
 
-    def trace_cubes(self, beam: Union[dict[str, Any], Beam]) -> list[sitk.Image]:
+    def _bev_box_corners(self, beam: Beam, rot_mat: np.ndarray) -> np.ndarray:
+        """Return the eight cube-corner voxel centers in BEV coordinates.
+
+        The BEV y extent is the maximum of an affine map over the voxel-center box,
+        which is attained at one of the 8 corner voxels -- no need to rotate all voxels.
+        """
+        nx, ny, nz = self.cubes[0].GetSize()
+        # "sitk" linear index layout is z-fastest: z + nz * (y + ny * x)
+        corner_lin_ix = np.array(
+            [k + nz * (j + ny * i) for i in (0, nx - 1) for j in (0, ny - 1) for k in (0, nz - 1)],
+            dtype=np.int64,
+        )
+        coords = linear_indices_to_image_coordinates(
+            corner_lin_ix, self.cubes[0], index_type="sitk", dtype=self.precision
+        )
+        return (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
+
+    def trace_cubes(
+        self,
+        beam: Union[dict[str, Any], Beam],
+        patient_coords: Optional[Array] = None,
+    ) -> list[sitk.Image]:
         """
         Automatically calculate depth by tracing rays through cubes.
 
@@ -164,43 +185,34 @@ class RayTracerBase(ABC):
         all cubes, resulting in a cumulative sum of values in every voxel
         relative to the source. Will calculate cumulative sum on all of
         the supplied images.
+
+        Parameters
+        ----------
+        beam : dict or Beam
+            The beam geometry to trace.
+        patient_coords : Array, optional
+            Voxel coordinates in BEV, shape (N, 3), as used by the caller's dose
+            calculation. Only their maximum y extent is used, to size the ray matrix
+            to the voxels that actually matter. Defaults to the full cube extent,
+            which is correct but traces a larger region than necessary.
         """
 
         if not isinstance(beam, Beam):
             beam = Beam.model_validate(beam)
 
-        t_trace_start = time.perf_counter()
-        logger.debug("Computing coordinates...")
-
-        # obtain rotation matrix
         rot_mat = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle)
 
-        def rotate_to_bev(voxel_linear_ix):
-            coords = linear_indices_to_image_coordinates(
-                voxel_linear_ix, self.cubes[0], index_type="sitk", dtype=self.precision
-            )
-            return (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
-
-        # The BEV y extent is the maximum of an affine map over the voxel-center box,
-        # which is attained at one of the 8 corner voxels — no need to rotate all voxels
-        nx, ny, nz = self.cubes[0].GetSize()
-        # "sitk" linear index layout is z-fastest: z + nz * (y + ny * x)
-        corner_lin_ix = np.array(
-            [k + nz * (j + ny * i) for i in (0, nx - 1) for j in (0, ny - 1) for k in (0, nz - 1)],
-            dtype=np.int64,
-        )
-        corners_bev = rotate_to_bev(corner_lin_ix)
-        t_trace_end = time.perf_counter()
-        logger.debug("took %s seconds!", t_trace_end - t_trace_start)
+        if patient_coords is None:
+            patient_coords = self._bev_box_corners(beam, rot_mat)
 
         # central_ray_vector = np.array(iso_center) - np.array(source_point).reshape
         logger.debug("Setting up Ray matrix...")
         t_trace_start = time.perf_counter()
 
         ray_spacing = np.min(self._resolution) / np.sqrt(2.0, dtype=self.precision)
-        ray_matrix_bev_y = (
-            np.max(corners_bev[:, 1]) + np.max(self._resolution) + beam.source_point_bev[1]
-        )
+        coords_xp = array_api_compat.array_namespace(patient_coords)
+        max_patient_bev_y = float(coords_xp.max(patient_coords[:, 1]))
+        ray_matrix_bev_y = max_patient_bev_y + np.max(self._resolution) + beam.source_point_bev[1]
         ray_matrix_scale = 1 + ray_matrix_bev_y / beam.sad
 
         # If we have reference positions, we use them to restrict the raytracing region
