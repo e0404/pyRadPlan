@@ -1,5 +1,7 @@
 """Tests for the global pydantic-settings configuration."""
 
+import os
+
 import pytest
 
 import pyRadPlan
@@ -103,6 +105,15 @@ def test_gui_env_override(monkeypatch):
     monkeypatch.setenv("PYRADPLAN_GUI_UI_MODE", "educational")
     settings = PyRadPlanSettings(_env_file=None)
     assert settings.gui.ui_mode == "educational"
+
+
+def test_base_data_path_env_override(monkeypatch, env_dirs):
+    cwd, data = env_dirs
+    assert PyRadPlanSettings(_env_file=None).base_data_path == ""
+    (data / ".env").write_text("PYRADPLAN_BASE_DATA_PATH=from-user-env\n", encoding="utf-8")
+    assert PyRadPlanSettings().base_data_path == "from-user-env"
+    monkeypatch.setenv("PYRADPLAN_BASE_DATA_PATH", "a" + os.pathsep + "b")
+    assert PyRadPlanSettings().base_data_path == "a" + os.pathsep + "b"
 
 
 def test_gui_ui_mode_rejects_unknown_mode(monkeypatch):

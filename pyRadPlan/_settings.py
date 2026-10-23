@@ -328,6 +328,15 @@ class PyRadPlanSettings(_PyRadPlanBaseSettings):
 
     All sub-configurations are consulted from the :data:`settings` singleton at
     runtime, so mutating them takes effect for subsequent computations.
+
+    Attributes
+    ----------
+    base_data_path : str
+        Shared base data folders (``PYRADPLAN_BASE_DATA_PATH``), separated by
+        :data:`os.pathsep` (``;`` on Windows, ``:`` elsewhere) like ``PATH``. Each is
+        laid out like the user's data folder (``<folder>/phantoms``,
+        ``<folder>/machines``, ...) and searched after it, e.g. to provide the cases
+        of a course; see :mod:`pyRadPlan.core._base_data`.
     """
 
     model_config = SettingsConfigDict(
@@ -349,6 +358,11 @@ class PyRadPlanSettings(_PyRadPlanBaseSettings):
     gui: GuiSettings = Field(
         default_factory=GuiSettings,
         description="GUI sub-configuration (PYRADPLAN_GUI_* variables).",
+    )
+    base_data_path: str = Field(
+        default="",
+        description="Shared base data folders searched after your own, separated like PATH "
+        "(';' on Windows, ':' elsewhere); each holds e.g. phantoms/ and machines/ folders.",
     )
 
 

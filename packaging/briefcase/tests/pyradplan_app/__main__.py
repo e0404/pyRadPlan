@@ -10,6 +10,7 @@ constructing the main window offscreen.
 
 import os
 import sys
+import time
 import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -67,13 +68,25 @@ def _check_main_window():
     from pyRadPlan.gui.workspace import WorkspaceManager
 
     app = QApplication.instance() or QApplication(sys.argv)
-    win = MainWindow(WorkspaceManager.instance())
+    workspace = WorkspaceManager.instance()
+    workspace.clear()
+    win = MainWindow(workspace)
     win.show()
     app.processEvents()
     assert win.isVisible()
+
+    phantoms = {a.text(): a for a in win._file_menu._phantom_menu.actions()}
+    assert "TG119" in phantoms, list(phantoms)
+    phantoms["TG119"].trigger()
+    deadline = time.monotonic() + 120
+    while not workspace.has("ct", "cst") and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.05)
+    assert workspace.has("ct", "cst"), "TG119 did not load from the File menu"
+
     win.close()
     app.processEvents()
-    print("main window built offscreen")
+    print("main window built offscreen, TG119 opened from the File menu")
 
 
 def main() -> int:
