@@ -100,6 +100,57 @@ def test_quantity_widget_signals(qapp, test_data_photons):
     assert received_slice[-1] == 0
 
 
+def test_new_image_opens_at_the_isocenter_slice(qapp):
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((20, 10, 10)), isocenter=np.array([4.2, 3.0, 7.0]))
+    assert widget.slice_slider.value() == 4
+
+    widget.set_plane("Coronal")
+    assert widget.slice_slider.value() == 7
+
+    widget.set_data(ct_volume=np.zeros((20, 10, 10)))
+    assert widget.slice_slider.value() == 5  # no isocenter: middle slice
+
+
+def test_new_result_keeps_the_slice(qapp):
+    ct_vol = np.zeros((20, 10, 10))
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=ct_vol, isocenter=np.array([4.0, 3.0, 7.0]))
+    widget.slice_slider.setValue(12)
+
+    widget.set_data(ct_volume=ct_vol, quantity_volume=np.ones_like(ct_vol))
+
+    assert widget.slice_slider.value() == 12
+
+
+def test_isocenter_arriving_with_the_same_image_positions_the_slice(qapp):
+    ct_vol = np.zeros((20, 10, 10))
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=ct_vol)
+    assert widget.slice_slider.value() == 10
+
+    widget.set_data(ct_volume=ct_vol, isocenter=np.array([4.0, 3.0, 7.0]))
+    widget.set_isocenter(np.array([4.0, 3.0, 7.0]))
+    assert widget.slice_slider.value() == 4
+
+    widget.slice_slider.setValue(15)
+    widget.set_data(ct_volume=ct_vol, isocenter=np.array([6.0, 3.0, 7.0]))
+    assert widget.slice_slider.value() == 15
+
+
+def test_isocenter_known_later_positions_the_slice_until_the_user_scrolls(qapp):
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((20, 10, 10)))
+    assert widget.slice_slider.value() == 10
+
+    widget.set_isocenter(np.array([4.0, 3.0, 7.0]))
+    assert widget.slice_slider.value() == 4
+
+    widget.slice_slider.setValue(15)
+    widget.set_isocenter(np.array([6.0, 3.0, 7.0]))
+    assert widget.slice_slider.value() == 15
+
+
 def _beam_widget(spacing=(1.0, 1.0, 1.0)):
     widget = QuantityWidget()
     widget.set_data(ct_volume=np.zeros((21, 21, 21)))

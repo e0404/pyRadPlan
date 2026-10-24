@@ -204,6 +204,13 @@ class QuantityWidget(QWidget):
     def _init_state(self) -> None:
         """Initialize all instance-level state attributes."""
         self._ct: Optional[np.ndarray] = None
+        #: The array last passed to :meth:`set_data`, to tell a new image from a new result.
+        self._ct_source: Optional[np.ndarray] = None
+        #: Whether the slice still follows the isocenter: true from a new image on until the
+        #: user picks a slice, so an isocenter known only later (e.g. once the structures
+        #: are loaded) still positions the view.
+        self._follow_isocenter: bool = True
+        self._setting_slice: bool = False
         self._quantities: dict[str, np.ndarray] = {}
         self._active_quantity_name: Optional[str] = None
         self._overlay_unit: str | dict[str, str] = ""
@@ -330,7 +337,13 @@ class QuantityWidget(QWidget):
             Unit label for quantity overlay.
         isocenter : ndarray, optional
             Isocenter coordinates in voxel space (z, x, y) matching the viewer's slice orientation.
+
+        A new image shows the isocenter slice (the middle one without an isocenter), and
+        follows the isocenter until the user picks a slice; from then on the same
+        ``ct_volume`` object again, e.g. with a new result, keeps the current slice.
         """
+        new_image = ct_volume is not self._ct_source
+        self._ct_source = ct_volume
         self._ct = ct_volume.astype(float, copy=False)
         self._quantities = {}
         self._active_quantity_name = None
@@ -360,13 +373,16 @@ class QuantityWidget(QWidget):
 
         self._quantity_window = None
 
-        self._configure_slider()
+        if new_image:
+            self._follow_isocenter = True
+        self._configure_slider(reset=self._follow_isocenter)
         self.update_slice()
         self._update_orientation_marker()
 
     def clear_data(self) -> None:
         """Remove all imaging data and rendered items (e.g. workspace cleared)."""
         self._ct = None
+        self._ct_source = None
         self._quantities = {}
         self._active_quantity_name = None
         self._masks = {}
@@ -567,31 +583,53 @@ class QuantityWidget(QWidget):
             One of Axial, Sagittal, Coronal (case-insensitive).
         """
         self._plane = plane
-        self._configure_slider()
+        self._configure_slider(reset=True)
         self.update_slice()
         self._update_orientation_marker()
 
-    def _configure_slider(self) -> None:
+    def _configure_slider(self, reset: bool = True) -> None:
+        """Set the slider range for the current plane; *reset* moves to :meth:`_home_slice`."""
         if self._ct is None:
             self.slice_slider.setEnabled(False)
             self.slice_spin.setEnabled(False)
             return
         axis = self._PLANE_MAP.get(self._plane, 2)
         size = self._ct.shape[axis]
-        self.slice_slider.setEnabled(True)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(size - 1)
-        self.slice_spin.setEnabled(True)
-        self.slice_spin.setMinimum(0)
-        self.slice_spin.setMaximum(size - 1)
-        mid = size // 2
-        if self.slice_slider.value() != mid:
-            self.slice_slider.setValue(mid)
+        # A kept slice outside the new range is clamped by setMaximum, which is not a
+        # slice the user picked either.
+        self._setting_slice = True
+        try:
+            self.slice_slider.setEnabled(True)
+            self.slice_slider.setMinimum(0)
+            self.slice_slider.setMaximum(size - 1)
+            self.slice_spin.setEnabled(True)
+            self.slice_spin.setMinimum(0)
+            self.slice_spin.setMaximum(size - 1)
+            if reset:
+                self.slice_slider.setValue(self._home_slice())
+        finally:
+            self._setting_slice = False
         if self.slice_spin.value() != self.slice_slider.value():
             self.slice_spin.blockSignals(True)
             self.slice_spin.setValue(self.slice_slider.value())
             self.slice_spin.blockSignals(False)
         self._slice_label.setText(f"/ {size - 1}")
+
+    def _home_slice(self) -> int:
+        """Slice through the isocenter, or the middle slice without one."""
+        axis = self._PLANE_MAP.get(self._plane, 2)
+        if self._isocenter is not None and 0 <= axis < len(self._isocenter):
+            idx = int(round(float(self._isocenter[axis])))
+            return max(self.slice_slider.minimum(), min(self.slice_slider.maximum(), idx))
+        return self._ct.shape[axis] // 2
+
+    def _set_slice(self, idx: int) -> None:
+        """Move the slider without counting it as the user's choice of slice."""
+        self._setting_slice = True
+        try:
+            self.slice_slider.setValue(idx)
+        finally:
+            self._setting_slice = False
 
     # ------------------------------------------------------------------
     # Rendering
@@ -1331,6 +1369,8 @@ class QuantityWidget(QWidget):
     # Internal callbacks
     # ------------------------------------------------------------------
     def _on_slider_changed(self, value: int) -> None:  # value provided by Qt
+        if not self._setting_slice:
+            self._follow_isocenter = False
         self.update_slice()
 
     def _on_scroll_slice(self, delta: int) -> None:
@@ -1398,7 +1438,14 @@ class QuantityWidget(QWidget):
             and np.array_equal(isocenter, self._isocenter)
         )
         self._isocenter = isocenter
-        if self._show_isocenter and not unchanged:
+        if unchanged:
+            return
+        if self._follow_isocenter and self._ct is not None and isocenter is not None:
+            home = self._home_slice()
+            if home != self.slice_slider.value():
+                self._set_slice(home)  # renders the slice through _on_slider_changed
+                return
+        if self._show_isocenter:
             self.update_slice()
 
     def set_beams(self, beams: Sequence[dict]) -> None:
@@ -1533,7 +1580,8 @@ class QuantityWidget(QWidget):
             slice_idx = max(
                 self.slice_slider.minimum(), min(self.slice_slider.maximum(), slice_idx)
             )
-            self.slice_slider.setValue(slice_idx)
+            self._set_slice(slice_idx)
+            self._follow_isocenter = True
         self._view_box.autoRange()
 
     def reset_options(self) -> None:
