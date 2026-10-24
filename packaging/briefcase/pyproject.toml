@@ -19,7 +19,8 @@ project_name = "pyRadPlan"
 bundle = "de.dkfz.pyradplan"
 version = "0.5.0"
 url = "https://github.com/e0404/pyRadPlan"
-license.file = "../../LICENSE"
+license = "BSD-3-Clause"
+license-files = ["../../LICENSE"]
 author = "The pyRadPlan developers"
 author_email = "n.wahl@dkfz-heidelberg.de"
 
