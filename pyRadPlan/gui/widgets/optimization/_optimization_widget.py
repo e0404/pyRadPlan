@@ -275,9 +275,6 @@ class OptimizationWidget(WorkspaceWidget):
         penalty = AdaptiveDoubleSpinBox()
         penalty.setRange(0.0, 1.0e9)
         penalty.setValue(float(obj.priority))
-        # The size hint of the spinbox spans its full 1e9 range, which blows up
-        # the ResizeToContents column; typical penalties are much shorter.
-        penalty.setMaximumWidth(100)
         penalty.valueChanged.connect(
             lambda value, v=voi_idx, o=obj_idx: self._on_penalty_changed(v, o, value)
         )

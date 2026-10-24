@@ -1260,17 +1260,12 @@ class WorkflowWidget(WorkspaceWidget):
             self._ws.pln,
         )
         prev_result: dict[str, Any] = dict(self._ws.result or {})
-        # The objectives table sets every objective's quantity explicitly, so the
-        # legacy conversion must not silently swap physical_dose for rbe_x_dose.
-        opt_pln = pln.model_copy(
-            update={"prop_opt": {"convert_dose_objectives": False, **pln.prop_opt}}
-        )
 
         def _compute() -> tuple:
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
-            weights = fluence_optimization(ct, cst, stf, dij, opt_pln)
+            weights = fluence_optimization(ct, cst, stf, dij, pln)
             result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
             return weights, result
 

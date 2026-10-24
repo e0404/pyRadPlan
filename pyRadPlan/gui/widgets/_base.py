@@ -17,7 +17,7 @@ import math
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import QAbstractSpinBox, QDoubleSpinBox, QWidget
 
 from pyRadPlan.core import ComputeControl, observe_control, observe_reports
@@ -119,8 +119,38 @@ class AdaptiveDoubleSpinBox(QDoubleSpinBox):
         # 3 decimals for [0.1, 1), one more for each further power of ten below.
         return min(2 - math.floor(math.log10(magnitude)), cls._INTERNAL_DECIMALS)
 
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        return self._compact(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        return self._compact(super().minimumSizeHint())
+
+    def _compact(self, hint: QSize) -> QSize:
+        """Size *hint* for a typical value instead of the range limits Qt measures.
+
+        Wide ranges (e.g. +-1e9 for unbounded parameters) would otherwise make every
+        field as wide as its longest possible text.
+        """
+        metrics = self.fontMetrics()
+        range_width = max(
+            metrics.horizontalAdvance(self.prefix() + self.textFromValue(limit) + self.suffix())
+            for limit in (self.minimum(), self.maximum())
+        )
+        typical_width = metrics.horizontalAdvance(
+            self.prefix() + self.textFromValue(-999.9) + self.suffix()
+        )
+        if range_width > typical_width:
+            hint.setWidth(hint.width() - (range_width - typical_width))
+        return hint
+
     def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt override name
-        return f"{value:.{self._display_decimals(value)}f}"
+        # Qt parses the text back in the widget's locale, so it needs the locale's decimal
+        # point and sign: a "." under a "," decimal locale turns an edit of "60.0" into
+        # "45.0" into 450. The digits stay ASCII, which Qt accepts in every locale, unlike
+        # its own native digits outside the BMP (e.g. Chakma) with several decimals.
+        locale = self.locale()
+        text = f"{value:.{self._display_decimals(value)}f}"
+        return text.replace("-", locale.negativeSign()).replace(".", locale.decimalPoint())
 
 
 class WorkspaceWidget(QWidget):

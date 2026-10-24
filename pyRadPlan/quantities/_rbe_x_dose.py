@@ -14,17 +14,29 @@ def lq_inverse_dose(effect: Array, alpha_x: Array, beta_x: Array) -> Array:
     """
     Photon-equivalent (RBE-weighted) dose of an LQ effect.
 
-    The dose ``d`` solving ``alpha_x * d + beta_x * d**2 = effect``. For a zero quadratic
-    coefficient, the linear solution ``effect / alpha_x`` is used when ``alpha_x`` is positive.
+    The non-negative dose ``d`` solving ``alpha_x * d + beta_x * d**2 = effect``, evaluated as
+    ``2 * effect / (sqrt(alpha_x**2 + 4 * beta_x * effect) + alpha_x)``. Unlike the textbook
+    root this has no cancellation at low effect, which keeps single precision accurate, and
+    gives the linear solution ``effect / alpha_x`` for a zero ``beta_x``. Voxels without a
+    positive denominator (no positive reference parameters) get zero dose.
     """
     xp = array_api_compat.array_namespace(effect)
-    quadratic = beta_x > 0
-    linear = (~quadratic) & (alpha_x > 0)
-    safe_beta = xp.where(quadratic, beta_x, xp.ones_like(beta_x))
-    safe_alpha = xp.where(linear, alpha_x, xp.ones_like(alpha_x))
-    quadratic_dose = (xp.sqrt(alpha_x**2 + 4 * safe_beta * effect) - alpha_x) / (2 * safe_beta)
-    linear_dose = effect / safe_alpha
-    return xp.where(quadratic, quadratic_dose, xp.where(linear, linear_dose, 0.0))
+    denominator = xp.sqrt(alpha_x**2 + 4 * beta_x * effect) + alpha_x
+    positive = denominator > 0
+    return xp.where(positive, 2 * effect / xp.where(positive, denominator, 1.0), 0.0)
+
+
+def lq_inverse_dose_derivative(rbe_x_dose: Array, alpha_x: Array, beta_x: Array) -> Array:
+    """
+    Differentiate :func:`lq_inverse_dose` with respect to the effect.
+
+    From ``alpha_x * d + beta_x * d**2 = effect``: ``1 / (alpha_x + 2 * beta_x * d)``, zero
+    where the denominator is not positive.
+    """
+    xp = array_api_compat.array_namespace(rbe_x_dose)
+    denominator = alpha_x + 2 * beta_x * rbe_x_dose
+    positive = denominator > 0
+    return xp.where(positive, 1 / xp.where(positive, denominator, 1.0), 0.0)
 
 
 class RBExDose(FluenceDependentQuantity):
@@ -49,6 +61,7 @@ class RBExDose(FluenceDependentQuantity):
 
     def __init__(self, dij, *, mode=None, dependencies=None, scenarios=None):
         super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
+        self._reference_params_cache: dict[int, tuple[Array, Array]] = {}
         # The alpha_x / beta_x fallbacks of alpha_dose / sqrt_beta_dose give a photon effect
         # (RBE = 1), so only real LQ matrices qualify for the effect path.
         has_lq = self._dij.alpha_dose is not None and self._dij.sqrt_beta_dose is not None
@@ -112,10 +125,17 @@ class RBExDose(FluenceDependentQuantity):
     # ------------------------------------------------------------------ effect path
     def _reference_params(self, scenario_index: int):
         # TODO: correct handling of ct scenarios
-        xp = self.array_backend
-        alphax = xp.asarray(self._dij.alphax[:, scenario_index])
-        betax = xp.asarray(self._dij.betax[:, scenario_index])
-        return alphax, betax
+        # Cast once to the quantity's dtype: the dij stores them in double precision, which
+        # would promote every evaluation (and the upstream gradient) to slow float64 math.
+        if scenario_index not in self._reference_params_cache:
+            xp = self.array_backend
+            alphax = xp.asarray(self._dij.alphax[:, scenario_index])
+            betax = xp.asarray(self._dij.betax[:, scenario_index])
+            self._reference_params_cache[scenario_index] = (
+                xp.astype(alphax, self._dtype),
+                xp.astype(betax, self._dtype),
+            )
+        return self._reference_params_cache[scenario_index]
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         xp = self.array_backend
@@ -143,27 +163,9 @@ class RBExDose(FluenceDependentQuantity):
         alphax, betax = self._reference_params(scenario_index)
         # One row per upstream gradient (e.g. per objective without the jacobian bypass).
         d_quantity = xp.reshape(d_quantity, (-1, alphax.shape[0]))
-        quadratic = betax > 0
-        linear = (~quadratic) & (alphax > 0)
-        safe_beta = xp.where(quadratic, betax, xp.ones_like(betax))
-        safe_alpha = xp.where(linear, alphax, xp.ones_like(alphax))
-        gamma = alphax / (2 * safe_beta)
-
-        # d(rbe_x_dose)/d(effect) = 1 / (2 * beta_x * (rbe_x_dose + gamma))
-        effect = self._deps["effect"].compute(self._w_cache)
-        effect_slice = xp.asarray(effect.flat[scenario_index])
-        rbe_x_dose = lq_inverse_dose(effect_slice, alphax, betax)
-        safe_quadratic_denominator = xp.where(
-            quadratic,
-            2 * safe_beta * (rbe_x_dose + gamma),
-            xp.ones_like(betax),
-        )
-        inverse_derivative = xp.where(
-            quadratic,
-            1 / safe_quadratic_denominator,
-            xp.where(linear, 1 / safe_alpha, 0.0),
-        )
-        fgrad = d_quantity * inverse_derivative
+        # The forward cache holds the RBE-weighted dose at the fluence being differentiated.
+        rbe_x_dose = self._q_cache.flat[scenario_index]
+        fgrad = d_quantity * lq_inverse_dose_derivative(rbe_x_dose, alphax, betax)
         return self._deps["effect"]._compute_chain_derivative_single_scenario(
             fgrad, scenario_index
         )
