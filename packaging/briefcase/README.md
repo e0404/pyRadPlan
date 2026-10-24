@@ -14,7 +14,7 @@ install pyRadPlan.
 | `pyproject.toml` | The Briefcase project (app metadata, requirements, per-platform settings). Separate from the repository's root `pyproject.toml`, which describes the library. |
 | `src/pyradplan_app/` | The app package Briefcase launches. It only calls `pyRadPlan.gui.main()`; the icons live in `resources/`. |
 | `tests/pyradplan_app/__main__.py` | Smoke test that runs inside the built bundle (`briefcase run --test`). |
-| `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project. |
+| `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project, and the root `CHANGELOG.md` next to it (git-ignored; Briefcase needs a changelog there for the Linux package). |
 | `scripts/collect_licenses.py` | Writes the third-party license notices into the bundle. |
 | `scripts/make_icons.py` | Regenerates the `.ico`/`.icns`/`.png` icons and the Windows installer's side panel and banner bitmaps from the pyRadPlan logo SVGs. |
 | `scripts/run_briefcase.py` | Runs Briefcase with a workaround for `rcedit` failing on relative paths (see below). |
@@ -88,7 +88,7 @@ refreshes the app code without the tests (and without reinstalling the requireme
 ### Version
 
 `[tool.briefcase].version` must equal the library version in the root `pyproject.toml`.
-`python scripts/sync_version.py` rewrites it, `--check` only verifies. Keep in mind that the
+`python scripts/sync_version.py` rewrites it (and copies the changelog, see above), `--check` only verifies the version. Keep in mind that the
 MSI requires a plain `MAJOR.MINOR.PATCH` version; pre-release suffixes do not package on
 Windows.
 

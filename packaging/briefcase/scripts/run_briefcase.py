@@ -41,4 +41,6 @@ windows_app.WindowsAppBuildCommand.build_app = _build_app
 
 if __name__ == "__main__":
     sys.argv[0] = "briefcase"
-    main()
+    # main() returns Briefcase's exit code instead of exiting: dropping it would report
+    # every failure (a failing smoke test, a package that cannot be built) as success.
+    sys.exit(main())
