@@ -1,0 +1,25 @@
+# One pyRadPlan session in a browser, for trying the image out. From this folder:
+#   docker compose up --build        then open http://localhost:10000
+# Several users each need their own container, see README.md.
+services:
+  pyradplan:
+    build:
+      context: ../..
+      dockerfile: packaging/container/Dockerfile
+    image: pyradplan-web
+    ports:
+      - "10000:10000"
+    environment:
+      # Empty means no password: only use that on a machine nobody else can reach.
+      XPRA_PASSWORD: ${XPRA_PASSWORD:-}
+      # Show only the basic controls, for teaching.
+      PYRADPLAN_GUI_UI_MODE: educational
+      # Phantoms, machines, ... of the course: ./shared/phantoms/*.mat, ./shared/machines/*.mat
+      PYRADPLAN_BASE_DATA_PATH: /shared
+    volumes:
+      - ./shared:/shared:ro
+    # A dose calculation needs memory; this keeps one session from taking the whole host.
+    mem_limit: 8g
+    cpus: 4
+    shm_size: 1gb
+    command: ["pyRadPlanGUI"]
