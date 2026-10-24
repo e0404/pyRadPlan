@@ -47,7 +47,7 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.platform }} ${{ matrix.format }}
+    name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
@@ -55,18 +55,34 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            label: windows app
             platform: windows
             format: app
             artifact: pyRadPlan-windows-installer
             package-args: ""
             timeout-minutes: 90
+          # Briefcase builds for the architecture of the machine (universal_build = false),
+          # so Apple silicon and Intel Macs each get their own installer.
           - os: macos-latest
+            label: macOS app (arm64)
             platform: macOS
+            arch: arm64
             format: app
-            artifact: pyRadPlan-macos-installer
+            artifact: pyRadPlan-macos-arm64-installer
             package-args: --adhoc-sign
             timeout-minutes: 60
-          - os: ubuntu-latest
+          - os: macos-15-intel
+            label: macOS app (x86_64)
+            platform: macOS
+            arch: x86_64
+            format: app
+            artifact: pyRadPlan-macos-x86_64-installer
+            package-args: --adhoc-sign
+            timeout-minutes: 60
+          # Pinned: the .deb is built for, and needs, the distribution it is built on, and
+          # ubuntu-latest moves to Ubuntu 26 in October 2026. The GitLab job uses the same.
+          - os: ubuntu-24.04
+            label: linux system
             platform: linux
             format: system
             artifact: pyRadPlan-linux-installer
@@ -83,7 +99,7 @@ jobs:
 
       - name: Set up Python 3.12
         if: runner.os != 'Linux'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -148,12 +164,21 @@ jobs:
         working-directory: packaging/briefcase
         run: python scripts/run_briefcase.py package ${{ matrix.platform }} ${{ matrix.format }} ${{ matrix.package-args }} --no-input
 
+      # The macOS DMG and its license notices are named after the platform only, so the
+      # builds of the two architectures would overwrite each other in the release.
+      - name: Name the macOS installer after its architecture
+        if: runner.os == 'macOS'
+        working-directory: packaging/briefcase/dist
+        run: |
+          for f in *.dmg; do mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"; done
+          mv THIRD_PARTY_NOTICES-macos.txt "THIRD_PARTY_NOTICES-macos-${{ matrix.arch }}.txt"
+
       - name: List the installer
         working-directory: packaging/briefcase
         run: ls -l dist
 
       - name: Upload the installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: packaging/briefcase/dist/*
@@ -163,7 +188,7 @@ jobs:
 
       - name: Upload the Briefcase logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}-logs
           path: packaging/briefcase/logs/
@@ -180,7 +205,7 @@ jobs:
 
     steps:
       - name: Download the installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pyRadPlan-*-installer
           path: installers
@@ -190,7 +215,7 @@ jobs:
         run: ls -l installers
 
       - name: Attach the installers to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: installers/*

@@ -63,8 +63,12 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
   per-user installer (`system_installer = false`, no admin rights). Briefcase downloads the WiX
   toolset on first use. Without `--identity` the MSI is unsigned (Briefcase prints a warning).
 - **macOS:** `macOS app`, run on macOS. Produces `dist/pyRadPlan-<version>.dmg` for the
-  architecture of the build machine (`universal_build = false`; the CI runner is Apple
-  silicon). `--adhoc-sign` is required for an unsigned build and skips notarization.
+  architecture of the build machine (`universal_build = false`), so Apple silicon and Intel
+  Macs need one build each; CI builds both and appends `-arm64` or `-x86_64` to the file
+  name. `--adhoc-sign` is required for an unsigned build and skips notarization. Several
+  dependencies have no Intel Mac wheels in their latest releases, so the Intel app bundles
+  older ones (for example `numba` 0.62 and Qt 6.11, against `numba` 0.68 and Qt 6.12 on
+  Apple silicon).
 - **Linux:** `linux system`, run on the target distribution. Produces
   `dist/pyradplan-app_<version>-1~<distro>-<codename>_<arch>.deb` (or an RPM/pkg on other
   families). Briefcase must run under the distribution's `/usr/bin/python3` (a venv created
@@ -127,15 +131,17 @@ installer before the release.
 ### GitHub: the "Desktop installers" workflow
 
 `.github/workflows/installers.yml` runs the steps above on `windows-latest`, `macos-latest`
-and `ubuntu-latest` (fail-fast off, Windows with a 90 minute timeout):
+(Apple silicon), `macos-15-intel` and `ubuntu-24.04` (fail-fast off, Windows with a 90 minute
+timeout). The Linux runner is pinned because the `.deb` is built for the distribution it is
+built on, and `ubuntu-latest` moves to Ubuntu 26 in October 2026:
 
 - **Pushes to `main`, `rc/**` and `devops/**`, and pull requests into `main`.** A newer push to a branch or
   pull request cancels the older build; builds of `main` and of tags are never cancelled. A
   push to an `rc` branch and the pull request opened from it build different commits (the
   branch head and its merge into `main`), so both run. The installers are uploaded as the
-  workflow artifacts `pyRadPlan-windows-installer`, `pyRadPlan-macos-installer` and
-  `pyRadPlan-linux-installer` (each also contains the `THIRD_PARTY_NOTICES-<platform>.txt`),
-  kept for 14 days.
+  workflow artifacts `pyRadPlan-windows-installer`, `pyRadPlan-macos-arm64-installer`,
+  `pyRadPlan-macos-x86_64-installer` and `pyRadPlan-linux-installer` (each also contains the
+  `THIRD_PARTY_NOTICES-<platform>.txt`), kept for 14 days.
 - **`v*` tags.** The installers of the tag are uploaded as above (kept for 90 days) and
   attached to its GitHub release (`softprops/action-gh-release` with `files:`, job permission
   `contents: write`). `release.yml` creates that release for the same tag; it does not matter
@@ -190,6 +196,6 @@ into the runner's certificate store or keychain before the `briefcase package` s
 
 - AppImage (`linux appimage`, configured in `pyproject.toml` but untested) and Flatpak builds
   for distribution-independent Linux packages.
-- An Intel macOS build (`macos-15-intel` runner) if there is demand; `universal_build` would
+- A single universal macOS build instead of one per architecture: `universal_build` would
   double the bundle size and requires universal wheels of all dependencies.
 - Code signing and notarization as described above.
