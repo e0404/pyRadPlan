@@ -229,6 +229,61 @@ packaging:
             - dist/
         expire_in: 1 week
 
+# Desktop installer (Briefcase, packaging/briefcase) of the GUI. Only the Linux .deb can be
+# built here, on the Docker runners: the Windows MSI and the macOS DMG are built by the
+# "Desktop installers" GitHub workflow. Briefcase builds a Linux system package under the
+# target distribution's own python3, hence the Ubuntu image instead of the python one.
+#
+# Runs for main, the release candidate branches (rc/*), the devops/* branches for trying out
+# changes to the pipeline, and tags. A merge request from rc/X.Y.Z into
+# main shows the pipeline of its source branch, so there is deliberately no merge_request_event
+# rule: it would add a second, installer-only pipeline that GitLab then reports as the merge
+# request's pipeline in place of the one running the tests.
+installer-linux:
+    stage: package
+    image: ubuntu:24.04
+    variables:
+        DEBIAN_FRONTEND: noninteractive
+        PYTHONUTF8: "1"
+        QT_QPA_PLATFORM: "offscreen"
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
+        - if: '$CI_COMMIT_TAG'
+    script:
+        # git: Briefcase fetches its app template with it; gnupg: its package command looks for
+        # gpg. The Qt libraries are the system_runtime_requires of the Briefcase project plus
+        # those of the smoke test.
+        - apt-get update
+        - >
+            apt-get install -y --no-install-recommends
+            ca-certificates git gnupg python3 python3-dev python3-pip python3-venv build-essential dpkg-dev
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1
+            libglib2.0-0 libnss3 libasound2t64
+        # A venv of /usr/bin/python3 reports the same sys.version, which is what Briefcase
+        # checks for the system packaging format.
+        - python3 -m venv /opt/briefcase-venv
+        - /opt/briefcase-venv/bin/python -m pip install --upgrade pip
+        - /opt/briefcase-venv/bin/python -m pip install "briefcase==0.4.5"
+        - export PATH=/opt/briefcase-venv/bin:$PATH
+        - python packaging/briefcase/scripts/sync_version.py
+        - cd packaging/briefcase
+        - python scripts/run_briefcase.py create linux system --no-input
+        - python scripts/run_briefcase.py build linux system --no-input
+        - python scripts/run_briefcase.py run linux system --test --no-input
+        # `run --test` copied the test sources into the bundle; refresh the app code
+        # (not the requirements) so the installer ships without them.
+        - python scripts/run_briefcase.py build linux system --update --no-input
+        - python scripts/collect_licenses.py --check
+        - python scripts/run_briefcase.py package linux system --no-input
+        - ls -l dist
+    artifacts:
+        when: always
+        paths:
+            - packaging/briefcase/dist/
+            - packaging/briefcase/logs/
+        expire_in: 4 weeks
+
 docs:
     stage: package
     cache:

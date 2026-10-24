@@ -116,25 +116,49 @@ of `THIRD_PARTY_NOTICES.txt`. The collected notices and the pyRadPlan license (B
 copies `../../LICENSE` into the installer metadata) together document the terms of everything
 shipped in the bundle.
 
-## CI: the "Desktop installers" workflow
+## CI: building the installers
+
+The installers are built on GitHub (all three platforms) and on the internal GitLab (the Linux
+package only). Both build on `main`, on the release candidate branches `rc/*`, on `devops/*`
+branches (for trying out changes to the pipelines) and for `v*` tags;
+GitHub also builds pull requests into `main`, so the release PR from `rc/X.Y.Z` shows a broken
+installer before the release.
+
+### GitHub: the "Desktop installers" workflow
 
 `.github/workflows/installers.yml` runs the steps above on `windows-latest`, `macos-latest`
-and `ubuntu-latest` (fail-fast off, Windows with a 90 minute timeout). It is not triggered by
-pushes:
+and `ubuntu-latest` (fail-fast off, Windows with a 90 minute timeout):
 
-- **Manually:** Actions -> "Desktop installers" -> "Run workflow". The installers from `dist/`
-  are uploaded as the workflow artifacts `pyRadPlan-windows-installer`,
-  `pyRadPlan-macos-installer` and `pyRadPlan-linux-installer` (each also contains the
-  `THIRD_PARTY_NOTICES-<platform>.txt`). The `attach_to_release` input additionally uploads
-  them to the GitHub release of the selected ref; it only has an effect when the run is
-  started from a tag.
-- **On a published release:** `release.yml` creates a GitHub release for every `v*` tag. The
-  `release: published` event then starts this workflow, which attaches the installers to that
-  release (`softprops/action-gh-release` with `files:`, job permission `contents: write`).
-  Releases created in other ways (for example by hand in the GitHub UI) trigger it as well.
+- **Pushes to `main`, `rc/**` and `devops/**`, and pull requests into `main`.** A newer push to a branch or
+  pull request cancels the older build; builds of `main` and of tags are never cancelled. A
+  push to an `rc` branch and the pull request opened from it build different commits (the
+  branch head and its merge into `main`), so both run. The installers are uploaded as the
+  workflow artifacts `pyRadPlan-windows-installer`, `pyRadPlan-macos-installer` and
+  `pyRadPlan-linux-installer` (each also contains the `THIRD_PARTY_NOTICES-<platform>.txt`),
+  kept for 14 days.
+- **`v*` tags.** The installers of the tag are uploaded as above (kept for 90 days) and
+  attached to its GitHub release (`softprops/action-gh-release` with `files:`, job permission
+  `contents: write`). `release.yml` creates that release for the same tag; it does not matter
+  which of the two workflows gets there first. The trigger is the tag push and not the
+  `release: published` event, because `release.yml` creates the release with the workflow's
+  `GITHUB_TOKEN`, and events caused by that token do not start other workflows.
+- **Manually:** Actions -> "Desktop installers" -> "Run workflow". The `attach_to_release`
+  input additionally uploads the installers to the GitHub release of the selected ref; it only
+  has an effect when the run is started from a tag.
 
 On failure the Briefcase logs (`packaging/briefcase/logs/`) are uploaded as
 `<artifact>-logs`.
+
+### GitLab: the `installer-linux` job
+
+The job `installer-linux` of `.gitlab-ci.yml` (stage `package`, so it runs once the tests pass)
+builds the Linux `.deb` in an `ubuntu:24.04` container with the same Briefcase steps, for
+`main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
+macOS DMG are only built on GitHub. The package and the Briefcase logs are job artifacts for
+four weeks. A merge request from `rc/X.Y.Z` into `main` shows the pipeline of its source
+branch, which includes this job; the job has no `merge_request_event` rule on purpose, as
+that would create a second, installer-only pipeline which GitLab then reports as the merge
+request's pipeline in place of the one that runs the tests.
 
 ## Code signing (not yet done)
 

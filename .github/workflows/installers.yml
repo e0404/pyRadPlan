@@ -1,22 +1,45 @@
 name: Desktop installers
 
 # Builds the Briefcase desktop bundle of the pyRadPlan GUI (packaging/briefcase)
-# as a Windows MSI, a macOS DMG and a Linux .deb. It runs only on demand and
-# when a GitHub release is published (release.yml creates one for v* tags), so
-# the installers end up attached to that release.
+# as a Windows MSI, a macOS DMG and a Linux .deb. It runs on main, on the release
+# candidate branches rc/* and on pull requests into main (the release PR from
+# rc/X.Y.Z), so a broken installer shows up before a release, and on v* tags, where
+# the installers are attached to the release of the tag. The devops/* branches are
+# for trying out changes to the pipelines. It can also be started manually.
+#
+# The tag push (not the "release published" event) is the trigger: release.yml
+# creates the release with the workflow's GITHUB_TOKEN, and events caused by that
+# token do not start other workflows. The release is attached to by tag name, so it
+# does not matter which of the two workflows reaches it first.
 
 on:
+  push:
+    branches:
+      - main
+      - 'rc/**'
+      - 'devops/**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       attach_to_release:
         description: Attach the installers to the GitHub release of this tag (needs a tag ref)
         type: boolean
         default: false
-  release:
-    types: [published]
 
 permissions:
   contents: read
+
+# A newer push to a branch or pull request makes the build of the older one obsolete.
+# Builds of main and of tags are never cancelled. A push to an rc branch and the pull
+# request opened from it build different commits (the branch head, and its merge into
+# main), so both run.
+concurrency:
+  group: installers-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.ref != 'refs/heads/main' }}
 
 env:
   # Briefcase re-prints the app's output; keep that from failing on non-UTF-8 consoles.
@@ -75,7 +98,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            python3-dev python3-pip python3-venv build-essential dpkg-dev \
+            gnupg python3-dev python3-pip python3-venv build-essential dpkg-dev \
             libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 \
             libglib2.0-0 libnss3 libasound2t64
@@ -94,7 +117,7 @@ jobs:
             python -m pip install "briefcase==0.4.5"
           fi
 
-      - name: Sync the app version with pyRadPlan
+      - name: Sync the app version and changelog with pyRadPlan
         run: python packaging/briefcase/scripts/sync_version.py
 
       - name: Create the app scaffold
@@ -135,6 +158,8 @@ jobs:
           name: ${{ matrix.artifact }}
           path: packaging/briefcase/dist/*
           if-no-files-found: error
+          # Builds of every push are only for looking at; the release keeps the tag's.
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
 
       - name: Upload the Briefcase logs
         if: failure()
@@ -147,8 +172,8 @@ jobs:
   attach:
     name: Attach to release
     needs: build
-    # A manual run from a branch has no release to attach to.
-    if: github.ref_type == 'tag' && (github.event_name == 'release' || inputs.attach_to_release)
+    # Only a tag has a release to attach to; a manual run on one has to ask for it.
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.attach_to_release)
     runs-on: ubuntu-latest
     permissions:
       contents: write
