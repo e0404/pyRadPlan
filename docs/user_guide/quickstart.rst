@@ -33,7 +33,7 @@ with just a few lines of code — mirroring the experience of matRad's ``matRad.
     result = fluence_optimization(ct, cst, stf, dij, pln)
 
     # 6. Visualize
-    plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values, overlay_unit="Gy")
+    plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose, overlay_unit="Gy")
 
 Each step corresponds to a major concept described in :ref:`concepts`. The following sections
 explain every object and function in detail.

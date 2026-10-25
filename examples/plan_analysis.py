@@ -43,7 +43,7 @@ cst.vois[2].objectives = [
 ]  # BODY
 
 result = fluence_optimization(ct, cst, stf, dij, pln)
-dose = result.physical_dose.values
+dose = result.physical_dose
 
 # %% [markdown]
 # ## Quick single QIs

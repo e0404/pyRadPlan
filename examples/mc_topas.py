@@ -112,10 +112,10 @@ else:
 # The viewer takes a dict of named quantities and lets you switch between them. Keeping
 # the ``physical_dose`` prefix makes it pick up the correct label and unit.
 # %%
-result = {"physical_dose (pencil beam)": result_pb.physical_dose.values}
+result = {"physical_dose (pencil beam)": result_pb.physical_dose}
 if result_mc is not None:
-    result["physical_dose (TOPAS)"] = result_mc.physical_dose.values
-    result["physical_dose_var (TOPAS)"] = result_mc.physical_dose_var.values
+    result["physical_dose (TOPAS)"] = result_mc.physical_dose
+    result["physical_dose_var (TOPAS)"] = result_mc.physical_dose_var
 
 if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed

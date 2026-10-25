@@ -91,7 +91,7 @@ else:
     plot_multiple_slices(
         image_volume=ct,
         cst=cst,
-        overlays=[result.physical_dose.values, result.rbe_x_dose.values],
+        overlays=[result.physical_dose, result.rbe_x_dose],
         view_slice=view_slice,
         plane="axial",
         overlay_unit=[
