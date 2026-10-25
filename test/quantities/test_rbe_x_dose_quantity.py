@@ -325,6 +325,43 @@ def test_lq_inverse_dose_supports_linear_limit_and_immutable_arrays():
     assert np.allclose(np.asarray(result), [1.0, 1.0, 0.0])
 
 
+def test_lq_inverse_dose_is_accurate_in_single_precision_at_low_effect():
+    effect = np.asarray([1e-7, 1e-4, 0.5, 4.0])
+    alpha_x, beta_x = np.full(4, 0.1), np.full(4, 0.05)
+    reference = (np.sqrt(alpha_x**2 + 4 * beta_x * effect) - alpha_x) / (2 * beta_x)
+
+    result = lq_inverse_dose(
+        xp.asarray(effect, dtype=xp.float32),
+        xp.asarray(alpha_x, dtype=xp.float32),
+        xp.asarray(beta_x, dtype=xp.float32),
+    )
+
+    assert np.allclose(np.asarray(result), reference, rtol=1e-6, atol=0)
+
+
+def test_lq_inverse_dose_without_alpha_x_solves_the_quadratic_term():
+    result = lq_inverse_dose(
+        xp.asarray([4.0, 0.0]), xp.asarray([0.0, 0.0]), xp.asarray([1.0, 1.0])
+    )
+
+    assert np.allclose(np.asarray(result), [2.0, 0.0])
+
+
+def test_rbe_x_dose_effect_evaluates_in_the_matrix_precision(sample_dij_sparse):
+    """Double-precision reference parameters do not promote single-precision matrices."""
+    dij = sample_dij_sparse.model_copy()
+    dij.alphax = np.full((125, 1), 0.1, dtype=np.float64)
+    dij.betax = np.full((125, 1), 0.05, dtype=np.float64)
+    quantity = RBExDose(dij)
+    fluence = xp.ones(dij.total_num_of_bixels, dtype=xp.float32)
+
+    rbe_x_dose = quantity(fluence).flat[0]
+    gradient = quantity.compute_chain_derivative(xp.ones_like(rbe_x_dose), fluence).flat[0]
+
+    assert rbe_x_dose.dtype == quantity._dtype
+    assert gradient.dtype == quantity._dtype
+
+
 def test_RBExDose_constant_reuses_the_physical_dose_quantity(sample_dij_sparse_constant_rbe):
     """The constant path scales the dose vector instead of the influence matrix."""
     const_rbe = RBExDose(sample_dij_sparse_constant_rbe)
