@@ -327,6 +327,20 @@ class TestOutcomeCNN:
         assert grad.shape == index.shape
         assert np.any(grad != 0.0)
 
+    def test_num_of_fractions_scales_dose_and_gradient(self, ct_and_cst):
+        """The model sees total dose; the gradient follows the chain rule."""
+        ct, cst = ct_and_cst
+        obj = _make_obj(ct, cst, warmup_iterations=0, num_of_fractions=30)
+        reference = _make_obj(ct, cst, warmup_iterations=0)
+        dose = _dose() / 30.0
+
+        assert float(obj.compute_objective(dose)) == pytest.approx(
+            float(reference.compute_objective(dose * 30.0))
+        )
+        np.testing.assert_allclose(
+            obj.compute_gradient(dose), 30.0 * reference.compute_gradient(dose * 30.0), rtol=1e-5
+        )
+
     def test_ntcp_history_and_reset(self, outcome_obj):
         dose = _dose()
         for _ in range(3):
