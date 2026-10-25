@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Optional, Union
@@ -20,18 +21,30 @@ if find_spec("pyqtgraph") is None:
 if TYPE_CHECKING:
     from pyRadPlan.cst._cst import StructureSet
     from pyRadPlan.ct._ct import CT
+    from pyRadPlan.gui.windows._splash_win import StartupSplash
     from pyRadPlan.gui.workspace import WorkspaceManager
 
-#: Startup imports announced on the splash as (status, module, weight), weights roughly
-#: in warm-start milliseconds.  Modules the package import already loaded are skipped.
+logger = logging.getLogger(__name__)
+
+#: Startup imports announced on the splash as (status, module, weight), one per top-level
+#: subpackage the GUI uses, weights roughly in warm-start milliseconds.  ``import
+#: pyRadPlan`` is lazy, so these run behind the splash; modules already loaded are skipped.
 _STARTUP_IMPORTS = (
-    ("Detecting array backends…", "pyRadPlan.core.xp_utils", 2500.0),
-    ("Loading dose engines…", "pyRadPlan.dose", 1000.0),
-    ("Loading optimization…", "pyRadPlan.optimization", 1000.0),
-    ("Loading AI planning agents…", "pyRadPlan.ai.agents", 1200.0),
-    ("Loading GUI widgets…", "pyRadPlan.gui.widgets", 300.0),
-    ("Loading main window…", "pyRadPlan.gui.windows._main_win", 50.0),
+    ("Loading core…", "pyRadPlan.core.xp_utils", 1200.0),
+    ("Loading CT…", "pyRadPlan.ct", 10.0),
+    ("Loading structure sets…", "pyRadPlan.cst", 600.0),
+    ("Loading plans…", "pyRadPlan.plan", 370.0),
+    ("Loading beam geometry…", "pyRadPlan.stf", 100.0),
+    ("Loading dose engines…", "pyRadPlan.dose", 360.0),
+    ("Loading optimization…", "pyRadPlan.optimization", 1500.0),
+    ("Loading analysis…", "pyRadPlan.analysis", 780.0),
+    ("Loading data import/export…", "pyRadPlan.io", 470.0),
+    ("Loading AI planning agents…", "pyRadPlan.ai.agents", 120.0),
+    ("Loading GUI widgets…", "pyRadPlan.gui.widgets", 1000.0),
+    ("Loading main window…", "pyRadPlan.gui.windows._main_win", 30.0),
 )
+#: Weight of loading the array backend the settings select (CuPy, warm).
+_BACKEND_WEIGHT = 500.0
 _PATIENT_WEIGHT = 300.0
 
 
@@ -80,24 +93,32 @@ def gui(patient: Optional[str] = None) -> None:
         StartupSplash,
     )
 
-    patient_path = _resolve_patient(patient) if patient is not None else None
-
     _app = QApplication.instance() or QApplication(sys.argv)
     imports = [entry for entry in _STARTUP_IMPORTS if entry[1] not in sys.modules]
-    total = sum(weight for *_, weight in imports) + BUILD_WINDOW_WEIGHT + SHOW_WINDOW_WEIGHT
-    if patient_path is not None:
+    total = (
+        sum(weight for *_, weight in imports)
+        + _BACKEND_WEIGHT
+        + BUILD_WINDOW_WEIGHT
+        + SHOW_WINDOW_WEIGHT
+    )
+    steps = len(imports) + 3
+    if patient is not None:
         total += _PATIENT_WEIGHT
-    splash = StartupSplash(total)
+        steps += 1
+    splash = StartupSplash(total, steps)
     splash.show()
     try:
         for message, module, weight in imports:
             splash.step(message, weight)
             importlib.import_module(module)
 
+        splash.step("Detecting array backends…", _BACKEND_WEIGHT)
+        _load_array_backend(splash)
+
         workspace = None
-        if patient_path is not None:
+        if patient is not None:
             splash.step(f"Loading patient {patient}…", _PATIENT_WEIGHT)
-            workspace = _load_patient(patient_path)
+            workspace = _load_patient(_resolve_patient(patient))
 
         # Deferred: avoids pulling in the full Qt main-window stack at package import time.
         from .windows._main_win import launch_main_window  # noqa: PLC0415
@@ -105,6 +126,27 @@ def gui(patient: Optional[str] = None) -> None:
         launch_main_window(workspace, splash=splash)
     finally:
         splash.close()
+
+
+def _load_array_backend(splash: StartupSplash) -> None:
+    """Import the array backend the settings select, listing the probed backends.
+
+    Only a preload: the GUI also serves viewing data, so a backend that cannot be loaded
+    does not stop it. Computations choose the backend again and report the error.
+    """
+    from pyRadPlan.core import xp_utils  # noqa: PLC0415
+
+    probed = []
+
+    def announce(name: str) -> None:
+        probed.append(xp_utils.BACKENDS.get(name, name))
+        splash.set_message(f"Detecting array backends: {', '.join(probed)}…")
+
+    try:
+        with xp_utils.observe_backend_imports(announce):
+            xp_utils.choose_array_api_namespace()
+    except Exception as exc:  # noqa: BLE001 - any backend failure only skips the preload
+        logger.warning("Cannot load the configured array backend: %s", exc)
 
 
 def _resolve_patient(patient: str) -> str:

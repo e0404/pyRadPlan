@@ -7,28 +7,15 @@ from types import ModuleType
 
 import array_api_compat
 
-from ..._settings import get_settings
-
-try:
-    from numba import cuda as numba_cuda
-except ImportError:
-    numba_cuda = None
 from typing import Any, Optional
 
-try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
-
-try:
-    import jax
-except ImportError:
-    jax = None
+from ..._settings import get_settings
+from ._backends import (
+    BACKENDS,
+    backend_installed,
+    import_backend,
+    observe_backend_imports,
+)
 
 from .helpers import (
     DLPACK_CPU,
@@ -70,27 +57,30 @@ from .compat import (
 # Check if GPU is available
 def cupy_available() -> bool:
     """Check if CuPy is available and a compatible GPU is present."""
+    cp = import_backend("cupy")
     return cp is not None and cp.cuda.is_available()
 
 
 def pytorch_available() -> bool:
     """Check if PyTorch is available."""
-    return torch is not None
+    return import_backend("torch") is not None
 
 
 def pytorch_gpu_available() -> bool:
     """Check if PyTorch is available and a compatible GPU is present."""
+    torch = import_backend("torch")
     return torch is not None and torch.cuda.is_available()
 
 
 def jax_available() -> bool:
     """Check if JAX is available."""
-    return jax is not None
+    return import_backend("jax") is not None
 
 
 # TODO: Check if this here is working as intended.
 def jax_gpu_available() -> bool:
     """Check if JAX is available and a compatible GPU is present."""
+    jax = import_backend("jax")
     if jax is None:
         return False
     try:
@@ -103,7 +93,9 @@ def jax_gpu_available() -> bool:
 def numba_cuda_available() -> bool:
     """Check if Numba CUDA is available."""
     try:
-        return numba_cuda.is_available()
+        from numba import cuda  # noqa: PLC0415
+
+        return cuda.is_available()
     except (ImportError, AttributeError):
         return False
 
@@ -136,14 +128,19 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
     """
     if namespace is None:
         xp_settings = get_settings().xp
-        gpu_backend = xp_settings.preferred_gpu_array_backend or _get_preferred_gpu_backend()
-        if xp_settings.prefer_gpu and gpu_backend is not None:
+        gpu_backend = None
+        if xp_settings.prefer_gpu:
+            # Probing imports the candidate backends, so only probe when a GPU is wanted
+            gpu_backend = xp_settings.preferred_gpu_array_backend or _get_preferred_gpu_backend()
+        if gpu_backend is not None:
             namespace = gpu_backend
         else:
             namespace = xp_settings.preferred_cpu_array_backend
     else:
         namespace = namespace.lower()
 
+    # Announces the backend import to observers, e.g. the GUI startup splash
+    import_backend(namespace.split(".")[0])
     try:
         return importlib.import_module(f"array_api_compat.{namespace}")
     except ModuleNotFoundError:
@@ -177,7 +174,7 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> An
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
             return dlpack_to_backend_device(xp, (2, int(gpu_index)))
         if array_api_compat.is_jax_namespace(xp) and jax_gpu_available():
-            if len(jax.devices("gpu")) > gpu_index:
+            if len(import_backend("jax").devices("gpu")) > gpu_index:
                 return dlpack_to_backend_device(xp, (2, int(gpu_index)))
             warnings.warn(
                 f"Requested GPU index {gpu_index} is out of range for available JAX devices. Defaulting to GPU index 0.",
@@ -205,6 +202,8 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> An
     raise RuntimeError(f"No compatible device found for the given array namespace: {xp.__name__}")
 
 
+_BACKEND_ATTRIBUTES = {"cp": "cupy", "torch": "torch", "jax": "jax"}
+
 _DEPRECATED_SETTINGS_ALIASES = {
     "PREFER_GPU": "prefer_gpu",
     "PREFERRED_CPU_ARRAY_BACKEND": "preferred_cpu_array_backend",
@@ -224,6 +223,9 @@ class _SettingsAliasModule(ModuleType):
     """Redirect the legacy module-level backend constants to pyRadPlan.settings.xp."""
 
     def __getattr__(self, name: str):
+        if name in _BACKEND_ATTRIBUTES:
+            # The backend module if installed, else None, as when they were imported eagerly
+            return import_backend(_BACKEND_ATTRIBUTES[name])
         field = _DEPRECATED_SETTINGS_ALIASES.get(name)
         if field is None:
             raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
@@ -246,8 +248,14 @@ class _SettingsAliasModule(ModuleType):
 # settings, which requires intercepting attribute writes on the module itself.
 sys.modules[__name__].__class__ = _SettingsAliasModule
 
+warn_on_unreliable_openblas()
+
 
 __all__ = [
+    "BACKENDS",
+    "backend_installed",
+    "import_backend",
+    "observe_backend_imports",
     "JittableKernel",
     "jittable",
     "DLPACK_CPU",
