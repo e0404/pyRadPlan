@@ -7,7 +7,7 @@ contract.
 """
 
 from ._settings import AiSettings
-from ._preprocessor import BasePreprocessor
+from ._preprocessor import BasePreprocessor, OutcomePreprocessor
 from ._registry import (
     ModelTask,
     list_local_models,
@@ -20,6 +20,7 @@ from ._load_model import load_model
 __all__ = [
     "AiSettings",
     "BasePreprocessor",
+    "OutcomePreprocessor",
     "ModelTask",
     "list_local_models",
     "task_from_dir",

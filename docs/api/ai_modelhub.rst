@@ -29,6 +29,7 @@ Loading
 
    load_model
    BasePreprocessor
+   OutcomePreprocessor
 
 
 Discovery

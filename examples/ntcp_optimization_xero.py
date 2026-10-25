@@ -30,7 +30,7 @@ from pyRadPlan.io import load_patient
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
     SquaredOverdosing,
-    OutcomeCNN,
+    OutcomeModel,
 )
 
 # HEAD_AND_NECK.mat ships with matRad (matRad/phantoms), not with pyRadPlan.
@@ -69,15 +69,12 @@ stf = generate_stf(ct, cst, pln)
 
 # %%
 # Configure the CNN-based xerostomia NTCP objective.
-# Keep a handle to it to access the NTCP history after optimization.
 # `model` accepts a HuggingFace name, a local model directory, or a preloaded
 # (model, preprocessor) tuple.
-ntcp_obj = OutcomeCNN(
+ntcp_obj = OutcomeModel(
     priority=300000.0,
     model=r"pyRadPlan-outcome-ORPDenseNet-Xerostomia",
     warmup_iterations=5,
-    ct=ct,  # needed as model input
-    cst=cst,  # needed as model input
     cst_masks=[
         "PAROTID_LT",
         "PAROTID_RT",
@@ -112,18 +109,15 @@ opt_info = {}
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
-# Save NTCP history from active optimization
-ntcp_history_active = list(ntcp_obj.ntcp_history)
-ntcp_obj.reset_history()
+ntcp_history_active = opt_info["objective_info"][0]["history"]
 
-# Native optimization: switch CNN NTCP objective to monitor-only mode (logs but zero gradients)
+# Native optimization: the NTCP objective only monitors (zero value and gradient)
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
 fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
-# Save NTCP history from the native (monitor-only) optimization
-ntcp_history_native = list(ntcp_obj.ntcp_history)
+ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
 
 # # Compute the result on the CT grid

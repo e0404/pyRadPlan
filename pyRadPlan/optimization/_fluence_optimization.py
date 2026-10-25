@@ -115,9 +115,7 @@ def fluence_optimization(  # noqa: PLR0913
         # that does not is left without the key rather than reported as zero iterations.
         if isinstance(result_info, dict) and "num_iter" in result_info:
             opt_info["num_iter"] = int(result_info["num_iter"])
-        # Objectives may report their own auxiliary series (e.g. NTCP per evaluation); left
-        # unset rather than empty when none does, matching the other optional keys. Looked up
-        # defensively so a duck-typed planning problem is not required to implement it.
+        # Left unset when no objective reports anything, like the other optional keys.
         collect = getattr(planning_prob, "collect_objective_info", None)
         objective_info = collect() if callable(collect) else None
         if objective_info:
