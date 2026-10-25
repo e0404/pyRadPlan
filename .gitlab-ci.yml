@@ -277,12 +277,14 @@ installer-linux:
         - python scripts/collect_licenses.py --check
         - python scripts/run_briefcase.py package linux system --no-input
         - ls -l dist
+    # The runners limit the size of artifacts and the .deb is almost 300 MB, so the package is
+    # not kept: the job only shows that the installer builds (the GitHub workflow keeps it).
+    # The small Briefcase logs of a failed job are.
     artifacts:
-        when: always
+        when: on_failure
         paths:
-            - packaging/briefcase/dist/
             - packaging/briefcase/logs/
-        expire_in: 4 weeks
+        expire_in: 1 week
 
 # The pyRadPlan GUI in a web browser (packaging/container, see its README), built with
 # Docker-in-Docker like the "Container" GitHub workflow, and tested with the same script.
