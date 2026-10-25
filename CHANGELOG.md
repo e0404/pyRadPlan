@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: a Help menu with links to the documentation and the source repository, a "Third-party Licenses…" browser listing the installed packages with their license texts, and an "About pyRadPlan…" dialog showing the version, the BSD license note and the research-and-education / not-for-clinical-use disclaimer
 - A per-user `.env` file at `<data_dir>/.env` (`~/.pyradplan/.env` by default, relocatable via `PYRADPLAN_DATA_DIR`) is read for all `PYRADPLAN_*` settings, the AI provider API keys and `KMP_DUPLICATE_LIB_OK`, so an installed desktop app can be configured without a writable working directory; a `.env` in the working directory keeps precedence, and real environment variables win over both
 - Desktop installers: a Briefcase project under `packaging/briefcase` packages the GUI (CPU-only) as a Windows MSI, macOS DMG and Linux .deb, with a bundled smoke test and a `Desktop installers` GitHub Actions workflow that attaches the installers to a release
+- Browser container: `packaging/container` runs the Qt GUI through Xpra's HTML5 client,
+  with a Compose example and shared smoke test; GitHub and GitLab build and test the
+  image and publish tagged releases to their container registries.
 
 ### Changed
 

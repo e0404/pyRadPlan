@@ -6,9 +6,9 @@ line over to it so the desktop bundle and ``pyRadPlanGUI`` behave the same.
 
 import sys
 
+from pyRadPlan.gui import main as gui_main
+
 
 def main() -> None:
     """Launch the pyRadPlan main window and exit with its status."""
-    from pyRadPlan.gui import main as gui_main
-
     sys.exit(gui_main(sys.argv[1:]))

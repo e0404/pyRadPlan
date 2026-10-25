@@ -24,11 +24,15 @@ else
     auth=allow
 fi
 
+# Xpra accepts one command string. Quote each argument so paths containing spaces and
+# shell metacharacters survive the conversion from Docker's argument vector.
+start_child=$(python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "$@")
+
 exec xpra start :100 \
     --daemon=no \
     --bind-tcp="0.0.0.0:$XPRA_PORT" --tcp-auth="$auth" \
     --html=on \
     --exit-with-children=yes \
-    --start-child="$*" \
+    --start-child="$start_child" \
     --mdns=no --notifications=no --pulseaudio=no --speaker=off --microphone=off \
     --webcam=no --printing=no

@@ -22,7 +22,8 @@ install pyRadPlan.
 
 pyRadPlan itself is installed into the bundle as a wheel built from the repository checkout
 (`requires = ["../.."]`), so the bundle always contains the pyRadPlan of the current commit
-together with its dependencies. The requirements are installed into the bundle's
+together with its dependencies. The Qt requirements repeat the root project's `gui` extra (a
+test keeps them equal). The requirements are installed into the bundle's
 `app_packages` directory as regular wheels:
 
 | Platform | `app_packages` inside `build/pyradplan_app/` |
@@ -67,8 +68,8 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
   Macs need one build each; CI builds both and appends `-arm64` or `-x86_64` to the file
   name. `--adhoc-sign` is required for an unsigned build and skips notarization. Several
   dependencies have no Intel Mac wheels in their latest releases, so the Intel app bundles
-  older ones (for example `numba` 0.62 and Qt 6.11, against `numba` 0.68 and Qt 6.12 on
-  Apple silicon).
+  older ones. The GUI dependencies follow the root project's `gui` extra on both
+  architectures.
 - **Linux:** `linux system`, run on the target distribution. Produces
   `dist/pyradplan-app_<version>-1~<distro>-<codename>_<arch>.deb` (or an RPM/pkg on other
   families). Briefcase must run under the distribution's `/usr/bin/python3` (a venv created

@@ -43,6 +43,7 @@ def _to_pil(image: QImage) -> Image.Image:
 
 
 def render(renderer: QSvgRenderer, size: int) -> Image.Image:
+    """Render a square SVG icon as a transparent image of ``size`` pixels."""
     image = QImage(size, size, QImage.Format.Format_ARGB32)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
@@ -83,6 +84,7 @@ def render_installer_images(skull: QSvgRenderer, wordmark: QSvgRenderer) -> dict
 
 
 def main() -> int:
+    """Write the application icons and installer bitmaps to the resource folder."""
     app = QGuiApplication.instance() or QGuiApplication(["make_icons", "-platform", "offscreen"])
     renderer = QSvgRenderer(str(SVG))
     assert renderer.isValid(), SVG

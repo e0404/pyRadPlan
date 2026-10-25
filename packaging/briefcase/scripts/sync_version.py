@@ -25,6 +25,7 @@ BRIEFCASE_CHANGELOG = HERE.parent / "CHANGELOG.md"
 
 
 def main(argv: list[str]) -> int:
+    """Synchronize the app version and changelog, or check the version with ``--check``."""
     root_version = tomllib.loads(ROOT_PYPROJECT.read_text("utf-8"))["project"]["version"]
     text = BRIEFCASE_PYPROJECT.read_text("utf-8")
     current = tomllib.loads(text)["tool"]["briefcase"]["version"]

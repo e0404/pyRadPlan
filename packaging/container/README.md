@@ -25,7 +25,9 @@ docker run --rm -p 10000:10000 -e XPRA_PASSWORD=choose-one pyradplan-web
 
 Then open <http://localhost:10000>. The first start takes a while (the GUI imports the
 numerical stack). Closing the GUI stops the container. `docker compose up --build` in this
-directory does the same with the settings of `compose.yaml`.
+directory does the same with the settings of `compose.yaml`, binding the web port to
+`127.0.0.1` so the passwordless default is accessible only from the host. To serve other
+machines, set `XPRA_PASSWORD` and explicitly change the port binding.
 
 The build installs pyRadPlan from the working tree, so the image contains exactly the commit
 it was built from; there is no separate version to pass. `--build-arg PYRADPLAN_EXTRAS=gui`

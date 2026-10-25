@@ -38,11 +38,13 @@ sources = ["src/pyradplan_app"]
 test_sources = ["tests"]
 
 # pyRadPlan comes from the repository checkout two directories up (a local path
-# is resolved relative to this file). CPU-only: no torch, cupy or jax.
+# is resolved relative to this file). CPU-only: no torch, cupy or jax. The Qt entries repeat
+# the gui extra of the root project (Briefcase cannot select an extra of a local path);
+# test/packaging/test_briefcase.py keeps them in sync.
 requires = [
     "../..",
-    "pyside6-essentials>=6.6",
-    "pyqtgraph>=0.13",
+    "pyside6-essentials>=6.4,<6.12",
+    "pyqtgraph>=0.12.0",
     "numba>=0.61.0",
 ]
 test_requires = []
@@ -72,6 +74,7 @@ system_requires = []
 system_runtime_requires = [
     "libgl1",
     "libegl1",
+    "libglib2.0-0",
     "libxkbcommon-x11-0",
     "libdbus-1-3",
     "libfontconfig1",

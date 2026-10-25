@@ -8,6 +8,9 @@ bundled TG119 phantom, a small photon dose calculation, a short optimization and
 constructing the main window offscreen.
 """
 
+# Imports belong inside the checks so failures reach main() and Briefcase's exit marker.
+# ruff: noqa: PLC0415
+
 import os
 import sys
 import time
@@ -90,6 +93,7 @@ def _check_main_window():
 
 
 def main() -> int:
+    """Run each bundled check and return a failure status if any check raises."""
     checks = [_check_import, _check_dose_and_optimization, _check_main_window]
     for check in checks:
         name = check.__name__.lstrip("_")
