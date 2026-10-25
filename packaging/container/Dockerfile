@@ -42,8 +42,11 @@ RUN /opt/venv/bin/python /tmp/collect_licenses.py \
  && rm /tmp/collect_licenses.py
 
 COPY packaging/container/entrypoint.sh /usr/local/bin/entrypoint.sh
+# /tmp/.X11-unix is where X servers put their sockets; it must belong to root and be sticky
+# and world-writable, and the non-root user cannot create it (Xvfb would complain).
 RUN chmod +x /usr/local/bin/entrypoint.sh \
- && useradd --create-home --uid 10001 pyradplan
+ && useradd --create-home --uid 10001 pyradplan \
+ && mkdir -m 1777 /tmp/.X11-unix
 
 # Qt draws with software OpenGL and without shared memory (there is no GPU, and the X server
 # runs in the same container namespace but not necessarily with a large /dev/shm).
