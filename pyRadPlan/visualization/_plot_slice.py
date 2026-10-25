@@ -124,7 +124,7 @@ def _resolve_view_slices(
 def _normalize_overlay_unit(overlay_unit: Union[str, pint.Unit, pint.Quantity]) -> pint.Unit:
     """Normalize ``overlay_unit`` to a ``pint.Unit`` so formatting and predicates are uniform."""
     if isinstance(overlay_unit, str):
-        return ureg(overlay_unit).units
+        return ureg.Unit(overlay_unit)
     if isinstance(overlay_unit, pint.Quantity):
         return overlay_unit.units
     return overlay_unit

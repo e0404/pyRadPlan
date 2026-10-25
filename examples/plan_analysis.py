@@ -43,14 +43,15 @@ cst.vois[2].objectives = [
 ]  # BODY
 
 result = fluence_optimization(ct, cst, stf, dij, pln)
+dose = result.physical_dose.values
 
 # %% [markdown]
 # ## Quick single QIs
 
 # %%
-D2 = DX.compute_from(quantity=result["physical_dose"], mask=cst.vois[1].mask, ref_vol=2)
-V3Gy = VX.compute_from(quantity=result["physical_dose"], mask=cst.vois[1].mask, ref_dose=3.0)
-mean = Mean.compute_from(quantity=result["physical_dose"], mask=cst.vois[1].mask)
+D2 = DX.compute_from(quantity=dose, mask=cst.vois[1].mask, ref_vol=2)
+V3Gy = VX.compute_from(quantity=dose, mask=cst.vois[1].mask, ref_dose=3.0)
+mean = Mean.compute_from(quantity=dose, mask=cst.vois[1].mask)
 
 print(f"{D2.metric}: {D2.value:.2f} {D2.unit:~}")
 print(f"{V3Gy.metric}: {V3Gy.value:.2f} {V3Gy.unit:~}")
@@ -62,7 +63,7 @@ print(f"{mean.metric}: {mean.value:.2f} {mean.unit:~}")
 # %%
 qi_collection = QICollection.from_structure_set(
     cst=cst,
-    dose=result["physical_dose"],
+    dose=dose,
     ref_doses=[2],
     ref_vols=[50],
 )
@@ -79,7 +80,7 @@ qi_collection.plot(metrics=["mean", "max", "D50", "V2Gy"])
 # ## DVH example
 
 # %%
-dvh_collection = DVHCollection.from_structure_set(cst=cst, dose=result["physical_dose"])
+dvh_collection = DVHCollection.from_structure_set(cst=cst, dose=dose)
 
 # Plot DVHs for target and OAR
 target_name = cst.vois[1].name
@@ -94,7 +95,7 @@ view_slice = int(np.round(ct.size[2] / 2))
 plot_slice(
     image_volume=ct,
     cst=cst,
-    overlay=result["physical_dose"],
+    overlay=dose,
     view_slice=view_slice,
     plane="axial",
     overlay_unit="Gy",

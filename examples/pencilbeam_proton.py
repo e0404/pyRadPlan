@@ -77,4 +77,4 @@ if GUI_AVAILABLE:
 else:
     # Choose a slice to visualize
     view_slice = int(np.round(ct.size[2] / 2))
-    plot_slice(ct, cst, result["physical_dose"], view_slice)
+    plot_slice(ct, cst, result.physical_dose.values, view_slice)

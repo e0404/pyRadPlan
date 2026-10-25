@@ -107,6 +107,22 @@ def test_viewing_widget_single_quantity_result(qapp, test_data_photons):
     assert widget.quantity_widget.get_available_quantities()
 
 
+def test_viewing_widget_reuses_unchanged_quantities(qapp, test_data_photons):
+    """A replaced result sharing its images (e.g. a snapshot) is not converted again."""
+    from pyRadPlan.gui.widgets.workflow._workflow_widget import _result_with
+
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst, _result_for(ct))
+    widget = ViewingWidget(ws)
+    before = widget._display_arrays(ws.result)["physical_dose"]
+
+    ws.result = _result_with(
+        ws.result, quantities={"physical_dose_saved": ws.result.physical_dose}
+    )
+
+    assert widget._display_arrays(ws.result)["physical_dose"] is before
+
+
 def test_viewing_widget_clears_on_workspace_clear(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 

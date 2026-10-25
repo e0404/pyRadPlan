@@ -24,14 +24,16 @@ The high-level entry point is :func:`~pyRadPlan.fluence_optimization`:
 
     from pyRadPlan import fluence_optimization
 
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
+    fluence = result.fluence
 
 Under the hood, this function:
 
 1. Instantiates the planning problem configured in ``pln.prop_opt["problem"]``.
 2. Reads objectives from each VOI in ``cst``.
 3. Resolves required :ref:`quantities <concept_quantities>` from ``dij``.
-4. Calls the solver and returns the optimal fluence vector.
+4. Calls the solver and returns a :class:`~pyRadPlan.result.PlanResult` with the quantities on
+   the CT grid and the optimal fluence vector (``result.fluence``).
 
 Planning problems
 -----------------

@@ -29,14 +29,11 @@ with just a few lines of code — mirroring the experience of matRad's ``matRad.
     # 4. Compute the dose influence matrix
     dij = calc_dose_influence(ct, cst, stf, pln)
 
-    # 5. Optimize beamlet fluences
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    # 5. Optimize beamlet fluences, which returns the result on the CT grid
+    result = fluence_optimization(ct, cst, stf, dij, pln)
 
-    # 6. Reconstruct dose on the CT grid
-    result = dij.compute_result_ct_grid(fluence)
-
-    # 7. Visualize
-    plot_slice(image_volume=ct, cst=cst, overlay=result["physical_dose"], overlay_unit="Gy")
+    # 6. Visualize
+    plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values, overlay_unit="Gy")
 
 Each step corresponds to a major concept described in :ref:`concepts`. The following sections
 explain every object and function in detail.

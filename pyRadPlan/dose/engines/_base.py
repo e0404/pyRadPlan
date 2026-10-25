@@ -18,6 +18,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
+from pyRadPlan.result import PlanResult
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
 from pyRadPlan.machines import load_from_name, Machine
 from pyRadPlan.biology.models import (
@@ -305,7 +306,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
-    ) -> dict:
+    ) -> PlanResult:
         """
         Perform a forward dose calculation.
 
@@ -325,9 +326,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         Returns
         -------
-        dict
-            Result quantities on the CT grid, keyed by quantity name, with the
-            weights already applied.
+        PlanResult
+            Result quantities on the CT grid with the weights already applied.
 
         Notes
         -----
@@ -343,6 +343,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         if w is None:
             logger.info("No weights given. Using weights stored in stf.")
+            w = np.array(
+                [bixel.weight for beam in stf.beams for ray in beam.rays for bixel in ray.beamlets]
+            )
         else:
             logger.info("Using provided weights for forward dose calculation.")
 
@@ -366,6 +369,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             np.ones(dij.total_num_of_bixels, dtype=np.float32),
             num_of_fractions=self._result_dose_factor,
         )
+        result.fluence = w
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)
