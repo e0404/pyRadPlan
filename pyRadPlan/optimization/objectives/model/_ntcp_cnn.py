@@ -81,6 +81,10 @@ class OutcomeCNN(Objective):
     cst_masks : list[str], optional
         VOI names for the mask channels. Ordering matters unless the model's
         config collapses the masks into a single channel.
+    num_of_fractions : int, optional
+        For models trained on total-course dose: the per-fraction dose of the
+        optimizer is multiplied by this before it reaches the model. ``None``
+        passes the dose unchanged.
     """
 
     # -- Objective metadata --
@@ -96,6 +100,7 @@ class OutcomeCNN(Objective):
     monitor_only: bool = Field(default=False)
     warmup_iterations: int = Field(default=0, ge=0)
     cst_masks: Optional[list[str]] = Field(default=None)
+    num_of_fractions: Optional[int] = Field(default=None, gt=0)
     ntcp_history: list[float] = Field(default_factory=list, exclude=True)
 
     # -- Internal state (excluded from serialisation) --
@@ -250,6 +255,8 @@ class OutcomeCNN(Objective):
         prob.backward()
 
         grad = self.preprocessor.gradient_to_dose_grid()
+        if self.num_of_fractions is not None:
+            grad = grad * self.num_of_fractions
 
         # gradient_to_dose_grid returns the full dose grid; restrict back to the
         # objective's VOI voxels so it matches the optimizer's input vector.
@@ -279,13 +286,15 @@ class OutcomeCNN(Objective):
             raise RuntimeError("OutcomeCNN not initialised — provide ct and cst at construction.")
 
     def _to_full_grid(self, dose_values, xp):
-        """Scatter VOI-restricted dose onto the full dose grid (zeros elsewhere)."""
-        if self._dose_index is None:
-            return dose_values
-        device = array_api_compat.device(dose_values)
-        full = xp.zeros(self._dose_n, dtype=dose_values.dtype, device=device)
-        full[xp.asarray(self._dose_index, device=device)] = dose_values
-        return full
+        """Scatter VOI-restricted dose onto the full dose grid (zeros elsewhere), as model dose."""
+        if self._dose_index is not None:
+            device = array_api_compat.device(dose_values)
+            full = xp.zeros(self._dose_n, dtype=dose_values.dtype, device=device)
+            full[xp.asarray(self._dose_index, device=device)] = dose_values
+            dose_values = full
+        if self.num_of_fractions is not None:
+            dose_values = dose_values * self.num_of_fractions
+        return dose_values
 
     def _from_full_grid(self, grad_full, dose_values, xp):
         """Gather a full-grid gradient back to the objective's VOI voxels."""
