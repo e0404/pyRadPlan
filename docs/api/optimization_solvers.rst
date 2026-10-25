@@ -7,6 +7,7 @@ optimization.solvers
    :toctree: generated/optimization/solvers/
 
    OptimizerIpopt
+   OptimizerIpax
    OptimizerSciPy
 
 

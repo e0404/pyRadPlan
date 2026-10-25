@@ -13,6 +13,7 @@ Api documentation
    pln
    dij
    dose
+   biology
    optimization
    machines
    raytracer
@@ -23,4 +24,4 @@ Api documentation
    core
    util
    io
-   ai_agents
+   ai

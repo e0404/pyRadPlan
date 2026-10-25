@@ -12,6 +12,8 @@ in :ref:`quickstart`.
     :caption: Concepts:
 
     plan
+    biological_models
+    biological_base_data
     patient_data
     steering
     dose_calculation
@@ -19,6 +21,7 @@ in :ref:`quickstart`.
     quantities
     visualization
     ai_agents
+    ai_modelhub
 
 .. rubric:: Workflow at a glance
 
@@ -33,5 +36,5 @@ in :ref:`quickstart`.
     plot_slice()            →  figure                (visualization)
 
     # optional AI-assisted steps
-    ai_agents.generate_beam_angles()    →  Plan with gantry angles  (ai_agents)
+    ai_agents.generate_beam_angles()    →  Plan with gantry angles  (ai.agents)
     ai_agents.generate_voi_objectives() →  StructureSet with objectives

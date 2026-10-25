@@ -80,11 +80,11 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
         cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> NDArray:
         try:
-            return handler(v, info)
+            return handler(v)
         except ValidationError:
             try:
                 v = np.asarray(v)
-                return handler(v, info)
+                return handler(v)
             except Exception as exc:
                 raise ValueError("Input not an array") from exc
 

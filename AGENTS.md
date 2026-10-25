@@ -22,6 +22,7 @@ pre-commit install
 | `interface/*` | API/interface changes |
 | `devops/*` | CI, tooling, docs |
 | `dev/*` | experimental |
+| `rc/X.Y.Z` | release candidate, branched from `develop`, merged into `main` |
 
 Always branch from `develop` (not `main`) for regular work.
 
@@ -40,6 +41,17 @@ pytest --cov=pyRadPlan        # with coverage
 
 CI runs on Python 3.10–3.13. Do not reduce existing coverage.
 
+Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
+so a bare `pytest` run never collects it — invoke it explicitly:
+
+```bash
+pytest benchmark/benchmark_interp1d.py                 # one harness ([dev])
+pytest benchmark/ -o python_files="benchmark_*.py"     # all of them
+python benchmark/profile_pencilbeam_photon_forward_lineprof.py  # line_profiler ([profiling])
+```
+
+Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance work.
+
 ## Changelog
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
@@ -52,9 +64,31 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 - [ ] Branch targets `develop` (not `main`)
 - [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
 
+## Releases
+
+Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
+stays open for regular work while the candidate is stabilised:
+
+1. Branch `rc/X.Y.Z` from `develop`.
+2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog. Last, commit the executed
+   example notebooks: `python docs/execute_examples.py --release` runs the examples and stages
+   them in `docs/tutorials/examples/`.
+3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
+4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
+   `main` back into `develop` while untracking the executed notebooks (`git merge --no-ff
+   --no-commit main`, `git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples`,
+   `git commit`), and delete `rc/X.Y.Z`.
+
+When proposing or preparing a release, follow
+[.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
+the authoritative checklist for both the pre-merge and post-merge steps, and it applies whichever
+platform hosts the release. Do not tag, publish, or push a release without explicit confirmation.
+
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
+
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. On `develop` and feature branches they are the only committed form of the examples: never commit `.ipynb` files there. The docs build converts them into `docs/tutorials/examples/` (git-ignored) without outputs; neither CI nor Read the Docs ever executes them. Only release commits (`rc/X.Y.Z`, hence `main` and the tags) carry executed notebooks there, written and staged by `python docs/execute_examples.py --release`, so the docs show outputs for releases only. The docs build renders an executed notebook as is while its script is unchanged (it records the script hash) and otherwise falls back to a conversion without outputs with a warning. Examples needing external tools (`SKIP` in `docs/execute_examples.py`) are never executed. Check that changed examples run with `python docs/execute_examples.py [name ...]` (writes to `docs/_build/executed_examples`); `PYRADPLAN_DOCS_NB_EXECUTION=cache` is a local opt-in to execute them during a docs build.
 
 ## Key Architecture Notes
 

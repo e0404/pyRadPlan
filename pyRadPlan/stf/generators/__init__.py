@@ -1,7 +1,11 @@
 """Beam geometry and steering information generators."""
 
 from ._base import StfGeneratorBase
-from ._externalbeam import StfGeneratorExternalBeamRayBixel, StfGeneratorExternalBeam
+from ._externalbeam import (
+    StfGeneratorExternalBeamRayBixel,
+    StfGeneratorExternalBeam,
+    resolve_iso_centers,
+)
 from ._ions import StfGeneratorIonSingleSpot, StfGeneratorIMPT
 from ._photons import (
     StfGeneratorPhotonIMRT,
@@ -33,4 +37,5 @@ __all__ = [
     "get_generator",
     "get_available_generators",
     "register_generator",
+    "resolve_iso_centers",
 ]

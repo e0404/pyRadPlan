@@ -2,7 +2,7 @@
 """
 # AI Agents for Radiotherapy Planning.
 
-This example demonstrates the usage of pydantic-ai based `ai_agents` in `pyRadPlan`
+This example demonstrates the usage of pydantic-ai based `ai.agents` in `pyRadPlan`
 to assist in treatment planning. The module uses a user-defined LLM to suggest
 beam angles and optimization objectives based on the treatment site.
 
@@ -15,7 +15,7 @@ beam angles and optimization objectives based on the treatment site.
    - Google:     `GOOGLE_API_KEY`
    - Mistral:    `MISTRAL_API_KEY`
    If a .env file is present, the environment will be populated with python-dotenv
-3. Optionally, set the model via `PYRADPLAN_AI_MODEL` (default: `claude-sonnet-4-5`).
+3. Optionally, set the model via `PYRADPLAN_AI_AGENTS_MODEL` (default: `claude-sonnet-4-5`).
 
 ## Setup
 """
@@ -26,13 +26,14 @@ from dotenv import load_dotenv
 from pyRadPlan import (
     IonPlan,
     load_tg119,
-    ai_agents,
     generate_stf,
     calc_dose_influence,
     fluence_optimization,
     plot_slice,
     DVHCollection,
+    settings,
 )
+from pyRadPlan.ai import agents as ai_agents
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 ## These two lines are needed to allow nested event loops in Jupyter.
 ## Otherwise you will experience sync-errors when running the AI agents.
@@ -51,19 +52,18 @@ logging.basicConfig(level=logging.INFO)
 """
 ## Configuration
 
-Set the model via the environment variable `PYRADPLAN_AI_MODEL`, or pass `model=`
+Set the model via the `PYRADPLAN_AI_AGENTS_MODEL` environment variable (or a `.env` file)
+before importing pyRadPlan, at runtime on `pyRadPlan.settings.ai`, or pass `model=`
 explicitly to each call. Your provider API key must be set in the environment
 (e.g. `OPENAI_API_KEY`). pydantic-ai picks it up automatically.
 """
 
 # %%
-# Set the model to use (can also be set via PYRADPLAN_AI_MODEL env var)
-# os.environ["PYRADPLAN_AI_MODEL"] = "openai:gpt-5-mini"
+# Set the model to use at runtime
+# settings.ai.agents_model = "openai:gpt-5-mini"
 
 # Inspect effective settings
-settings = ai_agents.AiSettings()
-print(f"Using model: {settings.model}")
-
+print(f"Using model: {settings.ai.agents_model}")
 # %% [markdown]
 """
 ## Load Data

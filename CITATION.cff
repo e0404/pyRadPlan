@@ -1,5 +1,7 @@
 cff-version: 1.2.0
 title: pyRadPlan
+version: 0.5.0
+date-released: '2026-09-07'
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -10,6 +12,10 @@ authors:
     email: t.becher@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
     orcid: 'https://orcid.org/0009-0002-5467-9605'
+  - given-names: Maxim
+    family-names: Braunsburger
+    email: m.braunsburger@icloud.com
+    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Lina
     family-names: Bucher
     email: lina.bucher@dkfz-heidelberg.de
@@ -38,6 +44,10 @@ authors:
     email: florian.leininger@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
     orcid: 'https://orcid.org/0009-0001-6852-5933'
+  - given-names: Moritz
+    family-names: Müller
+    email: moritz.mueller@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Tim
     family-names: Ortkamp
     email: tim.ortkamp@kit.edu
@@ -46,13 +56,13 @@ authors:
     family-names: Santiago Aguilar
     email: victoria.santiagoaguilar@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
-  - given-names: Goran
-    family-names: Stanic
-    email: goran.stanic@dkfz-heidelberg.de
-    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Samir
     family-names: Schulz
     email: samirshivaji.schulz@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
+  - given-names: Goran
+    family-names: Stanic
+    email: goran.stanic@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
   - given-names: Wilfrid
     family-names: Wangon Zekou

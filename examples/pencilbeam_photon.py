@@ -28,6 +28,9 @@ from pyRadPlan import (
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
+# The array backend is auto-detected. To pin it, set PYRADPLAN_XP_* environment
+# variables or assign to pyRadPlan.settings.xp before the first computation.
+
 logging.basicConfig(level=logging.INFO)
 
 # %%

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import weakref
 
 import numpy as np
 import SimpleITK as sitk
@@ -11,9 +12,24 @@ from PySide6.QtWidgets import QMainWindow, QWidget
 
 from pyRadPlan.gui.widgets._analysis_widget import AnalysisWidget
 
+#: Open analysis windows, kept alive because they are deliberately top-level
+#: (see :class:`AnalysisWindow`) and therefore have no Qt parent to own them.
+_OPEN_WINDOWS: set[AnalysisWindow] = set()
+
 
 class AnalysisWindow(QMainWindow):
-    """Main window for displaying DVH plots and QI tables."""
+    """Main window for displaying DVH plots and QI tables.
+
+    The window is deliberately created **without** a Qt parent. On Windows a
+    parented window gets a native owner and is then never given its own taskbar
+    button, which makes it practically unreachable once other applications are
+    in front of it. Setting ``Qt.Window`` does not change that - only the
+    absence of an owner does. Since there is no parent to own it, the window
+    keeps itself alive in :data:`_OPEN_WINDOWS` until it is closed, and no
+    parent closes it either. The supplied ``parent`` is recorded as a logical
+    owner only; its host window must call :func:`close_analysis_windows` with
+    that owner when closing, so unrelated analyses remain open.
+    """
 
     def __init__(
         self,
@@ -27,7 +43,9 @@ class AnalysisWindow(QMainWindow):
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(parent)
+        # Keep ownership separate from Qt parenting to preserve the taskbar entry.
+        super().__init__()
+        self._owner_ref = weakref.ref(parent) if parent is not None else None
         self.setWindowTitle("DVH / QI Analysis")
         self.resize(1000, 750)
 
@@ -44,6 +62,26 @@ class AnalysisWindow(QMainWindow):
             initial_vois=initial_vois,
             voi_types=voi_types,
         )
+
+        _OPEN_WINDOWS.add(self)
+
+    def closeEvent(self, event) -> None:  # noqa: N802  (Qt override)
+        """Drop the self-reference so the closed window can be collected."""
+        _OPEN_WINDOWS.discard(self)
+        super().closeEvent(event)
+
+
+def close_analysis_windows(owner: QWidget) -> None:
+    """Close analyses opened with *owner* as their logical parent widget."""
+    for window in list(_OPEN_WINDOWS):
+        if window._owner_ref is not None and window._owner_ref() is owner:
+            window.close()
+
+
+def close_all_analysis_windows() -> None:
+    """Close every open analysis window (they have no parent to do it for them)."""
+    for window in list(_OPEN_WINDOWS):
+        window.close()
 
 
 def show_analysis(
@@ -66,7 +104,8 @@ def show_analysis(
     masks:
         Mapping of VOI name → boolean/uint8 mask matching the quantity shape.
     parent:
-        Optional parent widget.
+        Optional logical owner widget, recorded without setting a Qt parent.
+        Pass this same widget to :func:`close_analysis_windows` when its host closes.
     overlay:
         Display configuration dict. Recognised keys:
 
@@ -80,7 +119,7 @@ def show_analysis(
     overlay_labels:
         Per-quantity label strings. Takes precedence over ``overlay["label"]``.
     initial_quantity:
-        Quantity name to preselect in the primary combo.
+        Quantity name to preselect in the primary quantity dropdown.
     initial_vois:
         VOI names to pre-check. Defaults to all available masks.
 

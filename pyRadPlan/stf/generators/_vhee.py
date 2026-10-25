@@ -8,7 +8,7 @@ from pyRadPlan.stf._beamlet import Beamlet
 from pyRadPlan.stf._ray import Ray
 from pyRadPlan.stf._rangeshifter import RangeShifter
 
-from ._externalbeam import StfGeneratorExternalBeamRayBixel
+from ._externalbeam import StfGeneratorExternalBeamRayBixel, _deprecated_alias
 
 
 class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
@@ -28,20 +28,25 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
         A list of possible radiation modes (["VHEE"]).
     energy : float, optional
         The energy for VHEE beams in MeV. If not specified, defaults to 200 MeV.
+    use_given_eq_density_cube : bool
+        Use the equivalent density cube given in ``ct.cube`` and omit the conversion from
+        ``ct.cube_hu``.
     """
 
     name = "VHEE Geometry Generator"
     short_name = "VHEE"
     possible_radiation_modes = ["VHEE"]
 
-    use_given_wet_image: bool
+    use_given_eq_density_cube: bool
 
     def __init__(self, pln=None):
         self.energy = None  # Will default to 200 MeV if not specified
         self.radiation_mode = "VHEE"
-        self.use_given_wet_image = False
+        self.use_given_eq_density_cube = False
         self._wet_image = None
         super().__init__(pln)
+
+    use_given_wet_image = _deprecated_alias("use_given_wet_image", "use_given_eq_density_cube")
 
     def _initialize(self):
         """Initialize the VHEE generator."""
@@ -52,12 +57,14 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
             raise ValueError("Machine must be an instance of VHEEAccelerator")
 
         self._available_energies = self.machine.energies
-        if self.use_given_wet_image:
-            if self._ct.cube is None:
-                warnings.warn("No WET CT provided provided in CT. Cannot use given WET image.")
-                self.use_given_wet_image = False
+        if self.use_given_eq_density_cube and getattr(self._ct, "cube", None) is None:
+            warnings.warn(
+                "HU conversion requested to be omitted but no ct.cube exists! "
+                "Will override and do the conversion anyway!"
+            )
+            self.use_given_eq_density_cube = False
 
-        if self.use_given_wet_image:
+        if self.use_given_eq_density_cube:
             self._wet_image = self._ct.cube
         else:
             # TODO: load HLUT for given scanner
@@ -148,22 +155,6 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
 
         return rays
 
-    def _generate_source_geometry(self):
-        """
-        Generate the source geometry for VHEE.
-
-        Returns
-        -------
-        list
-            List of beam dictionaries representing the steering information.
-        """
-        stf = super()._generate_source_geometry()
-
-        # Add VHEE-specific beam finalization
-        stf = [self._finalize_beam(beam) for beam in stf]
-
-        return stf
-
     def _finalize_beam(self, beam):
         """
         Finalize beam data for VHEE.
@@ -180,6 +171,8 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
         dict
             The finalized beam.
         """
+        beam = super()._finalize_beam(beam)
+
         # Remove rays without energy/beamlets
         valid_rays = []
         for ray in beam["rays"]:

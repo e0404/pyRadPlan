@@ -72,6 +72,13 @@ instance/
 docs/_build/
 docs/api/generated/
 .doc
+# Notebooks generated from examples/*.py by the docs build (docs/execute_examples.py). Only
+# release commits on rc/X.Y.Z track executed notebooks here: `python docs/execute_examples.py
+# --release` force-adds them, and merging main back into develop untracks them again (see
+# .gitlab/merge_request_templates/Release.md).
+docs/tutorials/examples/
+# Examples are committed as jupytext scripts only; notebooks converted locally stay untracked
+examples/*.ipynb
 
 # PyBuilder
 .pybuilder/
@@ -161,7 +168,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-
+# ai_models - but keep the example.json:
+pyRadPlan/data/ai_models/*
+!pyRadPlan/data/ai_models/model_config.template.json
 
 .vscode/
 

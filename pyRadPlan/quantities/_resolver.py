@@ -1,11 +1,15 @@
 """Resolver that builds the dependency graph of fluence-dependent quantities."""
 
-from typing import Iterable
+import logging
+from typing import Iterable, Optional
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.core import xp_utils as compute_backend
 
 from ._base import FluenceDependentQuantity
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuantityResolver:
@@ -26,7 +30,7 @@ class QuantityResolver:
     - If neither path is available, a ``ValueError`` is raised.
     """
 
-    def __init__(self, dij: Dij, *, _dij_already_in_namespace: bool = False):
+    def __init__(self, dij: Dij, *, scenarios=None, _dij_already_in_namespace: bool = False):
         xp = compute_backend.choose_array_api_namespace()
         device = compute_backend.choose_device(xp)
 
@@ -34,6 +38,8 @@ class QuantityResolver:
             self._dij = dij
         else:
             self._dij = dij.to_namespace(xp, device=device)
+        # Scenario indices every resolved quantity (and its dependencies) computes.
+        self._scenarios = scenarios
         self._instances: dict[str, FluenceDependentQuantity] = {}
         # In-progress identifiers used for cycle detection.
         self._resolving: set[str] = set()
@@ -69,7 +75,7 @@ class QuantityResolver:
         try:
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
-            inst = cls(self._dij, mode=mode, dependencies=deps)
+            inst = cls(self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios)
         finally:
             self._resolving.discard(identifier)
 
@@ -80,14 +86,41 @@ class QuantityResolver:
         """Resolve every identifier and return them in input order."""
         return [self.get(i) for i in identifiers]
 
+    def reachable(
+        self, roots: Iterable[FluenceDependentQuantity]
+    ) -> list[FluenceDependentQuantity]:
+        """
+        Return the instances ``roots`` depend on (including themselves), in resolution order.
+
+        A quantity may drop a resolved optional dependency once it has chosen its computation
+        path (e.g. the ``effect`` of a constant-RBE ``rbe_x_dose``). Such instances remain in
+        :attr:`instances`, but are not reachable from any root and need not be evaluated.
+        """
+        seen: set[int] = set()
+        stack = list(roots)
+        while stack:
+            quantity = stack.pop()
+            if id(quantity) not in seen:
+                seen.add(id(quantity))
+                stack.extend(quantity.dependencies.values())
+        return [q for q in self._instances.values() if id(q) in seen]
+
+    def try_get(self, identifier: str) -> Optional[FluenceDependentQuantity]:
+        """Resolve ``identifier`` or return ``None`` if it cannot be computed for this dij."""
+        try:
+            return self.get(identifier)
+        except ValueError as exc:
+            logger.debug("Optional quantity %r not resolvable: %s", identifier, exc)
+            return None
+
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:
             return "direct"
-        if cls.required_dependencies or cls.optional_dependencies:
+        if cls.has_indirect_path(self._dij):
             return "indirect"
         raise ValueError(
             f"Cannot resolve quantity {identifier!r}: dij has no attribute "
-            f"{identifier!r} and no dependencies are declared."
+            f"{identifier!r} and no usable dependency path."
         )
 
     def _resolve_dependencies(
@@ -99,5 +132,7 @@ class QuantityResolver:
         for dep_id in cls.required_dependencies:
             deps[dep_id] = self.get(dep_id)
         for dep_id in cls.optional_dependencies:
-            deps[dep_id] = self.get(dep_id)
+            dep = self.try_get(dep_id)
+            if dep is not None:
+                deps[dep_id] = dep
         return deps
