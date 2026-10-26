@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from pyRadPlan.core import ConfigurableAlgorithm, Grid, ProgressReporter
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
-from pyRadPlan.core.resample import resample_numpy_array
+from pyRadPlan.core.resample import resample_array
 from pyRadPlan.ct import CT, resample_ct
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
@@ -716,7 +716,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                 tmp_cube = np.zeros(ct.cube_dim[::-1], dtype=np.float32)
                 tmp_cube.ravel()[tmp_vct_grid_scen[s]] = 1
 
-                interpolated_tmp_cube = resample_numpy_array(
+                interpolated_tmp_cube = resample_array(
                     tmp_cube,
                     reference_image=ct.cube_hu,
                     interpolator=sitk.sitkNearestNeighbor,

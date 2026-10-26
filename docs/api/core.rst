@@ -10,6 +10,8 @@ core
    PyRadPlanError
    Grid
    resample_image
+   resample_array
+   ArrayBackendGridResampler
    resample_numpy_array
 
 
@@ -96,7 +98,38 @@ Resampling
    :toctree: generated/core/resample/
 
    resample_image
+   resample_array
+   ArrayBackendGridResampler
    resample_numpy_array
+
+
+For array input, use ``resample_array`` with either ``reference_image`` or
+``reference_grid`` and exactly one target specification. Array axes are in
+NumPy order: ``(z, y, x)`` for a 3D image. The returned array retains the input
+namespace, device and dtype.
+
+.. code-block:: python
+
+   import SimpleITK as sitk
+   from pyRadPlan.core.resample import resample_array
+
+   result = resample_array(
+       values,
+       reference_grid=ct_grid,
+       target_grid=dose_grid,
+       interpolator=sitk.sitkLinear,
+       extrapolate="nearest",
+   )
+
+``prefer_native=True`` (default) uses SimpleITK for full NumPy/CuPy volumes;
+CuPy input is downloaded and the result uploaded to its original device. This
+was faster for the measured larger full-volume workloads. Set
+``prefer_native=False`` for supported 3D backend execution without that round
+trip; unsupported modes or dtypes then raise ``NotImplementedError``.
+Other SimpleITK enums, including BSpline, remain available through the native
+path. See :class:`ArrayBackendGridResampler` for prepared, backend-resident
+sampling of selected voxels or repeated geometry. ``resample_numpy_array`` is
+a deprecated forwarding wrapper.
 
 
 xp_utils

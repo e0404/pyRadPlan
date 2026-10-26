@@ -7,7 +7,7 @@ import pytest
 import SimpleITK as sitk
 
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
-from pyRadPlan.core.resample import resample_numpy_array
+from pyRadPlan.core.resample import resample_array
 from pyRadPlan.ct import CT, resample_ct
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
 
@@ -60,7 +60,7 @@ def test_nominal_selection_matches_original_rules(selection, resolution):
         )
         mask = np.zeros(ct.cube_dim[::-1], dtype=np.float32)
         mask.ravel()[expected_ct] = 1
-        values = resample_numpy_array(
+        values = resample_array(
             mask,
             reference_image=ct.cube_hu,
             interpolator=sitk.sitkNearestNeighbor,
@@ -155,7 +155,7 @@ def test_multiscenario_resampling_retains_membership(monkeypatch):
         lambda **kwargs: SimpleNamespace(cube_hu=target),
     )
     monkeypatch.setattr(
-        "pyRadPlan.dose.engines._base.resample_numpy_array", lambda *args, **kwargs: next(results)
+        "pyRadPlan.dose.engines._base.resample_array", lambda *args, **kwargs: next(results)
     )
     engine._init_voxel_selection(ct, cst)
     np.testing.assert_array_equal(engine._vdose_grid, np.arange(5))

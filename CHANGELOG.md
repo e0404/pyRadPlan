@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `core.resample.resample_array` accepts Array API arrays and existing SimpleITK interpolator enums, preserves namespace/device/dtype, and provides `prefer_native` dispatch. Full-volume NumPy/CuPy resampling prefers SimpleITK; supported backend execution can be requested explicitly. The prepared `ArrayBackendGridResampler` now lives in the same module and also supports nearest-neighbor interpolation and constant extrapolation.
 - Backend-resident ray-tracer depth arrays and a shared Array API grid resampler with chunked linear image interpolation, nearest boundary extrapolation and NaN-aware exact-sample behavior. The image-returning ray-tracer interface remains available.
 - Cutoff grid-creation and GPU-resident kernel benchmarks in actual dose calculations, with separate grid-creation, evaluation, download, and database-setup measurements.
 - Configurable particle cutoff quadrature: custom radial bin boundaries and angular resolution, with retained sampling metadata and direct Array API backend/device creation. Particle cutoff creation and evaluation follow the dose backend by default; `cutoff_force_numpy=True` provides an explicit CPU override, replacing the earlier unreleased `cutoff_backend` selector.
@@ -102,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `resample_numpy_array` forwards to `resample_array` with a `DeprecationWarning`; its positional signature and native NumPy behavior remain supported. Internal callers use the replacement.
 - `use_given_wet_image` of the ion and VHEE stf generators; use `use_given_eq_density_cube`
 
 ### Fixed

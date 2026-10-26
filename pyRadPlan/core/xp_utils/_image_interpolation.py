@@ -3,7 +3,7 @@
 import array_api_compat
 
 
-def interpolate_image_linear(values, coordinates):
+def interpolate_image_linear(values, coordinates, *, extrapolate="nearest"):
     """Sample a 3D (z, y, x) image at continuous (x, y, z) indices.
 
     Match image interpolation semantics: use nearest-pixel extrapolation outside
@@ -40,5 +40,34 @@ def interpolate_image_linear(values, coordinates):
         rows = [blend(gather(lo[0], y, z), gather(hi[0], y, z), weight[0]) for y in (lo[1], hi[1])]
         planes.append(blend(rows[0], rows[1], weight[1]))
     linear = blend(planes[0], planes[1], weight[2])
-    result = xp.where(outside, gather(*nearest), linear)
+    boundary = (
+        gather(*nearest)
+        if extrapolate == "nearest"
+        else xp.asarray(
+            extrapolate, dtype=coordinates.dtype, device=array_api_compat.device(values)
+        )
+    )
+    result = xp.where(outside, boundary, linear)
     return xp.astype(result, values.dtype)
+
+
+def interpolate_image_nearest(values, coordinates, *, extrapolate="nearest"):
+    """Sample nearest voxels without converting integer labels to floating point."""
+    xp = array_api_compat.array_namespace(values, coordinates)
+    nz, ny, nx = values.shape
+    rounded = []
+    outside = xp.zeros(coordinates.shape[0], dtype=xp.bool, device=array_api_compat.device(values))
+    for axis, size in enumerate((nx, ny, nz)):
+        q = coordinates[:, axis]
+        outside = outside | (q < -0.5) | (q >= size - 0.5)
+        rounded.append(xp.astype(xp.floor(xp.clip(q, 0.0, float(size - 1)) + 0.5), xp.int64))
+    x, y, z = rounded
+    result = xp.take(xp.reshape(values, (-1,)), (z * ny + y) * nx + x, axis=0)
+    if extrapolate != "nearest":
+        constant = int(extrapolate) if xp.isdtype(values.dtype, "integral") else extrapolate
+        result = xp.where(
+            outside,
+            xp.asarray(constant, dtype=values.dtype, device=array_api_compat.device(values)),
+            result,
+        )
+    return result

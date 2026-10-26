@@ -9,7 +9,6 @@ from ._configurable import (
     field_constraints,
     replace_nested,
 )
-from .resample import resample_image, resample_numpy_array
 from ._paths import DEFAULT_DATA_DIR, get_data_dir, get_data_subdir
 from ._base_data import (
     BASE_DATA_KINDS,
@@ -27,7 +26,12 @@ from ._base_data import (
     user_base_data_dir,
 )
 from ._grids import Grid
-from ._array_resample import ArrayBackendGridResampler
+from .resample import (
+    resample_image,
+    resample_array,
+    resample_numpy_array,
+    ArrayBackendGridResampler,
+)
 from ._progress import (
     ComputeCancelledError,
     ComputeControl,
@@ -48,6 +52,7 @@ __all__ = [
     "ArrayBackendGridResampler",
     "np2sitk",
     "resample_image",
+    "resample_array",
     "resample_numpy_array",
     "DEFAULT_DATA_DIR",
     "get_data_dir",
@@ -72,7 +77,6 @@ __all__ = [
     "field_constraints",
     "replace_nested",
     "Grid",
-    "ArrayBackendGridResampler",
     "ProgressReporter",
     "ProgressReport",
     "ProgressLevel",

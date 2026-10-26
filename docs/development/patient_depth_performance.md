@@ -5,6 +5,9 @@ This follow-up changes shared patient tissue preparation and radiological-depth
 consumption. CT/density construction and other SimpleITK geometry operations
 remain as before.
 
+The later [resampling API follow-up](resample_api_performance.md) consolidates
+these operations in `core.resample` and measures equivalent full-volume workloads.
+
 ## Implementation
 
 `StructureSet.get_tissue_data()` resolves overlap priorities once, fills a VOI

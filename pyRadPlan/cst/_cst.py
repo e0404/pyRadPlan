@@ -13,7 +13,7 @@ from scipy import ndimage
 import SimpleITK as sitk
 
 from ..core import PyRadPlanBaseModel, Grid
-from ..core.resample import resample_numpy_array
+from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 from ..biology.tissues._base import TissueProperties
@@ -754,7 +754,7 @@ class StructureSet(PyRadPlanBaseModel):
             tissue[label] = class_list.index(voi.tissue_properties)
         if resample_grid is not None:
             grid = cst.ct_image.grid
-            labels = resample_numpy_array(
+            labels = resample_array(
                 labels.reshape(grid.dimensions[::-1]),
                 reference_grid=grid,
                 interpolator=sitk.sitkNearestNeighbor,
@@ -783,13 +783,13 @@ class StructureSet(PyRadPlanBaseModel):
 
         if resample_grid is not None:
             original_grid = cst.ct_image.grid
-            alpha = resample_numpy_array(
+            alpha = resample_array(
                 alpha.reshape(original_grid.dimensions[::-1]),
                 reference_grid=original_grid,
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
-            beta = resample_numpy_array(
+            beta = resample_array(
                 beta.reshape(original_grid.dimensions[::-1]),
                 reference_grid=original_grid,
                 interpolator=sitk.sitkNearestNeighbor,
@@ -834,7 +834,7 @@ class StructureSet(PyRadPlanBaseModel):
 
         if resample_grid is not None:
             original_grid = cst.ct_image.grid
-            ix = resample_numpy_array(
+            ix = resample_array(
                 ix.reshape(original_grid.dimensions[::-1]),
                 reference_grid=original_grid,
                 interpolator=sitk.sitkNearestNeighbor,

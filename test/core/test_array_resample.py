@@ -6,7 +6,7 @@ import pytest
 import SimpleITK as sitk
 
 from pyRadPlan.core import Grid
-from pyRadPlan.core._array_resample import ArrayBackendGridResampler
+from pyRadPlan.core.resample import ArrayBackendGridResampler
 from pyRadPlan.core.resample import resample_image
 from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.core.xp_utils._image_interpolation import interpolate_image_linear
