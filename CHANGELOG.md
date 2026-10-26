@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cached native-versus-generic interpolation benchmark using captured photon grids and queries, with NumPy/CuPy measurements for both bounds policies in the pencil-beam performance audit.
 - `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.
 - Pencil-beam performance audit covering NumPy/CuPy across modalities, reproducible profiling and isolated acceleration prototypes in `benchmark/`, and a modular execution design in `docs/development/pencil_beam_performance_audit.md`.
 - `OptimizerIpax` (`"ipax"`), an interface to the Array-API-native ipax interior-point solver. GPU-capable (`gpu_compatible`); `force_cpu_inner_solve` (off by default) runs ipax's interior-point linear algebra in NumPy while objective / gradient evaluations stay on the compute backend. Adds `ipax` as a dependency; its sparse-direct accelerations (Feral LDLᵀ on the CPU, cuDSS on CUDA through `ipax[sparse]`) are optional and described in the installation guide. Its `options` (an `ipax.Options` tree, with an acceptable-stopping band tuned for fluence optimization) can be configured through `prop_opt["solver"]` with a nested dictionary naming only the entries to change, e.g. `{"name": "ipax", "options": {"lbfgs": {"memory": 20}}}`

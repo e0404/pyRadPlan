@@ -858,6 +858,52 @@ Reproduce the backend measurements and dose checks:
 .venv/Scripts/python.exe benchmark/profile_pb_audit.py --backend cupy --mode photons --sampling --forward --variant legacy_interpolators --paired --pairs 20 --runs 1 --out benchmark/pb_audit_results/sampled_recheck
 ```
 
+### Cached native versus cached generic evaluation
+
+A focused follow-up compares **two prepared objects**, with `prefer_native=True`
+and `False`. The caching-versus-reconstruction speedups above do not answer this
+question. Historical `interpnd` already selected SciPy/CuPy directly; the separate,
+more selective `interp1d` dispatch has not been changed.
+
+`profile_interpnd_selection.py` captures the first photon convolution kernel and
+its 121 actual beamlet query batches from the TG119 fixture. The grid is 782 by
+782, axes and values are float64, and queries are float32. Smallest, median, and
+largest batches contain 12,164, 13,063, and 13,133 points. Construction is excluded;
+evaluation is warmed up, alternated for 15 pairs, and GPU-synchronized. These are
+wall-clock interpolation timings, not full-dose speedups.
+
+For the median-size batch:
+
+| Backend | Bounds policy | Cached native (ms) | Cached generic (ms) | Native speedup |
+|---|---|---:|---:|---:|
+| NumPy | Raise (`True`, photon engine) | 0.444 | 1.854 | 4.18x |
+| CuPy | Raise (`True`, photon engine) | 1.341 | 1.796 | 1.34x |
+| NumPy | Clip (`False`) | 0.539 | 1.917 | 3.55x |
+| CuPy | Clip (`False`) | 2.248 | 2.488 | 1.11x |
+
+The smallest/largest batches give similar ratios: 4.03–4.24x on NumPy and
+1.33–1.34x on CuPy with bounds checking. Every compared output passes
+`rtol=atol=1e-12`; maximum absolute difference is 2.22e-16. The GPU here is an
+RTX 4070 Laptop GPU, CuPy 13.3.0; NumPy is 2.3.5, Python 3.11.9. Native and generic
+execute the same public bounds policy, including its per-call validation cost.
+
+This supports keeping native preference for the current 2D photon workload. It
+does **not** establish a universal native advantage: the earlier synthetic 3D
+NumPy batch comparison was essentially tied. Backend selection should remain
+inside the interpolation module, and any future automatic selection should be
+justified by dimension/dtype/workload measurements. No production default or
+numerical implementation was changed by this check.
+
+See [NumPy results](../../benchmark/pb_audit_results/cached_native_generic/numpy.json)
+and [CuPy results](../../benchmark/pb_audit_results/cached_native_generic/cupy.json).
+The `capture/` records describe input generation only; their dose timings contain
+instrumentation and must not be used to compare implementations.
+
+```powershell
+.venv/Scripts/python.exe benchmark/profile_interpnd_selection.py --backend numpy
+.venv/Scripts/python.exe benchmark/profile_interpnd_selection.py --backend cupy
+```
+
 ## Reproduce and inspect
 
 Run from the repository root with the existing environment. All patches below
