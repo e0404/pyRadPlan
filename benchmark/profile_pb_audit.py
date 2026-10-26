@@ -46,6 +46,18 @@ def apply_variant(name):
     """Install the selected experiment in this Python process only."""
     if name == "baseline":
         return
+    if name == "legacy_interpolators":
+        # Compare current production code against the pre-reuse interpolation path.
+        fn = SVD._get_kernel_interpolators
+        source = textwrap.dedent(inspect.getsource(fn))
+        start = source.index("    # Prepare the grid once")
+        end = source.index("    num_kernels =", start)
+        replace_method(
+            SVD,
+            "_get_kernel_interpolators",
+            [(source[start:end], "    interpolator_cls = None\n\n")],
+        )
+        return
     if name in ("compact", "combined"):
         replace_method(
             PP,
@@ -120,6 +132,8 @@ def apply_variant(name):
             ],
         )
     if name == "prepared":
+        if "interpolator_cls" in inspect.getsource(SVD._get_kernel_interpolators):
+            return  # The prepared prototype is now the production implementation.
 
         def prepared_rgi(*, x, y):
             import array_api_compat

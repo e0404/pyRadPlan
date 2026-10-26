@@ -1,0 +1,50 @@
+[
+  {
+    "case": "field_Generic_cupy_legacy_interpolators_g5_b10_n1_forward_paired",
+    "current_seconds": 0.7406279999995604,
+    "legacy_seconds": 0.7517556000093464,
+    "speedup": 1.0150245467492351,
+    "exact_output": true,
+    "pairs": 6
+  },
+  {
+    "case": "field_Generic_numpy_legacy_interpolators_g5_b10_n1_forward_paired",
+    "current_seconds": 1.0553884000109974,
+    "legacy_seconds": 1.056247699976666,
+    "speedup": 1.000814202587085,
+    "exact_output": true,
+    "pairs": 6
+  },
+  {
+    "case": "photons_Generic_cupy_legacy_interpolators_g5_b10_n1_forward_sampled_paired",
+    "current_seconds": 2.0013383500045165,
+    "legacy_seconds": 2.562795450008707,
+    "speedup": 1.2805408190988412,
+    "exact_output": true,
+    "pairs": 6
+  },
+  {
+    "case": "photons_Generic_cupy_legacy_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 1.7715380000008736,
+    "legacy_seconds": 2.3454210499767214,
+    "speedup": 1.3239462263725446,
+    "exact_output": true,
+    "pairs": 6
+  },
+  {
+    "case": "photons_Generic_numpy_legacy_interpolators_g5_b10_n1_forward_sampled_paired",
+    "current_seconds": 1.4693272000004072,
+    "legacy_seconds": 1.4954896000272129,
+    "speedup": 1.0178057004776053,
+    "exact_output": true,
+    "pairs": 6
+  },
+  {
+    "case": "photons_Generic_numpy_legacy_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 1.2339428499981295,
+    "legacy_seconds": 1.2787800000223797,
+    "speedup": 1.0363364883749018,
+    "exact_output": true,
+    "pairs": 6
+  }
+]

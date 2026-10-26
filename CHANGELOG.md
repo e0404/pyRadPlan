@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Photon pencil-beam dose calculation reuses SciPy/CuPy interpolators for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while retaining bounds checks and the generic backend fallback.
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
 - The documentation tutorials are built from the jupytext example scripts in `examples/` and the documentation shows example outputs for releases only, from notebooks executed and committed during the release; examples are not executed in CI or on Read the Docs; example notebooks are no longer part of the repository
 - The pencil beam dose engines and the ion stf generators no longer ignore densities outside the patient contours by default (`ignore_outside_densities=False`), so air outside the patient is traced for dose calculation and energy selection alike. Set it to `True` on both to restore the previous dose engine behaviour

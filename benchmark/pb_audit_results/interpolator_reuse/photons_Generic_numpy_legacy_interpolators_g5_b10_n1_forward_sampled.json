@@ -1,0 +1,54 @@
+{
+  "args": {
+    "backend": "numpy",
+    "mode": "photons",
+    "machine": "Generic",
+    "variant": "legacy_interpolators",
+    "runs": 2,
+    "grid": 5,
+    "bixel": 10,
+    "beams": 1,
+    "forward": true,
+    "sampling": true,
+    "with_let": false,
+    "profile": false,
+    "paired": true,
+    "out": "benchmark/pb_audit_results/interpolator_reuse"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.32668589998502284,
+  "cold_seconds": 1.519220900023356,
+  "warm_seconds": [
+    1.5560820999671705,
+    1.5309454000089318
+  ],
+  "median_seconds": 1.5435137499880511,
+  "effective": {
+    "dose_resolution": {
+      "x": 5.0,
+      "y": 5.0,
+      "z": 5.0
+    },
+    "dose_dimensions": [
+      101,
+      101,
+      65
+    ],
+    "selected_voxels": 108871,
+    "lateral_model": null
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 121,
+  "beamlets": 121,
+  "output": {
+    "shape": [
+      129,
+      167,
+      167
+    ],
+    "bytes": 14390724
+  }
+}

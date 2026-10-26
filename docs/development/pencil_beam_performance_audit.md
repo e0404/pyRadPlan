@@ -4,6 +4,9 @@
 `develop`. Experiments are isolated scripts under `benchmark/`; engine source
 files were not edited. Optimization and Monte Carlo engines are outside scope.
 
+This audit describes the original revision. The subsequent implementation of
+photon interpolator reuse is recorded in the [step 1 follow-up](#step-1-photon-interpolator-reuse).
+
 ## Main findings
 
 The main limitation is the **size and organization of work submitted to the
@@ -693,6 +696,58 @@ entirely below those interfaces. If configuration/data structures change, update
 the GUI bindings and run `pytest test/gui`; no such production interface change
 was made in this audit.
 
+## Step 1: photon interpolator reuse
+
+Implemented on `refactor/dose-calc-performance` after audit commit `f5becffd`.
+`PhotonPencilBeamSVDEngine._get_kernel_interpolators` now constructs a SciPy or
+CuPy `RegularGridInterpolator` once per convolved kernel. Its lifetime remains
+the existing beam/ray lifetime: ordinary beamlets share beam interpolators, while
+custom fluences and shaped fields receive their own. There is no global cache
+or public API/model change. Other backends retain `partial(interpnd, ...)`.
+Both paths retain `bounds_error=True`; interpolation order and precision are unchanged.
+
+Six alternating pairs per case, using the same TG119 geometry and hardware as
+the audit, produced these end-to-end median times. The legacy method is restored
+in process by disabling prepared interpolators; all convolution and dose code is shared.
+
+| Case | Backend | Legacy (s) | Reuse (s) | Speedup |
+|---|---|---:|---:|---:|
+| Unsampled influence | CuPy | 2.345 | 1.772 | **1.32×** |
+| Sampled forward dose | CuPy | 2.563 | 2.001 | **1.28×** |
+| Unsampled influence | NumPy | 1.279 | 1.234 | 1.04× |
+| Sampled forward dose | NumPy | 1.495 | 1.469 | 1.02× |
+| Single shaped-field forward dose | CuPy | 0.752 | 0.741 | 1.02× |
+| Single shaped-field forward dose | NumPy | 1.056 | 1.055 | 1.00× |
+
+All 36 comparisons had exactly identical dose outputs within their backend;
+influence matrix indices and column pointers were also identical. The small CPU
+and single-field differences should not be interpreted as robust speedups.
+The main benefit is GPU evaluation across many beamlets.
+See [paired records and summary](../../benchmark/pb_audit_results/interpolator_reuse/summary.json).
+Here `baseline` means current production (reuse) and `variant` means legacy,
+which is the reverse of the original prototype comparison.
+
+Validation: six new regression cases passed across NumPy, CuPy, and strict Array
+API, with float32/float64 inputs. They check construction counts, repeated queries,
+different fluences, exact boundaries, out-of-bounds errors, and empty queries.
+All six existing photon engine tests in `test_svdpb.py` and `test_svdpb_bio.py`
+also passed, including the matRad dose fixture and shaped-field path. No public
+data structure or calling API changed, and the GUI has no uses of these private
+interpolators. The full repository suite was not run. Ruff passes for the new
+tests and benchmark code; the engine retains the pre-existing `PLR0915` finding
+in the unrelated `_init_beam` method.
+
+Reproduce this follow-up:
+
+```powershell
+.venv/Scripts/python.exe -m pytest test/dose/test_svdpb_interpolators.py test/dose/test_svdpb.py test/dose/test_svdpb_bio.py -q
+.venv/Scripts/python.exe benchmark/profile_photon_interpolator_reuse.py
+```
+
+The runner asserts exact parity and stores small JSON records. Large dose arrays
+remain ignored. The original `prepared` audit variant now uses production code
+unchanged; use `legacy_interpolators --paired` to compare against the old path.
+
 ## Reproduce and inspect
 
 Run from the repository root with the existing environment. All patches below
@@ -720,6 +775,6 @@ Raw configuration, repetitions, separate profile/stage results, paired compariso
 and the aggregate [`summary.json`](../../benchmark/pb_audit_results/summary.json)
 are under [`benchmark/pb_audit_results`](../../benchmark/pb_audit_results).
 Generated matrices/images and binary profiles remain local and are ignored in
-that folder. No production engine or public API was changed. Validation of this audit consists of
+that folder. The original audit changed no production engine or public API. Its validation consists of
 executed benchmark comparisons and lint checks, not a claim that a production
 refactor has passed the complete test suite.
