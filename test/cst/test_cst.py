@@ -1002,3 +1002,52 @@ def test_optimization_target_union(cst_mixed_targets):
 
     assert sitk.GetArrayFromImage(cst.target_union_mask()).sum() == 2
     assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1
+
+
+@pytest.mark.parametrize("resampled", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("same_priority", [False, True])
+def test_combined_tissue_data_matches_separate_getters(
+    generic_ct, resampled, reverse, same_priority
+):
+    """Preserve overlap ordering, duplicate tissue classes and outside values."""
+    tissues = [
+        TissueProperties(alpha_x=0.1, beta_x=0.05),
+        TissueProperties(alpha_x=0.2, beta_x=0.07),
+    ]
+    vois = [
+        Target(
+            name="T",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[2:6]),
+            tissue_properties=tissues[0],
+        ),
+        OAR(
+            name="O",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[4:8]),
+            tissue_properties=tissues[1],
+        ),
+        OAR(
+            name="duplicate",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[8:9]),
+            tissue_properties=tissues[0],
+        ),
+    ]
+    if same_priority:
+        for voi in vois:
+            voi.overlap_priority = 2
+    cst = StructureSet(ct_image=generic_ct, vois=vois[::-1] if reverse else vois)
+    grid = generic_ct.grid.resample(dict(x=1.7, y=2.1, z=2.3)) if resampled else None
+    expected = (
+        *cst.get_reference_lq_params(resample_grid=grid),
+        cst.get_tissue_class_indices(resample_grid=grid),
+    )
+    masks = [sitk.GetArrayFromImage(v.mask) for v in cst.vois]
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=grid)
+    for actual, old in zip((alpha, beta, indices), expected):
+        np.testing.assert_array_equal(actual, old)
+    assert list(classes) == list(cst.get_tissue_classes())
+    for voi, before in zip(cst.vois, masks):
+        np.testing.assert_array_equal(sitk.GetArrayFromImage(voi.mask), before)

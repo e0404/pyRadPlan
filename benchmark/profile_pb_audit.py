@@ -45,6 +45,15 @@ def replace_method(cls, name, substitutions):
 
 def apply_variant(name):
     """Install the selected experiment in this Python process only."""
+    if name in ("legacy_patient_depth", "legacy_tissue", "legacy_depth"):
+        from profile_patient_depth_reference import legacy_tissue_data, legacy_depth_selection
+        from pyRadPlan.cst import StructureSet
+
+        if name != "legacy_depth":
+            StructureSet.get_tissue_data = legacy_tissue_data
+        if name != "legacy_tissue":
+            PB._sample_radiological_depths = legacy_depth_selection
+        return
     if name == "baseline":
         return
     if name in ("legacy_interpolators", "native_interpolators"):
@@ -216,6 +225,7 @@ def main():
     parser.add_argument("--beams", type=int, default=1)
     parser.add_argument("--forward", action="store_true")
     parser.add_argument("--sampling", action="store_true")
+    parser.add_argument("--trace-on-ct-grid", action="store_true")
     parser.add_argument("--let", dest="with_let", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--paired", action="store_true")
@@ -261,7 +271,10 @@ def main():
             resolution=0.5,
             energy=6,
         )
-    plan.prop_dose_calc = {"dose_grid": {"resolution": [args.grid] * 3}}
+    plan.prop_dose_calc = {
+        "dose_grid": {"resolution": [args.grid] * 3},
+        "trace_on_dose_grid": not args.trace_on_ct_grid,
+    }
     if photon:
         plan.prop_dose_calc.update(enable_dij_sampling=args.sampling, random_seed=1234)
     else:
@@ -270,7 +283,11 @@ def main():
     stf = generate_stf(ct, cst, plan)
     preparation = time.perf_counter() - t
     configure(args.backend)
+    from pyRadPlan.cst import StructureSet
+
     patch_targets = [
+        (StructureSet, "get_tissue_data"),
+        (PB, "_sample_radiological_depths"),
         (PP, "_get_bixel_indices_on_ray"),
         (PP, "_calc_lateral_particle_cut_off"),
         (PP, "_cutoff_execution"),
@@ -314,6 +331,7 @@ def main():
         times.append(elapsed)
     label = f"{args.mode}_{args.machine}_{args.backend}_{args.variant}_g{args.grid}_b{args.bixel}_n{args.beams}"
     label += "_forward" if args.forward else "_influence"
+    label += "_cttrace" if args.trace_on_ct_grid else ""
     label += "_sampled" if args.sampling else ""
     label += "_let" if args.with_let else ""
     if args.forward:

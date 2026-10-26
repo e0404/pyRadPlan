@@ -1,0 +1,60 @@
+{
+  "args": {
+    "backend": "cupy",
+    "mode": "protons",
+    "machine": "Generic",
+    "variant": "baseline",
+    "runs": 1,
+    "grid": 5,
+    "bixel": 10,
+    "beams": 1,
+    "forward": false,
+    "sampling": false,
+    "trace_on_ct_grid": false,
+    "with_let": false,
+    "profile": false,
+    "paired": false,
+    "pairs": 6,
+    "out": "benchmark\\pb_audit_results\\patient_depth\\depth_sampling"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.538044799992349,
+  "cold_seconds": 1.7972118000034243,
+  "warm_seconds": [
+    1.4885315000428818
+  ],
+  "median_seconds": 1.4885315000428818,
+  "effective": {
+    "dose_resolution": {
+      "x": 5.0,
+      "y": 5.0,
+      "z": 5.0
+    },
+    "dose_dimensions": [
+      101,
+      101,
+      65
+    ],
+    "selected_voxels": 108871,
+    "lateral_model": "single"
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 72,
+  "beamlets": 908,
+  "output": {
+    "shape": [
+      663065,
+      908
+    ],
+    "nnz": 933649,
+    "bytes": 11211060,
+    "index_dtype": "int64",
+    "data_dtype": "float32"
+  },
+  "cupy": "13.3.0",
+  "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "cuda_runtime": 12060
+}

@@ -27,6 +27,7 @@ from ._base_data import (
     user_base_data_dir,
 )
 from ._grids import Grid
+from ._array_resample import ArrayBackendGridResampler
 from ._progress import (
     ComputeCancelledError,
     ComputeControl,
@@ -44,6 +45,7 @@ __all__ = [
     "PyRadPlanBaseModel",
     "PyRadPlanError",
     "Grid",
+    "ArrayBackendGridResampler",
     "np2sitk",
     "resample_image",
     "resample_numpy_array",
@@ -70,6 +72,7 @@ __all__ = [
     "field_constraints",
     "replace_nested",
     "Grid",
+    "ArrayBackendGridResampler",
     "ProgressReporter",
     "ProgressReport",
     "ProgressLevel",

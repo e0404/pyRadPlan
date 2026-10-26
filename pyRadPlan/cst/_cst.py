@@ -716,6 +716,58 @@ class StructureSet(PyRadPlanBaseModel):
         # Add to existing VOIs
         self.vois = self.vois + [body_voi]
 
+    def get_tissue_data(
+        self, resample_grid: Optional[Grid] = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Prepare reference alpha, beta, tissue indices and classes together.
+
+        Resolve overlaps once and resample one VOI-label volume using nearest
+        neighbors. Label zero denotes unassigned voxels: their alpha/beta are
+        zero and their tissue index is zero, preserving the separate getters'
+        conventions. The structure set is not modified.
+
+        Parameters
+        ----------
+        resample_grid : Grid, optional
+            Target grid for nearest-neighbor label resampling.
+
+        Returns
+        -------
+        alpha, beta : numpy.ndarray
+            Reference LQ parameters, each shaped (num_voxels, num_ct_scenarios).
+        tissue_indices : numpy.ndarray
+            Integer class indices with the same shape as alpha and beta.
+        classes : numpy.ndarray
+            Distinct tissue properties in original first-occurrence order.
+        """
+        cst = self.apply_overlap_priorities()
+        classes = self.get_tissue_classes()
+        class_list = list(classes)
+        labels = np.zeros(cst.ct_image.grid.num_voxels, dtype=np.int64)
+        alpha = np.zeros(len(cst.vois) + 1)
+        beta = np.zeros(len(cst.vois) + 1)
+        tissue = np.zeros(len(cst.vois) + 1, dtype=np.int64)
+        for label, voi in enumerate(cst.vois, 1):
+            labels[voi.indices_numpy] = label
+            alpha[label] = voi.tissue_properties.alpha_x
+            beta[label] = voi.tissue_properties.beta_x
+            tissue[label] = class_list.index(voi.tissue_properties)
+        if resample_grid is not None:
+            grid = cst.ct_image.grid
+            labels = resample_numpy_array(
+                labels.reshape(grid.dimensions[::-1]),
+                reference_grid=grid,
+                interpolator=sitk.sitkNearestNeighbor,
+                target_grid=resample_grid,
+            ).ravel()
+        scenarios = cst.ct_image.num_of_ct_scen
+        return (
+            np.repeat(alpha[labels, None], scenarios, axis=1),
+            np.repeat(beta[labels, None], scenarios, axis=1),
+            np.repeat(tissue[labels, None], scenarios, axis=1),
+            classes,
+        )
+
     def get_reference_lq_params(
         self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
     ) -> tuple[np.ndarray, np.ndarray]:

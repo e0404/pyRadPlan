@@ -1,0 +1,122 @@
+[
+  {
+    "mode": "photons",
+    "backend": "cupy",
+    "trace_on_ct": true,
+    "current": 1.3281974999699742,
+    "legacy": 1.455214600020554,
+    "speedup": 1.0800648412138427,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "photons",
+    "backend": "cupy",
+    "trace_on_ct": false,
+    "current": 1.267654000024777,
+    "legacy": 1.400812100037001,
+    "speedup": 1.105042937591505,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "photons",
+    "backend": "numpy",
+    "trace_on_ct": true,
+    "current": 1.059739599993918,
+    "legacy": 1.1478409999981523,
+    "speedup": 1.0885124987624695,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "photons",
+    "backend": "numpy",
+    "trace_on_ct": false,
+    "current": 0.8235080000013113,
+    "legacy": 0.9213222999824211,
+    "speedup": 1.1494680235721042,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "protons",
+    "backend": "cupy",
+    "trace_on_ct": true,
+    "current": 1.7130741000291891,
+    "legacy": 1.907140800030902,
+    "speedup": 1.128865003537773,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "protons",
+    "backend": "cupy",
+    "trace_on_ct": false,
+    "current": 1.5279248000006191,
+    "legacy": 1.6690330000128597,
+    "speedup": 1.0959380571536042,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "protons",
+    "backend": "numpy",
+    "trace_on_ct": true,
+    "current": 0.6554577000206336,
+    "legacy": 0.7967489000293426,
+    "speedup": 1.205618735750751,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "protons",
+    "backend": "numpy",
+    "trace_on_ct": false,
+    "current": 0.5019953000009991,
+    "legacy": 0.6498224000097252,
+    "speedup": 1.2857715620722179,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "VHEE",
+    "backend": "cupy",
+    "trace_on_ct": true,
+    "current": 0.8181585000129417,
+    "legacy": 0.9357492999988608,
+    "speedup": 1.138678852591501,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "VHEE",
+    "backend": "cupy",
+    "trace_on_ct": false,
+    "current": 0.7709135000477545,
+    "legacy": 0.819009900034871,
+    "speedup": 1.0598840172526907,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "VHEE",
+    "backend": "numpy",
+    "trace_on_ct": true,
+    "current": 0.7965367999859154,
+    "legacy": 0.9472334999591112,
+    "speedup": 1.1444821247429795,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  },
+  {
+    "mode": "VHEE",
+    "backend": "numpy",
+    "trace_on_ct": false,
+    "current": 0.6179553000256419,
+    "legacy": 0.7315955000231043,
+    "speedup": 1.1838971200550377,
+    "max_peak_relative_error": 0.0,
+    "identical_indices": true
+  }
+]

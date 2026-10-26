@@ -13,7 +13,13 @@ from pydantic import Field
 from scipy import sparse
 import array_api_compat
 
-from pyRadPlan.core import AlgorithmParameterMetadata, resample_image, np2sitk
+from pyRadPlan.core import (
+    AlgorithmParameterMetadata,
+    ArrayBackendGridResampler,
+    Grid,
+    resample_image,
+    np2sitk,
+)
 from pyRadPlan.ct import CT, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation
@@ -292,6 +298,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
 
         dij = super()._init_dose_calc(ct, cst, stf)
+        self._depth_resampler = None
 
         # calculate rED or rSP from HU or take provided wedCube
         if self.use_given_eq_density_cube and getattr(ct, "cube", None) is None:
@@ -451,6 +458,45 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         return dij
 
+    def _sample_radiological_depths(self, rad_depth_cubes):
+        """Select dose-grid depths on the backend; export images only when requested."""
+        selected = []
+        xp = self.xp
+        for rad_depth_cube in rad_depth_cubes:
+            if self.trace_on_dose_grid:
+                rad_depth_arr = rad_depth_cube
+                rad_depth_vdose_grid = xp.take(
+                    xp.reshape(rad_depth_arr, (-1,)), self._vdose_grid, axis=0
+                )
+            else:
+                if self._depth_resampler is None:
+                    indices = (
+                        xp.arange(self.dose_grid.num_voxels, dtype=xp.int64, device=self.device)
+                        if self.keep_rad_depth_cubes
+                        else self._vdose_grid
+                    )
+                    self._depth_resampler = ArrayBackendGridResampler(
+                        Grid.from_sitk_image(self._raytracer.cubes[0]), self.dose_grid, indices
+                    )
+                sampled = self._depth_resampler(rad_depth_cube)
+                if self.keep_rad_depth_cubes:
+                    rad_depth_arr = xp.reshape(sampled, tuple(reversed(self.dose_grid.dimensions)))
+                    rad_depth_vdose_grid = xp.take(sampled, self._vdose_grid, axis=0)
+                else:
+                    rad_depth_vdose_grid = sampled
+            if self.keep_rad_depth_cubes:
+                image = sitk.GetImageFromArray(to_numpy(rad_depth_arr))
+                image.SetSpacing(tuple(self.dose_grid.resolution_vector))
+                image.SetOrigin(tuple(self.dose_grid.origin))
+                image.SetDirection(tuple(self.dose_grid.direction.ravel()))
+                self._rad_depth_cubes.append(image)
+            rad_depth_vdose_grid = xp.astype(
+                rad_depth_vdose_grid, self._vox_world_coords.dtype, copy=False
+            )
+
+            selected.append(rad_depth_vdose_grid)
+        return selected
+
     def _init_beam(
         self, _dij: dict, ct: CT, _cst: StructureSet, stf: SteeringInformation, i
     ) -> dict:
@@ -545,7 +591,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "effective_lateral_cut_off", self._effective_lateral_cutoff
         )
         patient_coords = rot_coords_vdose_grid if self.trace_on_dose_grid else rot_coords_v
-        rad_depth_cubes = self._raytracer.trace_cubes(
+        rad_depth_cubes = self._raytracer.trace_cubes_array(
             beam_info["beam"], patient_coords=patient_coords
         )
         self._raytracer.debug_core_performance = False
@@ -558,26 +604,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         beam_info["valid_coords"] = [None] * len(rad_depth_cubes)
         beam_info["rad_depths"] = [None] * len(rad_depth_cubes)
 
-        for c, rad_depth_cube in enumerate(rad_depth_cubes):
-            if self.trace_on_dose_grid:
-                rad_depth_cube_dose_grid = rad_depth_cube
-            else:
-                rad_depth_cube_dose_grid = resample_image(
-                    input_image=rad_depth_cube,
-                    interpolator=sitk.sitkLinear,
-                    target_grid=self.dose_grid,
-                )
-            if self.keep_rad_depth_cubes:
-                self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
-
-            rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
-            rad_depth_arr = xp.asarray(
-                rad_depth_cube_dosegrid, dtype=self._vox_world_coords.dtype, device=self.device
-            )
-            rad_depth_vdose_grid = xp.take(
-                xp.reshape(rad_depth_arr, (-1,)), self._vdose_grid, axis=0
-            )
-
+        for c, rad_depth_vdose_grid in enumerate(
+            self._sample_radiological_depths(rad_depth_cubes)
+        ):
             # Find valid coordinates
             coord_is_valid = xp.isfinite(rad_depth_vdose_grid)
 

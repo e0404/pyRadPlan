@@ -652,13 +652,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._resolve_bio_model(dij, radiation_mode, cst)
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
 
-        dij["alphax"], dij["betax"] = cst.get_reference_lq_params(
-            overlap_is_applied=False, resample_grid=self.dose_grid
+        (dij["alphax"], dij["betax"], dij["tissue_class_ix"], self._tissue_classes) = (
+            cst.get_tissue_data(resample_grid=self.dose_grid)
         )
-        dij["tissue_class_ix"] = cst.get_tissue_class_indices(
-            overlap_is_applied=False, resample_grid=self.dose_grid
-        )
-        self._tissue_classes = cst.get_tissue_classes()
 
         # TODO: this function has not yet been implemented
         # structures that are selected here will be included in dose calculation over

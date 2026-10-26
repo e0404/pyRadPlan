@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Backend-resident ray-tracer depth arrays and a shared Array API grid resampler with chunked linear image interpolation, nearest boundary extrapolation and NaN-aware exact-sample behavior. The image-returning ray-tracer interface remains available.
 - Cutoff grid-creation and GPU-resident kernel benchmarks in actual dose calculations, with separate grid-creation, evaluation, download, and database-setup measurements.
 - Configurable particle cutoff quadrature: custom radial bin boundaries and angular resolution, with retained sampling metadata and direct Array API backend/device creation. Particle cutoff creation and evaluation follow the dose backend by default; `cutoff_force_numpy=True` provides an explicit CPU override, replacing the earlier unreleased `cutoff_backend` selector.
 - Isolated particle mask-compaction benchmarks across three dose-grid resolutions, including Array API `take` compatibility checks and separate NumPy/CuPy gather measurements.
@@ -69,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dose setup prepares reference alpha/beta and tissue-class indices from one overlap-resolved, nearest-neighbor-resampled label volume. Pencil-beam engines retain radiological depths on their compute backend for both CT-grid and dose-grid tracing; host depth images are created only when requested.
 - Shared dose setup unions existing VOI masks directly and reuses sorted voxel indices and scenario membership for single-CT calculations. Nearest-neighbor selection resampling avoids redundant rounding and sorting; custom selections retain their original arrays and internal canonicalization.
 - Particle lateral-cutoff preparation converts each energy kernel once, interpolates physical parameters once per depth, and evaluates bounded depth batches using shared lateral-dose formulas. Sampling order, cutoff selection and scalar compensation semantics are preserved; custom engine overrides retain a fallback path.
 - Particle pencil-beam engines compact each beamlet's voxel mask once and use Array API `take` for all ray fields, including lateral distances and biological tissue data, uniformly across backends.

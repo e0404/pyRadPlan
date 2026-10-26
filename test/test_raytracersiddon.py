@@ -1,11 +1,13 @@
 import warnings
 
+import array_api_compat
 import array_api_strict as xps
 import numpy as np
 import pytest
 import SimpleITK as sitk
 
 from pyRadPlan import settings
+from pyRadPlan.core import xp_utils
 from pyRadPlan.core.xp_utils import from_numpy
 from pyRadPlan.geometry import lps
 from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
@@ -243,3 +245,38 @@ def test_trace_cubes_traverses_full_cube_at_oblique_angles(monkeypatch, gantry, 
     # deepest voxel must lie about one full chord through the cube behind the entry face
     assert finite.mean() > 0.99
     assert np.nanmax(rad_depth) > 0.9 * min(n * s for n, s in zip(size, spacing))
+
+
+@pytest.mark.parametrize("backend", ["numpy", "cupy", "array_api_strict"])
+def test_trace_depth_arrays_stay_on_backend(monkeypatch, backend):
+    """The array interface avoids host conversion while the image wrapper preserves metadata."""
+    module = pytest.importorskip(backend)
+    if backend == "cupy" and not module.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
+    monkeypatch.setattr(
+        settings.xp, "preferred_cpu_array_backend", backend if backend != "cupy" else "numpy"
+    )
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    cube = sitk.GetImageFromArray(np.ones((5, 6, 7), dtype=np.float32))
+    cube.SetSpacing((1.3, 1.7, 2.1))
+    cube.SetOrigin((-3.0, -4.0, -5.0))
+    tracer = RayTracerSiddon(cube)
+    beam = Beam(
+        gantry_angle=30.0,
+        couch_angle=20.0,
+        iso_center=np.zeros(3),
+        SAD=10000.0,
+        rays=[Ray(ray_pos_bev=np.zeros(3), ray_pos=np.zeros(3), beamlets=[Beamlet(energy=100.0)])],
+    )
+    expected = tracer.trace_cubes(beam)[0]
+    with monkeypatch.context() as patch:
+        patch.setattr(xp_utils, "to_numpy", lambda *args: pytest.fail("Unexpected depth download"))
+        result = tracer.trace_cubes_array(beam)[0]
+    assert array_api_compat.array_namespace(result) == array_api_compat.get_namespace(
+        module.asarray([0.0])
+    )
+    np.testing.assert_array_equal(xp_utils.to_numpy(result), sitk.GetArrayFromImage(expected))
+    assert expected.GetSpacing() == cube.GetSpacing()
+    assert expected.GetOrigin() == cube.GetOrigin()
+    assert expected.GetDirection() == cube.GetDirection()
