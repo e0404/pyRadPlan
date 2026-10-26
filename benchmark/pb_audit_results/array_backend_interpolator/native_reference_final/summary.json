@@ -1,0 +1,22 @@
+[
+  {
+    "case": "photons_Generic_cupy_native_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 9.054587650025496,
+    "reference_seconds": 9.118423150008311,
+    "speedup": 1.0070500725654399,
+    "exact_output": true,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0,
+    "pairs": 6
+  },
+  {
+    "case": "photons_Generic_numpy_native_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 5.309275100007653,
+    "reference_seconds": 5.268593299988424,
+    "speedup": 0.9923375980236605,
+    "exact_output": true,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0,
+    "pairs": 6
+  }
+]

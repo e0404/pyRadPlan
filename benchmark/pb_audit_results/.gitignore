@@ -2,3 +2,4 @@
 *.npz
 *.npy
 *.prof
+array_backend_interpolation_micro.raw.json

@@ -1,6 +1,5 @@
 from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Callable, Optional
 import logging
-from functools import partial
 
 import numpy as np
 import array_api_compat
@@ -15,7 +14,8 @@ from pyRadPlan.stf import FieldShape
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
-from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d, interpnd
+from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator
+from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d
 from pyRadPlan.core.xp_utils.helpers import to_namespace, scatter
 from pyRadPlan.core.xp_utils.typing import Array
 
@@ -383,19 +383,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         xp = self.xp
 
-        # Prepare the grid once per convolution, not on every bixel evaluation.
-        # These objects live with the beam/ray data, so different fields and later
-        # dose calculations cannot accidentally reuse another fluence's kernels.
-        interpolator_cls = None
-        if array_api_compat.is_numpy_namespace(xp):
-            from scipy.interpolate import RegularGridInterpolator  # noqa: PLC0415
-
-            interpolator_cls = RegularGridInterpolator
-        elif array_api_compat.is_cupy_namespace(xp):
-            from cupyx.scipy.interpolate import RegularGridInterpolator  # noqa: PLC0415
-
-            interpolator_cls = RegularGridInterpolator
-
         num_kernels = cast(PhotonSVDKernel, beam_info["kernel"]).num_kernel_components
         conv_size = beam_info["kernel_conv_size"]
 
@@ -413,14 +400,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             )
 
             # A query outside the convolution grid indicates incorrect grid sizing.
-            if interpolator_cls is not None:
-                interpolators[c] = interpolator_cls(
-                    (conv_grid, conv_grid), conv_mx, bounds_error=True
-                )
-            else:
-                interpolators[c] = partial(
-                    interpnd, x=(conv_grid, conv_grid), y=conv_mx, bounds_error=True
-                )
+            interpolators[c] = ArrayBackendGridInterpolator(
+                (conv_grid, conv_grid), conv_mx, bounds_error=True
+            )
 
         return interpolators
 

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.
 - Pencil-beam performance audit covering NumPy/CuPy across modalities, reproducible profiling and isolated acceleration prototypes in `benchmark/`, and a modular execution design in `docs/development/pencil_beam_performance_audit.md`.
 - `OptimizerIpax` (`"ipax"`), an interface to the Array-API-native ipax interior-point solver. GPU-capable (`gpu_compatible`); `force_cpu_inner_solve` (off by default) runs ipax's interior-point linear algebra in NumPy while objective / gradient evaluations stay on the compute backend. Adds `ipax` as a dependency; its sparse-direct accelerations (Feral LDLᵀ on the CPU, cuDSS on CUDA through `ipax[sparse]`) are optional and described in the installation guide. Its `options` (an `ipax.Options` tree, with an acceptable-stopping band tuned for fluence optimization) can be configured through `prop_opt["solver"]` with a nested dictionary naming only the entries to change, e.g. `{"name": "ipax", "options": {"lbfgs": {"memory": 20}}}`
 - GUI: an optimization row in the plan widget selects the planning problem and opens a "…" dialog configuring it and choosing its solver, whose settings are edited in a form generated from the solver's configuration (ipax's options as collapsible groups). Planning problems and solvers expose `config_model()` like the dose engines.
@@ -64,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Photon pencil-beam dose calculation reuses SciPy/CuPy interpolators for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while retaining bounds checks and the generic backend fallback.
+- Photon pencil-beam dose calculation reuses `ArrayBackendGridInterpolator` for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while keeping backend dispatch in `xp_utils`.
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
 - The documentation tutorials are built from the jupytext example scripts in `examples/` and the documentation shows example outputs for releases only, from notebooks executed and committed during the release; examples are not executed in CI or on Read the Docs; example notebooks are no longer part of the repository
 - The pencil beam dose engines and the ion stf generators no longer ignore densities outside the patient contours by default (`ignore_outside_densities=False`), so air outside the patient is traced for dose calculation and energy selection alike. Set it to `True` on both to restore the previous dose engine behaviour

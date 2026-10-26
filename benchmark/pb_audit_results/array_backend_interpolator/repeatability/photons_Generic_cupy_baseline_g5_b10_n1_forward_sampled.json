@@ -1,0 +1,56 @@
+{
+  "args": {
+    "backend": "cupy",
+    "mode": "photons",
+    "machine": "Generic",
+    "variant": "baseline",
+    "runs": 1,
+    "grid": 5,
+    "bixel": 10,
+    "beams": 1,
+    "forward": true,
+    "sampling": true,
+    "with_let": false,
+    "profile": false,
+    "paired": true,
+    "out": "benchmark/pb_audit_results/array_backend_interpolator/repeatability"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.30894610000541434,
+  "cold_seconds": 4.761681700008921,
+  "warm_seconds": [
+    1.7243488000240177
+  ],
+  "median_seconds": 1.7243488000240177,
+  "effective": {
+    "dose_resolution": {
+      "x": 5.0,
+      "y": 5.0,
+      "z": 5.0
+    },
+    "dose_dimensions": [
+      101,
+      101,
+      65
+    ],
+    "selected_voxels": 108871,
+    "lateral_model": null
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 121,
+  "beamlets": 121,
+  "output": {
+    "shape": [
+      129,
+      167,
+      167
+    ],
+    "bytes": 14390724
+  },
+  "cupy": "13.3.0",
+  "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "cuda_runtime": 12060
+}

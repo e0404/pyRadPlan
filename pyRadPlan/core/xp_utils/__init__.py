@@ -52,6 +52,7 @@ from .compat import (
     quantile,
     interp1d,
 )
+from ._interpolation import ArrayBackendGridInterpolator, interpnd
 
 
 # Check if GPU is available
@@ -290,5 +291,7 @@ __all__ = [
     "ArrayNamespace",
     "quantile",
     "interp1d",
+    "interpnd",
+    "ArrayBackendGridInterpolator",
     "record_event",
 ]

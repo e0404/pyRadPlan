@@ -1,0 +1,68 @@
+[
+  {
+    "case": "field_Generic_cupy_legacy_interpolators_g5_b10_n1_forward_paired",
+    "current_seconds": 0.7407602999883238,
+    "reference_seconds": 0.7269132999936119,
+    "speedup": 0.981307043594358,
+    "exact_output": true,
+    "exact_pairs": 6,
+    "pairs": 6,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  },
+  {
+    "case": "field_Generic_numpy_legacy_interpolators_g5_b10_n1_forward_paired",
+    "current_seconds": 1.019150800013449,
+    "reference_seconds": 1.0192011499893852,
+    "speedup": 1.0000494038526344,
+    "exact_output": true,
+    "exact_pairs": 6,
+    "pairs": 6,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  },
+  {
+    "case": "photons_Generic_cupy_legacy_interpolators_g5_b10_n1_forward_sampled_paired",
+    "current_seconds": 1.933111150021432,
+    "reference_seconds": 2.5240100500232074,
+    "speedup": 1.3056724906869552,
+    "exact_output": false,
+    "exact_pairs": 5,
+    "pairs": 6,
+    "max_abs": 0.0015868619084358215,
+    "max_abs_over_peak": 0.0013163200071988617
+  },
+  {
+    "case": "photons_Generic_cupy_legacy_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 1.733371000009356,
+    "reference_seconds": 2.258602650021203,
+    "speedup": 1.3030116749438012,
+    "exact_output": true,
+    "exact_pairs": 6,
+    "pairs": 6,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  },
+  {
+    "case": "photons_Generic_numpy_legacy_interpolators_g5_b10_n1_forward_sampled_paired",
+    "current_seconds": 1.3802945500065107,
+    "reference_seconds": 1.4392232999962289,
+    "speedup": 1.0426928802909787,
+    "exact_output": true,
+    "exact_pairs": 6,
+    "pairs": 6,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  },
+  {
+    "case": "photons_Generic_numpy_legacy_interpolators_g5_b10_n1_influence_paired",
+    "current_seconds": 1.2116395000193734,
+    "reference_seconds": 1.2425903499824926,
+    "speedup": 1.0255446029636903,
+    "exact_output": true,
+    "exact_pairs": 6,
+    "pairs": 6,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  }
+]

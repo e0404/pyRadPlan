@@ -6,6 +6,8 @@ files were not edited. Optimization and Monte Carlo engines are outside scope.
 
 This audit describes the original revision. The subsequent implementation of
 photon interpolator reuse is recorded in the [step 1 follow-up](#step-1-photon-interpolator-reuse).
+Its integration was subsequently moved into the reusable
+[Array API interpolation backend](#reusable-array-api-interpolator).
 
 ## Main findings
 
@@ -698,8 +700,9 @@ was made in this audit.
 
 ## Step 1: photon interpolator reuse
 
-Implemented on `refactor/dose-calc-performance` after audit commit `f5becffd`.
-`PhotonPencilBeamSVDEngine._get_kernel_interpolators` now constructs a SciPy or
+Initially implemented in `9a045eeb` on `refactor/dose-calc-performance` after audit commit
+`f5becffd`. This integration is superseded by the reusable backend described below.
+`PhotonPencilBeamSVDEngine._get_kernel_interpolators` initially constructed a SciPy or
 CuPy `RegularGridInterpolator` once per convolved kernel. Its lifetime remains
 the existing beam/ray lifetime: ordinary beamlets share beam interpolators, while
 custom fluences and shaped fields receive their own. There is no global cache
@@ -747,6 +750,113 @@ Reproduce this follow-up:
 The runner asserts exact parity and stores small JSON records. Large dose arrays
 remain ignored. The original `prepared` audit variant now uses production code
 unchanged; use `legacy_interpolators --paired` to compare against the old path.
+
+## Reusable Array API interpolator
+
+Backend dispatch now belongs to `core.xp_utils._interpolation` and the photon
+engine constructs the public `ArrayBackendGridInterpolator`:
+
+```python
+from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator
+
+interpolate = ArrayBackendGridInterpolator(
+    (conv_grid, conv_grid), conv_mx, bounds_error=True, prefer_native=True
+)
+values = interpolate(query_points)
+```
+
+The object retains preparation for its lifetime; no global array cache is used.
+Native SciPy/CuPy objects are constructed once. Generic Array API paths validate
+and normalize grid ordering once. JAX uses a shared compiled evaluator with
+grid/value arrays passed as arguments, avoiding compilation per object. Namespace
+and device are resolved during construction; queries must stay on that namespace
+and device. Inputs must remain unchanged while an object is used. A read-only
+`implementation` property reports the selected implementation.
+
+`prefer_native=False` forces the generic implementation (currently 2D/3D with at
+least two points per axis). `bounds_error=False` still means clipping to the grid,
+not native-library extrapolation or fill values. Native bounds checking is reused
+when `bounds_error=True`, avoiding duplicate GPU synchronization. The historical
+`compat.interpnd` import is preserved as a one-shot wrapper with the same options.
+There are no interpolation-library imports or selection branches in the engine.
+
+The initial comparison against the original implementation produced:
+
+| Case | Backend | Original (s) | Backend object (s) | Speedup | Exact pairs |
+|---|---|---:|---:|---:|---:|
+| Unsampled influence | CuPy | 2.259 | 1.733 | **1.30×** | 6/6 |
+| Sampled forward | CuPy | 2.524 | 1.933 | **1.31×** | **5/6** |
+| Unsampled influence | NumPy | 1.243 | 1.212 | 1.03× | 6/6 |
+| Sampled forward | NumPy | 1.439 | 1.380 | 1.04× | 6/6 |
+| Single shaped-field forward | CuPy | 0.727 | 0.741 | 0.98× | 6/6 |
+| Single shaped-field forward | NumPy | 1.019 | 1.019 | 1.00× | 6/6 |
+
+These are six alternating pairs per configuration; all exact influence comparisons
+also had identical sparse indices and column pointers. See the
+[initial records](../../benchmark/pb_audit_results/array_backend_interpolator/summary.json).
+Small CPU and single-field timing differences are not robust gains.
+
+**Unresolved validation observation:** one sampled GPU forward pair differed by
+0.00158686 in absolute dose, or 0.1316% of the reference peak. The other 35 pairs
+were exact. This must not be described as universal bitwise parity. Follow-up
+controls yielded 20/20 exact pairs using the original interpolation path on both
+sides, and 6/6 using the new object on both sides. A subsequent 20-pair comparison
+of the final object against the original path was entirely exact, with median
+times 1.866 versus 2.426 s (**1.30×**). The outlier's cause remains unexplained;
+these controls neither identify an existing engine bug nor prove the refactor
+cannot contribute. No production tolerance was relaxed. The benchmark now retains
+mismatching arrays locally and writes summary evidence before failing its exact
+parity assertion. See [original-path controls](../../benchmark/pb_audit_results/array_backend_interpolator/legacy_repeatability/summary.json),
+[new-path controls](../../benchmark/pb_audit_results/array_backend_interpolator/repeatability/summary.json),
+and [20-pair recheck](../../benchmark/pb_audit_results/array_backend_interpolator/sampled_recheck/summary.json).
+
+A final comparison with the previous **direct-native** engine integration produced
+12/12 exact influence matrices. Median time differed by less than 0.8% in either
+direction: the new object/reference ratios were 1.008 on NumPy and 0.993 on CuPy.
+There was no material measured overhead from the final abstraction. Absolute
+times were substantially higher for both implementations during this later run
+(about 5.3 s NumPy and 9.1 s CuPy); its paired ratios must not be combined with
+the earlier absolute timings. No lingering Python trace/profile hooks or coverage
+environment variables were detected. See the
+[direct-native control](../../benchmark/pb_audit_results/array_backend_interpolator/native_reference_final/summary.json).
+
+The lifecycle benchmark now measures construction, repeated evaluation, and one-shot
+calls separately, for one query and batches, native and generic, NumPy and CuPy.
+`profile_interpnd_reference.py` freezes the original NumPy/CuPy interpolation path
+and the direct-native integration from `9a045eeb`; changing production `interpnd`
+therefore cannot silently change the reference. Raw timing samples stay local;
+the [compact measurement record](../../benchmark/pb_audit_results/array_backend_interpolation_micro.json)
+retains distribution statistics and environment metadata.
+All 72 lifecycle cases passed their numerical checks; 24 unsupported/redundant
+parameter combinations were skipped. In the final 2D single-query measurements,
+native one-shot median overhead relative to the frozen reference was about +3.4%
+on NumPy and -1.2% on CuPy. Retained-object evaluation took about 75% and 85% of
+the respective one-shot reference times. Batch differences were small/noisy.
+These microbenchmarks were run in the same slower runtime conditions as the final
+direct-native comparison; they do not replace the paired full-dose measurements.
+
+Validation covers native/fallback selection, construction reuse, fluence isolation,
+descending/nonuniform axes, clipping and strict boundaries, empty queries, invalid
+grids, mixed namespaces/devices, compatible query subclasses, and native 4D support.
+The final core, compatibility, photon, and lazy-import test run passed **265 tests**
+with 5 skips. The new module has **99% statement coverage** (the optional-library
+ImportError handler was not executed). JAX float64 is explicitly enabled and restored
+in the new tests. To avoid a local pydantic-settings startup error with pytest-cov,
+settings were imported before starting pytest; the interpolation module was verified
+not yet imported, so its coverage remained instrumented. The full repository suite
+was not run. All **559 GUI tests** passed with the offscreen Qt platform; there are
+no GUI uses of the changed private engine interpolators or `interpnd`. Existing
+`interp1d` branch-count and photon `_init_beam` statement-count
+lint findings remain unchanged.
+
+Reproduce the backend measurements and dose checks:
+
+```powershell
+.venv/Scripts/python.exe benchmark/profile_grid_interpolation.py
+.venv/Scripts/python.exe benchmark/profile_photon_interpolator_reuse.py --out benchmark/pb_audit_results/backend_recheck
+.venv/Scripts/python.exe benchmark/profile_photon_interpolator_reuse.py --reference native --influence-only --out benchmark/pb_audit_results/native_recheck
+.venv/Scripts/python.exe benchmark/profile_pb_audit.py --backend cupy --mode photons --sampling --forward --variant legacy_interpolators --paired --pairs 20 --runs 1 --out benchmark/pb_audit_results/sampled_recheck
+```
 
 ## Reproduce and inspect
 

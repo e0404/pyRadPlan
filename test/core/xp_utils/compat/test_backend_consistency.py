@@ -125,7 +125,7 @@ def test_interpnd_bounds_and_multiple_queries(xp):
     result = interpnd(xq, (gx, gy), y)
 
     np.testing.assert_allclose(to_numpy(result), [10.5, 10.0, 32.0], rtol=1e-6)
-    with pytest.raises(ValueError, match="outside the grid bounds"):
+    with pytest.raises(ValueError, match="outside the grid bounds|out of bounds"):
         interpnd(xq, (gx, gy), y, bounds_error=True)
 
 

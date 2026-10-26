@@ -1,0 +1,2225 @@
+{
+  "machine_info": {
+    "node": "Laptop-Niklas",
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "machine": "AMD64",
+    "python_compiler": "MSC v.1938 64 bit (AMD64)",
+    "python_implementation": "CPython",
+    "python_implementation_version": "3.11.9",
+    "python_version": "3.11.9",
+    "python_build": [
+      "tags/v3.11.9:de54cf5",
+      "Apr  2 2024 10:12:12"
+    ],
+    "release": "10",
+    "system": "Windows",
+    "cpu": {
+      "python_version": "3.11.9.final.0 (64 bit)",
+      "cpuinfo_version": [
+        10,
+        1,
+        1
+      ],
+      "cpuinfo_version_string": "10.1.1",
+      "arch": "X86_64",
+      "bits": 64,
+      "count": 32,
+      "arch_string_raw": "AMD64",
+      "vendor_id_raw": "GenuineIntel",
+      "brand_raw": "13th Gen Intel(R) Core(TM) i9-13900HX",
+      "hz_advertised_friendly": "2.4190 GHz",
+      "hz_actual_friendly": "2.4190 GHz",
+      "hz_advertised": [
+        2419000000,
+        0
+      ],
+      "hz_actual": [
+        2419000000,
+        0
+      ],
+      "flags": [
+        "3dnow",
+        "3dnowprefetch",
+        "abm",
+        "acpi",
+        "adx",
+        "aes",
+        "apic",
+        "avx",
+        "avx2",
+        "bmi1",
+        "bmi2",
+        "clflush",
+        "clflushopt",
+        "clwb",
+        "cmov",
+        "cx16",
+        "cx8",
+        "de",
+        "dts",
+        "erms",
+        "est",
+        "f16c",
+        "fma",
+        "fpu",
+        "fxsr",
+        "gfni",
+        "ht",
+        "hypervisor",
+        "ia64",
+        "intel_pt",
+        "invpcid",
+        "lahf_lm",
+        "mca",
+        "mce",
+        "mmx",
+        "monitor",
+        "movbe",
+        "msr",
+        "mtrr",
+        "osxsave",
+        "pae",
+        "pat",
+        "pbe",
+        "pcid",
+        "pclmulqdq",
+        "pdcm",
+        "pge",
+        "pni",
+        "popcnt",
+        "pse",
+        "pse36",
+        "rdpid",
+        "rdrnd",
+        "rdseed",
+        "sep",
+        "serial",
+        "sha",
+        "smap",
+        "smep",
+        "ss",
+        "sse",
+        "sse2",
+        "sse4_1",
+        "sse4_2",
+        "ssse3",
+        "tm",
+        "tm2",
+        "tsc",
+        "tscdeadline",
+        "umip",
+        "vaes",
+        "vme",
+        "vpclmulqdq",
+        "x2apic",
+        "xsave",
+        "xtpr"
+      ],
+      "l2_cache_size": 65536,
+      "l2_cache_line_size": 2048,
+      "l2_cache_associativity": 7,
+      "stepping": 1,
+      "model": 183,
+      "family": 6
+    }
+  },
+  "commit_info": {
+    "id": "9a045eeba13a9e0fe4a8df60ff08fd38b551227c",
+    "time": "2026-10-26T09:59:51+01:00",
+    "author_time": "2026-10-26T09:59:51+01:00",
+    "dirty": true,
+    "project": "pyRadPlan",
+    "branch": "refactor/dose-calc-performance"
+  },
+  "datetime": "2026-10-26T11:34:46.138480+00:00",
+  "benchmarks": [
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-2d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 9.739998495206237e-05,
+        "max": 0.0013673999928869307,
+        "mean": 0.0001225464838644007,
+        "stddev": 7.588607894087846e-05,
+        "rounds": 2332,
+        "median": 0.00010159995872527361,
+        "iqr": 5.600013537332416e-06,
+        "q1": 0.00010010000551119447,
+        "q3": 0.00010570001904852688,
+        "iqr_outliers": 397,
+        "stddev_outliers": 151,
+        "outliers": "151;397",
+        "ld15iqr": 9.739998495206237e-05,
+        "hd15iqr": 0.00011419999646022916,
+        "ops": 8160.168847492296,
+        "total": 0.2857784003717825,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-2d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0014791000285185874,
+        "max": 0.002783200005069375,
+        "mean": 0.0017903833375183037,
+        "stddev": 0.0002705155373888853,
+        "rounds": 72,
+        "median": 0.0017008499999064952,
+        "iqr": 0.00033614999847486615,
+        "q1": 0.0016054500010795891,
+        "q3": 0.0019415999995544553,
+        "iqr_outliers": 3,
+        "stddev_outliers": 15,
+        "outliers": "15;3",
+        "ld15iqr": 0.0014791000285185874,
+        "hd15iqr": 0.0026080000097863376,
+        "ops": 558.5396038069287,
+        "total": 0.12890760030131787,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-2d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 6.78999931551516e-05,
+        "max": 0.0010151999886147678,
+        "mean": 0.0001295697015456914,
+        "stddev": 5.766339405388618e-05,
+        "rounds": 2416,
+        "median": 0.00011560000712051988,
+        "iqr": 1.5799974789842963e-05,
+        "q1": 0.00011010002344846725,
+        "q3": 0.00012589999823831022,
+        "iqr_outliers": 242,
+        "stddev_outliers": 110,
+        "outliers": "110;242",
+        "ld15iqr": 0.00010350003140047193,
+        "hd15iqr": 0.0001495999749749899,
+        "ops": 7717.853696277602,
+        "total": 0.3130403989343904,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-2d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0016750000067986548,
+        "max": 0.003343900025356561,
+        "mean": 0.0024781333365050764,
+        "stddev": 0.000329712693763247,
+        "rounds": 48,
+        "median": 0.0024492999946232885,
+        "iqr": 0.00044735000119544566,
+        "q1": 0.002216449996922165,
+        "q3": 0.002663799998117611,
+        "iqr_outliers": 1,
+        "stddev_outliers": 13,
+        "outliers": "13;1",
+        "ld15iqr": 0.0016750000067986548,
+        "hd15iqr": 0.003343900025356561,
+        "ops": 403.52953784573384,
+        "total": 0.11895040015224367,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-3d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00012179999612271786,
+        "max": 0.0009696999914012849,
+        "mean": 0.00015702823734797455,
+        "stddev": 7.10252709074387e-05,
+        "rounds": 811,
+        "median": 0.00013990001752972603,
+        "iqr": 2.4574968847446144e-05,
+        "q1": 0.00013150001177564263,
+        "q3": 0.00015607498062308878,
+        "iqr_outliers": 60,
+        "stddev_outliers": 41,
+        "outliers": "41;60",
+        "ld15iqr": 0.00012179999612271786,
+        "hd15iqr": 0.00019419996533542871,
+        "ops": 6368.281379762292,
+        "total": 0.12734990048920736,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-3d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.00204299995675683,
+        "max": 0.003545899991877377,
+        "mean": 0.0024778616931685742,
+        "stddev": 0.00028187732536216585,
+        "rounds": 47,
+        "median": 0.0024154999991878867,
+        "iqr": 0.00032917501812335104,
+        "q1": 0.002278699990711175,
+        "q3": 0.002607875008834526,
+        "iqr_outliers": 2,
+        "stddev_outliers": 10,
+        "outliers": "10;2",
+        "ld15iqr": 0.00204299995675683,
+        "hd15iqr": 0.003186599991749972,
+        "ops": 403.5737760331758,
+        "total": 0.11645949957892299,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-3d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 7.050001295283437e-05,
+        "max": 0.0006121000042185187,
+        "mean": 0.00016957028116375,
+        "stddev": 5.427902704967876e-05,
+        "rounds": 710,
+        "median": 0.00015395000809803605,
+        "iqr": 2.400000812485814e-05,
+        "q1": 0.00014620000729337335,
+        "q3": 0.0001702000154182315,
+        "iqr_outliers": 56,
+        "stddev_outliers": 40,
+        "outliers": "40;56",
+        "ld15iqr": 0.00013969995779916644,
+        "hd15iqr": 0.00020670000230893493,
+        "ops": 5897.259785954614,
+        "total": 0.12039489962626249,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-3d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0028144000098109245,
+        "max": 0.004583700036164373,
+        "mean": 0.0034335909065592923,
+        "stddev": 0.0005306629634198959,
+        "rounds": 33,
+        "median": 0.003330299980007112,
+        "iqr": 0.0009218749910360202,
+        "q1": 0.002932574992883019,
+        "q3": 0.0038544499839190394,
+        "iqr_outliers": 0,
+        "stddev_outliers": 12,
+        "outliers": "12;0",
+        "ld15iqr": 0.0028144000098109245,
+        "hd15iqr": 0.004583700036164373,
+        "ops": 291.24028668927036,
+        "total": 0.11330849991645664,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-4d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00013860000763088465,
+        "max": 0.0013896999880671501,
+        "mean": 0.00018517500170345716,
+        "stddev": 0.00010898022356644192,
+        "rounds": 776,
+        "median": 0.00015109998639672995,
+        "iqr": 1.4749966794624925e-05,
+        "q1": 0.0001488000270910561,
+        "q3": 0.00016354999388568103,
+        "iqr_outliers": 113,
+        "stddev_outliers": 61,
+        "outliers": "61;113",
+        "ld15iqr": 0.00013860000763088465,
+        "hd15iqr": 0.00018630002159625292,
+        "ops": 5400.296966657624,
+        "total": 0.14369580132188275,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-construct-4d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "construct",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0025810999795794487,
+        "max": 0.004312100005336106,
+        "mean": 0.0030072102582870196,
+        "stddev": 0.00038652978155187203,
+        "rounds": 39,
+        "median": 0.002938400022685528,
+        "iqr": 0.0005108249897602946,
+        "q1": 0.002684799997950904,
+        "q3": 0.0031956249877111986,
+        "iqr_outliers": 1,
+        "stddev_outliers": 11,
+        "outliers": "11;1",
+        "ld15iqr": 0.0025810999795794487,
+        "hd15iqr": 0.004312100005336106,
+        "ops": 332.5341143820201,
+        "total": 0.11728120007319376,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-2d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.003523999999742955,
+        "max": 0.005305500002577901,
+        "mean": 0.004209962073344223,
+        "stddev": 0.00044456998485590426,
+        "rounds": 29,
+        "median": 0.00419300002977252,
+        "iqr": 0.0005571249930653721,
+        "q1": 0.003862124984152615,
+        "q3": 0.004419249977217987,
+        "iqr_outliers": 1,
+        "stddev_outliers": 11,
+        "outliers": "11;1",
+        "ld15iqr": 0.003523999999742955,
+        "hd15iqr": 0.005305500002577901,
+        "ops": 237.53183106603154,
+        "total": 0.12208890012698248,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-2d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.014358700020238757,
+        "max": 0.017407700011972338,
+        "mean": 0.015486437514482532,
+        "stddev": 0.0008947380467530317,
+        "rounds": 8,
+        "median": 0.015265150024788454,
+        "iqr": 0.0007064999954309314,
+        "q1": 0.015045450010802597,
+        "q3": 0.015751950006233528,
+        "iqr_outliers": 1,
+        "stddev_outliers": 2,
+        "outliers": "2;1",
+        "ld15iqr": 0.014358700020238757,
+        "hd15iqr": 0.017407700011972338,
+        "ops": 64.57263002319448,
+        "total": 0.12389150011586025,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-2d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.004939000005833805,
+        "max": 0.010062900022603571,
+        "mean": 0.006086654165604462,
+        "stddev": 0.0011668113399721852,
+        "rounds": 24,
+        "median": 0.00577454999438487,
+        "iqr": 0.0012110999668948352,
+        "q1": 0.005316549999406561,
+        "q3": 0.0065276499663013965,
+        "iqr_outliers": 1,
+        "stddev_outliers": 2,
+        "outliers": "2;1",
+        "ld15iqr": 0.004939000005833805,
+        "hd15iqr": 0.010062900022603571,
+        "ops": 164.29387522146013,
+        "total": 0.1460796999745071,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-2d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.015816499944776297,
+        "max": 0.01818990003084764,
+        "mean": 0.017046571426492716,
+        "stddev": 0.0008545475256351999,
+        "rounds": 7,
+        "median": 0.01706199999898672,
+        "iqr": 0.0013238000246929005,
+        "q1": 0.016408924988354556,
+        "q3": 0.017732725013047457,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.015816499944776297,
+        "hd15iqr": 0.01818990003084764,
+        "ops": 58.66282286218931,
+        "total": 0.11932599998544902,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-3d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0066503999987617135,
+        "max": 0.012450200039893389,
+        "mean": 0.007698340003844351,
+        "stddev": 0.001414498362029885,
+        "rounds": 15,
+        "median": 0.007216099998913705,
+        "iqr": 0.0005157250270713121,
+        "q1": 0.007107274999725632,
+        "q3": 0.0076230000267969444,
+        "iqr_outliers": 2,
+        "stddev_outliers": 1,
+        "outliers": "1;2",
+        "ld15iqr": 0.0066503999987617135,
+        "hd15iqr": 0.008709600020665675,
+        "ops": 129.89813381854088,
+        "total": 0.11547510005766526,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-3d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.021197800000663847,
+        "max": 0.02399150002747774,
+        "mean": 0.022067479987163095,
+        "stddev": 0.0011177952892430214,
+        "rounds": 5,
+        "median": 0.02158259996213019,
+        "iqr": 0.0010986999986926094,
+        "q1": 0.021436374983750284,
+        "q3": 0.022535074982442893,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.021197800000663847,
+        "hd15iqr": 0.02399150002747774,
+        "ops": 45.31555032934034,
+        "total": 0.11033739993581548,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-3d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00664350000442937,
+        "max": 0.008056699996814132,
+        "mean": 0.007318513328209519,
+        "stddev": 0.00041434883154314005,
+        "rounds": 15,
+        "median": 0.007237799989525229,
+        "iqr": 0.0006332999764708802,
+        "q1": 0.006990175010287203,
+        "q3": 0.007623474986758083,
+        "iqr_outliers": 0,
+        "stddev_outliers": 4,
+        "outliers": "4;0",
+        "ld15iqr": 0.00664350000442937,
+        "hd15iqr": 0.008056699996814132,
+        "ops": 136.63977301857983,
+        "total": 0.10977769992314279,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-3d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.02447010000469163,
+        "max": 0.0304809000226669,
+        "mean": 0.02759215999394655,
+        "stddev": 0.0027513951512647228,
+        "rounds": 5,
+        "median": 0.02711609995458275,
+        "iqr": 0.005132325051818043,
+        "q1": 0.0252628499729326,
+        "q3": 0.030395175024750642,
+        "iqr_outliers": 0,
+        "stddev_outliers": 3,
+        "outliers": "3;0",
+        "ld15iqr": 0.02447010000469163,
+        "hd15iqr": 0.0304809000226669,
+        "ops": 36.242178945736406,
+        "total": 0.13796079996973276,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-4d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.005601900047622621,
+        "max": 0.008110700000543147,
+        "mean": 0.006678622225687529,
+        "stddev": 0.0006088270325413328,
+        "rounds": 18,
+        "median": 0.0067075000260956585,
+        "iqr": 0.0007652000640518963,
+        "q1": 0.006223499949555844,
+        "q3": 0.00698870001360774,
+        "iqr_outliers": 0,
+        "stddev_outliers": 6,
+        "outliers": "6;0",
+        "ld15iqr": 0.005601900047622621,
+        "hd15iqr": 0.008110700000543147,
+        "ops": 149.73148146540888,
+        "total": 0.12021520006237552,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-evaluate-4d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "evaluate",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.03633939998690039,
+        "max": 0.0402285999734886,
+        "mean": 0.03816281999461353,
+        "stddev": 0.0014305591798527465,
+        "rounds": 5,
+        "median": 0.03785010002320632,
+        "iqr": 0.0017173499945783988,
+        "q1": 0.03736082499381155,
+        "q3": 0.039078174988389947,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.03633939998690039,
+        "hd15iqr": 0.0402285999734886,
+        "ops": 26.203514314223753,
+        "total": 0.19081409997306764,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-2d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0035214999807067215,
+        "max": 0.006766099948436022,
+        "mean": 0.004262649992597289,
+        "stddev": 0.0006491222776153929,
+        "rounds": 28,
+        "median": 0.004105900006834418,
+        "iqr": 0.0005790000432170928,
+        "q1": 0.003900749987224117,
+        "q3": 0.00447975003044121,
+        "iqr_outliers": 1,
+        "stddev_outliers": 5,
+        "outliers": "5;1",
+        "ld15iqr": 0.0035214999807067215,
+        "hd15iqr": 0.006766099948436022,
+        "ops": 234.59585040682327,
+        "total": 0.1193541997927241,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-2d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.01420259999576956,
+        "max": 0.018479500024113804,
+        "mean": 0.01658298570795783,
+        "stddev": 0.0015440520424661553,
+        "rounds": 7,
+        "median": 0.01720439997734502,
+        "iqr": 0.002321649983059615,
+        "q1": 0.01534949999768287,
+        "q3": 0.017671149980742484,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.01420259999576956,
+        "hd15iqr": 0.018479500024113804,
+        "ops": 60.3027716245405,
+        "total": 0.11608089995570481,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-2d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.004593499994371086,
+        "max": 0.006766099948436022,
+        "mean": 0.005613814282696694,
+        "stddev": 0.0005224205739075777,
+        "rounds": 21,
+        "median": 0.005594999995082617,
+        "iqr": 0.0006374250078806654,
+        "q1": 0.005281649995595217,
+        "q3": 0.005919075003475882,
+        "iqr_outliers": 0,
+        "stddev_outliers": 5,
+        "outliers": "5;0",
+        "ld15iqr": 0.004593499994371086,
+        "hd15iqr": 0.006766099948436022,
+        "ops": 178.1320060911656,
+        "total": 0.11789009993663058,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-2d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.01829629996791482,
+        "max": 0.020486800000071526,
+        "mean": 0.01935064999270253,
+        "stddev": 0.0007316112828050039,
+        "rounds": 6,
+        "median": 0.0193851999938488,
+        "iqr": 0.0007146000280044973,
+        "q1": 0.018917899986263365,
+        "q3": 0.019632500014267862,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.01829629996791482,
+        "hd15iqr": 0.020486800000071526,
+        "ops": 51.67785063432586,
+        "total": 0.11610389995621517,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-3d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.006159899989143014,
+        "max": 0.009154000028502196,
+        "mean": 0.0074891812619171105,
+        "stddev": 0.0006797766772260264,
+        "rounds": 16,
+        "median": 0.007433350023347884,
+        "iqr": 0.0006949999951757491,
+        "q1": 0.007120100024621934,
+        "q3": 0.007815100019797683,
+        "iqr_outliers": 1,
+        "stddev_outliers": 3,
+        "outliers": "3;1",
+        "ld15iqr": 0.006159899989143014,
+        "hd15iqr": 0.009154000028502196,
+        "ops": 133.52594429581424,
+        "total": 0.11982690019067377,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-3d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.02643169998191297,
+        "max": 0.02794459997676313,
+        "mean": 0.026856080000288784,
+        "stddev": 0.0006406529103262554,
+        "rounds": 5,
+        "median": 0.026533199998084456,
+        "iqr": 0.0007367999787675217,
+        "q1": 0.026442725022207014,
+        "q3": 0.027179525000974536,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.02643169998191297,
+        "hd15iqr": 0.02794459997676313,
+        "ops": 37.23551612853577,
+        "total": 0.13428040000144392,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-3d-generic-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00633079995168373,
+        "max": 0.008762500016018748,
+        "mean": 0.007788573333527893,
+        "stddev": 0.0006874745035504554,
+        "rounds": 15,
+        "median": 0.008013299957383424,
+        "iqr": 0.0009082249744096771,
+        "q1": 0.007352375003392808,
+        "q3": 0.008260599977802485,
+        "iqr_outliers": 0,
+        "stddev_outliers": 3,
+        "outliers": "3;0",
+        "ld15iqr": 0.00633079995168373,
+        "hd15iqr": 0.008762500016018748,
+        "ops": 128.39321878054943,
+        "total": 0.11682860000291839,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-3d-generic-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.03238510002847761,
+        "max": 0.03321770002366975,
+        "mean": 0.032851199992001055,
+        "stddev": 0.00034883102539838703,
+        "rounds": 5,
+        "median": 0.03300279995892197,
+        "iqr": 0.0005612500244751573,
+        "q1": 0.032538624975131825,
+        "q3": 0.03309987499960698,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.03238510002847761,
+        "hd15iqr": 0.03321770002366975,
+        "ops": 30.440288337822977,
+        "total": 0.16425599996000528,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-4d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.006223600008524954,
+        "max": 0.008605999988503754,
+        "mean": 0.007247205878443578,
+        "stddev": 0.0006587663532467248,
+        "rounds": 17,
+        "median": 0.007161599991377443,
+        "iqr": 0.0010380750172771513,
+        "q1": 0.0066861749946838245,
+        "q3": 0.007724250011960976,
+        "iqr_outliers": 0,
+        "stddev_outliers": 4,
+        "outliers": "4;0",
+        "ld15iqr": 0.006223600008524954,
+        "hd15iqr": 0.008605999988503754,
+        "ops": 137.98421305712398,
+        "total": 0.12320249993354082,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-oneshot-4d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "oneshot",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.04294149996712804,
+        "max": 0.04479960002936423,
+        "mean": 0.043993500014767054,
+        "stddev": 0.0007149193243206977,
+        "rounds": 5,
+        "median": 0.044269600010011345,
+        "iqr": 0.0009520250168861821,
+        "q1": 0.04347542501636781,
+        "q3": 0.04442745003325399,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.04294149996712804,
+        "hd15iqr": 0.04479960002936423,
+        "ops": 22.730630653717835,
+        "total": 0.21996750007383525,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-2d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.003686700016260147,
+        "max": 0.0053884999942965806,
+        "mean": 0.0042758703693161135,
+        "stddev": 0.0004504799705884806,
+        "rounds": 27,
+        "median": 0.004166400001849979,
+        "iqr": 0.0005527499597519636,
+        "q1": 0.003939350019209087,
+        "q3": 0.0044920999789610505,
+        "iqr_outliers": 1,
+        "stddev_outliers": 10,
+        "outliers": "10;1",
+        "ld15iqr": 0.003686700016260147,
+        "hd15iqr": 0.0053884999942965806,
+        "ops": 233.87051374991543,
+        "total": 0.11544849997153506,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-2d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.01564130000770092,
+        "max": 0.017496499989647418,
+        "mean": 0.016710542865829275,
+        "stddev": 0.0007468155927313183,
+        "rounds": 7,
+        "median": 0.016679199994541705,
+        "iqr": 0.0013192499754950404,
+        "q1": 0.016125650028698146,
+        "q3": 0.017444900004193187,
+        "iqr_outliers": 0,
+        "stddev_outliers": 3,
+        "outliers": "3;0",
+        "ld15iqr": 0.01564130000770092,
+        "hd15iqr": 0.017496499989647418,
+        "ops": 59.842460417301,
+        "total": 0.11697380006080493,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-3d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.007155500003136694,
+        "max": 0.009635600028559566,
+        "mean": 0.008087312504358124,
+        "stddev": 0.000787146517570484,
+        "rounds": 16,
+        "median": 0.007932750013424084,
+        "iqr": 0.0007906999962870032,
+        "q1": 0.0075173500226810575,
+        "q3": 0.00830805001896806,
+        "iqr_outliers": 2,
+        "stddev_outliers": 5,
+        "outliers": "5;2",
+        "ld15iqr": 0.007155500003136694,
+        "hd15iqr": 0.00958900002297014,
+        "ops": 123.6504709643798,
+        "total": 0.12939700006972998,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-3d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.026053400011733174,
+        "max": 0.031035699998028576,
+        "mean": 0.02859314000234008,
+        "stddev": 0.0018416340770811403,
+        "rounds": 5,
+        "median": 0.028902799997013062,
+        "iqr": 0.002322875036043115,
+        "q1": 0.027339874985045753,
+        "q3": 0.02966275002108887,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.026053400011733174,
+        "hd15iqr": 0.031035699998028576,
+        "ops": 34.97342369247167,
+        "total": 0.1429657000117004,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-4d-native-numpy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00614109996240586,
+        "max": 0.008590899989940226,
+        "mean": 0.007247105268393888,
+        "stddev": 0.0007200340743424417,
+        "rounds": 19,
+        "median": 0.007355000008828938,
+        "iqr": 0.0012646749964915216,
+        "q1": 0.006602225010283291,
+        "q3": 0.007866900006774813,
+        "iqr_outliers": 0,
+        "stddev_outliers": 6,
+        "outliers": "6;0",
+        "ld15iqr": 0.00614109996240586,
+        "hd15iqr": 0.008590899989940226,
+        "ops": 137.9861286631512,
+        "total": 0.13769500009948388,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[batch-legacy-4d-native-cupy]",
+      "params": {
+        "single_query": false,
+        "operation": "legacy",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.042574900027830154,
+        "max": 0.04602609999710694,
+        "mean": 0.04406374000245705,
+        "stddev": 0.0013402793559133671,
+        "rounds": 5,
+        "median": 0.044036799983587116,
+        "iqr": 0.0019326750189065933,
+        "q1": 0.042989124995074235,
+        "q3": 0.04492180001398083,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.042574900027830154,
+        "hd15iqr": 0.04602609999710694,
+        "ops": 22.694396797553697,
+        "total": 0.22031870001228526,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-2d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 4.2700034100562334e-05,
+        "max": 0.0009642000077292323,
+        "mean": 0.00011990395503508001,
+        "stddev": 6.940736216976456e-05,
+        "rounds": 1770,
+        "median": 0.00010210002074018121,
+        "iqr": 9.199953638017178e-06,
+        "q1": 0.00010000000474974513,
+        "q3": 0.00010919995838776231,
+        "iqr_outliers": 295,
+        "stddev_outliers": 115,
+        "outliers": "115;295",
+        "ld15iqr": 8.85000335983932e-05,
+        "hd15iqr": 0.00012310000602155924,
+        "ops": 8340.008465170582,
+        "total": 0.2122300004120916,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-2d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0013738999841734767,
+        "max": 0.0032731000101193786,
+        "mean": 0.0016857178089183386,
+        "stddev": 0.0003536899700760826,
+        "rounds": 73,
+        "median": 0.0015542999608442187,
+        "iqr": 0.0003526750224409625,
+        "q1": 0.0014373250014614314,
+        "q3": 0.0017900000239023939,
+        "iqr_outliers": 4,
+        "stddev_outliers": 9,
+        "outliers": "9;4",
+        "ld15iqr": 0.0013738999841734767,
+        "hd15iqr": 0.002365300024393946,
+        "ops": 593.2190991335983,
+        "total": 0.12305740005103871,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-2d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 7.680000271648169e-05,
+        "max": 0.0010325000039301813,
+        "mean": 0.00012432530277602279,
+        "stddev": 6.384984974301732e-05,
+        "rounds": 2482,
+        "median": 0.00010830000974237919,
+        "iqr": 6.7999353632330894e-06,
+        "q1": 0.0001064000534825027,
+        "q3": 0.00011319998884573579,
+        "iqr_outliers": 364,
+        "stddev_outliers": 130,
+        "outliers": "130;364",
+        "ld15iqr": 0.00010320002911612391,
+        "hd15iqr": 0.00012340000830590725,
+        "ops": 8043.4149579473915,
+        "total": 0.30857540149008855,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-2d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.0019195000058971345,
+        "max": 0.0037485999637283385,
+        "mean": 0.002549578847650152,
+        "stddev": 0.00046678167347761557,
+        "rounds": 52,
+        "median": 0.0024740500084590167,
+        "iqr": 0.0006695000047329813,
+        "q1": 0.002159750001737848,
+        "q3": 0.0028292500064708292,
+        "iqr_outliers": 0,
+        "stddev_outliers": 17,
+        "outliers": "17;0",
+        "ld15iqr": 0.0019195000058971345,
+        "hd15iqr": 0.0037485999637283385,
+        "ops": 392.22164120229553,
+        "total": 0.1325781000778079,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-3d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00012159999459981918,
+        "max": 0.0008717000018805265,
+        "mean": 0.00014898080240430386,
+        "stddev": 7.894487176658967e-05,
+        "rounds": 823,
+        "median": 0.0001262999721802771,
+        "iqr": 8.40004940982908e-06,
+        "q1": 0.0001243999577127397,
+        "q3": 0.00013280000712256879,
+        "iqr_outliers": 128,
+        "stddev_outliers": 54,
+        "outliers": "54;128",
+        "ld15iqr": 0.00012159999459981918,
+        "hd15iqr": 0.000146100006531924,
+        "ops": 6712.274225011903,
+        "total": 0.12261120037874207,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-3d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.001996200007852167,
+        "max": 0.0031568999984301627,
+        "mean": 0.0024614509813688404,
+        "stddev": 0.0003216685241544615,
+        "rounds": 51,
+        "median": 0.002434200025163591,
+        "iqr": 0.00044479998177848756,
+        "q1": 0.0022123000089777634,
+        "q3": 0.002657099990756251,
+        "iqr_outliers": 0,
+        "stddev_outliers": 19,
+        "outliers": "19;0",
+        "ld15iqr": 0.001996200007852167,
+        "hd15iqr": 0.0031568999984301627,
+        "ops": 406.26443815829674,
+        "total": 0.12553400004981086,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-3d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00011409999569877982,
+        "max": 0.00103420001687482,
+        "mean": 0.00016181930477614513,
+        "stddev": 7.334885344900106e-05,
+        "rounds": 720,
+        "median": 0.0001446999958716333,
+        "iqr": 7.950002327561378e-06,
+        "q1": 0.00014259997988119721,
+        "q3": 0.0001505499822087586,
+        "iqr_outliers": 98,
+        "stddev_outliers": 34,
+        "outliers": "34;98",
+        "ld15iqr": 0.00013950001448392868,
+        "hd15iqr": 0.00016270001651719213,
+        "ops": 6179.7323958557545,
+        "total": 0.1165098994388245,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-3d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.002891399955842644,
+        "max": 0.005512299947440624,
+        "mean": 0.003709276468725875,
+        "stddev": 0.0006198767578331131,
+        "rounds": 34,
+        "median": 0.0035696499689947814,
+        "iqr": 0.0007243999862112105,
+        "q1": 0.0033600000315345824,
+        "q3": 0.004084400017745793,
+        "iqr_outliers": 2,
+        "stddev_outliers": 10,
+        "outliers": "10;2",
+        "ld15iqr": 0.002891399955842644,
+        "hd15iqr": 0.0053114999900572,
+        "ops": 269.5943557810607,
+        "total": 0.12611539993667975,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-4d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00014600000577047467,
+        "max": 0.0013276999816298485,
+        "mean": 0.00017757007019116627,
+        "stddev": 8.53684278869652e-05,
+        "rounds": 1704,
+        "median": 0.00015199999324977398,
+        "iqr": 1.3199984095990658e-05,
+        "q1": 0.00014949997421354055,
+        "q3": 0.0001626999583095312,
+        "iqr_outliers": 241,
+        "stddev_outliers": 123,
+        "outliers": "123;241",
+        "ld15iqr": 0.00014600000577047467,
+        "hd15iqr": 0.00018289999570697546,
+        "ops": 5631.579685266959,
+        "total": 0.3025793996057473,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-construct-4d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "construct",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.002573199977632612,
+        "max": 0.0035957000218331814,
+        "mean": 0.0030785564091414786,
+        "stddev": 0.0003124836511103374,
+        "rounds": 39,
+        "median": 0.0031577000045217574,
+        "iqr": 0.0005356750334613025,
+        "q1": 0.0027850749902427197,
+        "q3": 0.003320750023704022,
+        "iqr_outliers": 0,
+        "stddev_outliers": 15,
+        "outliers": "15;0",
+        "ld15iqr": 0.002573199977632612,
+        "hd15iqr": 0.0035957000218331814,
+        "ops": 324.8275708155276,
+        "total": 0.12006369995651767,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-2d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00035449996357783675,
+        "max": 0.0013967000413686037,
+        "mean": 0.0004244775799669829,
+        "stddev": 0.00014372617977528255,
+        "rounds": 281,
+        "median": 0.000375300005543977,
+        "iqr": 3.972496779169887e-05,
+        "q1": 0.0003634000167949125,
+        "q3": 0.0004031249845866114,
+        "iqr_outliers": 39,
+        "stddev_outliers": 24,
+        "outliers": "24;39",
+        "ld15iqr": 0.00035449996357783675,
+        "hd15iqr": 0.000464899989310652,
+        "ops": 2355.837026958604,
+        "total": 0.1192781999707222,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-2d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.013099399977363646,
+        "max": 0.014398000028450042,
+        "mean": 0.013665137499629054,
+        "stddev": 0.0003999960385564741,
+        "rounds": 8,
+        "median": 0.01362544999574311,
+        "iqr": 0.0004916999896522611,
+        "q1": 0.013397350005107,
+        "q3": 0.013889049994759262,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.013099399977363646,
+        "hd15iqr": 0.014398000028450042,
+        "ops": 73.17891971647892,
+        "total": 0.10932109999703243,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-2d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0005270999972708523,
+        "max": 0.001968200027476996,
+        "mean": 0.0006427015738649518,
+        "stddev": 0.0001949426182095797,
+        "rounds": 191,
+        "median": 0.0005700999754481018,
+        "iqr": 9.425001917406917e-05,
+        "q1": 0.0005432500038295984,
+        "q3": 0.0006375000230036676,
+        "iqr_outliers": 29,
+        "stddev_outliers": 22,
+        "outliers": "22;29",
+        "ld15iqr": 0.0005270999972708523,
+        "hd15iqr": 0.0007788999937474728,
+        "ops": 1555.9320852233136,
+        "total": 0.1227560006082058,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-2d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.013460799993481487,
+        "max": 0.016884199983906,
+        "mean": 0.01509490000171354,
+        "stddev": 0.0014228561282437753,
+        "rounds": 8,
+        "median": 0.015066649997606874,
+        "iqr": 0.002812149963574484,
+        "q1": 0.01366415002848953,
+        "q3": 0.016476299992064014,
+        "iqr_outliers": 0,
+        "stddev_outliers": 4,
+        "outliers": "4;0",
+        "ld15iqr": 0.013460799993481487,
+        "hd15iqr": 0.016884199983906,
+        "ops": 66.24754055253644,
+        "total": 0.12075920001370832,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-3d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0006489999941550195,
+        "max": 0.001725299982354045,
+        "mean": 0.0008081764688873602,
+        "stddev": 0.00019498376708092623,
+        "rounds": 153,
+        "median": 0.0007181999972090125,
+        "iqr": 0.00021115003619343042,
+        "q1": 0.0006775749789085239,
+        "q3": 0.0008887250151019543,
+        "iqr_outliers": 8,
+        "stddev_outliers": 23,
+        "outliers": "23;8",
+        "ld15iqr": 0.0006489999941550195,
+        "hd15iqr": 0.0012496999697759748,
+        "ops": 1237.3535217830936,
+        "total": 0.12365099973976612,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-3d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.018984700029250234,
+        "max": 0.025838400004431605,
+        "mean": 0.021336960000917317,
+        "stddev": 0.002634803775231973,
+        "rounds": 5,
+        "median": 0.020622899988666177,
+        "iqr": 0.0024113750259857625,
+        "q1": 0.01986174998455681,
+        "q3": 0.02227312501054257,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.018984700029250234,
+        "hd15iqr": 0.025838400004431605,
+        "ops": 46.86703260244234,
+        "total": 0.10668480000458658,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-3d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0004913999582640827,
+        "max": 0.0016468000249005854,
+        "mean": 0.0009495273894618508,
+        "stddev": 0.00016541571742306621,
+        "rounds": 157,
+        "median": 0.0008766000391915441,
+        "iqr": 0.0001744499895721674,
+        "q1": 0.0008440000092377886,
+        "q3": 0.001018449998809956,
+        "iqr_outliers": 9,
+        "stddev_outliers": 28,
+        "outliers": "28;9",
+        "ld15iqr": 0.0008046000148169696,
+        "hd15iqr": 0.0012826999882236123,
+        "ops": 1053.1555077803018,
+        "total": 0.14907580014551058,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-3d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.02174830000149086,
+        "max": 0.02344370004720986,
+        "mean": 0.022770320007111877,
+        "stddev": 0.0007643510702483191,
+        "rounds": 5,
+        "median": 0.02308929996797815,
+        "iqr": 0.001334275002591312,
+        "q1": 0.022070725011872128,
+        "q3": 0.02340500001446344,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.02174830000149086,
+        "hd15iqr": 0.02344370004720986,
+        "ops": 43.916818019582905,
+        "total": 0.11385160003555939,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-4d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0009207999682985246,
+        "max": 0.003389500023331493,
+        "mean": 0.0012057935134550833,
+        "stddev": 0.00037923837329138126,
+        "rounds": 108,
+        "median": 0.0010803999612107873,
+        "iqr": 0.00028299997211433947,
+        "q1": 0.0009836000099312514,
+        "q3": 0.0012665999820455909,
+        "iqr_outliers": 9,
+        "stddev_outliers": 11,
+        "outliers": "11;9",
+        "ld15iqr": 0.0009207999682985246,
+        "hd15iqr": 0.0016972000012174249,
+        "ops": 829.3293908461972,
+        "total": 0.130225699453149,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-evaluate-4d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "evaluate",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.03364869998767972,
+        "max": 0.037444000015966594,
+        "mean": 0.03500295999692753,
+        "stddev": 0.0014666859140289562,
+        "rounds": 5,
+        "median": 0.03449019999243319,
+        "iqr": 0.001606349993380718,
+        "q1": 0.034120374999474734,
+        "q3": 0.03572672499285545,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.03364869998767972,
+        "hd15iqr": 0.037444000015966594,
+        "ops": 28.56901245174058,
+        "total": 0.17501479998463765,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-2d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.00046690000453963876,
+        "max": 0.0024068999919109046,
+        "mean": 0.0005936738289675075,
+        "stddev": 0.00019877177522631184,
+        "rounds": 214,
+        "median": 0.000520200002938509,
+        "iqr": 0.00013569998554885387,
+        "q1": 0.0004904000088572502,
+        "q3": 0.0006260999944061041,
+        "iqr_outliers": 19,
+        "stddev_outliers": 21,
+        "outliers": "21;19",
+        "ld15iqr": 0.00046690000453963876,
+        "hd15iqr": 0.0008352999575436115,
+        "ops": 1684.4266181299552,
+        "total": 0.1270461993990466,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-2d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.015126599988434464,
+        "max": 0.018052499974146485,
+        "mean": 0.016019950002373662,
+        "stddev": 0.0008853792392589354,
+        "rounds": 8,
+        "median": 0.015872550022322685,
+        "iqr": 0.0005492999916896224,
+        "q1": 0.015534200007095933,
+        "q3": 0.016083499998785555,
+        "iqr_outliers": 1,
+        "stddev_outliers": 2,
+        "outliers": "2;1",
+        "ld15iqr": 0.015126599988434464,
+        "hd15iqr": 0.018052499974146485,
+        "ops": 62.42216735082387,
+        "total": 0.1281596000189893,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-2d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0006496999994851649,
+        "max": 0.0024475999525748193,
+        "mean": 0.0008758500009303374,
+        "stddev": 0.000297746680115933,
+        "rounds": 152,
+        "median": 0.0007297000265680254,
+        "iqr": 0.00030570002854801714,
+        "q1": 0.0006807000027038157,
+        "q3": 0.0009864000312518328,
+        "iqr_outliers": 9,
+        "stddev_outliers": 23,
+        "outliers": "23;9",
+        "ld15iqr": 0.0006496999994851649,
+        "hd15iqr": 0.001449400035198778,
+        "ops": 1141.7480150000447,
+        "total": 0.13312920014141127,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-2d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 2,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.015664100006688386,
+        "max": 0.018952200014609843,
+        "mean": 0.016945828575574393,
+        "stddev": 0.0010285882642773567,
+        "rounds": 7,
+        "median": 0.016773899958934635,
+        "iqr": 0.0008174500544555485,
+        "q1": 0.016425674984930083,
+        "q3": 0.01724312503938563,
+        "iqr_outliers": 1,
+        "stddev_outliers": 2,
+        "outliers": "2;1",
+        "ld15iqr": 0.015664100006688386,
+        "hd15iqr": 0.018952200014609843,
+        "ops": 59.01157299805295,
+        "total": 0.11862080002902076,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-3d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0008028000011108816,
+        "max": 0.003603599965572357,
+        "mean": 0.0010550151988863944,
+        "stddev": 0.0003377856288077504,
+        "rounds": 125,
+        "median": 0.0009480000007897615,
+        "iqr": 0.00024142501933965832,
+        "q1": 0.0008778499905019999,
+        "q3": 0.0011192750098416582,
+        "iqr_outliers": 7,
+        "stddev_outliers": 9,
+        "outliers": "9;7",
+        "ld15iqr": 0.0008028000011108816,
+        "hd15iqr": 0.0015156999579630792,
+        "ops": 947.8536432987269,
+        "total": 0.1318768998607993,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-3d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.025125399988610297,
+        "max": 0.027451599948108196,
+        "mean": 0.02588089999044314,
+        "stddev": 0.0009271327474582789,
+        "rounds": 5,
+        "median": 0.025752399989869446,
+        "iqr": 0.000989774998743087,
+        "q1": 0.02523040000232868,
+        "q3": 0.026220175001071766,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.025125399988610297,
+        "hd15iqr": 0.027451599948108196,
+        "ops": 38.63853267735137,
+        "total": 0.1294044999522157,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-3d-generic-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0009748999727889895,
+        "max": 0.00372630002675578,
+        "mean": 0.0011373336621707693,
+        "stddev": 0.0003498865825662455,
+        "rounds": 101,
+        "median": 0.0010278000263497233,
+        "iqr": 7.14250054443255e-05,
+        "q1": 0.0010021750058513135,
+        "q3": 0.001073600011295639,
+        "iqr_outliers": 19,
+        "stddev_outliers": 9,
+        "outliers": "9;19",
+        "ld15iqr": 0.0009748999727889895,
+        "hd15iqr": 0.0011868999572470784,
+        "ops": 879.2494526991774,
+        "total": 0.1148706998792477,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-3d-generic-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 3,
+        "prefer_native": false,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.026268500019796193,
+        "max": 0.028142400027718395,
+        "mean": 0.027034599997568874,
+        "stddev": 0.0007957552416839797,
+        "rounds": 5,
+        "median": 0.026906299986876547,
+        "iqr": 0.0013428250240394846,
+        "q1": 0.026325874976464547,
+        "q3": 0.027668700000504032,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.026268500019796193,
+        "hd15iqr": 0.028142400027718395,
+        "ops": 36.98963550745809,
+        "total": 0.13517299998784438,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-4d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0006310000317171216,
+        "max": 0.002905300003476441,
+        "mean": 0.001339164765496193,
+        "stddev": 0.0002886360700971798,
+        "rounds": 193,
+        "median": 0.0012185000232420862,
+        "iqr": 0.0002783749660011381,
+        "q1": 0.0011569000052986667,
+        "q3": 0.0014352749712998047,
+        "iqr_outliers": 12,
+        "stddev_outliers": 25,
+        "outliers": "25;12",
+        "ld15iqr": 0.0010860000038519502,
+        "hd15iqr": 0.0018657000036910176,
+        "ops": 746.7341030507741,
+        "total": 0.25845879974076524,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-oneshot-4d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "oneshot",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.03910440002800897,
+        "max": 0.04329800000414252,
+        "mean": 0.04112582000670954,
+        "stddev": 0.001524868985289618,
+        "rounds": 5,
+        "median": 0.04127399995923042,
+        "iqr": 0.0017437249625800177,
+        "q1": 0.04016070003854111,
+        "q3": 0.041904425001121126,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.03910440002800897,
+        "hd15iqr": 0.04329800000414252,
+        "ops": 24.31562458418709,
+        "total": 0.20562910003354773,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-2d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0004566999850794673,
+        "max": 0.0011990999919362366,
+        "mean": 0.0005667931831505319,
+        "stddev": 0.00014693188162269997,
+        "rounds": 220,
+        "median": 0.0005032999906688929,
+        "iqr": 0.00012214996968396008,
+        "q1": 0.0004754000110551715,
+        "q3": 0.0005975499807391316,
+        "iqr_outliers": 23,
+        "stddev_outliers": 30,
+        "outliers": "30;23",
+        "ld15iqr": 0.0004566999850794673,
+        "hd15iqr": 0.0007818000158295035,
+        "ops": 1764.3119743280588,
+        "total": 0.12469450029311702,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-2d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 2,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.014258500013966113,
+        "max": 0.017552000004798174,
+        "mean": 0.016241257137153298,
+        "stddev": 0.0011609528817173075,
+        "rounds": 7,
+        "median": 0.01606510003330186,
+        "iqr": 0.001581249976879917,
+        "q1": 0.01569409998774063,
+        "q3": 0.017275349964620546,
+        "iqr_outliers": 0,
+        "stddev_outliers": 2,
+        "outliers": "2;0",
+        "ld15iqr": 0.014258500013966113,
+        "hd15iqr": 0.017552000004798174,
+        "ops": 61.57158842786944,
+        "total": 0.11368879996007308,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-3d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0007521000225096941,
+        "max": 0.001967800024431199,
+        "mean": 0.0010036614157010134,
+        "stddev": 0.0002514779816190456,
+        "rounds": 127,
+        "median": 0.0009017999982461333,
+        "iqr": 0.00019200002134311944,
+        "q1": 0.0008392499876208603,
+        "q3": 0.0010312500089639798,
+        "iqr_outliers": 17,
+        "stddev_outliers": 22,
+        "outliers": "22;17",
+        "ld15iqr": 0.0007521000225096941,
+        "hd15iqr": 0.0013586000422947109,
+        "ops": 996.351941358176,
+        "total": 0.1274649997940287,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-3d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 3,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.021885900001507252,
+        "max": 0.023636400001123548,
+        "mean": 0.023008240002673118,
+        "stddev": 0.0007106259410610279,
+        "rounds": 5,
+        "median": 0.023257300024852157,
+        "iqr": 0.0009924750338541344,
+        "q1": 0.022542149978107773,
+        "q3": 0.023534625011961907,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.021885900001507252,
+        "hd15iqr": 0.023636400001123548,
+        "ops": 43.462689883442586,
+        "total": 0.1150412000133656,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-4d-native-numpy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "numpy"
+      },
+      "stats": {
+        "min": 0.0008684000349603593,
+        "max": 0.0022701999987475574,
+        "mean": 0.001339935955952518,
+        "stddev": 0.00025837353492195943,
+        "rounds": 89,
+        "median": 0.001254200004041195,
+        "iqr": 0.00024410002515651286,
+        "q1": 0.001184024993563071,
+        "q3": 0.0014281250187195837,
+        "iqr_outliers": 7,
+        "stddev_outliers": 13,
+        "outliers": "13;7",
+        "ld15iqr": 0.0008684000349603593,
+        "hd15iqr": 0.0018594000139273703,
+        "ops": 746.3043256340798,
+        "total": 0.11925430007977411,
+        "iterations": 1
+      }
+    },
+    {
+      "name": "test_interpnd_lifecycle[single-legacy-4d-native-cupy]",
+      "params": {
+        "single_query": true,
+        "operation": "legacy",
+        "ndim": 4,
+        "prefer_native": true,
+        "backend": "cupy"
+      },
+      "stats": {
+        "min": 0.03829659998882562,
+        "max": 0.04271010000957176,
+        "mean": 0.04122883999953046,
+        "stddev": 0.001797495319716719,
+        "rounds": 5,
+        "median": 0.042164099984802306,
+        "iqr": 0.0022279250115389004,
+        "q1": 0.04012689999944996,
+        "q3": 0.04235482501098886,
+        "iqr_outliers": 0,
+        "stddev_outliers": 1,
+        "outliers": "1;0",
+        "ld15iqr": 0.03829659998882562,
+        "hd15iqr": 0.04271010000957176,
+        "ops": 24.25486625409273,
+        "total": 0.20614419999765232,
+        "iterations": 1
+      }
+    }
+  ]
+}

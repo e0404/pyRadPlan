@@ -1,0 +1,13 @@
+[
+  {
+    "case": "photons_Generic_cupy_baseline_g5_b10_n1_forward_sampled_paired",
+    "current_seconds": 2.452253199968254,
+    "reference_seconds": 2.4494517499988433,
+    "speedup": 0.9988576016663177,
+    "exact_output": true,
+    "exact_pairs": 20,
+    "pairs": 20,
+    "max_abs": 0.0,
+    "max_abs_over_peak": 0.0
+  }
+]

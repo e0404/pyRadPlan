@@ -46,16 +46,19 @@ def apply_variant(name):
     """Install the selected experiment in this Python process only."""
     if name == "baseline":
         return
-    if name == "legacy_interpolators":
-        # Compare current production code against the pre-reuse interpolation path.
-        fn = SVD._get_kernel_interpolators
-        source = textwrap.dedent(inspect.getsource(fn))
-        start = source.index("    # Prepare the grid once")
-        end = source.index("    num_kernels =", start)
+    if name in ("legacy_interpolators", "native_interpolators"):
+        from profile_interpnd_reference import legacy_grid_interpolator, native_grid_interpolator
+
+        factory = (
+            legacy_grid_interpolator
+            if name == "legacy_interpolators"
+            else native_grid_interpolator
+        )
+        SVD._get_kernel_interpolators.__globals__["_audit_grid_interpolator"] = factory
         replace_method(
             SVD,
             "_get_kernel_interpolators",
-            [(source[start:end], "    interpolator_cls = None\n\n")],
+            [("ArrayBackendGridInterpolator(", "_audit_grid_interpolator(")],
         )
         return
     if name in ("compact", "combined"):
@@ -132,29 +135,7 @@ def apply_variant(name):
             ],
         )
     if name == "prepared":
-        if "interpolator_cls" in inspect.getsource(SVD._get_kernel_interpolators):
-            return  # The prepared prototype is now the production implementation.
-
-        def prepared_rgi(*, x, y):
-            import array_api_compat
-
-            if array_api_compat.is_cupy_array(y):
-                from cupyx.scipy.interpolate import RegularGridInterpolator
-            else:
-                from scipy.interpolate import RegularGridInterpolator
-            return RegularGridInterpolator(x, y, bounds_error=True)
-
-        SVD._get_kernel_interpolators.__globals__["_audit_prepare_rgi"] = prepared_rgi
-        replace_method(
-            SVD,
-            "_get_kernel_interpolators",
-            [
-                (
-                    "partial(\n            interpnd, x=(conv_grid, conv_grid), y=conv_mx, bounds_error=True\n        )",
-                    "_audit_prepare_rgi(x=(conv_grid, conv_grid), y=conv_mx)",
-                ),
-            ],
-        )
+        return  # Interpolator reuse is now provided by the production backend class.
     if name == "device_forward":
         original_fill = PB._fill_dij
         original_finalize = PB._finalize_dose
@@ -205,6 +186,15 @@ def sync(backend):
         cp.cuda.get_current_stream().synchronize()
 
 
+def save_mismatch(out, label, pair, a, b, forward):
+    """Retain failing dose outputs locally for repeatability diagnosis."""
+    if forward:
+        np.savez_compressed(out / f"{label}_pair{pair}_mismatch.npz", baseline=a, variant=b)
+    else:
+        sparse.save_npz(out / f"{label}_pair{pair}_baseline.npz", a)
+        sparse.save_npz(out / f"{label}_pair{pair}_variant.npz", b)
+
+
 def main():
     """Run full dose calculations, optional profiles, and paired comparisons."""
     parser = argparse.ArgumentParser()
@@ -221,6 +211,7 @@ def main():
     parser.add_argument("--let", dest="with_let", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--paired", action="store_true")
+    parser.add_argument("--pairs", type=int, default=6)
     parser.add_argument("--out", default="benchmark/pb_audit_results")
     args = parser.parse_args()
     logging.basicConfig(level=logging.ERROR)
@@ -429,7 +420,7 @@ def main():
     print(json.dumps(metadata), flush=True)
     if args.paired:
         paired = {"baseline": [], "variant": [], "comparisons": []}
-        for pair in range(6):
+        for pair in range(args.pairs):
             outputs = {}
             names = ["baseline", "variant"] if pair % 2 == 0 else ["variant", "baseline"]
             for name in names:
@@ -462,6 +453,8 @@ def main():
                     ),
                 )
             paired["comparisons"].append(comparison)
+            if comparison["max_abs"] != 0:
+                save_mismatch(out, label, pair, a, b, args.forward)
         (out / (label + "_paired.json")).write_text(json.dumps(paired, indent=2))
 
 
