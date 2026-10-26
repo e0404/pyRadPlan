@@ -904,6 +904,129 @@ instrumentation and must not be used to compare implementations.
 .venv/Scripts/python.exe benchmark/profile_interpnd_selection.py --backend cupy
 ```
 
+## Step 2 investigation: shared particle mask compaction
+
+This follow-up isolates the indexing change in
+`ParticlePencilBeamEngineAbstract._get_bixel_indices_on_ray`. The process-local
+`compact_take` variant converts the mask once and gathers each field with:
+
+```python
+selected = xp.nonzero(mask)[0]
+bixel["ix"] = xp.take(ray["ix"], selected, axis=0)
+bixel["rad_depths"] = xp.take(ray["rad_depths"], selected, axis=0)
+# Likewise for radial distances, optional lateral distances, and tissue fields.
+```
+
+The repeated kernel conversion in cutoff preparation is **unchanged**. So are
+cutoffs, kernel interpolation, precision, dose accumulation, and sparse storage.
+The earlier 1.18x combined-variant measurement must not be attributed to indexing
+alone or subtracted from these timings to estimate the other change's contribution.
+
+### Array API contract and dynamic shapes
+
+The compatibility concern is real: older Array API versions did not require
+integer-array bracket indexing. `take` has been standardized since 2022.12 and
+explicitly supports selecting along one axis of a multidimensional array. Thus
+`xp.take(..., axis=0)` also handles the `(N, 2)` lateral-distance field without
+depending on NumPy's advanced-indexing semantics. See the
+[2023.12 take specification](https://data-apis.org/array-api/2023.12/API_specification/generated/array_api.take.html).
+
+`nonzero(mask)` still has a data-dependent output shape and can still synchronize
+on a GPU. The benefit sought here is paying the compaction cost **once**, then
+using its known-length index array for several gathers. It also introduces an
+index-buffer allocation. This is not a static-shape/JIT solution; the
+[nonzero specification](https://data-apis.org/array-api/2024.12/API_specification/generated/array_api.nonzero.html)
+explicitly permits graph-based libraries to omit that operation.
+
+Three-argument `where` can preserve fixed shapes, but a simple substitution would
+leave rejected voxels in all downstream calculations and require changes to
+mask propagation and sparse output. Fixed-capacity buffers with valid counts are
+another architectural option. Neither is needed to evaluate this local change.
+
+The full-dose experiment uses TG119, one proton beam, 72 rays and 908 beamlets,
+with 8, 5 and 3 mm isotropic dose grids. Each NumPy/CuPy case runs in a fresh
+process, with one warm-up and six alternating baseline/variant pairs. Only the
+mask-application code is changed. Comparisons require identical dose values,
+indices and column pointers. These are physical-dose influence measurements;
+they do not establish biological-dose or other-modality performance.
+
+### Full-dose results
+
+Production baseline: `3ad8fae8`. Same Python 3.11.9 / NumPy 2.3.5 / CuPy 13.3.0
+environment and RTX 4070 Laptop GPU as the preceding interpolation check.
+
+| Backend | Grid (mm) | Selected voxels | Boolean median (s) | Shared take median (s) | Median paired speedup | Pair range |
+|---|---:|---:|---:|---:|---:|---:|
+| NumPy | 8 | 25,813 | 3.991 | 4.129 | 0.967x | 0.951–1.002x |
+| NumPy | 5 | 108,871 | 4.522 | 4.463 | 0.999x | 0.966–1.048x |
+| NumPy | 3 | 502,192 | 6.726 | 6.729 | 1.004x | 0.964–1.018x |
+| CuPy | 8 | 25,813 | 11.719 | 10.667 | 1.102x | 1.080–1.128x |
+| CuPy | 5 | 108,871 | 12.726 | 11.122 | 1.155x | 1.131–1.196x |
+| CuPy | 3 | 502,192 | 13.794 | 12.373 | 1.123x | 1.101–1.147x |
+
+Speedup is the median of the six within-pair baseline/variant ratios, not the
+ratio of the two timing medians. The range is the observed minimum/maximum, not
+a confidence interval. Absolute times were higher than the original audit;
+use these paired comparisons rather than combining timings across sessions.
+
+**All 36 pairs have bitwise-identical physical dose values and identical sparse
+indices/column pointers.** The indexing-only change gives a consistent GPU
+benefit across these voxel counts (roughly 9–13% less elapsed time), but no
+convincing CPU benefit. The coarse CPU case is approximately 3% slower. No
+production engine code has been changed by this investigation.
+
+The [summary and individual pairs](../../benchmark/pb_audit_results/particle_indexing/summary.json)
+retain configuration, timing samples, dimensions, and numerical comparisons.
+
+### Isolated gathers and compatibility checks
+
+The microbenchmark captures beamlets 0, 450 and 907 at 5 mm: 1,516–1,573 candidate
+rows, 908–1,111 selected rows, and four fields (`ix`, `radial_dist_sq`, `rad_depths`,
+and the two-column `lat_dists`). Each timed call includes `nonzero` for the
+integer/take paths. There are 21 rounds with rotating execution order, warm-up,
+exact output checks, and GPU synchronization. Input capture and host transfers
+are outside the measured gather timings.
+
+Representative beamlet 450:
+
+| Backend | Repeated boolean (ms) | Shared integer brackets (ms) | Shared take (ms) |
+|---|---:|---:|---:|
+| NumPy | 0.0629 | 0.0552 | 0.0742 |
+| CuPy | 2.8277 | 1.1551 | 1.0745 |
+
+Across the three samples, GPU `take` is 2.4–2.6x faster than repeated boolean
+indexing. Direct integer brackets have no consistent advantage over `take` on
+CuPy. On NumPy, `take` is 10–19% slower than boolean indexing in these small
+gathers; integer brackets are modestly faster, but this does not establish a
+full-dose CPU speedup and would require handling older Array API versions and
+multidimensional indexing carefully. See the
+[NumPy gather record](../../benchmark/pb_audit_results/particle_indexing/micro/numpy.json)
+and [CuPy gather record](../../benchmark/pb_audit_results/particle_indexing/micro/cupy.json).
+
+`array_api_strict` verifies `take` against boolean selection for empty input,
+empty selection, full selection and mixed selection, across API versions
+2022.12, 2023.12, 2024.12 and 2025.12: **16 cases**, each covering integer/float
+vectors and a two-column array. The `take` execution runs with boolean indexing
+disabled and preserves shapes, values and dtypes. These are gather-level checks,
+not a full strict-backend dose-engine test.
+
+**Recommendation:** the shared `nonzero` + `take` path is justified for CuPy;
+keep NumPy's existing boolean path unless a separate CPU change demonstrates a
+full-dose gain. If a backend-dependent policy is introduced, keep it in a small
+shared indexing utility rather than distributing native-library details through
+engines. Other backends need their own measurements. The production change and
+its broader dose regression tests remain a separate step; this commit contains
+the experiment and evidence only. Ruff and the commit hooks pass; the full
+repository test suite was not rerun for this benchmark-only change.
+
+Reproduce sequentially, without overlapping benchmarks:
+
+```powershell
+.venv/Scripts/python.exe benchmark/profile_particle_indexing.py
+.venv/Scripts/python.exe benchmark/profile_particle_indexing_micro.py --backend numpy
+.venv/Scripts/python.exe benchmark/profile_particle_indexing_micro.py --backend cupy
+```
+
 ## Reproduce and inspect
 
 Run from the repository root with the existing environment. All patches below

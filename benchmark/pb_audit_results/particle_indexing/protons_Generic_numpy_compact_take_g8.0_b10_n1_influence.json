@@ -1,0 +1,56 @@
+{
+  "args": {
+    "backend": "numpy",
+    "mode": "protons",
+    "machine": "Generic",
+    "variant": "compact_take",
+    "runs": 1,
+    "grid": 8.0,
+    "bixel": 10,
+    "beams": 1,
+    "forward": false,
+    "sampling": false,
+    "with_let": false,
+    "profile": false,
+    "paired": true,
+    "pairs": 6,
+    "out": "benchmark\\pb_audit_results\\particle_indexing"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.5080989000271074,
+  "cold_seconds": 10.134066400001757,
+  "warm_seconds": [
+    3.8524552000453696
+  ],
+  "median_seconds": 3.8524552000453696,
+  "effective": {
+    "dose_resolution": {
+      "x": 8.0,
+      "y": 8.0,
+      "z": 8.0
+    },
+    "dose_dimensions": [
+      63,
+      63,
+      41
+    ],
+    "selected_voxels": 25813,
+    "lateral_model": "single"
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 72,
+  "beamlets": 908,
+  "output": {
+    "shape": [
+      162729,
+      908
+    ],
+    "nnz": 223475,
+    "bytes": 2688972,
+    "index_dtype": "int64",
+    "data_dtype": "float32"
+  }
+}

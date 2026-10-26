@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Isolated particle mask-compaction benchmarks across three dose-grid resolutions, including Array API `take` compatibility checks and separate NumPy/CuPy gather measurements.
 - Cached native-versus-generic interpolation benchmark using captured photon grids and queries, with NumPy/CuPy measurements for both bounds policies in the pencil-beam performance audit.
 - `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.
 - Pencil-beam performance audit covering NumPy/CuPy across modalities, reproducible profiling and isolated acceleration prototypes in `benchmark/`, and a modular execution design in `docs/development/pencil_beam_performance_audit.md`.

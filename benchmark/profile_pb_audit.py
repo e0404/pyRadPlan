@@ -67,6 +67,25 @@ def apply_variant(name):
             "_get_bixel_indices_on_ray",
             [("# Apply mask", "# Apply mask\n    curr_ix = xp.nonzero(curr_ix)[0]")],
         )
+    if name == "compact_take":
+        fields = (
+            "ix",
+            "radial_dist_sq",
+            "rad_depths",
+            "lat_dists",
+            "v_alpha_x",
+            "v_beta_x",
+            "v_tissue_class_ix",
+        )
+        replace_method(
+            PP,
+            "_get_bixel_indices_on_ray",
+            [("# Apply mask", "# Apply mask\n    curr_ix = xp.nonzero(curr_ix)[0]")]
+            + [
+                (f'curr_ray["{field}"][curr_ix]', f'xp.take(curr_ray["{field}"], curr_ix, axis=0)')
+                for field in fields
+            ],
+        )
     if name in ("hoist", "combined"):
         replace_method(
             PP,
