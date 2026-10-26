@@ -1,0 +1,36 @@
+[
+  {
+    "backend": "cupy",
+    "grid_mm": 5.0,
+    "selected_voxels": 108871,
+    "beamlets": 908,
+    "nnz": 933649,
+    "baseline_seconds": 2.1890120999887586,
+    "take_seconds": 1.871621199999936,
+    "median_pair_speedup": 1.1695807356685388,
+    "pair_speedup_range": [
+      1.1695807356685388,
+      1.1695807356685388
+    ],
+    "exact_pairs": 1,
+    "pairs": 1,
+    "source": "protons_Generic_cupy_legacy_indexing_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "backend": "numpy",
+    "grid_mm": 5.0,
+    "selected_voxels": 108871,
+    "beamlets": 908,
+    "nnz": 933649,
+    "baseline_seconds": 0.9966018000268377,
+    "take_seconds": 0.9453529000165872,
+    "median_pair_speedup": 1.0542113955638697,
+    "pair_speedup_range": [
+      1.0542113955638697,
+      1.0542113955638697
+    ],
+    "exact_pairs": 1,
+    "pairs": 1,
+    "source": "protons_Generic_numpy_legacy_indexing_g5.0_b10_n1_influence_paired.json"
+  }
+]

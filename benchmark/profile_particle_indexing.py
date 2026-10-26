@@ -1,8 +1,8 @@
 """Measure indexing alone, without hoisting particle kernel conversion.
 
 Runs paired full-dose comparisons in isolated processes, sequentially to avoid
-CPU/GPU contention. The compact_take variant only changes the mask application
-in _get_bixel_indices_on_ray. Dose values and sparse structure must match exactly.
+CPU/GPU contention. Production now uses take; legacy_indexing restores boolean
+mask application only. Dose values and sparse structure must match exactly.
 """
 
 import argparse
@@ -19,7 +19,11 @@ def summarize(out):
     for path in sorted(out.glob("*_paired.json")):
         paired = json.loads(path.read_text())
         metadata = json.loads(path.with_name(path.name.replace("_paired", "")).read_text())
-        ratios = [b / v for b, v in zip(paired["baseline"], paired["variant"])]
+        if metadata["args"]["variant"] == "legacy_indexing":
+            boolean, take = paired["variant"], paired["baseline"]
+        else:  # Retain support for the original compact_take measurement records.
+            boolean, take = paired["baseline"], paired["variant"]
+        ratios = [b / t for b, t in zip(boolean, take)]
         rows.append(
             dict(
                 backend=metadata["args"]["backend"],
@@ -27,8 +31,8 @@ def summarize(out):
                 selected_voxels=metadata["effective"]["selected_voxels"],
                 beamlets=metadata["beamlets"],
                 nnz=metadata["output"]["nnz"],
-                baseline_seconds=statistics.median(paired["baseline"]),
-                take_seconds=statistics.median(paired["variant"]),
+                baseline_seconds=statistics.median(boolean),
+                take_seconds=statistics.median(take),
                 median_pair_speedup=statistics.median(ratios),
                 pair_speedup_range=[min(ratios), max(ratios)],
                 exact_pairs=sum(
@@ -49,7 +53,7 @@ def main():
     parser.add_argument("--backends", nargs="+", default=["numpy", "cupy"])
     parser.add_argument("--grids", nargs="+", type=float, default=[8, 5, 3])
     parser.add_argument("--pairs", type=int, default=6)
-    parser.add_argument("--out", default="benchmark/pb_audit_results/particle_indexing")
+    parser.add_argument("--out", default="benchmark/pb_audit_results/particle_indexing/production")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -66,7 +70,7 @@ def main():
                     "--grid",
                     str(grid),
                     "--variant",
-                    "compact_take",
+                    "legacy_indexing",
                     "--runs",
                     "1",
                     "--paired",

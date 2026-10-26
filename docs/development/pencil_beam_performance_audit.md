@@ -972,8 +972,8 @@ use these paired comparisons rather than combining timings across sessions.
 **All 36 pairs have bitwise-identical physical dose values and identical sparse
 indices/column pointers.** The indexing-only change gives a consistent GPU
 benefit across these voxel counts (roughly 9–13% less elapsed time), but no
-convincing CPU benefit. The coarse CPU case is approximately 3% slower. No
-production engine code has been changed by this investigation.
+convincing CPU benefit. The coarse CPU case is approximately 3% slower. These
+measurements were captured before the production integration described below.
 
 The [summary and individual pairs](../../benchmark/pb_audit_results/particle_indexing/summary.json)
 retain configuration, timing samples, dimensions, and numerical comparisons.
@@ -1010,14 +1010,37 @@ vectors and a two-column array. The `take` execution runs with boolean indexing
 disabled and preserves shapes, values and dtypes. These are gather-level checks,
 not a full strict-backend dose-engine test.
 
-**Recommendation:** the shared `nonzero` + `take` path is justified for CuPy;
-keep NumPy's existing boolean path unless a separate CPU change demonstrates a
-full-dose gain. If a backend-dependent policy is introduced, keep it in a small
-shared indexing utility rather than distributing native-library details through
-engines. Other backends need their own measurements. The production change and
-its broader dose regression tests remain a separate step; this commit contains
-the experiment and evidence only. Ruff and the commit hooks pass; the full
-repository test suite was not rerun for this benchmark-only change.
+### Production integration
+
+The shared particle engine now uses `nonzero` once and `take(..., axis=0)` for
+every selected field on **all backends**. A single Array API implementation is
+preferred over backend dispatch given the negligible full-dose CPU differences
+at 3 and 5 mm and the small coarse-grid regression. The observed CPU tradeoff is
+retained above; no CPU acceleration is claimed. Cutoff conversion, physics,
+precision, and public calling interfaces are unchanged.
+
+Regression tests exercise empty, rejected, full and mixed support; unsorted
+global voxel IDs; constant and tabulated cutoffs; depth offsets; optional
+two-column lateral distances and tissue fields; and preservation of shapes,
+dtypes, devices and input arrays. NumPy, CuPy and strict Array API 2023.12/2025.12
+are covered, with boolean indexing disabled on strict backends. Full-method
+tests start at 2023.12 because the existing table interpolation uses `clip`;
+the gather-only checks above continue to cover 2022.12.
+
+The benchmark's `compact_take` variant now uses production unchanged.
+`legacy_indexing` restores the old boolean selection for comparisons, while
+`compact` retains the integer-bracket experiment. The runner keeps new records
+in `particle_indexing/production/` and correctly labels boolean versus take
+timings regardless of which is the current baseline.
+
+Validation: **178 targeted tests pass**, including the new selection tests,
+existing matRad particle dose fixtures (protons, helium, carbon and oxygen),
+biological outputs, multi-Gaussian consistency and geometry. One additional
+production-versus-boolean pair at 5 mm on each of NumPy/CuPy has exact dose and
+sparse structure parity; these are integration checks, not new speedup estimates.
+See the [production check](../../benchmark/pb_audit_results/particle_indexing/production/summary.json).
+The full repository and GUI suites were not rerun: no public API or GUI binding
+changed. The existing cutoff routine's Ruff statement-count finding is unchanged.
 
 Reproduce sequentially, without overlapping benchmarks:
 

@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Particle pencil-beam engines compact each beamlet's voxel mask once and use Array API `take` for all ray fields, including lateral distances and biological tissue data, uniformly across backends.
 - Photon pencil-beam dose calculation reuses `ArrayBackendGridInterpolator` for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while keeping backend dispatch in `xp_utils`.
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
 - The documentation tutorials are built from the jupytext example scripts in `examples/` and the documentation shows example outputs for releases only, from notebooks executed and committed during the release; examples are not executed in CI or on Read the Docs; example notebooks are no longer part of the repository

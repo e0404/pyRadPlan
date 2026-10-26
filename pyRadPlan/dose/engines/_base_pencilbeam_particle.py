@@ -431,20 +431,24 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             raise ValueError("dosimetric_lateral_cutoff must be a value > 0 and <= 1!")
 
         # Apply mask
-        curr_bixel["ix"] = curr_ray["ix"][curr_ix]
+        # Compact once; take preserves trailing dimensions and works across Array API backends.
+        curr_ix = xp.nonzero(curr_ix)[0]
+        curr_bixel["ix"] = xp.take(curr_ray["ix"], curr_ix, axis=0)
 
         # Get quantities from ray and mask them
-        curr_bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][curr_ix]
-        curr_bixel["rad_depths"] = curr_ray["rad_depths"][curr_ix]
+        curr_bixel["radial_dist_sq"] = xp.take(curr_ray["radial_dist_sq"], curr_ix, axis=0)
+        curr_bixel["rad_depths"] = xp.take(curr_ray["rad_depths"], curr_ix, axis=0)
 
         # Propagate lateral distances if available (needed for singleXY focused model)
         if "lat_dists" in curr_ray:
-            curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
+            curr_bixel["lat_dists"] = xp.take(curr_ray["lat_dists"], curr_ix, axis=0)
 
         if self._calc_bio_dose:
-            curr_bixel["v_alpha_x"] = curr_ray["v_alpha_x"][curr_ix]
-            curr_bixel["v_beta_x"] = curr_ray["v_beta_x"][curr_ix]
-            curr_bixel["v_tissue_class_ix"] = curr_ray["v_tissue_class_ix"][curr_ix]
+            curr_bixel["v_alpha_x"] = xp.take(curr_ray["v_alpha_x"], curr_ix, axis=0)
+            curr_bixel["v_beta_x"] = xp.take(curr_ray["v_beta_x"], curr_ix, axis=0)
+            curr_bixel["v_tissue_class_ix"] = xp.take(
+                curr_ray["v_tissue_class_ix"], curr_ix, axis=0
+            )
 
         return curr_bixel
 

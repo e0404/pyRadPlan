@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import pstats
+import re
 import textwrap
 import time
 import warnings
@@ -61,13 +62,9 @@ def apply_variant(name):
             [("ArrayBackendGridInterpolator(", "_audit_grid_interpolator(")],
         )
         return
-    if name in ("compact", "combined"):
-        replace_method(
-            PP,
-            "_get_bixel_indices_on_ray",
-            [("# Apply mask", "# Apply mask\n    curr_ix = xp.nonzero(curr_ix)[0]")],
-        )
     if name == "compact_take":
+        return  # Shared compaction with Array API take is now the production path.
+    if name in ("compact", "legacy_indexing"):
         fields = (
             "ix",
             "radial_dist_sq",
@@ -77,14 +74,18 @@ def apply_variant(name):
             "v_beta_x",
             "v_tissue_class_ix",
         )
+        source = textwrap.dedent(inspect.getsource(PP._get_bixel_indices_on_ray))
+        substitutions = []
+        for field in fields:
+            pattern = rf'xp\.take\(\s*curr_ray\["{field}"\],\s*curr_ix,\s*axis=0\s*\)'
+            match = re.search(pattern, source)
+            assert match is not None, field
+            substitutions.append((match.group(), f'curr_ray["{field}"][curr_ix]'))
         replace_method(
             PP,
             "_get_bixel_indices_on_ray",
-            [("# Apply mask", "# Apply mask\n    curr_ix = xp.nonzero(curr_ix)[0]")]
-            + [
-                (f'curr_ray["{field}"][curr_ix]', f'xp.take(curr_ray["{field}"], curr_ix, axis=0)')
-                for field in fields
-            ],
+            ([("    curr_ix = xp.nonzero(curr_ix)[0]\n", "")] if name == "legacy_indexing" else [])
+            + substitutions,
         )
     if name in ("hoist", "combined"):
         replace_method(
