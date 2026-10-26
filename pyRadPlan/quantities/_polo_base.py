@@ -46,6 +46,12 @@ class POLOBase(FluenceDependentQuantity):
     resolution of the binary risk mask, the volume correction factor and the dose domain of
     the fit -- lives here.
 
+    The model was fitted on the dose of the whole treatment course, while the dose influence
+    matrix holds the dose of a single fraction. Both doses entering the linear predictor are
+    therefore scaled by ``num_of_fractions`` (identical fractions assumed), independently of
+    ``Plan.dose_convention``. Bahn et al. fitted on conventional fractionation; the model has
+    no fraction-size correction, so hypofractionated courses lie outside its domain.
+
     References
     ----------
     .. [1] Bahn, E., Bauer, J., Harrabi, S. B., et al. (2020). Late contrast enhancing brain lesions
@@ -68,7 +74,7 @@ class POLOBase(FluenceDependentQuantity):
     # Voxel volume of the planning CT the model was fitted on: 0.6 x 0.6 x 3.0 mm^3 ([2], Sec 2.1.2)
     FIT_VOXEL_VOLUME = 1.08  # mm^3
 
-    # Physical dose domain of the fit: Bahn et al. included voxels receiving at least 2 Gy ([1]).
+    # Course dose domain of the fit: Bahn et al. included voxels receiving at least 2 Gy ([1]).
     DEFAULT_DOSE_THRESHOLD = 2.0  # Gy
 
     def __init__(
@@ -81,6 +87,8 @@ class POLOBase(FluenceDependentQuantity):
         mode=None,
         dependencies=None,
         scenarios=None,
+        *,
+        num_of_fractions: int,
     ):
         """
         Initialize a POLO-family quantity.
@@ -98,7 +106,7 @@ class POLOBase(FluenceDependentQuantity):
             VOI name in the CST for the periventricular risk structure, by default
             ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component.
         dose_threshold : float, optional
-            Physical dose in Gy below which the model is treated as undefined, by default
+            Course dose in Gy below which the model is treated as undefined, by default
             2.0 Gy. Set to 0.0 to disable.
         mode : str, optional
             Compute mode, ``"direct"`` or ``"indirect"``. Resolved automatically when omitted.
@@ -106,8 +114,16 @@ class POLOBase(FluenceDependentQuantity):
             Dependency quantity instances, supplied by the resolver.
         scenarios : array_like, optional
             Scenario indices.
+        num_of_fractions : int
+            Number of fractions of the plan. The model is evaluated on the course dose,
+            ``num_of_fractions`` times the per-fraction dose of *dij*. Supplied from the plan
+            during optimization; required when constructing the quantity directly, since a
+            wrong value moves every voxel along the dose axis of the model.
         """
+        if num_of_fractions < 1:
+            raise ValueError(f"num_of_fractions must be at least 1, got {num_of_fractions}.")
         super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
+        self.num_of_fractions = num_of_fractions
         self.risk_voi_name = risk_voi_name
         self.dose_threshold = dose_threshold
         self.binary_risk_mask = self._resolve_risk_mask(binary_risk_mask, cst, risk_voi_name)
@@ -156,21 +172,21 @@ class POLOBase(FluenceDependentQuantity):
 
     def _dose(self, fluence: Array, scenario_index: int) -> Array:
         """
-        Physical dose for one scenario, in the quantity's namespace and dtype.
+        Course dose for one scenario, in the quantity's namespace and dtype.
 
         *fluence* is passed in rather than read from a cache: the forward pass must evaluate
         at ``self._w_cache`` and the chain derivative at ``self._w_grad_cache``, and those are
         not guaranteed to hold the same vector.
         """
-        return self.array_backend.asarray(
+        return self.num_of_fractions * self.array_backend.asarray(
             self._deps["physical_dose"].compute(fluence).flat[scenario_index],
             dtype=self._dtype,
         )
 
     def _linear_predictor(self, fluence: Array, scenario_index: int) -> tuple[Array, Array]:
-        """Return ``(eta, d)``: the linear predictor and the physical dose it was built from."""
+        """Return ``(eta, d)``: the linear predictor and the course dose it was built from."""
         d = self._dose(fluence, scenario_index)
-        d_x_ld = self.array_backend.asarray(
+        d_x_ld = self.num_of_fractions * self.array_backend.asarray(
             self._deps["let_dose"].compute(fluence).flat[scenario_index], dtype=self._dtype
         )
         eta = (
@@ -187,6 +203,8 @@ class POLOBase(FluenceDependentQuantity):
 
     def _backpropagate(self, grad_eta: Array, scenario_index: int) -> Array:
         """Push a gradient w.r.t. eta back to fluence through both dose dependencies."""
+        # Both dependencies enter eta scaled by num_of_fractions.
+        grad_eta = grad_eta * self.num_of_fractions
         chain_d = self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
             grad_eta * self.BETA_DOSE, scenario_index
         )

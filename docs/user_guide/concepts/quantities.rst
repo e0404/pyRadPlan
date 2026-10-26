@@ -61,7 +61,9 @@ Available quantities
    * - :class:`~pyRadPlan.quantities.POLO`
      - ``"polo"``
      - Probability of lesion origin per voxel, volume-corrected to the grid the model was
-       fitted on. Derived from ``physical_dose`` and ``let_dose``.
+       fitted on. Derived from ``physical_dose`` and ``let_dose``, evaluated on the course
+       dose (``num_of_fractions`` times the per-fraction dose). Fitted on conventional
+       fractionation (1.8-2 Gy per fraction); there is no correction for fraction size.
 
 Selecting a quantity for optimization
 --------------------------------------

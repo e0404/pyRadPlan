@@ -47,6 +47,12 @@ logging.basicConfig(level=logging.INFO)
 
 # %% [markdown]
 # Just like in the other examples, we load the CT and CST, create the Plan and SteeringInformation.
+#
+# POLO was fitted on the dose of the whole treatment course, so the plan states its number of
+# fractions, and `dose_convention="total"` lets us write the objectives in course dose as well.
+# The dose influence matrix itself always holds the dose of one fraction. 50 Gy in 30 fractions
+# (about 1.7 Gy each) is close to the conventional 1.8-2 Gy fractions the model was fitted on; it
+# has no correction for fraction size, so hypofractionated plans lie outside its domain.
 # %%
 # Load TG119 surrogate phantom
 ct, cst = load_tg119()
@@ -55,6 +61,8 @@ ct, cst = load_tg119()
 pln = IonPlan(
     radiation_mode="protons",
     machine="Generic",
+    num_of_fractions=30,
+    dose_convention="total",
 )
 pln.prop_opt = {"solver": "scipy", "convert_dose_objectives": False}
 
@@ -81,7 +89,7 @@ vois = {voi.name: voi for voi in cst.vois}
 # OAR ('Core' - simulating the ventricular risk structure)
 vois["Core"].objectives = [SquaredOverdosing(priority=10.0, d_max=15.0)]
 
-# Target ('OuterTarget' - prescribed to 50.0 Gy cumulative course dose)
+# Target ('OuterTarget' - prescribed to 50.0 Gy over the course)
 vois["OuterTarget"].objectives = [SquaredDeviation(priority=100.0, d_ref=50.0)]
 
 # BODY (general dose objectives over the standard BODY contour)
@@ -103,7 +111,7 @@ polo_voi = VOI(
     mask=sitk.MaskNegated(vois["BODY"].mask, vois["OuterTarget"].mask),
     grid=vois["BODY"].grid,
     apply_overlap=None,
-    objectives=[NTCPPOLO(priority=1.0e6, risk_voi_name="Core")],
+    objectives=[NTCPPOLO(priority=1.0e3, risk_voi_name="Core")],
 )
 cst.vois.append(polo_voi)
 
@@ -113,14 +121,14 @@ cst.vois.append(polo_voi)
 # %%
 fluence = fluence_optimization(ct, cst, stf, dij, pln)
 
-# Compute standard physical result (without POLO quantity)
-result = dij.compute_result_ct_grid(fluence)
+# Compute standard physical result (without POLO quantity), reported as course dose
+result = dij.compute_result_ct_grid(fluence, num_of_fractions=pln.result_dose_factor)
 
 # Like every pyRadPlan quantity, POLO is computed over the whole dose grid. Only the POLO
 # segment is exported, though: the model is defined for brain tissue, so values inside the
 # target -- or out in air -- are not meaningful and should not be displayed. Because
 # 'POLO VOI' opts out of overlap resolution, its mask is exactly the one the objective saw.
-polo_qty = POLO(dij, cst=cst, risk_voi_name="Core")
+polo_qty = POLO(dij, cst=cst, risk_voi_name="Core", num_of_fractions=pln.num_of_fractions)
 polo_full = polo_qty.compute_ct_grid(fluence)
 result["polo"] = sitk.Mask(polo_full, sitk.Cast(polo_voi.mask, sitk.sitkUInt8))
 

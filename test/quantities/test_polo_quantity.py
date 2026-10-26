@@ -43,7 +43,7 @@ def sample_dij_dense(sample_base_dij_dict):
 
 
 def test_polo_quantity_initialization_and_compute(sample_dij_dense):
-    polo = POLO(sample_dij_dense, risk_voi_name=None)
+    polo = POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
 
     risk_mask = np.zeros(125, dtype=bool)
     risk_mask[:10] = True
@@ -59,7 +59,7 @@ def test_polo_quantity_initialization_and_compute(sample_dij_dense):
 
 
 def test_linear_polo_quantity_compute(sample_dij_dense):
-    lin_polo = LinearPOLO(sample_dij_dense, risk_voi_name=None)
+    lin_polo = LinearPOLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
 
     risk_mask = np.zeros(125, dtype=bool)
     risk_mask[:10] = True
@@ -93,7 +93,7 @@ def risk_cst():
 
 def test_polo_quantity_cst_lookup(sample_dij_dense, risk_cst):
     _ct, cst = risk_cst
-    polo = POLO(sample_dij_dense, cst=cst, risk_voi_name="Ventricles_4mm")
+    polo = POLO(sample_dij_dense, num_of_fractions=1, cst=cst, risk_voi_name="Ventricles_4mm")
 
     assert polo.risk_voi_name == "Ventricles_4mm"
 
@@ -108,16 +108,20 @@ def test_polo_quantity_cst_lookup(sample_dij_dense, risk_cst):
 def test_polo_quantity_missing_risk_voi_raises(sample_dij_dense, risk_cst):
     _ct, cst = risk_cst
     with pytest.raises(ValueError, match="Absent"):
-        POLO(sample_dij_dense, cst=cst, risk_voi_name="Absent")
+        POLO(sample_dij_dense, num_of_fractions=1, cst=cst, risk_voi_name="Absent")
 
 
 def test_polo_dose_threshold_zeroes_below_domain(sample_dij_dense):
     # Bahn et al. fitted on voxels receiving at least 2 Gy; below that POLO is undefined.
     fluence = xp.ones(10, dtype=xp.float32)  # dij is all ones -> dose 10 Gy everywhere
 
-    above = np.asarray(POLO(sample_dij_dense, risk_voi_name=None).compute(fluence).flat[0])
+    above = np.asarray(
+        POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None).compute(fluence).flat[0]
+    )
     below = np.asarray(
-        POLO(sample_dij_dense, risk_voi_name=None, dose_threshold=1e3).compute(fluence).flat[0]
+        POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None, dose_threshold=1e3)
+        .compute(fluence)
+        .flat[0]
     )
 
     assert np.all(above > 0.0)
@@ -129,21 +133,23 @@ def test_linear_polo_marks_below_threshold_as_neg_inf(sample_dij_dense):
     fluence = xp.ones(10, dtype=xp.float32)
 
     eta = np.asarray(
-        LinearPOLO(sample_dij_dense, risk_voi_name=None, dose_threshold=1e3)
+        LinearPOLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None, dose_threshold=1e3)
         .compute(fluence)
         .flat[0]
     )
     assert np.all(np.isneginf(eta))
 
     eta_in_domain = np.asarray(
-        LinearPOLO(sample_dij_dense, risk_voi_name=None).compute(fluence).flat[0]
+        LinearPOLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
+        .compute(fluence)
+        .flat[0]
     )
     assert np.all(np.isfinite(eta_in_domain))
 
 
 def test_polo_derivative_without_forward_compute(sample_dij_dense):
     # The derivative path must not depend on a prior compute() having populated _w_cache.
-    polo = POLO(sample_dij_dense, risk_voi_name=None)
+    polo = POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
 
     fluence = xp.ones(10, dtype=xp.float32)
     d_q = xp.ones((1, 125), dtype=xp.float32)
@@ -155,14 +161,43 @@ def test_polo_derivative_without_forward_compute(sample_dij_dense):
 def test_polo_derivative_uses_current_fluence(sample_dij_dense):
     # The chain derivative must be evaluated at _w_grad_cache, not at whatever fluence the
     # last forward pass happened to leave in _w_cache.
-    polo = POLO(sample_dij_dense, risk_voi_name=None)
+    polo = POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
     d_q = xp.ones((1, 125), dtype=xp.float32)
 
     grad_fluence = xp.asarray(np.arange(1, 11, dtype=np.float32))
     expected = np.asarray(polo.compute_chain_derivative(d_q, grad_fluence).flat[0])
 
-    stale = POLO(sample_dij_dense, risk_voi_name=None)
+    stale = POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
     stale.compute(xp.ones(10, dtype=xp.float32))  # different fluence, forward cache only
     actual = np.asarray(stale.compute_chain_derivative(d_q, grad_fluence).flat[0])
 
     assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize("cls", [POLO, LinearPOLO])
+def test_polo_evaluates_course_dose(sample_dij_dense, cls):
+    # The dij holds per-fraction dose and the model was fitted on course dose, so n fractions
+    # at fluence w must equal one fraction at n * w, with the gradient scaled by n.
+    n = 3
+    fluence = xp.full(10, 4.0, dtype=xp.float32)
+    d_q = xp.ones((1, 125), dtype=xp.float32)
+    per_fx = cls(sample_dij_dense, num_of_fractions=n, risk_voi_name=None)
+    course = cls(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
+
+    assert np.allclose(
+        np.asarray(per_fx.compute(fluence).flat[0]),
+        np.asarray(course.compute(n * fluence).flat[0]),
+    )
+    assert np.allclose(
+        np.asarray(per_fx.compute_chain_derivative(d_q, fluence).flat[0]),
+        n * np.asarray(course.compute_chain_derivative(d_q, n * fluence).flat[0]),
+    )
+
+
+def test_resolver_injects_num_of_fractions(sample_dij_dense):
+    resolver = QuantityResolver(
+        sample_dij_dense,
+        context={"num_of_fractions": 7},
+        quantity_kwargs={"polo": {"risk_voi_name": None}},
+    )
+    assert resolver.get("polo").num_of_fractions == 7

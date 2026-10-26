@@ -16,7 +16,7 @@ class POLO(POLOBase):
     """
     Probability of Lesion Origin (POLO) model quantity.
 
-    Predicts the probability of lesion origin from physical dose, dose-weighted LET and a
+    Predicts the probability of lesion origin from course dose, dose-weighted LET and a
     binary risk factor (periventricular fringe <= 4 mm), volume-corrected by
     ``k = v_voxel / 1.08 mm^3`` relative to the grid the model was fitted on
     (0.6 x 0.6 x 3.0 mm^3).
