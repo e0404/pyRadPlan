@@ -309,7 +309,7 @@ def test_new_objectives_follow_the_shared_quantity(qapp, tg119):
 
 
 def _image_reference_combos(widget):
-    """All image-reference dropdowns in the parameters column."""
+    """All dropdowns in the parameters column (image and VOI references)."""
     combos = []
     for row in range(widget._table.rowCount()):
         cell = widget._table.cellWidget(row, OptimizationWidget._COL_PARAMS)
@@ -379,6 +379,28 @@ def test_image_reference_accepts_imported_numpy_dose(mimicking_workspace):
     d_ref = _objectives(ws.cst.vois[voi_idx])[-1].d_ref
     assert isinstance(d_ref, tuple)
     assert d_ref[0] is cube
+
+
+def test_voi_reference_param_selects_structure(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+
+    voi_idx = next(i for i, v in enumerate(cst.vois) if v.name == "BODY")
+    cst.vois[voi_idx].objectives = [get_objective("NTCP POLO")]
+    ws.set_many(ct=ct, cst=cst)
+
+    # the default risk structure is not part of TG119, so it is shown as missing
+    cmb = _image_reference_combos(widget)[0]
+    assert cmb.itemText(0) == "Ventricles_4mm (not in structures)"
+    assert cmb.findText("Core") > 0
+
+    cmb.setCurrentIndex(cmb.findText("Core"))
+    assert _objectives(ws.cst.vois[voi_idx])[0].risk_voi_name == "Core"
+
+    cmb = _image_reference_combos(widget)[0]
+    assert cmb.currentText() == "Core"
+    assert cmb.findText("Ventricles_4mm (not in structures)") < 0
 
 
 def _tg119_dose_image(ct):

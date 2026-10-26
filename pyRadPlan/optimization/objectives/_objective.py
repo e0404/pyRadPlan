@@ -16,7 +16,8 @@ from ...core import Grid
 from ...core.resample import resample_numpy_array
 
 ParameterType = Union[
-    Literal["reference", "numeric", "relative_volume", "image_reference"], list[str]
+    Literal["reference", "numeric", "relative_volume", "image_reference", "voi_reference"],
+    list[str],
 ]
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,10 @@ class ParameterMetadata:
         optimization)
     kind : str, optional, default='numeric'
         Type/Meaning of the parameter. Options are 'reference' (relates to the input vector, e.g.
-        the dose when you optimize on dose. Used for normalization), 'numeric', 'relative_volume'.
-        The kind is used in case the parameter needs to pre transformed in context.
+        the dose when you optimize on dose. Used for normalization), 'numeric', 'relative_volume',
+        'image_reference' (a reference image) and 'voi_reference' (the name of a VOI in the
+        structure set). The kind is used in case the parameter needs to pre transformed in
+        context.
 
     Attributes
     ----------

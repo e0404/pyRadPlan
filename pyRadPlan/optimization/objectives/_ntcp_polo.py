@@ -1,13 +1,13 @@
 """NTCP POLO objective."""
 
-from typing import ClassVar, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import Field
 import array_api_compat
 
 from ...core.xp_utils.typing import Array
 from ...quantities import P_MAX, total_ntcp
-from ._objective import Objective
+from ._objective import Objective, ParameterMetadata
 
 
 class NTCPPOLO(Objective):
@@ -31,10 +31,14 @@ class NTCPPOLO(Objective):
     quantity: str = Field(
         default="polo", description="Quantity the objective is evaluated on (e.g. 'polo')."
     )
-    risk_voi_name: str = Field(
-        default="Ventricles_4mm",
-        description="Name of the periventricular risk structure in CST (<= 4mm).",
-    )
+    risk_voi_name: Annotated[
+        str,
+        Field(
+            default="Ventricles_4mm",
+            description="Name of the periventricular risk structure in CST (<= 4mm).",
+        ),
+        ParameterMetadata(kind="voi_reference"),
+    ]
 
     quantity_params: ClassVar[tuple[str, ...]] = ("risk_voi_name",)
 
