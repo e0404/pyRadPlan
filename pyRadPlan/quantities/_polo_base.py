@@ -49,8 +49,10 @@ class POLOBase(FluenceDependentQuantity):
     The model was fitted on the dose of the whole treatment course, while the dose influence
     matrix holds the dose of a single fraction. Both doses entering the linear predictor are
     therefore scaled by ``num_of_fractions`` (identical fractions assumed), independently of
-    ``Plan.dose_convention``. Bahn et al. fitted on conventional fractionation; the model has
-    no fraction-size correction, so hypofractionated courses lie outside its domain.
+    ``Plan.dose_convention``. The fitting cohort was treated with 1.8 or 2.0 Gy(RBE) per
+    fraction to prescriptions of 45-60 Gy(RBE) ([1], Table 1). The model has no fraction-size
+    correction, so courses with other fraction sizes (e.g. hypofractionation) lie outside its
+    domain.
 
     References
     ----------
