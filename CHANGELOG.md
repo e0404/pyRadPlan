@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** `fluence_optimization` returns a `PlanResult` instead of the fluence vector, which is available as `result.fluence`. `Dij.compute_result_ct_grid` and `calc_dose_forward` return a `PlanResult` instead of a dictionary of images
+- **Breaking:** `fluence_optimization` returns a `PlanResult` instead of the fluence vector, which is available as `result.fluence`. `Dij.compute_result_ct_grid`, `Dij.compute_result_dose_grid` and `calc_dose_forward` return a `PlanResult` instead of a dictionary of images
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
 - The documentation tutorials are built from the jupytext example scripts in `examples/` and the documentation shows example outputs for releases only, from notebooks executed and committed during the release; examples are not executed in CI or on Read the Docs; example notebooks are no longer part of the repository
 - The pencil beam dose engines and the ion stf generators no longer ignore densities outside the patient contours by default (`ignore_outside_densities=False`), so air outside the patient is traced for dose calculation and energy selection alike. Set it to `True` on both to restore the previous dose engine behaviour
@@ -96,6 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `plot_slice` / `plot_multiple_slices` failed for a dimensionless `overlay_unit` such as `"1"` (e.g. in the carbon example)
+- `calculate_machine_scale` read the forward dose as a dictionary and failed
 - GUI: editing a number field of the objectives table or the configuration dialogs, e.g. a reference dose or a penalty, gave a value ten times too large or more in locales with a decimal comma: the fields displayed a decimal point, which these locales read as a thousands separator, so overwriting the "60" of "60.0" with "45" set 450. The fields now display the decimal separator of the locale. The parameter fields of the objectives table are also no longer sized for their full ±1e9 range
 - Ion machine files listing more focus sizes (`initFocus.SisFWHMAtIso`) than foci with beam optics, as the HIT base data with fluence spectra does, load again; the surplus sizes are ignored. Energy spectra given as a histogram (`energySpectrum.type = 'histogram'` with `energy_MeVpN` and `weight`) are read as well; the Monte Carlo engines use their weighted mean and spread
 - FRED: ion energies are written per nucleon (`Tu`, `EuFWHM`), as the machines tabulate them; carbon was simulated with about a twelfth of its energy before. FRED is now available for oxygen plans (it was registered as `oxygen16`) and writes helium and oxygen inputs. Ion calculations with FRED are not validated yet (the oxygen test case's dose is about 20 times the reference) and warn about it; proton calculations agree with the reference

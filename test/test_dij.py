@@ -188,10 +188,10 @@ def test_result_computation_physical_dose_dose_grid(sample_dij_dict):
     dij = create_dij(**sample_dij_dict)
     f = np.ones((dij.total_num_of_bixels,), dtype=np.float32)
     result = dij.compute_result_dose_grid(f)
-    assert isinstance(result, dict)
+    assert isinstance(result, PlanResult)
     assert "physical_dose" in result
-    assert isinstance(result["physical_dose"], sitk.Image)
-    assert result["physical_dose"].GetSize() == dij.dose_grid.dimensions
+    assert isinstance(result.physical_dose.values, sitk.Image)
+    assert result.physical_dose.values.GetSize() == dij.dose_grid.dimensions
 
 
 def test_result_computation_physical_dose_ct_grid(sample_dij_dict):
@@ -212,13 +212,13 @@ def test_result_computation_let(sample_dij_dict):
 
     result = dij.compute_result_dose_grid(f)
 
-    assert isinstance(result, dict)
+    assert isinstance(result, PlanResult)
     assert "let" in result
     assert "physical_dose" in result
-    assert isinstance(result["let"], sitk.Image)
-    assert isinstance(result["physical_dose"], sitk.Image)
-    assert result["let"].GetSize() == dij.dose_grid.dimensions
-    assert result["physical_dose"].GetSize() == dij.dose_grid.dimensions
+    assert isinstance(result.let.values, sitk.Image)
+    assert isinstance(result.physical_dose.values, sitk.Image)
+    assert result.let.values.GetSize() == dij.dose_grid.dimensions
+    assert result.physical_dose.values.GetSize() == dij.dose_grid.dimensions
 
     with pytest.raises(ValueError):
         dij.physical_dose = None
@@ -234,13 +234,13 @@ def test_result_computation_biodose(sample_dij_dict):
 
     result = dij.compute_result_dose_grid(f)
 
-    assert isinstance(result, dict)
+    assert isinstance(result, PlanResult)
     assert "effect" in result
     assert "physical_dose" in result
-    assert isinstance(result["effect"], sitk.Image)
-    assert isinstance(result["physical_dose"], sitk.Image)
-    assert result["effect"].GetSize() == dij.dose_grid.dimensions
-    assert result["physical_dose"].GetSize() == dij.dose_grid.dimensions
+    assert isinstance(result.effect.values, sitk.Image)
+    assert isinstance(result.physical_dose.values, sitk.Image)
+    assert result.effect.values.GetSize() == dij.dose_grid.dimensions
+    assert result.physical_dose.values.GetSize() == dij.dose_grid.dimensions
 
 
 def test_compose_beam_dijs(sample_dij_dict):

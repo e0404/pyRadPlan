@@ -599,7 +599,7 @@ class Dij(PyRadPlanBaseModel):
 
     def compute_result_dose_grid(
         self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
-    ) -> dict[str, sitk.Image]:
+    ) -> PlanResult:
         """
         Compute results on the dose grid from intensity vector.
 
@@ -615,8 +615,8 @@ class Dij(PyRadPlanBaseModel):
 
         Returns
         -------
-        dict[str,sitk.Image]
-            A dictionary containing the quantity images for each scenario.
+        PlanResult
+            A PlanResult object containing the quantity distributions on the dose grid.
         """
 
         out = self.get_result_arrays_from_intensity(
@@ -642,7 +642,7 @@ class Dij(PyRadPlanBaseModel):
                 out[key].SetSpacing(self.dose_grid.resolution_vector)
                 out[key].SetDirection(self.dose_grid.direction.ravel())
 
-        return out
+        return create_result(out, fluence=intensities)
 
     def compute_result_ct_grid(
         self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
@@ -666,29 +666,18 @@ class Dij(PyRadPlanBaseModel):
             A PlanResult object containing the quantity distributions on the CT grid.
         """
 
-        out = self.compute_result_dose_grid(
+        result = self.compute_result_dose_grid(
             intensities, scenario_index=scenario_index, num_of_fractions=num_of_fractions
         )
-        # Create a sitk image for each scenario
-
-        for key, value in out.items():
-            # Create a sitk image for each scenario
-            resampler = sitk.ResampleImageFilter()
-            resampler.SetInterpolator(sitk.sitkLinear)
-            resampler.SetOutputDirection(self.ct_grid.direction.ravel())
-            resampler.SetOutputOrigin(self.ct_grid.origin)
-            resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
-            resampler.SetSize(self.ct_grid.dimensions)
-
-            if isinstance(value, list):
-                #  handle every single beam information
-                for i in range(len(value)):
-                    out[key][i] = resampler.Execute(value[i])
-            else:
-                # handle the collective of all beams
-                out[key] = resampler.Execute(value)
-
-        return create_result(out, fluence=intensities)
+        grid = self.ct_grid
+        return create_result(
+            quantities={k: q.resample_to_grid(grid) for k, q in result.quantities.items()},
+            beam_quantities={
+                k: [q.resample_to_grid(grid) for q in qs]
+                for k, qs in result.beam_quantities.items()
+            },
+            fluence=intensities,
+        )
 
     def to_namespace(
         self,
