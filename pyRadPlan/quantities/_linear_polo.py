@@ -1,7 +1,7 @@
 import pint
 
 from ..core.xp_utils.typing import Array
-from pyRadPlan.quantities._polo_base import POLOBase
+from ._polo_base import POLOBase
 
 ureg = pint.UnitRegistry()
 

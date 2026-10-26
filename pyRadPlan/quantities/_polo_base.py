@@ -3,9 +3,11 @@
 from typing import Optional
 
 import array_api_compat
+import SimpleITK as sitk
 
+from ..core.resample import resample_image
 from ..core.xp_utils.typing import Array
-from pyRadPlan.quantities._base import FluenceDependentQuantity
+from ._base import FluenceDependentQuantity
 
 # Clip bound for POLO probabilities. Keeps a saturated voxel from driving the product to
 # exactly zero; 1e-6 stays representable in float32. Public because the NTCPPOLO objective
@@ -129,9 +131,6 @@ class POLOBase(FluenceDependentQuantity):
             binary_risk_mask = getattr(self._dij, "binary_risk_mask", None)
 
         if hasattr(binary_risk_mask, "mask") or hasattr(binary_risk_mask, "GetSize"):
-            import SimpleITK as sitk  # noqa: PLC0415
-            from pyRadPlan.core.resample import resample_image  # noqa: PLC0415
-
             img = binary_risk_mask.mask if hasattr(binary_risk_mask, "mask") else binary_risk_mask
             resampled = resample_image(
                 img,

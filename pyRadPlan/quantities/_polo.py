@@ -1,8 +1,13 @@
-import pint
-
 from typing import Optional
+
+import numpy as np
+import pint
+import SimpleITK as sitk
+
+from ..core.resample import resample_image
+from ..core.xp_utils import to_numpy
 from ..core.xp_utils.typing import Array
-from pyRadPlan.quantities._polo_base import POLOBase, total_ntcp
+from ._polo_base import POLOBase, total_ntcp
 
 ureg = pint.UnitRegistry()
 
@@ -73,10 +78,6 @@ class POLO(POLOBase):
         float
             The total NTCP.
         """
-        import numpy as np
-
-        from pyRadPlan.core.xp_utils import to_numpy  # noqa: PLC0415
-
         # Bring the result to the host before masking and aggregating. The quantity may hold
         # its dij on an accelerator, and a device array neither converts implicitly to NumPy
         # nor indexes with a NumPy boolean mask.
@@ -84,9 +85,6 @@ class POLO(POLOBase):
 
         if mask is not None:
             if hasattr(mask, "GetSize"):
-                import SimpleITK as sitk
-                from pyRadPlan.core.resample import resample_image
-
                 resampled = resample_image(
                     mask,
                     target_grid=self._dij.dose_grid,

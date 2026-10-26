@@ -5,6 +5,7 @@ import logging
 
 import numpy as np
 import array_api_compat
+import SimpleITK as sitk
 
 from ..core.xp_utils.typing import Array, ArrayNamespace
 
@@ -194,14 +195,14 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         a quantity on an optimization result would otherwise mix, e.g., a CuPy dij with a
         NumPy fluence. Arrays already in the right place are returned untouched.
         """
-        from pyRadPlan.core.xp_utils import from_numpy, to_numpy  # noqa: PLC0415
-
         if array_api_compat.array_namespace(fluence) is self.array_backend and (
             self.device is None or array_api_compat.device(fluence) == self.device
         ):
             return fluence
 
-        return from_numpy(self.array_backend, to_numpy(fluence), device=self.device)
+        return compute_backend.from_numpy(
+            self.array_backend, compute_backend.to_numpy(fluence), device=self.device
+        )
 
     def compute(self, fluence: Array) -> Array:
         """
@@ -275,10 +276,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         sitk.Image
             The quantity as a SimpleITK image on the dose grid.
         """
-        from pyRadPlan.core.xp_utils import to_numpy
-        import SimpleITK as sitk
-
-        q_arr = to_numpy(self.compute(fluence).flat[scenario_index])
+        q_arr = compute_backend.to_numpy(self.compute(fluence).flat[scenario_index])
         q_img = sitk.GetImageFromArray(q_arr.reshape(self._dij.dose_grid.dimensions[::-1]))
         q_img.SetOrigin(tuple(self._dij.dose_grid.origin.tolist()))
         q_img.SetSpacing(tuple(self._dij.dose_grid.resolution_vector.tolist()))
@@ -302,8 +300,6 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         sitk.Image
             The quantity as a SimpleITK image on the CT grid.
         """
-        import SimpleITK as sitk
-
         q_img = self.compute_dose_grid(fluence, scenario_index=scenario_index)
 
         resampler = sitk.ResampleImageFilter()
