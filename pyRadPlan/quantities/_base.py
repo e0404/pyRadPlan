@@ -157,6 +157,26 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                         f"Required dependency {dep_id!r} missing for {type(self).__name__!r}."
                     )
 
+    def check_fit_domain(self, regions: dict[str, np.ndarray]) -> list[str]:
+        """
+        Warn about a plan outside the conditions the quantity's model was fitted for.
+
+        Called by the planning problem once the quantities are resolved. The default has
+        no fitted model and returns no warnings.
+
+        Parameters
+        ----------
+        regions : dict[str, np.ndarray]
+            Boolean voxel masks on the dose grid, after overlap handling, of the VOIs whose
+            objectives use this quantity, keyed by VOI name.
+
+        Returns
+        -------
+        list[str]
+            One message per violated condition.
+        """
+        return []
+
     def _infer_dtype(self, xp: ArrayNamespace):
         if self._mode == "direct":
             container = getattr(self._dij, self.identifier)

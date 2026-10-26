@@ -3,9 +3,11 @@
 from typing import Optional
 
 import array_api_compat
+import numpy as np
 import SimpleITK as sitk
 
 from ..core.resample import resample_image
+from ..core.xp_utils import to_numpy
 from ..core.xp_utils.typing import Array
 from ._base import FluenceDependentQuantity
 
@@ -53,6 +55,15 @@ class POLOBase(FluenceDependentQuantity):
     fraction to prescriptions of 45-60 Gy(RBE) ([1], Table 1). The model has no fraction-size
     correction, so courses with other fraction sizes (e.g. hypofractionation) lie outside its
     domain.
+
+    During optimization, :meth:`check_fit_domain` warns about an objective region that
+    overlaps a GTV or no risk voxel. The remaining conditions of the fit cannot be read from
+    a plan and are the user's responsibility: proton-treated adult and paediatric low-grade
+    glioma patients, voxels inside the brain, a risk structure that is the ventricles with a
+    4 mm margin, and contrast-enhancing lesions as the endpoint ([1]). LET from analytical
+    pencil-beam engines differs from the FLUKA Monte Carlo LETd (all charged particles) the
+    model was fitted on; absolute POLO/NTCP values carry a corresponding systematic
+    uncertainty.
 
     References
     ----------
@@ -128,6 +139,7 @@ class POLOBase(FluenceDependentQuantity):
         self.num_of_fractions = num_of_fractions
         self.risk_voi_name = risk_voi_name
         self.dose_threshold = dose_threshold
+        self._cst = cst
         self.binary_risk_mask = self._resolve_risk_mask(binary_risk_mask, cst, risk_voi_name)
 
         # Volume correction factor k = v_new / v_old ([2], Equation 4). Applied by subclasses
@@ -150,13 +162,7 @@ class POLOBase(FluenceDependentQuantity):
 
         if hasattr(binary_risk_mask, "mask") or hasattr(binary_risk_mask, "GetSize"):
             img = binary_risk_mask.mask if hasattr(binary_risk_mask, "mask") else binary_risk_mask
-            resampled = resample_image(
-                img,
-                target_grid=self._dij.dose_grid,
-                extrapolate=0.0,
-                interpolator=sitk.sitkNearestNeighbor,
-            )
-            binary_risk_mask = sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
+            binary_risk_mask = self._on_dose_grid(img)
 
         if binary_risk_mask is None:
             if risk_voi_name is not None:
@@ -171,6 +177,49 @@ class POLOBase(FluenceDependentQuantity):
             )
 
         return self.array_backend.asarray(binary_risk_mask, dtype=self._dtype)
+
+    def _on_dose_grid(self, mask: sitk.Image) -> np.ndarray:
+        """Resample a binary mask to the dose grid, as a flat boolean array in dij order."""
+        resampled = resample_image(
+            mask,
+            target_grid=self._dij.dose_grid,
+            extrapolate=0.0,
+            interpolator=sitk.sitkNearestNeighbor,
+        )
+        return sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
+
+    def check_fit_domain(self, regions: dict[str, np.ndarray]) -> list[str]:
+        """
+        Warn about objective regions the model was not fitted for, or cannot act on.
+
+        The model was fitted on voxels outside the GTV ([1]); target structures are matched
+        by type and a name containing "GTV". A region without a single risk voxel leaves the
+        periventricular term inactive, e.g. when overlap handling removed the risk structure
+        from it.
+        """
+        name = type(self).__name__
+        messages = []
+        vois = getattr(self._cst, "vois", None) or []
+        gtvs = [v for v in vois if v.voi_type == "TARGET" and "GTV" in v.name.upper()]
+        gtv_mask = np.zeros(self._dij.dose_grid.num_voxels, dtype=bool)
+        for voi in gtvs:
+            gtv_mask |= self._on_dose_grid(voi.mask)
+        risk = to_numpy(self.binary_risk_mask) > 0.5
+        for region_name, region in regions.items():
+            n_gtv = int(np.count_nonzero(region & gtv_mask))
+            if n_gtv:
+                messages.append(
+                    f"{name} on '{region_name}': {n_gtv} voxels lie inside the GTV "
+                    f"({', '.join(v.name for v in gtvs)}), where the model was not fitted."
+                )
+            if self.risk_voi_name is not None and not np.any(region & risk):
+                messages.append(
+                    f"{name} on '{region_name}': no voxel of the risk structure "
+                    f"'{self.risk_voi_name}' lies in this region, so the periventricular term "
+                    "has no effect. If overlap handling removed it, set apply_overlap=None on "
+                    f"'{region_name}'."
+                )
+        return messages
 
     def _dose(self, fluence: Array, scenario_index: int) -> Array:
         """

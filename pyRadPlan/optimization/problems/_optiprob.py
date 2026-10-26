@@ -106,6 +106,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     _mult_scen: ScenarioModel
 
     _objective_list: list[tuple]
+    _objective_voi_names: list[str]
     _constraint_list: list
 
     _quantities: list[RTQuantity]
@@ -298,6 +299,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                     obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
+        self._objective_voi_names = [voi.name for voi, _ in voi_objectives]
 
         return objectives, quantity_ids
 
@@ -349,6 +351,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)
 
+        # Quantities read anatomy (e.g. POLO's risk structure) from the structures as given;
+        # overlap handling only defines the regions objectives are evaluated on.
+        cst_unmodified = self._cst
+
         # apply overlap priorities
         if self.apply_overlap:
             self._cst = self._cst.apply_overlap_priorities()
@@ -384,7 +390,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Quantities receive problem-level context (and parameters their objectives opt into)
         # through dependency injection on their ``__init__`` signature.
         context = {
-            "cst": self._cst,
+            "cst": cst_unmodified,
             "ct": self._ct,
             "stf": getattr(self, "_stf", None),
             "num_of_fractions": self._num_of_fractions,
@@ -395,6 +401,16 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             objective_list=self._objective_list,
         )
         self._quantities = resolver.reachable(resolver.resolve(quantity_ids))
+
+        for q in self._quantities:
+            regions = {
+                name: mask
+                for name, (mask, objs) in zip(self._objective_voi_names, self._objective_list)
+                if any(obj.quantity == q.identifier for obj in objs)
+            }
+            for message in q.check_fit_domain(regions):
+                logger.warning(message)
+                self.report_warning(message)
 
         if len(set([q.array_backend for q in self._quantities])) == 1:
             self._array_backend = self._quantities[0].array_backend
