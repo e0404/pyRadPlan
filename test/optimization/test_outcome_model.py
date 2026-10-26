@@ -303,3 +303,13 @@ def test_planning_problem_passes_planning_data(test_data_protons_raw):
         prob._initialize()
 
     assert seen == [(ct, cst)]
+
+
+@requires_torch
+def test_unloadable_model_is_a_validation_error(tmp_path):
+    from pydantic import ValidationError
+
+    from pyRadPlan.optimization.objectives import OutcomeModel
+
+    with pytest.raises(ValidationError, match="Cannot load outcome model"):
+        OutcomeModel(priority=1.0, model=str(tmp_path / "missing"))

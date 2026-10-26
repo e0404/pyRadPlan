@@ -12,6 +12,13 @@ from pyRadPlan.ai.modelhub import load_model
 from ._outcome import OutcomeObjective
 
 
+def _torch():
+    torch = xp_utils.import_backend("torch")
+    if torch is None:
+        raise RuntimeError("PyTorch is required for OutcomeModel.")
+    return torch
+
+
 class OutcomeModel(OutcomeObjective):
     """Outcome objective using a torch model and its :class:`OutcomePreprocessor`.
 
@@ -51,7 +58,10 @@ class OutcomeModel(OutcomeObjective):
             return data
 
         spec = data.get("model")
-        nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
+        try:
+            nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
+        except OSError as exc:  # a ValueError lets pydantic report it as a validation error
+            raise ValueError(f"Cannot load outcome model {spec!r}: {exc}") from exc
         nn_model.requires_grad_(False)
         if not isinstance(spec, str):
             data["model"] = "<preloaded>"
@@ -62,6 +72,7 @@ class OutcomeModel(OutcomeObjective):
     @staticmethod
     def _resolve_model(spec: Any, device: Optional[str] = None) -> tuple[Any, Any]:
         """Resolve ``model`` into an ``(nn_model, preprocessor)`` pair."""
+        torch = _torch()
         if isinstance(spec, (tuple, list)) and len(spec) == 2 and hasattr(spec[0], "forward"):
             nn_model, preprocessor = spec
             if device is not None:
@@ -69,8 +80,6 @@ class OutcomeModel(OutcomeObjective):
             return nn_model, preprocessor
         if isinstance(spec, str):
             if device is None:
-                import torch  # noqa: PLC0415
-
                 device = str(
                     xp_utils.choose_device(array_api_compat.array_namespace(torch.empty(0)))
                 )
@@ -81,10 +90,6 @@ class OutcomeModel(OutcomeObjective):
             "OutcomeModel 'model' must be a model name, a local directory path, "
             "or a preloaded (model, preprocessor) tuple."
         )
-
-    def __deepcopy__(self, memo=None):
-        """Share model and preprocessor; torch modules don't deepcopy reliably."""
-        return self.model_copy()
 
     @property
     def _model_device(self):
@@ -98,14 +103,11 @@ class OutcomeModel(OutcomeObjective):
         self.preprocessor.set_dose_grid(dose_grid)
 
     def _predict(self, dose) -> float:
-        import torch  # noqa: PLC0415
-
-        with torch.no_grad():
+        with _torch().no_grad():
             return float(self._forward(self._to_torch(dose)))
 
     def _predict_with_gradient(self, dose) -> tuple[float, Any]:
-        import torch  # noqa: PLC0415
-
+        torch = _torch()
         leaf = self._to_torch(dose).detach().requires_grad_(True)
         prob = self._forward(leaf)
         (grad,) = torch.autograd.grad(prob, leaf)
@@ -118,8 +120,7 @@ class OutcomeModel(OutcomeObjective):
         return self.preprocessor.postprocess(self.nn_model(*inputs))
 
     def _to_torch(self, dose):
-        import torch  # noqa: PLC0415
-
+        torch = _torch()
         return xp_utils.to_namespace(torch, dose).to(
             device=self._model_device, dtype=torch.float32
         )

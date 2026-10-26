@@ -33,6 +33,9 @@ class OutcomeObjective(Objective):
     num_of_fractions : int, optional
         For models trained on total-course dose: the per-fraction dose is multiplied by
         this before it reaches the model.
+    transform : bool
+        Apply pyanno4rt's SALU transform: above ``p = 0.5`` the value becomes
+        ``0.25 * logit(p) + 0.5``, which keeps the gradient from vanishing.
     """
 
     has_hessian: ClassVar[bool] = False
@@ -40,12 +43,19 @@ class OutcomeObjective(Objective):
     monitor_only: bool = Field(default=False)
     warmup_iterations: int = Field(default=0, ge=0)
     num_of_fractions: Optional[int] = Field(default=None, gt=0)
+    transform: bool = Field(default=False)
 
     _history: list[float] = PrivateAttr(default_factory=list)
     _iteration: int = PrivateAttr(default=0)
     # VOI voxel indices on the dose grid; None when the VOI covers the whole grid.
     _dose_index: Any = PrivateAttr(default=None)
     _dose_n: Optional[int] = PrivateAttr(default=None)
+
+    def __deepcopy__(self, memo=None):
+        """Share runtime handles (models, extractors); they don't deepcopy reliably."""
+        copied = self.model_copy()
+        copied._history = list(self._history)
+        return copied
 
     @property
     def history(self) -> list[float]:
@@ -63,12 +73,12 @@ class OutcomeObjective(Objective):
         self._set_dose_grid(target_grid)
 
     def compute_objective(self, dose_values):
-        """Compute the predicted probability (0 when *monitor_only*)."""
+        """Compute the (transformed) predicted probability; 0 when *monitor_only*."""
         xp = array_api_compat.array_namespace(dose_values)
         prob = self._predict(self._to_full_grid(dose_values, xp))
         self._history.append(prob)
 
-        value = 0.0 if self.monitor_only else prob
+        value = 0.0 if self.monitor_only else self._transform(prob)[0]
         return xp.asarray(
             value, dtype=dose_values.dtype, device=array_api_compat.device(dose_values)
         )
@@ -89,14 +99,19 @@ class OutcomeObjective(Objective):
                 device=array_api_compat.device(dose_values),
             )
 
-        _, grad = self._predict_with_gradient(self._to_full_grid(dose_values, xp))
-        if self.num_of_fractions is not None:
-            grad = grad * self.num_of_fractions
-        return self._from_full_grid(grad, dose_values, xp)
+        prob, grad = self._predict_with_gradient(self._to_full_grid(dose_values, xp))
+        scale = self._transform(prob)[1] * (self.num_of_fractions or 1)
+        return self._from_full_grid(grad * scale, dose_values, xp)
 
     def report_info(self) -> dict:
         """Return the probability history of the last optimization."""
         return {"history": list(self._history)} if self._history else {}
+
+    def _transform(self, p: float) -> tuple[float, float]:
+        """Return the objective value and its derivative w.r.t. ``p``."""
+        if not self.transform or p <= 0.5:
+            return p, 1.0
+        return 0.25 * float(np.log(p / (1.0 - p))) + 0.5, 0.25 / (p - p**2)
 
     def _set_dose_grid(self, dose_grid) -> None:
         """Set up model-specific dose grid handling."""
