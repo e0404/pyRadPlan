@@ -606,7 +606,7 @@ class StructureSet(PyRadPlanBaseModel):
 
         new_vois = [None] * len(self.vois)
 
-        # VOIs with None will instantly be copied to new_vois.
+        # VOIs with apply_overlap=None are copied unchanged and never cut others.
         overlap_indices = []
         for i, v in enumerate(self.vois):
             if v.apply_overlap is not None:
@@ -614,7 +614,6 @@ class StructureSet(PyRadPlanBaseModel):
             else:
                 new_vois[i] = v.model_copy()
 
-        # Cases where all VOIs were set to None
         if not overlap_indices:
             return self.model_copy(deep=True, update={"vois": new_vois})
 
@@ -641,13 +640,12 @@ class StructureSet(PyRadPlanBaseModel):
                 if curr_voi.overlap_priority > prev_voi.overlap_priority:
                     last_priority_mask = overlap_mask
 
-                # False means IT DOES NOT UPDATE ITS VOXELS (is not masked by higher priority)
+                # apply_overlap=False keeps its own voxels
                 if curr_voi.apply_overlap is not False:
                     curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
 
             curr_voi.mask = curr_mask
 
-            # Both True and False contribute to overlap_mask
             overlap_mask = sitk.Or(overlap_mask, curr_mask)
 
             # sitk.Show(overlap_mask, debugOn = True)

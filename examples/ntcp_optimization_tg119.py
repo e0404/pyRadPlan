@@ -29,12 +29,9 @@ from pyRadPlan.cst import HelperVOI
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
     SquaredOverdosing,
-    OutcomeCNN,
+    OutcomeModel,
 )
 
-import os
-
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
 settings.xp.preferred_gpu_array_backend = "cupy"
@@ -66,13 +63,10 @@ stf = generate_stf(ct, cst, pln)
 
 # %%
 # Configure the CNN-based NTCP objective for the Core.
-# Keep a handle to it to access the NTCP history after optimization.
-ntcp_obj = OutcomeCNN(
+ntcp_obj = OutcomeModel(
     priority=10000.0,
     model="pyRadPlan-outcome-ORPDenseNet-tg119",  # HF name, local dir, or (model, preprocessor)
     warmup_iterations=5,
-    ct=ct,
-    cst=cst,
     cst_masks=["Core"],  # channel order matters unless the model collapses masks
 )
 
@@ -102,18 +96,15 @@ opt_info = {}
 # Calculate optimized fluence
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
-# Save NTCP history from active optimization
-ntcp_history_active = list(ntcp_obj.ntcp_history)
-ntcp_obj.reset_history()
+ntcp_history_active = opt_info["objective_info"][0]["history"]
 
-# Native optimization: switch CNN NTCP objective to monitor-only mode (logs but zero gradients)
+# Native optimization: the NTCP objective only monitors (zero value and gradient)
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
 fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
-# Save NTCP history from the native (monitor-only) optimization
-ntcp_history_native = list(ntcp_obj.ntcp_history)
+ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
 
 # # Compute the result on the CT grid

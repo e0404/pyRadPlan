@@ -200,6 +200,9 @@ class Objective(PyRadPlanBaseModel):
         """Compute the objective Hessian."""
         return
 
+    def setup(self, ct, cst) -> None:
+        """Receive the planning CT and structures before optimization. Override in subclasses."""
+
     def report_info(self) -> dict:
         """Return auxiliary info collected during optimization. Override in subclasses."""
         return {}

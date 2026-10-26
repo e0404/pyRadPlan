@@ -18,8 +18,8 @@ import SimpleITK as sitk
 from pyRadPlan.ai.modelhub import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 from pyRadPlan import settings
 from pyRadPlan.core import Grid
-from pyRadPlan.optimization.objectives import OutcomeLR
-from pyRadPlan.optimization.objectives.model._features import (
+from pyRadPlan.optimization.objectives import OutcomeLR, OutcomeSklearn
+from pyRadPlan.optimization.objectives.outcome._features import (
     DOSE_FEATURES,
     FeatureExtractor,
     segment_area,
@@ -106,7 +106,8 @@ def _objective(estimator, features, **kwargs):
     kwargs.setdefault("num_of_fractions", 1)
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=features)
-    objective = OutcomeLR(model=(estimator, spec), ct=ct, cst=cst, **kwargs)
+    objective = OutcomeLR(model=(estimator, spec), **kwargs)
+    objective.setup(ct, cst)
     objective.preprocess_image_reference_parameters(grid, index_list=None)
     return objective, grid
 
@@ -388,8 +389,8 @@ def test_objective_matches_the_hand_computed_probability():
     features = objective.extractor.compute_values(dose, np)
     logit = float(features @ np.asarray(coefficients) + 0.05)
     assert probability == pytest.approx(1.0 / (1.0 + np.exp(-logit)))
-    assert objective.ntcp_history == [pytest.approx(probability)]
-    assert objective.report_info()["ntcp_history"] == [pytest.approx(probability)]
+    assert objective.history == [pytest.approx(probability)]
+    assert objective.report_info()["history"] == [pytest.approx(probability)]
 
 
 def test_gradient_matches_finite_differences_on_the_dose_vector():
@@ -442,7 +443,7 @@ def test_monitor_only_reports_but_does_not_steer():
     dose = _dose(grid)
 
     assert objective.compute_objective(dose) == 0.0
-    assert objective.ntcp_history  # still recorded
+    assert objective.history  # still recorded
     assert np.all(objective.compute_gradient(dose) == 0.0)
 
 
@@ -474,7 +475,7 @@ def test_uninitialised_objective_raises():
     spec = OutcomeModelSpec(label="test", features=_features())
     objective = OutcomeLR(model=(_logistic([0.1] * 4), spec))
 
-    with pytest.raises(RuntimeError, match="not initialised"):
+    with pytest.raises(RuntimeError, match="not set up"):
         objective.compute_objective(np.zeros(4))
 
 
@@ -486,7 +487,7 @@ def test_deepcopy_shares_the_extractor():
     clone = copy.deepcopy(objective)
 
     assert clone.extractor is objective.extractor
-    assert clone.ntcp_history is not objective.ntcp_history
+    assert clone.history is not objective.history
 
     dose = _dose(grid, seed=5)
     assert clone.compute_objective(dose) == pytest.approx(objective.compute_objective(dose))
@@ -498,6 +499,7 @@ def test_objective_serialises_without_runtime_handles():
 
     assert dumped["model"] == "<preloaded>"
     assert "coef" not in dumped
+    assert "estimator" not in dumped
     assert "extractor" not in dumped
 
 
@@ -561,30 +563,27 @@ def test_fractionated_gradient_matches_finite_differences():
 
 
 def test_fraction_count_defaults_to_the_spec():
-    ct, cst, _ = _make_geometry()
     spec = OutcomeModelSpec(label="test", features=_features(), num_of_fractions=30)
 
-    from_spec = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
-    explicit = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst, num_of_fractions=25)
+    from_spec = OutcomeLR(model=(_logistic([0.1] * 4), spec))
+    explicit = OutcomeLR(model=(_logistic([0.1] * 4), spec), num_of_fractions=25)
 
     assert from_spec.num_of_fractions == 30
     assert explicit.num_of_fractions == 25
 
 
 def test_rejects_models_that_are_not_a_logistic_regression():
-    ct, cst, _ = _make_geometry()
     spec = OutcomeModelSpec(label="test", features=_features())
 
     with pytest.raises(TypeError, match="binary LogisticRegression"):
-        OutcomeLR(model=(object(), spec), ct=ct, cst=cst)
+        OutcomeLR(model=(object(), spec))
 
 
 def test_rejects_tcp_models():
-    ct, cst, _ = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="TCP", features=_features())
 
     with pytest.raises(ValueError, match="minimises NTCP"):
-        OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
+        OutcomeLR(model=(_logistic([0.1] * 4), spec))
 
 
 def test_objective_value_is_an_array_like_the_dose():
@@ -602,7 +601,73 @@ def test_objective_value_is_an_array_like_the_dose():
 def test_rejects_a_voi_that_misses_part_of_a_segment():
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", features=_features())
-    objective = OutcomeLR(model=(_logistic([0.1] * 4), spec), ct=ct, cst=cst)
+    objective = OutcomeLR(model=(_logistic([0.1] * 4), spec))
+    objective.setup(ct, cst)
 
     with pytest.raises(ValueError, match="misses"):
         objective.preprocess_image_reference_parameters(grid, index_list=np.arange(10))
+
+
+# ---------------------------------------------------------------------------
+# scikit-learn objective
+# ---------------------------------------------------------------------------
+
+
+def _sklearn_objective(estimator, **kwargs):
+    kwargs.setdefault("num_of_fractions", 1)
+    ct, cst, grid = _make_geometry()
+    spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=_features())
+    objective = OutcomeSklearn(model=(estimator, spec), **kwargs)
+    objective.setup(ct, cst)
+    objective.preprocess_image_reference_parameters(grid, index_list=None)
+    return objective, grid
+
+
+def test_feature_names_are_available_before_setup():
+    spec = OutcomeModelSpec(label="test", features=_features())
+    objective = OutcomeLR(model=(_logistic([0.1] * 4), spec))
+    assert objective.feature_names == [feature.name for feature in _features()]
+
+
+def test_sklearn_objective_matches_the_analytic_logistic_regression():
+    """Finite differences over the features reproduce the analytic LR gradient."""
+    estimator = _logistic([0.03, -1e-4, 0.06, -1e-4])
+    analytic, grid = _objective(estimator, _features(), transform=True, num_of_fractions=30)
+    generic, _ = _sklearn_objective(estimator, transform=True, num_of_fractions=30)
+    dose = _dose(grid, seed=8) / 30
+
+    assert generic.compute_objective(dose) == pytest.approx(analytic.compute_objective(dose))
+    np.testing.assert_allclose(
+        generic.compute_gradient(dose), analytic.compute_gradient(dose), rtol=1e-5
+    )
+
+
+def test_sklearn_objective_steers_a_nonlinear_model():
+    from sklearn.neural_network import MLPClassifier  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    mean_dose = rng.uniform(0, 60, size=(200, 2))
+    volume = rng.uniform(0, 1e3, size=(200, 2))
+    x = np.column_stack([mean_dose[:, 0], volume[:, 0], mean_dose[:, 1], volume[:, 1]]) / 100
+    y = (mean_dose.sum(axis=1) + rng.normal(0, 10, 200) > 60).astype(int)
+    estimator = MLPClassifier(hidden_layer_sizes=(8,), max_iter=3000, random_state=0).fit(x, y)
+
+    objective, grid = _sklearn_objective(estimator)
+    dose = _dose(grid, seed=9)
+    gradient = objective.compute_gradient(dose)
+
+    step = 1e-3
+    for index in np.flatnonzero(gradient)[::13]:
+        forward, backward = dose.copy(), dose.copy()
+        forward[index] += step
+        backward[index] -= step
+        numeric = (
+            objective.compute_objective(forward) - objective.compute_objective(backward)
+        ) / (2 * step)
+        assert gradient[index] == pytest.approx(numeric, rel=1e-2, abs=1e-8)
+
+
+def test_sklearn_objective_rejects_models_without_probabilities():
+    spec = OutcomeModelSpec(label="test", features=_features())
+    with pytest.raises(TypeError, match="predict_proba"):
+        OutcomeSklearn(model=(object(), spec))

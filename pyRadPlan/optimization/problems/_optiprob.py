@@ -101,6 +101,8 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     # Private properties
     _ct: CT
     _cst: StructureSet
+    _planning_ct: CT
+    _planning_cst: StructureSet
     _stf: SteeringInformation
     _dij: Dij
     _mult_scen: ScenarioModel
@@ -290,6 +292,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
             linear_mask[cube_ix] = True
             for obj in objs:
+                obj.setup(ct=self._planning_ct, cst=self._planning_cst)
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
@@ -345,6 +348,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
 
     def _initialize(self):
         """Initialize the data for the planning problem."""
+
+        # Objectives' setup() gets the CT and structures as passed in, not the dose-grid ones.
+        self._planning_ct = self._ct
+        self._planning_cst = self._cst
 
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)

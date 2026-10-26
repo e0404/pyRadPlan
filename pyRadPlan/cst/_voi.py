@@ -142,7 +142,13 @@ class VOI(PyRadPlanBaseModel, ABC):
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
-    apply_overlap: Union[bool, None] = Field(default=True)
+    apply_overlap: Union[bool, None] = Field(
+        default=True,
+        description=(
+            "True: cut by higher priorities. False: keeps its voxels but still cuts lower "
+            "priorities. None: ignored by overlap handling."
+        ),
+    )
 
     visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
     color: tuple[int, int, int] = Field(

@@ -10,8 +10,13 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
-from .model._ntcp_cnn import OutcomeCNN
-from .model._ntcp_lr import OutcomeLR
+from .outcome import (
+    OutcomeObjective,
+    OutcomeModel,
+    FeatureOutcomeObjective,
+    OutcomeLR,
+    OutcomeSklearn,
+)
 
 from ._factory import (
     get_available_objectives,
@@ -29,8 +34,9 @@ register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
 register_objective(DoseUniformity)
-register_objective(OutcomeCNN)
+register_objective(OutcomeModel)
 register_objective(OutcomeLR)
+register_objective(OutcomeSklearn)
 
 __all__ = [
     "Objective",
@@ -43,8 +49,11 @@ __all__ = [
     "SquaredMimicking",
     "SquaredOverdosing",
     "SquaredUnderdosing",
-    "OutcomeCNN",
+    "OutcomeObjective",
+    "OutcomeModel",
+    "FeatureOutcomeObjective",
     "OutcomeLR",
+    "OutcomeSklearn",
     "get_available_objectives",
     "get_objective",
     "get_objectives_union",

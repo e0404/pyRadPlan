@@ -17,7 +17,6 @@
 # %%
 # Import necessary libraries
 import logging
-import os
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,7 +38,6 @@ from pyRadPlan.optimization.objectives import (
     SquaredOverdosing,
 )
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
 settings.xp.preferred_gpu_array_backend = "cupy"
@@ -96,8 +94,6 @@ ntcp_obj = OutcomeLR(
     model=PYANNO4RT_MODEL,
     transform=True,
     num_of_fractions=pln.num_of_fractions,
-    ct=ct,  # geometry features are evaluated on the CT grid
-    cst=cst,  # provides the segment masks
 )
 print("Model features:", ntcp_obj.feature_names)
 
@@ -135,8 +131,7 @@ cst.vois.append(
 opt_info = {}
 fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
-ntcp_history_active = list(ntcp_obj.ntcp_history)
-ntcp_obj.reset_history()
+ntcp_history_active = opt_info["objective_info"][0]["history"]
 
 # %% [markdown]
 # Reference run: the same problem with the NTCP objective in monitor-only mode, so it
@@ -147,7 +142,7 @@ ntcp_obj.monitor_only = True
 
 opt_info_native = {}
 fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
-ntcp_history_native = list(ntcp_obj.ntcp_history)
+ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
 print(f"NTCP model-guided: {ntcp_history_active[-1]:.2%}")
 print(f"NTCP native:       {ntcp_history_native[-1]:.2%}")

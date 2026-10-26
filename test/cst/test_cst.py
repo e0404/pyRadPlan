@@ -682,6 +682,34 @@ def test_apply_overlap_flags(generic_ct):
     assert np.array_equal(m4_out, expected_m4)
 
 
+def test_apply_overlap_false_keeps_voxels(generic_ct):
+    """A lower-priority VOI with apply_overlap=False keeps its voxels but still cuts lower ones."""
+    masks = [np.zeros((10, 10, 10), dtype=np.uint8) for _ in range(3)]
+    masks[0][2:8, 2:8, 2:8] = 1
+    masks[1][4:9, 4:9, 4:9] = 1
+    masks[2][:] = 1
+
+    vois = [
+        Target(
+            name=f"v{i}",
+            ct_image=generic_ct,
+            mask=sitk.GetImageFromArray(m),
+            overlap_priority=i + 1,
+            apply_overlap=flag,
+        )
+        for i, (m, flag) in enumerate(zip(masks, [True, False, True]))
+    ]
+    for v in vois:
+        v.mask.CopyInformation(generic_ct.cube_hu)
+
+    out = StructureSet(ct_image=generic_ct, vois=vois).apply_overlap_priorities()
+    m1_out = sitk.GetArrayViewFromImage(out.vois[1].mask)
+    m2_out = sitk.GetArrayViewFromImage(out.vois[2].mask)
+
+    assert np.array_equal(m1_out, masks[1])
+    assert np.array_equal(m2_out, 1 - (masks[0] | masks[1]))
+
+
 # --- Helpers for body segmentation tests ---
 def _make_test_ct():
     """Create a small CT with a main component, an internal cavity (hole), and a small extra component."""

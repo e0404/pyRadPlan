@@ -7,7 +7,7 @@ contract.
 """
 
 from ._settings import AiSettings
-from ._preprocessor import BasePreprocessor
+from ._preprocessor import BasePreprocessor, OutcomePreprocessor
 from ._registry import (
     ModelTask,
     list_local_models,
@@ -16,11 +16,12 @@ from ._registry import (
 )
 from ._resolve import resolve_model_dir, is_valid_model_dir, repo_subpath
 from ._load_model import load_model
-from ._pyanno4rt import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
+from ._pyanno4rt_loader import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
     "AiSettings",
     "BasePreprocessor",
+    "OutcomePreprocessor",
     "ModelTask",
     "list_local_models",
     "task_from_dir",

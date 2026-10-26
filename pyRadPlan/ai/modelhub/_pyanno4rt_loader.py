@@ -1,19 +1,11 @@
-"""Loading of pyanno4rt outcome models.
+"""Loader for pyanno4rt outcome models.
 
-pyanno4rt snapshots a trained outcome model as a bare pickled scikit-learn
-estimator (``<model_path>/predictor.save``). Everything needed to *use* that
-estimator -- which features it consumes, from which segments, and in which
-order -- lives in the ``input.json`` of the treatment plan it was trained with.
-:func:`load_pyanno4rt_model` reads that pair and returns the estimator together
-with a declarative :class:`OutcomeModelSpec`.
+pyanno4rt saves a trained outcome model as a pickled scikit-learn estimator
+(``<label>/predictor.*``); its features are defined in the plan's ``input.json``.
 
-Feature order is the subtle part: pyanno4rt re-sorts the feature columns listed
-in ``input.json`` into the column order of the training table before fitting, so
-the estimator's coefficients are bound to *that* order and not to the order the
-columns appear in the JSON. This is reproduced by reading the header of
-``dataset.data_path`` when it is reachable; when it is not, the JSON order is
-used and a warning is emitted, because a wrong order binds the coefficients to
-the wrong features without any other symptom.
+pyanno4rt fits on the column order of the training table, not the JSON order, so
+the features are sorted by the header of ``dataset.data_path`` when it is readable.
+Otherwise the JSON order is used with a warning.
 """
 
 from __future__ import annotations
@@ -154,8 +146,8 @@ def _order_features(
     warning = (
         "Cannot verify the feature order of the outcome model (%s); falling back to the order "
         "given in the configuration. If it differs from the training table, the model's "
-        "coefficients bind to the wrong features. Pass an explicit feature order or make the "
-        "training table available to remove this ambiguity."
+        "coefficients bind to the wrong features. Make the training table available to "
+        "remove this ambiguity."
     )
 
     if not data_path:

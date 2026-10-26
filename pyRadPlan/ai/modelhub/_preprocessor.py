@@ -63,3 +63,23 @@ class BasePreprocessor(ABC):
     def __call__(self, inputs: Any) -> Any:
         """Alias for :meth:`preprocess`."""
         return self.preprocess(inputs)
+
+
+class OutcomePreprocessor(BasePreprocessor):
+    """Preprocessor contract for outcome models used as optimization objectives.
+
+    The objective calls ``postprocess(model(*preprocess(dose)))`` and differentiates the
+    result w.r.t. ``dose``, so :meth:`preprocess` must use differentiable torch ops.
+    """
+
+    @abstractmethod
+    def configure(self, ct: Any, cst: Any, cst_masks: Optional[list[str]] = None, device=None):
+        """Prepare the static inputs (e.g. CT and masks) on ``device``."""
+
+    @abstractmethod
+    def set_dose_grid(self, dose_grid: Any) -> None:
+        """Set the grid the optimization dose lives on."""
+
+    @abstractmethod
+    def preprocess(self, inputs: Any) -> Any:
+        """Map a flat (Fortran-order) float32 dose tensor on the model device to model inputs."""
