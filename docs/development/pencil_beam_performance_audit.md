@@ -1050,6 +1050,158 @@ Reproduce sequentially, without overlapping benchmarks:
 .venv/Scripts/python.exe benchmark/profile_particle_indexing_micro.py --backend cupy
 ```
 
+## Cutoff preparation: conversion hoisting, batching and backend placement
+
+Reference: `115e6ca8`, frozen in `benchmark/profile_cutoff_reference.py`, including
+the original Hong physical-dose formulas. The new implementation keeps the
+1,200 radial samples, 360 angles for `singleXY`, depth-selection procedure,
+integration order, first-true cutoff rule, integral tolerance and compensation
+convention. It does not substitute an analytic Gaussian cutoff or change physics.
+
+### 1. Isolated conversion hoisting
+
+Before refactoring, four alternating TG119 proton influence pairs per dose
+backend compared only moving `base_kernel.to_namespace(np)` outside the depth
+loop. The existing shared `take` indexing was present on both sides.
+
+| Dose backend | Original median (s) | Hoisted median (s) | Median paired speedup | Pair range |
+|---|---:|---:|---:|---:|
+| NumPy | 0.913 | 0.903 | 1.024x | 0.945–1.062x |
+| CuPy | 2.169 | 2.114 | 1.078x | 0.902–1.141x |
+
+All eight pairs had identical dose values and sparse structure. These full-dose
+differences are noisy; there is no robust standalone speedup claim. The isolated
+preparation measurements below show where conversion cost is material. Original
+records are under [hoist](../../benchmark/pb_audit_results/cutoff_preparation/hoist).
+
+### 2. A common numerical evaluator
+
+`CutoffQuadrature` retains the original radius-major sample order and prepares
+the deterministic host geometry once per beam. It can transfer that geometry to
+an Array API namespace once. `evaluate_cutoff` processes bounded depth batches,
+integrates each profile, and selects radii/compensation using Array API operations.
+Its callback leaves physical-dose evaluation with the engine.
+
+Hong now shares `_lateral_profile` between normal dose evaluation and cutoff
+preparation. The cutoff path interpolates IDD and lateral parameters once per
+depth, broadcasts them over samples, and skips unused LET/biological interpolation
+and evaluation. The energy kernel is converted once, outside the depth loop.
+The base engine retains
+a scalar-profile fallback; Hong subclasses overriding physical dose or kernel
+interpolation use that fallback unless they explicitly provide a batched hook.
+Future engines can supply `_cutoff_dose_profile` without duplicating quadrature
+or backend-specific integration code.
+
+The default batch limit is 1,000,000 depth-by-sample entries, with a minimum of
+one complete depth. It is a per-array sizing rule, not a total-memory guarantee:
+component count and live physics intermediates also consume memory. It fits all
+35 isotropic depths in one batch and two focused depths per batch. A packed
+`(n_depths, 3)` result permits one host transfer per energy for the existing
+NumPy-backed machine model. Full cutoff (`1.0`) skips quadrature and conversion.
+
+The historical `relative` method overwrites a scalar compensation factor at
+each depth. Integration deliberately retains the final depth's value. Likewise,
+an all-false threshold comparison retains the original argmax index-zero result.
+Changing either convention would require a separate numerical-model change.
+
+### 3. NumPy/CuPy measurements, including preparation and transfers
+
+Each call constructs quadrature, prepares/uploads the kernel and depth arrays,
+evaluates 35 depths, and downloads the small output. CUDA initialization, JIT and
+allocation pools are warmed; prepared input arrays are **not** reused between
+calls. Five rotating-order rounds were measured for integral cutoffs. Timings
+are for one energy, not the complete dose engine. The full engine can reuse
+quadrature across multiple energies, unlike this deliberately self-contained
+single-energy comparison.
+
+| Lateral model | Original (ms) | Hoisted only (ms) | Batched NumPy (ms) | Batched CuPy (ms) |
+|---|---:|---:|---:|---:|
+| Single Gaussian | 4.997 | 1.980 | **0.783** | 2.121 |
+| Double Gaussian | 5.508 | 2.877 | **1.169** | 2.664 |
+| Multi Gaussian, synthetic | 15.964 | 12.517 | **1.667** | 6.064 |
+| `singleXY`, synthetic | 461.348 | 474.802 | 228.386 | **51.139** |
+
+Single/double cases use an actual Generic proton kernel at 162.933 MeV. No
+shipped Generic machine exposed a multi-Gaussian or focused kernel, so those
+cases explicitly extend that kernel with three Gaussian components or unequal
+x/y sigmas. They establish computational behavior, not validation of a clinical
+focused machine. In `singleXY`, CuPy is about **4.47x faster than batched NumPy**
+and **9.02x faster than the original**, with transfers included. Isotropic cases
+favor batched NumPy by roughly 2.3–3.6x over CuPy.
+
+NumPy outputs matched the frozen reference exactly for all measured models.
+CuPy selected the same radius bins in both integral and relative measurements;
+the largest difference in the relative compensation was 7.5e-14, and in the
+reported integral-error percentage 8.5e-12. GPU cumulative reductions are not
+bitwise identical to NumPy, so other inputs near a bin threshold can select a
+neighboring radius. The benchmark requires exact radius selection for these
+cases and `rtol=atol=1e-10` for compensation/error. Independent scalar-formula
+tests use tighter tolerances. No production dose tolerance was relaxed.
+
+Three additional rotating-order rounds for `relative` cutoffs show the same
+placement trend. The records include separate preparation, evaluation and
+download timings: [integral](../../benchmark/pb_audit_results/cutoff_preparation/preparation_integral.json),
+[relative](../../benchmark/pb_audit_results/cutoff_preparation/preparation_relative.json).
+
+### Full-dose impact and execution policy
+
+Three alternating pairs per case compared the complete current engine against
+the frozen original cutoff and physical-dose methods:
+
+| Modality | Dose backend | Current median (s) | Original median (s) | Median paired speedup |
+|---|---|---:|---:|---:|
+| Protons | NumPy | 0.844 | 0.960 | 1.073x |
+| Protons | CuPy | 1.820 | 1.865 | 1.032x |
+| VHEE | NumPy | 0.969 | 0.972 | 0.996x |
+| VHEE | CuPy | 1.029 | 1.048 | 1.032x |
+
+VHEE changes are within observed timing noise; preparation gains do not imply
+proportional engine gains. The single-energy synthetic focused speedup should
+not be presented as a full VHEE speedup. Paired speedups are medians of the
+within-pair ratios, not ratios of the displayed timing medians.
+
+Six more pairs put the new cutoff evaluator on CuPy instead of NumPy while dose
+remained on CuPy. They showed no convincing full-engine advantage for these
+isotropic proton/VHEE fixtures. **All 18 full-dose pairs had bitwise-identical
+physical dose values, indices and column pointers.** See the
+[full-dose records](../../benchmark/pb_audit_results/cutoff_preparation/full_dose/summary.json).
+
+NumPy remains the default preparation backend. The new plan/engine option
+`cutoff_backend="dose"` chooses the dose namespace and device while using the
+same numerical evaluator:
+
+```python
+pln.prop_dose_calc["cutoff_backend"] = "dose"  # e.g. CuPy when dose uses CuPy
+```
+
+There is no automatic threshold policy based on the synthetic focused case.
+The option fits the existing generated GUI configuration form (Literal choices);
+no widget-specific dispatch is introduced.
+
+Validation: **262 targeted tests** and **559 GUI tests** pass. The new numerical
+module has **100% statement coverage** from a clean 84-test numerical coverage
+run. Tests cover all lateral models, both cutoff methods, multiple batch sizes,
+empty/full cutoff, invalid physical dose, sample order, custom engine fallbacks,
+placement configuration, and existing matRad/biological-dose regressions. An
+initial broad instrumented run encountered sparse-matrix validation errors while
+loading fixtures after pre-importing settings; the normal functional run passed,
+and coverage was collected separately on the numerical tests. The full
+repository suite was not run. All changed production modules pass Ruff.
+
+Reproduce sequentially:
+
+```powershell
+.venv/Scripts/python.exe benchmark/profile_particle_cutoff.py
+.venv/Scripts/python.exe benchmark/profile_particle_cutoff.py --method relative --rounds 3
+.venv/Scripts/python.exe benchmark/profile_cutoff_suite.py
+.venv/Scripts/python.exe -m pytest test/dose/test_particle_cutoff.py test/dose/test_particle_indexing.py test/dose/test_hongpb.py test/dose/test_hongpb_bio.py test/dose/test_base_pencilbeam.py test/dose/test_pb_geodist.py -q
+```
+
+The frozen `make_hoisted_cutoff()` remains available for standalone reproduction
+of step 1; the audit's `hoist` variant now compares that frozen hoisted path
+against current production. The earlier standalone numbers above were captured
+before the batched implementation, so those references remain independent.
+
 ## Reproduce and inspect
 
 Run from the repository root with the existing environment. All patches below

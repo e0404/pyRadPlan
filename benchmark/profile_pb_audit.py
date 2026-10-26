@@ -87,19 +87,21 @@ def apply_variant(name):
             ([("    curr_ix = xp.nonzero(curr_ix)[0]\n", "")] if name == "legacy_indexing" else [])
             + substitutions,
         )
-    if name in ("hoist", "combined"):
-        replace_method(
-            PP,
-            "_calc_lateral_particle_cut_off",
-            [
-                (
-                    "for j, current_depth in enumerate(depth_values):",
-                    "base_kernel_np = base_kernel.to_namespace(np)\n"
-                    "        for j, current_depth in enumerate(depth_values):",
-                ),
-                ('"kernel": base_kernel.to_namespace(np),', '"kernel": base_kernel_np,'),
-            ],
+    if name in ("hoist", "legacy_cutoff"):
+        from profile_cutoff_reference import (
+            legacy_cutoff,
+            legacy_particle_bixel,
+            make_hoisted_cutoff,
         )
+
+        PP._calc_lateral_particle_cut_off = (
+            make_hoisted_cutoff() if name == "hoist" else legacy_cutoff
+        )
+        Hong._calc_particle_bixel = legacy_particle_bixel
+        return
+    if name == "device_cutoff":
+        PP._cutoff_execution = lambda self: (self.xp, self.device)
+        return
     if name in ("fft", "combined"):
         replace_method(
             SVD,
@@ -285,6 +287,8 @@ def main():
     patch_targets = [
         (PP, "_get_bixel_indices_on_ray"),
         (PP, "_calc_lateral_particle_cut_off"),
+        (PP, "_cutoff_execution"),
+        (Hong, "_calc_particle_bixel"),
         (SVD, "_get_kernel_interpolators"),
         (SVD, "_sample_dij"),
         (DoseEngineBase, "_init_dose_calc"),

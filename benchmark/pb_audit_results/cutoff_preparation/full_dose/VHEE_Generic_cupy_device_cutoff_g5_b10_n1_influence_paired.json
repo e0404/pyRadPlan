@@ -1,0 +1,29 @@
+{
+  "baseline": [
+    1.0320739999879152,
+    1.2202619999879971,
+    1.1251115000341088
+  ],
+  "variant": [
+    1.0364451999776065,
+    0.99813229998108,
+    1.0909926000167616
+  ],
+  "comparisons": [
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    }
+  ]
+}

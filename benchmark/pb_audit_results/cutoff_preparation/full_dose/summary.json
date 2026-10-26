@@ -1,0 +1,68 @@
+[
+  {
+    "mode": "protons",
+    "dose_backend": "cupy",
+    "variant": "device_cutoff",
+    "current_median": 1.7778682000353,
+    "variant_median": 1.7913540999870747,
+    "current_speedup": 1.0226780705003053,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "protons_Generic_cupy_device_cutoff_g5_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "protons",
+    "dose_backend": "cupy",
+    "variant": "legacy_cutoff",
+    "current_median": 1.820114099944476,
+    "variant_median": 1.8651933000073768,
+    "current_speedup": 1.0315578407850168,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "protons_Generic_cupy_legacy_cutoff_g5_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "protons",
+    "dose_backend": "numpy",
+    "variant": "legacy_cutoff",
+    "current_median": 0.8435571999871172,
+    "variant_median": 0.9596174000180326,
+    "current_speedup": 1.072767798062476,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "protons_Generic_numpy_legacy_cutoff_g5_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "VHEE",
+    "dose_backend": "cupy",
+    "variant": "device_cutoff",
+    "current_median": 1.1251115000341088,
+    "variant_median": 1.0364451999776065,
+    "current_speedup": 0.969675094409476,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "VHEE_Generic_cupy_device_cutoff_g5_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "VHEE",
+    "dose_backend": "cupy",
+    "variant": "legacy_cutoff",
+    "current_median": 1.028907000028994,
+    "variant_median": 1.0481188999838196,
+    "current_speedup": 1.0316799060578428,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "VHEE_Generic_cupy_legacy_cutoff_g5_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "VHEE",
+    "dose_backend": "numpy",
+    "variant": "legacy_cutoff",
+    "current_median": 0.9693764000548981,
+    "variant_median": 0.9722038999898359,
+    "current_speedup": 0.9960098058321076,
+    "exact_pairs": 3,
+    "pairs": 3,
+    "source": "VHEE_Generic_numpy_legacy_cutoff_g5_b10_n1_influence_paired.json"
+  }
+]

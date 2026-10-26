@@ -31,7 +31,8 @@ from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
-from ...core.xp_utils import to_namespace
+from ...core.xp_utils import to_namespace, to_numpy
+from ._particle_cutoff import CutoffQuadrature, evaluate_cutoff
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,11 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Method used to determine lateral cut off. 'integral' uses the integral of the lateral
         dose profile to obtain the cut-off distance. 'relative' finds the lateral distance at which
         the dose drops to the requested cutoff
+    cutoff_backend : Literal["numpy", "dose"]
+        Where to prepare lateral cutoffs. "numpy" (default) uses the CPU;
+        "dose" uses the dose calculation's array namespace and device. Both use
+        the same batched Array API evaluator. CPU preparation is usually faster
+        for small isotropic grids; large anisotropic grids can benefit from a GPU.
     """
 
     computes_bio_influence: ClassVar[bool] = True
@@ -74,6 +80,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
     cut_off_method: Literal["integral", "relative"] = "integral"
+    cutoff_backend: Literal["numpy", "dose"] = "numpy"
     tissue_classes: list[TissueProperties] = []  # list of tissues used in the cst
 
     _dij_guarantee_canonical: ClassVar[bool]
@@ -681,6 +688,37 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
         return self._allocate_quantity_matrices(dij, ["let_dose"])
 
+    def _cutoff_execution(self):
+        """Select preparation placement independently of dose-array placement."""
+        if self.cutoff_backend == "dose":
+            return self.xp, self.device
+        if self.cutoff_backend != "numpy":
+            raise ValueError("cutoff_backend must be 'numpy' or 'dose'.")
+        return array_api_compat.array_namespace(np.empty(0)), None
+
+    def _cutoff_dose_profile(self, depths, kernel, sigma_ini_sq, quadrature):
+        """Fallback for engines without a batched physical-profile implementation."""
+        xp = array_api_compat.array_namespace(depths)
+        device = array_api_compat.device(depths)
+        profiles = []
+        for j in range(depths.shape[0]):
+            bixel = {
+                "energy_ix": self._machine.get_energy_index(kernel["energy"], 4),
+                "kernel": kernel,
+                "radial_dist_sq": quadrature.radial_dist_sq,
+                "lat_dists": quadrature.lat_dists,
+                "sigma_ini_sq": sigma_ini_sq,
+                "rad_depths": (depths[j] + kernel["offset"])
+                * xp.ones_like(quadrature.radial_dist_sq),
+                "sub_ray_ix": xp.ones_like(quadrature.radial_dist_sq, dtype=xp.bool),
+                "ix": xp.arange(quadrature.radii.shape[0], device=device),
+                "rad_depth_offset": 0,
+                "add_sigma_sq": 0,
+            }
+            self._calc_particle_bixel(bixel)
+            profiles.append(bixel["physical_dose"])
+        return xp.stack(profiles, axis=0)
+
     def _calc_lateral_particle_cut_off(self, cut_off_level, stf_element):
         # Sanity Checks
         assert isinstance(self._machine, ParticleAccelerator)
@@ -704,46 +742,13 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # TODO: this factor should probably be in the machine data and translate to MU
         conversion_factor = 1.6021766208e-02
 
-        # Define some variables needed for the cutoff calculation
-        v_x = np.concatenate(([0], np.logspace(-1, 3, 1200)))  # [mm]
-
-        # Integration steps
-        r_mid = 0.5 * (v_x[:-1] + v_x[1:])  # [mm]
-        dr = np.diff(v_x)
-        radial_dist_sq = r_mid**2
-
-        # Handle different lateral models for integration
-        if self.lateral_model == "singleXY":
-            v_theta = np.linspace(0, 2 * np.pi, 361)
-            v_theta = v_theta[:-1]  # remove last to avoid duplication at 2*pi
-            # angular bin size
-            d_theta_angle = (v_theta[1] - v_theta[0]) * np.ones_like(v_theta)
-
-            # Store original radial mid vector length before expansion
-            n_radial_bins = r_mid.size  # equals numel(vR)-1 in MATLAB
-            n_angles = v_theta.size
-
-            r_mid_mesh, theta_mesh = np.meshgrid(r_mid, v_theta)
-
-            # Flatten r_mid_mesh
-            r_mid = r_mid_mesh.ravel(order="F")
-            radial_dist_sq = r_mid**2
-
-            # Expand dr /repeat
-            dr = np.repeat(dr, n_angles)
-
-            # Flatten theta
-            theta = theta_mesh.ravel(order="F")
-
-            # Expand d_theta: replicate angular step sequence for each radial bin
-            d_theta = np.tile(d_theta_angle, n_radial_bins)
-
-            # Lateral distances per sample point (vector of radii times unit vectors)
-            sqrt_r2 = np.sqrt(radial_dist_sq)
-            lat_dists = sqrt_r2[:, np.newaxis] * np.column_stack((np.cos(theta), np.sin(theta)))
-        else:
-            lat_dists = np.tile(np.sqrt(radial_dist_sq / 2)[:, np.newaxis], (1, 2))
-            d_theta = 2 * np.pi
+        # Keep deterministic host sampling; transfer it once per beam if requested.
+        cutoff_xp, cutoff_device = self._cutoff_execution()
+        quadrature = (
+            CutoffQuadrature.create(self.lateral_model).to_namespace(cutoff_xp, cutoff_device)
+            if cut_off_level != 1
+            else None
+        )
 
         # Number of depth points for which a lateral cutoff is determined
         num_depth_val = 35
@@ -852,9 +857,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             # Get the kernel entry
             kernel = self._machine.get_kernel_by_index(energy_ix)
 
-            # set default depth cut off - finite value will be set during first iteration
-            depth_dose_cut_off = np.inf
-
             # Get the current integrated depth dose profile
             idd_org = conversion_factor * kernel.idd
             peak_ix_org = np.argmax(idd_org)
@@ -895,59 +897,28 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 comp_fac=1.0, depths=depth_values, cut_off=np.inf * np.ones_like(depth_values)
             )
 
-            base_kernel = deepcopy(kernel)  # similar to base_data in matRad
-
-            # TODO: this could probably be done for all depths with one calculation without a loop
-            for j, current_depth in enumerate(depth_values):
-                # If there's no cut-off set, we do not need to find it. Set it to infinity
-                if cut_off_level == 1:
-                    continue
-                # Create a dummy bixel calculating radial dose distribution for the current
-                # depth (physical dose only: no tissue parameters, hence no bio evaluation)
-                bixel = {
-                    "energy_ix": energy_ix,
-                    "kernel": base_kernel.to_namespace(np),
-                    "radial_dist_sq": radial_dist_sq,
-                    "lat_dists": lat_dists,
-                    "sigma_ini_sq": largest_sigma_sq4unique_energies[
-                        cnt - 1
-                    ],  # TODO: check if this result is correct (rounded but may be right)
-                    "rad_depths": (current_depth + base_kernel.offset)
-                    * np.ones_like(radial_dist_sq),
-                    "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
-                    "ix": np.arange(len(radial_dist_sq)),
-                    "rad_depth_offset": 0,
-                    "add_sigma_sq": 0,
-                }
-
-                self._calc_particle_bixel(bixel)
-                dose_r = bixel["physical_dose"]
-
-                cum_area = np.cumsum(r_mid * dose_r * dr * d_theta)
-
-                relative_tolerance = 0.5  # in [%]
-
-                if abs((cum_area[-1] / idd[j]) - 1) * 100 > relative_tolerance:
-                    warnings.warn("Shell integration in cut-off calculation is inconsistent!")
-
-                # obtain the cut-off compensation factor dending on the cut-off method
-                if self.cut_off_method == "integral":
-                    ix = (cum_area >= idd[j] * cut_off_level).argmax()
-                    kernel.lateral_cut_off.comp_fac = cut_off_level**-1
-                elif self.cut_off_method == "relative":
-                    ix = (dose_r <= (1 - cut_off_level) * np.max(dose_r)).argmax()
-                    rel_fac = cum_area[ix] / cum_area[-1]
-                    kernel.lateral_cut_off.comp_fac = rel_fac**-1
-                else:
-                    raise ValueError("Invalid Cutoff Method. Must be 'integral' or 'relative'!")
-                # Nothing was cut-off -> warn the user
-                if ix == len(cum_area):
-                    depth_dose_cut_off = np.inf
-                    warnings.warn("Couldn't find lateral cut off!")
-                else:
-                    depth_dose_cut_off = r_mid[ix]
-
-                kernel.lateral_cut_off.cut_off[j] = depth_dose_cut_off
+            if cut_off_level != 1:
+                # Convert once per energy, and keep the default compensation during integration.
+                base_kernel = deepcopy(kernel).to_namespace(cutoff_xp, device=cutoff_device)
+                sigma_ini_sq = largest_sigma_sq4unique_energies[cnt - 1]
+                result = evaluate_cutoff(
+                    to_namespace(cutoff_xp, depth_values, device=cutoff_device),
+                    to_namespace(cutoff_xp, idd, device=cutoff_device),
+                    quadrature,
+                    lambda depths, grid: self._cutoff_dose_profile(
+                        depths, base_kernel, sigma_ini_sq, grid
+                    ),
+                    cutoff=cut_off_level,
+                    method=self.cut_off_method,
+                )
+                # One small device-to-host transfer per energy for the serialized machine model.
+                result = to_numpy(result)
+                kernel.lateral_cut_off.cut_off = result[:, 0]
+                # Preserve the existing scalar compensation convention for relative cutoffs.
+                kernel.lateral_cut_off.comp_fac = result[-1, 1]
+                for error in result[:, 2]:
+                    if error > 0.5:
+                        warnings.warn("Shell integration in cut-off calculation is inconsistent!")
 
             self._machine.update_kernel_at_index(energy_ix, kernel)
 

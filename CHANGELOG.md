@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Particle pencil-beam `cutoff_backend` setting: keep cutoff preparation on NumPy (default), or use the dose calculation's namespace/device with `"dose"`. Both run the same Array API evaluator; preparation/transfer benchmarks cover NumPy and CuPy.
 - Isolated particle mask-compaction benchmarks across three dose-grid resolutions, including Array API `take` compatibility checks and separate NumPy/CuPy gather measurements.
 - Cached native-versus-generic interpolation benchmark using captured photon grids and queries, with NumPy/CuPy measurements for both bounds policies in the pencil-beam performance audit.
 - `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.
@@ -67,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Particle lateral-cutoff preparation converts each energy kernel once, interpolates physical parameters once per depth, and evaluates bounded depth batches using shared lateral-dose formulas. Sampling order, cutoff selection and scalar compensation semantics are preserved; custom engine overrides retain a fallback path.
 - Particle pencil-beam engines compact each beamlet's voxel mask once and use Array API `take` for all ray fields, including lateral distances and biological tissue data, uniformly across backends.
 - Photon pencil-beam dose calculation reuses `ArrayBackendGridInterpolator` for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while keeping backend dispatch in `xp_utils`.
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
