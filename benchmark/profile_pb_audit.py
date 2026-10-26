@@ -136,31 +136,12 @@ def apply_variant(name):
         exec(compile(source, "<audit scatter maximum>", "exec"), namespace)
         SVD._sample_dij = namespace["_sample_dij"]
     if name == "union":
-        fn = DoseEngineBase._init_dose_calc
-        namespace = fn.__globals__
+        return  # Nominal selection reuse is now implemented in production.
+    if name == "legacy_voxel_selection":
+        from profile_voxel_preparation_reference import legacy_voxel_selection
 
-        def union_indices(cst, nvox):
-            mask = np.zeros(nvox, dtype=bool)
-            for voi in cst.vois:
-                mask[voi.indices_numpy] = True
-            return np.flatnonzero(mask)
-
-        namespace["_audit_union_indices"] = union_indices
-        replace_method(
-            DoseEngineBase,
-            "_init_dose_calc",
-            [
-                (
-                    "np.unique(\n            np.concatenate([cst.vois[c].indices_numpy for c in range(0, len(cst.vois))])\n        )",
-                    "_audit_union_indices(cst, ct.grid.num_voxels)",
-                ),
-                (
-                    "np.unique(np.concatenate(tmp_vct_grid_scen))",
-                    "(np.asarray(self.voxel_sub_ix) if ct.num_of_ct_scen == 1 "
-                    "else np.unique(np.concatenate(tmp_vct_grid_scen)))",
-                ),
-            ],
-        )
+        DoseEngineBase._init_voxel_selection = legacy_voxel_selection
+        return
     if name == "prepared":
         return  # Interpolator reuse is now provided by the production backend class.
     if name == "device_forward":
@@ -297,6 +278,7 @@ def main():
         (SVD, "_get_kernel_interpolators"),
         (SVD, "_sample_dij"),
         (DoseEngineBase, "_init_dose_calc"),
+        (DoseEngineBase, "_init_voxel_selection"),
         (PB, "_fill_dij"),
         (PB, "_finalize_dose"),
     ]

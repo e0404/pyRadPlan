@@ -644,17 +644,62 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         dij["max_mu"] = np.ones(self._num_of_columns_dij) * np.inf
         dij["num_of_particles_per_mu"] = np.ones(self._num_of_columns_dij) * 1e6
 
+        self._init_voxel_selection(ct, cst)
+
+        # Load machine file from base data folder
+        self._machine = self.load_machine(radiation_mode, machine)
+
+        self._resolve_bio_model(dij, radiation_mode, cst)
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
+
+        dij["alphax"], dij["betax"] = cst.get_reference_lq_params(
+            overlap_is_applied=False, resample_grid=self.dose_grid
+        )
+        dij["tissue_class_ix"] = cst.get_tissue_class_indices(
+            overlap_is_applied=False, resample_grid=self.dose_grid
+        )
+        self._tissue_classes = cst.get_tissue_classes()
+
+        # TODO: this function has not yet been implemented
+        # structures that are selected here will be included in dose calculation over
+        # the robust scenarios
+        # self._robust_voxels_on_grid = select_voxels_from_cst(cst, dij["ct_grid"])
+
+        return dij
+
+    def _init_voxel_selection(self, ct: CT, cst: StructureSet) -> None:
+        """Prepare sorted CT/dose indices, scenario membership, coordinates and masks."""
+        single_ct = ct.num_of_ct_scen == 1
+        ct_mask = None
+        automatic_selection = self.voxel_sub_ix is None
         if self.voxel_sub_ix is None:
-            self.voxel_sub_ix = np.unique(
-                np.concatenate([cst.vois[c].indices_numpy for c in range(0, len(cst.vois))])
-            )
+            if single_ct:
+                # This mask is needed downstream anyway. Union the existing dense masks
+                # directly instead of materializing and sorting overlapping VOI indices.
+                ct_mask = np.zeros(self._ct_grid.num_voxels, dtype=bool)
+                for voi in cst.vois:
+                    np.logical_or(
+                        ct_mask, sitk.GetArrayViewFromImage(voi.mask).ravel(), out=ct_mask
+                    )
+                self.voxel_sub_ix = np.flatnonzero(ct_mask)
+            else:
+                # Keep the existing multi-CT semantics; 4D indices are not 3D mask offsets.
+                self.voxel_sub_ix = np.unique(
+                    np.concatenate([voi.indices_numpy for voi in cst.vois])
+                )
 
         tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
 
-        self._vct_grid = np.unique(np.concatenate(tmp_vct_grid_scen))
-
-        # Find subindexes for the individual scenarios. This helps with subselection later.
-        self._vct_grid_scen_ix = [np.isin(self._vct_grid, c) for c in tmp_vct_grid_scen]
+        if single_ct:
+            # Only generated indices are known to be sorted and unique. Leave the user's
+            # original selection untouched and canonicalize it for internal use.
+            self._vct_grid = (
+                self.voxel_sub_ix if automatic_selection else np.unique(tmp_vct_grid_scen[0])
+            )
+            self._vct_grid_scen_ix = [np.ones(self._vct_grid.size, dtype=bool)]
+        else:
+            self._vct_grid = np.unique(np.concatenate(tmp_vct_grid_scen))
+            self._vct_grid_scen_ix = [np.isin(self._vct_grid, c) for c in tmp_vct_grid_scen]
 
         # Initialize tmp_vdose_grid_scen
         tmp_vdose_grid_scen = [None] * ct.num_of_ct_scen
@@ -682,15 +727,22 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                     target_image=resampled_ct.cube_hu,
                 )
 
-                tmp_vdose_grid_scen[s] = np.where(
-                    np.abs(np.round(interpolated_tmp_cube)).ravel().astype(bool)
+                tmp_vdose_grid_scen[s] = (
+                    # Nearest-neighbor resampling of a binary mask remains binary.
+                    np.flatnonzero(interpolated_tmp_cube)
+                    if single_ct
+                    else np.where(np.abs(np.round(interpolated_tmp_cube)).ravel().astype(bool))
                 )
 
         # Get unique dose grid
-        self._vdose_grid = np.unique(np.concatenate(tmp_vdose_grid_scen, axis=0))
-
-        # Find subindexes for the dose grid scenarios
-        self._vdose_grid_scen_ix = [np.isin(self._vdose_grid, c) for c in tmp_vdose_grid_scen]
+        if single_ct:
+            self._vdose_grid = (
+                self._vct_grid if self._ct_grid == self.dose_grid else tmp_vdose_grid_scen[0]
+            )
+            self._vdose_grid_scen_ix = [np.ones(self._vdose_grid.size, dtype=bool)]
+        else:
+            self._vdose_grid = np.unique(np.concatenate(tmp_vdose_grid_scen, axis=0))
+            self._vdose_grid_scen_ix = [np.isin(self._vdose_grid, c) for c in tmp_vdose_grid_scen]
 
         # Convert CT subscripts to world coordinates.
         self._vox_world_coords = linear_indices_to_grid_coordinates(
@@ -705,32 +757,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._vdose_grid_mask = np.zeros(self.dose_grid.num_voxels, dtype=bool)
         self._vdose_grid_mask[self._vdose_grid] = True
 
-        self._vct_grid_mask = np.zeros(np.prod(ct.cube_dim), dtype=bool)
-        self._vct_grid_mask[self._vct_grid] = True
-
-        # Load machine file from base data folder
-        self._machine = self.load_machine(radiation_mode, machine)
-
-        self._resolve_bio_model(dij, radiation_mode, cst)
-        self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
-
-        # TODO: this is currently not needed, but may be needed in the future
-        # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)
-
-        dij["alphax"], dij["betax"] = cst.get_reference_lq_params(
-            overlap_is_applied=False, resample_grid=self.dose_grid
-        )
-        dij["tissue_class_ix"] = cst.get_tissue_class_indices(
-            overlap_is_applied=False, resample_grid=self.dose_grid
-        )
-        self._tissue_classes = cst.get_tissue_classes()
-
-        # TODO: this function has not yet been implemented
-        # structures that are selected here will be included in dose calculation over
-        # the robust scenarios
-        # self._robust_voxels_on_grid = select_voxels_from_cst(cst, dij["ct_grid"])
-
-        return dij
+        if ct_mask is None:
+            ct_mask = np.zeros(np.prod(ct.cube_dim), dtype=bool)
+            ct_mask[self._vct_grid] = True
+        self._vct_grid_mask = ct_mask
 
     def _resolve_bio_model(
         self, dij: dict[str, Any], radiation_mode: str, cst: Optional[StructureSet] = None

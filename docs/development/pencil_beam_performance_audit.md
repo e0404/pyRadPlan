@@ -8,6 +8,8 @@ This audit describes the original revision. The subsequent implementation of
 photon interpolator reuse is recorded in the [step 1 follow-up](#step-1-photon-interpolator-reuse).
 Its integration was subsequently moved into the reusable
 [Array API interpolation backend](#reusable-array-api-interpolator).
+The shared voxel-preparation follow-up, including measurements across modalities,
+is documented in [voxel preparation performance](voxel_preparation_performance.md).
 
 ## Main findings
 

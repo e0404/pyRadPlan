@@ -1,0 +1,102 @@
+[
+  {
+    "mode": "photons",
+    "backend": "cupy",
+    "resolution": 10.0,
+    "current_median": 1.3006308000185527,
+    "legacy_median": 1.5090343999909237,
+    "paired_speedup": 1.1602327116729807,
+    "exact_pairs": 3,
+    "source": "photons_Generic_cupy_legacy_voxel_selection_g10.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "photons",
+    "backend": "cupy",
+    "resolution": 3.0,
+    "current_median": 1.5282586000394076,
+    "legacy_median": 1.867485199996736,
+    "paired_speedup": 1.2275184540062034,
+    "exact_pairs": 3,
+    "source": "photons_Generic_cupy_legacy_voxel_selection_g3.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "photons",
+    "backend": "cupy",
+    "resolution": 5.0,
+    "current_median": 1.3443248000112362,
+    "legacy_median": 1.651271699985955,
+    "paired_speedup": 1.233660273183422,
+    "exact_pairs": 3,
+    "source": "photons_Generic_cupy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "photons",
+    "backend": "numpy",
+    "resolution": 10.0,
+    "current_median": 0.6334449000423774,
+    "legacy_median": 0.9008757999981754,
+    "paired_speedup": 1.38385773778414,
+    "exact_pairs": 3,
+    "source": "photons_Generic_numpy_legacy_voxel_selection_g10.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "photons",
+    "backend": "numpy",
+    "resolution": 3.0,
+    "current_median": 2.3843562000547536,
+    "legacy_median": 2.7475124999764375,
+    "paired_speedup": 1.2008200853565005,
+    "exact_pairs": 3,
+    "source": "photons_Generic_numpy_legacy_voxel_selection_g3.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "photons",
+    "backend": "numpy",
+    "resolution": 5.0,
+    "current_median": 0.9514970000018366,
+    "legacy_median": 1.2051599000114948,
+    "paired_speedup": 1.266295374365861,
+    "exact_pairs": 3,
+    "source": "photons_Generic_numpy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "protons",
+    "backend": "cupy",
+    "resolution": 5.0,
+    "current_median": 1.6009800999891013,
+    "legacy_median": 1.8614452999900095,
+    "paired_speedup": 1.1634943559177167,
+    "exact_pairs": 3,
+    "source": "protons_Generic_cupy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "protons",
+    "backend": "numpy",
+    "resolution": 5.0,
+    "current_median": 0.6026241999934427,
+    "legacy_median": 0.8612257000058889,
+    "paired_speedup": 1.423891767671587,
+    "exact_pairs": 3,
+    "source": "protons_Generic_numpy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "VHEE",
+    "backend": "cupy",
+    "resolution": 5.0,
+    "current_median": 0.8317061999696307,
+    "legacy_median": 1.0834240000112914,
+    "paired_speedup": 1.331780238688573,
+    "exact_pairs": 3,
+    "source": "VHEE_Generic_cupy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  },
+  {
+    "mode": "VHEE",
+    "backend": "numpy",
+    "resolution": 5.0,
+    "current_median": 0.7159184999763966,
+    "legacy_median": 0.9674530999618582,
+    "paired_speedup": 1.3767793868473395,
+    "exact_pairs": 3,
+    "source": "VHEE_Generic_numpy_legacy_voxel_selection_g5.0_b10_n1_influence_paired.json"
+  }
+]

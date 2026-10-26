@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Shared dose setup unions existing VOI masks directly and reuses sorted voxel indices and scenario membership for single-CT calculations. Nearest-neighbor selection resampling avoids redundant rounding and sorting; custom selections retain their original arrays and internal canonicalization.
 - Particle lateral-cutoff preparation converts each energy kernel once, interpolates physical parameters once per depth, and evaluates bounded depth batches using shared lateral-dose formulas. Sampling order, cutoff selection and scalar compensation semantics are preserved; custom engine overrides retain a fallback path.
 - Particle pencil-beam engines compact each beamlet's voxel mask once and use Array API `take` for all ray fields, including lateral distances and biological tissue data, uniformly across backends.
 - Photon pencil-beam dose calculation reuses `ArrayBackendGridInterpolator` for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while keeping backend dispatch in `xp_utils`.
