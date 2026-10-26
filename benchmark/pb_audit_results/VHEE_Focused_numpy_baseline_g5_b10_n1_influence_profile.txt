@@ -1,0 +1,71 @@
+         346448 function calls (335170 primitive calls) in 1.611 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1092 to 65 due to restriction <65>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    1.611    1.611 profile_pb_audit.py:144(run)
+        1    0.000    0.000    1.601    1.601 _base.py:375(calc_dose_influence)
+        1    0.003    0.003    1.601    1.601 _base_pencilbeam.py:151(_calc_dose)
+        1    0.001    0.001    0.690    0.690 _base_pencilbeam_particle.py:504(_init_beam)
+        1    0.065    0.065    0.606    0.606 _base_pencilbeam_particle.py:680(_calc_lateral_particle_cut_off)
+        1    0.000    0.000    0.580    0.580 _base_pencilbeam_particle.py:475(_init_dose_calc)
+        1    0.001    0.001    0.576    0.576 _base_pencilbeam.py:285(_init_dose_calc)
+        1    0.008    0.008    0.536    0.536 _base.py:540(_init_dose_calc)
+      159    0.299    0.002    0.515    0.003 _hongpb.py:18(_calc_particle_bixel)
+        8    0.000    0.000    0.250    0.031 _arraysetops_impl.py:145(unique)
+        8    0.000    0.000    0.250    0.031 _arraysetops_impl.py:348(_unique1d)
+      621    0.001    0.000    0.235    0.000 _function_base_impl.py:1527(interp)
+        6    0.234    0.039    0.234    0.039 {built-in method numpy._core._multiarray_umath._unique_hash}
+      621    0.233    0.000    0.233    0.000 {built-in method numpy._core._multiarray_umath.interp}
+      121    0.001    0.000    0.222    0.002 _base_pencilbeam_particle.py:950(_init_ray)
+      159    0.002    0.000    0.211    0.001 _base_pencilbeam_particle.py:264(_interpolate_kernels_in_depth)
+      159    0.001    0.000    0.209    0.001 compat.py:272(interp1d)
+      121    0.001    0.000    0.207    0.002 _base_pencilbeam.py:610(_init_ray)
+      121    0.002    0.000    0.206    0.002 _base_pencilbeam.py:825(_get_ray_geometry_from_beam)
+      159    0.001    0.000    0.204    0.001 compat.py:354(<dictcomp>)
+     1584    0.001    0.000    0.132    0.000 fromnumeric.py:51(_wrapfunc)
+        1    0.009    0.009    0.129    0.129 _cst.py:719(get_reference_lq_params)
+      121    0.053    0.000    0.118    0.001 _base_pencilbeam.py:1023(calc_geo_dists)
+        2    0.000    0.000    0.084    0.042 _cst.py:597(apply_overlap_priorities)
+        1    0.005    0.005    0.083    0.083 _cst.py:754(get_tissue_class_indices)
+        1    0.004    0.004    0.082    0.082 _base_pencilbeam.py:454(_init_beam)
+      121    0.000    0.000    0.081    0.001 _base_pencilbeam_particle.py:142(_compute_bixel)
+        4    0.000    0.000    0.078    0.020 resample.py:87(resample_numpy_array)
+      256    0.000    0.000    0.069    0.000 fromnumeric.py:2018(nonzero)
+      256    0.069    0.000    0.069    0.000 {method 'nonzero' of 'numpy.ndarray' objects}
+       12    0.000    0.000    0.062    0.005 _voi.py:675(indices_numpy)
+       12    0.000    0.000    0.062    0.005 np2sitk.py:15(sitk_mask_to_linear_indices)
+       12    0.000    0.000    0.062    0.005 numeric.py:680(flatnonzero)
+        6    0.000    0.000    0.060    0.010 resample.py:10(resample_image)
+        6    0.000    0.000    0.058    0.010 SimpleITK.py:50355(Execute)
+        6    0.058    0.010    0.058    0.010 {built-in method SimpleITK._SimpleITK.ResampleImageFilter_Execute}
+        6    0.000    0.000    0.043    0.007 extra.py:300(GetImageFromArray)
+        1    0.000    0.000    0.043    0.043 _base.py:176(trace_cubes)
+      728    0.003    0.000    0.043    0.000 helpers.py:737(to_namespace)
+1018/1014    0.001    0.000    0.040    0.000 _internal.py:33(wrapped_f)
+      121    0.001    0.000    0.038    0.000 _base_pencilbeam_particle.py:166(_init_bixel)
+       40    0.000    0.000    0.036    0.001 fromnumeric.py:2879(cumsum)
+       40    0.036    0.001    0.036    0.001 {method 'cumsum' of 'numpy.ndarray' objects}
+        4    0.000    0.000    0.035    0.009 SimpleITK.py:41044(MaskNegated)
+        4    0.035    0.009    0.035    0.009 {built-in method SimpleITK._SimpleITK.MaskNegated}
+        4    0.000    0.000    0.034    0.008 SimpleITK.py:46269(Or)
+        4    0.033    0.008    0.033    0.008 {built-in method SimpleITK._SimpleITK.Or}
+      121    0.022    0.000    0.033    0.000 _base_pencilbeam_particle.py:362(_get_bixel_indices_on_ray)
+    14311    0.007    0.000    0.031    0.000 _backends.py:59(loaded_backend)
+        1    0.001    0.001    0.029    0.029 _ct.py:400(compute_wet)
+      121    0.027    0.000    0.027    0.000 _base_pencilbeam.py:846(<listcomp>)
+      121    0.027    0.000    0.027    0.000 _base_pencilbeam.py:848(<listcomp>)
+       16    0.000    0.000    0.024    0.002 SimpleITK.py:3107(__init__)
+       16    0.024    0.002    0.024    0.002 {built-in method SimpleITK._SimpleITK.new_Image}
+    10188    0.005    0.000    0.024    0.000 __init__.py:108(import_module)
+    400/7    0.001    0.000    0.024    0.003 main.py:990(__deepcopy__)
+  5631/17    0.005    0.000    0.024    0.001 copy.py:128(deepcopy)
+    442/7    0.001    0.000    0.024    0.003 copy.py:227(_deepcopy_dict)
+       10    0.000    0.000    0.023    0.002 main.py:393(model_copy)
+   149/22    0.001    0.000    0.023    0.001 {method 'validate_python' of 'pydantic_core._pydantic_core.SchemaValidator' objects}
+    126/5    0.000    0.000    0.021    0.004 main.py:693(model_validate)
+       12    0.020    0.002    0.020    0.002 {method 'sort' of 'numpy.ndarray' objects}
+        2    0.000    0.000    0.020    0.010 _siddon.py:119(_trace_rays_core)
+        6    0.020    0.003    0.020    0.003 {built-in method SimpleITK._SimpleITK._SetImageFromArray}
+      242    0.001    0.000    0.019    0.000 _ray.py:83(sanitize_beamlet_structure)

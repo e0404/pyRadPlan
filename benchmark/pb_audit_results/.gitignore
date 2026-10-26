@@ -1,0 +1,4 @@
+# Generated dose arrays and binary profiler state stay available locally.
+*.npz
+*.npy
+*.prof

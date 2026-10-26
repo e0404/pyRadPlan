@@ -1,0 +1,52 @@
+{
+  "PencilBeamEngineAbstract._init_dose_calc": {
+    "calls": 1,
+    "exclusive_s": 0.5309491999796592,
+    "inclusive_s": 0.5309491999796592
+  },
+  "RayTracerSiddon.trace_cubes": {
+    "calls": 1,
+    "exclusive_s": 0.048818299983395264,
+    "inclusive_s": 0.048818299983395264
+  },
+  "PencilBeamEngineAbstract._compute_ssd": {
+    "calls": 1,
+    "exclusive_s": 0.010215999995125458,
+    "inclusive_s": 0.010215999995125458
+  },
+  "PencilBeamEngineAbstract._init_beam": {
+    "calls": 1,
+    "exclusive_s": 0.028334600036032498,
+    "inclusive_s": 0.08736890001455322
+  },
+  "ParticleHongPencilBeamEngine._calc_particle_bixel": {
+    "calls": 159,
+    "exclusive_s": 0.5438173997972626,
+    "inclusive_s": 0.5438173997972626
+  },
+  "ParticlePencilBeamEngineAbstract._calc_lateral_particle_cut_off": {
+    "calls": 1,
+    "exclusive_s": 0.1162275000824593,
+    "inclusive_s": 0.5696132000011858
+  },
+  "PencilBeamEngineAbstract.calc_geo_dists": {
+    "calls": 121,
+    "exclusive_s": 0.1779737998440396,
+    "inclusive_s": 0.1779737998440396
+  },
+  "ParticlePencilBeamEngineAbstract._init_bixel": {
+    "calls": 121,
+    "exclusive_s": 0.09718210026039742,
+    "inclusive_s": 0.09718210026039742
+  },
+  "PencilBeamEngineAbstract._fill_dij": {
+    "calls": 121,
+    "exclusive_s": 0.023851700127124786,
+    "inclusive_s": 0.023851700127124786
+  },
+  "PencilBeamEngineAbstract._finalize_dose": {
+    "calls": 1,
+    "exclusive_s": 0.00031949998810887337,
+    "inclusive_s": 0.00031949998810887337
+  }
+}

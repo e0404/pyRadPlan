@@ -1,0 +1,60 @@
+{
+  "args": {
+    "backend": "cupy",
+    "mode": "protons",
+    "machine": "Generic",
+    "variant": "baseline",
+    "runs": 3,
+    "grid": 3.0,
+    "bixel": 5.0,
+    "beams": 1,
+    "forward": false,
+    "sampling": false,
+    "with_let": false,
+    "profile": true,
+    "paired": false,
+    "out": "benchmark/pb_audit_results"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.5917626000009477,
+  "cold_seconds": 8.041993099992396,
+  "warm_seconds": [
+    7.72827540000435,
+    7.469976199994562,
+    7.519647899986012
+  ],
+  "median_seconds": 7.519647899986012,
+  "effective": {
+    "dose_resolution": {
+      "x": 3.0,
+      "y": 3.0,
+      "z": 3.0
+    },
+    "dose_dimensions": [
+      167,
+      167,
+      108
+    ],
+    "selected_voxels": 502192,
+    "lateral_model": "single"
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 272,
+  "beamlets": 3592,
+  "output": {
+    "shape": [
+      3012012,
+      3592
+    ],
+    "nnz": 16537575,
+    "bytes": 198479644,
+    "index_dtype": "int64",
+    "data_dtype": "float32"
+  },
+  "cupy": "13.3.0",
+  "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "cuda_runtime": 12060
+}

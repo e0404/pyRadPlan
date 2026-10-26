@@ -1,0 +1,71 @@
+         53223 function calls (48343 primitive calls) in 1.079 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1053 to 65 due to restriction <65>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    1.079    1.079 profile_pb_audit.py:144(run)
+        1    0.002    0.002    1.077    1.077 _base.py:375(calc_dose_influence)
+        1    0.002    0.002    1.075    1.075 _base_pencilbeam.py:151(_calc_dose)
+        1    0.000    0.000    0.626    0.626 _svdpb.py:91(_init_dose_calc)
+        1    0.001    0.001    0.626    0.626 _base_pencilbeam.py:285(_init_dose_calc)
+        1    0.007    0.007    0.584    0.584 _base.py:540(_init_dose_calc)
+        1    0.000    0.000    0.381    0.381 _svdpb.py:531(_init_ray)
+        1    0.014    0.014    0.375    0.375 _svdpb.py:381(_get_kernel_interpolators)
+    85/75    0.000    0.000    0.365    0.005 _internal.py:33(wrapped_f)
+       12    0.004    0.000    0.359    0.030 _pocketfft.py:741(_raw_fftnd)
+       24    0.354    0.015    0.354    0.015 _pocketfft.py:58(_raw_fft)
+       12    0.000    0.000    0.273    0.023 _arraysetops_impl.py:145(unique)
+       12    0.000    0.000    0.272    0.023 _arraysetops_impl.py:348(_unique1d)
+       12    0.256    0.021    0.256    0.021 {built-in method numpy._core._multiarray_umath._unique_hash}
+        8    0.000    0.000    0.232    0.029 compat.py:670(_fft2)
+        8    0.000    0.000    0.229    0.029 _fft.py:41(fftn)
+        8    0.000    0.000    0.229    0.029 _pocketfft.py:755(fftn)
+       16    0.000    0.000    0.227    0.014 _pocketfft.py:120(fft)
+        4    0.000    0.000    0.130    0.033 compat.py:705(_ifft2)
+        4    0.000    0.000    0.130    0.033 _fft.py:55(ifftn)
+        4    0.000    0.000    0.130    0.032 _pocketfft.py:887(ifftn)
+        8    0.000    0.000    0.128    0.016 _pocketfft.py:219(ifft)
+        1    0.010    0.010    0.125    0.125 _cst.py:719(get_reference_lq_params)
+        1    0.005    0.005    0.088    0.088 _cst.py:754(get_tissue_class_indices)
+        2    0.000    0.000    0.083    0.042 _cst.py:597(apply_overlap_priorities)
+        4    0.000    0.000    0.076    0.019 resample.py:87(resample_numpy_array)
+       75    0.000    0.000    0.070    0.001 fromnumeric.py:51(_wrapfunc)
+       12    0.000    0.000    0.064    0.005 _voi.py:675(indices_numpy)
+       12    0.000    0.000    0.064    0.005 np2sitk.py:15(sitk_mask_to_linear_indices)
+       16    0.000    0.000    0.064    0.004 fromnumeric.py:2018(nonzero)
+       16    0.064    0.004    0.064    0.004 {method 'nonzero' of 'numpy.ndarray' objects}
+       12    0.000    0.000    0.064    0.005 numeric.py:680(flatnonzero)
+        6    0.000    0.000    0.059    0.010 resample.py:10(resample_image)
+        1    0.011    0.011    0.058    0.058 _svdpb.py:114(_init_beam)
+        6    0.000    0.000    0.056    0.009 SimpleITK.py:50355(Execute)
+        6    0.056    0.009    0.056    0.009 {built-in method SimpleITK._SimpleITK.ResampleImageFilter_Execute}
+        6    0.000    0.000    0.044    0.007 extra.py:300(GetImageFromArray)
+        4    0.000    0.000    0.035    0.009 SimpleITK.py:41044(MaskNegated)
+        4    0.035    0.009    0.035    0.009 {built-in method SimpleITK._SimpleITK.MaskNegated}
+        5    0.000    0.000    0.034    0.007 _function_base_impl.py:1527(interp)
+        5    0.034    0.007    0.034    0.007 {built-in method numpy._core._multiarray_umath.interp}
+        4    0.000    0.000    0.034    0.008 SimpleITK.py:46269(Or)
+        4    0.034    0.008    0.034    0.008 {built-in method SimpleITK._SimpleITK.Or}
+        1    0.001    0.001    0.031    0.031 _ct.py:400(compute_wet)
+        1    0.000    0.000    0.030    0.030 _base.py:906(load_machine)
+        1    0.000    0.000    0.030    0.030 _load.py:128(load_from_name)
+        1    0.000    0.000    0.030    0.030 _load.py:38(load_machine)
+        1    0.000    0.000    0.028    0.028 _load.py:47(load_machine_from_mat)
+        1    0.000    0.000    0.028    0.028 pymatreader.py:52(read_mat)
+       16    0.000    0.000    0.025    0.002 SimpleITK.py:3107(__init__)
+       16    0.025    0.002    0.025    0.002 {built-in method SimpleITK._SimpleITK.new_Image}
+        1    0.003    0.003    0.024    0.024 _base_pencilbeam.py:454(_init_beam)
+        1    0.000    0.000    0.021    0.021 _mio.py:86(loadmat)
+        1    0.000    0.000    0.021    0.021 _mio5.py:293(get_variables)
+        1    0.019    0.019    0.020    0.020 _mio5.py:274(read_var_array)
+        6    0.020    0.003    0.020    0.003 {built-in method SimpleITK._SimpleITK._SetImageFromArray}
+       18    0.018    0.001    0.018    0.001 {method 'sort' of 'numpy.ndarray' objects}
+        2    0.000    0.000    0.016    0.008 compat.py:272(interp1d)
+        1    0.000    0.000    0.016    0.016 _base.py:649(<listcomp>)
+        1    0.001    0.001    0.015    0.015 _shape_base_impl.py:281(apply_along_axis)
+        1    0.000    0.000    0.015    0.015 _base.py:176(trace_cubes)
+   884/16    0.001    0.000    0.014    0.001 copy.py:128(deepcopy)
+     41/6    0.000    0.000    0.014    0.002 main.py:990(__deepcopy__)
+     84/8    0.000    0.000    0.014    0.002 copy.py:227(_deepcopy_dict)
+       10    0.000    0.000    0.014    0.001 main.py:393(model_copy)

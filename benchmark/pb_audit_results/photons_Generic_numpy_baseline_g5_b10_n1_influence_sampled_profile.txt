@@ -1,0 +1,71 @@
+         456520 function calls (441182 primitive calls) in 1.703 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1042 to 65 due to restriction <65>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    1.704    1.704 profile_pb_audit.py:144(run)
+        1    0.002    0.002    1.693    1.693 _base.py:375(calc_dose_influence)
+        1    0.005    0.005    1.691    1.691 _base_pencilbeam.py:151(_calc_dose)
+        1    0.000    0.000    0.607    0.607 _svdpb.py:91(_init_dose_calc)
+        1    0.001    0.001    0.607    0.607 _base_pencilbeam.py:285(_init_dose_calc)
+        1    0.008    0.008    0.563    0.563 _base.py:540(_init_dose_calc)
+      121    0.034    0.000    0.547    0.005 _svdpb.py:325(_compute_bixel)
+3572/2721    0.004    0.000    0.431    0.000 _internal.py:33(wrapped_f)
+        1    0.007    0.007    0.318    0.318 _svdpb.py:114(_init_beam)
+      121    0.001    0.000    0.296    0.002 _svdpb.py:355(<listcomp>)
+      363    0.003    0.000    0.295    0.001 compat.py:570(interpnd)
+     1991    0.002    0.000    0.250    0.000 fromnumeric.py:51(_wrapfunc)
+        5    0.000    0.000    0.242    0.048 _arraysetops_impl.py:145(unique)
+        5    0.000    0.000    0.242    0.048 _arraysetops_impl.py:348(_unique1d)
+        5    0.224    0.045    0.224    0.045 {built-in method numpy._core._multiarray_umath._unique_hash}
+        1    0.015    0.015    0.209    0.209 _svdpb.py:381(_get_kernel_interpolators)
+      363    0.033    0.000    0.199    0.001 _rgi.py:375(__call__)
+      121    0.027    0.000    0.195    0.002 _svdpb.py:410(_sample_dij)
+      121    0.001    0.000    0.192    0.002 _svdpb.py:531(_init_ray)
+      121    0.001    0.000    0.191    0.002 _base_pencilbeam.py:610(_init_ray)
+       12    0.005    0.000    0.191    0.016 _pocketfft.py:741(_raw_fftnd)
+      121    0.003    0.000    0.190    0.002 _base_pencilbeam.py:825(_get_ray_geometry_from_beam)
+       24    0.186    0.008    0.186    0.008 _pocketfft.py:58(_raw_fft)
+      242    0.000    0.000    0.138    0.001 _aliases.py:468(argsort)
+      245    0.000    0.000    0.137    0.001 fromnumeric.py:1129(argsort)
+      245    0.137    0.001    0.137    0.001 {method 'argsort' of 'numpy.ndarray' objects}
+        1    0.011    0.011    0.131    0.131 _cst.py:719(get_reference_lq_params)
+      121    0.047    0.000    0.119    0.001 _base_pencilbeam.py:1023(calc_geo_dists)
+        8    0.000    0.000    0.116    0.015 compat.py:670(_fft2)
+        8    0.000    0.000    0.113    0.014 _fft.py:41(fftn)
+        8    0.000    0.000    0.113    0.014 _pocketfft.py:755(fftn)
+       16    0.000    0.000    0.110    0.007 _pocketfft.py:120(fft)
+      363    0.089    0.000    0.095    0.000 _rgi.py:632(_find_indices)
+        1    0.006    0.006    0.090    0.090 _cst.py:754(get_tissue_class_indices)
+        1    0.005    0.005    0.088    0.088 _base_pencilbeam.py:454(_init_beam)
+        2    0.000    0.000    0.086    0.043 _cst.py:597(apply_overlap_priorities)
+        4    0.000    0.000    0.078    0.020 resample.py:87(resample_numpy_array)
+        4    0.000    0.000    0.078    0.020 compat.py:705(_ifft2)
+        4    0.000    0.000    0.078    0.020 _fft.py:55(ifftn)
+        4    0.000    0.000    0.078    0.020 _pocketfft.py:887(ifftn)
+      363    0.017    0.000    0.076    0.000 compat.py:427(_prepare_rectilinear_grid)
+        8    0.000    0.000    0.076    0.009 _pocketfft.py:219(ifft)
+      256    0.000    0.000    0.071    0.000 fromnumeric.py:2018(nonzero)
+      256    0.071    0.000    0.071    0.000 {method 'nonzero' of 'numpy.ndarray' objects}
+      363    0.016    0.000    0.066    0.000 _rgi.py:492(_prepare_xi)
+       12    0.000    0.000    0.064    0.005 _voi.py:675(indices_numpy)
+       12    0.000    0.000    0.064    0.005 np2sitk.py:15(sitk_mask_to_linear_indices)
+       12    0.000    0.000    0.063    0.005 numeric.py:680(flatnonzero)
+        6    0.000    0.000    0.063    0.010 resample.py:10(resample_image)
+        6    0.000    0.000    0.060    0.010 SimpleITK.py:50355(Execute)
+        6    0.060    0.010    0.060    0.010 {built-in method SimpleITK._SimpleITK.ResampleImageFilter_Execute}
+     4722    0.006    0.000    0.056    0.000 fromnumeric.py:89(_wrapreduction_any_all)
+     5358    0.053    0.000    0.053    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+      851    0.018    0.000    0.052    0.000 _aliases.py:375(clip)
+     2301    0.002    0.000    0.050    0.000 fromnumeric.py:2477(any)
+      363    0.001    0.000    0.047    0.000 compat.py:448(<listcomp>)
+        1    0.000    0.000    0.046    0.046 _base.py:176(trace_cubes)
+        6    0.000    0.000    0.044    0.007 extra.py:300(GetImageFromArray)
+      617    0.002    0.000    0.037    0.000 helpers.py:737(to_namespace)
+      976    0.001    0.000    0.036    0.000 fromnumeric.py:109(take)
+        4    0.000    0.000    0.036    0.009 SimpleITK.py:41044(MaskNegated)
+        4    0.036    0.009    0.036    0.009 {built-in method SimpleITK._SimpleITK.MaskNegated}
+        4    0.000    0.000    0.035    0.009 SimpleITK.py:46269(Or)
+        4    0.035    0.009    0.035    0.009 {built-in method SimpleITK._SimpleITK.Or}
+      976    0.034    0.000    0.034    0.000 {method 'take' of 'numpy.ndarray' objects}
