@@ -1052,6 +1052,9 @@ Reproduce sequentially, without overlapping benchmarks:
 
 ## Cutoff preparation: conversion hoisting, batching and backend placement
 
+Follow-up: [direct backend grid creation and GPU-resident kernel data](cutoff_backend_creation.md)
+measures construction separately and tests its impact inside complete dose calculations.
+
 Reference: `115e6ca8`, frozen in `benchmark/profile_cutoff_reference.py`, including
 the original Hong physical-dose formulas. The new implementation keeps the
 1,200 radial samples, 360 angles for `singleXY`, depth-selection procedure,
