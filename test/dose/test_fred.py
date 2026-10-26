@@ -1,3 +1,5 @@
+import logging
+
 import SimpleITK as sitk
 import numpy as np
 import shutil
@@ -9,7 +11,11 @@ from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import (
     ParticleFredMCEngine,
     DoseEngineBase,
+    get_available_engines,
+    get_engine,
+    get_engine_class,
 )
+from pyRadPlan.dose.engines._fredmc import FRED_PARTICLES
 
 # from pyRadPlan import generate_stf, plot_slice
 from pyRadPlan.plan import IonPlan
@@ -341,3 +347,81 @@ class Test_calc_dose_forward:
         result_matRad_rot = np.swapaxes(result_mat["physicalDose"], 0, 1)
         # TODO: 1e-4 should be possible! (boundary is off!)
         assert np.allclose(result_py, result_matRad_rot, atol=1e-3)
+
+
+def _external_fred_plan(pln, tmp_path):
+    pln.prop_dose_calc = {
+        "engine": "FRED",
+        "external_calculation": True,
+        "save_input": str(tmp_path),
+        "dose_grid": {"resolution": {"x": 10, "y": 10, "z": 10}},
+    }
+    return pln
+
+
+class TestIonRadiationModes:
+    """FRED is offered under pyRadPlan's radiation mode names and maps them to its own."""
+
+    @pytest.mark.parametrize("mode", ["protons", "helium", "carbon", "oxygen"])
+    def test_fred_is_available_for_ion_modes(self, mode):
+        """Every ion mode FRED simulates selects it like the factory does."""
+        assert mode in ParticleFredMCEngine.possible_radiation_modes
+        assert get_available_engines(mode)["FRED"] is ParticleFredMCEngine
+        assert get_engine_class(mode, "FRED") is ParticleFredMCEngine
+
+    def test_oxygen_plan_selects_fred(self):
+        """An oxygen plan asking for FRED gets FRED (it used to fall back to the first)."""
+        pln = IonPlan(radiation_mode="oxygen", machine="Generic")
+        pln.prop_dose_calc = {"engine": "FRED"}
+        assert isinstance(get_engine(pln), ParticleFredMCEngine)
+
+    def test_oxygen_input_names_the_nuclide_and_energy_per_nucleon(
+        self, test_data_oxygen, tmp_path
+    ):
+        """FRED reads the per-nucleon machine energy of an ion from Tu / EuFWHM."""
+        pln, ct, cst, stf, _dij, _result = test_data_oxygen
+
+        calc_dose_influence(ct, cst, stf, _external_fred_plan(pln, tmp_path))
+
+        delivery = (tmp_path / "inp/plan/planDelivery.inp").read_text()
+        assert "particle = O16\n" in delivery
+        assert "Tu   = $currEnergy" in delivery
+        assert "EuFWHM = $currEspread" in delivery
+        assert "T    = $currEnergy" not in delivery
+
+    def test_ion_calculation_warns_that_it_is_not_validated(
+        self, test_data_oxygen, tmp_path, caplog
+    ):
+        pln, ct, cst, stf, _dij, _result = test_data_oxygen
+
+        with caplog.at_level(logging.WARNING):
+            calc_dose_influence(ct, cst, stf, _external_fred_plan(pln, tmp_path))
+
+        assert "FRED's oxygen simulations are not validated" in caplog.text
+
+    def test_proton_calculation_does_not_warn(self, test_data_protons, tmp_path, caplog):
+        pln, ct, cst, stf, _dij, _result = test_data_protons
+
+        with caplog.at_level(logging.WARNING):
+            calc_dose_influence(ct, cst, stf, _external_fred_plan(pln, tmp_path))
+
+        assert "simulations are not validated" not in caplog.text
+
+    @pytest.mark.parametrize(("mode", "particle"), [("helium", "He4"), ("carbon", "C12")])
+    def test_ion_particle_names(self, mode, particle):
+        """The other ions are named by nuclide as well."""
+        assert FRED_PARTICLES[mode] == particle
+
+    @pytest.mark.parametrize("mode", ["helium", "carbon"])
+    def test_machine_without_emittance_is_rejected_clearly(self, request, tmp_path, mode):
+        """The generic helium and carbon machines carry no beam emittance for FRED."""
+        pln, ct, cst, stf, _dij, _result = request.getfixturevalue(f"test_data_{mode}")
+        with pytest.raises(ValueError, match="FRED needs the beam emittance"):
+            calc_dose_influence(ct, cst, stf, _external_fred_plan(pln, tmp_path))
+
+    def test_unsupported_radiation_mode_is_rejected(self, test_data_protons):
+        """A radiation mode FRED has no particle for fails with a clear message."""
+        engine = ParticleFredMCEngine(test_data_protons[0])
+        engine._machine = type("Machine", (), {"radiation_mode": "electrons"})()
+        with pytest.raises(ValueError, match="FRED cannot simulate radiation mode 'electrons'"):
+            engine._write_plan_delivery_file()

@@ -10,7 +10,7 @@ pyRadPlan = ["data/**/*", "gui/assets/**/*"]
 
 [project]
 name = "pyRadPlan"
-version = "0.4.1"
+version = "0.5.0"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
@@ -22,6 +22,7 @@ authors = [
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
   { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Moritz Müller", email = "moritz.mueller@dkfz-heidelberg.de" },
   { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
   { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },
   { name="Goran Stanic", email = "goran.stanic@dkfz-heidelberg.de" },
@@ -51,6 +52,7 @@ dependencies = [
     "array_api_strict",
     "array_api_extra",
     "types-array-api",
+    "ipax>=0.12.0",
     "pymatreader>=1.0.0",
     "h5py>=3.11.0",
     "regex>=2024.5.15",
@@ -77,7 +79,8 @@ dependencies = [
 [project.optional-dependencies]
 matlab = ["matlabengine"]
 octave = ["oct2py"]
-gui    = ["pyside6>=6.0.1", "pyqtgraph>=0.12.0"]
+# Only the core Qt modules are used, so the ~450 MB PySide6 add-ons are not pulled in.
+gui    = ["pyside6-essentials>=6.4,<6.12", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
 # Optional compute backends. The core is array-API based (array_api_compat), so
@@ -89,7 +92,7 @@ jax    = ["jax>=0.4.35"]
 # Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
 profiling = ["line_profiler>=4.0"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.16","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -132,9 +135,19 @@ fixable = ["ALL"]
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
-# flat computational kernels take their arrays and scalars as individual arguments
-"pyRadPlan/raytracer/_kernels.py" = ["PLR0913"]
-"pyRadPlan/raytracer/_kernels_numba.py" = ["PLR0913"]
+# nuclide names follow physics convention: A is the mass number, Z the atomic number
+"pyRadPlan/machines/particles/_beam_fragment_spectrum.py" = ["N802", "N803", "N806", "N815"]
+
+[tool.ruff.lint.pylint]
+# Relaxed for scientific code: physics kernels and backend dispatchers legitimately take
+# many parameters and branch on dtype/backend/modality, and early returns are the clearer
+# pattern for such dispatch. These thresholds are set to flag genuine outliers rather than
+# ordinary numerical code; silence individual leftovers with a `# noqa: PLR09xx  # reason`
+# on the `def` so the justification is recorded at the site.
+max-args = 10        # default 5
+max-returns = 12     # default 6
+max-branches = 20    # default 12
+max-statements = 80  # default 50
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -200,7 +213,7 @@ format = "simple"
 
 [tool.codespell]
 skip = "./matRad,*/matRad/*,*.ipynb"
-ignore-words-list = "coo"
+ignore-words-list = "coo,HEL"
 
 [tool.pydocstringformatter]
 write = true

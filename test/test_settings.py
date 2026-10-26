@@ -4,7 +4,13 @@ import pytest
 
 import pyRadPlan
 from pyRadPlan import xp_utils
-from pyRadPlan._settings import AiSettings, PyRadPlanSettings, XpSettings, get_settings
+from pyRadPlan._settings import (
+    AiSettings,
+    GuiSettings,
+    PyRadPlanSettings,
+    XpSettings,
+    get_settings,
+)
 
 
 @pytest.fixture
@@ -21,7 +27,9 @@ def test_defaults():
     settings = PyRadPlanSettings(_env_file=None)
     assert isinstance(settings.xp, XpSettings)
     assert isinstance(settings.ai, AiSettings)
+    assert isinstance(settings.gui, GuiSettings)
     assert settings.xp.prefer_gpu is True
+    assert settings.gui.ui_mode == "default"
     assert settings.xp.preferred_cpu_array_backend == "numpy"
 
 
@@ -68,6 +76,23 @@ def test_ai_section_covers_agents_and_modelhub(monkeypatch):
     settings = PyRadPlanSettings(_env_file=None)
     assert settings.ai.agents_model == "an-llm"
     assert settings.ai.modelhub_device == "cuda"
+
+
+def test_gui_env_override(monkeypatch):
+    monkeypatch.setenv("PYRADPLAN_GUI_UI_MODE", "educational")
+    settings = PyRadPlanSettings(_env_file=None)
+    assert settings.gui.ui_mode == "educational"
+
+
+def test_gui_ui_mode_rejects_unknown_mode(monkeypatch):
+    monkeypatch.setenv("PYRADPLAN_GUI_UI_MODE", "expert")
+    with pytest.raises(ValueError):
+        PyRadPlanSettings(_env_file=None)
+    settings = PyRadPlanSettings(
+        _env_file=None, gui=GuiSettings(_env_file=None, ui_mode="default")
+    )
+    with pytest.raises(ValueError):
+        settings.gui.ui_mode = "expert"
 
 
 def test_assignment_is_validated():

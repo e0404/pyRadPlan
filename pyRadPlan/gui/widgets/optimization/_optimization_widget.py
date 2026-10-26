@@ -3,8 +3,9 @@
 Python translation of matRad's ``matRad_OptimizationWidget``: a per-VOI editor of
 the optimization objectives stored on the structure set (``cst``).  Each row binds
 one objective on one VOI; the user can change the objective type, its penalty
-(priority) and its numeric parameters, and add or remove objectives.  Constraints
-are intentionally out of scope because pyRadPlan currently ships objectives only.
+(priority) and its numeric parameters, and add or remove objectives. A "Change all
+quantities" selector above the table sets one quantity on the objectives of all VOIs at once.
+Constraints are intentionally out of scope because pyRadPlan currently ships objectives only.
 """
 
 from __future__ import annotations
@@ -23,9 +24,11 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +42,7 @@ from pyRadPlan.optimization.objectives import (
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
 from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
+from .._display_names import add_identified_item, result_key_labels, show_identifiers_when_open
 from ..ai import ai_disabled_reason
 
 
@@ -114,6 +118,27 @@ class OptimizationWidget(WorkspaceWidget):
         controls.addWidget(self._btn_add)
         controls.addWidget(self._btn_ai)
         controls.addStretch()
+        # Shortcut setting one quantity on every objective at once; the per-row
+        # Quantity column keeps individual overrides possible.
+        self._btn_all_quantity = QToolButton()
+        self._btn_all_quantity.setText("Change all quantities…")
+        self._btn_all_quantity.setFocusPolicy(Qt.StrongFocus)
+        self._btn_all_quantity.setPopupMode(QToolButton.InstantPopup)
+        self._btn_all_quantity.setToolTip(
+            "Set the quantity of the objectives of all VOIs at once.\n"
+            "Single objectives can still be changed in the Quantity column below."
+        )
+        quantity_menu = QMenu(self._btn_all_quantity)
+        quantity_menu.setToolTipsVisible(True)
+        for identifier, quantity in get_available_quantities().items():
+            action = quantity_menu.addAction(quantity.name)
+            action.setData(identifier)
+            action.setToolTip(identifier)
+            action.triggered.connect(
+                lambda _checked=False, q=identifier: self._set_all_quantities(q)
+            )
+        self._btn_all_quantity.setMenu(quantity_menu)
+        controls.addWidget(self._btn_all_quantity)
         # Plan-wide objective count.
         self._lbl_count = QLabel("0 objectives")
         controls.addWidget(self._lbl_count)
@@ -201,6 +226,13 @@ class OptimizationWidget(WorkspaceWidget):
         self._set_status("")
         self._update_count(cst)
 
+    def _shared_quantity(self, cst) -> Optional[str]:
+        """Return the quantity all objectives agree on, or *None* for none or a mix."""
+        if cst is None:
+            return None
+        used = {obj.quantity for voi in cst.vois for obj in self._iter_objectives(voi)}
+        return next(iter(used)) if len(used) == 1 else None
+
     def _update_count(self, cst) -> None:
         total = 0
         if cst is not None:
@@ -243,19 +275,22 @@ class OptimizationWidget(WorkspaceWidget):
         penalty = AdaptiveDoubleSpinBox()
         penalty.setRange(0.0, 1.0e9)
         penalty.setValue(float(obj.priority))
-        # The size hint of the spinbox spans its full 1e9 range, which blows up
-        # the ResizeToContents column; typical penalties are much shorter.
-        penalty.setMaximumWidth(100)
         penalty.valueChanged.connect(
             lambda value, v=voi_idx, o=obj_idx: self._on_penalty_changed(v, o, value)
         )
         self._table.setCellWidget(row, self._COL_PENALTY, penalty)
 
         cmb_quantity = QComboBox()
-        cmb_quantity.addItems(list(get_available_quantities().keys()))
-        cmb_quantity.setCurrentText(obj.quantity)
-        cmb_quantity.currentTextChanged.connect(
-            lambda text, v=voi_idx, o=obj_idx: self._on_quantity_changed(v, o, text)
+        show_identifiers_when_open(cmb_quantity)
+        for identifier, quantity in get_available_quantities().items():
+            add_identified_item(cmb_quantity, quantity.name, identifier, identifier)
+        current = cmb_quantity.findData(obj.quantity)
+        if current >= 0:
+            cmb_quantity.setCurrentIndex(current)
+        cmb_quantity.currentIndexChanged.connect(
+            lambda idx, c=cmb_quantity, v=voi_idx, o=obj_idx: self._on_quantity_changed(
+                v, o, c.itemData(idx)
+            )
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
 
@@ -312,11 +347,12 @@ class OptimizationWidget(WorkspaceWidget):
         """
         cmb = QComboBox()
         cmb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        show_identifiers_when_open(cmb)
         current = -1
-        for label, candidate in self._reference_dose_options():
+        for label, candidate, key in self._reference_dose_options():
             if self._image_ref_matches(value, candidate):
                 current = cmb.count()
-            cmb.addItem(label, candidate)
+            add_identified_item(cmb, label, candidate, key)
         if current < 0:
             cmb.insertItem(0, self._summarize_image_reference(value), value)
             current = 0
@@ -332,21 +368,23 @@ class OptimizationWidget(WorkspaceWidget):
         )
         return cmb
 
-    def _reference_dose_options(self) -> list[tuple[str, Any]]:
+    def _reference_dose_options(self) -> list[tuple[str, Any, str]]:
         """Workspace result entries convertible to an image-reference value.
 
         Result images come out of ``Dij.compute_result_ct_grid`` as
         ``sitk.Image`` and are used directly; imported cubes are numpy arrays
         on the CT grid and are paired with the CT grid.  Weight vectors and
-        per-beam lists are skipped.
+        per-beam lists are skipped.  Returns ``(label, value, key)`` triples.
         """
-        options: list[tuple[str, Any]] = []
+        options: list[tuple[str, Any, str]] = []
         ct = self._ws.ct
-        for key, val in (self._ws.result or {}).items():
+        result = self._ws.result or {}
+        labels = result_key_labels(result)
+        for key, val in result.items():
             if isinstance(val, sitk.Image):
-                options.append((key, val))
+                options.append((labels[key], val, key))
             elif isinstance(val, np.ndarray) and val.ndim == 3 and ct is not None:
-                options.append((key, (val, ct.grid)))
+                options.append((labels[key], (val, ct.grid), key))
         return options
 
     @staticmethod
@@ -384,6 +422,11 @@ class OptimizationWidget(WorkspaceWidget):
         if name not in self._available:
             name = self._available[0]
         new_obj = get_objective(name)
+        # Follow the quantity the objectives agree on, so a new objective does not
+        # silently reintroduce a mix after "Change all quantities".
+        quantity = self._shared_quantity(cst)
+        if quantity is not None:
+            new_obj.quantity = quantity
 
         objectives = self._iter_objectives(voi)
         objectives.append(new_obj)
@@ -395,14 +438,16 @@ class OptimizationWidget(WorkspaceWidget):
         if cst is None or pln is None:
             return
 
+        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog, busy_cursor  # noqa: PLC0415
+
         # Deferred: keeps the optional ai.agents stack out of widget construction.
-        from pyRadPlan.ai.agents import (  # noqa: PLC0415
-            available_models,
-            cst_context_summary,
-            generate_voi_objectives,
-            objectives_system_prompt,
-        )
-        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+        with busy_cursor():
+            from pyRadPlan.ai.agents import (  # noqa: PLC0415
+                available_models,
+                cst_context_summary,
+                generate_voi_objectives,
+                objectives_system_prompt,
+            )
 
         qis, accepted = self._prompt_qi_adaptation(cst)
         if not accepted:
@@ -451,7 +496,7 @@ class OptimizationWidget(WorkspaceWidget):
         from pyRadPlan.analysis import QICollection  # noqa: PLC0415
 
         choices = ["No — suggest new objectives"] + [
-            f"Adapt using QIs from '{label}'" for label, _ in options
+            f"Adapt using QIs from '{label}'" for label, *_ in options
         ]
         choice, ok = QInputDialog.getItem(
             self,
@@ -468,7 +513,7 @@ class OptimizationWidget(WorkspaceWidget):
         if idx < 0:
             return None, True
 
-        label, dose = options[idx]
+        label, dose, _ = options[idx]
         if isinstance(dose, tuple):
             dose = dose[0]
         try:
@@ -530,6 +575,29 @@ class OptimizationWidget(WorkspaceWidget):
             self._set_status(f"Rejected quantity {quantity!r}: {exc}")
             return
         self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+
+    def _set_all_quantities(self, quantity: str) -> None:
+        """Set *quantity* on the objectives of every VOI in one workspace write."""
+        cst = self._ws.cst
+        if cst is None:
+            return
+
+        per_voi = {idx: self._iter_objectives(voi) for idx, voi in enumerate(cst.vois)}
+        if all(obj.quantity == quantity for objectives in per_voi.values() for obj in objectives):
+            return
+        try:
+            for idx, objectives in per_voi.items():
+                for obj in objectives:
+                    obj.quantity = quantity
+                cst.vois[idx].objectives = list(objectives)
+            cst = validate_cst(cst)
+        except (ValueError, TypeError) as exc:
+            self._set_status(f"Rejected quantity {quantity!r}: {exc}")
+            return
+
+        with self.hold_updates():
+            self._ws.cst = cst
+        self._rebuild_table(cst)
 
     def _on_param_changed(self, voi_idx: int, obj_idx: int, param: str, value: float) -> None:
         cst = self._ws.cst

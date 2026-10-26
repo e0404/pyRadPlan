@@ -11,9 +11,10 @@ settings instances (e.g. by the AI agents) observe them.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import AliasChoices, BaseModel
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -68,6 +69,26 @@ def _env_names(model_cls: type[BaseModel], field_name: str) -> list[str]:
         if isinstance(candidate, str) and candidate.upper() not in names:
             names.append(candidate.upper())
     return names
+
+
+def apply_settings_values(
+    model_cls: type[BaseModel], target: BaseModel, values: Mapping[str, Any]
+) -> None:
+    """Assign *values* to the settings object *target* and mirror them into the environment.
+
+    The environment is written under the variable names *model_cls* reads the
+    fields from (stale legacy aliases are cleared), so freshly constructed
+    settings instances observe the change as well.
+    """
+    for name, value in values.items():
+        setattr(target, name, value)
+        env_name, *stale = _env_names(model_cls, name)
+        for other in stale:
+            os.environ.pop(other, None)
+        if value is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = str(value)
 
 
 class SettingsDialog(QDialog):
@@ -179,21 +200,11 @@ class SettingsDialog(QDialog):
     def apply(self) -> None:
         """Write the form state to the settings singleton and the process environment."""
         if self._general_form is not None:
-            self._apply_form(type(self._settings), self._settings, self._general_form.values())
+            apply_settings_values(
+                type(self._settings), self._settings, self._general_form.values()
+            )
         for name, form in self._sub_forms.items():
-            self._apply_form(form.model_cls, getattr(self._settings, name), form.values())
-
-    @staticmethod
-    def _apply_form(model_cls: type[BaseModel], target: BaseModel, values: dict) -> None:
-        for name, value in values.items():
-            setattr(target, name, value)
-            env_name, *stale = _env_names(model_cls, name)
-            for other in stale:
-                os.environ.pop(other, None)
-            if value is None:
-                os.environ.pop(env_name, None)
-            else:
-                os.environ[env_name] = str(value)
+            apply_settings_values(form.model_cls, getattr(self._settings, name), form.values())
 
 
 class SettingsMenu(QMenu):
@@ -209,6 +220,9 @@ class SettingsMenu(QMenu):
         Optional Qt parent widget.
     """
 
+    #: Emitted after a settings dialog opened from this menu was accepted.
+    settings_applied = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__("&Settings", parent)
         for name in _nested_model_fields(PyRadPlanSettings):
@@ -220,4 +234,5 @@ class SettingsMenu(QMenu):
 
     def _edit_settings(self, section: Optional[str] = None) -> None:
         dialog = SettingsDialog(section=section, parent=self.parentWidget())
-        dialog.exec()
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.settings_applied.emit()

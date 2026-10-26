@@ -1,8 +1,12 @@
 """Tests for the pickle import/export backend."""
 
+import pickle
+
 import numpy as np
 import SimpleITK as sitk
 
+from pyRadPlan.biology.models import ConstantRBEModel
+from pyRadPlan.biology.tissues import MKMTissueProperties
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.io import load_data, save_data, load_tg119, PickleHandler
@@ -81,3 +85,25 @@ def test_pickle_handler_direct(tmp_path):
     handler = PickleHandler(out)
     assert _ct_close(ct, handler.load_ct())
     assert _voxel_sets(handler.load_cst()) == _voxel_sets(cst)
+
+
+def test_pickle_loads_module_paths_before_biology_package(tmp_path):
+    """Pickles written before the move into ``pyRadPlan.biology`` still load."""
+    tissue = MKMTissueProperties(alpha_0=0.2, beta_0=0.05, r_domain=0.3, r_nucleus=4.0)
+    model = ConstantRBEModel(rbe=1.2)
+    stream = pickle.dumps({"tissue": tissue, "model": model}, protocol=2)
+    for new, old in (
+        (b"pyRadPlan.biology.tissues", b"pyRadPlan.tissue_properties"),
+        (b"pyRadPlan.biology.models._models", b"pyRadPlan.bio_models.models"),
+        (b"pyRadPlan.biology.models", b"pyRadPlan.bio_models"),
+    ):
+        stream = stream.replace(new, old)
+    assert b"pyRadPlan.biology" not in stream
+    out = tmp_path / "old_paths.pkl"
+    out.write_bytes(stream)
+
+    data = load_data(out)
+    assert type(data["tissue"]) is MKMTissueProperties
+    assert data["tissue"] == tissue
+    assert type(data["model"]) is ConstantRBEModel
+    assert data["model"] == model

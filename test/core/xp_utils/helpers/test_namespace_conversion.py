@@ -250,6 +250,36 @@ def test_cupy_sparse_to_torch_gpu(scipy_sparse_matrix):
     assert result.is_cuda
 
 
+@pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
+@pytest.mark.parametrize("fmt", ("coo", "csr", "csc"))
+def test_torch_sparse_to_scipy_preserves_format(fmt):
+    source = getattr(sp, f"{fmt}_array")([[0.0, 1.0], [2.0, 0.0]])
+    torch_sparse = to_namespace(torch, source, device="cpu")
+
+    result = to_namespace(np, torch_sparse)
+
+    assert sp.issparse(result)
+    assert result.format == fmt
+    assert np.array_equal(result.toarray(), source.toarray())
+
+
+@pytest.mark.skipif(
+    not (has_cupy and has_torch and torch.cuda.is_available()),
+    reason="CuPy and PyTorch with CUDA required",
+)
+@pytest.mark.parametrize("source_device", ("cpu", "cuda"))
+@pytest.mark.parametrize("fmt", ("coo", "csr", "csc"))
+def test_torch_sparse_to_cupy_preserves_format(fmt, source_device):
+    # The CPU source exercises the host upload path, the CUDA source the DLPack hand-over.
+    source = getattr(sp, f"{fmt}_array")([[0.0, 1.0], [2.0, 0.0]])
+    torch_sparse = to_namespace(torch, source, device=source_device)
+
+    result = to_namespace(cp, torch_sparse, device="gpu")
+
+    assert result.getformat() == fmt
+    assert np.array_equal(result.get().toarray(), source.toarray())
+
+
 # --- from_numpy with device ---
 @pytest.mark.skipif(not has_torch, reason="PyTorch not installed")
 def test_from_numpy_torch_cpu(numpy_array):

@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Union, ClassVar
-import warnings
+from typing import Annotated, Any, Optional, Union, ClassVar
 import logging
 
 from ...core.xp_utils.typing import Array, ArrayNamespace
@@ -14,17 +13,22 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import ScenarioModel
-from pyRadPlan.quantities import RTQuantity, QuantityResolver
+from pyRadPlan.quantities import (
+    RBExDose,
+    RTQuantity,
+    QuantityResolver,
+    get_available_quantities,
+)
 
-from ..objectives import Objective, get_objective
+from ..objectives import get_objective
 from ..solvers import get_available_solvers, get_solver, SolverBase
-from ...core import ProgressReporter, xp_utils
+from ...core import AlgorithmParameterMetadata, ConfigurableAlgorithm, ProgressReporter, xp_utils
 
 
 logger = logging.getLogger(__name__)
 
 
-class PlanningProblem(ProgressReporter, ABC):
+class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     """
     Abstract class for all planning problems.
 
@@ -42,13 +46,39 @@ class PlanningProblem(ProgressReporter, ABC):
     apply_overlap : bool, default=True
         Whether to apply overlap priorities to the StructureSet
     solver : Union[str, dict, SolverBase], default="ipopt"
-        The solver to use for optimization.
+        The solver to use for optimization. A string only selects solver with default options,
+        a dict contains specific solver options and the corresponding solver 'name' key.
+        Only the default falls back to the first registered solver when unavailable; a solver
+        requested via ``pln.prop_opt`` raises instead, as substituting it would silently
+        discard its configuration and change the result.
+    display : bool, optional
+        Toggle propagated to the solver. Left unset, the solver keeps whatever it was
+        configured with (its own default, or a value from the ``solver`` dict).
+    max_iter : int, optional
+        Iteration cap propagated to the solver. Left unset, the solver keeps whatever it was
+        configured with (its own default, or a value from the ``solver`` dict).
+    convert_dose_objectives : bool, default=True
+        Legacy plan-wide conversion of physical-dose objectives to the RBE-weighted dose
+        when the dose influence data carries a biological model, skipped when objectives
+        already use a biological quantity. Set to ``False`` to use every objective's
+        quantity literally.
     """
 
     # Constant, Abstract properties are realized as ClassVars
     short_name: ClassVar[str]
     name: ClassVar[str]
-    possible_radiation_modes: list[str] = [
+
+    #: Names of the generic knobs forwarded to the solver by :meth:`_propagate_solver_properties`
+    #: when set on the problem. Not every solver supports all of them; a subclass tied to a
+    #: particular family of solvers can extend the list.
+    solver_properties: ClassVar[tuple[str, ...]] = ("max_iter", "display")
+
+    #: Whether this problem appends every objective evaluation to :attr:`obj_history`. Declared
+    #: rather than assumed, so that a problem which does not record leaves
+    #: ``opt_info["obj_history"]`` absent instead of handing back an empty list that reads as
+    #: "the solver never evaluated the objective".
+    records_obj_history: ClassVar[bool] = False
+    possible_radiation_modes: ClassVar[list[str]] = [
         "photons",
         "protons",
         "helium",
@@ -56,18 +86,17 @@ class PlanningProblem(ProgressReporter, ABC):
         "oxygen",
         "VHEE",
     ]
-    default_quantities: dict[str, str] = {
-        "photons": "physical_dose",
-        "protons": "physical_dose",
-        "helium": "physical_dose",
-        "carbon": "rbe_x_dose",
-        "oxygen": "physical_dose",
-        "VHEE": "physical_dose",
-    }
     # right now only kernel based rbe model which is only standard in the carbon machine
 
-    apply_overlap: bool
-    solver: Union[str, dict, SolverBase]
+    apply_overlap: bool = True
+    # Unset by default so that a value configured on the solver itself - including one
+    # coming from a prop_opt["solver"] dict - is not overwritten by a top-level default.
+    # Only an explicitly assigned top-level value takes precedence over the solver's.
+    display: Optional[bool] = None
+    max_iter: Optional[int] = None
+    solver: Union[str, dict, SolverBase] = "ipopt"
+    obj_history: Annotated[Optional[list], AlgorithmParameterMetadata(configurable=False)] = None
+    convert_dose_objectives: bool = True
 
     # Private properties
     _ct: CT
@@ -83,36 +112,83 @@ class PlanningProblem(ProgressReporter, ABC):
     _q_cache_index: list[int]
     _objectives_per_quantity: dict[str, int]
     _num_objectives: int
+    _solver_explicit: bool
 
     _array_backend: ArrayNamespace
+
+    _num_of_fractions: int = 1
+    _dose_convention: str = "per_fraction"
 
     def __init__(self, pln: Union[Plan, dict] = None):
         super().__init__()
 
         self._scenario_model = None
-
-        self.solver = "ipopt"
-        self.apply_overlap = True
-
-        self.convert_dose_objectives = True
+        self._solver_explicit = False
+        self._init_config_defaults()
 
         if pln is not None:
             pln = validate_pln(pln)
             self.assign_properties_from_pln(pln)
 
+        # Validate the chosen solver name (string or "name" key inside dict).
         solvers = get_available_solvers()
-        if self.solver not in solvers:
+        if isinstance(self.solver, str):
+            solver_name = self.solver
+        elif isinstance(self.solver, dict):
+            solver_name = self.solver.get("name")
+        else:
+            solver_name = None  # SolverBase instance — skip name check
+
+        if solver_name is not None and solver_name not in solvers:
             solver_names = list(solvers.keys())
-
             if len(solver_names) == 0:
-                raise ValueError("No solver found!")
+                raise ValueError("No solver registered!")
 
-            warnings.warn(
-                f"Solver {self.solver} not available. Choose from {solver_names}"
-                ", and we will choose the first available one for you!"
+            # An explicitly requested solver is never silently substituted: a different
+            # solver ignores the given configuration and yields a different result.
+            if self._solver_explicit:
+                raise ValueError(
+                    f"Solver '{solver_name}' was explicitly requested but is not available "
+                    f"(registered: {solver_names}). Install its backend (e.g. "
+                    f"'pip install ipyopt' for 'ipopt') or pick a registered solver and "
+                    f"restate the configuration using that solver's own option names."
+                )
+
+            fallback = solver_names[0]
+            logger.warning(
+                "Default solver '%s' is not available (registered: %s), falling back to '%s'. "
+                "Install the backend of '%s' (e.g. 'pip install ipyopt' for 'ipopt') or "
+                "configure '%s' explicitly in prop_opt['solver'] using its own option names.",
+                solver_name,
+                solver_names,
+                fallback,
+                solver_name,
+                fallback,
             )
+            self.solver = fallback
 
-            self.solver = solver_names[0]
+    def _get_legacy_default_quantity(self, radiation_mode: str) -> str:
+        """
+        Return the quantity used by the legacy plan-wide objective conversion.
+
+        Ion objectives are converted to ``rbe_x_dose`` only if the dij can provide it, as
+        decided by :meth:`RBExDose.choose_path`; a dij computed without (applicable)
+        biological model keeps its physical-dose objectives.
+        """
+        has_effect = (
+            getattr(self._dij, "alpha_dose", None) is not None
+            and getattr(self._dij, "sqrt_beta_dose", None) is not None
+        )
+        use_rbe = RBExDose.choose_path(self._dij, has_effect=has_effect, strict=False) is not None
+        default_quantities = {
+            "photons": "physical_dose",
+            "protons": "rbe_x_dose" if use_rbe else "physical_dose",
+            "helium": "rbe_x_dose" if use_rbe else "physical_dose",
+            "carbon": "rbe_x_dose" if use_rbe else "physical_dose",
+            "oxygen": "rbe_x_dose" if use_rbe else "physical_dose",
+            "VHEE": "physical_dose",
+        }
+        return default_quantities.get(radiation_mode, "physical_dose")
 
     def assign_properties_from_pln(self, pln: Plan, warn_when_property_changed: bool = False):
         """
@@ -129,6 +205,9 @@ class PlanningProblem(ProgressReporter, ABC):
             Whether to warn when properties are changed.
         """
 
+        self._num_of_fractions = pln.num_of_fractions
+        self._dose_convention = pln.dose_convention
+
         # Set Scenario Model
         self._mult_scen = pln.mult_scen
 
@@ -144,21 +223,24 @@ class PlanningProblem(ProgressReporter, ABC):
         if hasattr(pln, "prop_opt") and isinstance(
             pln.prop_opt, dict
         ):  # TODO: This is not tested yet
-            prop_dict = pln.prop_opt
-            if (
-                "opti_prob" in prop_dict
-                and prop_dict["opti_prob"]
-                and prop_dict["opti_prob"] != self.short_name
-            ):
+            # A copy, so that popping the selector keys leaves the plan untouched.
+            prop_dict = dict(pln.prop_opt)
+            # "problem" selects the class in get_problem_from_pln, which already warns when
+            # it cannot honour it.
+            prop_dict.pop("problem", None)
+            requested = prop_dict.pop("opti_prob", None)
+            if requested and requested != self.short_name:
                 raise ValueError(
-                    f"Inconsistent dose opti_probs given! pln asks for '{prop_dict['opti_prob']}'"
+                    f"Inconsistent dose opti_probs given! pln asks for '{requested}'"
                     f", but you are using '{self.short_name}'!"
                 )
-            prop_dict.pop("opti_prob", None)
         else:
             prop_dict = {}
 
         fields = prop_dict.keys()
+
+        if "solver" in fields:
+            self._solver_explicit = True
 
         # Set up warning message
         if warn_when_property_changed:
@@ -168,7 +250,7 @@ class PlanningProblem(ProgressReporter, ABC):
 
         for field in fields:
             if not hasattr(self, field):
-                warnings.warn(f"Property {field} not found in Problem!")
+                logger.warning("Property %s not found in Problem!", field)
             elif warn_when_property_changed and warning_msg:
                 logger.warning(warning_msg + f": {field}")
 
@@ -180,18 +262,7 @@ class PlanningProblem(ProgressReporter, ABC):
 
     def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
         """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
-        default_quantity = self.default_quantities.get(
-            self._stf.beams[0].radiation_mode, "physical_dose"
-        )
-        objectives: list[tuple] = []
-        quantity_ids: list[str] = []
-
-        if self.convert_dose_objectives:
-            logger.info(
-                "Converting all objectives to use quantity: "
-                + self.default_quantities.get(self._stf.beams[0].radiation_mode, "physical_dose")
-            )
-
+        voi_objectives: list[tuple] = []
         for voi in self._cst.vois:
             valid_objectives = [
                 obj
@@ -204,26 +275,73 @@ class PlanningProblem(ProgressReporter, ABC):
             ]
             if not valid_objectives:
                 continue
+            # Copy so that quantity conversion / fraction normalization below do not
+            # alter the objectives stored in the user's StructureSet.
+            objs = [get_objective(obj).model_copy() for obj in valid_objectives]
+            voi_objectives.append((voi, objs))
 
+        if self.convert_dose_objectives:
+            self._convert_dose_objectives([obj for _, objs in voi_objectives for obj in objs])
+
+        objectives: list[tuple] = []
+        quantity_ids: list[str] = []
+        for voi, objs in voi_objectives:
             cube_ix = voi.indices_numpy
             linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
             linear_mask[cube_ix] = True
-            objs = [get_objective(obj) for obj in valid_objectives]
-
-            if self.convert_dose_objectives:
-                for obj in objs:
-                    if obj.quantity == Objective.model_fields["quantity"].default:
-                        obj.quantity = default_quantity
-
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
-
+            if self._dose_convention == "total":
+                for obj in objs:
+                    obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
 
         return objectives, quantity_ids
+
+    def _convert_dose_objectives(self, objectives: list) -> None:
+        """Legacy plan-wide conversion of physical-dose objectives to the biological dose.
+
+        Physical-dose objectives are converted only when no objective already uses a
+        biological quantity; otherwise the mix is taken as intended and kept.  Objectives
+        on any other quantity (e.g. LET) are used literally.  Either outcome is reported
+        as a warning.
+        """
+        # TODO: Replace this plan-wide legacy mode with explicit ``dose_auto``
+        # objective intent; see docs/development/optimization_quantity_api.md.
+        default_quantity = self._get_legacy_default_quantity(self._stf.beams[0].radiation_mode)
+        if default_quantity == "physical_dose":
+            return
+        physical = [obj for obj in objectives if obj.quantity == "physical_dose"]
+        if not physical:
+            return
+
+        quantities = get_available_quantities()
+        biological = sorted(
+            {
+                obj.quantity
+                for obj in objectives
+                if getattr(quantities.get(obj.quantity), "biological", False)
+            }
+        )
+        if biological:
+            message = (
+                f"{len(physical)} physical-dose objective(s) are not converted to "
+                f"{default_quantity!r} because other objectives already use the biological "
+                f"quantities {biological}; they are optimized on physical dose."
+            )
+        else:
+            for obj in physical:
+                obj.quantity = default_quantity
+            message = (
+                f"{len(physical)} physical-dose objective(s) were converted to "
+                f"{default_quantity!r} for the biological model of the dose influence data. "
+                "Set convert_dose_objectives=False to optimize physical dose instead."
+            )
+        logger.warning(message)
+        self.report_warning(message)
 
     def _initialize(self):
         """Initialize the data for the planning problem."""
@@ -237,28 +355,46 @@ class PlanningProblem(ProgressReporter, ABC):
 
         self._cst = self._cst.resample_on_new_ct(self._ct)
 
+        # check consistency of bio models and dij
+        if getattr(self._dij, "alphax", None) is not None:
+            [ax, bx] = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
+            if not np.array_equal(ax, self._dij.alphax) or not np.array_equal(bx, self._dij.betax):
+                logger.error(
+                    "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
+                )
+        if self._dose_convention == "total":
+            logger.info(
+                "Objective doses are interpreted as total-course doses (dose_convention='total'); "
+                "scaling reference doses by 1/%d for the per-fraction optimization.",
+                self._num_of_fractions,
+            )
+        else:
+            logger.info(
+                "Objective doses are interpreted per fraction (dose_convention='per_fraction')."
+            )
         # sanitize objectives and constraints and manage required quantities
         objectives, quantity_ids = self._collect_objectives()
-
         self._objective_list = objectives
         # unique quantities
         quantity_ids = list(set(quantity_ids))
 
         # Resolve all requested quantities (plus their transitive dependencies) through a
-        # shared resolver using dynamic dependency injection (via signature inspection).
+        # shared resolver so that any quantity referenced by multiple roots is instantiated
+        # exactly once. Only the quantities the requested ones actually use are evaluated.
+        # Quantities receive problem-level context (and parameters their objectives opt into)
+        # through dependency injection on their ``__init__`` signature.
         context = {
             "cst": self._cst,
             "ct": self._ct,
-            "pln": getattr(self, "_pln", None),
             "stf": getattr(self, "_stf", None),
+            "num_of_fractions": self._num_of_fractions,
         }
         resolver = QuantityResolver(
             self._dij,
             context=context,
             objective_list=self._objective_list,
         )
-        resolver.resolve(quantity_ids)
-        self._quantities = list(resolver.instances.values())
+        self._quantities = resolver.reachable(resolver.resolve(quantity_ids))
 
         if len(set([q.array_backend for q in self._quantities])) == 1:
             self._array_backend = self._quantities[0].array_backend
@@ -280,18 +416,44 @@ class PlanningProblem(ProgressReporter, ABC):
                             len(self._objectives_per_quantity[q.identifier])
                         )
                         self._objectives_per_quantity[q.identifier].append(obj_ix)
-                    obj_ix += 1
+                obj_ix += 1
 
         self._num_objectives = obj_ix
 
         # set solver options
         self.solver = get_solver(self.solver)
+        self._propagate_solver_properties()
 
         # Let the solver push status (and honour pause/stop) through this problem,
         # which is the top-level workflow step observed by callers (e.g. the GUI).
         self.solver.status_callback = self._emit_solver_status
 
         # initial point
+
+    def _propagate_solver_properties(self):
+        """Forward the top-level solver knobs that were explicitly set on this problem.
+
+        Only assigned values are forwarded, so a solver configured through a
+        ``prop_opt["solver"]`` dictionary keeps that configuration. A knob the solver does not
+        define is reported rather than applied: not every solver is iterative (``max_iter``) or
+        produces output (``display``), and silently attaching the attribute would leave the
+        caller believing a setting took effect.
+        """
+        for prop in self.solver_properties:
+            value = getattr(self, prop)
+            if value is None:
+                continue
+
+            if not hasattr(self.solver, prop):
+                logger.warning(
+                    "Solver '%s' has no '%s' property, so the value configured on the planning "
+                    "problem is ignored.",
+                    getattr(self.solver, "short_name", type(self.solver).__name__),
+                    prop,
+                )
+                continue
+
+            setattr(self.solver, prop, value)
 
     def _emit_solver_status(self, message: str = "", **data: Any) -> bool:
         """Forward arbitrary solver status upward and report whether to continue.
@@ -337,6 +499,11 @@ class PlanningProblem(ProgressReporter, ABC):
         self._cst = validate_cst(cst)
         self._stf = validate_stf(stf)
         self._dij = validate_dij(dij)
+
+        if self.obj_history is not None:
+            # Cleared in place rather than replaced, so a caller holding the list still sees
+            # this solve's history and not the previous one's appended to it.
+            self.obj_history.clear()
 
         self._initialize()
         x, info = self._solve()

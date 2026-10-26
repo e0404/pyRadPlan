@@ -6,9 +6,7 @@ import SimpleITK as sitk
 import matplotlib.pyplot as plt
 import pint
 from pyRadPlan import CT, validate_ct, StructureSet, validate_cst
-
-# Initialize Units
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class PlotSliceKwargs(TypedDict, total=False):
@@ -164,8 +162,7 @@ def _draw_contours(
 ) -> None:
     for voi in cst.vois:
         mask = sitk.GetArrayViewFromImage(voi.mask)[slice_indexing]
-        color = voi.visible_color
-        color = [tuple(float(c) / 255.0 for c in voi.visible_color)]
+        color = [tuple(float(c) / 255.0 for c in voi.color)]
 
         if ctx.transpose:
             mask = mask.T

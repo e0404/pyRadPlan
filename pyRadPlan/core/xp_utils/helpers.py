@@ -1,7 +1,7 @@
 """Helper functions for array namespace operations."""
 
 from __future__ import annotations
-from typing import ContextManager, Optional, Union, Any
+from typing import TYPE_CHECKING, ContextManager, Optional, Union, Any
 from contextlib import nullcontext
 import importlib
 
@@ -9,28 +9,13 @@ import logging
 import re
 import warnings
 
-try:
-    import cupy as cp
-    import cupyx.scipy.sparse as csp
+from ._backends import loaded_backend
 
-    CupySpmatrix = csp.spmatrix
-except ImportError:
-    cp = None
-    CupySpmatrix = Any
-try:
+if TYPE_CHECKING:
     import torch
+    from cupyx.scipy import sparse as cupy_sparse
 
-except ImportError:
-    torch = None
-
-try:
-    import jax
-    import jax.numpy as jnp
-    from jax.experimental import sparse as jsparse
-except ImportError:
-    jax = None
-    jnp = None
-    jsparse = None
+    CupySpmatrix = cupy_sparse.spmatrix
 
 try:
     import array_api_strict
@@ -125,6 +110,7 @@ def is_on_gpu(arr: Any) -> bool:
 
 
 def _is_torch_sparse_tensor(arr: Any) -> bool:
+    torch = loaded_backend("torch")
     if torch is None or not isinstance(arr, torch.Tensor):
         return False
     return arr.layout in {
@@ -141,6 +127,9 @@ def _parse_device_to_dlpack(device: Any) -> tuple[int, int] | None:
 
     None means that no explicit target device was requested.
     """
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
     if device is None:
         return None
 
@@ -275,8 +264,42 @@ def is_host_device(device: Any) -> bool:
     return dlpack_device is None or dlpack_device[0] == DLPACK_CPU
 
 
+def device_cache_key(arr: Any) -> Any:
+    """
+    Hashable identity of the device an array lives on, usable as a dict key.
+
+    Backend device objects cannot simply be used as dictionary keys: ``cupy.cuda.Device``
+    is not hashable. The DLPack ``(device_type, device_id)`` tuple is always hashable but
+    is not always distinguishing either -- every ``array_api_strict`` logical device
+    reports ``(1, 0)``. This therefore prefers the backend's own device object, which
+    identifies the device exactly, and falls back to the DLPack tuple only for the
+    backends whose device objects are unhashable (where the tuple does distinguish the
+    devices, since it carries the GPU index).
+
+    Parameters
+    ----------
+    arr : Array
+        Array whose device should be identified.
+
+    Returns
+    -------
+    Hashable
+        A value that compares equal for two arrays on the same device and differs for
+        arrays on different devices of the same backend.
+    """
+    device = array_api_compat.device(arr)
+    try:
+        hash(device)
+    except TypeError:
+        return get_device_info(arr)
+    return device
+
+
 def dlpack_to_backend_device(xp: ArrayNamespace, device: tuple[int, int] | None):
     """Return backend-specific device object for a given DLPack device tuple."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
     if device is None:
         return None
 
@@ -323,6 +346,9 @@ def dlpack_to_backend_device(xp: ArrayNamespace, device: tuple[int, int] | None)
 
 def _namespace_gpu_available(xp: ArrayNamespace) -> bool:
     """Return True if the namespace can place arrays on a CUDA device right now."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
     if array_api_compat.is_cupy_namespace(xp):
         return cp is not None and cp.cuda.is_available()
     if array_api_compat.is_torch_namespace(xp):
@@ -362,6 +388,9 @@ def _default_dlpack_device_for_namespace(xp: ArrayNamespace) -> tuple[int, int] 
 
 def _source_dlpack_device(arr: Any) -> tuple[int, int] | None:
     """Return the DLPack device of an array, or None if it cannot be determined."""
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    jsparse = loaded_backend("jax.experimental.sparse")
     if not is_sparse_array(arr):
         if hasattr(arr, "__dlpack_device__") or array_api_compat.is_array_api_obj(arr):
             return get_device_info(arr)
@@ -397,6 +426,8 @@ def _resolve_target_device(xp_new: ArrayNamespace, arr: Any) -> tuple[int, int]:
 
 def get_current_stream(xp: ArrayNamespace) -> ContextManager:
     """Get the current stream based on the array namespace."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp):
         return cp.cuda.get_current_stream()
     if array_api_compat.is_torch_namespace(xp):
@@ -409,6 +440,8 @@ def get_current_stream(xp: ArrayNamespace) -> ContextManager:
 
 def create_stream(xp: ArrayNamespace) -> ContextManager:
     """Create a context manager for the appropriate stream based on the array namespace."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp):
         return cp.cuda.Stream(non_blocking=True)
     if array_api_compat.is_torch_namespace(xp):
@@ -423,6 +456,8 @@ def create_stream(xp: ArrayNamespace) -> ContextManager:
 
 def synchronize(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> None:
     """Synchronize the device if using CuPy."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
 
     if stream is not None and not isinstance(stream, nullcontext):
         # torch.cuda.stream() returns a StreamContext — delegate to the inner Stream
@@ -469,6 +504,8 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     This is useful to manage GPU memory usage in long-running applications.
     Will ignore cpu arrays.
     """
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp) and cp is not None:
         cp.get_default_memory_pool().free_all_blocks()
     elif array_api_compat.is_torch_namespace(xp) and torch is not None:
@@ -489,6 +526,7 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
 
 def record_event(xp: ArrayNamespace, stream: Optional[ContextManager] = None) -> Optional[object]:
     """Record an event in the current stream if using CuPy or PyTorch."""
+    torch = loaded_backend("torch")
     if not isinstance(stream, nullcontext):
         if array_api_compat.is_cupy_namespace(xp):
             event = xp.cuda.Event()
@@ -528,6 +566,8 @@ def stream_wait_event(
     the host keeps enqueueing. A no-op for host timestamps returned by
     :func:`record_event` on backends without stream support.
     """
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
     if event is None or stream is None or isinstance(stream, nullcontext):
         return
 
@@ -552,6 +592,8 @@ def stream_wait_event(
 
 def elapsed_time(xp: ArrayNamespace, start, end) -> float:
     """Calculate the elapsed time between two events or timestamps."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp):
         return cp.cuda.get_elapsed_time(start, end) / 1000.0  # Convert ms to s
     if array_api_compat.is_torch_namespace(xp):
@@ -601,6 +643,7 @@ def scatter(arr: Array, key: Any, values: Any) -> Array:
 
 def to_numpy(arr: Array, detach: bool = True, dtype: np.dtype | type | None = None) -> NDArray:
     """Convert an array to a NumPy array."""
+    cp = loaded_backend("cupy")
     if array_api_compat.is_torch_array(arr):
         if detach and arr.requires_grad:
             arr = arr.detach()
@@ -616,6 +659,18 @@ def to_numpy(arr: Array, detach: bool = True, dtype: np.dtype | type | None = No
     return out
 
 
+def _ensure_torch_compatible_strides(arr: Any) -> Any:
+    """Materialize a NumPy view that has negative strides.
+
+    PyTorch supports neither ``torch.from_numpy`` nor a DLPack import of a negatively strided
+    array; the DLPack path aborts the process instead of raising on some builds. Reversed views
+    (``arr[::-1]``, ``np.flip``, ``np.rot90``) therefore have to be copied before conversion.
+    """
+    if isinstance(arr, np.ndarray) and arr.strides and min(arr.strides) < 0:
+        return np.ascontiguousarray(arr)
+    return arr
+
+
 def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Any = None) -> Array:
     """Convert a NumPy array to the specified array namespace.
 
@@ -629,6 +684,10 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Any = None) -> Ar
         Target device. Accepts ``"cpu"``, ``"gpu"``, ``"gpu:N"``, ``"cuda:N"`` or dlpack tuple (normalized automatically).
         Default ``None`` keeps the array on the CPU (NumPy/torch/jax) or uses the current CuPy device.
     """
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jnp = loaded_backend("jax.numpy")
     device = _parse_device_to_dlpack(device)
 
     if device is None:
@@ -646,7 +705,7 @@ def from_numpy(xp: ArrayNamespace, arr: np.ndarray, *, device: Any = None) -> Ar
             return cp.asarray(arr)
 
     if array_api_compat.is_torch_namespace(xp) and torch is not None:
-        t = torch.from_numpy(arr)
+        t = torch.from_numpy(_ensure_torch_compatible_strides(arr))
         if device_type == DLPACK_CUDA:
             if not torch.cuda.is_available():
                 raise RuntimeError("GPU requested but not available for PyTorch.")
@@ -709,6 +768,10 @@ def to_namespace(
     Array
         The converted array.
     """
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jnp = loaded_backend("jax.numpy")
     # We need these checks, to ensure that the error makes sense.
     # Otherwise this function will complain about a sparse array error :)
     if isinstance(arr, (int, float, bool, complex)):
@@ -791,6 +854,8 @@ def to_namespace(
         device_type = int(device[0])
         device_id = int(device[1])
 
+        arr = _ensure_torch_compatible_strides(arr)
+
         # Convert to Torch, preserving device if possible.
         try:
             if hasattr(xp_new, "from_dlpack"):
@@ -840,6 +905,37 @@ def to_namespace(
     return xp_new.from_dlpack(arr, copy=copy)
 
 
+def _resolve_sparse_device(xp_new: ArrayNamespace, device: Any) -> tuple[int, int]:
+    """Resolve a device specification into the DLPack ``(device_type, device_id)`` to convert to.
+
+    Falls back to the namespace's default device when no device is requested.
+    """
+    device = _parse_device_to_dlpack(device)
+
+    if device is None:
+        device = _default_dlpack_device_for_namespace(xp_new)
+
+    return int(device[0]), int(device[1])
+
+
+def _require_cuda_device(device_type: int, backend: str = "CuPy") -> None:
+    """Reject DLPack device types other than CUDA for backends that only run on CUDA."""
+    if device_type == DLPACK_CPU:
+        raise ValueError(f"{backend} does not support CPU.")
+    if device_type != DLPACK_CUDA:
+        raise ValueError(
+            f"{backend} only supports CUDA devices, got DLPack device type {device_type}."
+        )
+
+
+def _require_cpu_or_cuda_device(device_type: int, backend: str) -> None:
+    """Reject DLPack device types other than CPU and CUDA."""
+    if device_type not in (DLPACK_CPU, DLPACK_CUDA):
+        raise ValueError(
+            f"{backend} only supports CPU and CUDA devices, got DLPack device type {device_type}."
+        )
+
+
 def _convert_sparse_for_namespace(
     xp_new: ArrayNamespace,
     sparray: Array,
@@ -847,13 +943,15 @@ def _convert_sparse_for_namespace(
     device: Any = None,
 ) -> Array:
     """Convert a sparse matrix to be compatible with a new array namespace."""
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    jsparse = loaded_backend("jax.experimental.sparse")
 
     if isinstance(sparray, (scp.spmatrix, scp.sparray)):
         return _convert_scipy_sparse_for_namespace(
             xp_new, sparray, keep_sparse_compat, device=device
         )
 
-    if cp is not None and isinstance(sparray, CupySpmatrix):
+    if csp is not None and isinstance(sparray, csp.spmatrix):
         return _convert_cupy_sparse_for_namespace(
             xp_new, sparray, keep_sparse_compat, device=device
         )
@@ -880,13 +978,14 @@ def _convert_scipy_sparse_for_namespace(
     device: Any = None,
 ) -> Array:
     """Convert a scipy sparse matrix to be compatible with a new array namespace."""
-    device = _parse_device_to_dlpack(device)
-
-    if device is None:
-        device = _default_dlpack_device_for_namespace(xp_new)
-
-    device_type = int(device[0])
-    device_id = int(device[1])
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jnp = loaded_backend("jax.numpy")
+    jsparse = loaded_backend("jax.experimental.sparse")
+    device = _resolve_sparse_device(xp_new, device)
+    device_type, device_id = device
 
     if not keep_sparse_compat:
         return to_namespace(xp_new, sparray.toarray(), device=device)
@@ -918,28 +1017,18 @@ def _convert_scipy_sparse_for_namespace(
             indices = torch.from_numpy(np.vstack((sparray.row, sparray.col)).astype(np.int64))
             sparray = torch.sparse_coo_tensor(indices, values, size=sparray.shape)
 
-        # Move sparse tensor to requested CUDA device.
+        # Move sparse tensor to requested CUDA device; a CPU target needs no move.
+        _require_cpu_or_cuda_device(device_type, "PyTorch")
         if device_type == DLPACK_CUDA:
             if not torch.cuda.is_available():
                 raise RuntimeError("GPU requested but not available for PyTorch.")
             sparray = sparray.to(device=torch.device("cuda", device_id))
 
-        # Keep sparse tensor on CPU.
-        elif device_type == DLPACK_CPU:
-            pass
-        else:
-            raise ValueError(f"Unsupported DLPack device for PyTorch sparse tensor: {device}")
-
         return sparray
 
     # --- Target: CuPy ---
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
-        if device_type == DLPACK_CPU:
-            raise ValueError("CuPy does not support CPU.")
-        if device_type != DLPACK_CUDA:
-            raise ValueError(
-                f"CuPy only supports CUDA devices, got DLPack device type {device_type}."
-            )
+        _require_cuda_device(device_type)
 
         with cp.cuda.Device(device_id):
             try:
@@ -955,10 +1044,7 @@ def _convert_scipy_sparse_for_namespace(
 
     # --- Target: JAX ---
     if array_api_compat.is_jax_namespace(xp_new) and jax is not None and jsparse is not None:
-        if device_type not in (DLPACK_CPU, DLPACK_CUDA):
-            raise ValueError(
-                f"JAX only supports CPU and CUDA devices, got DLPack device type {device_type}."
-            )
+        _require_cpu_or_cuda_device(device_type, "JAX")
         jax_device = dlpack_to_backend_device(xp_new, device)
         try:
             if fmt == "csr":
@@ -1009,25 +1095,20 @@ def _convert_cupy_sparse_for_namespace(
     keep_sparse_compat: bool,
     device: Any = None,
 ) -> Array:
-    device = _parse_device_to_dlpack(device)
-
-    if device is None:
-        device = _default_dlpack_device_for_namespace(xp_new)
-
-    device_type = int(device[0])
-    device_id = int(device[1])
+    """Convert a CuPy sparse matrix to be compatible with a new array namespace."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jsparse = loaded_backend("jax.experimental.sparse")
+    device = _resolve_sparse_device(xp_new, device)
+    device_type, device_id = device
 
     if not keep_sparse_compat:
         return to_namespace(xp_new, sparray.toarray(), device=device)
 
     # --- Target: CuPy ---
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
-        if device_type == DLPACK_CPU:
-            raise ValueError("CuPy does not support CPU.")
-        if device_type != DLPACK_CUDA:
-            raise ValueError(
-                f"CuPy only supports CUDA devices, got DLPack device type {device_type}."
-            )
+        _require_cuda_device(device_type)
         # No format conversion needed, but the array may still live on another GPU
         if sparray.data.device.id != device_id:
             with cp.cuda.Device(device_id):
@@ -1048,73 +1129,79 @@ def _convert_cupy_sparse_for_namespace(
 
     # --- Target: PyTorch ---
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
-        fmt = sparray.getformat()
-
-        if fmt in ("csr", "csc"):
-            f_create = torch.sparse_csr_tensor if fmt == "csr" else torch.sparse_csc_tensor
-            indptr = torch.utils.dlpack.from_dlpack(sparray.indptr.astype(np.int64, copy=False))
-            indices = torch.utils.dlpack.from_dlpack(sparray.indices.astype(np.int64, copy=False))
-            values = torch.utils.dlpack.from_dlpack(sparray.data)
-            sparray = f_create(indptr, indices, values, size=sparray.shape)
-        else:
-            if fmt != "coo":
-                sparray = sparray.tocoo()
-            row = sparray.row.astype(cp.int64, copy=False)
-            col = sparray.col.astype(cp.int64, copy=False)
-            indices_cp = cp.stack((row, col), axis=0)
-
-            indices = torch.utils.dlpack.from_dlpack(indices_cp)
-            values = torch.utils.dlpack.from_dlpack(sparray.data)
-            sparray = torch.sparse_coo_tensor(indices, values, size=sparray.shape)
-
-        # Move to requested DLPack device if needed.
-        if device_type == DLPACK_CUDA:
-            if not torch.cuda.is_available():
-                raise RuntimeError("GPU requested but not available for PyTorch.")
-            sparray = sparray.to(device=dlpack_to_backend_device(xp_new, device))
-        elif device_type == DLPACK_CPU:
-            sparray = sparray.to(device=dlpack_to_backend_device(xp_new, device))
-        else:
-            raise ValueError(f"Unsupported DLPack device for PyTorch sparse tensor: {device}")
-
-        return sparray
+        _require_cpu_or_cuda_device(device_type, "PyTorch")
+        if device_type == DLPACK_CUDA and not torch.cuda.is_available():
+            raise RuntimeError("GPU requested but not available for PyTorch.")
+        return _cupy_sparse_to_torch(sparray, xp_new, device)
 
     # --- Target: JAX ---
     if array_api_compat.is_jax_namespace(xp_new) and jax is not None and jsparse is not None:
-        if device_type not in (DLPACK_CPU, DLPACK_CUDA):
-            raise ValueError(
-                f"JAX only supports CPU and CUDA devices, got DLPack device type {device_type}."
-            )
-        jax_device = dlpack_to_backend_device(xp_new, device)
-        fmt = sparray.getformat()
-
-        try:
-            if fmt in ("csr", "csc"):
-                sparse_type = jsparse.CSR if fmt == "csr" else jsparse.CSC
-                data = jax.dlpack.from_dlpack(sparray.data)
-                indices = jax.dlpack.from_dlpack(sparray.indices.astype(cp.int32, copy=False))
-                indptr = jax.dlpack.from_dlpack(sparray.indptr.astype(cp.int32, copy=False))
-                jax_sparse = sparse_type((data, indices, indptr), shape=sparray.shape)
-            else:
-                if fmt != "coo":
-                    sparray = sparray.tocoo()
-                data = jax.dlpack.from_dlpack(sparray.data)
-                row = jax.dlpack.from_dlpack(sparray.row.astype(cp.int32, copy=False))
-                col = jax.dlpack.from_dlpack(sparray.col.astype(cp.int32, copy=False))
-                jax_sparse = jsparse.COO((data, row, col), shape=sparray.shape)
-        except Exception as exc:
-            raise TypeError(
-                "Could not convert CuPy sparse matrix to a JAX sparse array. "
-                f"Input sparse format was '{fmt}'."
-            ) from exc
-
-        return jax.device_put(jax_sparse, jax_device)
+        _require_cpu_or_cuda_device(device_type, "JAX")
+        return _cupy_sparse_to_jax(sparray, xp_new, device)
 
     raise TypeError(
         "Conversion of sparse matrix to namespace '{}' is not yet supported.".format(
             xp_new.__name__
         )
     )
+
+
+def _cupy_sparse_to_torch(
+    sparray: CupySpmatrix, xp_new: ArrayNamespace, device: tuple[int, int]
+) -> torch.Tensor:
+    """Convert a CuPy sparse matrix to a PyTorch sparse tensor on the requested device."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    fmt = sparray.getformat()
+
+    if fmt in ("csr", "csc"):
+        f_create = torch.sparse_csr_tensor if fmt == "csr" else torch.sparse_csc_tensor
+        indptr = torch.utils.dlpack.from_dlpack(sparray.indptr.astype(np.int64, copy=False))
+        indices = torch.utils.dlpack.from_dlpack(sparray.indices.astype(np.int64, copy=False))
+        values = torch.utils.dlpack.from_dlpack(sparray.data)
+        torch_sparse = f_create(indptr, indices, values, size=sparray.shape)
+    else:
+        if fmt != "coo":
+            sparray = sparray.tocoo()
+        row = sparray.row.astype(cp.int64, copy=False)
+        col = sparray.col.astype(cp.int64, copy=False)
+        indices = torch.utils.dlpack.from_dlpack(cp.stack((row, col), axis=0))
+        values = torch.utils.dlpack.from_dlpack(sparray.data)
+        torch_sparse = torch.sparse_coo_tensor(indices, values, size=sparray.shape)
+
+    return torch_sparse.to(device=dlpack_to_backend_device(xp_new, device))
+
+
+def _cupy_sparse_to_jax(
+    sparray: CupySpmatrix, xp_new: ArrayNamespace, device: tuple[int, int]
+) -> Any:
+    """Convert a CuPy sparse matrix to a JAX sparse array on the requested device."""
+    cp = loaded_backend("cupy")
+    jax = loaded_backend("jax")
+    jsparse = loaded_backend("jax.experimental.sparse")
+    fmt = sparray.getformat()
+
+    try:
+        if fmt in ("csr", "csc"):
+            sparse_type = jsparse.CSR if fmt == "csr" else jsparse.CSC
+            data = jax.dlpack.from_dlpack(sparray.data)
+            indices = jax.dlpack.from_dlpack(sparray.indices.astype(cp.int32, copy=False))
+            indptr = jax.dlpack.from_dlpack(sparray.indptr.astype(cp.int32, copy=False))
+            jax_sparse = sparse_type((data, indices, indptr), shape=sparray.shape)
+        else:
+            if fmt != "coo":
+                sparray = sparray.tocoo()
+            data = jax.dlpack.from_dlpack(sparray.data)
+            row = jax.dlpack.from_dlpack(sparray.row.astype(cp.int32, copy=False))
+            col = jax.dlpack.from_dlpack(sparray.col.astype(cp.int32, copy=False))
+            jax_sparse = jsparse.COO((data, row, col), shape=sparray.shape)
+    except Exception as exc:
+        raise TypeError(
+            "Could not convert CuPy sparse matrix to a JAX sparse array. "
+            f"Input sparse format was '{fmt}'."
+        ) from exc
+
+    return jax.device_put(jax_sparse, dlpack_to_backend_device(xp_new, device))
 
 
 def _convert_torch_sparse_for_namespace(
@@ -1124,32 +1211,26 @@ def _convert_torch_sparse_for_namespace(
     device: Any = None,
 ) -> Array:
     """Convert a PyTorch sparse tensor to be compatible with a new array namespace."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jsparse = loaded_backend("jax.experimental.sparse")
 
     if not _is_torch_sparse_tensor(sparray):
         raise ValueError("Expected a PyTorch sparse tensor, got a dense tensor.")
 
-    device = _parse_device_to_dlpack(device)
-
-    if device is None:
-        device = _default_dlpack_device_for_namespace(xp_new)
-
-    device_type = int(device[0])
-    device_id = int(device[1])
+    device = _resolve_sparse_device(xp_new, device)
+    device_type, device_id = device
 
     if not keep_sparse_compat:
         return to_namespace(xp_new, sparray.to_dense(), device=device)
 
-    fmt = sparray.layout
-
     # --- Target: PyTorch ---
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
-        if device_type == DLPACK_CUDA:
-            if not torch.cuda.is_available():
-                raise RuntimeError("GPU requested but not available for PyTorch.")
-            return sparray.to(device=dlpack_to_backend_device(xp_new, device))
-        elif device_type == DLPACK_CPU:
-            return sparray.to(device=dlpack_to_backend_device(xp_new, device))
-        raise ValueError(f"Unsupported DLPack device for PyTorch sparse tensor: {device}")
+        _require_cpu_or_cuda_device(device_type, "PyTorch")
+        if device_type == DLPACK_CUDA and not torch.cuda.is_available():
+            raise RuntimeError("GPU requested but not available for PyTorch.")
+        return sparray.to(device=dlpack_to_backend_device(xp_new, device))
 
     # --- Target: NumPy / Scipy / array-api-strict ---
     if array_api_compat.is_numpy_namespace(
@@ -1161,171 +1242,129 @@ def _convert_torch_sparse_for_namespace(
                 RuntimeWarning,
                 stacklevel=2,
             )
-
-        # Consider different sparse formats.
-        sparray_cpu = sparray.cpu()
-
-        if fmt == torch.sparse_csr:
-            crow_indices = sparray_cpu.crow_indices().numpy()
-            col_indices = sparray_cpu.col_indices().numpy()
-            values = sparray_cpu.values().numpy()
-            return scp.csr_array(
-                (values, col_indices, crow_indices), shape=sparray_cpu.shape, copy=False
-            )
-
-        elif fmt == torch.sparse_csc:
-            ccol_indices = sparray_cpu.ccol_indices().numpy()
-            row_indices = sparray_cpu.row_indices().numpy()
-            values = sparray_cpu.values().numpy()
-            return scp.csc_array(
-                (values, row_indices, ccol_indices), shape=sparray_cpu.shape, copy=False
-            )
-
-        else:
-            if fmt != torch.sparse_coo:
-                try:
-                    sparray_cpu = sparray_cpu.to_sparse_coo()
-                except RuntimeError as exc:
-                    raise TypeError(
-                        f"Unsupported PyTorch sparse layout for COO conversion: {fmt}"
-                    ) from exc
-            sparray_cpu = sparray_cpu.coalesce()
-            values = sparray_cpu.values().numpy()
-            indices = sparray_cpu.indices().numpy()
-            return scp.coo_array(
-                (values, (indices[0], indices[1])), shape=tuple(sparray_cpu.shape), copy=False
-            )
+        return _torch_sparse_to_scipy(sparray)
 
     # --- Target: CuPy ---
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
-        if device_type == DLPACK_CPU:
-            raise ValueError("CuPy does not support CPU.")
-        if device_type != DLPACK_CUDA:
-            raise ValueError(
-                f"CuPy only supports CUDA devices, got DLPack device type {device_type}."
-            )
-
-        # Depending if torch on GPU or CPU, proceed differently to avoid unnecessary GPU->CPU->GPU transfers.
-        with cp.cuda.Device(device_id):
-            if sparray.is_cuda:
-                if sparray.device.index != device_id:
-                    sparray = sparray.to(device=torch.device("cuda", device_id))
-
-                if fmt == torch.sparse_csr:
-                    crow_indices = cp.from_dlpack(sparray.crow_indices(), copy=False)
-                    col_indices = cp.from_dlpack(sparray.col_indices(), copy=False)
-                    values = cp.from_dlpack(sparray.values(), copy=False)
-                    return csp.csr_matrix(
-                        (values, col_indices, crow_indices), shape=tuple(sparray.shape), copy=False
-                    )
-
-                if fmt == torch.sparse_csc:
-                    ccol_indices = cp.from_dlpack(sparray.ccol_indices(), copy=False)
-                    row_indices = cp.from_dlpack(sparray.row_indices(), copy=False)
-                    values = cp.from_dlpack(sparray.values(), copy=False)
-                    return csp.csc_matrix(
-                        (values, row_indices, ccol_indices), shape=tuple(sparray.shape), copy=False
-                    )
-
-                if fmt != torch.sparse_coo:
-                    try:
-                        sparray = sparray.to_sparse_coo()
-                    except RuntimeError as exc:
-                        raise TypeError(
-                            f"Unsupported PyTorch sparse layout for COO conversion: {fmt}"
-                        ) from exc
-
-                sparray = sparray.coalesce()
-                indices = cp.from_dlpack(sparray.indices(), copy=False)
-                values = cp.from_dlpack(sparray.values(), copy=False)
-                return csp.coo_matrix(
-                    (values, (indices[0], indices[1])), shape=tuple(sparray.shape), copy=False
-                )
-
-            # CPU path: Torch CPU sparse -> NumPy/SciPy -> CuPy sparse.
-            sp_cpu = sparray.detach().cpu()
-
-            if fmt == torch.sparse_csr:
-                crow_indices = sp_cpu.crow_indices().numpy()
-                col_indices = sp_cpu.col_indices().numpy()
-                values = sp_cpu.values().numpy()
-                return csp.csr_matrix(
-                    (values, col_indices, crow_indices), shape=tuple(sp_cpu.shape), copy=False
-                )
-
-            if fmt == torch.sparse_csc:
-                ccol_indices = sp_cpu.ccol_indices().numpy()
-                row_indices = sp_cpu.row_indices().numpy()
-                values = sp_cpu.values().numpy()
-                return csp.csc_matrix(
-                    (values, row_indices, ccol_indices), shape=tuple(sp_cpu.shape), copy=False
-                )
-
-            if fmt != torch.sparse_coo:
-                try:
-                    sp_cpu = sp_cpu.to_sparse_coo()
-                except RuntimeError as exc:
-                    raise TypeError(
-                        f"Unsupported PyTorch sparse layout for COO conversion: {fmt}"
-                    ) from exc
-
-            sp_cpu = sp_cpu.coalesce()
-            indices = sp_cpu.indices().numpy()
-            values = sp_cpu.values().numpy()
-            return csp.coo_matrix(
-                (values, (indices[0], indices[1])), shape=tuple(sp_cpu.shape), copy=False
-            )
+        _require_cuda_device(device_type)
+        return _torch_sparse_to_cupy(sparray, device_id)
 
     # --- Target: JAX ---
     if array_api_compat.is_jax_namespace(xp_new) and jax is not None and jsparse is not None:
-        if device_type not in (DLPACK_CPU, DLPACK_CUDA):
-            raise ValueError(
-                f"JAX only supports CPU and CUDA devices, got DLPack device type {device_type}."
-            )
-        jax_device = dlpack_to_backend_device(xp_new, device)
-        try:
-            if fmt == torch.sparse_csr:
-                values = jax.dlpack.from_dlpack(sparray.values().detach())
-                indices = jax.dlpack.from_dlpack(
-                    sparray.col_indices().to(dtype=torch.int32).detach()
-                )
-                indptr = jax.dlpack.from_dlpack(
-                    sparray.crow_indices().to(dtype=torch.int32).detach()
-                )
-                jax_sparse = jsparse.CSR((values, indices, indptr), shape=tuple(sparray.shape))
-            elif fmt == torch.sparse_csc:
-                values = jax.dlpack.from_dlpack(sparray.values().detach())
-                indices = jax.dlpack.from_dlpack(
-                    sparray.row_indices().to(dtype=torch.int32).detach()
-                )
-                indptr = jax.dlpack.from_dlpack(
-                    sparray.ccol_indices().to(dtype=torch.int32).detach()
-                )
-                jax_sparse = jsparse.CSC((values, indices, indptr), shape=tuple(sparray.shape))
-            else:
-                if fmt != torch.sparse_coo:
-                    sparray = sparray.to_sparse_coo()
-                sparray = sparray.coalesce()
-                indices_torch = sparray.indices().to(dtype=torch.int32).detach()
-                values = jax.dlpack.from_dlpack(sparray.values().detach())
-                indices = jax.dlpack.from_dlpack(indices_torch)
-                jax_sparse = jsparse.COO(
-                    (values, indices[0], indices[1]), shape=tuple(sparray.shape)
-                )
-
-        except Exception as exc:
-            raise TypeError(
-                "Could not convert PyTorch sparse tensor to a JAX sparse array. "
-                f"Input sparse layout was '{fmt}'."
-            ) from exc
-
-        return jax.device_put(jax_sparse, jax_device)
+        _require_cpu_or_cuda_device(device_type, "JAX")
+        return _torch_sparse_to_jax(sparray, xp_new, device)
 
     raise TypeError(
         "Conversion of sparse matrix to namespace '{}' is not yet supported.".format(
             xp_new.__name__
         )
     )
+
+
+def _torch_sparse_components(sparray: torch.Tensor) -> tuple[Any, tuple[torch.Tensor, ...]]:
+    """Split a PyTorch sparse tensor into its layout and its constituent tensors.
+
+    Layouts other than CSR and CSC are coalesced into COO first, so the returned tensors are
+    ``(values, col_indices, crow_indices)`` for CSR, ``(values, row_indices, ccol_indices)`` for
+    CSC and ``(values, indices)`` for COO -- the ``(data, indices, indptr)`` order that the
+    SciPy, CuPy and JAX sparse constructors expect.
+    """
+    torch = loaded_backend("torch")
+    fmt = sparray.layout
+
+    if fmt == torch.sparse_csr:
+        return fmt, (sparray.values(), sparray.col_indices(), sparray.crow_indices())
+
+    if fmt == torch.sparse_csc:
+        return fmt, (sparray.values(), sparray.row_indices(), sparray.ccol_indices())
+
+    if fmt != torch.sparse_coo:
+        try:
+            sparray = sparray.to_sparse_coo()
+        except RuntimeError as exc:
+            raise TypeError(
+                f"Unsupported PyTorch sparse layout for COO conversion: {fmt}"
+            ) from exc
+
+    sparray = sparray.coalesce()
+    return torch.sparse_coo, (sparray.values(), sparray.indices())
+
+
+def _torch_sparse_to_scipy(sparray: torch.Tensor) -> Union[scp.spmatrix, scp.sparray]:
+    """Convert a PyTorch sparse tensor to the matching SciPy sparse array on the host."""
+    torch = loaded_backend("torch")
+    shape = tuple(sparray.shape)
+    fmt, parts = _torch_sparse_components(sparray.cpu())
+    values = parts[0].numpy()
+
+    if fmt == torch.sparse_csr:
+        return scp.csr_array((values, parts[1].numpy(), parts[2].numpy()), shape=shape, copy=False)
+
+    if fmt == torch.sparse_csc:
+        return scp.csc_array((values, parts[1].numpy(), parts[2].numpy()), shape=shape, copy=False)
+
+    indices = parts[1].numpy()
+    return scp.coo_array((values, (indices[0], indices[1])), shape=shape, copy=False)
+
+
+def _torch_sparse_to_cupy(sparray: torch.Tensor, device_id: int) -> CupySpmatrix:
+    """Convert a PyTorch sparse tensor to a CuPy sparse matrix on the given CUDA device."""
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    torch = loaded_backend("torch")
+    shape = tuple(sparray.shape)
+
+    with cp.cuda.Device(device_id):
+        # A tensor already on a GPU is handed over via DLPack; routing it through the host
+        # would cost an unnecessary GPU->CPU->GPU transfer. A CPU tensor is uploaded via
+        # NumPy: the cupyx constructors reject host arrays.
+        if sparray.is_cuda:
+            if sparray.device.index != device_id:
+                sparray = sparray.to(device=torch.device("cuda", device_id))
+            fmt, parts = _torch_sparse_components(sparray)
+            arrays = tuple(cp.from_dlpack(part) for part in parts)
+        else:
+            fmt, parts = _torch_sparse_components(sparray.detach().cpu())
+            arrays = tuple(cp.asarray(part.numpy()) for part in parts)
+
+        if fmt == torch.sparse_csr:
+            return csp.csr_matrix(arrays, shape=shape, copy=False)
+
+        if fmt == torch.sparse_csc:
+            return csp.csc_matrix(arrays, shape=shape, copy=False)
+
+        values, indices = arrays
+        return csp.coo_matrix((values, (indices[0], indices[1])), shape=shape, copy=False)
+
+
+def _torch_sparse_to_jax(
+    sparray: torch.Tensor, xp_new: ArrayNamespace, device: tuple[int, int]
+) -> Any:
+    """Convert a PyTorch sparse tensor to a JAX sparse array on the requested device."""
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jsparse = loaded_backend("jax.experimental.sparse")
+    layout = sparray.layout
+
+    try:
+        shape = tuple(sparray.shape)
+        fmt, parts = _torch_sparse_components(sparray)
+        values = jax.dlpack.from_dlpack(parts[0].detach())
+        indices = jax.dlpack.from_dlpack(parts[1].to(dtype=torch.int32).detach())
+
+        if fmt in (torch.sparse_csr, torch.sparse_csc):
+            indptr = jax.dlpack.from_dlpack(parts[2].to(dtype=torch.int32).detach())
+            sparse_type = jsparse.CSR if fmt == torch.sparse_csr else jsparse.CSC
+            jax_sparse = sparse_type((values, indices, indptr), shape=shape)
+        else:
+            jax_sparse = jsparse.COO((values, indices[0], indices[1]), shape=shape)
+    except Exception as exc:
+        raise TypeError(
+            "Could not convert PyTorch sparse tensor to a JAX sparse array. "
+            f"Input sparse layout was '{layout}'."
+        ) from exc
+
+    return jax.device_put(jax_sparse, dlpack_to_backend_device(xp_new, device))
 
 
 def _convert_jax_sparse_for_namespace(
@@ -1335,6 +1374,10 @@ def _convert_jax_sparse_for_namespace(
     device: Any = None,
 ) -> Array:
     """Convert a JAX sparse array to be compatible with a new array namespace."""
+    cp = loaded_backend("cupy")
+    torch = loaded_backend("torch")
+    jax = loaded_backend("jax")
+    jsparse = loaded_backend("jax.experimental.sparse")
 
     if jsparse is None:
         raise ValueError("JAX sparse support is not available.")
@@ -1343,38 +1386,19 @@ def _convert_jax_sparse_for_namespace(
     if not isinstance(sparray, supported_types):
         raise ValueError("Expected a JAX BCOO, COO, CSR, or CSC sparse array.")
 
-    device = _parse_device_to_dlpack(device)
-
-    if device is None:
-        device = _default_dlpack_device_for_namespace(xp_new)
-
-    device_type = int(device[0])
-    device_id = int(device[1])
+    device = _resolve_sparse_device(xp_new, device)
+    device_type, device_id = device
 
     if not keep_sparse_compat:
         return to_namespace(xp_new, sparray.todense(), device=device)
 
-    shape = tuple(sparray.shape)
-
     # --- Target: JAX ---
     if array_api_compat.is_jax_namespace(xp_new) and jax is not None:
-        if device_type not in (DLPACK_CPU, DLPACK_CUDA):
-            raise ValueError(
-                f"JAX only supports CPU and CUDA devices, got DLPack device type {device_type}."
-            )
+        _require_cpu_or_cuda_device(device_type, "JAX")
         return jax.device_put(sparray, dlpack_to_backend_device(xp_new, device))
 
-    if len(shape) != 2:
+    if len(sparray.shape) != 2:
         raise ValueError("Only 2D JAX sparse arrays can be converted to sparse matrix backends.")
-
-    if isinstance(sparray, jsparse.CSR):
-        fmt = "csr"
-    elif isinstance(sparray, jsparse.CSC):
-        fmt = "csc"
-    else:
-        fmt = "coo"
-
-    values = sparray.data
 
     # --- Target: NumPy / SciPy / array-api-strict ---
     if array_api_compat.is_numpy_namespace(
@@ -1386,83 +1410,109 @@ def _convert_jax_sparse_for_namespace(
                 RuntimeWarning,
                 stacklevel=2,
             )
-
-        values_np = np.asarray(jax.device_get(values))
-
-        if fmt in ("csr", "csc"):
-            indices_np = np.asarray(jax.device_get(sparray.indices))
-            indptr_np = np.asarray(jax.device_get(sparray.indptr))
-            sparse_type = scp.csr_array if fmt == "csr" else scp.csc_array
-            return sparse_type((values_np, indices_np, indptr_np), shape=shape, copy=False)
-
-        if isinstance(sparray, jsparse.BCOO):
-            indices_np = np.asarray(jax.device_get(sparray.indices))
-            row_np, col_np = indices_np[:, 0], indices_np[:, 1]
-        else:
-            row_np = np.asarray(jax.device_get(sparray.row))
-            col_np = np.asarray(jax.device_get(sparray.col))
-        return scp.coo_array((values_np, (row_np, col_np)), shape=shape, copy=False)
+        return _jax_sparse_to_scipy(sparray)
 
     # --- Target: CuPy ---
     if array_api_compat.is_cupy_namespace(xp_new) and cp is not None:
-        if device_type == DLPACK_CPU:
-            raise ValueError("CuPy does not support CPU.")
-        if device_type != DLPACK_CUDA:
-            raise ValueError(
-                f"CuPy only supports CUDA devices, got DLPack device type {device_type}."
-            )
-
-        with cp.cuda.Device(device_id):
-            values_cp = cp.from_dlpack(values)
-
-            if fmt in ("csr", "csc"):
-                indices_cp = cp.from_dlpack(sparray.indices)
-                indptr_cp = cp.from_dlpack(sparray.indptr)
-                sparse_type = csp.csr_matrix if fmt == "csr" else csp.csc_matrix
-                return sparse_type((values_cp, indices_cp, indptr_cp), shape=shape, copy=False)
-
-            if isinstance(sparray, jsparse.BCOO):
-                indices_cp = cp.from_dlpack(sparray.indices)
-                row_cp, col_cp = indices_cp[:, 0], indices_cp[:, 1]
-            else:
-                row_cp = cp.from_dlpack(sparray.row)
-                col_cp = cp.from_dlpack(sparray.col)
-            return csp.coo_matrix((values_cp, (row_cp, col_cp)), shape=shape, copy=False)
+        _require_cuda_device(device_type)
+        return _jax_sparse_to_cupy(sparray, device_id)
 
     # --- Target: PyTorch ---
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
-        if device_type not in (DLPACK_CPU, DLPACK_CUDA):
-            raise ValueError(
-                f"PyTorch only supports CPU and CUDA devices, got DLPack device type {device_type}."
-            )
-
-        target_torch_device = dlpack_to_backend_device(xp_new, device)
-
-        values_torch = torch.utils.dlpack.from_dlpack(values)
-
-        if fmt in ("csr", "csc"):
-            indices_torch = torch.utils.dlpack.from_dlpack(sparray.indices).to(dtype=torch.int64)
-            indptr_torch = torch.utils.dlpack.from_dlpack(sparray.indptr).to(dtype=torch.int64)
-            sparse_type = torch.sparse_csr_tensor if fmt == "csr" else torch.sparse_csc_tensor
-            torch_sparse = sparse_type(indptr_torch, indices_torch, values_torch, size=shape)
-        else:
-            if isinstance(sparray, jsparse.BCOO):
-                indices_torch = (
-                    torch.utils.dlpack.from_dlpack(sparray.indices).to(dtype=torch.int64).T
-                )
-            else:
-                row_torch = torch.utils.dlpack.from_dlpack(sparray.row)
-                col_torch = torch.utils.dlpack.from_dlpack(sparray.col)
-                indices_torch = torch.stack((row_torch, col_torch)).to(dtype=torch.int64)
-            torch_sparse = torch.sparse_coo_tensor(indices_torch, values_torch, size=shape)
-
-        return torch_sparse.to(device=target_torch_device)
+        _require_cpu_or_cuda_device(device_type, "PyTorch")
+        return _jax_sparse_to_torch(sparray, xp_new, device)
 
     raise TypeError(
         "Conversion of JAX sparse matrix to namespace '{}' is not yet supported.".format(
             xp_new.__name__
         )
     )
+
+
+def _jax_sparse_format(sparray: Any) -> str:
+    """Return the sparse format ('csr', 'csc' or 'coo') of a JAX sparse array."""
+    jsparse = loaded_backend("jax.experimental.sparse")
+    if isinstance(sparray, jsparse.CSR):
+        return "csr"
+    if isinstance(sparray, jsparse.CSC):
+        return "csc"
+    return "coo"
+
+
+def _jax_sparse_coo_indices(sparray: Any) -> tuple[Any, Any]:
+    """Return the row and column index arrays of a JAX COO or BCOO sparse array."""
+    jsparse = loaded_backend("jax.experimental.sparse")
+    if isinstance(sparray, jsparse.BCOO):
+        return sparray.indices[:, 0], sparray.indices[:, 1]
+    return sparray.row, sparray.col
+
+
+def _jax_sparse_to_scipy(sparray: Any) -> Union[scp.spmatrix, scp.sparray]:
+    """Convert a JAX sparse array to the matching SciPy sparse array on the host."""
+    jax = loaded_backend("jax")
+    shape = tuple(sparray.shape)
+    fmt = _jax_sparse_format(sparray)
+    values = np.asarray(jax.device_get(sparray.data))
+
+    if fmt in ("csr", "csc"):
+        indices = np.asarray(jax.device_get(sparray.indices))
+        indptr = np.asarray(jax.device_get(sparray.indptr))
+        sparse_type = scp.csr_array if fmt == "csr" else scp.csc_array
+        return sparse_type((values, indices, indptr), shape=shape, copy=False)
+
+    row, col = _jax_sparse_coo_indices(sparray)
+    row = np.asarray(jax.device_get(row))
+    col = np.asarray(jax.device_get(col))
+    return scp.coo_array((values, (row, col)), shape=shape, copy=False)
+
+
+def _jax_sparse_to_cupy(sparray: Any, device_id: int) -> CupySpmatrix:
+    """Convert a JAX sparse array to a CuPy sparse matrix on the given CUDA device."""
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    shape = tuple(sparray.shape)
+    fmt = _jax_sparse_format(sparray)
+
+    with cp.cuda.Device(device_id):
+        values = cp.from_dlpack(sparray.data)
+
+        if fmt in ("csr", "csc"):
+            indices = cp.from_dlpack(sparray.indices)
+            indptr = cp.from_dlpack(sparray.indptr)
+            sparse_type = csp.csr_matrix if fmt == "csr" else csp.csc_matrix
+            return sparse_type((values, indices, indptr), shape=shape, copy=False)
+
+        row, col = _jax_sparse_coo_indices(sparray)
+        return csp.coo_matrix(
+            (values, (cp.from_dlpack(row), cp.from_dlpack(col))), shape=shape, copy=False
+        )
+
+
+def _jax_sparse_to_torch(
+    sparray: Any, xp_new: ArrayNamespace, device: tuple[int, int]
+) -> torch.Tensor:
+    """Convert a JAX sparse array to a PyTorch sparse tensor on the requested device."""
+    torch = loaded_backend("torch")
+    shape = tuple(sparray.shape)
+    fmt = _jax_sparse_format(sparray)
+    values = torch.utils.dlpack.from_dlpack(sparray.data)
+
+    if fmt in ("csr", "csc"):
+        indices = torch.utils.dlpack.from_dlpack(sparray.indices).to(dtype=torch.int64)
+        indptr = torch.utils.dlpack.from_dlpack(sparray.indptr).to(dtype=torch.int64)
+        sparse_type = torch.sparse_csr_tensor if fmt == "csr" else torch.sparse_csc_tensor
+        torch_sparse = sparse_type(indptr, indices, values, size=shape)
+    else:
+        row, col = _jax_sparse_coo_indices(sparray)
+        indices = torch.stack(
+            (
+                torch.utils.dlpack.from_dlpack(row),
+                torch.utils.dlpack.from_dlpack(col),
+            )
+        ).to(dtype=torch.int64)
+        torch_sparse = torch.sparse_coo_tensor(indices, values, size=shape)
+
+    return torch_sparse.to(device=dlpack_to_backend_device(xp_new, device))
 
 
 def is_sparse_array(arr: Any) -> bool:
@@ -1484,6 +1534,10 @@ def is_sparse_array(arr: Any) -> bool:
     TypeError
         If the type of arr is not supported.
     """
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    torch = loaded_backend("torch")
+    jsparse = loaded_backend("jax.experimental.sparse")
 
     if isinstance(arr, (scp.spmatrix, scp.sparray)):
         return True
@@ -1544,6 +1598,9 @@ def _rebuild_scipy_csc_in_namespace(
     TypeError
         If rebuilding is not yet supported for *xp_new*.
     """
+    cp = loaded_backend("cupy")
+    csp = loaded_backend("cupyx.scipy.sparse", "cupy")
+    torch = loaded_backend("torch")
     if array_api_compat.is_numpy_namespace(
         xp_new
     ) or array_api_compat.is_array_api_strict_namespace(xp_new):

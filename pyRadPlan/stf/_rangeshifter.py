@@ -36,4 +36,4 @@ class RangeShifter(PyRadPlanBaseModel):
         if context and context.get("matRad") == "mat-file":
             return np.float64(v)  # Ensure double for MATLAB/matRad
 
-        return handler(v, info)
+        return handler(v)

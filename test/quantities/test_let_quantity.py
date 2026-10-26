@@ -1,9 +1,15 @@
+import unicodedata
+
 import pytest
 import numpy as np
 import array_api_strict as xp
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.quantities import DoseWeightedLET, FluenceDependentQuantity
+
+
+def _nfkc(s):
+    return unicodedata.normalize("NFKC", s)
 
 
 @pytest.fixture
@@ -44,7 +50,8 @@ def test_DoseWeightedLET_properties(sample_dij_dense):
     assert let.identifier == "let"
     assert let.name == "LETd"
     assert let.required_dependencies == ("let_dose", "physical_dose")
-    assert format(let.unit, "~") == "keV / µm"
+    # pint >= 0.26 renders micro as Greek mu (U+03BC), older versions as micro sign (U+00B5)
+    assert format(let.unit, "~").replace("μ", "µ") == "keV / µm"
 
 
 def test_DoseWeightedLET_compute_and_derivative(sample_dij_dense):

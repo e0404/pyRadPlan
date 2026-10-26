@@ -1,12 +1,16 @@
 """Resolver that builds the dependency graph of fluence-dependent quantities."""
 
 import inspect
-from typing import Iterable, Any
+import logging
+from typing import Any, Iterable, Optional
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.core import xp_utils as compute_backend
 
 from ._base import FluenceDependentQuantity
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuantityResolver:
@@ -21,7 +25,7 @@ class QuantityResolver:
     Dynamic Dependency Injection (via Signature Inspection):
     When instantiating a quantity class, the resolver inspects the quantity's ``__init__`` signature.
     It automatically supplies required dependencies from:
-    1. Problem-level context objects (e.g., ``cst``, ``pln``, ``stf``, ``ct``).
+    1. Problem-level context (e.g., ``cst``, ``ct``, ``stf``, ``num_of_fractions``).
     2. Objective-level parameters that the objective explicitly opts into via its
        ``quantity_params`` ClassVar (e.g., ``risk_voi_name``).
        Each quantity is instantiated once, so all objectives targeting it must agree on those
@@ -41,6 +45,7 @@ class QuantityResolver:
         self,
         dij: Dij,
         *,
+        scenarios=None,
         _dij_already_in_namespace: bool = False,
         quantity_kwargs: dict | None = None,
         context: dict | None = None,
@@ -53,6 +58,8 @@ class QuantityResolver:
             self._dij = dij
         else:
             self._dij = dij.to_namespace(xp, device=device)
+        # Scenario indices every resolved quantity (and its dependencies) computes.
+        self._scenarios = scenarios
 
         self.quantity_kwargs = quantity_kwargs or {}
         self.context = context or {}
@@ -88,7 +95,7 @@ class QuantityResolver:
         sig = inspect.signature(cls.__init__)
         kwargs: dict[str, Any] = {}
 
-        # A. Inject from problem-level context (e.g. cst, pln, stf, ct) if accepted by __init__
+        # A. Inject from problem-level context (e.g. cst, num_of_fractions) if accepted by __init__
         for param in sig.parameters:
             if param in self.context and param not in kwargs:
                 kwargs[param] = self.context[param]
@@ -128,7 +135,9 @@ class QuantityResolver:
         try:
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
-            inst = cls(self._dij, mode=mode, dependencies=deps, **kwargs)
+            inst = cls(
+                self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios, **kwargs
+            )
         finally:
             self._resolving.discard(identifier)
 
@@ -139,14 +148,41 @@ class QuantityResolver:
         """Resolve every identifier and return them in input order."""
         return [self.get(i) for i in identifiers]
 
+    def reachable(
+        self, roots: Iterable[FluenceDependentQuantity]
+    ) -> list[FluenceDependentQuantity]:
+        """
+        Return the instances ``roots`` depend on (including themselves), in resolution order.
+
+        A quantity may drop a resolved optional dependency once it has chosen its computation
+        path (e.g. the ``effect`` of a constant-RBE ``rbe_x_dose``). Such instances remain in
+        :attr:`instances`, but are not reachable from any root and need not be evaluated.
+        """
+        seen: set[int] = set()
+        stack = list(roots)
+        while stack:
+            quantity = stack.pop()
+            if id(quantity) not in seen:
+                seen.add(id(quantity))
+                stack.extend(quantity.dependencies.values())
+        return [q for q in self._instances.values() if id(q) in seen]
+
+    def try_get(self, identifier: str) -> Optional[FluenceDependentQuantity]:
+        """Resolve ``identifier`` or return ``None`` if it cannot be computed for this dij."""
+        try:
+            return self.get(identifier)
+        except ValueError as exc:
+            logger.debug("Optional quantity %r not resolvable: %s", identifier, exc)
+            return None
+
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:
             return "direct"
-        if cls.required_dependencies or cls.optional_dependencies:
+        if cls.has_indirect_path(self._dij):
             return "indirect"
         raise ValueError(
             f"Cannot resolve quantity {identifier!r}: dij has no attribute "
-            f"{identifier!r} and no dependencies are declared."
+            f"{identifier!r} and no usable dependency path."
         )
 
     def _resolve_dependencies(
@@ -158,5 +194,7 @@ class QuantityResolver:
         for dep_id in cls.required_dependencies:
             deps[dep_id] = self.get(dep_id)
         for dep_id in cls.optional_dependencies:
-            deps[dep_id] = self.get(dep_id)
+            dep = self.try_get(dep_id)
+            if dep is not None:
+                deps[dep_id] = dep
         return deps
