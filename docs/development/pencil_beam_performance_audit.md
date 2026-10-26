@@ -12,6 +12,8 @@ The shared voxel-preparation follow-up, including measurements across modalities
 is documented in [voxel preparation performance](voxel_preparation_performance.md).
 The next shared changes are recorded in
 [tissue and backend depth preparation](patient_depth_performance.md).
+The subsequent shared ray-loop changes are measured in
+[ray geometry preparation](ray_geometry_performance.md).
 
 ## Main findings
 

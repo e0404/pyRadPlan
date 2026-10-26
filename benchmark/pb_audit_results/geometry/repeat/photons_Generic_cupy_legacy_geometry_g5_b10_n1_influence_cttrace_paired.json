@@ -1,0 +1,50 @@
+{
+  "baseline": [
+    1.3016617000102997,
+    1.3298678999999538,
+    1.3559071999625303,
+    1.3658063999610022,
+    1.3188401000224985,
+    1.2914487000089139
+  ],
+  "variant": [
+    1.464445199992042,
+    1.4689588999608532,
+    1.477982999989763,
+    1.468875400023535,
+    1.5917378999874927,
+    1.5741105999913998
+  ],
+  "comparisons": [
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true
+    }
+  ]
+}

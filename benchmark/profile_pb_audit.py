@@ -54,6 +54,11 @@ def apply_variant(name):
         if name != "legacy_tissue":
             PB._sample_radiological_depths = legacy_depth_selection
         return
+    if name == "legacy_geometry":
+        from profile_ray_geometry_reference import install_reference
+
+        install_reference(PB)
+        return
     if name == "baseline":
         return
     if name in ("legacy_interpolators", "native_interpolators"):
@@ -286,6 +291,10 @@ def main():
     from pyRadPlan.cst import StructureSet
 
     patch_targets = [
+        (PB, "_init_beam"),
+        (PB, "_compute_ssd"),
+        (PB, "calc_geo_dists"),
+        (PB, "_get_ray_geometry_from_beam"),
         (StructureSet, "get_tissue_data"),
         (PB, "_sample_radiological_depths"),
         (PP, "_get_bixel_indices_on_ray"),
@@ -399,9 +408,12 @@ def main():
             (PB, "_init_beam"),
             (PB, "_compute_ssd"),
             (PB, "calc_geo_dists"),
+            (PB, "_get_ray_geometry_from_beam"),
+            (PB, "_prepare_beam_geometry"),
+            (PB, "_calc_geo_dists_on_valid_coords"),
             (PB, "_fill_dij"),
             (PB, "_finalize_dose"),
-            (RayTracerSiddon, "trace_cubes"),
+            (RayTracerSiddon, "trace_cubes_array"),
             (PP, "_calc_lateral_particle_cut_off"),
             (PP, "_init_bixel"),
             (Hong, "_calc_particle_bixel"),

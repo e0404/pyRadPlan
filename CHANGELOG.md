@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a bundled phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the bundled phantoms by name
 
 ### Changed
+- Pencil-beam engines prepare beam-valid coordinates once and carry ordered integer selections through ray geometry using Array API `take`; SSD metadata is downloaded in batches and bixel counts remain on the host. The public `calc_geo_dists` mask interface is preserved.
 
 - Dose setup prepares reference alpha/beta and tissue-class indices from one overlap-resolved, nearest-neighbor-resampled label volume. Pencil-beam engines retain radiological depths on their compute backend for both CT-grid and dose-grid tracing; host depth images are created only when requested.
 - Shared dose setup unions existing VOI masks directly and reuses sorted voxel indices and scenario membership for single-CT calculations. Nearest-neighbor selection resampling avoids redundant rounding and sorting; custom selections retain their original arrays and internal canonicalization.
