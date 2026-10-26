@@ -3,7 +3,8 @@
 This follow-up to the [pencil-beam performance audit](pencil_beam_performance_audit.md)
 tests grid creation inside complete dose calculations and separates it from
 kernel placement and cutoff evaluation. The experiment uses process-local
-patches only; production code and its configuration are unchanged.
+patches only; the original experiment did not change production code. The later
+[production integration](#production-integration) is documented below.
 
 ## What is measured
 
@@ -187,3 +188,87 @@ above uses the first command's 15-round measurements.
 The measured GPU is an NVIDIA GeForce RTX 4070 Laptop GPU, with Python 3.11.9,
 NumPy 2.3.5 and CuPy 13.3.0. Results describe these workloads and this hardware;
 they do not establish a universal CPU/GPU dispatch threshold.
+
+## Production integration
+
+Cutoff sampling creation and batched evaluation now follow the dose namespace
+and device by default. `cutoff_force_numpy=True` overrides both together. The
+unreleased `cutoff_backend` selector has been replaced, not extended with more
+backend choices. The GUI exposes the new boolean through its generated form.
+Depth selection and serialized machine cutoff tables remain on the host.
+
+`CutoffQuadrature` remains a frozen dataclass because it keeps the sampling
+definition and the derived arrays together across depth batches. Its factory
+accepts custom bin boundaries and angular resolution:
+
+```python
+from pyRadPlan.dose.engines._particle_cutoff import CutoffQuadrature
+
+quadrature = CutoffQuadrature.create(
+    "singleXY",
+    xp=xp,
+    device=device,
+    radial_edges=[0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0],
+    n_angles=180,
+)
+```
+
+The example illustrates the API, not a recommended dose-accuracy configuration.
+The production engine retains the existing 1,200 radial bins and 360 angular
+samples. Angular sampling is only used for `singleXY`; isotropic quadratures
+record `n_angles=1` and integrate the angular factor analytically. The class
+retains `radial_edges`, `n_angles`, and `lateral_model` alongside its integration
+arrays. Array-valued custom edges can supply the namespace/device implicitly;
+explicit `xp`/`device` remain available. Custom boundaries are copied and checked
+for finite, strictly increasing values starting at zero. Change sampling by
+creating a new quadrature; frozen fields do not make array contents immutable.
+
+No host grid is constructed when a GPU namespace is requested. Default creation
+uses Array API operations, including broadcast/reshape for radius-major angular
+sampling. Custom host edges need an initial upload; device-resident edges need no host copy of the edge array, though validation
+synchronizes scalar checks. The public engine configuration does not expose sampling
+resolution yet; the configurable factory is an internal engine-building API.
+
+The historical host factory is retained independently in the benchmark reference
+module. `profile_particle_cutoff.py` now measures production-native creation;
+`profile_cutoff_suite.py` compares the current native default against both the
+frozen original and the NumPy override for protons, VHEE, and carbon. Historical
+result files above have not been overwritten.
+
+Production validation: the 304-test dose regression run passed, followed by a
+129-test numerical coverage run including three additional cross-backend edge
+cases. `_particle_cutoff.py` retains **100% statement coverage**. All **560 GUI
+tests** passed, including the new boolean-editor round trip. Strict Array API
+coverage includes a non-default logical device; the host-selected initial spot
+variance is converted to a Python float before backend arithmetic. The full
+repository test suite was not run.
+
+All **27 full-dose pairs** matched dose values, sparse indices and column
+pointers exactly: three pairs each for NumPy/CuPy versus the frozen original,
+and three CuPy pairs versus the NumPy override, for all three modalities. See
+[production full-dose records](../../benchmark/pb_audit_results/cutoff_native/full_dose/summary.json).
+Timing noise remains material; the change makes placement follow the chosen
+backend and does not claim GPU execution is faster for every machine.
+
+Current integral preparation medians, including grid construction, kernel/depth
+uploads and result download (five rounds, 35 depths per energy):
+
+| Lateral model | Frozen original (ms) | Native NumPy (ms) | Native CuPy (ms) |
+|---|---:|---:|---:|
+| single | 5.024 | 0.851 | 2.436 |
+| double | 6.243 | 1.155 | 2.665 |
+| multi (synthetic) | 16.770 | 1.765 | 6.064 |
+| singleXY (synthetic) | 508.779 | 235.148 | 38.663 |
+
+The relative-cutoff benchmark also passes. Native CuPy radii differ from the
+host reference by at most about 2.2e-14 mm in these preparation cases; no radius
+bin changes were observed. Numerical checks allow only rounding-scale radius
+differences, while production dose comparisons still require exact results.
+The records are [integral](../../benchmark/pb_audit_results/cutoff_native/preparation_integral.json)
+and [relative](../../benchmark/pb_audit_results/cutoff_native/preparation_relative.json).
+
+```powershell
+.venv/Scripts/python.exe benchmark/profile_particle_cutoff.py --out benchmark/pb_audit_results/cutoff_native
+.venv/Scripts/python.exe benchmark/profile_particle_cutoff.py --method relative --rounds 3 --out benchmark/pb_audit_results/cutoff_native
+.venv/Scripts/python.exe benchmark/profile_cutoff_suite.py --pairs 3
+```

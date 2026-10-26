@@ -63,11 +63,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Method used to determine lateral cut off. 'integral' uses the integral of the lateral
         dose profile to obtain the cut-off distance. 'relative' finds the lateral distance at which
         the dose drops to the requested cutoff
-    cutoff_backend : Literal["numpy", "dose"]
-        Where to prepare lateral cutoffs. "numpy" (default) uses the CPU;
-        "dose" uses the dose calculation's array namespace and device. Both use
-        the same batched Array API evaluator. CPU preparation is usually faster
-        for small isotropic grids; large anisotropic grids can benefit from a GPU.
+    cutoff_force_numpy : bool
+        Force cutoff creation and evaluation onto NumPy when True. By default
+        both use the dose calculation's namespace and device. The override can
+        help small isotropic workloads; large anisotropic grids favor GPU execution.
     """
 
     computes_bio_influence: ClassVar[bool] = True
@@ -80,7 +79,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
     cut_off_method: Literal["integral", "relative"] = "integral"
-    cutoff_backend: Literal["numpy", "dose"] = "numpy"
+    cutoff_force_numpy: bool = False
     tissue_classes: list[TissueProperties] = []  # list of tissues used in the cst
 
     _dij_guarantee_canonical: ClassVar[bool]
@@ -690,11 +689,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def _cutoff_execution(self):
         """Select preparation placement independently of dose-array placement."""
-        if self.cutoff_backend == "dose":
-            return self.xp, self.device
-        if self.cutoff_backend != "numpy":
-            raise ValueError("cutoff_backend must be 'numpy' or 'dose'.")
-        return array_api_compat.array_namespace(np.empty(0)), None
+        if self.cutoff_force_numpy:
+            return array_api_compat.array_namespace(np.empty(0)), None
+        return self.xp, self.device
 
     def _cutoff_dose_profile(self, depths, kernel, sigma_ini_sq, quadrature):
         """Fallback for engines without a batched physical-profile implementation."""
@@ -742,10 +739,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # TODO: this factor should probably be in the machine data and translate to MU
         conversion_factor = 1.6021766208e-02
 
-        # Keep deterministic host sampling; transfer it once per beam if requested.
+        # Construct sampling directly on the chosen backend once per beam.
         cutoff_xp, cutoff_device = self._cutoff_execution()
         quadrature = (
-            CutoffQuadrature.create(self.lateral_model).to_namespace(cutoff_xp, cutoff_device)
+            CutoffQuadrature.create(self.lateral_model, xp=cutoff_xp, device=cutoff_device)
             if cut_off_level != 1
             else None
         )
@@ -900,7 +897,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             if cut_off_level != 1:
                 # Convert once per energy, and keep the default compensation during integration.
                 base_kernel = deepcopy(kernel).to_namespace(cutoff_xp, device=cutoff_device)
-                sigma_ini_sq = largest_sigma_sq4unique_energies[cnt - 1]
+                # Host-selected scalar must be a Python scalar for strict Array API backends.
+                sigma_ini_sq = float(largest_sigma_sq4unique_energies[cnt - 1])
                 result = evaluate_cutoff(
                     to_namespace(cutoff_xp, depth_values, device=cutoff_device),
                     to_namespace(cutoff_xp, idd, device=cutoff_device),

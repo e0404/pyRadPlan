@@ -1,0 +1,492 @@
+{
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "cupy": "13.3.0",
+  "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "args": {
+    "rounds": 1,
+    "micro_rounds": 1,
+    "beams": [
+      1
+    ],
+    "modes": [
+      "VHEE"
+    ],
+    "out": "benchmark/pb_audit_results/cutoff_native/creation_smoke.json"
+  },
+  "micro": [
+    {
+      "model": "single",
+      "synthetic": false,
+      "samples": {
+        "numpy_host": [
+          {
+            "creation": 0.00010659999679774046,
+            "evaluation": 0.0005848999717272818,
+            "download": 5.699985194951296e-06,
+            "total": 0.0006971999537199736
+          }
+        ],
+        "numpy_native": [
+          {
+            "creation": 8.789997082203627e-05,
+            "evaluation": 0.0007239000406116247,
+            "download": 6.800051778554916e-06,
+            "total": 0.0008186000632122159
+          }
+        ],
+        "cupy_host": [
+          {
+            "creation": 0.00048589997459203005,
+            "evaluation": 0.0010425999644212425,
+            "download": 3.100000321865082e-05,
+            "total": 0.0015594999422319233
+          }
+        ],
+        "cupy_native": [
+          {
+            "creation": 0.00031350000062957406,
+            "evaluation": 0.0009670999716036022,
+            "download": 3.270001616328955e-05,
+            "total": 0.0013132999883964658
+          }
+        ]
+      },
+      "medians": {
+        "numpy_host": {
+          "creation": 0.00010659999679774046,
+          "evaluation": 0.0005848999717272818,
+          "download": 5.699985194951296e-06,
+          "total": 0.0006971999537199736
+        },
+        "numpy_native": {
+          "creation": 8.789997082203627e-05,
+          "evaluation": 0.0007239000406116247,
+          "download": 6.800051778554916e-06,
+          "total": 0.0008186000632122159
+        },
+        "cupy_host": {
+          "creation": 0.00048589997459203005,
+          "evaluation": 0.0010425999644212425,
+          "download": 3.100000321865082e-05,
+          "total": 0.0015594999422319233
+        },
+        "cupy_native": {
+          "creation": 0.00031350000062957406,
+          "evaluation": 0.0009670999716036022,
+          "download": 3.270001616328955e-05,
+          "total": 0.0013132999883964658
+        }
+      },
+      "geometry_max_abs": {
+        "numpy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "numpy_native": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_native": {
+          "radii": 1.1368683772161603e-13,
+          "dr": 2.2737367544323206e-13,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 2.3283064365386963e-10,
+          "lat_dists": 1.1368683772161603e-13
+        }
+      },
+      "cutoff_max_abs": {
+        "numpy_host": 0.0,
+        "numpy_native": 0.0,
+        "cupy_host": 1.5543122344752192e-13,
+        "cupy_native": 1.6653345369377348e-13
+      }
+    },
+    {
+      "model": "double",
+      "synthetic": false,
+      "samples": {
+        "numpy_host": [
+          {
+            "creation": 0.00010000000474974513,
+            "evaluation": 0.0008099999977275729,
+            "download": 5.099980626255274e-06,
+            "total": 0.0009150999831035733
+          }
+        ],
+        "numpy_native": [
+          {
+            "creation": 9.200000204145908e-05,
+            "evaluation": 0.0008740000193938613,
+            "download": 6.699992809444666e-06,
+            "total": 0.000972700014244765
+          }
+        ],
+        "cupy_host": [
+          {
+            "creation": 0.00047849997645244,
+            "evaluation": 0.0013717999681830406,
+            "download": 3.519997699186206e-05,
+            "total": 0.0018854999216273427
+          }
+        ],
+        "cupy_native": [
+          {
+            "creation": 0.000318799982778728,
+            "evaluation": 0.0011671000393107533,
+            "download": 2.9900053050369024e-05,
+            "total": 0.0015158000751398504
+          }
+        ]
+      },
+      "medians": {
+        "numpy_host": {
+          "creation": 0.00010000000474974513,
+          "evaluation": 0.0008099999977275729,
+          "download": 5.099980626255274e-06,
+          "total": 0.0009150999831035733
+        },
+        "numpy_native": {
+          "creation": 9.200000204145908e-05,
+          "evaluation": 0.0008740000193938613,
+          "download": 6.699992809444666e-06,
+          "total": 0.000972700014244765
+        },
+        "cupy_host": {
+          "creation": 0.00047849997645244,
+          "evaluation": 0.0013717999681830406,
+          "download": 3.519997699186206e-05,
+          "total": 0.0018854999216273427
+        },
+        "cupy_native": {
+          "creation": 0.000318799982778728,
+          "evaluation": 0.0011671000393107533,
+          "download": 2.9900053050369024e-05,
+          "total": 0.0015158000751398504
+        }
+      },
+      "geometry_max_abs": {
+        "numpy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "numpy_native": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_native": {
+          "radii": 1.1368683772161603e-13,
+          "dr": 2.2737367544323206e-13,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 2.3283064365386963e-10,
+          "lat_dists": 1.1368683772161603e-13
+        }
+      },
+      "cutoff_max_abs": {
+        "numpy_host": 0.0,
+        "numpy_native": 0.0,
+        "cupy_host": 1.7763568394002505e-13,
+        "cupy_native": 1.9984014443252818e-13
+      }
+    },
+    {
+      "model": "singleXY",
+      "synthetic": true,
+      "samples": {
+        "numpy_host": [
+          {
+            "creation": 0.012766999949235469,
+            "evaluation": 0.21657540003070608,
+            "download": 1.2200034689158201e-05,
+            "total": 0.2293546000146307
+          }
+        ],
+        "numpy_native": [
+          {
+            "creation": 0.009348199993837625,
+            "evaluation": 0.21236790000693873,
+            "download": 1.1800031643360853e-05,
+            "total": 0.2217279000324197
+          }
+        ],
+        "cupy_host": [
+          {
+            "creation": 0.01185589999658987,
+            "evaluation": 0.036947299959138036,
+            "download": 3.7299992982298136e-05,
+            "total": 0.0488404999487102
+          }
+        ],
+        "cupy_native": [
+          {
+            "creation": 0.0008779999916441739,
+            "evaluation": 0.03637170000001788,
+            "download": 3.3100019209086895e-05,
+            "total": 0.03728280001087114
+          }
+        ]
+      },
+      "medians": {
+        "numpy_host": {
+          "creation": 0.012766999949235469,
+          "evaluation": 0.21657540003070608,
+          "download": 1.2200034689158201e-05,
+          "total": 0.2293546000146307
+        },
+        "numpy_native": {
+          "creation": 0.009348199993837625,
+          "evaluation": 0.21236790000693873,
+          "download": 1.1800031643360853e-05,
+          "total": 0.2217279000324197
+        },
+        "cupy_host": {
+          "creation": 0.01185589999658987,
+          "evaluation": 0.036947299959138036,
+          "download": 3.7299992982298136e-05,
+          "total": 0.0488404999487102
+        },
+        "cupy_native": {
+          "creation": 0.0008779999916441739,
+          "evaluation": 0.03637170000001788,
+          "download": 3.3100019209086895e-05,
+          "total": 0.03728280001087114
+        }
+      },
+      "geometry_max_abs": {
+        "numpy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "numpy_native": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_host": {
+          "radii": 0.0,
+          "dr": 0.0,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 0.0,
+          "lat_dists": 0.0
+        },
+        "cupy_native": {
+          "radii": 1.1368683772161603e-13,
+          "dr": 2.2737367544323206e-13,
+          "angular_weights": 0.0,
+          "radial_dist_sq": 2.3283064365386963e-10,
+          "lat_dists": 2.2737367544323206e-13
+        }
+      },
+      "cutoff_max_abs": {
+        "numpy_host": 0.0,
+        "numpy_native": 0.0,
+        "cupy_host": 8.459899447643693e-12,
+        "cupy_native": 8.459899447643693e-12
+      }
+    }
+  ],
+  "full_dose": [
+    {
+      "mode": "VHEE",
+      "beams": 1,
+      "samples": {
+        "cpu": [
+          1.105837800016161
+        ],
+        "gpu_host": [
+          1.1225144000491127
+        ],
+        "gpu_native": [
+          1.1123729000100866
+        ],
+        "resident_cpu_mirror": [
+          1.1069715000339784
+        ],
+        "resident_cpu_download": [
+          1.063649700023234
+        ],
+        "resident_gpu_host": [
+          1.0810360999894328
+        ],
+        "resident_gpu_native": [
+          1.1109711999888532
+        ]
+      },
+      "medians": {
+        "cpu": 1.105837800016161,
+        "gpu_host": 1.1225144000491127,
+        "gpu_native": 1.1123729000100866,
+        "resident_cpu_mirror": 1.1069715000339784,
+        "resident_cpu_download": 1.063649700023234,
+        "resident_gpu_host": 1.0810360999894328,
+        "resident_gpu_native": 1.1109711999888532
+      },
+      "max_abs": {
+        "cpu": [
+          0.0
+        ],
+        "gpu_host": [
+          0.0
+        ],
+        "gpu_native": [
+          0.0
+        ],
+        "resident_cpu_mirror": [
+          0.0
+        ],
+        "resident_cpu_download": [
+          0.0
+        ],
+        "resident_gpu_host": [
+          0.0
+        ],
+        "resident_gpu_native": [
+          0.0
+        ]
+      },
+      "stages": {
+        "cpu": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.00017360004130750895
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.00040879996959120035
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.0018874999950639904
+          }
+        },
+        "gpu_host": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.00046440004371106625
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.0006802999414503574
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.0029792000423185527
+          }
+        },
+        "gpu_native": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.0002660999889485538
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.0006303999689407647
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.002748900034930557
+          }
+        },
+        "resident_cpu_mirror": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.0001745999907143414
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.00021309999283403158
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.0017574999947100878
+          }
+        },
+        "resident_cpu_download": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.00016220001270994544
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.0007164000417105854
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.0025195000343956053
+          }
+        },
+        "resident_gpu_host": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.0008520000264979899
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.0005481000407598913
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.003528100030962378
+          }
+        },
+        "resident_gpu_native": {
+          "grid_creation": {
+            "calls": 1,
+            "seconds": 0.00041909998981282115
+          },
+          "kernel_conversion": {
+            "calls": 2,
+            "seconds": 0.0004493000451475382
+          },
+          "cutoff_total": {
+            "calls": 1,
+            "seconds": 0.003074500011280179
+          }
+        }
+      },
+      "kernel_count": 3,
+      "resident_array_bytes": 72000,
+      "upload_cold": 0.0009788000024855137,
+      "upload_seconds": [
+        0.000680199998896569,
+        0.0006912999670021236,
+        0.0006281000096350908,
+        0.0006262999959290028,
+        0.0005925999721512198
+      ],
+      "upload_median": 0.0006281000096350908,
+      "beamlets": 121
+    }
+  ]
+}

@@ -20,7 +20,7 @@ import time
 import array_api_compat
 import numpy as np
 
-from profile_cutoff_reference import legacy_particle_bixel
+from profile_cutoff_reference import legacy_particle_bixel, legacy_quadrature
 from pyRadPlan.core.xp_utils import to_namespace, to_numpy
 from pyRadPlan.dose.engines import DoseEngineBase, ParticleHongPencilBeamEngine
 from pyRadPlan.dose.engines._particle_cutoff import CutoffQuadrature, evaluate_cutoff
@@ -78,8 +78,8 @@ def measure(case, variant, cp, method):
     sync = cp.cuda.get_current_stream().synchronize if variant == "cupy" else lambda: None
     sync()
     start = time.perf_counter()
-    grid = CutoffQuadrature.create(engine.lateral_model)
     if variant in ("legacy", "hoisted"):
+        grid = legacy_quadrature(engine.lateral_model)
         prepared = time.perf_counter()
         result = legacy_evaluate(
             engine, kernel, depths, idd, grid, hoist=variant == "hoisted", method=method
@@ -87,7 +87,7 @@ def measure(case, variant, cp, method):
         evaluated = finished = time.perf_counter()
     else:
         xp = array_api_compat.array_namespace(cp.empty(0) if variant == "cupy" else np.empty(0))
-        grid = grid.to_namespace(xp)
+        grid = CutoffQuadrature.create(engine.lateral_model, xp=xp)
         data = kernel.to_namespace(xp)
         batch_depths = to_namespace(xp, depths)
         batch_idd = to_namespace(xp, idd)
@@ -137,12 +137,13 @@ def main():
         for variant in variants:
             actual, _ = measure(case, variant, cp, args.method)
             np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
-            np.testing.assert_array_equal(actual[:, 0], expected[:, 0])
+            # Native grid generation may differ by a few ulps; require the same radius bin.
+            np.testing.assert_allclose(actual[:, 0], expected[:, 0], rtol=2e-13, atol=1e-13)
         for i in range(args.rounds):
             for variant in variants[i % 4 :] + variants[: i % 4]:
                 actual, elapsed = measure(case, variant, cp, args.method)
                 np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
-                np.testing.assert_array_equal(actual[:, 0], expected[:, 0])
+                np.testing.assert_allclose(actual[:, 0], expected[:, 0], rtol=2e-13, atol=1e-13)
                 times[variant].append(elapsed)
                 max_abs[variant] = np.maximum(
                     max_abs[variant], np.max(abs(actual - expected), axis=0)

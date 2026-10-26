@@ -59,7 +59,16 @@ def _inputs(model):
     else:
         lat = np.tile((radii / np.sqrt(2))[:, None], (1, 2))
         angular = np.asarray(2 * np.pi)
-    grid = CutoffQuadrature(radii, dr, angular, radii**2, lat)
+    grid = CutoffQuadrature(
+        radii,
+        dr,
+        angular,
+        radii**2,
+        lat,
+        edges,
+        16 if model == "singleXY" else 1,
+        engine.lateral_model,
+    )
     return engine, kernel, grid
 
 
@@ -194,6 +203,104 @@ def test_default_angular_grid_keeps_radius_major_order():
     assert angular.lat_dists.shape == (1200 * 360, 2)
 
 
+@pytest.mark.parametrize("model", ["single", "singleXY"])
+def test_native_grid_matches_historical_sampling(xp, model):
+    """Default sampling agrees with independently built host geometry on all backends."""
+    grid = CutoffQuadrature.create(model, xp=xp, device=array_api_compat.device(xp.zeros(1)))
+    edges = np.concatenate(([0], np.logspace(-1, 3, 1200)))
+    radii = 0.5 * (edges[:-1] + edges[1:])
+    dr = np.diff(edges)
+    if model == "singleXY":
+        angles = np.linspace(0, 2 * np.pi, 361)[:-1]
+        radii = np.repeat(radii, 360)
+        dr = np.repeat(dr, 360)
+        theta = np.tile(angles, 1200)
+        lat = radii[:, None] * np.column_stack((np.cos(theta), np.sin(theta)))
+        angular = np.full(radii.shape, angles[1] - angles[0])
+    else:
+        lat = np.tile(np.sqrt(radii**2 / 2)[:, None], (1, 2))
+        angular = np.asarray(2 * np.pi)
+    for name, expected in dict(
+        radial_edges=edges, radii=radii, dr=dr, angular_weights=angular, lat_dists=lat
+    ).items():
+        actual = getattr(grid, name)
+        assert array_api_compat.array_namespace(actual) == xp
+        np.testing.assert_allclose(to_numpy(actual), expected, rtol=2e-12, atol=2e-12)
+
+
+@pytest.mark.parametrize("n_angles", [1, 4, 17])
+def test_custom_sampling_preserves_definition_and_integrates_annuli(xp, n_angles):
+    """Changing edges/angles updates every dependent array and retains the definition."""
+    edges = xp.asarray([0.0, 1.0, 3.0, 4.0], dtype=xp.float64)
+    grid = CutoffQuadrature.create("singleXY", radial_edges=edges, n_angles=n_angles)
+    assert array_api_compat.array_namespace(grid.radii) == xp
+    assert grid.n_angles == n_angles
+    assert grid.lateral_model == "singleXY"
+    edges[1] = 0.5
+    np.testing.assert_array_equal(to_numpy(grid.radial_edges), [0, 1, 3, 4])
+    np.testing.assert_array_equal(to_numpy(grid.radii), np.repeat([0.5, 2, 3.5], n_angles))
+    np.testing.assert_array_equal(to_numpy(grid.dr), np.repeat([1, 2, 1], n_angles))
+    np.testing.assert_allclose(to_numpy(grid.radial_dist_sq), to_numpy(grid.radii) ** 2)
+    np.testing.assert_allclose(
+        to_numpy(xp.sum(grid.lat_dists**2, axis=1)), to_numpy(grid.radial_dist_sq), rtol=1e-14
+    )
+    area = xp.sum(grid.radii * grid.dr * grid.angular_weights)
+    assert float(area) == pytest.approx(np.pi * 4**2)
+    moved = grid.to_namespace(array_api_compat.array_namespace(np.empty(0)))
+    assert moved.n_angles == n_angles
+    assert moved.lateral_model == "singleXY"
+    np.testing.assert_array_equal(moved.radial_edges, [0, 1, 3, 4])
+
+
+@pytest.mark.parametrize(
+    "edges", [[0], [[0, 1]], [1, 2], [0, 0, 1], [0, 2, 1], [0, np.inf], [0, np.nan]]
+)
+def test_invalid_sampling_edges(xp, edges):
+    """Reject malformed radial definitions before any integration."""
+    with pytest.raises(ValueError, match="radial_edges"):
+        CutoffQuadrature.create("single", xp=xp, radial_edges=edges)
+
+
+@pytest.mark.parametrize("n_angles", [0, -1, 1.5, True])
+def test_invalid_angle_count(n_angles):
+    """Angular resolution is a positive integer."""
+    with pytest.raises(ValueError, match="n_angles"):
+        CutoffQuadrature.create("singleXY", n_angles=n_angles)
+
+
+def test_invalid_quadrature_model():
+    """Unresolved or misspelled models should not silently get isotropic sampling."""
+    with pytest.raises(ValueError, match="lateral model"):
+        CutoffQuadrature.create("unknown")
+
+
+def test_quadrature_respects_explicit_and_inferred_device():
+    """Native creation and custom boundaries stay on a non-default logical device."""
+    xp = pytest.importorskip("array_api_strict")
+    device = xp.Device("device1")
+    edges = xp.asarray([0.0, 1.0, 2.0], device=device)
+    for grid in (
+        CutoffQuadrature.create("singleXY", xp=xp, device=device, n_angles=4),
+        CutoffQuadrature.create("singleXY", radial_edges=edges, n_angles=4),
+        CutoffQuadrature.create(
+            "singleXY", xp=xp, device=device, radial_edges=[0, 1, 2], n_angles=4
+        ),
+    ):
+        for name in ("radial_edges", "radii", "dr", "lat_dists", "angular_weights"):
+            assert array_api_compat.device(getattr(grid, name)) == device
+
+
+def test_host_edges_move_to_requested_backend(xp):
+    """Explicit placement overrides the custom input's namespace and keeps its definition."""
+    edges = np.array([0.0, 1.0, 3.0])
+    grid = CutoffQuadrature.create("single", xp=xp, radial_edges=edges)
+    assert array_api_compat.array_namespace(grid.radial_edges) == xp
+    assert grid.n_angles == 1
+    edges[1] = 0.5
+    np.testing.assert_array_equal(to_numpy(grid.radial_edges), [0.0, 1.0, 3.0])
+    np.testing.assert_array_equal(to_numpy(grid.radii), [0.5, 2.0])
+
+
 def test_hong_subclass_uses_custom_interpolation():
     """A custom kernel interpolator remains authoritative during cutoff setup."""
 
@@ -241,18 +348,21 @@ def test_cutoff_placement_configuration(xp):
     """The plan option selects placement without changing the numerical implementation."""
     from pyRadPlan import IonPlan  # noqa: PLC0415
 
-    engine = ParticleHongPencilBeamEngine(IonPlan(prop_dose_calc={"cutoff_backend": "dose"}))
+    engine = ParticleHongPencilBeamEngine(IonPlan())
     engine.xp = xp
     engine.device = array_api_compat.device(xp.asarray([1.0]))
     assert engine._cutoff_execution() == (xp, engine.device)
-    engine.cutoff_backend = "numpy"
+    engine.cutoff_force_numpy = True
     namespace, device = engine._cutoff_execution()
     assert array_api_compat.is_numpy_namespace(namespace)
     assert device is None
     config = engine.config_model()
-    assert config.model_fields["cutoff_backend"].default == "numpy"
+    assert config.model_fields["cutoff_force_numpy"].default is False
+    assert "cutoff_backend" not in config.model_fields
+    forced = ParticleHongPencilBeamEngine(IonPlan(prop_dose_calc={"cutoff_force_numpy": True}))
+    assert forced.cutoff_force_numpy is True
     with pytest.raises(ValueError):
-        config(cutoff_backend="invalid")
+        config(cutoff_force_numpy="invalid")
 
 
 def test_cutoff_rejects_mismatched_shapes(xp):

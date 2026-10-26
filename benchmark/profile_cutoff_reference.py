@@ -357,3 +357,27 @@ def legacy_particle_bixel(self, bixel):
 
     if self._calc_bio_dose and "v_alpha_x" in bixel:
         bixel.update(self._evaluate_bio_influence(bixel, kernels))
+
+
+# Historical host-only factory, kept independent of the production implementation.
+def legacy_quadrature(model):
+    """Reproduce the original NumPy sampling and materialized arrays."""
+    from pyRadPlan.dose.engines._particle_cutoff import CutoffQuadrature
+
+    edges = np.concatenate(([0], np.logspace(-1, 3, 1200)))
+    radii = 0.5 * (edges[:-1] + edges[1:])
+    dr = np.diff(edges)
+    if model == "singleXY":
+        angles = np.linspace(0, 2 * np.pi, 361)[:-1]
+        radius_mesh, theta_mesh = np.meshgrid(radii, angles)
+        angular = np.tile((angles[1] - angles[0]) * np.ones_like(angles), radii.size)
+        radii = radius_mesh.ravel(order="F")
+        dr = np.repeat(dr, 360)
+        theta = theta_mesh.ravel(order="F")
+        lat = np.sqrt(radii**2)[:, None] * np.column_stack((np.cos(theta), np.sin(theta)))
+    else:
+        angular = np.asarray(2 * np.pi)
+        lat = np.tile(np.sqrt(radii**2 / 2)[:, None], (1, 2))
+    return CutoffQuadrature(
+        radii, dr, angular, radii**2, lat, edges, 360 if model == "singleXY" else 1, model
+    )

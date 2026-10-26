@@ -22,6 +22,7 @@ import warnings
 import array_api_compat
 import numpy as np
 
+from profile_cutoff_reference import legacy_quadrature
 from profile_particle_cutoff import make_case
 from profile_pb_audit import configure, sync
 from pyRadPlan import IonPlan, generate_stf, load_tg119
@@ -50,7 +51,9 @@ def create_native(model, xp):
         angular = xp.asarray(2 * xp.pi, dtype=xp.float64)
         r2 = radii**2
         lat = xp.broadcast_to(xp.sqrt(r2 / 2)[:, None], (radii.shape[0], 2))
-    return CutoffQuadrature(radii, dr, angular, r2, lat)
+    return CutoffQuadrature(
+        radii, dr, angular, r2, lat, edges, 360 if model == "singleXY" else 1, model
+    )
 
 
 def timed(fn):
@@ -81,17 +84,17 @@ def microbench(cp, rounds):
             "cupy": (cp.asarray(depths), cp.asarray(idd)),
         }
         makers = {
-            "numpy_host": lambda: CutoffQuadrature.create(model).to_namespace(xp_cpu),
+            "numpy_host": lambda: legacy_quadrature(model).to_namespace(xp_cpu),
             "numpy_native": lambda: create_native(model, xp_cpu),
-            "cupy_host": lambda: CutoffQuadrature.create(model).to_namespace(xp_gpu),
+            "cupy_host": lambda: legacy_quadrature(model).to_namespace(xp_gpu),
             "cupy_native": lambda: create_native(model, xp_gpu),
         }
-        reference = CutoffQuadrature.create(model)
+        reference = legacy_quadrature(model)
         geometry_errors = {}
         for name, maker in makers.items():
             grid = maker()
             geometry_errors[name] = {}
-            for field in vars(grid):
+            for field in ("radii", "dr", "angular_weights", "radial_dist_sq", "lat_dists"):
                 actual = to_numpy(getattr(grid, field))
                 expected = getattr(reference, field)
                 np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-12)
@@ -150,7 +153,7 @@ def prototype(variant, resident, xp_gpu, stages=None):
     """Install and restore experiment hooks; optional stage timing is a separate run."""
     owner = ParticlePencilBeamEngineAbstract
     original_create = CutoffQuadrature.__dict__["create"]
-    create = CutoffQuadrature.create
+    create = legacy_quadrature
     original_convert = ParticlePencilBeamKernel.to_namespace
     original_cutoff = owner._calc_lateral_particle_cut_off
     original_placement = owner._cutoff_execution
@@ -165,10 +168,14 @@ def prototype(variant, resident, xp_gpu, stages=None):
         item["seconds"] += elapsed
         return value
 
-    def grid(cls, model):
+    def grid(cls, model, *, xp, device=None):
         return record(
             "grid_creation",
-            lambda: create_native(model, xp_gpu) if "native" in variant else create(model),
+            lambda: (
+                create_native(model, xp_gpu)
+                if "native" in variant
+                else create(model).to_namespace(xp, device)
+            ),
         )
 
     def convert(kernel, xp, device=None):
@@ -204,8 +211,11 @@ def prototype(variant, resident, xp_gpu, stages=None):
     CutoffQuadrature.create = classmethod(grid)
     ParticlePencilBeamKernel.to_namespace = convert
     owner._calc_lateral_particle_cut_off = cutoff
-    if gpu_cutoff:
-        owner._cutoff_execution = lambda self: (self.xp, self.device)
+    owner._cutoff_execution = (
+        (lambda self: (self.xp, self.device))
+        if gpu_cutoff
+        else (lambda self: (array_api_compat.array_namespace(np.empty(0)), None))
+    )
     try:
         yield
     finally:

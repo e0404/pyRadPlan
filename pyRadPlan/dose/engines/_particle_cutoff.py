@@ -1,6 +1,7 @@
 """Array API quadrature for particle lateral-cutoff preparation."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from numbers import Integral
 from typing import Callable
 
 import array_api_compat
@@ -12,10 +13,11 @@ from pyRadPlan.core.xp_utils.typing import Array
 
 @dataclass(frozen=True)
 class CutoffQuadrature:
-    """Fixed radial/angular samples, in the historical integration order.
+    """Sampling definition and derived arrays for batched radial integration.
 
-    All arrays belong to the same namespace/device. Geometry is generated on the
-    host once so changing execution backends does not change the sampling grid.
+    All arrays belong to the same namespace/device. Treat their contents as
+    read-only; create a new quadrature to change sampling consistently. The frozen
+    dataclass prevents rebinding fields, but does not make array contents immutable.
     """
 
     radii: Array
@@ -23,35 +25,125 @@ class CutoffQuadrature:
     angular_weights: Array
     radial_dist_sq: Array
     lat_dists: Array
+    radial_edges: Array
+    n_angles: int
+    lateral_model: str
 
     @classmethod
-    def create(cls, lateral_model):
-        """Prepare the existing 1,200-bin radial and optional 360-angle grid."""
-        edges = np.concatenate(([0], np.logspace(-1, 3, 1200)))
-        radii = 0.5 * (edges[:-1] + edges[1:])
-        dr = np.diff(edges)
-        if lateral_model == "singleXY":
-            angles = np.linspace(0, 2 * np.pi, 361)[:-1]
-            angular_weights = (angles[1] - angles[0]) * np.ones_like(angles)
-            radius_mesh, angle_mesh = np.meshgrid(radii, angles)
-            angular_weights = np.tile(angular_weights, radii.size)
-            radii = radius_mesh.ravel(order="F")
-            dr = np.repeat(dr, angles.size)
-            theta = angle_mesh.ravel(order="F")
-            radial_dist_sq = radii**2
-            lat_dists = np.sqrt(radial_dist_sq)[:, None] * np.column_stack(
-                (np.cos(theta), np.sin(theta))
+    def create(cls, lateral_model, *, xp=None, device=None, radial_edges=None, n_angles=360):
+        """Construct samples directly on the requested backend and device.
+
+        Parameters
+        ----------
+        lateral_model : {"single", "double", "multi", "singleXY"}
+            Only ``singleXY`` needs explicit angular sampling.
+        xp : array namespace, optional
+            Defaults to the namespace of array-valued ``radial_edges``, otherwise
+            NumPy. Pass an Array API-compatible namespace.
+        device : device, optional
+            Target backend device. Defaults to the input edges' device when
+            inferring their namespace, otherwise the backend default.
+        radial_edges : array or sequence, optional
+            Finite, strictly increasing bin boundaries in mm, starting at zero.
+            Defaults to zero followed by 1,200 logarithmic points from 0.1 to
+            1,000 mm. Custom edges are copied and stored as float64.
+        n_angles : int, optional
+            Number of uniformly spaced angles for ``singleXY``; default 360.
+            Isotropic models integrate angles analytically and store ``1``.
+
+        Notes
+        -----
+        Flattened angular samples are radius-major. Backend arithmetic may differ
+        slightly in rounding, while sampling definitions and ordering are shared.
+        """
+        if lateral_model not in ("single", "double", "multi", "singleXY"):
+            raise ValueError("Invalid lateral model for cutoff quadrature.")
+        if isinstance(n_angles, bool) or not isinstance(n_angles, Integral) or n_angles < 1:
+            raise ValueError("n_angles must be a positive integer.")
+        if xp is None:
+            if radial_edges is not None and array_api_compat.is_array_api_obj(radial_edges):
+                xp = array_api_compat.array_namespace(radial_edges)
+                if device is None:
+                    device = array_api_compat.device(radial_edges)
+            else:
+                xp = array_api_compat.array_namespace(np.empty(0))
+        if radial_edges is None:
+            edges = xp.concat(
+                (
+                    xp.zeros(1, dtype=xp.float64, device=device),
+                    10 ** xp.linspace(-1, 3, 1200, dtype=xp.float64, device=device),
+                )
             )
         else:
-            angular_weights = np.asarray(2 * np.pi)
+            if (
+                array_api_compat.is_array_api_obj(radial_edges)
+                and array_api_compat.array_namespace(radial_edges) != xp
+            ):
+                radial_edges = to_namespace(xp, radial_edges, device=device)
+            edges = xp.asarray(radial_edges, dtype=xp.float64, device=device, copy=True)
+            if edges.ndim != 1 or edges.shape[0] < 2:
+                raise ValueError("radial_edges must be a one-dimensional array of bin boundaries.")
+            if (
+                not bool(xp.all(xp.isfinite(edges)))
+                or float(edges[0]) != 0
+                or not bool(xp.all(edges[1:] > edges[:-1]))
+            ):
+                raise ValueError(
+                    "radial_edges must be finite, strictly increasing, and start at zero."
+                )
+            device = array_api_compat.device(edges)
+        radii = 0.5 * (edges[:-1] + edges[1:])
+        dr = edges[1:] - edges[:-1]
+        if lateral_model == "singleXY":
+            angles = xp.linspace(0, 2 * xp.pi, n_angles + 1, dtype=xp.float64, device=device)[:-1]
+            shape = (radii.shape[0], n_angles)
+            radii = xp.reshape(xp.broadcast_to(radii[:, None], shape), (-1,))
+            dr = xp.reshape(xp.broadcast_to(dr[:, None], shape), (-1,))
+            theta = xp.reshape(xp.broadcast_to(angles[None, :], shape), (-1,))
+            angular_weights = xp.full(
+                radii.shape, 2 * xp.pi / n_angles, dtype=xp.float64, device=device
+            )
             radial_dist_sq = radii**2
-            lat_dists = np.tile(np.sqrt(radial_dist_sq / 2)[:, None], (1, 2))
-        return cls(radii, dr, angular_weights, radial_dist_sq, lat_dists)
+            lat_dists = xp.sqrt(radial_dist_sq)[:, None] * xp.stack(
+                (xp.cos(theta), xp.sin(theta)), axis=1
+            )
+        else:
+            n_angles = 1
+            angular_weights = xp.asarray(2 * xp.pi, dtype=xp.float64, device=device)
+            radial_dist_sq = radii**2
+            lat_dists = xp.broadcast_to(xp.sqrt(radial_dist_sq / 2)[:, None], (radii.shape[0], 2))
+        return cls(
+            radii,
+            dr,
+            angular_weights,
+            radial_dist_sq,
+            lat_dists,
+            edges,
+            int(n_angles),
+            lateral_model,
+        )
 
     def to_namespace(self, xp, device=None):
         """Transfer preparation once, outside the depth-batch loop."""
-        return type(self)(
-            *(to_namespace(xp, value, device=device) for value in vars(self).values())
+
+        def move(value):
+            if array_api_compat.array_namespace(value) == xp:
+                return xp.asarray(value, device=device)
+            return to_namespace(xp, value, device=device)
+
+        return replace(
+            self,
+            **{
+                name: move(getattr(self, name))
+                for name in (
+                    "radii",
+                    "dr",
+                    "angular_weights",
+                    "radial_dist_sq",
+                    "lat_dists",
+                    "radial_edges",
+                )
+            },
         )
 
 

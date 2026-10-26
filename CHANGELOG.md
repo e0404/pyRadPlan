@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Cutoff grid-creation and GPU-resident kernel benchmarks in actual dose calculations, with separate grid-creation, evaluation, download, and database-setup measurements.
-- Particle pencil-beam `cutoff_backend` setting: keep cutoff preparation on NumPy (default), or use the dose calculation's namespace/device with `"dose"`. Both run the same Array API evaluator; preparation/transfer benchmarks cover NumPy and CuPy.
+- Configurable particle cutoff quadrature: custom radial bin boundaries and angular resolution, with retained sampling metadata and direct Array API backend/device creation. Particle cutoff creation and evaluation follow the dose backend by default; `cutoff_force_numpy=True` provides an explicit CPU override, replacing the earlier unreleased `cutoff_backend` selector.
 - Isolated particle mask-compaction benchmarks across three dose-grid resolutions, including Array API `take` compatibility checks and separate NumPy/CuPy gather measurements.
 - Cached native-versus-generic interpolation benchmark using captured photon grids and queries, with NumPy/CuPy measurements for both bounds policies in the pencil-beam performance audit.
 - `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.

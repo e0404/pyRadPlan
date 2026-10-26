@@ -1052,6 +1052,10 @@ Reproduce sequentially, without overlapping benchmarks:
 
 ## Cutoff preparation: conversion hoisting, batching and backend placement
 
+These measurements describe the earlier CPU-default implementation. The current
+[backend-native implementation](cutoff_backend_creation.md#production-integration)
+uses the dose backend by default and offers `cutoff_force_numpy=True`.
+
 Follow-up: [direct backend grid creation and GPU-resident kernel data](cutoff_backend_creation.md)
 measures construction separately and tests its impact inside complete dose calculations.
 

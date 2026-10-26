@@ -14,7 +14,7 @@ def summarize(out):
     for path in sorted(out.glob("*_paired.json")):
         paired = json.loads(path.read_text())
         meta = json.loads(path.with_name(path.name.replace("_paired", "")).read_text())
-        # baseline = current batched CPU cutoff; variant = frozen legacy or device cutoff.
+        # baseline = current backend-native cutoff; variant = frozen legacy or NumPy cutoff override.
         current = paired["baseline"]
         variant = paired["variant"]
         rows.append(
@@ -41,14 +41,14 @@ def main():
     """Run cases in fresh, sequential processes to avoid timing contention."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--pairs", type=int, default=3)
-    parser.add_argument("--out", default="benchmark/pb_audit_results/cutoff_preparation/full_dose")
+    parser.add_argument("--out", default="benchmark/pb_audit_results/cutoff_native/full_dose")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    for mode in ("protons", "VHEE"):
+    for mode in ("protons", "VHEE", "carbon"):
         for backend in ("numpy", "cupy"):
             variants = (
-                ("legacy_cutoff", "device_cutoff") if backend == "cupy" else ("legacy_cutoff",)
+                ("legacy_cutoff", "numpy_cutoff") if backend == "cupy" else ("legacy_cutoff",)
             )
             for variant in variants:
                 subprocess.run(

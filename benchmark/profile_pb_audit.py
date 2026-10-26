@@ -99,6 +99,11 @@ def apply_variant(name):
         )
         Hong._calc_particle_bixel = legacy_particle_bixel
         return
+    if name == "numpy_cutoff":
+        import array_api_compat
+
+        PP._cutoff_execution = lambda self: (array_api_compat.array_namespace(np.empty(0)), None)
+        return
     if name == "device_cutoff":
         PP._cutoff_execution = lambda self: (self.xp, self.device)
         return

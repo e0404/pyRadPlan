@@ -206,22 +206,21 @@ The ``Dij`` object can also convert its influence matrices explicitly with
 Particle cutoff preparation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Particle pencil-beam engines prepare lateral cutoff tables before evaluating
-beamlets. ``cutoff_backend="numpy"`` is the default, including when dose is
-calculated on a GPU: CPU preparation is typically faster for the small radial
-grids used by isotropic models. To prepare cutoffs on the same backend and device
-as the dose calculation, set:
+Particle pencil-beam engines create their cutoff sampling grids and evaluate
+cutoffs directly on the dose calculation's array backend and device. For small
+isotropic grids, CPU evaluation can be faster. An explicit override keeps both
+sampling and evaluation on NumPy:
 
 .. code-block:: python
 
-    pln.prop_dose_calc["cutoff_backend"] = "dose"
+    pln.prop_dose_calc["cutoff_force_numpy"] = True  # default: False
 
 Both choices use the same Array API implementation. Large anisotropic
-``singleXY`` quadratures can benefit from GPU preparation; measure the complete
-calculation for your machine data and backend before changing the default.
-Depth batching limits temporary arrays, and only the small resulting cutoff
-tables return to the host machine model. GPU reductions can differ slightly in
-rounding near cutoff thresholds.
+``singleXY`` quadratures benefit from GPU creation and evaluation. Depth batching
+limits temporary arrays, and only the small resulting cutoff tables return to
+the host machine model. Depth selection still uses the CPU machine data.
+Backend grid construction and reductions can differ slightly in rounding near
+cutoff thresholds; measure the complete calculation for your workload.
 
 .. _jit-compiled-kernels:
 
