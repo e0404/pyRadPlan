@@ -1,0 +1,107 @@
+/* Light mode */
+html[data-theme="light"] {
+    --pst-color-primary: #0971b9;
+    --pst-color-secondary: #11528b;
+    --pst-color-accent: #11528b;
+
+    --pst-color-text-base: #222222;
+    --pst-color-background: #ffffff;
+    --pst-color-surface: #f4f6f8;
+    --pst-color-target: transparent;
+    --pst-color-table-row-hover: #0acbea;
+}
+
+
+/* Dark mode */
+html[data-theme="dark"] {
+    --pst-color-primary: #0971b9;
+    --pst-color-secondary: #0acbea;
+    --pst-color-accent: #0971b9;
+
+    --pst-color-text-base: #eeeeee;
+    --pst-color-background: #121212;
+    --pst-color-surface: #1e1e1e;
+    --pst-color-target: transparent;
+    --pst-color-table-row-hover: #0acbea;
+    --pst-color-link: #0acbea;
+    --pst-color-link-hover: #0971b9;
+}
+
+/*bg-light mode*/
+html[data-theme="bg-light"] {
+    --pst-color-secondary: #0acbea;
+}
+
+/*bg-dark mode*/
+html[data-theme="bg-dark"] {
+    --pst-color-secondary: #0acbea;
+}
+
+
+
+/* Toggle */
+
+button.theme-switch-button:hover {
+    border-color: #0acbea !important;
+}
+
+html[data-theme="light"] .intro-card .sd-btn-secondary:hover{
+    background-color: #0acbea !important;
+    border-color: #0acbea !important;
+    color: #222222 !important;
+}
+
+html[data-theme="light"] .intro-card .sd-btn-secondary{
+    background-color: #11528b !important;
+    border-color: #11528b !important;
+    color: #fff !important;
+}
+
+html[data-theme="dark"] .intro-card .sd-btn-secondary:hover{
+    background-color: #0acbea !important;
+    border-color: #0acbea !important;
+    color: #222222 !important;
+}
+
+html[data-theme="dark"] .intro-card .sd-btn-secondary{
+    background-color: #0971b9 !important;
+    border-color: #0971b9 !important;
+    color: #fff !important;
+}
+
+
+button.theme-switch-button:focus,
+button.theme-switch-button:active {
+    color: var(--pst-color-secondary) !important;
+    background-color: transparent !important;
+}
+
+/* keep the theme's focus ring for keyboard focus */
+button.theme-switch-button:focus:not(:focus-visible),
+button.theme-switch-button:active {
+    box-shadow: none !important;
+}
+
+@media (max-width: 475px) {
+
+    .bd-header__inner {
+        justify-content: center;
+    }
+
+    .navbar-brand {
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .navbar-brand img {
+        width: min(247.783px, 55vw);
+        height: auto;
+    }
+
+    .search-button-field {
+        padding-left: 0.25rem !important;
+        padding-right: 0.25rem !important;
+        margin-right: 0.1rem !important;
+        transform: translateX(15px);
+    }
+}
