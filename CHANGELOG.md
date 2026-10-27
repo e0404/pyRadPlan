@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `core.xp_utils.grouped_max` with NumPy/CuPy indexed reduction and an Array API fallback; `ArrayBackendGridInterpolator` supports trailing value dimensions to share coordinate searches across fields.
 - `core.resample.resample_array` accepts Array API arrays and existing SimpleITK interpolator enums, preserves namespace/device/dtype, and provides `prefer_native` dispatch. Full-volume NumPy/CuPy resampling prefers SimpleITK; supported backend execution can be requested explicitly. The prepared `ArrayBackendGridResampler` now lives in the same module and also supports nearest-neighbor interpolation and constant extrapolation.
 - Backend-resident ray-tracer depth arrays and a shared Array API grid resampler with chunked linear image interpolation, nearest boundary extrapolation and NaN-aware exact-sample behavior. The image-returning ray-tracer interface remains available.
 - Cutoff grid-creation and GPU-resident kernel benchmarks in actual dose calculations, with separate grid-creation, evaluation, download, and database-setup measurements.
@@ -70,6 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a bundled phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the bundled phantoms by name
 
 ### Changed
+
+- Photon pencil-beam sampling uses a shared grouped maximum instead of two sorts per ray. Convolved kernel components use one shared-grid interpolator, with backend-owned dispatch and contiguous field preparation for generic multi-value evaluation. Scalar interpolation dispatch is preserved; `prefer_native=True/False` explicitly selects native/generic preference and the default `None` selects the measured policy.
 - Performance documentation now includes GUI-default sampled five-field TG119 photon workloads, isolated historical revision comparisons, and the dominant sampling/interpolation costs.
 - Pencil-beam engines prepare beam-valid coordinates once and carry ordered integer selections through ray geometry using Array API `take`; SSD metadata is downloaded in batches and bixel counts remain on the host. The public `calc_geo_dists` mask interface is preserved.
 

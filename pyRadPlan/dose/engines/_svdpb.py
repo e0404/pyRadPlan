@@ -1,4 +1,4 @@
-from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Optional
 import logging
 
 import numpy as np
@@ -14,9 +14,9 @@ from pyRadPlan.stf import FieldShape
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
-from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator
+from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, grouped_max
 from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d
-from pyRadPlan.core.xp_utils.helpers import to_namespace, scatter
+from pyRadPlan.core.xp_utils.helpers import to_namespace
 from pyRadPlan.core.xp_utils.typing import Array
 
 
@@ -111,7 +111,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return dij
 
-    def _init_beam(self, beam_info, ct, cst, stf, i):
+    def _init_beam(self, beam_info, ct, cst, stf, i):  # noqa: PLR0915
         """
         Initialize a beam for pencil beam dose calculation.
 
@@ -338,7 +338,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         m = kernel.m
         betas = kernel.kernel_betas
         rd = curr_ray["rad_depths"]
-        interpolators = cast(list[Callable], curr_ray["kernel_interpolators"])
+        interpolators = cast(ArrayBackendGridInterpolator, curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
@@ -352,11 +352,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
         iso_lat_dists = to_namespace(xp, iso_lat_dists, device=self.device)
-        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
+        interpolated_kernels = interpolators(iso_lat_dists)
 
-        for c, interp in enumerate(interpolated_kernels):
+        for c in range(interpolated_kernels.shape[1]):
             dose_component = xpx.at(dose_component, (c, slice(None))).set(
-                dose_component[c, :] * xp.asarray(interp)
+                dose_component[c, :] * interpolated_kernels[:, c]
             )
 
         bixel_dose = xp.sum(dose_component, axis=0)
@@ -378,8 +378,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return bixel
 
-    def _get_kernel_interpolators(self, beam_info: dict[str], f: Array) -> list[Callable]:
-        """Prepare interpolators for this fluence's convolved photon kernels."""
+    def _get_kernel_interpolators(
+        self, beam_info: dict[str], f: Array
+    ) -> ArrayBackendGridInterpolator:
+        """Prepare one shared-grid interpolator for the convolved photon kernels."""
 
         xp = self.xp
 
@@ -390,7 +392,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         kernel_mxs = to_namespace(xp, beam_info["kernel_mxs"], device=self.device)
         conv_grid = to_namespace(xp, beam_info["kernel_conv_grid"], device=self.device)
 
-        interpolators = [None] * num_kernels
+        convolved_kernels = []
         for c in range(num_kernels):
             conv_mx = xp.real(
                 _ifft2(
@@ -399,12 +401,13 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 )
             )
 
-            # A query outside the convolution grid indicates incorrect grid sizing.
-            interpolators[c] = ArrayBackendGridInterpolator(
-                (conv_grid, conv_grid), conv_mx, bounds_error=True
-            )
+            convolved_kernels.append(conv_mx)
 
-        return interpolators
+        # The trailing dimension shares query preparation across all components.
+        # An out-of-grid query indicates incorrect convolution grid sizing.
+        return ArrayBackendGridInterpolator(
+            (conv_grid, conv_grid), xp.stack(convolved_kernels, axis=-1), bounds_error=True
+        )
 
     def _sample_dij(
         self,
@@ -493,23 +496,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         cluster = xp.astype(xp.clip(rad_depth_v, 0.0) / delta_rad_depth, xp.int64)
         num_clusters = int(xp.max(cluster)) + 1
 
-        # Maximum tail dose per cluster. The Array API offers no scatter-maximum, so the
-        # voxels are sorted by cluster with the dose as tie-breaker, which puts the maximum
-        # last in each cluster's block. Core voxels enter with zero dose and cannot win.
-        order = xp.argsort(dose_tail, stable=True)
-        order = xp.take(order, xp.argsort(xp.take(cluster, order), stable=True))
-        sorted_cluster = xp.take(cluster, order)
-        block_end = xp.concat(
-            (
-                sorted_cluster[:-1] != sorted_cluster[1:],
-                xp.ones((1,), dtype=xp.bool, device=device),
-            )
-        )
+        cluster_dose = grouped_max(dose_tail, cluster, num_clusters, initial=0.0)
 
-        cluster_dose = xp.zeros((num_clusters,), dtype=bixel_dose.dtype, device=device)
-        cluster_dose = scatter(
-            cluster_dose, sorted_cluster[block_end], xp.take(dose_tail, order)[block_end]
-        )
         threshold_dose = xp.take(cluster_dose, cluster)
 
         # Get random samples. The Array API has no random number generation, so they are

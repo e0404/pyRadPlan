@@ -1245,3 +1245,6 @@ Generated matrices/images and binary profiles remain local and are ignored in
 that folder. The original audit changed no production engine or public API. Its validation consists of
 executed benchmark comparisons and lint checks, not a claim that a production
 refactor has passed the complete test suite.
+
+See [shared photon sampling and interpolation reductions](shared_photon_hotpaths.md)
+for the production grouped maximum and multi-value interpolation follow-up.

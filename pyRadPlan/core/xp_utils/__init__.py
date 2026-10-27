@@ -52,6 +52,7 @@ from .compat import (
     quantile,
     interp1d,
 )
+from ._reductions import grouped_max
 from ._interpolation import ArrayBackendGridInterpolator, interpnd
 
 
@@ -284,6 +285,7 @@ __all__ = [
     "free_gpu_memory",
     "elapsed_time",
     "scatter",
+    "grouped_max",
     "to_numpy",
     "from_numpy",
     "to_namespace",

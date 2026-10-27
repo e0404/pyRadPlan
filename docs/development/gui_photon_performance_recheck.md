@@ -101,6 +101,10 @@ CuPy and strict Array API fallback validation remain part of the proposed next s
 
 ## Suggested next steps
 
+Steps 1 and 2 are implemented and evaluated in the
+[shared photon hot-path follow-up](shared_photon_hotpaths.md).
+The timings below describe the original recheck and its prototype.
+
 1. **Implement a shared backend grouped-maximum reduction and use it in photon
    sampling.** Put NumPy/CuPy native dispatch in `core.xp_utils`, with an Array
    API fallback, rather than introducing backend-specific code in the engine.

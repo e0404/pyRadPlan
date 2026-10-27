@@ -206,3 +206,53 @@ def test_query_subclass_uses_compatible_namespace():
     p = np.array([0.0, 1.0])
     interpolator = ArrayBackendGridInterpolator((p, p), np.ones((2, 2)))
     np.testing.assert_array_equal(interpolator(np.array([[0.5, 0.5]]).view(QueryArray)), [1.0])
+
+
+@pytest.mark.parametrize("prefer_native", [True, False])
+@pytest.mark.parametrize("ndim", [2, 3])
+@pytest.mark.parametrize("value_shape", [(3,), (2, 3)])
+def test_shared_value_dimensions(xp, prefer_native, ndim, value_shape):
+    """Shared grid searches preserve independent scalar fields and trailing shape."""
+    points = (xp.asarray([3.0, 1.0, -2.0]),) * ndim
+    shape = (3,) * ndim + value_shape
+    values = xp.asarray(np.random.default_rng(6).normal(size=shape), dtype=xp.float32)
+    queries = xp.asarray([[0.5] * ndim, [-2.0] * ndim, [4.0] * ndim], dtype=xp.float32)
+    shared = ArrayBackendGridInterpolator(points, values, prefer_native=prefer_native)
+    result = shared(queries)
+    assert result.shape == (3,) + value_shape
+    for index in np.ndindex(value_shape):
+        selection = (slice(None),) * ndim + index
+        reference = ArrayBackendGridInterpolator(
+            points, values[selection], prefer_native=prefer_native
+        )(queries)
+        np.testing.assert_allclose(
+            to_numpy(result[(slice(None),) + index]), to_numpy(reference), rtol=2e-6, atol=2e-6
+        )
+    assert shared(xp.empty((0, ndim), dtype=xp.float32)).shape == (0,) + value_shape
+
+
+def test_numpy_shared_dispatch():
+    """Automatic multi-value dispatch differs from an explicit native preference."""
+    points = (np.array([0.0, 1.0]),) * 2
+    values = np.ones((2, 2, 3))
+    assert ArrayBackendGridInterpolator(points, values).implementation == "array_api"
+    assert (
+        ArrayBackendGridInterpolator(points, values, prefer_native=True).implementation == "scipy"
+    )
+    assert ArrayBackendGridInterpolator(points, values[:, :, 0]).implementation == "scipy"
+
+
+def test_shared_preparation_reused(monkeypatch):
+    """Packing and grid normalization happen once, not on every query."""
+    points = (np.array([2.0, 1.0, 0.0]),) * 2
+    values = np.arange(27.0).reshape(3, 3, 3)
+    shared = ArrayBackendGridInterpolator(points, values, prefer_native=False)
+    queries = np.array([[0.5, 0.5], [1.0, 1.0]])
+    expected = shared(queries)
+
+    def unexpected(*args):
+        pytest.fail("Repeated grid preparation")
+
+    monkeypatch.setattr(_interpolation, "_normalize_grid", unexpected)
+    for _ in range(2):
+        np.testing.assert_array_equal(shared(queries), expected)

@@ -1,0 +1,128 @@
+[
+  {
+    "dtype": "float32",
+    "queries": 10000,
+    "path": "three_native",
+    "median_s": 0.0038895700010471044,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 10000,
+    "path": "shared_native",
+    "median_s": 0.001995019998867065,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 10000,
+    "path": "shared_generic",
+    "median_s": 0.004090919997543097,
+    "max_abs": 1.555249591334018e-07
+  },
+  {
+    "dtype": "float32",
+    "queries": 50000,
+    "path": "three_native",
+    "median_s": 0.022154220001539215,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 50000,
+    "path": "shared_native",
+    "median_s": 0.01172742000198923,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 50000,
+    "path": "shared_generic",
+    "median_s": 0.01209973000222817,
+    "max_abs": 1.4699635608739214e-07
+  },
+  {
+    "dtype": "float32",
+    "queries": 150000,
+    "path": "three_native",
+    "median_s": 0.07190610999823548,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 150000,
+    "path": "shared_native",
+    "median_s": 0.03985839000088163,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float32",
+    "queries": 150000,
+    "path": "shared_generic",
+    "median_s": 0.034456369996769355,
+    "max_abs": 1.6152859894091876e-07
+  },
+  {
+    "dtype": "float64",
+    "queries": 10000,
+    "path": "three_native",
+    "median_s": 0.003453159995842725,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float64",
+    "queries": 10000,
+    "path": "shared_native",
+    "median_s": 0.0022369500016793608,
+    "max_abs": 3.3306690738754696e-16
+  },
+  {
+    "dtype": "float64",
+    "queries": 10000,
+    "path": "shared_generic",
+    "median_s": 0.01799080000491813,
+    "max_abs": 3.3306690738754696e-16
+  },
+  {
+    "dtype": "float64",
+    "queries": 50000,
+    "path": "three_native",
+    "median_s": 0.020026719995075836,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float64",
+    "queries": 50000,
+    "path": "shared_native",
+    "median_s": 0.015033000003313646,
+    "max_abs": 3.3306690738754696e-16
+  },
+  {
+    "dtype": "float64",
+    "queries": 50000,
+    "path": "shared_generic",
+    "median_s": 0.02950740000233054,
+    "max_abs": 3.3306690738754696e-16
+  },
+  {
+    "dtype": "float64",
+    "queries": 150000,
+    "path": "three_native",
+    "median_s": 0.05248487999779172,
+    "max_abs": 0.0
+  },
+  {
+    "dtype": "float64",
+    "queries": 150000,
+    "path": "shared_native",
+    "median_s": 0.04469528999761678,
+    "max_abs": 3.3306690738754696e-16
+  },
+  {
+    "dtype": "float64",
+    "queries": 150000,
+    "path": "shared_generic",
+    "median_s": 0.05820988999912515,
+    "max_abs": 3.3306690738754696e-16
+  }
+]

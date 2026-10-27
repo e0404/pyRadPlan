@@ -17,14 +17,16 @@ class ArrayBackendGridInterpolator:
         One-dimensional, strictly ascending or descending coordinate arrays.
         Spacing may be nonuniform. All arrays must share a namespace and device.
     values : Array
-        Scalar grid values with shape ``tuple(len(p) for p in points)``.
+        Grid values with shape ``(*grid_shape, *value_shape)``. Optional trailing
+        dimensions represent fields evaluated with shared coordinate searches.
     bounds_error : bool, optional
         Raise ValueError for queries outside the grid if True. Otherwise clip
         coordinates to the boundary (default), rather than extrapolating.
-    prefer_native : bool, optional
-        Prefer SciPy, CuPy, or JAX interpolation when available (default True).
-        False selects the generic Array API implementation, currently supporting
-        2D and 3D grids with at least two points per axis.
+    prefer_native : bool or None, optional
+        None (default) selects the measured faster implementation: generic for
+        NumPy multi-value 2D grids, native where available otherwise. True
+        explicitly prefers SciPy, CuPy, or JAX. False selects the generic Array
+        API implementation (2D/3D grids with at least two points per axis).
 
     Notes
     -----
@@ -46,24 +48,35 @@ class ArrayBackendGridInterpolator:
         values: Array,
         *,
         bounds_error: bool = False,
-        prefer_native: bool = True,
+        prefer_native: bool | None = None,
     ):
         self._xp = xp = array_api_compat.array_namespace(*points, values)
         self._array_type = type(values)
         self._device = array_api_compat.device(values)
         self._ndim = len(points)
+        self._value_shape = values.shape[self._ndim :]
         self._bounds_error = bounds_error
         self._native_bounds = False
         self._implementation = "array_api"
         if not points or any(p.ndim != 1 or p.shape[0] == 0 for p in points):
             raise ValueError("Grid axes must be nonempty one-dimensional arrays.")
-        if values.shape != tuple(p.shape[0] for p in points):
+        if values.shape[: self._ndim] != tuple(p.shape[0] for p in points):
             raise ValueError("Values shape must match the grid axes.")
         if any(array_api_compat.device(p) != self._device for p in points):
             raise ValueError("Grid axes and values must share a device.")
 
         # Keep bounds in the input precision even if a native implementation
         # converts its own axes to float64. No host copies are needed.
+        if prefer_native is None:
+            # Shared searches pay off on both CPU and GPU, but the native
+            # vector-value evaluator wins only on CuPy in measured 2D workloads.
+            # Keep native scalar / singleton / higher-dimensional support.
+            prefer_native = not (
+                array_api_compat.is_numpy_namespace(xp)
+                and bool(self._value_shape)
+                and self._ndim == 2
+                and all(p.shape[0] >= 2 for p in points)
+            )
         native = _native_interpolator_class(xp) if prefer_native else None
         self._bounds = (
             tuple((xp.minimum(p[0], p[-1]), xp.maximum(p[0], p[-1])) for p in points)
@@ -71,7 +84,12 @@ class ArrayBackendGridInterpolator:
             else ()
         )
         if native is not None:
-            self._evaluate = native(points, values, bounds_error=bounds_error)
+            # CuPy's NaN mask supports only one trailing value axis. Flatten
+            # multiple value dimensions internally and restore them on return.
+            native_values = values
+            if len(self._value_shape) > 1:
+                native_values = xp.reshape(values, values.shape[: self._ndim] + (-1,))
+            self._evaluate = native(points, native_values, bounds_error=bounds_error)
             self._native_bounds = True
             self._implementation = "scipy" if array_api_compat.is_numpy_namespace(xp) else "cupy"
             return
@@ -89,7 +107,20 @@ class ArrayBackendGridInterpolator:
             if any(p.shape[0] < 2 for p in points):
                 raise ValueError("Generic interpolation requires at least two points per axis.")
             core = _interp2d_core if len(points) == 2 else _interp3d_core
-            self._evaluate = partial(core, xp, **dict(zip(("gx", "gy", "gz"), points)), y=values)
+            options = {}
+            if len(points) == 2 and self._value_shape:
+                # Pack fields once, with grid samples contiguous within each field.
+                # Evaluation then broadcasts weights along long query rows, avoiding
+                # repeated short-row broadcasting for (N, number_of_fields) arrays.
+                flat = xp.reshape(values, (points[0].shape[0] * points[1].shape[0], -1))
+                # Flatten in logical (row-major) order; asarray(copy=True) alone
+                # preserves NumPy's transposed strides and makes take copy per call.
+                packed = xp.reshape(xp.permute_dims(flat, (1, 0)), (-1,))
+                values = xp.reshape(packed, (flat.shape[1], flat.shape[0]))
+                options["values_first"] = True
+            self._evaluate = partial(
+                core, xp, **dict(zip(("gx", "gy", "gz"), points)), y=values, **options
+            )
 
     @property
     def implementation(self) -> str:
@@ -97,7 +128,7 @@ class ArrayBackendGridInterpolator:
         return self._implementation
 
     def __call__(self, xi: Array) -> Array:
-        """Evaluate queries of shape ``(N, ndim)`` on the original device."""
+        """Return shape ``(N, *value_shape)`` for queries of shape ``(N, ndim)``."""
         xp = self._xp
         # The usual query has the same array type as the prepared values. Only
         # unusual/subclass inputs need full namespace discovery again.
@@ -120,7 +151,8 @@ class ArrayBackendGridInterpolator:
                 [xp.clip(xi[:, axis], lo, hi) for axis, (lo, hi) in enumerate(self._bounds)],
                 axis=1,
             )
-        return self._evaluate(xi)
+        result = self._evaluate(xi)
+        return xp.reshape(result, (xi.shape[0],) + self._value_shape)
 
 
 def _native_interpolator_class(xp):
@@ -168,7 +200,7 @@ def interpnd(
     y: Array,
     *,
     bounds_error: bool = False,
-    prefer_native: bool = True,
+    prefer_native: bool | None = None,
 ) -> Array:
     """Interpolate once on a rectilinear grid of Array API arrays.
 
@@ -179,12 +211,12 @@ def interpnd(
     x : tuple[Array, ...]
         One-dimensional grid axes.
     y : Array
-        Scalar grid values with shape matching the lengths of the axes.
+        Grid values with optional trailing value dimensions after the grid axes.
     bounds_error : bool, optional
         Raise for out-of-grid queries if True; otherwise clip to the grid (default).
-    prefer_native : bool, optional
-        Prefer a native implementation when available (default True). False
-        selects the generic Array API implementation, supporting 2D and 3D.
+    prefer_native : bool or None, optional
+        None selects the measured backend policy. True prefers native libraries;
+        False selects generic 2D/3D interpolation. See the reusable class.
 
     Returns
     -------
@@ -200,7 +232,9 @@ def interpnd(
     )(xq)
 
 
-def _interp2d_core(xp, xq: Array, gx: Array, gy: Array, y: Array) -> Array:
+def _interp2d_core(
+    xp, xq: Array, gx: Array, gy: Array, y: Array, *, values_first: bool = False
+) -> Array:
     """Perform generic core implementation of 2D interpolation."""
     qx = xq[:, 0]
     qy = xq[:, 1]
@@ -217,7 +251,15 @@ def _interp2d_core(xp, xq: Array, gx: Array, gy: Array, y: Array) -> Array:
     tx = (qx - gx0) / (gx[ix + 1] - gx0)
     ty = (qy - gy0) / (gy[iy + 1] - gy0)
 
-    y_flat = xp.reshape(y, (nx * ny,))
+    if values_first:
+        y_flat = y
+        weight_shape = (1, -1)
+        gather_axis = 1
+    else:
+        y_flat = xp.reshape(y, (nx * ny,) + y.shape[2:])
+        weight_shape = (-1,) + (1,) * (y.ndim - 2)
+        gather_axis = 0
+    tx, ty = xp.reshape(tx, weight_shape), xp.reshape(ty, weight_shape)
 
     stride_x = ny
     base = ix * stride_x + iy
@@ -227,15 +269,16 @@ def _interp2d_core(xp, xq: Array, gx: Array, gy: Array, y: Array) -> Array:
     i10 = base + stride_x
     i11 = base + stride_x + 1
 
-    c00 = xp.take(y_flat, i00, axis=0)
-    c01 = xp.take(y_flat, i01, axis=0)
-    c10 = xp.take(y_flat, i10, axis=0)
-    c11 = xp.take(y_flat, i11, axis=0)
+    c00 = xp.take(y_flat, i00, axis=gather_axis)
+    c01 = xp.take(y_flat, i01, axis=gather_axis)
+    c10 = xp.take(y_flat, i10, axis=gather_axis)
+    c11 = xp.take(y_flat, i11, axis=gather_axis)
 
     ux = 1.0 - tx
     uy = 1.0 - ty
 
-    return ux * uy * c00 + ux * ty * c01 + tx * uy * c10 + tx * ty * c11
+    result = ux * uy * c00 + ux * ty * c01 + tx * uy * c10 + tx * ty * c11
+    return xp.permute_dims(result, (1, 0)) if values_first else result
 
 
 def _interp3d_core(xp, xq: Array, gx: Array, gy: Array, gz: Array, y: Array) -> Array:  # noqa: PLR0913
@@ -266,7 +309,9 @@ def _interp3d_core(xp, xq: Array, gx: Array, gy: Array, gz: Array, y: Array) -> 
     tz = (qz - gz0) / (gz[iz + 1] - gz0)
 
     # Flatten y for fast linear indexing
-    y_flat = xp.reshape(y, (nx * ny * nz,))
+    y_flat = xp.reshape(y, (nx * ny * nz,) + y.shape[3:])
+    weight_shape = (-1,) + (1,) * (y.ndim - 3)
+    tx, ty, tz = (xp.reshape(t, weight_shape) for t in (tx, ty, tz))
 
     stride_x = ny * nz
     stride_y = nz

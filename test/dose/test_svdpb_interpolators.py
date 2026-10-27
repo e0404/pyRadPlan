@@ -47,12 +47,8 @@ def test_kernel_interpolators_reuse_and_fluence_isolation(interpolation_backend,
     interpolators = PhotonPencilBeamSVDEngine._get_kernel_interpolators(engine, info, fluence)
     other = PhotonPencilBeamSVDEngine._get_kernel_interpolators(engine, info, 2 * fluence)
     for _ in range(2):
-        for original, changed, reference in zip(interpolators, other, expected):
-            np.testing.assert_array_equal(
-                to_namespace(np, original(queries)), to_namespace(np, reference)
-            )
-            np.testing.assert_allclose(
-                to_namespace(np, changed(queries)),
-                2 * to_namespace(np, reference),
-                rtol=1e-6,
-            )
+        original = to_namespace(np, interpolators(queries))
+        changed = to_namespace(np, other(queries))
+        reference = np.column_stack([to_namespace(np, v) for v in expected])
+        np.testing.assert_allclose(original, reference, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(changed, 2 * reference, rtol=1e-6, atol=1e-8)

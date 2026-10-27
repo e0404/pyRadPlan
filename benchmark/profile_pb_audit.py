@@ -63,7 +63,10 @@ def apply_variant(name):
         return
     if name in ("legacy_interpolators", "native_interpolators"):
         from profile_interpnd_reference import legacy_grid_interpolator, native_grid_interpolator
+        import profile_photon_hotpaths_reference as reference
 
+        SVD._get_kernel_interpolators = reference._get_kernel_interpolators
+        SVD._compute_bixel = reference._compute_bixel
         factory = (
             legacy_grid_interpolator
             if name == "legacy_interpolators"
@@ -136,6 +139,8 @@ def apply_variant(name):
     if name == "scattermax":
         fn = SVD._sample_dij
         source = textwrap.dedent(inspect.getsource(fn))
+        if "grouped_max(" in source:
+            return  # Current production already provides this reduction.
         start = source.index("    order = xp.argsort(dose_tail, stable=True)")
         end = source.index("    threshold_dose =", start)
         source = (
@@ -149,6 +154,23 @@ def apply_variant(name):
         namespace = dict(fn.__globals__)
         exec(compile(source, "<audit scatter maximum>", "exec"), namespace)
         SVD._sample_dij = namespace["_sample_dij"]
+    if name in ("legacy_photon_hotpaths", "legacy_sampling", "legacy_kernel_queries"):
+        import profile_photon_hotpaths_reference as reference
+
+        if name != "legacy_kernel_queries":
+            SVD._sample_dij = reference._sample_dij
+        if name != "legacy_sampling":
+            SVD._get_kernel_interpolators = reference._get_kernel_interpolators
+            SVD._compute_bixel = reference._compute_bixel
+        return
+    if name in ("generic_kernel_queries", "native_kernel_queries"):
+        preference = name == "native_kernel_queries"
+        replace_method(
+            SVD,
+            "_get_kernel_interpolators",
+            [("bounds_error=True", f"bounds_error=True, prefer_native={preference}")],
+        )
+        return
     if name == "union":
         return  # Nominal selection reuse is now implemented in production.
     if name == "legacy_voxel_selection":
@@ -234,6 +256,7 @@ def main():
     parser.add_argument("--let", dest="with_let", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--paired", action="store_true")
+    parser.add_argument("--no-matrices", action="store_true", help="Skip large NPZ artifacts")
     parser.add_argument("--pairs", type=int, default=6)
     parser.add_argument("--out", default="benchmark/pb_audit_results")
     args = parser.parse_args()
@@ -303,6 +326,7 @@ def main():
         (Hong, "_calc_particle_bixel"),
         (SVD, "_get_kernel_interpolators"),
         (SVD, "_sample_dij"),
+        (SVD, "_compute_bixel"),
         (DoseEngineBase, "_init_dose_calc"),
         (DoseEngineBase, "_init_voxel_selection"),
         (PB, "_fill_dij"),
@@ -351,7 +375,8 @@ def main():
         size = dict(shape=list(matrix.shape), bytes=matrix.nbytes)
     else:
         matrix = result.physical_dose.flat[0]
-        sparse.save_npz(out / (label + ".npz"), matrix)
+        if not args.no_matrices:
+            sparse.save_npz(out / (label + ".npz"), matrix)
         size = dict(
             shape=list(matrix.shape),
             nnz=int(matrix.nnz),
@@ -375,7 +400,7 @@ def main():
         stf_seconds=preparation,
         cold_seconds=times[0],
         warm_seconds=times[1:],
-        median_seconds=float(np.median(times[1:])),
+        median_seconds=float(np.median(times[1:])) if len(times) > 1 else None,
         effective=effective,
         jit_backends=settings.xp.jit_backends,
         rays=sum(len(b.rays) for b in stf.beams),
@@ -494,7 +519,7 @@ def main():
                     ),
                 )
             paired["comparisons"].append(comparison)
-            if comparison["max_abs"] != 0:
+            if comparison["max_abs"] != 0 and not args.no_matrices:
                 save_mismatch(out, label, pair, a, b, args.forward)
         (out / (label + "_paired.json")).write_text(json.dumps(paired, indent=2))
 
