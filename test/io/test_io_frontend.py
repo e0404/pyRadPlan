@@ -92,3 +92,37 @@ def test_phantom_path_unknown_lists_available():
 
 def test_available_phantoms_lists_tg119():
     assert "TG119" in available_phantoms()
+
+
+@pytest.fixture
+def phantom_folders(tmp_path, monkeypatch):
+    """An isolated user phantom folder and one shared base data root holding phantoms."""
+    from pyRadPlan._settings import get_settings
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
+    user = tmp_path / "data" / "phantoms"
+    shared = tmp_path / "course" / "phantoms"
+    user.mkdir(parents=True)
+    shared.mkdir(parents=True)
+    settings = get_settings()
+    previous = settings.base_data_path
+    settings.base_data_path = str(tmp_path / "course")
+    yield user, shared
+    settings.base_data_path = previous
+
+
+def test_phantoms_are_found_in_the_user_and_shared_folders(phantom_folders):
+    user, shared = phantom_folders
+    ct, cst = load_tg119()
+    (user / "MyCase.mat").write_bytes(phantom_path("TG119").read_bytes())
+    save_data(file_name=shared / "Course Case.npz", ct=ct, cst=cst)
+    # the shipped phantom wins over files of the same name, whatever their format
+    save_data(file_name=shared / "tg119.npz", ct=ct, cst=cst)
+    (shared / "notes.txt").write_text("not a phantom", encoding="utf-8")
+
+    assert available_phantoms() == ["TG119", "MyCase", "Course Case"]
+    assert phantom_path("mycase") == user / "MyCase.mat"
+    assert phantom_path("Course Case.npz") == shared / "Course Case.npz"
+    assert str(phantom_path("TG119")).lower().endswith("tg119.mat")
+    data = load_data(phantom_path("Course Case"))
+    assert data["ct"] is not None and data["cst"] is not None

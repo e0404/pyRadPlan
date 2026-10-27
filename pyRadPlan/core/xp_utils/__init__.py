@@ -1,6 +1,7 @@
 """Provide information about the available compute backends."""
 
 import importlib
+import logging
 import sys
 import warnings
 from types import ModuleType
@@ -52,6 +53,8 @@ from .compat import (
     quantile,
     interp1d,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Check if GPU is available
@@ -149,6 +152,32 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
         return importlib.import_module(namespace)
 
 
+def _is_gpu_capable_namespace(xp: ArrayNamespace) -> bool:
+    """Whether *xp* is a backend that could run on a GPU (torch, cupy, jax)."""
+    return (
+        array_api_compat.is_torch_namespace(xp)
+        or array_api_compat.is_cupy_namespace(xp)
+        or array_api_compat.is_jax_namespace(xp)
+    )
+
+
+def _report_gpu_fallback(xp: ArrayNamespace) -> None:
+    """Report that a GPU was preferred but *xp* will run on the CPU.
+
+    A ``prefer_gpu`` preference is only that: on a CPU-only install, where no
+    GPU-capable backend is available, numpy is the only choice and the fallback
+    is merely logged. A warning is reserved for a real mismatch -- the user
+    pinned a GPU backend via ``preferred_gpu_array_backend``, or *xp* is a
+    GPU-capable backend whose GPU is unavailable.
+    """
+    message = f"Requested GPU device is not available on {xp.__name__}. Falling back to CPU."
+    explicit = get_settings().xp.preferred_gpu_array_backend is not None
+    if explicit or _is_gpu_capable_namespace(xp) or _get_preferred_gpu_backend() is not None:
+        warnings.warn(message, UserWarning, stacklevel=3)
+    else:
+        logger.debug("%s No GPU-capable array backend is available.", message)
+
+
 def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Any:
     """
     Choose the default device for the given array namespace.
@@ -181,10 +210,7 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> An
                 UserWarning,
             )
             return dlpack_to_backend_device(xp, (2, 0))
-        warnings.warn(
-            f"Requested GPU device is not available on {xp.__name__}. Falling back to CPU.",
-            UserWarning,
-        )
+        _report_gpu_fallback(xp)
 
     # CPU fallback, also reached when a GPU was preferred but none is available
     if array_api_compat.is_torch_namespace(xp) and pytorch_available():

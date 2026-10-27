@@ -31,7 +31,7 @@ from PySide6.QtGui import QAction, QIcon
 
 from pyRadPlan._settings import get_settings
 from pyRadPlan.gui.assets import asset_path
-from pyRadPlan.gui.menus import BaseDataMenu, FileMenu, SettingsMenu, ViewMenu
+from pyRadPlan.gui.menus import BaseDataMenu, FileMenu, HelpMenu, SettingsMenu, ViewMenu
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets import (
     WorkflowWidget,
@@ -183,7 +183,14 @@ class MainWindow(QMainWindow):
         self._base_data_menu.base_data_changed.connect(self.plan_widget.refresh_base_data)
         self._settings_menu = SettingsMenu(self)
         self._settings_menu.settings_applied.connect(self.apply_ui_mode_setting)
-        for menu in (self._file_menu, self._view_menu, self._base_data_menu, self._settings_menu):
+        self._help_menu = HelpMenu(self)
+        for menu in (
+            self._file_menu,
+            self._view_menu,
+            self._base_data_menu,
+            self._settings_menu,
+            self._help_menu,
+        ):
             self.menuBar().addMenu(menu)
 
     # ------------------------------------------------------------------

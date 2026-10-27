@@ -8,7 +8,8 @@ Top-level API
 - :func:`load_data` -- load everything available (ct, cst, dose, ...) into a dict.
 - :func:`save_data` -- save pyRadPlan objects, format chosen from extension/argument.
 - :func:`load_tg119` -- load the bundled TG119 phantom.
-- :func:`phantom_path` / :func:`available_phantoms` -- locate the bundled phantoms by name.
+- :func:`phantom_path` / :func:`available_phantoms` / :func:`list_phantoms` -- locate the
+  phantoms (shipped, the user's and shared ones) by name.
 
 Low-level handlers
 ------------------
@@ -51,6 +52,7 @@ from ._load_save import (
     load_tg119,
     phantom_path,
     available_phantoms,
+    list_phantoms,
 )
 
 __all__ = [
@@ -60,6 +62,7 @@ __all__ = [
     "load_tg119",
     "phantom_path",
     "available_phantoms",
+    "list_phantoms",
     "load_binary_patient",
     "list_image_files",
     "BaseImporter",
