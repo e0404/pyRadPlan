@@ -70,9 +70,11 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
         # quantities using them; computing them here would cost an extra matrix product.
-        self._objective_quantities = [
-            q for q in self._quantities if self._objectives_per_quantity[q.identifier]
-        ]
+        self._objective_quantities = {
+            key: q
+            for key, q in self._quantities_by_key.items()
+            if self._objectives_per_quantity[key]
+        }
 
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
@@ -87,9 +89,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         q_scenarios = {}
 
         # Check & get Caches
-        for q in self._objective_quantities:
-            q_vectors[q.identifier] = q(x)
-            q_scenarios[q.identifier] = q.scenarios
+        for key, q in self._objective_quantities.items():
+            q_vectors[key] = q(x)
+            q_scenarios[key] = q.scenarios
 
         # Loop over all objectives
 
@@ -100,9 +102,10 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             ix = xp_utils.from_numpy(xp, obj_info[0], device=self._device)
             tmp_obj_list = cast(list[Objective], obj_info[1])
             for obj in tmp_obj_list:
+                key = self._objective_keys[obj_ix]
                 f_tmp_scen = [
-                    obj.priority * obj.compute_objective(q_vectors[obj.quantity].flat[scen_ix][ix])
-                    for scen_ix in q_scenarios[obj.quantity]
+                    obj.priority * obj.compute_objective(q_vectors[key].flat[scen_ix][ix])
+                    for scen_ix in q_scenarios[key]
                 ]
                 f_vals[obj_ix] = xp.sum(xp.stack(f_tmp_scen))
                 obj_ix += 1
@@ -133,14 +136,14 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         xp = self._array_backend
 
         # Check & get Caches
-        for q in self._objective_quantities:
+        for key in self._objective_quantities:
             if initialize_cache:
                 if self.bypass_objective_jacobian:
                     cache_rows = 1
                 else:
-                    cache_rows = len(self._objectives_per_quantity[q.identifier])
+                    cache_rows = len(self._objectives_per_quantity[key])
 
-                self._grad_cache_intermediate[q.identifier] = xp.zeros(
+                self._grad_cache_intermediate[key] = xp.zeros(
                     (
                         cache_rows,
                         self._dij.dose_grid.num_voxels,
@@ -150,7 +153,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 )
             else:
                 # The trailing ellipsis here is needed for array_api compatibility
-                self._grad_cache_intermediate[q.identifier][:, ...] = 0.0
+                self._grad_cache_intermediate[key][:, ...] = 0.0
 
     def _update_objective_grad_cache(self, x: Array, num_objectives: int, q_scenarios: dict):
         """Update the objective gradient / jacobian cache by computing the chain rule."""
@@ -172,15 +175,15 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         else:
             self._grad_cache[:, ...] = 0.0
 
-        for q in self._objective_quantities:
+        for key, q in self._objective_quantities.items():
             if self.bypass_objective_jacobian:
                 cache_ix = [0]
             else:
-                cache_ix = self._objectives_per_quantity[q.identifier]
+                cache_ix = self._objectives_per_quantity[key]
 
-            for scen_ix in q_scenarios[q.identifier]:
+            for scen_ix in q_scenarios[key]:
                 derivative = q.compute_chain_derivative(
-                    self._grad_cache_intermediate[q.identifier], x
+                    self._grad_cache_intermediate[key], x
                 ).flat[scen_ix]
                 # Row by row, as the Array API has no integer-array (scatter) indexing.
                 for row, obj_ix in enumerate(cache_ix):
@@ -193,8 +196,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._set_quantity_imtermediate_gradient_cache()
 
-        q_vectors = {q.identifier: q(x) for q in self._objective_quantities}
-        q_scenarios = {q.identifier: q.scenarios for q in self._objective_quantities}
+        q_vectors = {key: q(x) for key, q in self._objective_quantities.items()}
+        q_scenarios = {key: q.scenarios for key, q in self._objective_quantities.items()}
 
         cnt = 0
         for obj_info in self._objective_list:
@@ -205,16 +208,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     q_cache_index = 0
                 else:
                     q_cache_index = self._q_cache_index[cnt]
-                for scen_ix in q_scenarios[obj.quantity]:
-                    self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][ix] += (
-                        xp.astype(
-                            obj.priority
-                            * obj.compute_gradient(q_vectors[obj.quantity].flat[scen_ix][ix]),
-                            self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][
-                                ix
-                            ].dtype,
-                            copy=False,
-                        )
+                key = self._objective_keys[cnt]
+                for scen_ix in q_scenarios[key]:
+                    self._grad_cache_intermediate[key][q_cache_index, ...][ix] += xp.astype(
+                        obj.priority * obj.compute_gradient(q_vectors[key].flat[scen_ix][ix]),
+                        self._grad_cache_intermediate[key][q_cache_index, ...][ix].dtype,
+                        copy=False,
                     )
                 cnt += 1
 

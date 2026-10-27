@@ -110,8 +110,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     _constraint_list: list
 
     _quantities: list[RTQuantity]
+    _quantities_by_key: dict[str, RTQuantity]
+    _objective_keys: list[str]
     _q_cache_index: list[int]
-    _objectives_per_quantity: dict[str, int]
+    _objectives_per_quantity: dict[str, list[int]]
     _num_objectives: int
     _solver_explicit: bool
 
@@ -379,34 +381,46 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                 "Objective doses are interpreted per fraction (dose_convention='per_fraction')."
             )
         # sanitize objectives and constraints and manage required quantities
-        objectives, quantity_ids = self._collect_objectives()
+        objectives, _ = self._collect_objectives()
         self._objective_list = objectives
-        # unique quantities
-        quantity_ids = list(set(quantity_ids))
 
         # Resolve all requested quantities (plus their transitive dependencies) through a
         # shared resolver so that any quantity referenced by multiple roots is instantiated
         # exactly once. Only the quantities the requested ones actually use are evaluated.
         # Quantities receive problem-level context (and parameters their objectives opt into)
-        # through dependency injection on their ``__init__`` signature.
+        # through dependency injection on their ``__init__`` signature. Objectives setting
+        # such parameters differently (e.g. NTCPPOLO with two risk structures) get independent
+        # instances, which still share their dependencies.
         context = {
             "cst": cst_unmodified,
             "ct": self._ct,
             "stf": getattr(self, "_stf", None),
             "num_of_fractions": self._num_of_fractions,
         }
-        resolver = QuantityResolver(
-            self._dij,
-            context=context,
-            objective_list=self._objective_list,
-        )
-        self._quantities = resolver.reachable(resolver.resolve(quantity_ids))
+        resolver = QuantityResolver(self._dij, context=context)
+        voi_keys: list[list[str]] = []
+        roots = []
+        for _, objs in self._objective_list:
+            voi_keys.append([])
+            for obj in objs:
+                params = {p: getattr(obj, p) for p in type(obj).quantity_params}
+                voi_keys[-1].append(resolver.key(obj.quantity, params))
+                roots.append(resolver.get(obj.quantity, params))
+        self._objective_keys = [key for keys in voi_keys for key in keys]
+        self._quantities = resolver.reachable(roots)
+        self._quantities_by_key = {
+            key: q
+            for key, q in resolver.instances.items()
+            if any(q is reached for reached in self._quantities)
+        }
 
-        for q in self._quantities:
+        for key, q in self._quantities_by_key.items():
             regions = {
                 name: mask
-                for name, (mask, objs) in zip(self._objective_voi_names, self._objective_list)
-                if any(obj.quantity == q.identifier for obj in objs)
+                for name, (mask, _), keys in zip(
+                    self._objective_voi_names, self._objective_list, voi_keys
+                )
+                if key in keys
             }
             for message in q.check_fit_domain(regions):
                 logger.warning(message)
@@ -421,20 +435,12 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # obtain cache info to match quantities with objectives
         self._q_cache_index = []
-        self._objectives_per_quantity = {q.identifier: [] for q in self._quantities}
-        obj_ix = 0
+        self._objectives_per_quantity = {key: [] for key in self._quantities_by_key}
+        for obj_ix, key in enumerate(self._objective_keys):
+            self._q_cache_index.append(len(self._objectives_per_quantity[key]))
+            self._objectives_per_quantity[key].append(obj_ix)
 
-        for obj_info in self._objective_list:
-            for obj in obj_info[1]:
-                for q in self._quantities:
-                    if q.identifier == obj.quantity:
-                        self._q_cache_index.append(
-                            len(self._objectives_per_quantity[q.identifier])
-                        )
-                        self._objectives_per_quantity[q.identifier].append(obj_ix)
-                obj_ix += 1
-
-        self._num_objectives = obj_ix
+        self._num_objectives = len(self._objective_keys)
 
         # set solver options
         self.solver = get_solver(self.solver)

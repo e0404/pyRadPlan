@@ -17,7 +17,7 @@ class QuantityResolver:
     """
     Build and deduplicate the graph of :class:`FluenceDependentQuantity` instances for a Dij.
 
-    Each quantity (by identifier) is instantiated at most once per resolver.
+    Each quantity is instantiated at most once per resolver and parameterization (see 2.).
     Sub-quantities shared between parents (e.g. ``alpha_dose`` requested both directly and via ``effect``)
     are produced as a single shared instance. The resolver also performs the namespace conversion of the dij
     once so that every quantity in the graph shares the converted dij.
@@ -28,10 +28,9 @@ class QuantityResolver:
     1. Problem-level context (e.g., ``cst``, ``ct``, ``stf``, ``num_of_fractions``). Planning
        problems pass the ``cst`` as given, before overlap priorities are applied.
     2. Objective-level parameters that the objective explicitly opts into via its
-       ``quantity_params`` ClassVar (e.g., ``risk_voi_name``).
-       Each quantity is instantiated once, so all objectives targeting it must agree on those
-       values; conflicting values raise. If you need multiple parameterizations, subclass the
-       quantity with a unique identifier.
+       ``quantity_params`` ClassVar (e.g., ``risk_voi_name``), passed to :meth:`get`.
+       Each distinct parameterization is its own instance under its own :meth:`key`
+       (e.g. ``"polo[risk_voi_name='Core']"``); its dependencies are still shared.
     3. Explicit ``quantity_kwargs`` passed to the resolver.
 
     Mode resolution per class:
@@ -50,7 +49,6 @@ class QuantityResolver:
         _dij_already_in_namespace: bool = False,
         quantity_kwargs: dict | None = None,
         context: dict | None = None,
-        objective_list: list | None = None,
     ):
         xp = compute_backend.choose_array_api_namespace()
         device = compute_backend.choose_device(xp)
@@ -64,7 +62,6 @@ class QuantityResolver:
 
         self.quantity_kwargs = quantity_kwargs or {}
         self.context = context or {}
-        self.objective_list = objective_list or []
         self._instances: dict[str, FluenceDependentQuantity] = {}
         # In-progress identifiers used for cycle detection.
         self._resolving: set[str] = set()
@@ -76,52 +73,42 @@ class QuantityResolver:
 
     @property
     def instances(self) -> dict[str, FluenceDependentQuantity]:
-        """All quantity instances resolved so far, keyed by identifier."""
+        """All quantity instances resolved so far, keyed by :meth:`key`."""
         return self._instances
 
-    def get(self, identifier: str) -> FluenceDependentQuantity:
-        """Resolve a single quantity by identifier, using dynamic dependency injection."""
-        if identifier in self._instances:
-            return self._instances[identifier]
+    def key(self, identifier: str, params: Optional[dict[str, Any]] = None) -> str:
+        """
+        Key of the instance :meth:`get` returns for *identifier* and objective *params*.
 
-        # Lazy import to avoid a circular import at module load time.
-        from . import QUANTITIES  # noqa: PLC0415
+        Parameters the quantity does not accept, or that equal its default, do not distinguish
+        instances, so the key is the bare identifier unless an objective sets one differently.
+        """
+        params = self._own_params(self._class(identifier), params)
+        if not params:
+            return identifier
+        return f"{identifier}[{', '.join(f'{p}={v!r}' for p, v in sorted(params.items()))}]"
 
-        try:
-            cls = QUANTITIES[identifier]
-        except KeyError as exc:
-            raise ValueError(f"Unknown quantity identifier: {identifier!r}.") from exc
+    def get(
+        self, identifier: str, params: Optional[dict[str, Any]] = None
+    ) -> FluenceDependentQuantity:
+        """
+        Resolve a quantity by identifier, using dynamic dependency injection.
 
-        # 1. Dynamically discover keyword arguments required by cls.__init__ via signature inspection
+        *params* are the objective-level parameters of the quantity (see the class docstring);
+        each distinct parameterization is resolved into its own instance.
+        """
+        key = self.key(identifier, params)
+        if key in self._instances:
+            return self._instances[key]
+
+        cls = self._class(identifier)
         sig = inspect.signature(cls.__init__)
-        kwargs: dict[str, Any] = {}
 
-        # A. Inject from problem-level context (e.g. cst, num_of_fractions) if accepted by __init__
-        for param in sig.parameters:
-            if param in self.context and param not in kwargs:
-                kwargs[param] = self.context[param]
+        # A. Inject problem-level context (e.g. cst, num_of_fractions) if accepted by __init__
+        kwargs: dict[str, Any] = {p: self.context[p] for p in sig.parameters if p in self.context}
 
-        # B. Inject parameters the targeting objectives explicitly opt into (e.g. risk_voi_name).
-        # The quantity is built once, so disagreeing objectives cannot both be honoured.
-        from_objectives: dict[str, Any] = {}
-        for _, objs in self.objective_list:
-            for obj in objs:
-                if getattr(obj, "quantity", None) != identifier:
-                    continue
-                for param in type(obj).quantity_params:
-                    if param not in sig.parameters or param in kwargs:
-                        continue
-                    value = getattr(obj, param)
-                    if param in from_objectives and from_objectives[param] != value:
-                        raise ValueError(
-                            f"Objectives on quantity {identifier!r} disagree on {param!r}: "
-                            f"{from_objectives[param]!r} vs {value!r}. The quantity is "
-                            "instantiated once per identifier, so only one value can apply. "
-                            "Give all objectives on this quantity the same value, or subclass "
-                            "the quantity with its own identifier."
-                        )
-                    from_objectives[param] = value
-        kwargs.update(from_objectives)
+        # B. Parameters the targeting objectives explicitly opt into (e.g. risk_voi_name)
+        kwargs.update(self._own_params(cls, params))
 
         # C. Explicit overrides passed directly to QuantityResolver
         if identifier in self.quantity_kwargs:
@@ -142,7 +129,7 @@ class QuantityResolver:
         finally:
             self._resolving.discard(identifier)
 
-        self._instances[identifier] = inst
+        self._instances[key] = inst
         return inst
 
     def resolve(self, identifiers: Iterable[str]) -> list[FluenceDependentQuantity]:
@@ -175,6 +162,27 @@ class QuantityResolver:
         except ValueError as exc:
             logger.debug("Optional quantity %r not resolvable: %s", identifier, exc)
             return None
+
+    @staticmethod
+    def _class(identifier: str) -> type[FluenceDependentQuantity]:
+        # Lazy import to avoid a circular import at module load time.
+        from . import QUANTITIES  # noqa: PLC0415
+
+        try:
+            return QUANTITIES[identifier]
+        except KeyError as exc:
+            raise ValueError(f"Unknown quantity identifier: {identifier!r}.") from exc
+
+    def _own_params(
+        self, cls: type[FluenceDependentQuantity], params: Optional[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """The objective parameters *cls* accepts and that differ from its defaults."""
+        sig = inspect.signature(cls.__init__).parameters
+        return {
+            p: v
+            for p, v in (params or {}).items()
+            if p in sig and p not in self.context and v != sig[p].default
+        }
 
     def _choose_mode(self, cls: type[FluenceDependentQuantity], identifier: str) -> str:
         if getattr(self._dij, identifier, None) is not None:
