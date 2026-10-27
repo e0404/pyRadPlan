@@ -107,3 +107,5 @@ Repeat the dose benchmark with `--backend numpy`. The smaller coverage cases
 use a 5 mm dose grid, 10 mm bixels and one beam; `--trace-on-ct-grid` exercises
 CT-grid tracing, and `--mode protons --let` additionally checks LET output.
 Raw results are under `benchmark/pb_audit_results/ray_transforms/`.
+
+Follow-up: [photon bixel constants and component evaluation](photon_bixel_preparation.md).

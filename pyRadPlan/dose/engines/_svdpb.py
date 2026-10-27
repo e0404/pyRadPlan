@@ -3,7 +3,6 @@ import logging
 
 import numpy as np
 import array_api_compat
-import array_api_extra as xpx
 from pydantic import Field
 
 
@@ -309,6 +308,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
 
         beam_info["kernel"] = kernel
+        # Shared by all rays/scenarios, discarded with this beam. Preparation is
+        # lazy because scenario range adjustments can change the depth dtype.
+        beam_info["kernel_depth_parameters"] = {}
         beam_info["kernel_mxs"] = kernel_mxs
         # beam_info["kernel_xz"] = (kernel_x.ravel(), kernel_z.ravel())
         # beam_info["conv_mx_xz"] = (conv_mx_x, conv_mx_z)
@@ -322,6 +324,24 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return beam_info
 
+    def _get_kernel_depth_parameters(self, curr_ray: dict, depths: Array) -> tuple:
+        """Reuse depth constants for this beam's kernel, depth dtype and device."""
+        xp = self.xp
+        device = array_api_compat.device(depths)
+        cache = curr_ray["kernel_depth_parameters"]
+        # Array API devices need not be hashable (notably CuPy Device objects).
+        for cached_device, parameters in cache.get(depths.dtype, ()):
+            if cached_device == device:
+                return parameters
+        kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
+        betas = xp.reshape(
+            xp.asarray(kernel.kernel_betas, dtype=depths.dtype, device=device), (-1, 1)
+        )
+        m = xp.asarray(kernel.m, dtype=depths.dtype, device=device)
+        parameters = (betas, m, betas / (betas - m))
+        cache.setdefault(depths.dtype, []).append((device, parameters))
+        return parameters
+
     def _compute_bixel(self, curr_ray: dict[str], k: int) -> dict[str, Any]:
         """
         PyRadPlan photon dose calculation for a single bixel.
@@ -333,31 +353,26 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         xp = self.xp
         bixel = {}
 
-        kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
-
-        m = kernel.m
-        betas = kernel.kernel_betas
         rd = curr_ray["rad_depths"]
+        betas, m_arr, coefficient = self._get_kernel_depth_parameters(curr_ray, rd)
         interpolators = cast(ArrayBackendGridInterpolator, curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
 
         # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
-        device = array_api_compat.device(rd)
-        betas = xp.reshape(xp.asarray(betas, dtype=rd.dtype, device=device), (-1, 1))
         rd = xp.reshape(rd, (1, -1))
-        m_arr = xp.asarray(m, dtype=rd.dtype, device=device)
+        dose_component = coefficient * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
-        dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
-
-        iso_lat_dists = to_namespace(xp, iso_lat_dists, device=self.device)
+        # Geometry already supplies queries on the interpolator's namespace/device.
         interpolated_kernels = interpolators(iso_lat_dists)
-
-        for c in range(interpolated_kernels.shape[1]):
-            dose_component = xpx.at(dose_component, (c, slice(None))).set(
-                dose_component[c, :] * interpolated_kernels[:, c]
-            )
+        # The former indexed assignments cast each product to the depth dtype
+        # before summation, even when interpolation returns higher precision.
+        dose_component = xp.astype(
+            dose_component * xp.permute_dims(interpolated_kernels, (1, 0)),
+            dose_component.dtype,
+            copy=False,
+        )
 
         bixel_dose = xp.sum(dose_component, axis=0)
 
@@ -521,6 +536,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         ray = super()._init_ray(beam_info, j)
 
         ray["kernel"] = beam_info["kernel"]
+        ray["kernel_depth_parameters"] = beam_info["kernel_depth_parameters"]
 
         if self.use_custom_primary_photon_fluence or beam_info["field_based_dose_calc"]:
             logger.debug("Calculating custom kernel interpolators for ray %d.", j)

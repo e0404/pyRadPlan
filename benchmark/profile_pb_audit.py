@@ -61,6 +61,11 @@ def apply_variant(name):  # noqa: PLR0911, PLR0912
         return
     if name == "baseline":
         return
+    if name == "legacy_photon_bixel":
+        from profile_photon_bixel_reference import _compute_bixel
+
+        SVD._compute_bixel = _compute_bixel
+        return
     if name == "legacy_ray_transforms":
         import profile_ray_transform_reference as reference
 
