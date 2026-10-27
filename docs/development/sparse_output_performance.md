@@ -189,3 +189,5 @@ the repeated measurements discussed above; initial timing swings are retained
 separately. `--no-matrices` omits large local matrix files without skipping the
 full output comparisons. Performance scripts and prototypes live in `benchmark/`
 and are not imported by production code.
+
+Follow-up: [beam-level ray transform preparation](ray_transform_preparation.md).

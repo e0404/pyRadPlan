@@ -61,6 +61,13 @@ def apply_variant(name):  # noqa: PLR0911, PLR0912
         return
     if name == "baseline":
         return
+    if name == "legacy_ray_transforms":
+        import profile_ray_transform_reference as reference
+
+        PB._prepare_beam_geometry = reference._prepare_beam_geometry
+        PB._get_ray_geometry_from_beam = reference._get_ray_geometry_from_beam
+        PB._calc_geo_dists_on_valid_coords = reference._calc_geo_dists_on_valid_coords
+        return
     if name in ("device_collect_full", "device_collect_bounded"):
         from profile_device_collector import install
 
@@ -328,6 +335,8 @@ def main():  # noqa: PLR0912
         (PB, "_init_beam"),
         (PB, "_compute_ssd"),
         (PB, "calc_geo_dists"),
+        (PB, "_prepare_beam_geometry"),
+        (PB, "_calc_geo_dists_on_valid_coords"),
         (PB, "_get_ray_geometry_from_beam"),
         (StructureSet, "get_tissue_data"),
         (PB, "_sample_radiological_depths"),
@@ -451,6 +460,7 @@ def main():  # noqa: PLR0912
             (PB, "calc_geo_dists"),
             (PB, "_get_ray_geometry_from_beam"),
             (PB, "_prepare_beam_geometry"),
+            (PB, "_prepare_ray_transforms"),
             (PB, "_calc_geo_dists_on_valid_coords"),
             (PB, "_fill_dij"),
             (PB, "_finalize_dose"),

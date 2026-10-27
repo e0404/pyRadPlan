@@ -1,0 +1,21 @@
+{
+  "baseline": [
+    0.5320168000180274
+  ],
+  "variant": [
+    0.5552991000004113
+  ],
+  "comparisons": [
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true,
+      "baseline_bytes": 7487812,
+      "variant_bytes": 7487812,
+      "baseline_index_dtype": "int32",
+      "variant_index_dtype": "int32",
+      "let_max_abs": 0.0,
+      "let_identical_indices": true
+    }
+  ]
+}
