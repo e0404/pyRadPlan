@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pencil-beam influence matrices use int32 sparse indices when dimensions and entry counts permit, with Python-integer pointer arithmetic and automatic int64 promotion before overflow. Dose precision and shared indices across quantities are preserved.
 - Photon pencil-beam sampling uses a shared grouped maximum instead of two sorts per ray. Convolved kernel components use one shared-grid interpolator, with backend-owned dispatch and contiguous field preparation for generic multi-value evaluation. Scalar interpolation dispatch is preserved; `prefer_native=True/False` explicitly selects native/generic preference and the default `None` selects the measured policy.
 - Performance documentation now includes GUI-default sampled five-field TG119 photon workloads, isolated historical revision comparisons, and the dominant sampling/interpolation costs.
 - Pencil-beam engines prepare beam-valid coordinates once and carry ordered integer selections through ray geometry using Array API `take`; SSD metadata is downloaded in batches and bixel counts remain on the host. The public `calc_geo_dists` mask interface is preserved.

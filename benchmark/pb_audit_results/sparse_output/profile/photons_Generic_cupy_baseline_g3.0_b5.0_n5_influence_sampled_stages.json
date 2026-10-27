@@ -1,0 +1,64 @@
+{
+  "PencilBeamEngineAbstract._init_dose_calc": {
+    "calls": 1,
+    "exclusive_s": 0.24907820002408698,
+    "inclusive_s": 0.24907820002408698
+  },
+  "RayTracerSiddon.trace_cubes_array": {
+    "calls": 5,
+    "exclusive_s": 0.6187496000202373,
+    "inclusive_s": 0.6187496000202373
+  },
+  "PencilBeamEngineAbstract._compute_ssd": {
+    "calls": 5,
+    "exclusive_s": 0.04621160007081926,
+    "inclusive_s": 0.04621160007081926
+  },
+  "PencilBeamEngineAbstract._init_beam": {
+    "calls": 5,
+    "exclusive_s": 0.2921336999279447,
+    "inclusive_s": 0.9570949000190012
+  },
+  "PhotonPencilBeamSVDEngine._get_kernel_interpolators": {
+    "calls": 5,
+    "exclusive_s": 0.16147200000705197,
+    "inclusive_s": 0.16147200000705197
+  },
+  "PhotonPencilBeamSVDEngine._init_beam": {
+    "calls": 5,
+    "exclusive_s": 0.03706779994536191,
+    "inclusive_s": 1.155634699971415
+  },
+  "PencilBeamEngineAbstract._prepare_beam_geometry": {
+    "calls": 5,
+    "exclusive_s": 0.001206599990837276,
+    "inclusive_s": 0.001206599990837276
+  },
+  "PencilBeamEngineAbstract._calc_geo_dists_on_valid_coords": {
+    "calls": 1567,
+    "exclusive_s": 1.8680073991999961,
+    "inclusive_s": 1.8680073991999961
+  },
+  "PencilBeamEngineAbstract._get_ray_geometry_from_beam": {
+    "calls": 1567,
+    "exclusive_s": 0.1469554008799605,
+    "inclusive_s": 2.016169400070794
+  },
+  "PhotonPencilBeamSVDEngine._compute_bixel": {
+    "calls": 1567,
+    "exclusive_s": 5.52512280002702,
+    "inclusive_s": 5.52512280002702
+  },
+  "PencilBeamEngineAbstract._fill_dij": {
+    "calls": 1567,
+    "exclusive_s": 0.5709203005535528,
+    "inclusive_s": 0.5709203005535528,
+    "peak_capacity": 65121380,
+    "final_nnz": 64576412
+  },
+  "PencilBeamEngineAbstract._finalize_dose": {
+    "calls": 1,
+    "exclusive_s": 0.00048809999134391546,
+    "inclusive_s": 0.00048809999134391546
+  }
+}

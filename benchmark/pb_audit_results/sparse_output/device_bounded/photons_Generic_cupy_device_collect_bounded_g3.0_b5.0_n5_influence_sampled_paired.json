@@ -1,0 +1,50 @@
+{
+  "baseline": [
+    9.76398629997857,
+    9.739909900003113
+  ],
+  "variant": [
+    9.66228809999302,
+    9.631063300010283
+  ],
+  "comparisons": [
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true,
+      "baseline_bytes": 516617568,
+      "variant_bytes": 516617568,
+      "baseline_index_dtype": "int32",
+      "variant_index_dtype": "int32"
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true,
+      "baseline_bytes": 516617568,
+      "variant_bytes": 516617568,
+      "baseline_index_dtype": "int32",
+      "variant_index_dtype": "int32"
+    }
+  ],
+  "collector_metrics": {
+    "variant": [
+      {
+        "flushes": 8,
+        "download_calls": 16,
+        "peak_pending_bytes": 67404728,
+        "sampled_peak_pool_bytes": 225166848,
+        "device_wrap_s": 0.0,
+        "bulk_download_s": 0.07974019995890558
+      },
+      {
+        "flushes": 8,
+        "download_calls": 16,
+        "peak_pending_bytes": 67404728,
+        "sampled_peak_pool_bytes": 225166848,
+        "device_wrap_s": 0.0,
+        "bulk_download_s": 0.07984229997964576
+      }
+    ]
+  }
+}

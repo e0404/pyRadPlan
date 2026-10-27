@@ -43,7 +43,7 @@ def replace_method(cls, name, substitutions):
     setattr(cls, name, namespace[name])
 
 
-def apply_variant(name):
+def apply_variant(name):  # noqa: PLR0911, PLR0912
     """Install the selected experiment in this Python process only."""
     if name in ("legacy_patient_depth", "legacy_tissue", "legacy_depth"):
         from profile_patient_depth_reference import legacy_tissue_data, legacy_depth_selection
@@ -60,6 +60,17 @@ def apply_variant(name):
         install_reference(PB)
         return
     if name == "baseline":
+        return
+    if name in ("device_collect_full", "device_collect_bounded"):
+        from profile_device_collector import install
+
+        install(PB, batch_bytes=64 * 1024**2 if name == "device_collect_bounded" else None)
+        return
+    if name == "legacy_sparse_indices":
+        import profile_sparse_output_reference as reference
+
+        PB._allocate_quantity_matrices = reference._allocate_quantity_matrices
+        PB._fill_dij = reference._fill_dij
         return
     if name in ("legacy_interpolators", "native_interpolators"):
         from profile_interpnd_reference import legacy_grid_interpolator, native_grid_interpolator
@@ -239,7 +250,7 @@ def save_mismatch(out, label, pair, a, b, forward):
         sparse.save_npz(out / f"{label}_pair{pair}_variant.npz", b)
 
 
-def main():
+def main():  # noqa: PLR0912
     """Run full dose calculations, optional profiles, and paired comparisons."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["numpy", "cupy"], required=True)
@@ -329,6 +340,7 @@ def main():
         (SVD, "_compute_bixel"),
         (DoseEngineBase, "_init_dose_calc"),
         (DoseEngineBase, "_init_voxel_selection"),
+        (PB, "_allocate_quantity_matrices"),
         (PB, "_fill_dij"),
         (PB, "_finalize_dose"),
     ]
@@ -352,6 +364,9 @@ def main():
             selected_voxels=int(engine._vdose_grid.size),
             lateral_model=getattr(engine, "lateral_model", None),
         )
+        effective.pop("collector", None)
+        if hasattr(engine, "_collector_metrics"):
+            effective["collector"] = dict(engine._collector_metrics)
         return result
 
     times = []
@@ -386,7 +401,8 @@ def main():
         )
         if args.with_let:
             let_matrix = result.let_dose.flat[0]
-            sparse.save_npz(out / (label + "_let_dose.npz"), let_matrix)
+            if not args.no_matrices:
+                sparse.save_npz(out / (label + "_let_dose.npz"), let_matrix)
             size["let_nnz"] = int(let_matrix.nnz)
             size["let_data_bytes"] = int(let_matrix.data.nbytes)
             size["let_shares_indices"] = bool(np.shares_memory(matrix.indices, let_matrix.indices))
@@ -497,6 +513,10 @@ def main():
                 t = time.perf_counter()
                 outputs[name] = run()
                 elapsed = time.perf_counter() - t
+                if "collector" in effective:
+                    paired.setdefault("collector_metrics", {}).setdefault(name, []).append(
+                        dict(effective.pop("collector"))
+                    )
                 paired[name].append(elapsed)
                 print(f"PAIR {pair} {name}: {elapsed:.4f}s", flush=True)
             if args.forward:
@@ -517,11 +537,23 @@ def main():
                     identical_indices=bool(
                         np.array_equal(a.indices, b.indices) and np.array_equal(a.indptr, b.indptr)
                     ),
+                    baseline_bytes=int(a.data.nbytes + a.indices.nbytes + a.indptr.nbytes),
+                    variant_bytes=int(b.data.nbytes + b.indices.nbytes + b.indptr.nbytes),
+                    baseline_index_dtype=str(a.indices.dtype),
+                    variant_index_dtype=str(b.indices.dtype),
+                )
+            if args.with_let and not args.forward:
+                let_a = outputs["baseline"].let_dose.flat[0]
+                let_b = outputs["variant"].let_dose.flat[0]
+                comparison["let_max_abs"] = float(np.max(np.abs((let_a - let_b).data), initial=0))
+                comparison["let_identical_indices"] = bool(
+                    np.array_equal(let_a.indices, let_b.indices)
+                    and np.array_equal(let_a.indptr, let_b.indptr)
                 )
             paired["comparisons"].append(comparison)
             if comparison["max_abs"] != 0 and not args.no_matrices:
                 save_mismatch(out, label, pair, a, b, args.forward)
-        (out / (label + "_paired.json")).write_text(json.dumps(paired, indent=2))
+            (out / (label + "_paired.json")).write_text(json.dumps(paired, indent=2) + "\n")
 
 
 if __name__ == "__main__":

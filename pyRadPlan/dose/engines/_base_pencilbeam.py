@@ -30,6 +30,7 @@ from ._base import DoseEngineBase
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import cupy_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy, free_gpu_memory
+from ._sparse_output import sparse_index_dtype, ensure_index_capacity
 from .kernels import _calc_geo_dists_cupy_kernel, _calc_geo_dists_torch_kernel
 
 
@@ -437,10 +438,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                                 * self.dose_grid.num_voxels
                                 * self._num_of_columns_dij
                             ).astype(np.int64)
+                            index_dtype = sparse_index_dtype(
+                                self.dose_grid.num_voxels, self._num_of_columns_dij, int(est_nnz)
+                            )
                             dij["shared_structure"].flat[i] = {
-                                "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
+                                "indices": xp.empty((est_nnz,), dtype=index_dtype, device=device),
                                 "indptr": xp.zeros(
-                                    (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
+                                    (self._num_of_columns_dij + 1,),
+                                    dtype=index_dtype,
+                                    device=device,
                                 ),
                                 "nnz": 0,
                             }
@@ -951,8 +957,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         if not self._calc_dose_direct:
             shared_struct = dij["shared_structure"][sub_scen_idx]
             # Advance column pointer even when ix_size == 0 to keep CSC valid
-            start = shared_struct["indptr"][bixel_counter]
+            # Add in Python precision, then promote BEFORE storing the next pointer.
+            start = int(shared_struct["indptr"][bixel_counter])
             end = start + ix_size
+            ensure_index_capacity(shared_struct, end)
             shared_struct["indptr"][bixel_counter + 1] = end
 
             if ix_size > 0:

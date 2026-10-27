@@ -1248,3 +1248,6 @@ refactor has passed the complete test suite.
 
 See [shared photon sampling and interpolation reductions](shared_photon_hotpaths.md)
 for the production grouped maximum and multi-value interpolation follow-up.
+
+See [compact sparse indices and device collection](sparse_output_performance.md)
+for safe int32 storage, GPU construction measurements and the updated profile.

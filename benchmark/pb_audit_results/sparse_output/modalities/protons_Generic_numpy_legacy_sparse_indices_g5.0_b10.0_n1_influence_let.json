@@ -1,0 +1,60 @@
+{
+  "args": {
+    "backend": "numpy",
+    "mode": "protons",
+    "machine": "Generic",
+    "variant": "legacy_sparse_indices",
+    "runs": 0,
+    "grid": 5.0,
+    "bixel": 10.0,
+    "beams": 1,
+    "forward": false,
+    "sampling": false,
+    "trace_on_ct_grid": false,
+    "with_let": true,
+    "profile": false,
+    "paired": true,
+    "no_matrices": true,
+    "pairs": 1,
+    "out": "benchmark/pb_audit_results/sparse_output/modalities"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.512514200003352,
+  "cold_seconds": 0.5161248000222258,
+  "warm_seconds": [],
+  "median_seconds": null,
+  "effective": {
+    "dose_resolution": {
+      "x": 5.0,
+      "y": 5.0,
+      "z": 5.0
+    },
+    "dose_dimensions": [
+      101,
+      101,
+      65
+    ],
+    "selected_voxels": 108871,
+    "lateral_model": "single"
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 72,
+  "beamlets": 908,
+  "output": {
+    "shape": [
+      663065,
+      908
+    ],
+    "nnz": 933649,
+    "bytes": 11211060,
+    "index_dtype": "int64",
+    "data_dtype": "float32",
+    "let_nnz": 933649,
+    "let_data_bytes": 3734596,
+    "let_shares_indices": true,
+    "let_shares_indptr": true
+  }
+}

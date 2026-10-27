@@ -1,0 +1,67 @@
+{
+  "args": {
+    "backend": "cupy",
+    "mode": "photons",
+    "machine": "Generic",
+    "variant": "device_collect_full",
+    "runs": 0,
+    "grid": 5.0,
+    "bixel": 10.0,
+    "beams": 1,
+    "forward": false,
+    "sampling": true,
+    "trace_on_ct_grid": false,
+    "with_let": false,
+    "profile": false,
+    "paired": true,
+    "no_matrices": true,
+    "pairs": 1,
+    "out": "benchmark/pb_audit_results/sparse_output/prototype_smoke"
+  },
+  "python": "3.11.9",
+  "numpy": "2.3.5",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 32,
+  "stf_seconds": 0.279617500025779,
+  "cold_seconds": 5.965695199964102,
+  "warm_seconds": [],
+  "median_seconds": null,
+  "effective": {
+    "dose_resolution": {
+      "x": 5.0,
+      "y": 5.0,
+      "z": 5.0
+    },
+    "dose_dimensions": [
+      101,
+      101,
+      65
+    ],
+    "selected_voxels": 108871,
+    "lateral_model": null,
+    "collector": {
+      "flushes": 1,
+      "download_calls": 2,
+      "peak_pending_bytes": 7093184,
+      "sampled_peak_pool_bytes": 63099904,
+      "device_wrap_s": 0.049299699952825904,
+      "bulk_download_s": 0.003626300022006035
+    }
+  },
+  "jit_backends": "numpy,jax",
+  "rays": 121,
+  "beamlets": 121,
+  "output": {
+    "shape": [
+      663065,
+      121
+    ],
+    "nnz": 886648,
+    "bytes": 7093672,
+    "index_dtype": "int32",
+    "data_dtype": "float32"
+  },
+  "cupy": "13.3.0",
+  "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "cuda_runtime": 12060
+}

@@ -188,3 +188,5 @@ The public dose-engine calling interface and GUI model fields are unchanged.
 The engine's private `kernel_interpolators` state now holds one multi-value
 interpolator instead of a list of scalar interpolators; the custom-fluence and
 field-based paths use the same factory and are covered by regression tests.
+
+Follow-up: [compact sparse indices and device-collection measurements](sparse_output_performance.md).
