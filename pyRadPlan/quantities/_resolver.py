@@ -176,7 +176,7 @@ class QuantityResolver:
     def _own_params(
         self, cls: type[FluenceDependentQuantity], params: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
-        """The objective parameters *cls* accepts and that differ from its defaults."""
+        """Return the objective parameters *cls* accepts that differ from its defaults."""
         sig = inspect.signature(cls.__init__).parameters
         return {
             p: v
