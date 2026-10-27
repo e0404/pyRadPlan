@@ -15,7 +15,7 @@ vendors a runtime that clashes with the one PyTorch ships).
 Setting ``KMP_DUPLICATE_LIB_OK=TRUE`` tells the Intel runtime to continue anyway.
 That is explicitly unsafe -- it may crash or silently produce wrong results -- so
 pyRadPlan never *decides* to set it; it only honours the value the user has put in
-the real environment or in pyRadPlan's ``.env`` file (see
+the real environment or in pyRadPlan's ``.env`` files (see
 :func:`duplicate_runtimes_allowed`).
 """
 
@@ -48,23 +48,26 @@ _VENDOR_DIR_SUFFIXES = (".libs", ".dylibs")
 
 
 def _kmp_env_from_dotenv() -> Optional[str]:
-    """Look up ``KMP_DUPLICATE_LIB_OK`` in pyRadPlan's ``.env`` file, if any.
+    """Look up ``KMP_DUPLICATE_LIB_OK`` in pyRadPlan's ``.env`` files, if any.
 
-    Only this one key is read -- never the rest of the file (which may hold API
-    keys) -- and ``python-dotenv`` is an optional convenience here exactly as it
-    is for :func:`pyRadPlan.ai.agents.load_ai_env`: silently unavailable if the
-    package or the file is missing.
+    The working directory's ``.env`` is consulted before the per-user one (see
+    :func:`pyRadPlan._settings.find_env_files`). Only this one key is read --
+    never the rest of the file (which may hold API keys) -- and ``python-dotenv``
+    is an optional convenience here exactly as it is for
+    :func:`pyRadPlan.ai.agents.load_ai_env`: silently unavailable if the package
+    or the files are missing.
     """
     try:
-        from dotenv import dotenv_values, find_dotenv  # noqa: PLC0415
+        from dotenv import dotenv_values  # noqa: PLC0415
     except ImportError:
         return None
-    from pyRadPlan._settings import ENV_FILE  # noqa: PLC0415 - deferred to dodge import cycles
+    from pyRadPlan._settings import find_env_files  # noqa: PLC0415 - dodges import cycles
 
-    path = find_dotenv(ENV_FILE, usecwd=True)
-    if not path:
-        return None
-    return dotenv_values(path).get("KMP_DUPLICATE_LIB_OK")
+    for path in reversed(find_env_files()):
+        value = dotenv_values(path).get("KMP_DUPLICATE_LIB_OK")
+        if value is not None:
+            return value
+    return None
 
 
 def duplicate_runtimes_allowed() -> bool:

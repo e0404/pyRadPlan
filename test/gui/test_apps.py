@@ -135,6 +135,20 @@ def test_gui_unknown_patient_names_phantoms(captured_main_window):
     assert "ws" not in captured_main_window
 
 
+def test_gui_gives_a_windowed_process_standard_streams(captured_main_window, monkeypatch):
+    """Without a console (pythonw, the desktop bundle) sys.stdout/sys.stderr are None."""
+    import sys
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    gui()
+
+    for stream in (sys.stdout, sys.stderr):
+        assert stream is not None
+        stream.write("discarded\n")
+        stream.close()
+
+
 def test_main_passes_patient_to_gui(monkeypatch):
     received = []
     monkeypatch.setattr(apps, "gui", received.append)

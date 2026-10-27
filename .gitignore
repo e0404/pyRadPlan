@@ -26,6 +26,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Briefcase desktop bundle: the changelog copied there by scripts/sync_version.py
+packaging/briefcase/CHANGELOG.md
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.

@@ -709,6 +709,12 @@ class WorkflowWidget(WorkspaceWidget):
         """Prompt for and load a DICOM (or structured image) folder."""
         self._on_load_folder()
 
+    def load_phantom(self, name: str) -> None:
+        """Load the bundled phantom *name* (see :func:`pyRadPlan.io.available_phantoms`)."""
+        from pyRadPlan.io import phantom_path  # noqa: PLC0415
+
+        self._load_into_workspace(phantom_path(name), busy_text=f"Loading {name}…")
+
     def load_dij(self) -> None:
         """Prompt for and load a precomputed dose-influence matrix (.mat)."""
         self._on_load_dij()

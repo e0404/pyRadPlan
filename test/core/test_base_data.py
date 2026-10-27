@@ -13,8 +13,10 @@ from pyRadPlan.core import (
     find_base_data,
     list_base_data,
     remove_base_data_file,
+    shared_base_data_dirs,
     user_base_data_dir,
 )
+from pyRadPlan._settings import get_settings
 
 RBE_TABLE = "RBEtable_LEMI_Scholz06_AX01_BX005.mat"
 
@@ -23,6 +25,17 @@ RBE_TABLE = "RBEtable_LEMI_Scholz06_AX01_BX005.mat"
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     return tmp_path / "data"
+
+
+@pytest.fixture
+def shared_roots(tmp_path):
+    """Two shared base data roots configured through ``settings.base_data_path``."""
+    settings = get_settings()
+    previous = settings.base_data_path
+    roots = [tmp_path / "course", tmp_path / "site"]
+    settings.base_data_path = os.pathsep.join(str(root) for root in roots)
+    yield roots
+    settings.base_data_path = previous
 
 
 def _shipped(kind, name):
@@ -35,6 +48,7 @@ def _shipped(kind, name):
         ("machines", "machines", "photons_Generic.mat"),
         ("rbe_tables", "rbe", RBE_TABLE),
         ("stopping_power_tables", "physics/stopping", "SPtable.mat"),
+        ("phantoms", "phantoms", "TG119.mat"),
     ],
 )
 def test_user_folder_mirrors_the_shipped_one(data_dir, kind, folder, shipped):
@@ -74,6 +88,44 @@ def test_add_and_remove_base_data_file(data_dir):
     assert find_base_data("stopping_power_tables", "SP_mine.mat") is None
     with pytest.raises(FileNotFoundError):
         remove_base_data_file("stopping_power_tables", "SPtable.mat")
+
+
+def test_shared_folders_are_searched_after_the_user_folder(data_dir, shared_roots):
+    course, site = shared_roots
+    sp_table = _shipped("stopping_power_tables", "SPtable.mat").read_bytes()
+    assert shared_base_data_dirs("stopping_power_tables") == [
+        course / "physics" / "stopping",
+        site / "physics" / "stopping",
+    ]
+    for root, name in [(course, "SP_course.mat"), (site, "SP_course.mat"), (site, "SP_site.mat")]:
+        (root / "physics" / "stopping").mkdir(parents=True, exist_ok=True)
+        (root / "physics" / "stopping" / name).write_bytes(sp_table)
+    # a shared file never replaces a shipped one
+    (course / "physics" / "stopping" / "SPtable.mat").write_bytes(sp_table)
+
+    entries = {e.name: e for e in list_base_data("stopping_power_tables")}
+    assert entries["SPtable.mat"].source == "bundled"
+    assert entries["SP_course.mat"].source == "shared"
+    assert entries["SP_course.mat"].path == course / "physics" / "stopping" / "SP_course.mat"
+    assert entries["SP_site.mat"].source == "shared"
+    assert [e.name for e in list_base_data("stopping_power_tables", source="shared")] == [
+        "SP_course.mat",
+        "SP_site.mat",
+    ]
+
+    # adding a file under a shared name puts the user's own copy first
+    target = add_base_data_file(
+        "stopping_power_tables", course / "physics" / "stopping" / "SP_course.mat"
+    )
+    assert target == data_dir / "physics" / "stopping" / "SP_course.mat"
+    assert find_base_data("stopping_power_tables", "SP_course.mat").source == "user"
+    with pytest.raises(FileNotFoundError):
+        remove_base_data_file("stopping_power_tables", "SP_site.mat")
+
+
+def test_missing_shared_folders_are_skipped(data_dir, shared_roots):
+    assert [e.source for e in list_base_data("phantoms")] == ["bundled"]
+    assert find_base_data("phantoms", "nothing.mat") is None
 
 
 @pytest.mark.parametrize("name", ["", ".mat", "a/b.mat", "x:y.mat", "table.txt", "tab\there.mat"])

@@ -1,8 +1,20 @@
 """Global pydantic-settings configuration for pyRadPlan.
 
 All configuration is read from environment variables prefixed with
-``PYRADPLAN_`` and/or a ``.env`` file in the working directory. Sub-configurations
-extend the prefix (e.g. ``PYRADPLAN_AI_`` for :class:`AiSettings`).
+``PYRADPLAN_`` and/or ``.env`` files. Sub-configurations extend the prefix
+(e.g. ``PYRADPLAN_AI_`` for :class:`AiSettings`).
+
+Two ``.env`` files are consulted (see :func:`env_files`):
+
+1. the per-user file ``<data_dir>/.env``, where ``<data_dir>`` is
+   :func:`pyRadPlan.core.get_data_dir` (``~/.pyradplan`` unless
+   ``PYRADPLAN_DATA_DIR`` says otherwise). This is the place for an installed
+   desktop application, whose working directory is arbitrary and whose install
+   folder may be read-only;
+2. the ``.env`` file in the working directory, which takes precedence over the
+   per-user file when both define a variable.
+
+Real environment variables always win over both files.
 
 The module-level singleton :data:`settings` (also exposed as
 ``pyRadPlan.settings``) holds the runtime configuration and can be mutated to
@@ -15,13 +27,67 @@ change behavior of a running session::
 """
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: ``.env`` file consulted by all pyRadPlan settings classes.
+#: Name of the ``.env`` file in the working directory consulted by all pyRadPlan
+#: settings classes (and of the per-user one in the data directory).
 ENV_FILE = ".env"
+
+
+def user_env_file() -> Path:
+    """Return the per-user ``.env`` file: ``<data_dir>/.env``.
+
+    The file need not exist. ``<data_dir>`` is :func:`pyRadPlan.core.get_data_dir`,
+    so the location follows ``PYRADPLAN_DATA_DIR``.
+    """
+    from pyRadPlan.core import get_data_dir  # noqa: PLC0415 - see _default_ai_models_dir
+
+    return get_data_dir() / ENV_FILE
+
+
+def env_files() -> tuple[Path, str]:
+    """Return the ``.env`` files the settings classes read, lowest precedence first.
+
+    The per-user file (:func:`user_env_file`) comes first and the working
+    directory's :data:`ENV_FILE` last, so the latter overrides the former.
+    Files that do not exist are skipped by pydantic-settings.
+    """
+    return (user_env_file(), ENV_FILE)
+
+
+def find_env_files() -> list[Path]:
+    """Return the ``.env`` files that currently exist, lowest precedence first.
+
+    Mirrors :func:`env_files` for consumers that load ``.env`` values into the
+    process environment themselves (:func:`pyRadPlan.ai.agents.load_ai_env`,
+    :mod:`pyRadPlan.util.openmp`). The working directory's file is located the
+    way python-dotenv does it (walking up from the working directory).
+    """
+    paths = []
+    user = user_env_file()
+    if user.is_file():
+        paths.append(user)
+    try:
+        from dotenv import find_dotenv  # noqa: PLC0415 - optional at this layer
+    except ImportError:
+        found = ENV_FILE if Path(ENV_FILE).is_file() else ""
+    else:
+        found = find_dotenv(ENV_FILE, usecwd=True)
+    if found:
+        paths.append(Path(found))
+    return paths
+
+
+class _PyRadPlanBaseSettings(BaseSettings):
+    """Settings base reading :func:`env_files` unless ``_env_file`` is given explicitly."""
+
+    def __init__(self, **values: Any) -> None:
+        if "_env_file" not in values:
+            values["_env_file"] = env_files()
+        super().__init__(**values)
 
 
 def _default_ai_models_dir() -> Path:
@@ -40,7 +106,7 @@ def _default_ai_models_dir() -> Path:
     return get_data_dir() / "ai_models"
 
 
-class AiSettings(BaseSettings):
+class AiSettings(_PyRadPlanBaseSettings):
     """Global configuration of pyRadPlan's AI features.
 
     One class covers both AI subsystems, kept apart by the field-name prefix:
@@ -48,8 +114,8 @@ class AiSettings(BaseSettings):
     (:mod:`pyRadPlan.ai.agents`), the ``modelhub_*`` fields configure model
     loading (:mod:`pyRadPlan.ai.modelhub`). Values are read from environment
     variables prefixed with ``PYRADPLAN_AI_`` (e.g. ``PYRADPLAN_AI_AGENTS_MODEL``,
-    ``PYRADPLAN_AI_MODELHUB_DEVICE``) or from a ``.env`` file in the working
-    directory. The pre-0.4.2 names ``PYRADPLAN_AI_MODEL`` and
+    ``PYRADPLAN_AI_MODELHUB_DEVICE``) or from the ``.env`` files described in
+    the module docstring. The pre-0.4.2 names ``PYRADPLAN_AI_MODEL`` and
     ``PYRADPLAN_AI_DISPLAY_USAGE`` are still read as legacy aliases.
 
     API keys (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``,
@@ -143,12 +209,12 @@ class AiSettings(BaseSettings):
         return v
 
 
-class XpSettings(BaseSettings):
+class XpSettings(_PyRadPlanBaseSettings):
     """Array-API backend ("xp") preferences.
 
     Values are read from environment variables prefixed with ``PYRADPLAN_XP_``
-    (e.g. ``PYRADPLAN_XP_PREFER_GPU``) or from a ``.env`` file in the working
-    directory.
+    (e.g. ``PYRADPLAN_XP_PREFER_GPU``) or from the ``.env`` files described in
+    the module docstring.
 
     The values are consulted lazily by
     :func:`pyRadPlan.core.xp_utils.choose_array_api_namespace` and
@@ -208,13 +274,13 @@ class XpSettings(BaseSettings):
 GuiUiMode = Literal["default", "educational"]
 
 
-class GuiSettings(BaseSettings):
+class GuiSettings(_PyRadPlanBaseSettings):
     """Configuration of the graphical user interface (:mod:`pyRadPlan.gui`).
 
     Values are read from environment variables prefixed with ``PYRADPLAN_GUI_``
-    (e.g. ``PYRADPLAN_GUI_UI_MODE``) or from a ``.env`` file in the working
-    directory. The main window consults them when it is built and re-applies
-    them whenever they are changed through its menus, so mutating them on the
+    (e.g. ``PYRADPLAN_GUI_UI_MODE``) or from the ``.env`` files described in
+    the module docstring. The main window consults them when it is built and
+    re-applies them whenever they are changed through its menus, so mutating them on the
     :data:`settings` singleton before the GUI starts also takes effect.
 
     Attributes
@@ -251,17 +317,26 @@ class GuiSettings(BaseSettings):
     )
 
 
-class PyRadPlanSettings(BaseSettings):
+class PyRadPlanSettings(_PyRadPlanBaseSettings):
     """Top-level pyRadPlan configuration.
 
     Values are read from environment variables prefixed with ``PYRADPLAN_``
-    or from a ``.env`` file in the working directory. Sub-configurations use
+    or from the ``.env`` files described in the module docstring. Sub-configurations use
     extended prefixes (e.g. ``PYRADPLAN_XP_PREFER_GPU`` configures :attr:`xp`,
     ``PYRADPLAN_AI_AGENTS_MODEL`` configures :attr:`ai`, ``PYRADPLAN_GUI_UI_MODE``
     configures :attr:`gui`).
 
     All sub-configurations are consulted from the :data:`settings` singleton at
     runtime, so mutating them takes effect for subsequent computations.
+
+    Attributes
+    ----------
+    base_data_path : str
+        Shared base data folders (``PYRADPLAN_BASE_DATA_PATH``), separated by
+        :data:`os.pathsep` (``;`` on Windows, ``:`` elsewhere) like ``PATH``. Each is
+        laid out like the user's data folder (``<folder>/phantoms``,
+        ``<folder>/machines``, ...) and searched after it, e.g. to provide the cases
+        of a course; see :mod:`pyRadPlan.core._base_data`.
     """
 
     model_config = SettingsConfigDict(
@@ -283,6 +358,11 @@ class PyRadPlanSettings(BaseSettings):
     gui: GuiSettings = Field(
         default_factory=GuiSettings,
         description="GUI sub-configuration (PYRADPLAN_GUI_* variables).",
+    )
+    base_data_path: str = Field(
+        default="",
+        description="Shared base data folders searched after your own, separated like PATH "
+        "(';' on Windows, ':' elsewhere); each holds e.g. phantoms/ and machines/ folders.",
     )
 
 

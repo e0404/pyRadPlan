@@ -37,9 +37,9 @@ Data directories
 Base data files
 ---------------
 
-Machines, RBE tables and stopping power tables are found by file name in the folder
-shipped with pyRadPlan and in the same folder below the data directory. See
-:ref:`base_data_folders`.
+Machines, RBE tables, stopping power tables and phantoms are found by file name in the
+folder shipped with pyRadPlan, in the same folder below the data directory and below each
+shared folder of ``pyRadPlan.settings.base_data_path``. See :ref:`base_data_folders`.
 
 .. autosummary::
    :toctree: generated/core/
@@ -53,6 +53,8 @@ shipped with pyRadPlan and in the same folder below the data directory. See
    remove_base_data_file
    bundled_base_data_dir
    user_base_data_dir
+   shared_base_data_roots
+   shared_base_data_dirs
    base_data_dirs
    get_base_data_kind
    check_base_data_file_name
