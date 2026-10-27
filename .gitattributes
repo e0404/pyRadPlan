@@ -1,0 +1,4 @@
+# Files that run inside Linux containers keep their LF line endings in Windows checkouts
+# (core.autocrlf), where a CRLF would break the script's interpreter line.
+packaging/container/Dockerfile text eol=lf
+packaging/container/*.sh text eol=lf

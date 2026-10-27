@@ -1,5 +1,7 @@
 """Tests for the global pydantic-settings configuration."""
 
+import os
+
 import pytest
 
 import pyRadPlan
@@ -9,8 +11,29 @@ from pyRadPlan._settings import (
     GuiSettings,
     PyRadPlanSettings,
     XpSettings,
+    env_files,
+    find_env_files,
     get_settings,
+    user_env_file,
 )
+
+
+@pytest.fixture
+def env_dirs(tmp_path, monkeypatch):
+    """An empty working directory and an empty data directory, isolated from the machine."""
+    cwd = tmp_path / "cwd"
+    data = tmp_path / "data"
+    cwd.mkdir()
+    data.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(data))
+    for name in (
+        "PYRADPLAN_XP_PREFER_GPU",
+        "PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND",
+        "PYRADPLAN_XP_JIT_BACKENDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return cwd, data
 
 
 @pytest.fixture
@@ -84,6 +107,15 @@ def test_gui_env_override(monkeypatch):
     assert settings.gui.ui_mode == "educational"
 
 
+def test_base_data_path_env_override(monkeypatch, env_dirs):
+    cwd, data = env_dirs
+    assert PyRadPlanSettings(_env_file=None).base_data_path == ""
+    (data / ".env").write_text("PYRADPLAN_BASE_DATA_PATH=from-user-env\n", encoding="utf-8")
+    assert PyRadPlanSettings().base_data_path == "from-user-env"
+    monkeypatch.setenv("PYRADPLAN_BASE_DATA_PATH", "a" + os.pathsep + "b")
+    assert PyRadPlanSettings().base_data_path == "a" + os.pathsep + "b"
+
+
 def test_gui_ui_mode_rejects_unknown_mode(monkeypatch):
     monkeypatch.setenv("PYRADPLAN_GUI_UI_MODE", "expert")
     with pytest.raises(ValueError):
@@ -139,3 +171,50 @@ def test_choose_namespace_follows_settings(restore_settings):
 def test_unknown_xp_utils_attribute_raises():
     with pytest.raises(AttributeError):
         xp_utils.DOES_NOT_EXIST
+
+
+def test_user_env_file_lives_in_data_dir(env_dirs):
+    _, data = env_dirs
+    assert user_env_file() == data / ".env"
+    assert env_files() == (data / ".env", ".env")
+    assert find_env_files() == []
+
+
+def test_user_env_file_is_read(env_dirs):
+    """An installed app has an arbitrary working directory; <data_dir>/.env still applies."""
+    _, data = env_dirs
+    (data / ".env").write_text("PYRADPLAN_XP_PREFER_GPU=false\n", encoding="utf-8")
+
+    assert find_env_files() == [data / ".env"]
+    assert XpSettings().prefer_gpu is False
+    assert PyRadPlanSettings().xp.prefer_gpu is False
+
+
+def test_working_directory_env_wins_over_user_env(env_dirs):
+    cwd, data = env_dirs
+    (data / ".env").write_text(
+        "PYRADPLAN_XP_PREFER_GPU=false\nPYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND=numpy\n",
+        encoding="utf-8",
+    )
+    (cwd / ".env").write_text(
+        "PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND=array_api_strict\n", encoding="utf-8"
+    )
+
+    assert find_env_files() == [data / ".env", cwd / ".env"]
+    settings = XpSettings()
+    assert settings.preferred_cpu_array_backend == "array_api_strict"
+    assert settings.prefer_gpu is False
+
+
+def test_environment_wins_over_both_env_files(env_dirs, monkeypatch):
+    cwd, data = env_dirs
+    (data / ".env").write_text("PYRADPLAN_XP_PREFER_GPU=false\n", encoding="utf-8")
+    (cwd / ".env").write_text("PYRADPLAN_XP_PREFER_GPU=false\n", encoding="utf-8")
+    monkeypatch.setenv("PYRADPLAN_XP_PREFER_GPU", "true")
+    assert XpSettings().prefer_gpu is True
+
+
+def test_explicit_env_file_argument_is_respected(env_dirs):
+    _, data = env_dirs
+    (data / ".env").write_text("PYRADPLAN_XP_PREFER_GPU=false\n", encoding="utf-8")
+    assert XpSettings(_env_file=None).prefer_gpu is True

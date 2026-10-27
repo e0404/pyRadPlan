@@ -229,6 +229,103 @@ packaging:
             - dist/
         expire_in: 1 week
 
+# Desktop installer (Briefcase, packaging/briefcase) of the GUI. Only the Linux .deb can be
+# built here, on the Docker runners: the Windows MSI and the macOS DMG are built by the
+# "Desktop installers" GitHub workflow. Briefcase builds a Linux system package under the
+# target distribution's own python3, hence the Ubuntu image instead of the python one.
+#
+# Runs for main, the release candidate branches (rc/*), the devops/* branches for trying out
+# changes to the pipeline, and tags. A merge request from rc/X.Y.Z into
+# main shows the pipeline of its source branch, so there is deliberately no merge_request_event
+# rule: it would add a second, installer-only pipeline that GitLab then reports as the merge
+# request's pipeline in place of the one running the tests.
+installer-linux:
+    stage: package
+    image: ubuntu:24.04
+    variables:
+        DEBIAN_FRONTEND: noninteractive
+        PYTHONUTF8: "1"
+        QT_QPA_PLATFORM: "offscreen"
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
+        - if: '$CI_COMMIT_TAG'
+    script:
+        # git: Briefcase fetches its app template with it; gnupg: its package command looks for
+        # gpg. The Qt libraries are the system_runtime_requires of the Briefcase project plus
+        # those of the smoke test.
+        - apt-get update
+        - >
+            apt-get install -y --no-install-recommends
+            ca-certificates git gnupg python3 python3-dev python3-pip python3-venv build-essential dpkg-dev
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1
+            libglib2.0-0 libnss3 libasound2t64
+        # A venv of /usr/bin/python3 reports the same sys.version, which is what Briefcase
+        # checks for the system packaging format.
+        - python3 -m venv /opt/briefcase-venv
+        - /opt/briefcase-venv/bin/python -m pip install --upgrade pip
+        - /opt/briefcase-venv/bin/python -m pip install "briefcase==0.4.5"
+        - export PATH=/opt/briefcase-venv/bin:$PATH
+        - python packaging/briefcase/scripts/sync_version.py
+        - cd packaging/briefcase
+        - python scripts/run_briefcase.py create linux system --no-input
+        - python scripts/run_briefcase.py build linux system --no-input
+        - python scripts/run_briefcase.py run linux system --test --no-input
+        # `run --test` copied the test sources into the bundle; refresh the app code
+        # (not the requirements) so the installer ships without them.
+        - python scripts/run_briefcase.py build linux system --update --no-input
+        - python scripts/collect_licenses.py --check
+        - python scripts/run_briefcase.py package linux system --no-input
+        - ls -l dist
+    # The runners limit the size of artifacts and the .deb is almost 300 MB, so the package is
+    # not kept: the job only shows that the installer builds (the GitHub workflow keeps it).
+    # The small Briefcase logs of a failed job are.
+    artifacts:
+        when: on_failure
+        paths:
+            - packaging/briefcase/logs/
+        expire_in: 1 week
+
+# The pyRadPlan GUI in a web browser (packaging/container, see its README), built with
+# Docker-in-Docker like the "Container" GitHub workflow, and tested with the same script.
+# For a tag the image is pushed to the container registry of this project as
+# pyradplan-web:<version>, and as :latest unless the version is a pre-release. Needs a
+# privileged runner for the docker:dind service; without TLS, as the runner need not share
+# the certificate volume.
+container:
+    stage: package
+    image: docker:27
+    services:
+        - docker:27-dind
+    variables:
+        DOCKER_HOST: tcp://docker:2375
+        DOCKER_TLS_CERTDIR: ""
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
+        - if: '$CI_COMMIT_TAG'
+    script:
+        - >
+            docker build -f packaging/container/Dockerfile
+            --build-arg VERSION="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+            --build-arg REVISION="$CI_COMMIT_SHA" --build-arg SOURCE="$CI_PROJECT_URL"
+            -t pyradplan-web .
+        - docker run -d --name web -e XPRA_PASSWORD=ci-test pyradplan-web
+        - sh packaging/container/smoke_test.sh web
+        - |
+          if [ -n "$CI_COMMIT_TAG" ]; then
+            image="$CI_REGISTRY_IMAGE/pyradplan-web"
+            version="${CI_COMMIT_TAG#v}"
+            echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+            docker tag pyradplan-web "$image:$version"
+            docker push "$image:$version"
+            if echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              docker tag pyradplan-web "$image:latest"
+              docker push "$image:latest"
+            fi
+          fi
+    after_script:
+        - docker logs web || true
+
 docs:
     stage: package
     cache:

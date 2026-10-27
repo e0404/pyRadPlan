@@ -1,15 +1,19 @@
-"""Base data files shipped with pyRadPlan or added by the user.
+"""Base data files shipped with pyRadPlan, added by the user or shared.
 
-Base data (machine files, RBE tables, stopping power tables) is looked up by file name in
-two folders per kind, in order of precedence:
+Base data (machine files, RBE tables, stopping power tables, phantoms) is looked up by file
+name in these folders per kind, in order of precedence:
 
 1. the folder shipped with pyRadPlan, ``pyRadPlan/data/<folder>``;
 2. the same folder below the user's data root (see :func:`get_data_dir`), e.g.
-   ``~/.pyradplan/<folder>``.
+   ``~/.pyradplan/<folder>``;
+3. the same folder below each shared base data root listed in
+   ``pyRadPlan.settings.base_data_path`` (``PYRADPLAN_BASE_DATA_PATH``, separated by
+   :data:`os.pathsep`), e.g. a read-only folder with the phantoms of a course.
 
 Files in the user folder are found exactly like the shipped ones, whether they were added
-through :func:`add_base_data_file` or copied there by hand. A user file never replaces a
-shipped file of the same name.
+through :func:`add_base_data_file` or copied there by hand. A file never replaces one of the
+same name in a folder of higher precedence, so a user file named like a shared one is used
+instead of it.
 
 This module only knows the folders; checking that a file holds valid data of its kind is
 up to the domain functions (e.g. :func:`pyRadPlan.machines.add_machine_file`).
@@ -32,7 +36,7 @@ else:
 from ._paths import get_data_subdir
 
 #: Where a base data file comes from.
-BaseDataSource = Literal["bundled", "user"]
+BaseDataSource = Literal["bundled", "user", "shared"]
 
 
 @dataclass(frozen=True)
@@ -74,8 +78,8 @@ class BaseDataFile:
         File name, which is what the file is selected by.
     path : Traversable
         Location of the file.
-    source : {"bundled", "user"}
-        Whether the file ships with pyRadPlan or is in the user's folder.
+    source : {"bundled", "user", "shared"}
+        Whether the file ships with pyRadPlan, is in the user's folder or in a shared one.
     """
 
     kind: BaseDataKind
@@ -91,6 +95,7 @@ BASE_DATA_KINDS: dict[str, BaseDataKind] = {
         BaseDataKind("machines", "machine file", "machines"),
         BaseDataKind("rbe_tables", "RBE table", "rbe"),
         BaseDataKind("stopping_power_tables", "stopping power table", "physics/stopping"),
+        BaseDataKind("phantoms", "phantom", "phantoms", (".mat", ".npz")),
     )
 }
 
@@ -127,29 +132,53 @@ def user_base_data_dir(kind: Union[str, BaseDataKind], create: bool = False) -> 
     return get_data_subdir(get_base_data_kind(kind).folder, create=create)
 
 
+def shared_base_data_roots() -> list[Path]:
+    """Shared base data roots listed in ``pyRadPlan.settings.base_data_path``."""
+    # Deferred: pyRadPlan._settings imports pyRadPlan.core while it is being imported.
+    from pyRadPlan._settings import get_settings  # noqa: PLC0415
+
+    entries = get_settings().base_data_path.split(os.pathsep)
+    return [Path(entry.strip()).expanduser() for entry in entries if entry.strip()]
+
+
+def shared_base_data_dirs(kind: Union[str, BaseDataKind]) -> list[Path]:
+    """Folders of the shared ``kind`` files, one per shared root, whether they exist or not."""
+    folder = get_base_data_kind(kind).folder
+    return [root / folder for root in shared_base_data_roots()]
+
+
+def _sourced_dirs(kind: Union[str, BaseDataKind]) -> list[tuple[BaseDataSource, object]]:
+    return [
+        ("bundled", bundled_base_data_dir(kind)),
+        ("user", user_base_data_dir(kind)),
+        *(("shared", folder) for folder in shared_base_data_dirs(kind)),
+    ]
+
+
 def base_data_dirs(kind: Union[str, BaseDataKind]) -> list:
     """Folders searched for ``kind`` files, in order of precedence."""
-    return [bundled_base_data_dir(kind), user_base_data_dir(kind)]
+    return [folder for _, folder in _sourced_dirs(kind)]
 
 
 def list_base_data(
     kind: Union[str, BaseDataKind], source: Optional[BaseDataSource] = None
 ) -> list[BaseDataFile]:
-    """Return the base data files of a kind, the shipped ones first, each sorted by name.
+    """Return the base data files of a kind in order of precedence, each folder sorted by name.
 
-    A user file named like a shipped one is not listed: it is never found by name.
+    A file named like one in a folder of higher precedence is not listed: it is never found
+    by name.
 
     Parameters
     ----------
     kind : str or BaseDataKind
         Kind of base data.
-    source : {"bundled", "user"}, optional
+    source : {"bundled", "user", "shared"}, optional
         Only list the files of this source.
     """
     kind = get_base_data_kind(kind)
     files: list[BaseDataFile] = []
     seen: set[str] = set()
-    for folder_source, folder in zip(("bundled", "user"), base_data_dirs(kind)):
+    for folder_source, folder in _sourced_dirs(kind):
         if not folder.is_dir():
             continue
         entries = sorted(
@@ -172,7 +201,7 @@ def list_base_data(
 def find_base_data(kind: Union[str, BaseDataKind], name: str) -> Optional[BaseDataFile]:
     """Locate the ``kind`` file named ``name`` without reading it, ``None`` if absent."""
     kind = get_base_data_kind(kind)
-    for folder_source, folder in zip(("bundled", "user"), base_data_dirs(kind)):
+    for folder_source, folder in _sourced_dirs(kind):
         path = folder.joinpath(name)
         if path.is_file():
             return BaseDataFile(kind, name, path, folder_source)
@@ -220,7 +249,8 @@ def add_base_data_file(
 ) -> Path:
     """Copy a file into the user folder of its kind, making it available by name.
 
-    The file's content is not checked; use the function of the kind for that (e.g.
+    A shared file of the same name is not replaced but no longer used. The file's content is
+    not checked; use the function of the kind for that (e.g.
     :func:`pyRadPlan.machines.add_machine_file`).
 
     Parameters
@@ -252,7 +282,7 @@ def add_base_data_file(
 
     target = user_base_data_dir(kind) / name
     existing = find_base_data(kind, name)
-    if existing is not None:
+    if existing is not None and existing.source != "shared":
         if existing.source == "bundled":
             raise FileExistsError(
                 f"A {kind.label} named {name!r} ships with pyRadPlan and cannot be "
