@@ -15,7 +15,7 @@ from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, grouped_max
 from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d
-from pyRadPlan.core.xp_utils.helpers import to_namespace
+from pyRadPlan.core.xp_utils.helpers import to_namespace, to_numpy
 from pyRadPlan.core.xp_utils.typing import Array
 
 
@@ -324,6 +324,57 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return beam_info
 
+    def _prepare_sampling_cluster_counts(self, beam_info: dict) -> list[int]:
+        """Bound sampling groups per range scenario, covering all CT scenarios.
+
+        Only finite, beam-valid depth extrema are needed: scalar range shifts,
+        clipping and positive-width binning are monotone (reversed for a negative
+        range factor). Evaluate both endpoints in the original depth dtype and
+        preserve scalar shift promotion as in scenario-ray extraction. The small
+        vector of counts is transferred once per beam/shift.
+        """
+        xp = self.xp
+        width = self.dij_sampling["delta_rad_depth"]
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("Sampling delta_rad_depth must be finite and positive.")
+        extrema = []
+        for depths, beam_valid in zip(beam_info["rad_depths"], beam_info["valid_coords"]):
+            if depths.shape[0] == 0:
+                ends = xp.zeros(2, dtype=depths.dtype, device=self.device)
+                present = xp.asarray(False, device=self.device)
+            else:
+                valid = beam_valid & xp.isfinite(depths)
+                present = xp.any(valid)
+                infinity = xp.asarray(float("inf"), dtype=depths.dtype, device=self.device)
+                low = xp.min(xp.where(valid, depths, infinity))
+                high = xp.max(xp.where(valid, depths, -infinity))
+                ends = xp.stack((low, high))
+                ends = xp.where(present, ends, xp.zeros_like(ends))
+            extrema.append((ends, present))
+        counts = []
+        for relative, absolute in zip(
+            self.mult_scen.rel_range_shift, self.mult_scen.abs_range_shift
+        ):
+            per_ct = []
+            for ends, present in extrema:
+                shifted = (1 + xp.asarray(relative, device=self.device)) * ends + xp.asarray(
+                    absolute, device=self.device
+                )
+                groups = xp.astype(xp.clip(shifted, 0.0) / width, xp.int64)
+                per_ct.append(xp.where(present, xp.max(groups) + 1, xp.ones_like(groups[0])))
+            counts.append(xp.max(xp.stack(per_ct)))
+        return to_numpy(xp.stack(counts)).tolist()
+
+    def _extract_single_scenario_ray(self, ray: dict, scen_idx: int):
+        """Attach the beam's prepared count to the range-adjusted photon ray."""
+        result = super()._extract_single_scenario_ray(ray, scen_idx)
+        if self.enable_dij_sampling:
+            counts = ray["sampling_cluster_counts"]
+            result["sampling_num_clusters"] = (
+                counts[self.mult_scen.scen_num(scen_idx)] if counts is not None else None
+            )
+        return result
+
     def _get_kernel_depth_parameters(self, curr_ray: dict, depths: Array) -> tuple:
         """Reuse depth constants for this beam's kernel, depth dtype and device."""
         xp = self.xp
@@ -389,6 +440,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 curr_ray["rad_depths"],
                 curr_ray["radial_dist_sq"],
                 bixel_width=curr_ray["bixel_width"],
+                num_clusters=curr_ray.get("sampling_num_clusters"),
             )
 
         return bixel
@@ -431,6 +483,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         rad_depth_v: Array,
         rad_distances_sq: Array,
         bixel_width: Optional[float] = None,
+        *,
+        num_clusters: Optional[int] = None,
     ) -> tuple[Array, Array]:
         """
         Sample the lateral dose tail of a bixel to sparsify the dose influence matrix.
@@ -456,6 +510,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             Bixel width [mm]. If given, half of the bixel diagonal is added to the
             sampling radius, since dose is deposited over the whole bixel and not only
             around its central ray.
+        num_clusters : int, optional
+            Prepared upper bound on the number of depth clusters for this beam and
+            range scenario. If omitted, determine it from this ray's depths.
 
         Returns
         -------
@@ -509,7 +566,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         # the negative depths range shift scenarios can produce, which would otherwise
         # give negative cluster indices.
         cluster = xp.astype(xp.clip(rad_depth_v, 0.0) / delta_rad_depth, xp.int64)
-        num_clusters = int(xp.max(cluster)) + 1
+        if num_clusters is None:
+            num_clusters = int(xp.max(cluster)) + 1
 
         cluster_dose = grouped_max(dose_tail, cluster, num_clusters, initial=0.0)
 
@@ -528,7 +586,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         # indices ascending, as promised by _dij_guarantee_canonical
         keep = ix_core | ix_samp
 
-        return ix[keep], xp.where(ix_tail, threshold_dose, bixel_dose)[keep]
+        selected = xp.nonzero(keep)[0]
+        values = xp.where(ix_tail, threshold_dose, bixel_dose)
+        return xp.take(ix, selected, axis=0), xp.take(values, selected, axis=0)
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
         """Initialize the current ray."""
@@ -537,6 +597,14 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         ray["kernel"] = beam_info["kernel"]
         ray["kernel_depth_parameters"] = beam_info["kernel_depth_parameters"]
+        if self.enable_dij_sampling:
+            # Prepare after complete modality/subclass beam initialization, and
+            # share the bound with every later ray in this beam/shift.
+            if "sampling_cluster_counts" not in beam_info:
+                beam_info["sampling_cluster_counts"] = self._prepare_sampling_cluster_counts(
+                    beam_info
+                )
+            ray["sampling_cluster_counts"] = beam_info["sampling_cluster_counts"]
 
         if self.use_custom_primary_photon_fluence or beam_info["field_based_dose_calc"]:
             logger.debug("Calculating custom kernel interpolators for ray %d.", j)

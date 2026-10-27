@@ -122,3 +122,5 @@ Repeat with `--backend numpy`. Omit `--sampling` to check unsampled influence
 matrices; `--mode field` exercises per-ray field-shaped interpolation. Raw timing
 and complete-output comparison summaries live in
 `benchmark/pb_audit_results/photon_bixel/`.
+
+Next: [prepared sampling bounds and shared output selection](photon_sampling_preparation.md).

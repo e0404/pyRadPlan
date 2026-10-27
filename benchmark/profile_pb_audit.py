@@ -61,6 +61,14 @@ def apply_variant(name):  # noqa: PLR0911, PLR0912
         return
     if name == "baseline":
         return
+    if name in ("legacy_photon_sampling", "sampling_legacy_count", "sampling_boolean_selection"):
+        from profile_photon_sampling_reference import _sample_dij
+
+        if name != "sampling_legacy_count":
+            SVD._sample_dij = _sample_dij
+        if name != "sampling_boolean_selection":
+            SVD._prepare_sampling_cluster_counts = lambda self, beam: None
+        return
     if name == "legacy_photon_bixel":
         from profile_photon_bixel_reference import _compute_bixel
 
@@ -181,7 +189,11 @@ def apply_variant(name):  # noqa: PLR0911, PLR0912
         import profile_photon_hotpaths_reference as reference
 
         if name != "legacy_kernel_queries":
-            SVD._sample_dij = reference._sample_dij
+
+            def legacy_sample(self, *args, num_clusters=None, **kwargs):
+                return reference._sample_dij(self, *args, **kwargs)
+
+            SVD._sample_dij = legacy_sample
         if name != "legacy_sampling":
             SVD._get_kernel_interpolators = reference._get_kernel_interpolators
             SVD._compute_bixel = reference._compute_bixel
@@ -279,6 +291,9 @@ def main():  # noqa: PLR0912
     parser.add_argument("--let", dest="with_let", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--paired", action="store_true")
+    parser.add_argument(
+        "--paired-warmup", action="store_true", help="Warm both paths before pairing"
+    )
     parser.add_argument("--no-matrices", action="store_true", help="Skip large NPZ artifacts")
     parser.add_argument("--pairs", type=int, default=6)
     parser.add_argument("--out", default="benchmark/pb_audit_results")
@@ -351,6 +366,7 @@ def main():  # noqa: PLR0912
         (Hong, "_calc_particle_bixel"),
         (SVD, "_get_kernel_interpolators"),
         (SVD, "_sample_dij"),
+        (SVD, "_prepare_sampling_cluster_counts"),
         (SVD, "_compute_bixel"),
         (DoseEngineBase, "_init_dose_calc"),
         (DoseEngineBase, "_init_voxel_selection"),
@@ -476,6 +492,7 @@ def main():  # noqa: PLR0912
             (SVD, "_init_beam"),
             (SVD, "_get_kernel_interpolators"),
             (SVD, "_compute_bixel"),
+            (SVD, "_prepare_sampling_cluster_counts"),
         ]
 
         def wrap(fn, key):
@@ -517,6 +534,13 @@ def main():  # noqa: PLR0912
     print(json.dumps(metadata), flush=True)
     if args.paired:
         paired = {"baseline": [], "variant": [], "comparisons": []}
+        if args.paired_warmup:
+            for name, methods in (("baseline", baseline_methods), ("variant", variant_methods)):
+                for c, n, fn in methods:
+                    setattr(c, n, fn)
+                run()
+                print(f"WARMUP {name} complete", flush=True)
+            paired["warmup_both"] = True
         for pair in range(args.pairs):
             outputs = {}
             names = ["baseline", "variant"] if pair % 2 == 0 else ["variant", "baseline"]

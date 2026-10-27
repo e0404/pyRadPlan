@@ -1,0 +1,71 @@
+         3279293 function calls (3141413 primitive calls) in 11.601 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1118 to 65 due to restriction <65>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.001    0.001   11.602   11.602 profile_pb_audit.py:383(run)
+        1    0.000    0.000   11.482   11.482 _base.py:375(calc_dose_influence)
+        1    0.054    0.054   11.482   11.482 _base_pencilbeam.py:158(_calc_dose)
+     1567    0.389    0.000    6.908    0.004 _svdpb.py:396(_compute_bixel)
+     1567    0.018    0.000    3.319    0.002 _interpolation.py:130(__call__)
+     1567    0.034    0.000    3.283    0.002 _rgi.py:264(__call__)
+     1567    0.655    0.000    3.080    0.002 _svdpb.py:479(_sample_dij)
+        5    0.004    0.001    2.025    0.405 _svdpb.py:113(_init_beam)
+23956/20742    0.035    0.000    1.851    0.000 _internal.py:33(wrapped_f)
+        5    0.010    0.002    1.803    0.361 _base_pencilbeam.py:506(_init_beam)
+     1567    0.881    0.001    1.177    0.001 _rgi.py:370(_evaluate_linear)
+     1567    0.781    0.000    1.164    0.001 _rgi.py:472(_find_indices)
+        5    0.003    0.001    1.148    0.230 _base.py:194(trace_cubes_array)
+     1567    0.008    0.000    1.068    0.001 _svdpb.py:593(_init_ray)
+     1567    0.013    0.000    1.054    0.001 _base_pencilbeam.py:644(_init_ray)
+     1567    0.047    0.000    1.041    0.001 _base_pencilbeam.py:941(_get_ray_geometry_from_beam)
+     1567    0.315    0.000    0.861    0.001 _reductions.py:8(grouped_max)
+     1567    0.416    0.000    0.817    0.001 _rgi.py:340(_prepare_xi)
+     1567    0.141    0.000    0.786    0.001 _base_pencilbeam.py:1229(_calc_geo_dists_on_valid_coords)
+    31659    0.762    0.000    0.776    0.000 {built-in method cupy._core.core.array}
+     1567    0.131    0.000    0.740    0.000 _base_pencilbeam.py:1010(_fill_dij)
+    28465    0.016    0.000    0.667    0.000 from_data.py:56(asarray)
+     1602    0.477    0.000    0.656    0.000 _aliases.py:375(clip)
+       10    0.053    0.005    0.626    0.063 _siddon.py:119(_trace_rays_core)
+        5    0.000    0.000    0.596    0.119 _siddon.py:105(_trace_rays_device)
+       55    0.000    0.000    0.563    0.010 jittable.py:122(__call__)
+    17338    0.031    0.000    0.551    0.000 helpers.py:644(to_numpy)
+       10    0.004    0.000    0.549    0.055 _siddon.py:242(_compute_all_alphas)
+     6317    0.038    0.000    0.540    0.000 helpers.py:737(to_namespace)
+       10    0.001    0.000    0.489    0.049 _kernels.py:56(merge_sorted_unique)
+       30    0.000    0.000    0.488    0.016 _aliases.py:500(sort)
+       20    0.000    0.000    0.484    0.024 sort.py:9(sort)
+       20    0.484    0.024    0.484    0.024 {method 'sort' of 'cupy._core.core._ndarray_base' objects}
+    15715    0.009    0.000    0.470    0.000 indexing.py:5(take)
+    15715    0.421    0.000    0.460    0.000 {method 'take' of 'cupy._core.core._ndarray_base' objects}
+  1590/23    0.022    0.000    0.458    0.020 {method 'validate_python' of 'pydantic_core._pydantic_core.SchemaValidator' objects}
+     3149    0.005    0.000    0.458    0.000 _aliases.py:522(nonzero)
+   1576/9    0.000    0.000    0.456    0.051 main.py:693(model_validate)
+     3149    0.004    0.000    0.453    0.000 search.py:120(nonzero)
+     3149    0.394    0.000    0.446    0.000 {method 'nonzero' of 'cupy._core.core._ndarray_base' objects}
+    14295    0.042    0.000    0.445    0.000 _aliases.py:66(asarray)
+     3134    0.023    0.000    0.430    0.000 _ray.py:83(sanitize_beamlet_structure)
+     9592    0.225    0.000    0.426    0.000 search.py:177(where)
+     9462    0.007    0.000    0.411    0.000 __init__.py:782(asnumpy)
+     6268    0.015    0.000    0.408    0.000 _ray.py:65(validate_nparray_dtype)
+     9462    0.387    0.000    0.403    0.000 {method 'get' of 'cupy._core.core._ndarray_base' objects}
+     7865    0.014    0.000    0.387    0.000 truth.py:18(all)
+     7865    0.366    0.000    0.366    0.000 {method 'all' of 'cupy._core.core._ndarray_base' objects}
+     1567    0.005    0.000    0.323    0.000 _svdpb.py:368(_extract_single_scenario_ray)
+     1567    0.135    0.000    0.299    0.000 _base_pencilbeam.py:808(_extract_single_scenario_ray)
+        1    0.000    0.000    0.278    0.278 _svdpb.py:90(_init_dose_calc)
+        1    0.000    0.000    0.278    0.278 _base_pencilbeam.py:292(_init_dose_calc)
+    14428    0.273    0.000    0.273    0.000 {method 'astype' of 'cupy._core.core._ndarray_base' objects}
+        8    0.263    0.033    0.263    0.033 {method 'resize' of 'numpy.ndarray' objects}
+        1    0.004    0.004    0.236    0.236 _base.py:540(_init_dose_calc)
+    87485    0.047    0.000    0.232    0.000 _backends.py:59(loaded_backend)
+     6324    0.009    0.000    0.194    0.000 schema.py:271(validate_interface)
+        5    0.000    0.000    0.183    0.037 _svdpb.py:448(_get_kernel_interpolators)
+    44373    0.029    0.000    0.182    0.000 __init__.py:108(import_module)
+        5    0.000    0.000    0.175    0.035 _interpolation.py:45(__init__)
+        5    0.000    0.000    0.175    0.035 _rgi.py:217(__init__)
+        5    0.173    0.035    0.174    0.035 _rgi.py:36(_check_points)
+     1677    0.004    0.000    0.165    0.000 join.py:133(stack)
+    44373    0.027    0.000    0.144    0.000 <frozen importlib._bootstrap>:1192(_gcd_import)
+     3139    0.003    0.000    0.137    0.000 search.py:393(searchsorted)

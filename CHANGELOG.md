@@ -72,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Photon pencil-beam sampling prepares conservative depth-cluster counts once per beam/scenario and compacts the output mask once for Array API `take` gathers, preserving seeded sampling decisions and random draw order.
+
 - Photon pencil-beam evaluation caches depth-kernel constants per beam, depth dtype and device, and replaces component update loops with broadcast multiplication while preserving assignment precision before summation. Redundant query namespace dispatch is removed.
 - Pencil-beam engines prepare ray rotations in a backend-native batch per beam/shift, retaining matrices on the backend and transferring alignment flags once per beam. Existing cutoff geometry, alignment tolerance and voxel ordering are preserved.
 - Pencil-beam influence matrices use int32 sparse indices when dimensions and entry counts permit, with Python-integer pointer arithmetic and automatic int64 promotion before overflow. Dose precision and shared indices across quantities are preserved.

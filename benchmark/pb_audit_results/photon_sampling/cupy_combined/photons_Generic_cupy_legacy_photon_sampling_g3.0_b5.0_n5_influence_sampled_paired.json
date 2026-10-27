@@ -1,0 +1,30 @@
+{
+  "baseline": [
+    11.025879699969664,
+    9.704262299987022
+  ],
+  "variant": [
+    10.386819100007415,
+    10.330951699987054
+  ],
+  "comparisons": [
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true,
+      "baseline_bytes": 516617568,
+      "variant_bytes": 516617568,
+      "baseline_index_dtype": "int32",
+      "variant_index_dtype": "int32"
+    },
+    {
+      "max_abs": 0.0,
+      "max_abs_over_peak": 0.0,
+      "identical_indices": true,
+      "baseline_bytes": 516617568,
+      "variant_bytes": 516617568,
+      "baseline_index_dtype": "int32",
+      "variant_index_dtype": "int32"
+    }
+  ]
+}
