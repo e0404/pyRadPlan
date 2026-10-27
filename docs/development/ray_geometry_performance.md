@@ -4,6 +4,10 @@ Measured 2026-10-27 on `refactor/dose-calc-performance`, against `4c5bef97`.
 The comparison includes the earlier interpolation, particle cutoff, voxel,
 tissue and depth-resampling changes on **both** sides.
 
+These one-beam timings are not representative of GUI-default sampled five-field
+IMRT. See the [GUI photon recheck](gui_photon_performance_recheck.md) for that
+workload, historical comparisons and the remaining photon bottlenecks.
+
 ## Implementation
 
 The shared engine now prepares an ordered list of beam-valid voxel positions

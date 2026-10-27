@@ -1,0 +1,85 @@
+{
+  "outputs": [
+    {
+      "file": "4c5bef97_baseline_blasdefault.npz",
+      "shape": [
+        3012012,
+        1567
+      ],
+      "nnz": 64572864,
+      "data": {
+        "dtype": "float32",
+        "sha256": "a82596220cf160381efff4a09c5ce84a51895c82014baeff27ba2cde37ca3cd0"
+      },
+      "indices": {
+        "dtype": "int64",
+        "sha256": "37dc7e085bc765e97aee87b33befb835f13a458fb1a14df42e9ef7a484a7c455"
+      },
+      "indptr": {
+        "dtype": "int64",
+        "sha256": "2259d9d664a22274fdba652d7ae3c81e5d11347d00e6b1359727c46f8e349958"
+      }
+    },
+    {
+      "file": "dd06458d_baseline_blasdefault.npz",
+      "shape": [
+        3012012,
+        1567
+      ],
+      "nnz": 64572864,
+      "data": {
+        "dtype": "float32",
+        "sha256": "a82596220cf160381efff4a09c5ce84a51895c82014baeff27ba2cde37ca3cd0"
+      },
+      "indices": {
+        "dtype": "int64",
+        "sha256": "37dc7e085bc765e97aee87b33befb835f13a458fb1a14df42e9ef7a484a7c455"
+      },
+      "indptr": {
+        "dtype": "int64",
+        "sha256": "2259d9d664a22274fdba652d7ae3c81e5d11347d00e6b1359727c46f8e349958"
+      }
+    },
+    {
+      "file": "photons_Generic_numpy_baseline_g3.0_b5.0_n5_influence_sampled.npz",
+      "shape": [
+        3012012,
+        1567
+      ],
+      "nnz": 64572864,
+      "data": {
+        "dtype": "float32",
+        "sha256": "a82596220cf160381efff4a09c5ce84a51895c82014baeff27ba2cde37ca3cd0"
+      },
+      "indices": {
+        "dtype": "int64",
+        "sha256": "37dc7e085bc765e97aee87b33befb835f13a458fb1a14df42e9ef7a484a7c455"
+      },
+      "indptr": {
+        "dtype": "int64",
+        "sha256": "2259d9d664a22274fdba652d7ae3c81e5d11347d00e6b1359727c46f8e349958"
+      }
+    },
+    {
+      "file": "photons_Generic_numpy_scattermax_g3.0_b5.0_n5_influence_sampled.npz",
+      "shape": [
+        3012012,
+        1567
+      ],
+      "nnz": 64572864,
+      "data": {
+        "dtype": "float32",
+        "sha256": "a82596220cf160381efff4a09c5ce84a51895c82014baeff27ba2cde37ca3cd0"
+      },
+      "indices": {
+        "dtype": "int64",
+        "sha256": "37dc7e085bc765e97aee87b33befb835f13a458fb1a14df42e9ef7a484a7c455"
+      },
+      "indptr": {
+        "dtype": "int64",
+        "sha256": "2259d9d664a22274fdba652d7ae3c81e5d11347d00e6b1359727c46f8e349958"
+      }
+    }
+  ],
+  "exact_match": true
+}
