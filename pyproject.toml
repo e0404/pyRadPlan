@@ -25,6 +25,7 @@ authors = [
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
   { name="Julius Laub", email = "julius.laub@dkfz-heidelberg.de" },
   { name="Florian Leininger", email = "florian.leininger@dkfz-heidelberg.de" },
+  { name="Cheyenne Leize", email = "cheyenne.leize@dkfz-heidelberg.de" },
   { name="Moritz Müller", email = "moritz.mueller@dkfz-heidelberg.de" },
   { name="Tim Ortkamp", email = "tim.ortkamp@kit.edu" },
   { name="Victoria Santiago Aguilar", email = "victoria.santiagoaguilar@dkfz-heidelberg.de" },

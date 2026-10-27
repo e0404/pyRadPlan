@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Browser container: `packaging/container` runs the Qt GUI through Xpra's HTML5 client,
   with a Compose example and shared smoke test; GitHub and GitLab build and test the
   image and publish tagged releases to their container registries.
+- Responsive layout, favicon and links to Group Website, LinkedIn and GitHub in documentation website
 
 ### Changed
 
@@ -97,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RBExDose` with a constant RBE scales the physical-dose vector instead of building a scaled copy of the influence matrix on every evaluation, and chains its derivative through the physical-dose quantity
 - `ExactClassLookup` converts the reference tissue classes into the caller's namespace/device/dtype once instead of per bixel, and skips the redundant per-bixel match check (and its device synchronization) once the whole dose grid has been validated. It also rejects empty or inconsistent class declarations
 - `calc_let` and `calc_bio_dose` of the particle engines accept `"auto"` (new default): supported biological influence matrices are computed whenever the evaluator declares them and LET whenever the machine provides it (pencil beam) or the model requires it (FRED); `False` switches the matrices off explicitly (LET-based models still receive the LET kernel in the pencil-beam engines), `calc_bio_dose=True` without an evaluator providing influence quantities raises. FRED sets `Dij.rbe` for constant-RBE models; the unused `calc_bio_dose` of the TOPAS engine was removed
+- Documentation style update to adhere to the logo color scheme; the light theme meets the WCAG AA contrast standards
 
 ### Deprecated
 
