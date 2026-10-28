@@ -267,7 +267,11 @@ class MLC(BeamLimitingDevice):
         if (self.leaf_position_boundaries is None) or (self.leaf_positions is None):
             return None
 
-        boundaries_max = np.abs(self.leaf_position_boundaries).max()
+        boundaries_max = np.abs(
+            np.concatenate(
+                [self.leaf_position_boundaries, self.leaf_position_boundaries + self.leaf_width]
+            )
+        ).max()
         positions_max = np.abs(self.leaf_positions).max()
         half_size = max(boundaries_max, positions_max)
 

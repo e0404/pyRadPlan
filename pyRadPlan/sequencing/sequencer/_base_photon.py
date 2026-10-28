@@ -262,6 +262,7 @@ class PhotonSequencer(Sequencer):
                     "The field does not fit within the physical collimator."
                 )
             ray_map = self._interp_rows(ray_map, native_row_z, leaf_row_pos)
+            # > 0.0 to ensure the leaf travel limits cover every bixel the fluence can open
             ray_map = (ray_map > 0.0).astype(float)
             dim_stack = ray_map.shape[0]
             min_stack, max_stack = leaf_row_pos.min(), leaf_row_pos.max()
@@ -381,7 +382,7 @@ class PhotonSequencer(Sequencer):
 
         def _jaw(orientation: str, bounds: tuple[float, float]) -> Jaw:
             lo, hi = bounds
-            field_width = 2 * max(abs(lo), abs(hi))
+            field_width = 2 * max(abs(bound) for bound in mlc_window)
             return Jaw(device_orientation=orientation, positions=[lo, hi], field_width=field_width)
 
         return [_jaw("X", bev_x_bounds), _jaw("Y", bev_y_bounds)]

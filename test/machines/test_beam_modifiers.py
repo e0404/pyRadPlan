@@ -303,13 +303,17 @@ def test_create_Jaw_transmission_mask():
 
 
 def _mlc_with_rows(
-    j_start: int, j_end: int, leaf_width: float = 10.0, number_of_elements: int = 40
+    j_start: int,
+    j_end: int,
+    leaf_width: float = 10.0,
+    number_of_elements: int = 40,
+    orientation: str = "X",
 ) -> MLC:
     """An MLC whose shape spans global (isocenter-relative) leaf rows j_start..j_end."""
     leaf_row_pos = np.arange(j_start, j_end + 1) * leaf_width
     n = len(leaf_row_pos)
     return MLC(
-        device_type="MLCX",
+        device_type=f"MLC{orientation}",
         number_of_elements=number_of_elements,
         leaf_width=leaf_width,
         leaf_position_boundaries=leaf_row_pos,
@@ -343,3 +347,43 @@ def test_full_leaf_positions():
 
     with pytest.raises(ValueError, match="does not fit within the physical collimator"):
         mlc_3.full_leaf_positions(central_leaf_pair)
+
+
+@pytest.mark.parametrize("orientation", ["X", "Y"])
+@pytest.mark.parametrize(
+    ("j_start", "j_end"),
+    [
+        pytest.param(-3, -1, id="below_isocenter"),
+        pytest.param(-2, 1, id="straddling_isocenter"),
+        pytest.param(1, 3, id="above_isocenter"),
+    ],
+)
+def test_transmission_mask_grid_covers_every_leaf_row(j_start, j_end, orientation):
+    """The mask grid must hold the whole device, wherever the field sits.
+
+    ``leaf_position_boundaries`` are each row's *lower* edge, so a row reaches one
+    leaf width above its boundary. The transmission mask grid must span from the
+    lowest row's lower edge to the highest row's upper edge.
+    """
+    resolution = 0.5
+    open_width = 10.0  # _mlc_with_rows opens every row from -5 to +5 mm
+    mlc = _mlc_with_rows(j_start, j_end, orientation=orientation)
+    boundaries = np.asarray(mlc.leaf_position_boundaries)
+    n_rows = len(boundaries)
+
+    mask = mlc.calculate_transmission_mask(resolution)
+
+    travel_axis = 1 if orientation == "X" else 0
+    covered_rows = int((mask.sum(axis=travel_axis) > 0).sum())
+    # One cell of slack: the edge ramp (see MLC.calculate_transmission_mask())
+    # reaches half a cell past each outer edge.
+    assert abs(covered_rows - n_rows * mlc.leaf_width / resolution) <= 1, (
+        f"rows span [{boundaries.min():g}, {(boundaries + mlc.leaf_width).max():g}] mm, "
+        f"but only {covered_rows * resolution:g} of {n_rows * mlc.leaf_width:g} mm "
+        "of leaf rows appear in the mask"
+    )
+
+    # leaf_leakage is 0 and the edge ramps (see MLC.calculate_transmission_mask())
+    # integrate exactly, so the mask sums to the open area in pixels.
+    expected_area = n_rows * (mlc.leaf_width / resolution) * (open_width / resolution)
+    assert mask.sum() == pytest.approx(expected_area, rel=1e-3)
