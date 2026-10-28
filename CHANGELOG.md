@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
 ### Added
 
 - `OptimizerIpax` (`"ipax"`), an interface to the Array-API-native ipax interior-point solver. GPU-capable (`gpu_compatible`); `force_cpu_inner_solve` (off by default) runs ipax's interior-point linear algebra in NumPy while objective / gradient evaluations stay on the compute backend. Adds `ipax` as a dependency; its sparse-direct accelerations (Feral LDLᵀ on the CPU, cuDSS on CUDA through `ipax[sparse]`) are optional and described in the installation guide. Its `options` (an `ipax.Options` tree, with an acceptable-stopping band tuned for fluence optimization) can be configured through `prop_opt["solver"]` with a nested dictionary naming only the entries to change, e.g. `{"name": "ipax", "options": {"lbfgs": {"memory": 20}}}`
@@ -596,7 +598,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
