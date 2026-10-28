@@ -1,5 +1,14 @@
+import numpy as np
 import pytest
 from pydantic import ValidationError
+from pyRadPlan.machines import (
+    IonAccelerator,
+    PhotonLINAC,
+    find_machine_file,
+    load_from_name,
+    load_machine_from_mat,
+    validate_machine,
+)
 from pyRadPlan.scenarios import NominalScenario
 from pyRadPlan.plan import create_pln, PhotonPlan, IonPlan
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, Wedenberg
@@ -349,11 +358,90 @@ def test_dij_with_old_bio_model_identifier_loads():
 
 
 def test_plan_carries_a_loaded_machine():
-    from pyRadPlan.machines import load_from_name
-
     machine = load_from_name("protons", "Generic")
     plan = create_pln(radiation_mode="protons", machine=machine)
     assert plan.machine is machine
     # matRad's pln.machine names the base data file
     assert plan.to_matrad()["machine"] == "Generic"
     assert create_pln(radiation_mode="protons", machine={"name": "x"}).machine == {"name": "x"}
+
+
+@pytest.mark.parametrize(
+    ("radiation_mode", "plan_cls"), [("protons", IonPlan), ("photons", PhotonPlan)]
+)
+def test_plan_round_trip_keeps_the_concrete_machine(radiation_mode, plan_cls):
+    """A dumped plan restores its machine as the loaded subclass, kernels included."""
+    machine = load_from_name(radiation_mode, "Generic")
+    plan = create_pln(radiation_mode=radiation_mode, machine=machine)
+    dumped = plan.model_dump()
+    assert dumped["machine"]["radiation_mode"] == radiation_mode
+    assert "pb_kernels" in dumped["machine"]
+
+    restored_plans = (
+        create_pln(dumped),
+        plan_cls.model_validate(dumped),
+        create_pln(plan.model_dump(by_alias=True)),
+    )
+    for restored in restored_plans:
+        assert type(restored.machine) is type(machine)
+        assert restored.machine is not machine
+        assert len(restored.machine.pb_kernels) == len(machine.pb_kernels)
+        assert np.array_equal(restored.machine.energies, machine.energies)
+        # unset fields stay unset, e.g. undeclared tissue classes stay derived from kernels
+        assert restored.machine.model_fields_set == machine.model_fields_set
+        assert restored.to_matrad()["machine"] == "Generic"
+
+
+def test_plan_validates_a_dumped_machine_by_its_radiation_mode():
+    """Machine dicts with a registered radiation mode are validated by that machine class."""
+    dumped = load_from_name("protons", "Generic").model_dump()
+    plan = create_pln(radiation_mode="protons", machine=dumped)
+    assert isinstance(plan.machine, IonAccelerator)
+    with pytest.raises(ValidationError):
+        create_pln(radiation_mode="protons", machine={"radiation_mode": "protons", "name": "x"})
+
+
+def _legacy_photon_machine():
+    raw = load_machine_from_mat(find_machine_file("photons", "Generic"))
+    raw["meta"]["version"] = 1
+    return validate_machine(raw)
+
+
+def test_legacy_photon_kernels_are_rescaled_exactly_once():
+    """Version-1 kernels are rescaled on import, not again when their dump is validated."""
+    current = load_from_name("photons", "Generic")
+    machine = _legacy_photon_machine()
+    expected = {e: 4.0 * k.kernel_data for e, k in current.pb_kernels.items()}
+    for energy, kernel in machine.pb_kernels.items():
+        assert np.array_equal(kernel.kernel_data, expected[energy])
+
+    plan = create_pln(radiation_mode="photons", machine=machine)
+    once = create_pln(plan.model_dump())
+    restored = (
+        once,
+        create_pln(once.model_dump()),
+        PhotonPlan.model_validate(plan.model_dump()),
+        PhotonLINAC.model_validate(machine.model_dump()),
+    )
+    for pln in restored:
+        candidate = pln if isinstance(pln, PhotonLINAC) else pln.machine
+        for energy, kernel in candidate.pb_kernels.items():
+            assert np.array_equal(kernel.kernel_data, expected[energy])
+    for energy, kernel in machine.pb_kernels.items():
+        assert np.array_equal(kernel.kernel_data, expected[energy])
+
+
+@pytest.mark.parametrize(
+    ("machine_cls", "radiation_mode"), [(PhotonLINAC, "photons"), (IonAccelerator, "protons")]
+)
+def test_plan_round_trip_keeps_a_default_radiation_mode(machine_cls, radiation_mode):
+    """A machine relying on its class default radiation mode is still rebuilt as its class."""
+    data = load_from_name(radiation_mode, "Generic").model_dump(exclude_unset=True)
+    del data["radiation_mode"]
+    machine = machine_cls.model_validate(data)
+    assert "radiation_mode" not in machine.model_fields_set
+
+    restored = create_pln(create_pln(radiation_mode=radiation_mode, machine=machine).model_dump())
+    assert type(restored.machine) is machine_cls
+    assert restored.machine.radiation_mode == radiation_mode
+    assert restored.machine.model_fields_set - {"radiation_mode"} == machine.model_fields_set
