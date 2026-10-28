@@ -56,6 +56,7 @@ class RBExDose(FluenceDependentQuantity):
     identifier = "rbe_x_dose"
     biological = True
     name = "RBExDose"
+    fraction_exponent = 1.0
 
     optional_dependencies = ("effect", "physical_dose")
 

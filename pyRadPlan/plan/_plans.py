@@ -56,8 +56,10 @@ class Plan(PyRadPlanBaseModel, ABC):
     dose_convention : {"per_fraction", "total"}
         Whether objective dose parameters and reported result doses refer to one fraction
         or to the total course. The dose influence matrix is always per fraction; with
-        ``"total"`` objectives are scaled by ``1/num_of_fractions`` for optimization and
-        results by ``num_of_fractions``.
+        ``"total"`` objective references are converted to one fraction for optimization and
+        results to the total course, each following its quantity's fraction scaling
+        (``RTQuantity.total_course_factor``: doses and effects ``num_of_fractions``,
+        ``sqrt_beta_dose`` its square root, LET none).
     prescribed_dose : float
         Prescribed dose for the plan. Serves mainly as normalization value.
     radiation_mode : str

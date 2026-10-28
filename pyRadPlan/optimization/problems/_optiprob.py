@@ -364,8 +364,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                 )
         if self._dose_convention == "total":
             logger.info(
-                "Objective doses are interpreted as total-course doses (dose_convention='total'); "
-                "scaling reference doses by 1/%d for the per-fraction optimization.",
+                "Objective references are interpreted for the total course "
+                "(dose_convention='total'); converting them to one of %d fractions for the "
+                "per-fraction optimization (doses and effects / n, sqrt_beta_dose / sqrt(n), "
+                "LET unchanged).",
                 self._num_of_fractions,
             )
         else:

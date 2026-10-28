@@ -414,28 +414,31 @@ class Dij(PyRadPlanBaseModel):
 
         return dij_dict
 
-    #: Result quantities that are ratios / averages and do not scale with fractions.
-    _INTENSIVE_RESULTS: ClassVar[frozenset[str]] = frozenset(
-        {"let", "rbe", "alpha", "beta", "let_beam", "rbe_beam", "alpha_beam", "beta_beam"}
-    )
-    _SQRT_EXTENSIVE_RESULTS: ClassVar[frozenset[str]] = frozenset(
-        {"sqrt_beta_dose", "sqrt_beta_dose_beam"}
-    )
+    #: Fraction exponents (see ``RTQuantity.fraction_exponent``) of result arrays that are not
+    #: quantities; all other results scale like the quantity they are named after.
+    _RESULT_FRACTION_EXPONENTS: ClassVar[dict[str, float]] = {
+        "rbe": 0.0,
+        "alpha": 0.0,
+        "beta": 0.0,
+        "physical_dose_var": 2.0,
+    }
 
     @classmethod
     def _scale_result_to_fractions(cls, out: dict[str, Any], num_of_fractions: int) -> dict:
         """Scale per-fraction result arrays to ``num_of_fractions`` identical fractions."""
         if num_of_fractions == 1:
             return out
+        # Lazy import: the quantities module depends on the dij.
+        from pyRadPlan.quantities import get_quantity  # noqa: PLC0415
+
         for key, value in out.items():
-            if key in cls._INTENSIVE_RESULTS:
-                continue
-            if key in cls._SQRT_EXTENSIVE_RESULTS:
-                factor = num_of_fractions**0.5
-            elif key.startswith("physical_dose_var"):
-                factor = num_of_fractions**2
+            name = key.removesuffix("_beam")
+            if name in cls._RESULT_FRACTION_EXPONENTS:
+                factor = num_of_fractions ** cls._RESULT_FRACTION_EXPONENTS[name]
             else:
-                factor = num_of_fractions
+                factor = get_quantity(name).total_course_factor(num_of_fractions)
+            if factor == 1:
+                continue
             if isinstance(value, list):
                 out[key] = [factor * v for v in value]
             else:
