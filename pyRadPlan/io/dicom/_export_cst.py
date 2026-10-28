@@ -129,9 +129,8 @@ def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict
         roi_item.ROIGenerationAlgorithm = "AUTOMATIC"
         roi_seq.append(roi_item)
 
-        color = list(voi.visible_color) if voi.visible_color is not None else [255, 0, 0]
         roi_contour = Dataset()
-        roi_contour.ROIDisplayColor = [int(c) for c in color]
+        roi_contour.ROIDisplayColor = [int(c) for c in voi.color]
         roi_contour.ReferencedROINumber = i
         roi_contour.ContourSequence = _voi_contour_sequence(voi, ct_image)
         contour_seq.append(roi_contour)

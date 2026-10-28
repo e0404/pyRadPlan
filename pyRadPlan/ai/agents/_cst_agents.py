@@ -5,7 +5,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, create_model
 from pydantic_ai import Agent
 
-from pyRadPlan.analysis import QICollection
+from pyRadPlan.analysis import QICollection, format_unit_symbol
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.optimization.objectives import Objective, get_objectives_union
 from pyRadPlan.plan._plans import Plan
@@ -78,7 +78,7 @@ def _qi_summary(qis: QICollection) -> dict[str, dict[str, str]]:
     """Return QI values per structure as ``{structure: {metric: "value unit"}}``."""
     return {
         name: {
-            metric: f"{qi.value:.4g} {qi.unit:~}"
+            metric: f"{qi.value:.4g} {format_unit_symbol(qi.unit)}"
             for metric, qi in structure.items()
             if math.isfinite(qi.value)
         }

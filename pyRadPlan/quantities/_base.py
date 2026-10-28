@@ -14,7 +14,6 @@ import pint
 from pyRadPlan.dij import Dij
 from pyRadPlan.core import xp_utils as compute_backend
 
-ureg = pint.UnitRegistry()
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +24,53 @@ class RTQuantity(ABC):
     identifier: ClassVar[str]
     unit: ClassVar[pint.Unit]
     dim: ClassVar[int]  # To differentiate between scalar and vector quantities
+    #: Whether the quantity describes a biological effect (e.g. RBE-weighted dose or LQ
+    #: effect) rather than a physical one.
+    biological: ClassVar[bool] = False
+    #: Exponent ``p`` with which the quantity accumulates over ``n`` identical fractions: the
+    #: total-course value is ``n**p`` times the per-fraction value (1 for additive quantities
+    #: such as dose or effect, 0 for intensive ones such as LET). ``None`` (the default for
+    #: custom quantities) declares no rule, and converting between per-fraction and
+    #: total-course values then raises instead of guessing.
+    fraction_exponent: ClassVar[Optional[float]] = None
     precision: str
 
     def __init__(self, dij: Dij, scenarios=None):
         if scenarios is None:
             scenarios = [0]
         self.scenarios = np.asarray(scenarios, dtype=np.int64)
+
+    @classmethod
+    def total_course_factor(cls, num_of_fractions: int) -> float:
+        """
+        Factor from a per-fraction value of the quantity to its total-course value.
+
+        Parameters
+        ----------
+        num_of_fractions : int
+            Number of identical fractions in the course.
+
+        Returns
+        -------
+        float
+            ``num_of_fractions ** fraction_exponent``.
+
+        Raises
+        ------
+        ValueError
+            If ``num_of_fractions`` is not positive, or if it is not 1 and the quantity does
+            not declare a :attr:`fraction_exponent`.
+        """
+        if num_of_fractions <= 0:
+            raise ValueError("Number of fractions must be greater than zero.")
+        if num_of_fractions == 1:
+            return 1.0
+        if cls.fraction_exponent is None:
+            raise ValueError(
+                f"Quantity {cls.identifier!r} declares no fraction_exponent, so its values "
+                "cannot be converted between one fraction and the total course."
+            )
+        return float(num_of_fractions) ** cls.fraction_exponent
 
 
 class FluenceDependentQuantity(RTQuantity, ABC):
@@ -43,6 +83,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
       needed to compute this quantity. The resolver must produce them; failure raises.
     - :attr:`optional_dependencies`: identifiers of upstream quantities used as a fallback
       computation path when no direct Dij matrix is available.
+    - :attr:`indirect_dij_fields`: Dij attributes (e.g. ``alphax``) the indirect path reads
+      directly; if any is missing, the indirect path is unavailable.
 
     The resolution mode (``"direct"`` vs ``"indirect"``) is decided at instantiation time:
     if the dij carries an attribute whose name matches this quantity's ``identifier``, the
@@ -54,6 +96,14 @@ class FluenceDependentQuantity(RTQuantity, ABC):
     # ClassVar metadata describing how this quantity is computed.
     required_dependencies: ClassVar[tuple[str, ...]] = ()
     optional_dependencies: ClassVar[tuple[str, ...]] = ()
+    indirect_dij_fields: ClassVar[tuple[str, ...]] = ()
+
+    @classmethod
+    def has_indirect_path(cls, dij: Dij) -> bool:
+        """Whether the dependency-based path is available for ``dij``."""
+        if not (cls.required_dependencies or cls.optional_dependencies):
+            return False
+        return all(getattr(dij, field, None) is not None for field in cls.indirect_dij_fields)
 
     array_backend: ArrayNamespace
 
@@ -85,9 +135,15 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 # Lazy import to avoid circular dependency at module import time.
                 from ._resolver import QuantityResolver  # noqa: PLC0415
 
-                resolver = QuantityResolver(self._dij, _dij_already_in_namespace=True)
-                for dep_id in self._dep_ids_for_indirect():
+                resolver = QuantityResolver(
+                    self._dij, scenarios=self.scenarios, _dij_already_in_namespace=True
+                )
+                for dep_id in self.required_dependencies:
                     self._deps[dep_id] = resolver.get(dep_id)
+                for dep_id in self.optional_dependencies:
+                    dep = resolver.try_get(dep_id)
+                    if dep is not None:
+                        self._deps[dep_id] = dep
         else:
             if mode not in ("direct", "indirect"):
                 raise ValueError(f"Unknown quantity mode: {mode!r}")
@@ -123,16 +179,12 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         """Pick the resolution mode for this dij; direct wins when both are available."""
         if getattr(self._dij, self.identifier, None) is not None:
             return "direct"
-        if self.required_dependencies or self.optional_dependencies:
+        if self.has_indirect_path(self._dij):
             return "indirect"
         raise ValueError(
             f"Quantity {type(self).__name__!r} cannot be computed: dij has no attribute "
-            f"{self.identifier!r} and no dependencies are declared."
+            f"{self.identifier!r} and no usable dependency path."
         )
-
-    def _dep_ids_for_indirect(self) -> tuple[str, ...]:
-        """Return identifiers that must be resolved to compute this quantity indirectly."""
-        return tuple(self.required_dependencies) + tuple(self.optional_dependencies)
 
     def _validate_dependencies(self) -> None:
         if self._mode == "indirect":
@@ -192,10 +244,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         # check if we need to update the cache
         if self._w_cache is None or not xp.all(self._w_cache == fluence):
-            if self._w_cache is None:
-                self._w_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_cache[:] = fluence
+            self._w_cache = xp.asarray(fluence, copy=True)
             self._compute_quantity_cache()
 
         return self._q_cache
@@ -223,10 +272,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             fluence = xp.asarray(fluence, dtype=self._dtype)
 
         if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
-            if self._w_grad_cache is None:
-                self._w_grad_cache = xp.asarray(fluence, copy=True)
-            else:
-                self._w_grad_cache[:] = fluence
+            self._w_grad_cache = xp.asarray(fluence, copy=True)
             self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache

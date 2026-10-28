@@ -12,6 +12,8 @@ in :ref:`quickstart`.
     :caption: Concepts:
 
     plan
+    biological_models
+    biological_base_data
     patient_data
     steering
     dose_calculation

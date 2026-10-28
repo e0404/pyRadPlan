@@ -1,18 +1,9 @@
 """Base class for all dose engines."""
 
 import logging
-
-import sys
-
-if sys.version_info < (3, 10):
-    import importlib_resources as resources  # Backport for older versions
-else:
-    from importlib import resources  # Standard from Python 3.9+
-
-
 import warnings
 import time
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
@@ -28,11 +19,40 @@ from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
-from pyRadPlan.machines import load_machine_from_mat, validate_machine, Machine
+from pyRadPlan.machines import load_from_name, validate_machine, Machine
+from pyRadPlan.biology.models import (
+    BiologicalModel,
+    BioModelEvaluator,
+    BioModelUnavailableError,
+    EngineBioCapability,
+    create_bio_model,
+    raise_for_tissue_issues,
+    structure_tissues,
+    validate_reference_coefficients,
+)
 from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
 logger = logging.getLogger(__name__)
+
+
+def _check_bio_tissues(engine: Any, model: BiologicalModel, voxel_params: dict[str, Any]) -> None:
+    """
+    Run the tissue check of ``model`` before its evaluator is built.
+
+    The structures are the ones the engine recorded during setup, otherwise the tissue
+    classes of the voxel parameters. The check is made for the engine's own capability
+    (:meth:`DoseEngineBase.bio_capability`); engines without a machine skip the base-data
+    part. Warnings were reported when the model was resolved and are not repeated here.
+    """
+    machine = getattr(engine, "_machine", None)
+    structures = getattr(engine, "_bio_structures", None)
+    if structures is None:
+        tissue_classes = voxel_params.get("tissue_class")
+        structures = [] if tissue_classes is None else structure_tissues(list(tissue_classes))
+    capability = engine if callable(getattr(engine, "bio_capability", None)) else None
+    raise_for_tissue_issues(model, model.check_tissues(machine, structures, engine=capability))
+
 
 # from dose.calcDoseInit import init_dose_calc
 
@@ -58,6 +78,19 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         The possible radiation modes for the dose engine.
     is_dose_engine : bool = True
         Helper class variable telling you that this is a dose engine
+    computes_bio_influence : bool
+        Whether the engine evaluates biological models into influence matrices; without,
+        only models without outputs (``none``, a constant RBE) can be computed.
+    bio_kernel_quantities : tuple[str, ...] or None
+        Machine quantities (as in ``Machine.provided_quantities()``, without variant) the
+        engine evaluates from the machine's pencil-beam kernels, e.g. ``("alpha", "beta")``;
+        None for every quantity the machine tabulates (particle pencil-beam engines). Empty
+        for engines that do not use the machine's kernels (Monte Carlo engines).
+    bio_scored_quantities : tuple[str, ...]
+        Quantities the engine computes itself, as ``"<quantity>"`` or
+        ``"<quantity>:<variant>"`` (e.g. ``"let:LETd"``), independently of the machine.
+    bio_scored_radiation_modes : tuple[str, ...] or None
+        Radiation modes ``bio_scored_quantities`` are scored for; None for every mode.
     select_voxels_in_scenarios : bool
         Whether to select voxels in scenarios.
     mult_scen : Union[str, ScenarioModel]
@@ -74,6 +107,15 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
 
+    # Whether this engine can evaluate a biological model into additive influence matrices.
+    # Engines that only produce physical dose still store the model on the dij (so that a
+    # constant RBE keeps working) but warn about model outputs they cannot compute.
+    computes_bio_influence: ClassVar[bool] = False
+    # What the engine supplies to biological models, see bio_capability().
+    bio_kernel_quantities: ClassVar[Optional[tuple[str, ...]]] = ()
+    bio_scored_quantities: ClassVar[tuple[str, ...]] = ()
+    bio_scored_radiation_modes: ClassVar[Optional[tuple[str, ...]]] = None
+
     mult_scen: Union[str, ScenarioModel] = "nomScen"
     bio_model: Optional[Union[str, dict]] = None
     dose_grid: Optional[Union[Grid, dict]] = None
@@ -87,6 +129,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     def __init__(self, pln: Union[Plan, dict] = None):
         # Assign default parameters declared as class-level annotations
         self._init_config_defaults()
+
+        # machine the plan specifies (name or loaded machine), see _resolve_machine
+        self._pln_machine: Optional[Union[str, Machine]] = None
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
@@ -106,6 +151,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._vct_grid_mask = None  # voxel grid inside patient as logical mask
         self._vdose_grid_mask = None  # voxel dose grid inside patient as logical mask
         self._robust_voxels_on_grid = None  # voxels to be computed in robustness scenarios
+        self._tissue_classes = None  # tissue classes the dij's tissue_class_ix refers to
 
         # Protected properties with private get access
         self._calc_dose_direct = False
@@ -121,7 +167,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         """
         Assign properties from a Plan object to the Dose Engine.
 
-        This includes the Scenario Model and the Biological Model, and any
+        This includes the Scenario Model, the Biological Model, machine base data the plan
+        carries (``pln.machine`` given as a loaded machine instead of a name), and any
         other properties that
         can be stored in the prop_dose_calc dictionary within the Plan object.
         This function will check if a property exists for the dose engine and,
@@ -137,13 +184,21 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         pln = validate_pln(pln)
 
+        if isinstance(pln.machine, str):
+            self._pln_machine = pln.machine
+        else:
+            self._pln_machine = validate_machine(pln.machine)
+
         # Set Scenario Model
         if hasattr(pln, "mult_scen"):
             self.mult_scen = pln.mult_scen
 
+        # Reported forward-dose scaling follows the plan's dose convention
+        self._result_dose_factor = getattr(pln, "result_dose_factor", 1)
+
         # Assign Biologival Model
-        if hasattr(pln, "bio_param"):
-            self.bio_param = pln.bio_param  # TODO: No bio_param yet
+        if hasattr(pln, "bio_model"):
+            self.bio_model = pln.bio_model  # TODO: No bio_model yet
 
         if not isinstance(warn_when_property_changed, bool):
             warn_when_property_changed = False
@@ -171,6 +226,92 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             overwrite_source="pln.propDoseCalc",
         )
 
+    def _resolve_quantity_flags(
+        self,
+        calc_bio_dose: Union[Literal["auto"], bool],
+        calc_let: Union[Literal["auto"], bool],
+        *,
+        bio_influence_quantities: tuple[str, ...],
+        let_available: bool,
+        let_auto: bool,
+    ) -> tuple[bool, bool, bool]:
+        """
+        Resolve ``"auto"`` quantity switches against the biological model and the machine.
+
+        Parameters
+        ----------
+        calc_bio_dose : "auto" or bool
+            Requested biological influence calculation. ``"auto"`` follows the evaluator's
+            declared influence quantities; ``True`` without such an evaluator raises.
+        calc_let : "auto" or bool
+            Requested LET influence calculation. ``"auto"`` resolves to ``let_auto``; ``True``
+            without LET data resolves to ``False`` with a warning.
+        bio_influence_quantities : tuple[str, ...]
+            Additive matrix quantities the biological evaluator can produce.
+        let_available : bool
+            Whether the engine can produce LET at all.
+        let_auto : bool
+            Value ``calc_let="auto"`` resolves to.
+
+        Returns
+        -------
+        tuple[bool, bool, bool]
+            ``(calc_bio_dose, calc_let, use_let_kernel)``; the last one is True if LET is needed
+            either as output or as input to the biological model.
+        """
+        model = self.bio_model if isinstance(self.bio_model, BiologicalModel) else None
+        provides_bio_influence = bool(bio_influence_quantities)
+
+        if calc_bio_dose == "auto":
+            bio = provides_bio_influence
+        elif calc_bio_dose and not provides_bio_influence:
+            raise ValueError(
+                "calc_bio_dose=True requires a biological evaluator providing influence "
+                f"quantities, but the plan's bio_model is {model!r}."
+            )
+        else:
+            bio = bool(calc_bio_dose)
+
+        if calc_let == "auto":
+            let = let_auto and let_available
+        elif calc_let and not let_available:
+            logger.warning("No LET data found in machine data. LET calculation will be skipped.")
+            let = False
+        else:
+            let = bool(calc_let)
+
+        use_let_kernel = let or (bio and model is not None and model.requires("let"))
+        return bio, let, use_let_kernel
+
+    @staticmethod
+    def _validate_bio_influence_names(
+        dij: dict[str, Any], influence_names: tuple[str, ...]
+    ) -> None:
+        """Validate evaluator outputs against the influence fields supported by Dij."""
+        if not influence_names or any(
+            not isinstance(name, str) or not name for name in influence_names
+        ):
+            raise ValueError("Biological influence quantity names must be non-empty strings.")
+        if len(set(influence_names)) != len(influence_names):
+            raise ValueError("Biological influence quantity names must be unique.")
+
+        # TODO: Replace this fixed set with centrally registered Dij quantities. See
+        # docs/development/dynamic_dij_quantities.md for the proposed design.
+        supported_names = {"alpha_dose", "sqrt_beta_dose"}
+        unsupported = set(influence_names) - supported_names
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise NotImplementedError(
+                f"Dij cannot yet store biological influence quantities: {names}."
+            )
+
+        collisions = set(influence_names).intersection(dij)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(
+                f"Biological influence quantities collide with dose-engine fields: {names}."
+            )
+
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
     ) -> dict:
@@ -193,8 +334,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         Returns
         -------
-        Dij
-            The dose information
+        dict
+            Result quantities on the CT grid, keyed by quantity name, with the
+            weights already applied.
 
         Notes
         -----
@@ -229,7 +371,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
-        result = dij.compute_result_ct_grid(np.ones(dij.total_num_of_bixels, dtype=np.float32))
+        result = dij.compute_result_ct_grid(
+            np.ones(dij.total_num_of_bixels, dtype=np.float32),
+            num_of_fractions=self._result_dose_factor,
+        )
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)
@@ -427,7 +572,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         the CT and dose grids, checks machine and radiation mode consistency, creates a scenario
         model, and sets up arrays for bookkeeping. It also adjusts the isocenter internally for
         different dose grids and converts CT subscripts to world coordinates. Additionally, it
-        loads the machine file from the base data folder and performs voxel selection for dose
+        resolves the machine (the plan's loaded machine, or the machine file from the base data
+        folder, see :meth:`_resolve_machine`) and performs voxel selection for dose
         calculation.
         """
 
@@ -572,8 +718,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._vct_grid_mask = np.zeros(np.prod(ct.cube_dim), dtype=bool)
         self._vct_grid_mask[self._vct_grid] = True
 
-        # Load machine file from base data folder
-        self._machine = self.load_machine(radiation_mode, machine)
+        self._machine = self._resolve_machine(radiation_mode, machine)
+
+        self._resolve_bio_model(dij, radiation_mode, cst)
+        self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
 
         # TODO: this is currently not needed, but may be needed in the future
         # cst = self.set_overlap_priorities(cst).resample_on_new_ct(resampled_ct)
@@ -581,6 +729,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         dij["alphax"], dij["betax"] = cst.get_reference_lq_params(
             overlap_is_applied=False, resample_grid=self.dose_grid
         )
+        dij["tissue_class_ix"] = cst.get_tissue_class_indices(
+            overlap_is_applied=False, resample_grid=self.dose_grid
+        )
+        self._tissue_classes = cst.get_tissue_classes()
 
         # TODO: this function has not yet been implemented
         # structures that are selected here will be included in dose calculation over
@@ -589,8 +741,196 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         return dij
 
+    def _resolve_bio_model(
+        self, dij: dict[str, Any], radiation_mode: str, cst: Optional[StructureSet] = None
+    ) -> None:
+        """
+        Validate the plan's biological model and record it on the dij.
+
+        Runs :meth:`~pyRadPlan.biology.models.BiologicalModel.check_tissues` for the machine,
+        the structures and this engine, the same check a user interface runs. A model the
+        engine, the machine or a structure's tissue cannot serve only fails the calculation
+        when biological dose is
+        explicitly requested (``calc_bio_dose=True``); otherwise the physical dose is computed
+        alone, see :meth:`_drop_bio_model`. Invalid reference α_x / β_x always raise.
+        Warnings of the check (e.g. a tissue labelled with another provenance than the
+        base data it matches) are logged and reported, and the model is evaluated.
+        """
+        self._bio_structures = None if cst is None else structure_tissues(cst)
+        if self.bio_model is None:
+            return
+
+        model = create_bio_model(self.bio_model, radiation_mode)
+        try:
+            tissue_warnings = raise_for_tissue_issues(
+                model, model.check_tissues(self._machine, cst, engine=self)
+            )
+        except BioModelUnavailableError as exc:
+            if getattr(self, "calc_bio_dose", "auto") is True:
+                raise
+            self._drop_bio_model(dij, model, str(exc))
+            return
+        for issue in tissue_warnings:
+            message = f"Biological model '{model.model}': {issue}"
+            logger.warning(message)
+            self.report_warning(message)
+
+        self.bio_model = model
+        # Every engine records the model the dij was computed with, so that quantities and
+        # result assembly (e.g. a constant RBE) work independently of the engine used.
+        dij["bio_model"] = self.bio_model
+
+    def _drop_bio_model(self, dij: dict[str, Any], model: BiologicalModel, reason: str) -> None:
+        """
+        Continue with the physical dose alone because ``model`` cannot be evaluated.
+
+        The dij then records no biological model (``dij.bio_model is None``) and carries no
+        biological influence matrices, so downstream quantities and objective conversion
+        treat it as a physical-dose dij: RBE-weighted dose is reported as unavailable instead
+        of being derived from a model that was never applied.
+        """
+        message = (
+            f"{reason.rstrip('.')}. Biological quantities (e.g. RBExDose) will not be "
+            "available; only the physical dose influence is computed. Choose a biological "
+            "model and tissue parameters matching the machine base data, or set "
+            "calc_bio_dose=True to make this an error."
+        )
+        logger.warning(message)
+        self.report_warning(message)
+        self.bio_model = None
+        dij["bio_model"] = None
+
+    @classmethod
+    def bio_capability(cls) -> EngineBioCapability:
+        """
+        Declare what this engine supplies to biological models, without loading a machine.
+
+        Built from :attr:`bio_kernel_quantities`, :attr:`bio_scored_quantities` and
+        :attr:`computes_bio_influence`. :func:`~pyRadPlan.biology.models.bio_model_options` and
+        :meth:`~pyRadPlan.biology.models.BiologicalModel.check_tissues` take it (or the engine)
+        as ``engine``; the engine runs the same check before a calculation.
+        """
+        kernel_quantities = cls.bio_kernel_quantities
+        scored_modes = cls.bio_scored_radiation_modes
+        return EngineBioCapability(
+            engine=getattr(cls, "short_name", None) or cls.__name__,
+            kernel_quantities=None if kernel_quantities is None else frozenset(kernel_quantities),
+            scored_quantities=tuple(cls.bio_scored_quantities),
+            computes_bio_influence=cls.computes_bio_influence,
+            scored_radiation_modes=None if scored_modes is None else frozenset(scored_modes),
+        )
+
+    @classmethod
+    def bio_quantities(cls, machine: Any = None) -> list[str]:
+        """
+        Named quantities available to a biological model with this engine and a machine.
+
+        The machine's quantities this engine reads from the pencil-beam kernels (including
+        variants such as ``"let:LETt"``) and the ones it scores itself, see
+        :meth:`~pyRadPlan.biology.models.EngineBioCapability.quantities`.
+
+        Parameters
+        ----------
+        machine : Machine, BioMachineSummary or None
+            The machine.
+        """
+        return cls.bio_capability().quantities(machine)
+
+    def provided_quantities(self) -> list[str]:
+        """Named quantities available to a biological model in this calculation."""
+        return self.bio_quantities(self._machine)
+
+    def engine_provided_quantities(self) -> list[str]:
+        """
+        Named quantities this engine scores itself (e.g. LET).
+
+        .. deprecated:: 0.6
+            Use :meth:`bio_capability` (``scored_quantities``) or :meth:`bio_quantities`.
+        """
+        warnings.warn(
+            "DoseEngineBase.engine_provided_quantities() is deprecated; use "
+            "bio_capability().scored_quantities or bio_quantities(machine).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return list(self.bio_capability().scored)
+
+    def _resolve_machine(self, radiation_mode: str, machine_name: str) -> Machine:
+        """
+        Machine base data for a calculation of the steering information's beams.
+
+        The loaded machine the plan carries (``pln.machine`` given as a machine or its
+        dictionary), otherwise the machine file named by the beams, loaded with
+        :meth:`load_machine`.
+
+        Parameters
+        ----------
+        radiation_mode : str
+            Radiation mode of the beams.
+        machine_name : str
+            Machine name of the beams.
+
+        Raises
+        ------
+        ValueError
+            The plan's loaded machine does not match the radiation mode or machine name of the
+            beams.
+        """
+        machine = self._pln_machine
+        if machine is None or isinstance(machine, str):
+            return self.load_machine(radiation_mode, machine_name)
+
+        if machine.radiation_mode != radiation_mode or machine.name != machine_name:
+            raise ValueError(
+                f"The plan's machine '{machine.name}' ({machine.radiation_mode}) does not match "
+                f"the machine '{machine_name}' ({radiation_mode}) of the steering information."
+            )
+        return machine
+
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
+
+    def _create_bio_evaluator(
+        self, model: BiologicalModel, voxel_params: dict[str, Any]
+    ) -> BioModelEvaluator:
+        """
+        Create and validate a model evaluator for this dose calculation.
+
+        Raises
+        ------
+        ValueError
+            The reference photon parameters are invalid LQ rates, or the evaluator violates
+            its declarations.
+        BioModelUnavailableError
+            The model cannot be evaluated for this machine and patient (no matching tissue
+            class, inconsistent kernels, reference parameters outside the model's domain).
+        """
+        # Reject reference photon parameters outside the model's domain before any dose is
+        # computed, instead of storing nonfinite values in the influence matrices.
+        validate_reference_coefficients(voxel_params)
+        _check_bio_tissues(self, model, voxel_params)
+        try:
+            model.validate_reference_parameters(voxel_params)
+            evaluator = model.evaluator(self._machine, voxel_params)
+        except BioModelUnavailableError:
+            raise
+        except ValueError as exc:
+            raise BioModelUnavailableError(
+                f"Biological model '{model.model}' cannot be evaluated for this machine and "
+                f"patient: {exc}"
+            ) from exc
+        if not isinstance(evaluator, BioModelEvaluator):
+            raise TypeError(
+                f"Biological model '{model.model}' evaluator() must return a "
+                f"BioModelEvaluator, got {type(evaluator).__name__}."
+            )
+        if evaluator.model is not model:
+            raise ValueError(
+                f"Biological model '{model.model}' returned an evaluator bound to a different "
+                "model instance."
+            )
+        evaluator.validate_declarations()
+        return evaluator
 
     # Private and abstract methods
 
@@ -606,8 +946,4 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
     @staticmethod
     def load_machine(radiation_mode, machine_name):
-        file_name = radiation_mode + "_" + machine_name + ".mat"
-        machines_path = resources.files("pyRadPlan.data.machines")
-        path = machines_path.joinpath(file_name)
-        machine = validate_machine(load_machine_from_mat(path))
-        return machine
+        return load_from_name(radiation_mode, machine_name)

@@ -1,12 +1,13 @@
 from typing import Any, Optional, ClassVar, cast, List
 import numpy as np
 from numpy.typing import NDArray
+from typing_extensions import Self
 
 from pydantic import (
     Field,
     field_validator,
+    model_validator,
     ValidatorFunctionWrapHandler,
-    ValidationInfo,
     ValidationError,
 )
 
@@ -32,6 +33,12 @@ class PhotonLINAC(ExternalBeamMachine):
         Output factor data
     tpr : np.ndarray
         Tissue-to-phantom ratio data
+
+    Notes
+    -----
+    Version-1 machine data is converted on validation: the pencil-beam kernels are rescaled
+    by 4 to the version-2 convention and the machine then reports ``version == 2``, so that
+    validating it or its dump again does not rescale the kernels a second time.
     """
 
     # Defining some naming properties (must keep type annotations when overriding pydantic fields)
@@ -68,11 +75,9 @@ class PhotonLINAC(ExternalBeamMachine):
 
     @field_validator("pb_kernels", mode="wrap")
     @classmethod
-    def validate_pb_kernels(
-        cls, v: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
-    ) -> PhotonSVDKernel:
+    def validate_pb_kernels(cls, v: Any, handler: ValidatorFunctionWrapHandler) -> PhotonSVDKernel:
         try:
-            pb_kernels = handler(v, info)
+            pb_kernels = handler(v)
         except ValidationError as err:
             # If we have a dict, we try to convert it to a PhotonSVDKernel object
             if isinstance(v, dict):
@@ -94,23 +99,34 @@ class PhotonLINAC(ExternalBeamMachine):
                     except Exception as exc:
                         raise ValueError("Could not parse matRad kernel data") from exc
 
-                    pb_kernels = handler(v, info)
+                    pb_kernels = handler(v)
                 else:
                     # Otherwise we don't know what to do
                     raise err
             else:
                 raise err
 
-        # Version specific handling
-        pb_kernels = cast(dict[float, PhotonSVDKernel], pb_kernels)
+        return cast(dict[float, PhotonSVDKernel], pb_kernels)
 
-        if info.data["version"] < 2:
-            # We need to rescale the pencil beam kernels by 4 due to their
-            # hardcoded implied 2D convolution resolution of (0.5 mm)^2
-            for _, kernel in pb_kernels.items():
-                kernel.kernel_data *= 4.0
+    @model_validator(mode="after")
+    def _convert_legacy_kernels(self) -> Self:
+        """
+        Rescale version-1 pencil beam kernels to the version-2 convention, once.
 
-        return pb_kernels
+        Version-1 kernels imply a hardcoded 2D convolution resolution of (0.5 mm)^2 and are
+        multiplied by 4. The machine is then marked as version 2, so that validating it or its
+        dump again does not rescale the kernels a second time. The kernels are replaced rather
+        than modified in place, as they may be shared with the validated input.
+        """
+        if self.version < 2 and self.pb_kernels:
+            # Written to __dict__: assignment validation would rerun this validator.
+            self.__dict__["pb_kernels"] = {
+                energy: kernel.model_copy(update={"kernel_data": 4.0 * kernel.kernel_data})
+                for energy, kernel in self.pb_kernels.items()
+            }
+            self.__dict__["version"] = 2
+            self.__pydantic_fields_set__.add("version")
+        return self
 
     def get_kernel_by_index(self, ix_energy: int) -> PhotonSVDKernel:
         """Get the pencil beam kernel for a specific energy index.

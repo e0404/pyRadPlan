@@ -29,8 +29,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon
 
+from pyRadPlan._settings import get_settings
 from pyRadPlan.gui.assets import asset_path
-from pyRadPlan.gui.menus import FileMenu, SettingsMenu, ViewMenu
+from pyRadPlan.gui.menus import BaseDataMenu, FileMenu, HelpMenu, SettingsMenu, ViewMenu
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets import (
     WorkflowWidget,
@@ -41,6 +42,12 @@ from pyRadPlan.gui.widgets import (
 )
 from pyRadPlan.gui.widgets._logo_widget import LogoWidget
 from pyRadPlan.gui.widgets._info_widget import InfoWidget
+from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
+from pyRadPlan.gui.windows._splash_win import (
+    BUILD_WINDOW_WEIGHT,
+    SHOW_WINDOW_WEIGHT,
+    StartupSplash,
+)
 
 
 def _group(title: str, content: QWidget) -> QGroupBox:
@@ -88,6 +95,14 @@ class MainWindow(QMainWindow):
         # Persistent log view (bottom-left panel), fed by the root logger.
         self.log_console = LogConsoleWidget()
 
+        # Beams dragged in the viewer are edits of the plan form, applied with it.
+        self._viewer.set_beam_editor(self.plan_widget.set_gantry_angle)
+        self.plan_widget.beam_angles_edited.connect(self._viewer.set_edited_beam_angles)
+        self._viewer.set_edited_beam_angles(self.plan_widget.edited_beam_angles())
+        self.workflow_widget.add_pending_changes_source(
+            "plan", self.plan_widget.has_pending_changes, self.plan_widget.apply_changes
+        )
+
         # Lock the input widgets while a workflow computation is running.
         self.workflow_widget.busy_changed.connect(self._on_busy_changed)
 
@@ -117,6 +132,11 @@ class MainWindow(QMainWindow):
                 font.setPixelSize(max(1, round(pixel * self._FONT_SCALE)))
         self.setFont(font)
 
+    def apply_ui_mode_setting(self) -> None:
+        """Push the configured ``settings.gui.ui_mode`` to the widgets and the File menu."""
+        self.plan_widget.set_ui_mode(get_settings().gui.ui_mode)
+        self._file_menu.refresh_ui_mode()
+
     def _on_busy_changed(self, busy: bool) -> None:
         """Disable input editors while a background computation runs."""
         self.plan_widget.setEnabled(not busy)
@@ -141,6 +161,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.workflow_widget.shutdown()
+        close_analysis_windows(self._viewer)
         # The log handler outlives the widget otherwise, and logging into a
         # destroyed QObject bridge would crash on interpreter shutdown.
         self.log_console.detach()
@@ -152,13 +173,24 @@ class MainWindow(QMainWindow):
 
     def _build_menu_bar(self) -> None:
         self._file_menu = FileMenu(self.workspace, self.workflow_widget, self)
+        self._file_menu.ui_mode_changed.connect(lambda _mode: self.apply_ui_mode_setting())
         log_toggle = QAction("Log Panel", self)
         log_toggle.setCheckable(True)
         log_toggle.setChecked(True)
         log_toggle.toggled.connect(self._log_panel.setVisible)
         self._view_menu = ViewMenu(self, panel_actions=(log_toggle,))
+        self._base_data_menu = BaseDataMenu(self)
+        self._base_data_menu.base_data_changed.connect(self.plan_widget.refresh_base_data)
         self._settings_menu = SettingsMenu(self)
-        for menu in (self._file_menu, self._view_menu, self._settings_menu):
+        self._settings_menu.settings_applied.connect(self.apply_ui_mode_setting)
+        self._help_menu = HelpMenu(self)
+        for menu in (
+            self._file_menu,
+            self._view_menu,
+            self._base_data_menu,
+            self._settings_menu,
+            self._help_menu,
+        ):
             self.menuBar().addMenu(menu)
 
     # ------------------------------------------------------------------
@@ -228,13 +260,30 @@ class MainWindow(QMainWindow):
         return col
 
 
-def launch_main_window(workspace: Optional[WorkspaceManager] = None) -> None:
-    """Create and show the main window, starting the Qt event loop."""
+def launch_main_window(
+    workspace: Optional[WorkspaceManager] = None, splash: Optional[StartupSplash] = None
+) -> None:
+    """Create and show the main window, starting the Qt event loop.
+
+    Parameters
+    ----------
+    workspace:
+        Shared :class:`WorkspaceManager`.  Falls back to the singleton.
+    splash:
+        Startup splash to advance while the window is built; it closes once the
+        window is shown.
+    """
     app = QApplication.instance() or QApplication(sys.argv)
+    if splash is not None:
+        splash.step("Building main window…", BUILD_WINDOW_WEIGHT)
     win = MainWindow(workspace)
     # Sensible restored-window size, but open maximized by default.
     win.resize(1500, 850)
+    if splash is not None:
+        splash.step("Opening main window…", SHOW_WINDOW_WEIGHT)
     win.showMaximized()
+    if splash is not None:
+        splash.finish(win)
     app.exec()
 
 

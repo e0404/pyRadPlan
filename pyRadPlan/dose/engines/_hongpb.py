@@ -1,5 +1,7 @@
 from typing import ClassVar
+
 import array_api_compat
+
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
 
 
@@ -40,16 +42,17 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             )
             lateral = (1 - kernels["weight"]) * l_narr + kernels["weight"] * l_bro
         elif self.lateral_model == "multi":
+            # Kernels are interpolated along depth: sigma_multi (m + 1, n_vox) and
+            # weight_multi (m, n_vox) or (n_vox,); the first sigma carries the remaining weight
+            radial_dist_sq = bixel["radial_dist_sq"]
             sigma_sq = kernels["sigma_multi"] ** 2 + bixel["sigma_ini_sq"]
+            w = xp.reshape(kernels["weight_multi"], (-1, radial_dist_sq.shape[0]))
+            weights_full = xp.concat((1 - xp.sum(w, axis=0, keepdims=True), w), axis=0)
             lateral = xp.sum(
-                (
-                    xp.column_stack(
-                        (1 - xp.sum(kernels["weight_multi"], axis=1), kernels["weight_multi"])
-                    )
-                    * xp.exp(-bixel["radial_dist_sq"][:, xp.newaxis] / (2 * sigma_sq))
-                    / (2 * xp.pi * sigma_sq)
-                ),
-                axis=1,
+                weights_full
+                * xp.exp(-xp.expand_dims(radial_dist_sq, axis=0) / (2 * sigma_sq))
+                / (2 * xp.pi * sigma_sq),
+                axis=0,
             )
         elif self.lateral_model == "singleXY":
             # Extract squared distances in the two lateral axes
@@ -77,17 +80,11 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         if xp.any(xp.isnan(bixel["physical_dose"])) or xp.any(bixel["physical_dose"] < 0):
             raise ValueError("Error in particle dose calculation.")
 
-        if self.calc_let:
+        if self._calc_let:
             bixel["let_dose"] = bixel["physical_dose"] * kernels["let"]
 
-        if self.calc_bio_dose:
-            # TODO: correct / adaptive alpha / beta values given tissue indices
-            bixel_alpha = kernels["alpha"][0]
-            bixel_beta = kernels["beta"][0]
-
-            # Multiple with dose
-            bixel["alpha_dose"] = bixel["physical_dose"] * bixel_alpha
-            bixel["sqrt_beta_dose"] = bixel["physical_dose"] * xp.sqrt(bixel_beta)
+        if self._calc_bio_dose and "v_alpha_x" in bixel:
+            bixel.update(self._evaluate_bio_influence(bixel, kernels))
 
     @staticmethod
     def is_available(pln, machine):

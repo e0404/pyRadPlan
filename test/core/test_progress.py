@@ -3,7 +3,10 @@
 import threading
 import time
 
+import pytest
+
 from pyRadPlan.core import (
+    ComputeCancelledError,
     ComputeControl,
     ProgressReport,
     ProgressReporter,
@@ -193,3 +196,30 @@ def test_progress_level_fraction():
     prog = [r for r in reports if isinstance(r, ProgressReport) and r.levels]
     mid = [r for r in prog if r.levels[0].current == 2][0]
     assert mid.levels[0].fraction == 0.5
+
+
+def test_track_raises_once_a_stop_is_requested():
+    algo = _Algo()
+    control = ComputeControl()
+    seen = []
+
+    with observe_control(control), pytest.raises(ComputeCancelledError):
+        for i in algo.track(range(5), name="Ray"):
+            seen.append(i)
+            if i == 1:
+                control.request_stop()
+
+    assert seen == [0, 1]
+    # without a stop request the loop completes
+    assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+
+
+def test_track_without_stderr_skips_the_console_bar(monkeypatch):
+    """Windowed processes (pythonw, the desktop bundle) have no stderr for tqdm to write to."""
+    algo = _Algo()
+    algo.console_progress = True
+    reports = _collect(algo)
+    monkeypatch.setattr("sys.stderr", None)
+
+    assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+    assert any(isinstance(r, ProgressReport) and r.levels for r in reports)

@@ -1,9 +1,7 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
 
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class Dose(FluenceDependentQuantity):
@@ -13,6 +11,7 @@ class Dose(FluenceDependentQuantity):
     dim = 1
     identifier = "physical_dose"
     name = "dose"
+    fraction_exponent = 1.0
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         return self.array_backend.asarray(

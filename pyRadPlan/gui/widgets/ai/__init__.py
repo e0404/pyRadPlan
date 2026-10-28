@@ -1,7 +1,11 @@
 """GUI helpers for running pydantic-ai tasks."""
 
 import importlib.util
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from ._ai_task_dialog import AiTask, AiTaskDialog
 
@@ -36,6 +40,20 @@ def ai_disabled_reason() -> Optional[str]:
     return None
 
 
+@contextmanager
+def busy_cursor() -> Iterator[None]:
+    """Show a wait cursor while the block runs.
+
+    Used around the first import of the agents, which loads pydantic-ai and can
+    take a few seconds.
+    """
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
 __all__ = [
     "AI_MISSING_TIP",
     "AI_NO_MODEL_TIP",
@@ -43,4 +61,5 @@ __all__ = [
     "AiTaskDialog",
     "ai_available",
     "ai_disabled_reason",
+    "busy_cursor",
 ]

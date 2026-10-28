@@ -5,17 +5,33 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
-from typing import Dict, Any, List, Union, ClassVar
+from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
 from pydantic import (
     Field,
     field_validator,
+    field_serializer,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
     ValidationError,
+    model_validator,
 )
 from pydantic.alias_generators import to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
+from pyRadPlan.biology.models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
+from pyRadPlan.machines import Machine, validate_machine
+from pyRadPlan.machines.base import get_machine
+
+default_bio_models: dict[str, str] = {
+    "photons": "none",
+    "protons": "constant_rbe",
+    "helium": "HEL",
+    "carbon": "alpha_beta_kernels",
+    "oxygen": "alpha_beta_kernels",
+    "VHEE": "none",
+}
 
 
 class Plan(PyRadPlanBaseModel, ABC):
@@ -34,8 +50,16 @@ class Plan(PyRadPlanBaseModel, ABC):
         Properties for the sequencer
     num_of_fractions : int
         Number of fractions in the plan.
-    machine : str
-        Machine used for the plan.
+    machine : str, dict or Machine
+        Machine used for the plan: the name of a machine in the base data search paths, or
+        its (loaded) base data.
+    dose_convention : {"per_fraction", "total"}
+        Whether objective dose parameters and reported result doses refer to one fraction
+        or to the total course. The dose influence matrix is always per fraction; with
+        ``"total"`` objective references are converted to one fraction for optimization and
+        results to the total course, each following its quantity's fraction scaling
+        (``RTQuantity.total_course_factor``: doses and effects ``num_of_fractions``,
+        ``sqrt_beta_dose`` its square root, LET none).
     prescribed_dose : float
         Prescribed dose for the plan. Serves mainly as normalization value.
     radiation_mode : str
@@ -47,11 +71,21 @@ class Plan(PyRadPlanBaseModel, ABC):
     prop_dose_calc: Dict[str, Any] = Field(default_factory=dict)
     prop_seq: Dict[str, Any] = Field(default_factory=dict)
     num_of_fractions: int = Field(default=30, gt=0)
-    machine: Union[Dict, str] = Field(default="Generic")
+    dose_convention: Literal["per_fraction", "total"] = Field(
+        default="per_fraction",
+        description="Convention for user-facing dose values: objective dose parameters are "
+        "interpreted and result doses reported either per fraction or for the total course "
+        "(num_of_fractions times the per-fraction dose of the influence matrix).",
+    )
+    machine: Union[Machine, Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
     mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
+    bio_model: Optional[Any] = Field(
+        default=None,
+        description="Biological model: name, {'model': name, **parameters} or instance. "
+        "Defaults per radiation mode.",
+    )
 
-    # Abstract property handled by below validator
     radiation_mode: str
 
     @field_validator("radiation_mode", mode="after")
@@ -71,6 +105,70 @@ class Plan(PyRadPlanBaseModel, ABC):
             This method should be overridden in derived classes.
         """
         raise NotImplementedError("This method should be overridden in derived classes")
+
+    @model_validator(mode="after")
+    def validate_bio_model(self) -> "Plan":
+        """
+        Resolve ``bio_model`` into a :class:`BiologicalModel` instance.
+
+        Accepts a model name, a ``{"model": name, **parameters}`` dict or an instance;
+        falls back to the per-modality default. The model must support the plan's
+        radiation mode; availability against the machine data is checked by the dose
+        engine.
+        """
+        spec = self.bio_model
+        if spec is None:
+            spec = default_bio_models.get(self.radiation_mode, "none")
+        if isinstance(spec, BiologicalModel):
+            create_bio_model(spec, self.radiation_mode)  # radiation mode check only
+        else:
+            self.bio_model = create_bio_model(spec, self.radiation_mode)
+        return self
+
+    @field_serializer("bio_model")
+    def _serialize_bio_model(self, value: Any, info: SerializationInfo) -> Any:
+        if not isinstance(value, BiologicalModel):
+            return value
+        context = info.context or {}
+        if context.get("matRad"):
+            return value.to_matrad()
+        return value.to_dict()
+
+    @field_validator("machine", mode="before")
+    @classmethod
+    def _validate_machine(cls, v: Any) -> Any:
+        """Rebuild a dumped machine as its registered class, chosen by its radiation mode."""
+        if isinstance(v, dict) and "meta" not in v:
+            radiation_mode = v.get("radiation_mode") or v.get("radiationMode")
+            if isinstance(radiation_mode, str) and get_machine(radiation_mode) is not None:
+                return validate_machine(v)
+        return v
+
+    @field_serializer("machine", mode="wrap")
+    def _serialize_machine(
+        self, value: Any, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> Any:
+        if not isinstance(value, Machine):
+            return handler(value)
+        if (info.context or {}).get("matRad"):
+            return value.name  # matRad's pln.machine names the base data file
+        # The field's Machine schema would drop the subclass fields (kernels, energies, ...).
+        # Only the explicitly set fields are kept so that validation restores the same
+        # fields_set, which e.g. decides whether tissue classes are derived from the kernels.
+        # The radiation mode is always kept, as validation picks the machine class by it.
+        dumped = value.model_dump(
+            mode=info.mode,
+            by_alias=info.by_alias,
+            exclude_unset=True,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+            round_trip=info.round_trip,
+            context=info.context,
+        )
+        mode_field = type(value).model_fields["radiation_mode"]
+        mode_key = (mode_field.serialization_alias or mode_field.alias) if info.by_alias else None
+        dumped.setdefault(mode_key or "radiation_mode", value.radiation_mode)
+        return dumped
 
     @field_validator("mult_scen", mode="before")
     @classmethod
@@ -140,6 +238,11 @@ class Plan(PyRadPlanBaseModel, ABC):
         # Convert camelCase to snake_case
         return {to_snake(k): v for k, v in v.items()}
 
+    @property
+    def result_dose_factor(self) -> int:
+        """Factor from per-fraction (dij) doses to reported doses under ``dose_convention``."""
+        return self.num_of_fractions if self.dose_convention == "total" else 1
+
     def to_matrad(self, context: str = "mat-file") -> Any:
         """
         Create a dictionary ready to save the Plan model to a mat-file.
@@ -152,6 +255,10 @@ class Plan(PyRadPlanBaseModel, ABC):
 
         pln_dict = super().to_matrad(context=context)
         pln_dict["numOfFractions"] = float(pln_dict["numOfFractions"])
+        if isinstance(self.bio_model, BiologicalModel) and self.bio_model.parameters:
+            # Keep matRad's established string-valued bioModel field while retaining
+            # pyRadPlan's model configuration for a lossless .mat round trip.
+            pln_dict["bioModelParameters"] = self.bio_model.parameters
         return pln_dict
 
 
@@ -283,11 +390,21 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
             return data
 
         # obtain the radiation mode if we have a dictionary at our hands
+        # (camelCase keys stem from matRad structs)
         radiation_mode = data.get("radiation_mode")
-
-        # Since we also allow camelCase, try to get radiationMode if radiation_mode is not set
         if radiation_mode is None:
             radiation_mode = data.get("radiationMode")
+
+        bio_model_parameters = data.pop("bioModelParameters", None)
+        if "bioModel" in data:
+            data["bio_model"] = bio_model_spec_from_matrad(data.pop("bioModel"))
+        if bio_model_parameters:
+            bio_model = data.get("bio_model")
+            if isinstance(bio_model, str):
+                data["bio_model"] = {"model": bio_model, **bio_model_parameters}
+            elif isinstance(bio_model, dict):
+                data["bio_model"] = {**bio_model, **bio_model_parameters}
+        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
 
         if radiation_mode == "photons":
             return PhotonPlan.model_validate(data)

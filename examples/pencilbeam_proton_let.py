@@ -38,7 +38,7 @@ ct, cst = load_tg119()
 
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
-pln.prop_opt = {"solver": "scipy"}
+pln.prop_opt = {"solver": "scipy", "convert_dose_objectives": False}
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)

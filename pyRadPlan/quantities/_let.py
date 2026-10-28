@@ -1,9 +1,7 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
 
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class DoseWeightedLET(FluenceDependentQuantity):
@@ -18,6 +16,7 @@ class DoseWeightedLET(FluenceDependentQuantity):
     dim = 1
     identifier = "let"
     name = "LETd"
+    fraction_exponent = 0.0
     required_dependencies = ("let_dose", "physical_dose")
 
     def _quotient_terms(self, fluence: Array, scenario_index: int) -> tuple[Array, Array, Array]:

@@ -15,7 +15,7 @@ from importlib.metadata import version as _pkg_version
 import logging
 import re
 from contextlib import nullcontext
-from typing import Literal
+from typing import Any, Literal
 import numpy as np
 import array_api_compat
 
@@ -56,7 +56,7 @@ class OptimizerIpopt(NonLinearOptimizer):
 
     allow_keyboard_cancel = True
 
-    options: dict[str]
+    options: dict[str, Any]
     display: bool
     output_mode: Literal["auto", "native", "logging"]
 

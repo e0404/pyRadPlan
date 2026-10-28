@@ -38,11 +38,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
     short_name = "nonlin_fluence"
     records_obj_history = True
 
-    bypass_objective_jacobian: bool
+    bypass_objective_jacobian: bool = True
 
     def __init__(self, pln: Union[Plan, dict] = None):
-        self.bypass_objective_jacobian = True
-
         self._target_voxels = None
         self._patient_voxels = None
 
@@ -70,6 +68,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self._device = getattr(self._quantities[0], "device", None)
         self.solver.device = self._device
 
+        # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
+        # quantities using them; computing them here would cost an extra matrix product.
+        self._objective_quantities = [
+            q for q in self._quantities if self._objectives_per_quantity[q.identifier]
+        ]
+
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
@@ -83,7 +87,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         q_scenarios = {}
 
         # Check & get Caches
-        for q in self._quantities:
+        for q in self._objective_quantities:
             q_vectors[q.identifier] = q(x)
             q_scenarios[q.identifier] = q.scenarios
 
@@ -129,7 +133,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         xp = self._array_backend
 
         # Check & get Caches
-        for q in self._quantities:
+        for q in self._objective_quantities:
             if initialize_cache:
                 if self.bypass_objective_jacobian:
                     cache_rows = 1
@@ -168,19 +172,19 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         else:
             self._grad_cache[:, ...] = 0.0
 
-        for q in self._quantities:
-            for scen_ix in q_scenarios[q.identifier]:
-                if self.bypass_objective_jacobian:
-                    cache_ix = 0
-                else:
-                    cache_ix = self._objectives_per_quantity[q.identifier]
+        for q in self._objective_quantities:
+            if self.bypass_objective_jacobian:
+                cache_ix = [0]
+            else:
+                cache_ix = self._objectives_per_quantity[q.identifier]
 
-                self._grad_cache[cache_ix, :] += xp.squeeze(
-                    q.compute_chain_derivative(
-                        self._grad_cache_intermediate[q.identifier], x
-                    ).flat[scen_ix],
-                    axis=0,
-                )
+            for scen_ix in q_scenarios[q.identifier]:
+                derivative = q.compute_chain_derivative(
+                    self._grad_cache_intermediate[q.identifier], x
+                ).flat[scen_ix]
+                # Row by row, as the Array API has no integer-array (scatter) indexing.
+                for row, obj_ix in enumerate(cache_ix):
+                    self._grad_cache[obj_ix, :] += derivative[row, :]
 
     def _objective_jacobian(self, x: Array) -> Array:
         """Define the objective jacobian."""
@@ -189,8 +193,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._set_quantity_imtermediate_gradient_cache()
 
-        q_vectors = {q.identifier: q(x) for q in self._quantities}
-        q_scenarios = {q.identifier: q.scenarios for q in self._quantities}
+        q_vectors = {q.identifier: q(x) for q in self._objective_quantities}
+        q_scenarios = {q.identifier: q.scenarios for q in self._objective_quantities}
 
         cnt = 0
         for obj_info in self._objective_list:

@@ -22,20 +22,6 @@ logger = logging.getLogger(__name__)
 
 SIDECAR_VERSION = 1
 
-# RGB triplets (0..1) used as a fallback for 3D-Slicer segment colors.
-_SLICER_COLORS = (
-    "1.0 0.0 0.0",
-    "0.0 1.0 0.0",
-    "0.0 0.0 1.0",
-    "1.0 1.0 0.0",
-    "1.0 0.0 1.0",
-    "0.0 1.0 1.0",
-    "0.5 0.5 0.5",
-    "1.0 0.5 0.0",
-    "0.5 0.0 1.0",
-    "0.0 0.5 0.5",
-)
-
 
 # --------------------------------------------------------------------------
 # Plain image IO
@@ -117,11 +103,12 @@ def build_sidecar(cst: StructureSet) -> dict:
         vois[str(index + 1)] = {
             "name": voi.name,
             "voi_type": voi.voi_type,
-            "alpha_x": voi.alpha_x,
-            "beta_x": voi.beta_x,
+            "alpha_x": voi.tissue_properties.alpha_x,
+            "beta_x": voi.tissue_properties.beta_x,
+            "tissue_properties": voi.tissue_properties.model_dump(),
             "overlap_priority": voi.overlap_priority,
             "visible": voi.visible,
-            "visible_color": list(voi.visible_color) if voi.visible_color is not None else None,
+            "color": list(voi.color),
         }
     return {"format_version": SIDECAR_VERSION, "type": "StructureSet", "vois": vois}
 
@@ -152,15 +139,14 @@ def apply_interop_metadata(image: sitk.Image, cst: StructureSet, extents: dict[i
     image.SetMetaData(
         "pyradplan_overlap_priorities", "|".join(str(v.overlap_priority) for v in cst.vois)
     )
-    image.SetMetaData("pyradplan_alpha_x_values", "|".join(str(v.alpha_x) for v in cst.vois))
-    image.SetMetaData("pyradplan_beta_x_values", "|".join(str(v.beta_x) for v in cst.vois))
+    tissues = [v.tissue_properties for v in cst.vois]
+    image.SetMetaData("pyradplan_alpha_x_values", "|".join(str(t.alpha_x) for t in tissues))
+    image.SetMetaData("pyradplan_beta_x_values", "|".join(str(t.beta_x) for t in tissues))
+    image.SetMetaData("pyradplan_tissue_properties", json.dumps([t.model_dump() for t in tissues]))
 
     image.SetMetaData("Segmentation_MasterRepresentation", "Binary labelmap")
     for i, voi in enumerate(cst.vois):
-        if voi.visible_color is not None:
-            color = " ".join(str(c / 255.0) for c in voi.visible_color)
-        else:
-            color = _SLICER_COLORS[i % len(_SLICER_COLORS)]
+        color = " ".join(str(c / 255.0) for c in voi.color)
         image.SetMetaData(f"Segment{i}_LabelValue", str(i + 1))
         image.SetMetaData(f"Segment{i}_Name", voi.name)
         image.SetMetaData(f"Segment{i}_Color", color)
@@ -189,6 +175,12 @@ def _embedded_metadata(label_image: sitk.Image) -> dict[int, dict]:
     alphas = _split("pyradplan_alpha_x_values")
     betas = _split("pyradplan_beta_x_values")
     priorities = _split("pyradplan_overlap_priorities")
+    tissues = []
+    if label_image.HasMetaDataKey("pyradplan_tissue_properties"):
+        try:
+            tissues = json.loads(label_image.GetMetaData("pyradplan_tissue_properties"))
+        except json.JSONDecodeError:
+            logger.warning("Ignoring unreadable pyradplan_tissue_properties header entry.")
 
     out: dict[int, dict] = {}
     for i, name in enumerate(names):
@@ -201,6 +193,8 @@ def _embedded_metadata(label_image: sitk.Image) -> dict[int, dict]:
             meta["beta_x"] = float(betas[i])
         if i < len(priorities):
             meta["overlap_priority"] = int(priorities[i])
+        if i < len(tissues):
+            meta["tissue_properties"] = tissues[i]
         out[i + 1] = meta
     return out
 
@@ -246,8 +240,13 @@ def label_image_to_vois(label_image: sitk.Image, ct, sidecar: Optional[dict]) ->
             "mask": mask,
             "ct_image": ct,
         }
-        for field in ("alpha_x", "beta_x", "overlap_priority", "visible", "visible_color"):
+        # Files written before tissue properties were stored only carry alpha/beta.
+        lq_fields = () if meta.get("tissue_properties") is not None else ("alpha_x", "beta_x")
+        for field in ("tissue_properties", *lq_fields, "overlap_priority", "visible", "color"):
             if field in meta and meta[field] is not None:
                 kwargs[field] = meta[field]
+        # Sidecars written before the color field was renamed use the former key.
+        if "color" not in kwargs and meta.get("visible_color") is not None:
+            kwargs["color"] = meta["visible_color"]
         vois.append(validate_voi(**kwargs))
     return vois

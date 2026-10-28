@@ -16,6 +16,7 @@ from ..core import PyRadPlanBaseModel, Grid
 from ..core.resample import resample_numpy_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
+from ..biology.tissues._base import TissueProperties
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -144,6 +145,12 @@ class StructureSet(PyRadPlanBaseModel):
         voi_list = []
         cst_data = data["vois"]
         ct = data["ct_image"]
+
+        # A cst with a single structure is a 1xN cell in MATLAB, which the reader squeezes
+        # into a flat row of columns. Column 2 is the VOI name, so a string in that position
+        # means we got a bare row; wrap it so we always iterate over rows.
+        if len(cst_data) > 1 and isinstance(cst_data[1], str):
+            cst_data = [cst_data]
 
         def get_idx_list(vdata_item):
             # Wrap a single array into a list if needed
@@ -325,6 +332,11 @@ class StructureSet(PyRadPlanBaseModel):
     def _target_vois(self) -> list[VOI]:
         return [v for v in self.vois if v.voi_type == "TARGET"]
 
+    def optimization_target_vois(self) -> list[VOI]:
+        """Targets carrying objectives, or all targets if none has any (matRad's rule)."""
+        targets = self._target_vois()
+        return [v for v in targets if v.objectives] or targets
+
     def _patient_contributing_vois(self) -> list[VOI]:
         """VOIs that define the patient outline.
 
@@ -333,6 +345,69 @@ class StructureSet(PyRadPlanBaseModel):
         """
         external = [v for v in self.vois if isinstance(v, ExternalVOI)]
         return external if external else list(self.vois)
+
+    def _union_voxels(
+        self,
+        vois: list[VOI],
+        order: str,
+        scenario: Union[int, Literal["any", "each"]],
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """Union of the voxel indices of ``vois``; see :meth:`target_union_voxels`."""
+        self._validate_scenario_arg(scenario)
+        if not vois:
+            empty = np.array([], dtype=np.int64)
+            if scenario == "each" and self.num_of_scenarios > 1:
+                return [empty.copy() for _ in range(self.num_of_scenarios)]
+            return empty
+
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            per_voi = [v.scenario_indices(scenario=int(scenario), order=order) for v in vois]
+            return np.unique(np.concatenate(per_voi))
+
+        if scenario == "any":
+            per_voi: list[np.ndarray] = []
+            for v in vois:
+                per_voi.extend(v.scenario_indices(order=order))
+            return np.unique(np.concatenate(per_voi))
+
+        # scenario == "each"
+        per_scen: list[np.ndarray] = []
+        for s in range(n_scen):
+            per_voi = [v.scenario_indices(scenario=s, order=order) for v in vois]
+            per_scen.append(np.unique(np.concatenate(per_voi)))
+        if n_scen == 1:
+            return per_scen[0]
+        return per_scen
+
+    def _union_mask(
+        self,
+        vois: list[VOI],
+        scenario: Union[int, Literal["any", "each"]],
+    ) -> sitk.Image:
+        """Union mask of the non-empty ``vois``; see :meth:`target_union_mask`."""
+        n_scen = self.num_of_scenarios
+
+        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
+            return self._union_3d_masks(
+                [self._voi_scenario_mask_3d(v, int(scenario)) for v in vois]
+            )
+
+        if scenario == "any":
+            slices_3d: list[sitk.Image] = []
+            for s in range(n_scen):
+                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in vois)
+            return self._union_3d_masks(slices_3d)
+
+        # scenario == "each"
+        per_scen = [
+            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in vois])
+            for s in range(n_scen)
+        ]
+        if n_scen == 1:
+            return per_scen[0]
+        return sitk.JoinSeries(per_scen)
 
     def target_union_voxels(
         self,
@@ -364,36 +439,7 @@ class StructureSet(PyRadPlanBaseModel):
         list[np.ndarray]
             For ``"each"`` on a 4D CT.
         """
-        self._validate_scenario_arg(scenario)
-        target_vois = self._target_vois()
-        if not target_vois:
-            empty = np.array([], dtype=np.int64)
-            if scenario == "each" and self.num_of_scenarios > 1:
-                return [empty.copy() for _ in range(self.num_of_scenarios)]
-            return empty
-
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            per_voi = [
-                v.scenario_indices(scenario=int(scenario), order=order) for v in target_vois
-            ]
-            return np.unique(np.concatenate(per_voi))
-
-        if scenario == "any":
-            per_voi: list[np.ndarray] = []
-            for v in target_vois:
-                per_voi.extend(v.scenario_indices(order=order))
-            return np.unique(np.concatenate(per_voi))
-
-        # scenario == "each"
-        per_scen: list[np.ndarray] = []
-        for s in range(n_scen):
-            per_voi = [v.scenario_indices(scenario=s, order=order) for v in target_vois]
-            per_scen.append(np.unique(np.concatenate(per_voi)))
-        if n_scen == 1:
-            return per_scen[0]
-        return per_scen
+        return self._union_voxels(self._target_vois(), order, scenario)
 
     def target_union_mask(
         self,
@@ -420,28 +466,36 @@ class StructureSet(PyRadPlanBaseModel):
         target_vois = self._target_vois()
         if not target_vois:
             raise ValueError("No TARGET VOI in StructureSet")
+        return self._union_mask(target_vois, scenario)
 
-        n_scen = self.num_of_scenarios
+    def optimization_target_voxels(
+        self,
+        order: str = "sitk",
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> Union[np.ndarray, list[np.ndarray]]:
+        """
+        Return the voxel indices of the targets used for beam placement.
 
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            return self._union_3d_masks(
-                [self._voi_scenario_mask_3d(v, int(scenario)) for v in target_vois]
-            )
+        Like :meth:`target_union_voxels`, but only targets carrying objectives count,
+        or all targets if none has any, as in matRad.
+        """
+        return self._union_voxels(self.optimization_target_vois(), order, scenario)
 
-        if scenario == "any":
-            slices_3d: list[sitk.Image] = []
-            for s in range(n_scen):
-                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in target_vois)
-            return self._union_3d_masks(slices_3d)
+    def optimization_target_mask(
+        self,
+        scenario: Union[int, Literal["any", "each"]] = "any",
+    ) -> sitk.Image:
+        """
+        Return the mask of the targets used for beam placement.
 
-        # scenario == "each"
-        per_scen = [
-            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in target_vois])
-            for s in range(n_scen)
-        ]
-        if n_scen == 1:
-            return per_scen[0]
-        return sitk.JoinSeries(per_scen)
+        Like :meth:`target_union_mask`, but only targets carrying objectives count,
+        or all targets if none has any, as in matRad.
+        """
+        self._validate_scenario_arg(scenario)
+        target_vois = self.optimization_target_vois()
+        if not target_vois:
+            raise ValueError("No TARGET VOI in StructureSet")
+        return self._union_mask(target_vois, scenario)
 
     def patient_voxels(
         self,
@@ -455,36 +509,7 @@ class StructureSet(PyRadPlanBaseModel):
         otherwise every VOI contributes. Index semantics and the ``scenario``
         argument mirror :meth:`target_union_voxels`.
         """
-        self._validate_scenario_arg(scenario)
-        contributing = self._patient_contributing_vois()
-        if not contributing:
-            empty = np.array([], dtype=np.int64)
-            if scenario == "each" and self.num_of_scenarios > 1:
-                return [empty.copy() for _ in range(self.num_of_scenarios)]
-            return empty
-
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            per_voi = [
-                v.scenario_indices(scenario=int(scenario), order=order) for v in contributing
-            ]
-            return np.unique(np.concatenate(per_voi))
-
-        if scenario == "any":
-            per_voi: list[np.ndarray] = []
-            for v in contributing:
-                per_voi.extend(v.scenario_indices(order=order))
-            return np.unique(np.concatenate(per_voi))
-
-        # scenario == "each"
-        per_scen: list[np.ndarray] = []
-        for s in range(n_scen):
-            per_voi = [v.scenario_indices(scenario=s, order=order) for v in contributing]
-            per_scen.append(np.unique(np.concatenate(per_voi)))
-        if n_scen == 1:
-            return per_scen[0]
-        return per_scen
+        return self._union_voxels(self._patient_contributing_vois(), order, scenario)
 
     def patient_mask(
         self,
@@ -500,32 +525,13 @@ class StructureSet(PyRadPlanBaseModel):
         contributing = self._patient_contributing_vois()
         if not contributing:
             raise ValueError("No VOIs in StructureSet")
+        return self._union_mask(contributing, scenario)
 
-        n_scen = self.num_of_scenarios
-
-        if isinstance(scenario, (int, np.integer)) and not isinstance(scenario, bool):
-            return self._union_3d_masks(
-                [self._voi_scenario_mask_3d(v, int(scenario)) for v in contributing]
-            )
-
-        if scenario == "any":
-            slices_3d: list[sitk.Image] = []
-            for s in range(n_scen):
-                slices_3d.extend(self._voi_scenario_mask_3d(v, s) for v in contributing)
-            return self._union_3d_masks(slices_3d)
-
-        # scenario == "each"
-        per_scen = [
-            self._union_3d_masks([self._voi_scenario_mask_3d(v, s) for v in contributing])
-            for s in range(n_scen)
-        ]
-        if n_scen == 1:
-            return per_scen[0]
-        return sitk.JoinSeries(per_scen)
-
-    def target_center_of_mass(self, scenario: int = 0) -> np.ndarray:
+    def target_center_of_mass(
+        self, scenario: int = 0, optimization_targets_only: bool = True
+    ) -> np.ndarray:
         """
-        Return the center of mass of the target union mask for one scenario.
+        Return the center of mass of the targets for one scenario.
 
         Parameters
         ----------
@@ -533,16 +539,30 @@ class StructureSet(PyRadPlanBaseModel):
             Scenario index in ``[0, num_of_scenarios)``. Defaults to ``0``,
             which preserves the legacy 3D behavior and the prior 4D
             behavior of implicitly using scenario 0.
+        optimization_targets_only : bool, optional
+            If ``True`` (default), use :meth:`optimization_target_mask`, giving the
+            default isocenter as in ``matRad_getIsoCenter``. If ``False``, use
+            :meth:`target_union_mask`, i.e. all targets.
 
         Returns
         -------
         np.ndarray
             World-space coordinates of the center of mass, shape ``(3,)``.
         """
+        self._validate_int_scenario(scenario, "target_center_of_mass")
+        if optimization_targets_only:
+            mask = self.optimization_target_mask(scenario=int(scenario))
+        else:
+            mask = self.target_union_mask(scenario=int(scenario))
+        return self._center_of_mass(mask)
+
+    def _validate_int_scenario(self, scenario: int, method: str) -> None:
         self._validate_scenario_arg(scenario)
         if not isinstance(scenario, (int, np.integer)) or isinstance(scenario, bool):
-            raise ValueError(f"target_center_of_mass requires an int scenario, got {scenario!r}")
-        mask_image = self.target_union_mask(scenario=int(scenario))
+            raise ValueError(f"{method} requires an int scenario, got {scenario!r}")
+
+    @staticmethod
+    def _center_of_mass(mask_image: sitk.Image) -> np.ndarray:
         # Transpose so axes go (x, y, z) for sitk-style continuous indexing.
         mask = sitk.GetArrayViewFromImage(mask_image).T
 
@@ -688,8 +708,7 @@ class StructureSet(PyRadPlanBaseModel):
             "ct_image": self.ct_image,
             "mask": body_segmentation,
             "voi_type": voi_type,
-            "alpha_x": 0.1,
-            "beta_x": 0.05,
+            "tissue_properties": TissueProperties(),
         }
 
         body_voi = validate_voi(body_voi_data)
@@ -702,14 +721,13 @@ class StructureSet(PyRadPlanBaseModel):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
 
-        if not overlap_is_applied:
-            cst = self.apply_overlap_priorities()
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
         num_voxels = np.prod(cst.ct_image.size)
         alpha = np.zeros(num_voxels)
         beta = np.zeros(num_voxels)
         for voi in cst.vois:
-            alpha[voi.indices_numpy] = voi.alpha_x
-            beta[voi.indices_numpy] = voi.beta_x
+            alpha[voi.indices_numpy] = voi.tissue_properties.alpha_x
+            beta[voi.indices_numpy] = voi.tissue_properties.beta_x
 
         if resample_grid is not None:
             original_grid = cst.ct_image.grid
@@ -725,30 +743,116 @@ class StructureSet(PyRadPlanBaseModel):
                 interpolator=sitk.sitkNearestNeighbor,
                 target_grid=resample_grid,
             ).ravel()
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
+        beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
         return alpha, beta
 
+    def get_tissue_class_indices(
+        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
+    ) -> np.ndarray:
+        """
+        Get the tissue class index of every voxel of the CT.
+
+        Indices refer to :meth:`get_tissue_classes`. Overlapping VOIs are resolved by
+        their overlap priority; voxels outside every VOI get index 0.
+
+        Parameters
+        ----------
+        overlap_is_applied : bool, optional
+            Whether overlap priorities were already applied to this structure set.
+        resample_grid : Grid, optional
+            Grid to resample the indices onto (nearest neighbor), e.g. the dose grid.
+
+        Returns
+        -------
+        np.ndarray
+            Indices of shape (num_voxels, num_ct_scenarios), voxels in numpy order.
+        """
+
+        cst = self if overlap_is_applied else self.apply_overlap_priorities()
+        num_voxels = np.prod(cst.ct_image.size)
+        ix = np.zeros(num_voxels, dtype=np.int64)
+        tissue_classes = list(self.get_tissue_classes())
+        for voi in cst.vois:
+            ix[voi.indices_numpy] = tissue_classes.index(voi.tissue_properties)
+
+        if resample_grid is not None:
+            original_grid = cst.ct_image.grid
+            ix = resample_numpy_array(
+                ix.reshape(original_grid.dimensions[::-1]),
+                reference_grid=original_grid,
+                interpolator=sitk.sitkNearestNeighbor,
+                target_grid=resample_grid,
+            ).ravel()
+
+        # One column per CT scenario. TODO: structures are currently assumed identical
+        # across CT scenarios; per-scenario structure sets need to fill the columns here.
+        num_ct_scen = cst.ct_image.num_of_ct_scen
+        ix = np.repeat(ix[:, None], num_ct_scen, axis=1)
+        return ix
+
+    def get_tissue_classes(self) -> np.ndarray:
+        """
+        Get the distinct tissue properties of the VOIs, in order of first occurrence.
+
+        Tissues are told apart by (NaN-aware) equality, so VOIs whose tissue properties
+        are equal share one class.
+
+        Returns
+        -------
+        np.ndarray
+            1D object array of :class:`TissueProperties`.
+        """
+        classes: list[TissueProperties] = []
+        for voi in self.vois:
+            if voi.tissue_properties not in classes:
+                classes.append(voi.tissue_properties)
+        tissue_classes = np.empty(len(classes), dtype=object)
+        tissue_classes[:] = classes
+        return tissue_classes
+
     def set_colors(self) -> Self:
-        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``visible_color``.
+        """Assign colors from ``DEFAULT_VOI_COLORS`` to VOIs lacking ``color``.
 
         Colors are popped in order from the predefined list for each VOI type, skipping
         any color already taken by another VOI. If the list is exhausted the last color
-        in the list is reused. Existing ``visible_color`` values are preserved.
+        in the list is reused. Explicitly set ``color`` values are preserved, and so is an
+        auto-assigned color that is still free, so revalidating the structure set (e.g.
+        after a VOI was retyped or removed) does not recolor the remaining VOIs.
         """
         # Per-type pool of unused predefined colors.
         pool: dict[str, list[tuple[int, int, int]]] = {
             t: list(palette) for t, palette in DEFAULT_VOI_COLORS.items()
         }
         for voi in self.vois:
-            if voi.visible_color is not None:
-                color = tuple(voi.visible_color)
+            if "color" in voi.model_fields_set:
+                color = tuple(voi.color)
                 if color in pool.get(voi.voi_type, []):
                     pool[voi.voi_type].remove(color)
 
+        unassigned = []
         for voi in self.vois:
-            if voi.visible_color is None:
-                palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
-                remaining = pool.setdefault(voi.voi_type, list(palette))
-                voi.visible_color = remaining.pop(0) if remaining else palette[-1]
+            if "color" not in voi.model_fields_set:
+                remaining = pool.get(voi.voi_type, [])
+                color = tuple(voi.color)
+                if color in remaining:
+                    remaining.remove(color)
+                else:
+                    unassigned.append(voi)
+
+        for voi in unassigned:
+            palette = DEFAULT_VOI_COLORS.get(voi.voi_type, [(128, 128, 128)])
+            remaining = pool.setdefault(voi.voi_type, list(palette))
+            new_color = remaining.pop(0) if remaining else palette[-1]
+            if tuple(voi.color) != new_color:
+                voi.color = new_color
+                # The assignment marks the field as set; keep "set" meaning "explicitly
+                # chosen" so consumers can still tell a default color from a picked one.
+                voi.model_fields_set.discard("color")
 
         return self
 

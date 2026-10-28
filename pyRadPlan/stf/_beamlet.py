@@ -83,7 +83,7 @@ class Beamlet(PyRadPlanBaseModel):
                 return np.float64(v + 1)  # Increment focus_ix by 1 for MATLAB/matRad
             return np.float64(v)  # Ensure double for MATLAB/matRad
 
-        return handler(v, info)
+        return handler(v)
 
 
 # Do not use yet

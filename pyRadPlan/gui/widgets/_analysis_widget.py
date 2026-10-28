@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from functools import partial
+from typing import Any, Optional
 
 import numpy as np
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QColorDialog,
+    QDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QComboBox,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -24,13 +28,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.gui.widgets._base import format_number_list, parse_number_list
+from pyRadPlan.gui.widgets._quantity_selector import QuantitySelector
 from pyRadPlan.gui.widgets.analysis._dvh import DVHPlotWidget
 from pyRadPlan.gui.widgets.analysis._gamma import GammaWidget
 from pyRadPlan.gui.widgets.analysis._qi import QITableWidget
+from pyRadPlan.gui.widgets.analysis._qi_point_dialog import PointKind, QIPointDialog
+from pyRadPlan.analysis._units import safe_unit
 from pyRadPlan.gui.widgets.result._labels import TruncatedCheckBox
-from pyRadPlan.analysis._dvh import DVH
+from pyRadPlan.analysis import DEFAULT_REF_VOLS, QICollection, format_unit_symbol
+from pyRadPlan.analysis._dvh import DVH, ureg
 
-_NONE_LABEL = "— None —"
+logger = logging.getLogger(__name__)
 
 _TYPE_GROUPS: tuple[tuple[str, str], ...] = (
     ("TARGET", "Targets"),
@@ -46,13 +55,24 @@ _GROUPBOX_STYLE = (
     "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
 )
 
+_NONE_LABEL = "— None —"
+
 
 class AnalysisWidget(QWidget):
     """Widget displaying DVH plot, QI table, and Gamma analysis.
 
-    Data is set via :meth:`set_data`. DVH curves are computed eagerly for all
-    (quantity x mask) combinations and cached; selection changes only trigger
-    a replot from the cache.
+    Data is set via :meth:`set_data`. The primary quantity, chosen in the
+    primary dropdown, drives the solid DVH curves and the QI table. An optional
+    secondary quantity from the compare dropdown adds dashed DVH curves for
+    comparison, on a second x axis when its unit is incompatible. DVH curves and
+    quality indicators are computed on demand and cached, so switching back to a
+    quantity or toggling structures only re-renders from the cache.
+
+    The DVH plot and the QI table are linked: selecting a table row or clicking a
+    curve highlights the structure in both, and selecting a D_x / V_x cell or
+    clicking its marker also shows the point with its value and parameter lines.
+    Double-clicking the plot or dragging a highlighted parameter line proposes a
+    new D_x / V_x point, which is added to the QI parameters after confirmation.
     """
 
     # Emitted when a VOI color is changed inside this widget
@@ -69,10 +89,30 @@ class AnalysisWidget(QWidget):
         self._overlay_units: dict[str, str] = {}
         self._overlay_labels: dict[str, str] = {}
         self._dvh_cache: dict[tuple[str, str], DVH] = {}  # (qty_name, voi_name)
+        # Keyed by (qty_name, params signature); filled lazily for the shown
+        # quantity only, since the D_x/V_x parameters are user-editable.
+        self._qi_cache: dict[tuple[str, str], QICollection] = {}
 
         # Per-VOI UI state (populated by set_data)
         self._voi_checkboxes: dict[str, TruncatedCheckBox] = {}
         self._voi_color_swatches: dict[str, QPushButton] = {}
+
+        # Metric selection UI state, plus the last computed QI collection so
+        # toggling a metric re-renders the table without recomputing it.
+        self._metric_checkboxes: dict[str, TruncatedCheckBox] = {}
+        self._available_metrics: list[str] = []
+        self._syncing_metrics = False
+        self._qi_collection: QICollection | None = None
+        self._qi_structures: list[str] = []
+
+        #: "Show in DVH" checkbox of the D_x ("dx") and V_x ("vx") points.
+        self.show_markers_checkboxes: dict[str, QCheckBox] = {}
+
+        # V_x text typed by the user per quantity. V_x values carry the unit of
+        # the shown quantity, so they cannot be shared like the D_x percentages.
+        self._shown_quantity = ""
+        self._ref_doses_by_quantity: dict[str, str] = {}
+        self._synced_ref_doses_text = ""
 
         # --- Main layout ---
         layout = QVBoxLayout(self)
@@ -85,7 +125,7 @@ class AnalysisWidget(QWidget):
         dvh_qi_layout = QVBoxLayout(self.dvh_qi_widget)
         dvh_qi_layout.setContentsMargins(4, 4, 4, 4)
 
-        # Controls panel (quantities left | structures right)
+        # Controls panel (quantity left | structures right)
         self._controls_panel = self._build_controls_panel()
         dvh_qi_layout.addWidget(self._controls_panel)
 
@@ -100,6 +140,21 @@ class AnalysisWidget(QWidget):
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
+        for kind, checkbox in self.show_markers_checkboxes.items():
+            checkbox.toggled.connect(partial(self.dvh_widget.set_markers_visible, kind))
+        self.qi_widget.cell_selected.connect(self._on_qi_cell_selected)
+        self.dvh_widget.structure_clicked.connect(self._on_structure_clicked)
+        self.dvh_widget.marker_clicked.connect(self._on_marker_clicked)
+        # Deferred, so the dialogs do not open inside the plot's mouse event handling.
+        self.dvh_widget.point_requested.connect(
+            lambda dose, volume: QTimer.singleShot(0, partial(self._add_point, dose, volume))
+        )
+        self.dvh_widget.parameter_moved.connect(
+            lambda structure, metric, parameter: QTimer.singleShot(
+                0, partial(self._move_point, structure, metric, parameter)
+            )
+        )
+
         self.tabs.addTab(self.dvh_qi_widget, "DVH / QI")
 
         # ---- Tab 2: Gamma ----
@@ -111,7 +166,7 @@ class AnalysisWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _build_controls_panel(self) -> QWidget:
-        """Build the side-by-side Quantities | Structures controls panel."""
+        """Build the side-by-side Quantity | Structures | QI parameters controls panel."""
         panel = QWidget()
         panel_layout = QHBoxLayout(panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -124,17 +179,22 @@ class AnalysisWidget(QWidget):
         form.setSpacing(6)
         qty_group.setLayout(form)
 
-        self.q1_combo = QComboBox()
-        self.q1_combo.setToolTip("Primary quantity — plotted as solid lines")
-        form.addRow(QLabel("Primary:"), self.q1_combo)
+        self.quantity_selector = QuantitySelector()
+        self.quantity_selector.setToolTip(
+            "Quantity shown in the DVH plot (solid) and the QI table"
+        )
+        form.addRow(QLabel("Primary:"), self.quantity_selector)
 
-        self.q2_combo = QComboBox()
-        self.q2_combo.setToolTip("Secondary quantity — plotted as dotted lines (optional)")
-        form.addRow(QLabel("Secondary:"), self.q2_combo)
+        self.secondary_selector = QuantitySelector(none_label=_NONE_LABEL)
+        self.secondary_selector.setToolTip(
+            "Optional second quantity plotted as dashed DVH curves; "
+            "incompatible units get a second x axis"
+        )
+        form.addRow(QLabel("Compare:"), self.secondary_selector)
 
         panel_layout.addWidget(qty_group, 1)
 
-        # ---- Right: Structures ----
+        # ---- Middle: Structures ----
         voi_group = QGroupBox("Structures")
         voi_outer = QVBoxLayout()
         voi_outer.setContentsMargins(6, 6, 6, 6)
@@ -170,11 +230,147 @@ class AnalysisWidget(QWidget):
 
         panel_layout.addWidget(voi_group, 2)
 
-        # Connect quantity-combo signals
-        self.q1_combo.currentTextChanged.connect(self._replot)
-        self.q2_combo.currentTextChanged.connect(self._replot)
+        # ---- Right: QI parameters ----
+        panel_layout.addWidget(self._build_qi_params_group(), 1)
+
+        self.quantity_selector.key_changed.connect(self._replot)
+        self.secondary_selector.key_changed.connect(self._replot)
 
         return panel
+
+    def _build_qi_params_group(self) -> QGroupBox:
+        """Build the D_x / V_x inputs and the metric selection for the QI table."""
+        group = QGroupBox("QI parameters")
+        outer = QVBoxLayout()
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(4)
+        group.setLayout(outer)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+
+        self.ref_vols_edit = QLineEdit(format_number_list(DEFAULT_REF_VOLS))
+        self.ref_vols_edit.setToolTip(
+            "Reference volumes in % for D_x metrics, e.g. '2 50 98'.\n"
+            "Invalid input falls back to the defaults."
+        )
+        form.addRow(QLabel("D_x [%]:"), self._with_markers_checkbox("dx", self.ref_vols_edit))
+
+        self.ref_doses_edit = QLineEdit()
+        self.ref_doses_edit.setToolTip(
+            "Reference doses for V_x metrics, e.g. '10 20 30'.\n"
+            "Clear the field to re-derive five values from the maximum."
+        )
+        self._ref_doses_label = QLabel("V_x:")
+        form.addRow(self._ref_doses_label, self._with_markers_checkbox("vx", self.ref_doses_edit))
+        outer.addLayout(form)
+
+        # Metric selection — same scroll + checkbox pattern as the Structures box
+        self._metrics_scroll = QScrollArea()
+        self._metrics_scroll.setWidgetResizable(True)
+        self._metrics_scroll.setMinimumHeight(115)
+        self._metrics_container = QWidget()
+        self._metrics_layout = QGridLayout(self._metrics_container)
+        self._metrics_layout.setContentsMargins(2, 2, 2, 2)
+        self._metrics_layout.setHorizontalSpacing(8)
+        self._metrics_layout.setVerticalSpacing(2)
+        self._metrics_scroll.setWidget(self._metrics_container)
+        outer.addWidget(self._metrics_scroll, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        all_btn = QPushButton("All")
+        all_btn.setFixedWidth(48)
+        none_btn = QPushButton("None")
+        none_btn.setFixedWidth(48)
+        all_btn.clicked.connect(self._select_all_metrics)
+        none_btn.clicked.connect(self._deselect_all_metrics)
+        btn_row.addWidget(all_btn)
+        btn_row.addWidget(none_btn)
+        btn_row.addStretch(1)
+        outer.addLayout(btn_row)
+
+        self.ref_vols_edit.editingFinished.connect(self._replot)
+        self.ref_doses_edit.editingFinished.connect(self._on_ref_doses_edited)
+
+        return group
+
+    def _with_markers_checkbox(self, kind: str, edit: QLineEdit) -> QHBoxLayout:
+        """Return *edit* in a row with a checkbox showing its points in the DVH."""
+        name = "D_x" if kind == "dx" else "V_x"
+        checkbox = QCheckBox("Show in DVH")
+        checkbox.setToolTip(
+            f"Mark the {name} points of the table on the DVH curves.\n"
+            "Select a D_x / V_x cell or click a marker to show its value and parameter "
+            "lines;\ndrag the dashed parameter line or double-click the plot to add a point."
+        )
+        self.show_markers_checkboxes[kind] = checkbox
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(edit, 1)
+        row.addWidget(checkbox)
+        return row
+
+    def _sync_metric_checkboxes(self, selectable: list[str]) -> None:
+        """Rebuild the metric checkboxes when the selectable metric set changes.
+
+        Only metrics that are *not* already governed by the D_x / V_x inputs
+        above get a checkbox; listing them twice in the same box would be
+        redundant. Check states of metrics that survive a parameter change are
+        preserved; metrics seen for the first time start checked.
+        """
+        if selectable == list(self._metric_checkboxes):
+            return
+
+        previous = {name: cb.isChecked() for name, cb in self._metric_checkboxes.items()}
+
+        for cb in self._metric_checkboxes.values():
+            cb.deleteLater()
+        self._metric_checkboxes.clear()
+        while self._metrics_layout.count():
+            item = self._metrics_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        for i, name in enumerate(selectable):
+            cb = TruncatedCheckBox(name)
+            cb.setChecked(previous.get(name, True))
+            cb.stateChanged.connect(self._on_metric_toggled)
+            self._metric_checkboxes[name] = cb
+            self._metrics_layout.addWidget(cb, *divmod(i, 3))
+
+    def _checked_metrics(self) -> list[str]:
+        """Return the metric ids to show as columns, in the collections' order.
+
+        Metrics driven by the D_x / V_x inputs have no checkbox and are always
+        included; the inputs themselves decide which of them exist.
+        """
+        return [
+            name
+            for name in self._available_metrics
+            if name not in self._metric_checkboxes or self._metric_checkboxes[name].isChecked()
+        ]
+
+    def _on_metric_toggled(self, *_: Any) -> None:
+        """Re-render the table only; the metric set itself did not change."""
+        if self._syncing_metrics:
+            return
+        self._render_qi_table()
+
+    def _set_all_metrics(self, checked: bool) -> None:
+        for cb in self._metric_checkboxes.values():
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+        self._render_qi_table()
+
+    def _select_all_metrics(self) -> None:
+        self._set_all_metrics(True)
+
+    def _deselect_all_metrics(self) -> None:
+        self._set_all_metrics(False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -191,7 +387,10 @@ class AnalysisWidget(QWidget):
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
     ) -> None:
-        """Set all data, populate controls, cache DVHs, and trigger initial plot.
+        """Set all data, populate controls, and trigger the initial plot.
+
+        The secondary (compare) dropdown is repopulated with the same quantities
+        and reset to none, so only the primary quantity is plotted initially.
 
         Parameters
         ----------
@@ -207,7 +406,7 @@ class AnalysisWidget(QWidget):
         overlay_labels:
             Display label (e.g. ``"Dose"``) per quantity name.
         initial_quantity:
-            Quantity name to preselect in the primary combo.
+            Quantity name to preselect in the quantity dropdown.
         initial_vois:
             VOI names to pre-check in the list. Defaults to all VOIs.
         voi_types:
@@ -221,37 +420,14 @@ class AnalysisWidget(QWidget):
         self._overlay_units = overlay_units or {}
         self._overlay_labels = overlay_labels or {}
         self._dvh_cache = {}
+        self._qi_cache = {}
+        self._shown_quantity = ""
+        self._ref_doses_by_quantity = {}
 
-        # Pre-compute DVHs for every (quantity × mask) combination
-        for qty_name, qty_arr in self._quantities.items():
-            for voi_name, mask in self._masks.items():
-                try:
-                    dvh = DVH.compute(quantity=qty_arr, mask=mask, name=voi_name)
-                    self._dvh_cache[(qty_name, voi_name)] = dvh
-                except Exception:
-                    pass
-
-        # ---- Populate quantity combos ----
         qty_names = list(self._quantities.keys())
 
-        self.q1_combo.blockSignals(True)
-        self.q2_combo.blockSignals(True)
-
-        self.q1_combo.clear()
-        self.q1_combo.addItems(qty_names)
-
-        self.q2_combo.clear()
-        self.q2_combo.addItem(_NONE_LABEL)
-        self.q2_combo.addItems(qty_names)
-
-        if initial_quantity and initial_quantity in qty_names:
-            self.q1_combo.setCurrentText(initial_quantity)
-        elif qty_names:
-            self.q1_combo.setCurrentIndex(0)
-        self.q2_combo.setCurrentIndex(0)  # default: None
-
-        self.q1_combo.blockSignals(False)
-        self.q2_combo.blockSignals(False)
+        self.quantity_selector.set_keys(qty_names, initial_quantity)
+        self.secondary_selector.set_keys(qty_names)
 
         # ---- Populate VOI rows ----
         self._rebuild_voi_rows(initial_vois)
@@ -360,6 +536,200 @@ class AnalysisWidget(QWidget):
             self.color_changed.emit(name, rgb)
             self._replot()
 
+    def _qi_params(self) -> tuple[list[float] | None, list[float] | None]:
+        """Read the D_x / V_x inputs, falling back to the defaults when invalid.
+
+        D_x volumes must be finite and within [0, 100] %, V_x doses finite and
+        non-negative; out-of-range values are treated like unparsable text.
+        """
+        try:
+            ref_vols = parse_number_list(self.ref_vols_edit.text())
+            if not all(np.isfinite(v) and 0.0 <= v <= 100.0 for v in ref_vols):
+                raise ValueError
+        except ValueError:
+            logger.debug("Invalid D_x input %r; using defaults", self.ref_vols_edit.text())
+            ref_vols = None
+        try:
+            ref_doses = parse_number_list(self.ref_doses_edit.text())
+            if not all(np.isfinite(v) and v >= 0.0 for v in ref_doses):
+                raise ValueError
+        except ValueError:
+            logger.debug("Invalid V_x input %r; using defaults", self.ref_doses_edit.text())
+            ref_doses = None
+
+        # An empty field means "use the backend default", not "no metrics".
+        return (ref_vols or None, ref_doses or None)
+
+    def _on_ref_doses_edited(self) -> None:
+        self._remember_ref_doses()
+        self._replot()
+
+    def _remember_ref_doses(self) -> None:
+        """Store the V_x text as explicit input for the shown quantity.
+
+        Text equal to what :meth:`_sync_param_fields` wrote back is not user
+        input: storing derived defaults would pin them for that quantity.
+        Invalid text is dropped rather than stored, so the quantity falls back
+        to its defaults instead of re-applying the invalid entry on return.
+        """
+        text = self.ref_doses_edit.text()
+        if not self._shown_quantity or text == self._synced_ref_doses_text:
+            return
+        if text and self._qi_params()[1] is None:
+            self._ref_doses_by_quantity.pop(self._shown_quantity, None)
+        else:
+            self._ref_doses_by_quantity[self._shown_quantity] = text
+
+    def _show_quantity(self, qty_name: str) -> None:
+        """Switch the V_x input and its label over to *qty_name*."""
+        self._remember_ref_doses()
+        self._shown_quantity = qty_name
+
+        text = self._ref_doses_by_quantity.get(qty_name, "")
+        self.ref_doses_edit.blockSignals(True)
+        self.ref_doses_edit.setText(text)
+        self.ref_doses_edit.blockSignals(False)
+        self._synced_ref_doses_text = text
+
+        unit = safe_unit(self._overlay_units.get(qty_name, ""))
+        label = "V_x:" if unit == ureg.dimensionless else f"V_x [{format_unit_symbol(unit)}]:"
+        self._ref_doses_label.setText(label)
+
+    def _dvh_for(self, qty_name: str, voi_name: str) -> DVH | None:
+        """Return (and cache) the DVH of *qty_name* in structure *voi_name*."""
+        key = (qty_name, voi_name)
+        if key in self._dvh_cache:
+            return self._dvh_cache[key]
+        if qty_name not in self._quantities or voi_name not in self._masks:
+            return None
+        try:
+            dvh = DVH.compute(
+                quantity=self._quantities[qty_name], mask=self._masks[voi_name], name=voi_name
+            )
+        except (ValueError, TypeError) as exc:
+            logger.debug("Could not compute %r DVH for structure %r: %s", qty_name, voi_name, exc)
+            return None
+        self._dvh_cache[key] = dvh
+        return dvh
+
+    def _qis_for(
+        self,
+        qty_name: str,
+        ref_vols: list[float] | None,
+        ref_doses: list[float] | None,
+    ) -> QICollection | None:
+        """Return (and cache) the QI collection for *qty_name*.
+
+        Computed on demand rather than eagerly for every quantity: the metric
+        parameters are user-editable, and voxel extraction over large masks
+        dominates the cost.
+        """
+        if qty_name not in self._quantities or not self._masks:
+            return None
+
+        dose_unit = safe_unit(self._overlay_units.get(qty_name, ""))
+        key = (qty_name, f"{ref_vols}|{ref_doses}|{dose_unit}")
+        if key not in self._qi_cache:
+            try:
+                self._qi_cache[key] = QICollection.from_masks(
+                    self._masks,
+                    self._quantities[qty_name],
+                    ref_vols=ref_vols,
+                    ref_doses=ref_doses,
+                    dose_unit=dose_unit,
+                )
+            except (ValueError, TypeError) as exc:
+                logger.warning("Could not compute quality indicators for %r: %s", qty_name, exc)
+                return None
+        return self._qi_cache[key]
+
+    def _update_qi_table(self, qty_name: str, selected_vois: list[str]) -> None:
+        """Recompute the QI collection, refresh the metric list, and render."""
+        self._qi_structures = selected_vois
+
+        if not qty_name or not selected_vois:
+            self._qi_collection = None
+            self.qi_widget.set_qis(None)
+            return
+
+        ref_vols, ref_doses = self._qi_params()
+
+        # Resolve the defaults here rather than in from_masks, so the values
+        # written back to the fields keep the cache key identical.
+        if ref_vols is None:
+            ref_vols = list(DEFAULT_REF_VOLS)
+        if ref_doses is None and qty_name in self._quantities:
+            try:
+                ref_doses = QICollection.default_ref_doses(self._quantities[qty_name]) or None
+            except ValueError:
+                ref_doses = None
+
+        qis = self._qis_for(qty_name, ref_vols, ref_doses)
+        self._qi_collection = qis
+        self._available_metrics = qis.metric_ids(selected_vois) if qis is not None else []
+
+        # D_x / V_x metrics are governed by the inputs above, so they get no
+        # checkbox of their own; only the fixed reductions are selectable.
+        selectable = [m for m in self._available_metrics if not self._is_parametric(qis, m)]
+
+        self._syncing_metrics = True
+        try:
+            self._sync_metric_checkboxes(selectable)
+            self._sync_param_fields(qis)
+        finally:
+            self._syncing_metrics = False
+
+        self._render_qi_table()
+
+    @staticmethod
+    def _is_parametric(qis: QICollection | None, metric: str) -> bool:
+        """Whether *metric* comes from a D_x / V_x reference parameter."""
+        if qis is None:
+            return False
+        for structure in qis:
+            qi = structure.metrics.get(metric)
+            if qi is not None:
+                return qi.qi_type in ("dx", "vx")
+        return False
+
+    def _sync_param_fields(self, qis: QICollection | None) -> None:
+        """Write the reference values actually used back into the D_x / V_x inputs.
+
+        Keeps the fields showing the real parameters rather than an ``auto``
+        placeholder, and makes a fallback from invalid input visible. Without a
+        collection (nothing could be computed) the user's input is left intact.
+        """
+        if qis is None:
+            return
+
+        ref_vols: list[float] = []
+        ref_doses: list[float] = []
+        for structure in qis:
+            for qi in structure.values():
+                if qi.qi_type == "dx" and qi.ref_vol not in ref_vols:
+                    ref_vols.append(qi.ref_vol)
+                elif qi.qi_type == "vx" and qi.ref_dose not in ref_doses:
+                    ref_doses.append(qi.ref_dose)
+
+        for edit, values in ((self.ref_vols_edit, ref_vols), (self.ref_doses_edit, ref_doses)):
+            text = format_number_list(values)
+            if edit.text() != text:
+                edit.setText(text)
+        self._synced_ref_doses_text = self.ref_doses_edit.text()
+
+    def _render_qi_table(self) -> None:
+        """Render the table from the cached collection and the checked metrics."""
+        if self._qi_collection is None or not self._qi_structures:
+            self.qi_widget.set_qis(None)
+            return
+
+        self.qi_widget.set_qis(
+            self._qi_collection,
+            structures=self._qi_structures,
+            voi_colors=self._voi_colors,
+            metrics=self._checked_metrics(),
+        )
+
     def _checked_vois(self) -> list[str]:
         """Return names of currently checked VOIs."""
         return [n for n, cb in self._voi_checkboxes.items() if cb.isChecked()]
@@ -378,40 +748,163 @@ class AnalysisWidget(QWidget):
             cb.blockSignals(False)
         self._replot()
 
+    def _secondary_quantity(self) -> str:
+        """Return the quantity chosen for comparison, or ``""`` when there is none.
+
+        A secondary equal to the primary quantity would only duplicate the solid
+        curves, so it counts as none.
+        """
+        name = self.secondary_selector.current_key()
+        if (
+            not name
+            or name not in self._quantities
+            or name == self.quantity_selector.current_key()
+        ):
+            return ""
+        return name
+
+    def _collect_dvhs(self, qty_name: str, voi_names: list[str]) -> list[DVH]:
+        """Return the available DVHs of *qty_name* for *voi_names*."""
+        if not qty_name:
+            return []
+        dvhs = (self._dvh_for(qty_name, voi_name) for voi_name in voi_names)
+        return [dvh for dvh in dvhs if dvh is not None]
+
     def _replot(self, *_: Any) -> None:
-        """Replot DVH using the current combo and VOI selections."""
-        q1_name = self.q1_combo.currentText()
-        q2_name = self.q2_combo.currentText()
+        """Replot the DVH and QI table for the shown quantities and the checked VOIs.
+
+        The optional secondary quantity only adds dashed DVH curves; the QI
+        table and its parameters follow the primary quantity.
+        """
+        qty_name = self.quantity_selector.current_key()
+        if qty_name != self._shown_quantity:
+            self._show_quantity(qty_name)
         selected_vois = self._checked_vois()
 
-        if not q1_name or not selected_vois:
-            self.dvh_widget.plot([], None, self._voi_colors)
-            return
+        # The QI table first, since the DVH plot marks its D_x / V_x points.
+        self._update_qi_table(qty_name, selected_vois)
+        dvhs = self._collect_dvhs(qty_name, selected_vois)
+        plot_kwargs: dict[str, Any] = {
+            "voi_colors": self._voi_colors,
+            "overlay_unit": self._overlay_units.get(qty_name, ""),
+            "overlay_label": self._overlay_labels.get(qty_name, ""),
+            "qis": self._qi_collection,
+        }
+        secondary = self._secondary_quantity()
+        if secondary:
+            plot_kwargs.update(
+                secondary_dvhs=self._collect_dvhs(secondary, selected_vois),
+                secondary_unit=self._overlay_units.get(secondary, ""),
+                secondary_label=self._overlay_labels.get(secondary, ""),
+                primary_name=self.quantity_selector.current_label(),
+                secondary_name=self.secondary_selector.current_label(),
+            )
+        self.dvh_widget.plot(dvhs, **plot_kwargs)
 
-        dvhs_q1 = [
-            self._dvh_cache[(q1_name, v)] for v in selected_vois if (q1_name, v) in self._dvh_cache
-        ]
+    # ------------------------------------------------------------------
+    # DVH / QI table interaction
+    # ------------------------------------------------------------------
 
-        dvhs_q2: list[DVH] | None = None
-        if q2_name and q2_name != _NONE_LABEL:
-            dvhs_q2 = [
-                self._dvh_cache[(q2_name, v)]
-                for v in selected_vois
-                if (q2_name, v) in self._dvh_cache
-            ]
-            if not dvhs_q2:
-                dvhs_q2 = None
+    def _on_qi_cell_selected(self, structure: str, metric: str) -> None:
+        self.dvh_widget.highlight(structure or None, metric or None)
 
-        overlay_unit = self._overlay_units.get(q1_name, "")
-        overlay_label = self._overlay_labels.get(q1_name, "")
+    def _on_structure_clicked(self, structure: str) -> None:
+        self.qi_widget.select(structure or None)
+        self.dvh_widget.highlight(structure or None)
 
-        self.dvh_widget.plot(
-            dvhs_q1,
-            dvhs_q2=dvhs_q2,
-            voi_colors=self._voi_colors,
-            overlay_unit=overlay_unit,
-            overlay_label=overlay_label,
-            q1_label=q1_name,
-            q2_label=q2_name if dvhs_q2 else "",
+    def _on_marker_clicked(self, structure: str, metric: str) -> None:
+        self.qi_widget.select(structure, metric)
+        self.dvh_widget.highlight(structure, metric)
+
+    def _ask_qi_point(
+        self,
+        dose: float,
+        volume: float,
+        kind: Optional[PointKind] = None,
+        replace: Optional[str] = None,
+    ) -> Optional[tuple[PointKind, float, bool]]:
+        """Let the user confirm a D_x / V_x point; ``None`` when cancelled."""
+        dose_unit = safe_unit(self._overlay_units.get(self._shown_quantity, ""))
+        dialog = QIPointDialog(
+            dose,
+            volume,
+            dose_unit="" if dose_unit == ureg.dimensionless else format_unit_symbol(dose_unit),
+            kind=kind,
+            replace=replace,
+            parent=self,
         )
-        self.qi_widget.update(None)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.chosen()
+
+    def _add_point(self, dose: float, volume: float) -> None:
+        """Add a D_x / V_x point picked by a double-click in the DVH plot."""
+        choice = self._ask_qi_point(dose, volume)
+        if choice is not None:
+            kind, parameter, _ = choice
+            self._apply_qi_point(kind, parameter)
+
+    def _move_point(self, structure: str, metric: str, parameter: float) -> None:
+        """Replace or add the D_x / V_x point whose parameter line was dragged."""
+        qis = self._qi_collection
+        qi = qis[structure].metrics.get(metric) if qis and structure in qis else None
+        if qi is None or qi.qi_type not in ("dx", "vx"):
+            return
+        old = qi.ref_vol if qi.qi_type == "dx" else qi.ref_dose
+        dose, volume = (0.0, parameter) if qi.qi_type == "dx" else (parameter, 0.0)
+        choice = self._ask_qi_point(dose, volume, kind=qi.qi_type, replace=metric)
+        if choice is None:
+            # Snap the dragged lines back to the unchanged point.
+            self.dvh_widget.highlight(structure, metric)
+            return
+        kind, parameter, replace = choice
+        self._apply_qi_point(
+            kind, parameter, replace=old if replace else None, structure=structure
+        )
+
+    def _apply_qi_point(
+        self,
+        kind: PointKind,
+        parameter: float,
+        replace: Optional[float] = None,
+        structure: Optional[str] = None,
+    ) -> None:
+        """Put *parameter* into the D_x or V_x input, replacing *replace* if given.
+
+        The table and plot are then recomputed, the points are shown in the plot,
+        and the new point is highlighted for *structure* (default: the highlighted
+        structure).
+        """
+        if structure is None:
+            structure = self.dvh_widget.highlighted()[0]
+        edit = self.ref_vols_edit if kind == "dx" else self.ref_doses_edit
+        try:
+            values = parse_number_list(edit.text())
+        except ValueError:
+            values = []
+        if replace is not None:
+            values = [parameter if np.isclose(v, replace) else v for v in values]
+        if not any(np.isclose(v, parameter) for v in values):
+            values.append(parameter)
+        edit.setText(format_number_list(values))
+        if kind == "vx":
+            self._remember_ref_doses()
+
+        self.show_markers_checkboxes[kind].setChecked(True)
+        self._replot()
+
+        metric = self._metric_for(structure, kind, parameter)
+        self.qi_widget.select(structure, metric)
+        self.dvh_widget.highlight(structure, metric)
+
+    def _metric_for(self, structure: Optional[str], kind: str, parameter: float) -> Optional[str]:
+        """Return the metric id of *structure*'s D_x / V_x QI with *parameter*."""
+        qis = self._qi_collection
+        if structure is None or qis is None or structure not in qis:
+            return None
+        for metric, qi in qis[structure].metrics.items():
+            if qi.qi_type != kind:
+                continue
+            if np.isclose(qi.ref_vol if kind == "dx" else qi.ref_dose, parameter):
+                return metric
+        return None

@@ -11,7 +11,7 @@ import array_api_compat
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import to_numpy, from_numpy
 from ...core.datamodel import PyRadPlanBaseModel
-from ...quantities import get_available_quantities
+from ...quantities import get_available_quantities, get_quantity
 from ...core import Grid
 from ...core.resample import resample_numpy_array
 
@@ -115,6 +115,9 @@ class Objective(PyRadPlanBaseModel):
                     Array containing indices for which the objective needs to be cached
         """
 
+        # A fresh dict: shallow model copies share the cache with the objective they were
+        # copied from.
+        cache = dict(self._resampled_image_reference_cache)
         for param_name, param_type in zip(self.parameter_names, self.parameter_types):
             if param_type == "image_reference":
                 # Check cache first
@@ -146,8 +149,8 @@ class Objective(PyRadPlanBaseModel):
                 if index_list is not None:
                     resampled_array = resampled_array[index_list]
 
-                # Cache the resampled value
-                self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
+                cache[cache_key] = xp.asarray(resampled_array)
+        self._resampled_image_reference_cache = cache
 
     def _image_reference(self, param_name: str, values: Array) -> Array:
         """Get cached image reference aligned to the namespace and device of *values*.
@@ -165,6 +168,64 @@ class Objective(PyRadPlanBaseModel):
             ref = xp.asarray(to_numpy(ref), device=array_api_compat.device(values))
             self._resampled_image_reference_cache[param_name] = ref
         return ref
+
+    def normalize_to_fraction_num(self, num_of_fractions: int):
+        """
+        Convert total-course reference parameters to one of ``num_of_fractions`` fractions.
+
+        The optimization runs on per-fraction quantities. Scalar (``"reference"``) and image
+        (``"image_reference"``) parameters given for the total course are divided by the
+        quantity's :meth:`~pyRadPlan.quantities.RTQuantity.total_course_factor`, i.e. by
+        ``num_of_fractions`` for dose-like quantities and not at all for LET. Image references
+        are scaled through their resampled cache only, so
+        :meth:`preprocess_image_reference_parameters` must run first; the image parameter
+        itself is left unchanged.
+
+        Parameters
+        ----------
+        num_of_fractions : int
+            The number of fractions to normalize to.
+
+        Returns
+        -------
+        Objective
+            The objective itself.
+
+        Raises
+        ------
+        ValueError
+            If the objective has reference parameters and ``num_of_fractions`` is not
+            positive or the objective's quantity declares no fraction scaling, or if an image
+            reference has not been preprocessed.
+        """
+        references = [
+            (param_name, param_type)
+            for param_name, param_type in zip(self.parameter_names, self.parameter_types)
+            if param_type in ("reference", "image_reference")
+        ]
+        if not references:
+            return self
+        factor = get_quantity(self.quantity).total_course_factor(num_of_fractions)
+        if factor == 1.0:
+            return self
+        cache = dict(self._resampled_image_reference_cache)
+        for param_name, param_type in references:
+            if param_type == "reference":
+                setattr(self, param_name, getattr(self, param_name) / factor)
+                continue
+            if param_name not in cache:
+                raise ValueError(
+                    f"Image reference {param_name!r} has no resampled cache entry; "
+                    "preprocess_image_reference_parameters must run before "
+                    "normalize_to_fraction_num."
+                )
+            ref = cache[param_name]
+            xp = array_api_compat.array_namespace(ref)
+            if not xp.isdtype(ref.dtype, "real floating"):
+                ref = xp.astype(ref, xp.float64)
+            cache[param_name] = ref / factor
+        self._resampled_image_reference_cache = cache
+        return self
 
     @abstractmethod
     def compute_objective(self, values):

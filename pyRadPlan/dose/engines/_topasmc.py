@@ -48,7 +48,12 @@ physics_modules : dict
     Dictionary defining Geant4 physics lists used in the simulation.
 
 scorer : dict
-    Configuration of scoring options (dose to medium, water, LET, output type).
+    Configuration of scoring options (dose to medium, water, LET, output type). The LET
+    scorer is switched on when LET is computed or a biological model needs it.
+calc_bio_dose : "auto" or bool
+    Compute the biological influence matrices of an LET-based model from the scored LET.
+calc_let : "auto" or bool
+    Store the LET-weighted dose (``let_dose``); ``"auto"`` when the model needs LET.
 
 material_converter : dict
     Configuration for material conversion strategy (RSP or Schneider method).
@@ -60,7 +65,9 @@ base_topas_folder : pathlib.Path
     Base directory containing TOPAS template and configuration files.
 
 simu_dir : str
-    Output directory for simulation runs, typically date-stamped.
+    Output directory for simulation runs, typically date-stamped. Defaults to
+    ``<data_dir>/topas/<date>`` (see :func:`pyRadPlan.core.get_data_dir`), so the
+    installed package directory is never written to.
 
 
 """
@@ -69,18 +76,19 @@ import logging
 import os
 from datetime import datetime
 import sys
-from typing import Any, Union
+from typing import Any, Literal, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
 
+from pyRadPlan.biology.models import bio_influence_from_let
+from pyRadPlan.core import get_data_dir
 from pyRadPlan.ct import CT, resample_ct, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from pyRadPlan.machines._load import load_from_name
 from pyRadPlan.stf import SteeringInformation
-from ._base_montecarlo import MonteCarloEngineAbstract
+from ._base_montecarlo import MonteCarloEngineAbstract, ScoredLETBioMixin
 
 if sys.version_info < (3, 10):
     import importlib_resources as resources  # Backport for older versions
@@ -91,7 +99,7 @@ else:
 logger = logging.getLogger(__name__)
 
 
-class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
+class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     # constants
 
     short_name = "TOPAS"
@@ -104,12 +112,20 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
         "oxygen",
     ]  # add more if needed
 
+    # TOPAS' ProtonLET scorer gives the dose-averaged LET of primary and secondary protons
+    # only, so LET-based biological models are restricted to proton plans.
+    computes_bio_influence = True
+    bio_kernel_quantities = ()
+    bio_scored_quantities = ("let:LETd",)
+    bio_scored_radiation_modes = ("protons",)
+
     available_source_models = ["biGaussian"]
 
-    calc_bio_dose: bool
     radiation_mode: str
 
     external_calculation: Union[str, bool]
+    calc_bio_dose: Union[Literal["auto"], bool]
+    calc_let: Union[Literal["auto"], bool]
 
     radiation_mode: str
     source_model: str
@@ -120,7 +136,7 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
     num_runs: int
 
     physics_modules: list[str]
-    base_topas_folder = resources.files("pyRadPlan.data.TOPAS")
+    base_topas_folder = resources.files("pyRadPlan.data.topas")
     input_filenames = {
         "beam_biGaussian": base_topas_folder
         / "input"
@@ -177,6 +193,10 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
         self.scaling_factor = 1e6
 
         self.external_calculation = True
+        self.calc_bio_dose = "auto"
+        self.calc_let = "auto"
+        # an instance copy, so switching on the LET scorer leaves the class default alone
+        self.scorer = dict(type(self).scorer)
 
         self.physics_modules = {
             "default": [
@@ -190,10 +210,13 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             ]
         }
 
-        self.simu_dir: str = self.base_topas_folder.joinpath(datetime.now().strftime("%Y-%m-%d"))
+        self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
         self._computed_quantities = []
+        self._bio_evaluator = None
+        self._bio_influence_names: tuple[str, ...] = ()
+        self._let_dose = None
 
         super().__init__(pln)
 
@@ -502,7 +525,7 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
 
         if self.external_calculation is True:
             os.makedirs(self.simu_dir, exist_ok=True)
-            tmp_machine = load_from_name(stf.beams[0].radiation_mode, stf.beams[0].machine)
+            tmp_machine = self._machine
             sad = tmp_machine.sad / 10
             beams_topas = []
 
@@ -610,24 +633,49 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             # set dose outside of the patient to 0
             for q_name in self._computed_quantities:
                 dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
+            if self._let_dose is not None:
+                self._let_dose[~self._vdose_grid_mask, :] = 0.0
+                self._store_let_quantities(dij, self._let_dose)
 
         dij = self._finalize_dose(dij)
         return dij
 
-    def _read_output_files(self, num_beams: int) -> list[np.ndarray]:
+    def _store_let_quantities(self, dij: dict[str, Any], let_dose: np.ndarray) -> None:
+        """Store the LET-weighted dose and the biological matrices derived from it."""
+        if self._calc_let:
+            dij["let_dose"].flat[0][:] = let_dose
+        if self._calc_bio_dose:
+            bio_influence = bio_influence_from_let(
+                self._bio_evaluator,
+                dij["physical_dose"].flat[0],
+                let_dose,
+                np.asarray(dij["alphax"])[:, 0],
+                np.asarray(dij["betax"])[:, 0],
+            )
+            for name, matrix in bio_influence.items():
+                dij[name].flat[0][:] = matrix.toarray()
+
+    def _read_output_files(self, num_beams: int, quantity: str = "physicalDose") -> list:
         """
         Read the output files generated by the TOPAS engine for all beams and runs.
+
+        Parameters
+        ----------
+        num_beams : int
+            Number of beams.
+        quantity : str
+            Scorer output to read: ``"physicalDose"`` or ``"LET"``.
 
         Returns
         -------
         list[np.ndarray]
-            A list containing all dose cubes for all beams and runs.
+            A list containing all cubes of the quantity for all beams and runs.
         """
         all_dose_cubes = []
 
         for beam_ix in range(num_beams):
             for run_ix in range(self.num_runs):
-                score_label = f"score_pyRadPlan_plan_field{beam_ix}_run{run_ix}_physicalDose"
+                score_label = f"score_pyRadPlan_plan_field{beam_ix}_run{run_ix}_{quantity}"
                 file_path = os.path.join(self.external_calculation, score_label + ".bin")
                 try:
                     shape = (
@@ -639,14 +687,39 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
                     arr = arr.reshape(shape)
                     all_dose_cubes.append(arr)
                 except Exception as e:
-                    logger.warning(f"Could not read dose file {file_path}: {e}")
+                    logger.warning(f"Could not read {quantity} file {file_path}: {e}")
                     continue
 
         return all_dose_cubes
 
+    def _read_let_dose(self, dose_cubes: np.ndarray, num_beams: int) -> np.ndarray:
+        """
+        LET-weighted dose per beam from the scored LET of every run.
+
+        TOPAS' ProtonLET scorer reports the dose-averaged LET in MeV/mm/(g/cm3), i.e. keV/µm
+        in water. Summing ``LETd * dose`` over the runs yields the LET-weighted dose of the
+        beam, the counterpart of its summed dose.
+        """
+        let_cubes = self._read_output_files(num_beams, "LET")
+        if len(let_cubes) != num_beams * self.num_runs:
+            raise ValueError(
+                "TOPAS LET output is missing: the biological model or calc_let needs the "
+                f"'_LET' scorer files of all {self.num_runs} runs of every beam, found "
+                f"{len(let_cubes)} of {num_beams * self.num_runs}. Rerun TOPAS on input files "
+                "written with the LET scorer."
+            )
+        let_cubes = np.nan_to_num(np.asarray(let_cubes))
+        let_dose = np.zeros((self.dose_grid.num_voxels, num_beams), dtype=np.float32)
+        for beam_ix in range(num_beams):
+            runs = slice(beam_ix * self.num_runs, (beam_ix + 1) * self.num_runs)
+            let_dose[:, beam_ix] = np.sum(let_cubes[runs] * dose_cubes[runs], axis=0).ravel()
+        return let_dose
+
     def _read_external(self, dij: dict) -> dict:
         all_dose_cubes = self._read_output_files(dij["num_of_beams"])
         all_dose_cubes = np.array(all_dose_cubes) * self.scaling_factor / self.num_histories_direct
+        if self._use_let_kernel:
+            self._let_dose = self._read_let_dose(all_dose_cubes, dij["num_of_beams"])
         # Calculate sum and var for all dose cubes
         # Calculate sum and var for each beam individually
         for beam_ix in range(dij["num_of_beams"]):
@@ -664,32 +737,37 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
             dij["bixel_num"][beam_ix] = beam_ix
         return dij
 
-    def _allocate_quantity_matrices(self, dij: dict[str, Any], names: list[str]) -> Dij:
+    def _allocate_quantity_matrices(
+        self, dij: dict[str, Any], names: list[str], with_variance: bool = True
+    ) -> Dij:
         # Loop over all requested quantities
         for q_name in names:
-            # Create dij list for each quantity
-            dij[q_name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
-            dij[q_name + "_var"] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+            container_names = [q_name, q_name + "_var"] if with_variance else [q_name]
+            for name in container_names:
+                dij[name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
 
-            # Loop over all scenarios and preallocate quantity containers
-            # TODO: write test for this
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    dij[q_name].flat[i] = np.zeros(
-                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                    )
-                    dij[q_name + "_var"].flat[i] = np.zeros(
-                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                    )
+                # Loop over all scenarios and preallocate quantity containers
+                for i in range(self.mult_scen.scen_mask.size):
+                    # Only if there is a scenario we will allocate
+                    if self.mult_scen.scen_mask.flat[i]:
+                        dij[name].flat[i] = np.zeros(
+                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                        )
 
-            self._computed_quantities.append(q_name)
-            self._computed_quantities.append(q_name + "_var")
+                self._computed_quantities.append(name)
 
         return dij
 
+    def _allocate_bio_matrices(self, dij: dict[str, Any], names: list[str]) -> dict[str, Any]:
+        # Dij stores no variance of the LET-weighted dose or the biological matrices
+        return self._allocate_quantity_matrices(dij, names, with_variance=False)
+
+    def _request_let_scoring(self) -> None:
+        self.scorer = {**self.scorer, "LET": True}
+
     def _init_dose_calc(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> None:
         self.radiation_mode = stf.beams[0].radiation_mode
+        self._let_dose = None
         dij = super()._init_dose_calc(ct, cst, stf)
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
 
@@ -698,7 +776,7 @@ class ParticleTOPASMCEngine(MonteCarloEngineAbstract):
                 "Multiple scenarios are not supported for TOPAS calculations."
             )
 
-        return dij
+        return self._init_bio_model(dij)
 
     @staticmethod
     def is_available(pln, machine):

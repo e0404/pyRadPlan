@@ -8,9 +8,6 @@ import re
 from pyRadPlan import CT, StructureSet
 from pyRadPlan.visualization._plot_slice import _apply_deprecated_aliases, plot_slice
 
-# Initialize Units
-ureg = pint.UnitRegistry()
-
 
 class PlotMultipleSlicesKwargs(TypedDict, total=False):
     plane: Union[Literal["axial", "coronal", "sagittal"], int]

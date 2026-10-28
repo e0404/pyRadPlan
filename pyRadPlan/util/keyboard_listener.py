@@ -124,7 +124,10 @@ class KeyboardListener:
         elif _HAS_MS_KBHIT and os.name == "nt":
             target = self._kb_listener_windows
         else:
-            # No supported backend available
+            self.logger.info(
+                "Keyboard cancellation requested but unavailable (no non-blocking keyboard "
+                "input on this platform, or stdin is not a terminal). Continuing without it."
+            )
             return
 
         self._thread = Thread(target=target, daemon=True)
