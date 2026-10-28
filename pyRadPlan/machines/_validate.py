@@ -10,7 +10,8 @@ def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs
     Parameters
     ----------
     data
-        A pre-existing ``Machine`` instance or a dictionary payload.
+        A pre-existing ``Machine`` instance or a dictionary payload: matRad base data
+        (``{"meta": ..., "data": ...}``) or the ``model_dump()`` of a machine.
     **kwargs
         Fallback keyword arguments (used only when ``data`` is not a dict) and to
         supply ``radiation_mode`` when no dictionary is provided.
@@ -23,7 +24,7 @@ def validate_machine(data: Union[dict[str, Any], Machine, None] = None, **kwargs
     radiation_mode = ""
 
     if isinstance(data, dict):
-        meta = data.get("meta")
+        meta = data.get("meta", data)
         if not isinstance(meta, dict):
             raise ValueError("Dictionary Structure of provided machine not valid!")
         # Prefer snake_case if both present, fall back to camelCase.
