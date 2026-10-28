@@ -1,14 +1,23 @@
 """Plan.dose_convention: objective scaling in the planning problem."""
 
+import numpy as np
 import pytest
+import SimpleITK as sitk
 
 from pyRadPlan.core import WarningReport
+from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.ct import validate_ct
 from pyRadPlan.cst import validate_cst
-from pyRadPlan.dij import validate_dij
-from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing
+from pyRadPlan.dij import Dij, validate_dij
+from pyRadPlan.optimization.objectives import (
+    DoseUniformity,
+    SquaredDeviation,
+    SquaredMimicking,
+    SquaredOverdosing,
+)
 from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
 from pyRadPlan.plan import validate_pln
+from pyRadPlan.quantities import QUANTITIES, Dose
 from pyRadPlan.stf import validate_stf
 
 
@@ -57,6 +66,105 @@ def test_total_scales_objective_doses_by_fractions(proton_case):
     # a second run scales from the original values again, not from the scaled ones
     objs = _collected_objectives(pln, ct, cst, dij, stf)
     assert objs[0].d_ref == pytest.approx(2.0)
+
+
+def _reference_image(grid, value, as_sitk):
+    array = np.full(tuple(grid.dimensions[::-1]), value, dtype=np.float32)
+    if not as_sitk:
+        return (array, grid)
+    image = sitk.GetImageFromArray(array)
+    image.SetOrigin(grid.origin)
+    image.SetSpacing(grid.resolution_vector)
+    image.SetDirection(grid.direction.ravel())
+    return image
+
+
+@pytest.mark.parametrize("as_sitk", [True, False], ids=["sitk", "array_grid"])
+@pytest.mark.parametrize(("convention", "expected"), [("per_fraction", 60.0), ("total", 2.0)])
+def test_dose_convention_scales_image_references(proton_case, as_sitk, convention, expected):
+    pln, ct, cst, dij, stf = proton_case
+    pln.num_of_fractions = 30
+    pln.dose_convention = convention
+    d_ref = _reference_image(dij.dose_grid, 60.0, as_sitk)
+    cst.vois[0].objectives = [SquaredMimicking(d_ref=d_ref)]
+
+    objs = _collected_objectives(pln, ct, cst, dij, stf)
+
+    cached = to_numpy(objs[0]._resampled_image_reference_cache["d_ref"])
+    assert cached.size > 0
+    assert np.allclose(cached, expected)
+    values = cached + 1.0
+    assert np.allclose(to_numpy(objs[0]._image_reference("d_ref", values)), expected)
+
+    # the user's objective keeps its image and gets no (scaled) evaluation cache
+    original = cst.vois[0].objectives[0]
+    if as_sitk:
+        assert original.d_ref is d_ref
+    else:
+        assert original.d_ref[0] is d_ref[0]
+    assert original._resampled_image_reference_cache == {}
+    source = sitk.GetArrayViewFromImage(d_ref) if as_sitk else d_ref[0]
+    assert np.allclose(source, 60.0)
+
+
+def test_image_reference_normalization_requires_preprocessing(proton_case):
+    _, _, _, dij, _ = proton_case
+    obj = SquaredMimicking(d_ref=_reference_image(dij.dose_grid, 60.0, True))
+
+    with pytest.raises(ValueError, match="preprocess_image_reference_parameters"):
+        obj.normalize_to_fraction_num(30)
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [
+        ("physical_dose", 6.0 / 30),
+        ("rbe_x_dose", 6.0 / 30),
+        ("effect", 6.0 / 30),
+        ("alpha_dose", 6.0 / 30),
+        ("sqrt_beta_dose", 6.0 / np.sqrt(30)),
+        ("let_dose", 6.0 / 30),
+        ("let", 6.0),
+    ],
+)
+def test_total_normalization_follows_quantity_fraction_scaling(proton_case, quantity, expected):
+    pln, ct, cst, dij, stf = proton_case
+    pln.num_of_fractions = 30
+    pln.dose_convention = "total"
+    pln.prop_opt["convert_dose_objectives"] = False
+    dij.bio_model = "constant_rbe"
+    dij.alpha_dose = dij.physical_dose.copy()
+    dij.sqrt_beta_dose = dij.physical_dose.copy()
+    dij.let_dose = dij.physical_dose.copy()
+    cst.vois[0].objectives = [SquaredOverdosing(d_max=6.0, quantity=quantity)]
+
+    objs = _collected_objectives(pln, ct, cst, dij, stf)
+
+    assert objs[0].d_max == pytest.approx(expected)
+    assert cst.vois[0].objectives[0].d_max == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize("identifier", sorted(QUANTITIES))
+def test_normalization_inverts_result_scaling(identifier):
+    """A total-course reference normalized to one fraction reports back as itself."""
+    obj = SquaredOverdosing(d_max=6.0, quantity=identifier).normalize_to_fraction_num(30)
+    reported = Dij._scale_result_to_fractions({identifier: obj.d_max}, 30)[identifier]
+    assert reported == pytest.approx(6.0)
+
+
+def test_undeclared_quantity_fraction_scaling_fails_for_total(monkeypatch):
+    class Custom(Dose):
+        identifier = "custom_dose"
+        fraction_exponent = None
+
+    monkeypatch.setitem(QUANTITIES, Custom.identifier, Custom)
+    obj = SquaredOverdosing(d_max=6.0, quantity=Custom.identifier)
+
+    assert obj.model_copy().normalize_to_fraction_num(1).d_max == pytest.approx(6.0)
+    with pytest.raises(ValueError, match="fraction_exponent"):
+        obj.normalize_to_fraction_num(30)
+    # without reference parameters there is nothing to convert
+    DoseUniformity(quantity=Custom.identifier).normalize_to_fraction_num(30)
 
 
 def _collect_with_warnings(pln, ct, cst, dij, stf):

@@ -302,8 +302,8 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_dose_convention.setToolTip(
             "Convention for dose values in objectives and results:\n"
             "per fraction - objective doses and reported doses refer to one fraction;\n"
-            "total - objective doses are total-course doses (scaled by 1/fractions for "
-            "optimization) and reported doses are multiplied by the number of fractions."
+            "total - objective values (including reference images) and reported results\n"
+            "refer to the whole course; doses scale with the number of fractions, LET does not."
         )
         fractions_row = QHBoxLayout()
         fractions_row.setContentsMargins(0, 0, 0, 0)

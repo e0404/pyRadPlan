@@ -11,6 +11,7 @@ class LETxDose(FluenceDependentQuantity):
     dim = 1
     identifier = "let_dose"
     name = "LETxDose"
+    fraction_exponent = 1.0
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         return self.array_backend.asarray(

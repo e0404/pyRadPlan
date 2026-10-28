@@ -10,6 +10,8 @@ class SqrtBetaDose(FluenceDependentQuantity):
     identifier = "sqrt_beta_dose"
     biological = True
     name = "SqrtBetaDose"
+    # sqrt(n) keeps the total-course effect equal to alpha_dose + sqrt_beta_dose**2.
+    fraction_exponent = 0.5
     optional_dependencies = ("physical_dose",)
     indirect_dij_fields = ("betax",)
 
