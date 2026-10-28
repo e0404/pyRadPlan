@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- JAX backend: converting a Dij to JAX (`Dij.to_namespace`) failed for pencil-beam dose influence matrices, and fluence optimization failed on JAX arrays
+
 ## [0.6.0] - 2026-10-28
 
 ### Added
