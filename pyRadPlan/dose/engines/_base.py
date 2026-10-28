@@ -19,7 +19,7 @@ from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
-from pyRadPlan.machines import load_from_name, Machine
+from pyRadPlan.machines import load_from_name, validate_machine, Machine
 from pyRadPlan.biology.models import (
     BiologicalModel,
     BioModelEvaluator,
@@ -130,6 +130,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Assign default parameters declared as class-level annotations
         self._init_config_defaults()
 
+        # machine the plan specifies (name or loaded machine), see _resolve_machine
+        self._pln_machine: Optional[Union[str, Machine]] = None
+
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
 
@@ -164,7 +167,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         """
         Assign properties from a Plan object to the Dose Engine.
 
-        This includes the Scenario Model and the Biological Model, and any
+        This includes the Scenario Model, the Biological Model, machine base data the plan
+        carries (``pln.machine`` given as a loaded machine instead of a name), and any
         other properties that
         can be stored in the prop_dose_calc dictionary within the Plan object.
         This function will check if a property exists for the dose engine and,
@@ -179,6 +183,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         """
 
         pln = validate_pln(pln)
+
+        if isinstance(pln.machine, str):
+            self._pln_machine = pln.machine
+        else:
+            self._pln_machine = validate_machine(pln.machine)
 
         # Set Scenario Model
         if hasattr(pln, "mult_scen"):
@@ -563,7 +572,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         the CT and dose grids, checks machine and radiation mode consistency, creates a scenario
         model, and sets up arrays for bookkeeping. It also adjusts the isocenter internally for
         different dose grids and converts CT subscripts to world coordinates. Additionally, it
-        loads the machine file from the base data folder and performs voxel selection for dose
+        resolves the machine (the plan's loaded machine, or the machine file from the base data
+        folder, see :meth:`_resolve_machine`) and performs voxel selection for dose
         calculation.
         """
 
@@ -708,8 +718,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._vct_grid_mask = np.zeros(np.prod(ct.cube_dim), dtype=bool)
         self._vct_grid_mask[self._vct_grid] = True
 
-        # Load machine file from base data folder
-        self._machine = self.load_machine(radiation_mode, machine)
+        self._machine = self._resolve_machine(radiation_mode, machine)
 
         self._resolve_bio_model(dij, radiation_mode, cst)
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
@@ -845,6 +854,38 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             stacklevel=2,
         )
         return list(self.bio_capability().scored)
+
+    def _resolve_machine(self, radiation_mode: str, machine_name: str) -> Machine:
+        """
+        Machine base data for a calculation of the steering information's beams.
+
+        The loaded machine the plan carries (``pln.machine`` given as a machine or its
+        dictionary), otherwise the machine file named by the beams, loaded with
+        :meth:`load_machine`.
+
+        Parameters
+        ----------
+        radiation_mode : str
+            Radiation mode of the beams.
+        machine_name : str
+            Machine name of the beams.
+
+        Raises
+        ------
+        ValueError
+            The plan's loaded machine does not match the radiation mode or machine name of the
+            beams.
+        """
+        machine = self._pln_machine
+        if machine is None or isinstance(machine, str):
+            return self.load_machine(radiation_mode, machine_name)
+
+        if machine.radiation_mode != radiation_mode or machine.name != machine_name:
+            raise ValueError(
+                f"The plan's machine '{machine.name}' ({machine.radiation_mode}) does not match "
+                f"the machine '{machine_name}' ({radiation_mode}) of the steering information."
+            )
+        return machine
 
     def _finalize_dose(self, dij: dict) -> Dij:
         return validate_dij(dij)
