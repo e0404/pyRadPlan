@@ -27,12 +27,50 @@ class RTQuantity(ABC):
     #: Whether the quantity describes a biological effect (e.g. RBE-weighted dose or LQ
     #: effect) rather than a physical one.
     biological: ClassVar[bool] = False
+    #: Exponent ``p`` with which the quantity accumulates over ``n`` identical fractions: the
+    #: total-course value is ``n**p`` times the per-fraction value (1 for additive quantities
+    #: such as dose or effect, 0 for intensive ones such as LET). ``None`` (the default for
+    #: custom quantities) declares no rule, and converting between per-fraction and
+    #: total-course values then raises instead of guessing.
+    fraction_exponent: ClassVar[Optional[float]] = None
     precision: str
 
     def __init__(self, dij: Dij, scenarios=None):
         if scenarios is None:
             scenarios = [0]
         self.scenarios = np.asarray(scenarios, dtype=np.int64)
+
+    @classmethod
+    def total_course_factor(cls, num_of_fractions: int) -> float:
+        """
+        Factor from a per-fraction value of the quantity to its total-course value.
+
+        Parameters
+        ----------
+        num_of_fractions : int
+            Number of identical fractions in the course.
+
+        Returns
+        -------
+        float
+            ``num_of_fractions ** fraction_exponent``.
+
+        Raises
+        ------
+        ValueError
+            If ``num_of_fractions`` is not positive, or if it is not 1 and the quantity does
+            not declare a :attr:`fraction_exponent`.
+        """
+        if num_of_fractions <= 0:
+            raise ValueError("Number of fractions must be greater than zero.")
+        if num_of_fractions == 1:
+            return 1.0
+        if cls.fraction_exponent is None:
+            raise ValueError(
+                f"Quantity {cls.identifier!r} declares no fraction_exponent, so its values "
+                "cannot be converted between one fraction and the total course."
+            )
+        return float(num_of_fractions) ** cls.fraction_exponent
 
 
 class FluenceDependentQuantity(RTQuantity, ABC):

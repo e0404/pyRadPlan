@@ -16,6 +16,7 @@ class DoseWeightedLET(FluenceDependentQuantity):
     dim = 1
     identifier = "let"
     name = "LETd"
+    fraction_exponent = 0.0
     required_dependencies = ("let_dose", "physical_dose")
 
     def _quotient_terms(self, fluence: Array, scenario_index: int) -> tuple[Array, Array, Array]:

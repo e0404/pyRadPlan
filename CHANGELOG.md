@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
 ### Added
 
 - `OptimizerIpax` (`"ipax"`), an interface to the Array-API-native ipax interior-point solver. GPU-capable (`gpu_compatible`); `force_cpu_inner_solve` (off by default) runs ipax's interior-point linear algebra in NumPy while objective / gradient evaluations stay on the compute backend. Adds `ipax` as a dependency; its sparse-direct accelerations (Feral LDLᵀ on the CPU, cuDSS on CUDA through `ipax[sparse]`) are optional and described in the installation guide. Its `options` (an `ipax.Options` tree, with an acceptable-stopping band tuned for fluence optimization) can be configured through `prop_opt["solver"]` with a nested dictionary naming only the entries to change, e.g. `{"name": "ipax", "options": {"lbfgs": {"memory": 20}}}`
@@ -22,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development implementation plan for explicit optimization quantities and opt-in `dose_auto` strategies, including prescription conversion, fraction normalization, GUI integration, and migration (design only).
 - Biological models (`pyRadPlan.biology.models`): constant RBE, LET-based LQ models (Wedenberg, McNamara, Carabé, Mairani helium, linear scaling), and three formalisms evaluating base data of any radiobiological model: precomputed α/β kernels (`alpha_beta_kernels`), α/β tables averaged over the fragment fluence spectra (`alpha_beta_tables`) and z\* kernels (`zstar_kernels`, α = α_0 + β_0·z\*). Models are lightweight parameter objects declaring `required_quantities` and `output_quantities`; per-calculation state lives in a `BioModelEvaluator` created by `model.evaluator(machine, voxel_params)`, which evaluates named inputs from `BioEvaluationContext` into a mapping-backed `BioModelResult` and converts them to its declared additive influence quantities; discrete tissue classes are selected through a `TissueParameterLookup` (`"exact"`)
 - `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back. Ion plans default to a biological model (`pyRadPlan.plan.default_bio_models`; protons: `constant_rbe`, helium: `HEL`, carbon/oxygen: `alpha_beta_kernels`; photons/VHEE: `none`). If the model cannot be applied to the patient (e.g. no machine tissue class matches a structure's tissue, or the machine lacks the required kernels), the dose engine warns and calculates physical dose only (`dij.bio_model` is then `None`); pass `calc_bio_dose=True` to make this an error
-- `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective dose parameters and reported result doses refer to one fraction or to the total course; `Dij.compute_result_*` take `num_of_fractions` for the scaling and the optimizer logs the interpretation it applies
+- `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective reference parameters (scalar values and reference images) and reported results refer to one fraction or to the total course. Conversions follow each quantity's declared fraction scaling (`RTQuantity.fraction_exponent`, `total_course_factor()`): doses and effects scale with the number of fractions, `sqrt_beta_dose` with its square root, LET not at all; custom quantities must declare it to be used with `"total"`. `Dij.compute_result_*` take `num_of_fractions` for the scaling, and the optimizer logs the interpretation it applies
 - `Dij.bio_model`: the biological model the dose engine used (validated like `Plan.bio_model`; `None`, dict or instance), serialised as its parameter dict; `dij.rbe` is derived from it for constant-RBE models and a legacy scalar `rbe`/`RBE` (matRad) is folded into a `constant_rbe` model on import and written back as `RBE` on export. `alphax`/`betax` carry one column per CT scenario
 - `rbe_x_dose` quantity (`RBExDose`) with two paths decided by `dij.bio_model` (`RBExDose.choose_path`): LQ inversion of the `effect` (`lq_inverse_dose`) or the constant RBE; models providing alpha/beta without matrices on the dij raise a clear error. Result assembly in `Dij` uses the same rule and inversion
 - `QuantityResolver.try_get`; optional quantity dependencies that cannot be computed for a dij are skipped instead of failing the resolution
@@ -45,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matRad interoperability of biological models: `pln.bioModel` names (`constRBE`, `LEM`) and model structs are understood on import (`bio_model_spec_from_matrad`); `Plan.to_matrad()` writes the matRad model name and preserves explicitly configured parameters in `bioModelParameters` for a lossless pyRadPlan `.mat` round trip
 - `bio_influence_from_let` derives the evaluator's declared biological influence matrices from physical dose and LET·dose matrices; the FRED engine uses it for LET-based models (`calc_bio_dose="auto"`) and stores the LET matrix under the canonical `let_dose` name
 - TOPAS scores the dose-averaged LET of protons and computes LET-based biological models (e.g. `WED`, `MCN`, `CAR`, `LSM`) for proton plans
-- `Plan.machine` accepts a loaded `Machine` object; the GUI plan widget lists it as "<name> (from plan)", builds the biological model options and tissue checks from it and keeps it on Apply
+- `Plan.machine` accepts a loaded `Machine` object; the GUI plan widget lists it as "<name> (from plan)", builds the biological model options and tissue checks from it and keeps it on Apply; steering and dose calculation use the loaded machine's base data, and dose engines raise if it does not match the steering information's machine name or radiation mode
 - GUI: the plan widget's beam-count indicator became an editable spin box that fills the gantry angles with that many equally spaced angles (e.g. 8 beams -> 0, 45, ... 315 deg), and the couch angles now follow the gantry angles once the gantry edit is finished — a single couch angle is repeated for every beam, otherwise an added beam gets a couch angle of 0, and a removed one drops its angle, so the two fields always match in length
 - GUI: a "Discard" button next to "Apply" in the plan panel resets the form, including the dose-engine settings, to the applied plan
 - GUI: before calculating the dose influence, optimizing, recalculating the dose or saving the plan or workspace, the workflow panel asks what to do with plan changes that are not applied yet: apply them, continue with the applied plan, or cancel. Applying them before optimizing or recalculating the dose outdates the dose influence, so that step does not run
@@ -596,7 +598,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0
