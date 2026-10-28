@@ -87,7 +87,6 @@ from pyRadPlan.ct import CT, resample_ct, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from pyRadPlan.machines._load import load_from_name
 from pyRadPlan.stf import SteeringInformation
 from ._base_montecarlo import MonteCarloEngineAbstract, ScoredLETBioMixin
 
@@ -526,7 +525,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         if self.external_calculation is True:
             os.makedirs(self.simu_dir, exist_ok=True)
-            tmp_machine = load_from_name(stf.beams[0].radiation_mode, stf.beams[0].machine)
+            tmp_machine = self._machine
             sad = tmp_machine.sad / 10
             beams_topas = []
 
