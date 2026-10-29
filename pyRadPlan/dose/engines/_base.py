@@ -3,6 +3,7 @@
 import logging
 import warnings
 import time
+from contextlib import contextmanager
 from typing import Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
@@ -106,6 +107,14 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     name: ClassVar[str]
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
+    # Settings a calculation resolves for its own ct, cst and machine (defaults, validated or
+    # dropped models). They are restored afterwards, so they do not carry over to the next one.
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        "dose_grid",
+        "voxel_sub_ix",
+        "bio_model",
+        "mult_scen",
+    )
 
     # Whether this engine can evaluate a biological model into additive influence matrices.
     # Engines that only produce physical dose still store the model on the dij (so that a
@@ -312,6 +321,23 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                 f"Biological influence quantities collide with dose-engine fields: {names}."
             )
 
+    @contextmanager
+    def _keep_settings(self):
+        """
+        Restore the settings a calculation fills in from its own ct, cst and machine.
+
+        ``_init_dose_calc`` resolves e.g. ``dose_grid`` (default resolution, dict),
+        ``voxel_sub_ix`` (default: all structures), the scenario model and the biological
+        model (validated, or dropped when the tissues do not fit) for the current patient.
+        Kept on the engine, they would carry over to the next calculation.
+        """
+        settings = {name: getattr(self, name) for name in self._per_calculation_settings}
+        try:
+            yield
+        finally:
+            for name, value in settings.items():
+                setattr(self, name, value)
+
     def calc_dose_forward(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
     ) -> dict:
@@ -358,7 +384,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             if w.size != stf.total_number_of_bixels:
                 raise ValueError("Number of weights does not match the number of bixels in stf.")
 
-            # Assign the weights to the stf
+            # Assign the weights to a copy, the caller's stf keeps its own
+            stf = stf.model_copy(deep=True)
             bixel_num = 0
             for beam in stf.beams:
                 for ray in beam.rays:
@@ -367,7 +394,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                         bixel_num += 1
 
         # Run dose calculation (direct flag is on)
-        dij = self._calc_dose(ct, cst, stf)
+        with self._keep_settings():
+            dij = self._calc_dose(ct, cst, stf)
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
@@ -411,7 +439,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         time_start = time.time()
         self._calc_dose_direct = False
-        dij = self._calc_dose(ct, cst, stf)
+        with self._keep_settings():
+            dij = self._calc_dose(ct, cst, stf)
         time_elapsed = time.time() - time_start
         logger.info("Dose influence matrix calculation done in %.2f seconds.", time_elapsed)
 
@@ -576,6 +605,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         folder, see :meth:`_resolve_machine`) and performs voxel selection for dose
         calculation.
         """
+        # Quantities are registered anew by every calculation
+        self._computed_quantities = []
 
         self._ct_grid = Grid.from_sitk_image(ct.cube_hu)
 

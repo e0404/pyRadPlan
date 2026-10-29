@@ -172,20 +172,17 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
         field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
 
-        # TODO: resampling should directly change object, not create new one?
+        # The resampled field shapes go into this beam's dose calculation only; the stf
+        # stays as the caller passed it
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
-            stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
-            )
-            beam_info["beam"]["rays"][j]["beamlets"][k] = (
-                stf.beams[i].rays[j].beamlets[k].model_dump()
-            )
+            field_shape = stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
+            beam_info["beam"]["rays"][j]["beamlets"][k] = field_shape.model_dump()
             # TODO: add mask as computed field?
             # Materialized: np.rot90 returns a negatively strided view, which the torch
             # backend cannot take, and the mask is converted once per ray below.
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
-                np.rot90(stf.beams[i].rays[j].beamlets[k].mask, k=-1)
+                np.rot90(field_shape.mask, k=-1)
             )
 
         field_grid = xp.asarray(field_grid)

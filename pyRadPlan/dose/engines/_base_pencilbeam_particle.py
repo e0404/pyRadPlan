@@ -79,6 +79,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     _dij_guarantee_canonical: ClassVar[bool]
     _dij_guarantee_nonzero: ClassVar[bool]
 
+    # "auto" / "fastest" resolve to the model the current machine supports
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *PencilBeamEngineAbstract._per_calculation_settings,
+        "lateral_model",
+    )
+
     def __init__(self, pln):
         # Protected properties with public get access
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
@@ -695,6 +701,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if cut_off_level < 0 or cut_off_level > 1:
             warnings.warn("Lateral cutoff is out of range - using default cut off of 0.99")
             cut_off_level = 0.99
+
+        # The cutoffs below depend on the SSDs of this beam and replace the kernels' previous
+        # ones, so namespace copies cached for an earlier beam are stale from here on
+        self._kernel_cache.clear()
 
         # conversion factor from kernel units (MeV cm^2/g per primary) to Gy mm^2 per 1e6 primaries
         # TODO: this factor should probably be in the machine data and translate to MU

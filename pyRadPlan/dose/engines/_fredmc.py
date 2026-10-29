@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Optional, Union, cast, Literal
+from typing import Any, ClassVar, Optional, Union, cast, Literal
 import time
 import textwrap
 from pathlib import Path
@@ -57,6 +57,12 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     short_name = "FRED"
     name = "FRED"
     possible_radiation_modes = list(FRED_PARTICLES)
+
+    # A LET-based biological model adds the LETd scorer
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *MonteCarloEngineAbstract._per_calculation_settings,
+        "scorers",
+    )
 
     computes_bio_influence = True
     # FRED scores the dose-averaged LET itself and does not use the machine's kernels.
@@ -119,7 +125,6 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self._bio_influence_names: tuple[str, ...] = ()
         self._total_number_of_bixels = None
         self._dij_format_version = None
-        self._fred_root_folder = Path(tempfile.mkdtemp())
         self._patient_filename = "CTpatient.mhd"
         self._run_input_filename = "fred.inp"
         self._regions_filename = "regions.inp"
@@ -131,17 +136,11 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self._output_folder = "out"
         self._output_image = "Dose.mhd"
         self._output_score = "/score/Phantom.Dose.mhd"
-        self._inp_dir = self._fred_root_folder / self._input_foldername
-        self._plan_dir = self._inp_dir / self._plan_foldername
-        self._output_dir = self._fred_root_folder / self._output_folder
-        self._regions_dir = self._inp_dir / self._regions_foldername
         self._conversion_factor = 1e6
         self._HU_clamping: bool = False
         self._max_hu_table_value: int = 3000  # TODO: set up max hu value using custom hu table
         self._simulated_particles_per_bixel = 1e2
-
-        os.makedirs(self._plan_dir)
-        os.makedirs(self._regions_dir)
+        self._create_working_dirs()
 
         super().__init__(pln)
 
@@ -600,11 +599,11 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         except PermissionError:
             logger.warning(
-                f"Warning: Permission denied when trying to write to {self.plan_filename}."
+                f"Warning: Permission denied when trying to write to {self._plan_filename}."
             )
         except IOError as e:
             logger.warning(
-                f"Warning: An error occurred while writing to {self.plan_filename}. Error: {e}"
+                f"Warning: An error occurred while writing to {self._plan_filename}. Error: {e}"
             )
         except Exception as e:
             logger.warning(f"An unexpected error occurred: {e}")
@@ -1243,9 +1242,29 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         if "LETd" not in self.scorers:
             self.scorers = [*self.scorers, "LETd"]
 
+    def _create_working_dirs(self) -> None:
+        """Create the temporary folder tree of one calculation (it is deleted at its end)."""
+        self._fred_root_folder = Path(tempfile.mkdtemp())
+        self._inp_dir = self._fred_root_folder / self._input_foldername
+        self._plan_dir = self._inp_dir / self._plan_foldername
+        self._output_dir = self._fred_root_folder / self._output_folder
+        self._regions_dir = self._inp_dir / self._regions_foldername
+        os.makedirs(self._plan_dir)
+        os.makedirs(self._regions_dir)
+
     def _init_dose_calc(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation
     ) -> dict[str, Any]:
+        # A finished calculation deletes its folder tree (and may have redirected the output
+        # folder to `use_output`), so create a fresh one. After a failed calculation the old
+        # tree is reused, which is harmless: every input file is written anew
+        if not self._fred_root_folder.exists() or self._output_dir != (
+            self._fred_root_folder / self._output_folder
+        ):
+            if self._fred_root_folder.exists():
+                shutil.rmtree(self._fred_root_folder)
+            self._create_working_dirs()
+
         dij = super()._init_dose_calc(ct, cst, stf)
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
 

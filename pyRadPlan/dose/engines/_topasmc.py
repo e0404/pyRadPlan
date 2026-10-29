@@ -76,7 +76,7 @@ import logging
 import os
 from datetime import datetime
 import sys
-from typing import Any, Literal, Union
+from typing import Any, ClassVar, Literal, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
@@ -120,6 +120,14 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     bio_scored_radiation_modes = ("protons",)
 
     available_source_models = ["biGaussian"]
+
+    # scaling_factor is multiplied by the sum of the weights in every calculation, and a
+    # LET-based biological model adds the LET scorer
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *MonteCarloEngineAbstract._per_calculation_settings,
+        "scaling_factor",
+        "scorer",
+    )
 
     radiation_mode: str
 
@@ -524,6 +532,8 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         )
 
         if self.external_calculation is True:
+            # The weights are replaced by history counts below; keep the caller's stf as it is
+            stf = stf.model_copy(deep=True)
             os.makedirs(self.simu_dir, exist_ok=True)
             tmp_machine = self._machine
             sad = tmp_machine.sad / 10
