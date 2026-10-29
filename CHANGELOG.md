@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
+
 ### Fixed
 
 - IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)

@@ -69,7 +69,8 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
   name. `--adhoc-sign` is required for an unsigned build and skips notarization. Several
   dependencies have no Intel Mac wheels in their latest releases, so the Intel app bundles
   older ones. The GUI dependencies follow the root project's `gui` extra on both
-  architectures.
+  architectures. The app needs macOS 14 or later (`min_os_version`), which makes Briefcase
+  bundle the NumPy and SciPy wheels linked against Apple's Accelerate instead of OpenBLAS.
 - **Linux:** `linux system`, run on the target distribution. Produces
   `dist/pyradplan-app_<version>-1~<distro>-<codename>_<arch>.deb` (or an RPM/pkg on other
   families). Briefcase must run under the distribution's `/usr/bin/python3` (a venv created
