@@ -328,8 +328,10 @@ container:
 
 docs:
     stage: package
+    # Same Python as .readthedocs.yaml: newer docs tooling only installs on newer Pythons
+    image: python:3.13-slim-bookworm
     cache:
-        key: "venv-${CI_COMMIT_REF_SLUG}-3.11.9"
+        key: "venv-${CI_COMMIT_REF_SLUG}-3.13"
         paths:
             - .venv/
             - .cache/pip/

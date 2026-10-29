@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- FRED retries start with a clean temporary directory after a failed simulation, so partial scorer files from the failed run cannot be read or saved as output of the retry
+- The online documentation builds again on Read the Docs (the 0.6.0 build failed on numpydantic array annotations with current `sphinx-autodoc-typehints`)
 - IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)
 - Dose engines can be reused for several calculations. A second calculation on the same engine object computed every quantity twice (twice the forward dose, an `IndexError` in a following influence calculation), and kept what the first one resolved for its own patient: the dose grid and voxel subset (dose was then computed only on the first cst's voxels), the scenario model and the biological model (one dropped for unsuitable tissues stayed dropped). A calculation now leaves these settings as the user gave them, also the particle lateral model ("auto" / "fastest" resolve per machine) and the LET scorers a LET-based model switches on in TOPAS and FRED. TOPAS no longer compounds `scaling_factor` with the weights of every call, and FRED no longer writes into the folder tree a previous calculation deleted
 - `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged

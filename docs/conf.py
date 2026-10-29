@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import sys
 
+from numpydantic import NDArray
 from sphinx.util import logging
 
 from pyRadPlan import __version__
@@ -120,7 +121,17 @@ html_theme_options = {
     "pygments_dark_style": "stata-dark",
 }
 
+
 # -- Autodoc / typing options -------------------------------------------------
+def typehints_formatter(annotation, config):
+    """Render numpydantic arrays without treating them as standard Python generics."""
+    # NDArray's metaclass rejects partial subscripting. The generic-argument inference
+    # in sphinx-autodoc-typehints otherwise raises InvalidArgumentsError during the build.
+    if isinstance(annotation, type(NDArray)):
+        return ":py:class:`~numpydantic.NDArray`"
+    return None
+
+
 autodoc_type_aliases = {
     "npt.ArrayLike": "npt.ArrayLike",
 }
