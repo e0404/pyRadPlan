@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bumped ipax to 0.13.0 containing a bugfix to consistently allocate on the correct device
 - macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
 
 ### Fixed
