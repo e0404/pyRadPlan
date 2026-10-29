@@ -69,12 +69,16 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
 stays open for regular work while the candidate is stabilised:
 
-1. Branch `rc/X.Y.Z` from `develop`.
-2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog. Last, commit the executed
-   example notebooks: `python docs/execute_examples.py --release` runs the examples and stages
-   them in `docs/tutorials/examples/`.
-3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
-4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
+1. Branch `rc/X.Y.Z` from `develop` and open the release MR/PR from `rc/X.Y.Z` into `main`.
+2. Review `rc/X.Y.Z` and address the remaining concerns on it.
+3. Once the review is addressed and approved and CI is green, commit the executed example
+   notebooks: `python docs/execute_examples.py --release` runs the examples and stages them in
+   `docs/tutorials/examples/`.
+4. Bump the version only now that the release code is final: `pyproject.toml`, `CHANGELOG.md`
+   (`[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD`), `CITATION.cff`. This is the last commit
+   before merging.
+5. Merge `rc/X.Y.Z` into `main`.
+6. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
    `main` back into `develop` while untracking the executed notebooks (`git merge --no-ff
    --no-commit main`, `git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples`,
    `git commit`), and delete `rc/X.Y.Z`.
