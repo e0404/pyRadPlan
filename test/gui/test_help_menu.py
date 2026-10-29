@@ -1,5 +1,6 @@
 """Tests for the Help menu, the About dialog and the third-party licenses dialog."""
 
+import platform
 from importlib import metadata
 
 import pytest
@@ -45,6 +46,7 @@ def test_about_dialog_contains_version_and_disclaimer(qapp):
     dialog = AboutDialog()
     text = dialog.text()
     assert pyRadPlan.__version__ in text
+    assert f"(Python {platform.python_version()})" in text
     assert "BSD" in text
     assert "research and education" in text
     assert "not for clinical use" in text.lower()

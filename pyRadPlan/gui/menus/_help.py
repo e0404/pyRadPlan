@@ -8,6 +8,7 @@ the version, the license note and the non-clinical-use disclaimer.
 
 from __future__ import annotations
 
+import platform
 from dataclasses import dataclass
 from importlib import metadata
 from typing import Optional
@@ -43,7 +44,7 @@ DISCLAIMER = (
     "pyRadPlan is intended for research and education. It is not a medical device "
     "and must not be used for clinical treatment planning."
 )
-LICENSE_NOTE = "Released under the BSD 3-Clause License. Copyright (c) 2024, DKFZ."
+LICENSE_NOTE = "Released under the BSD 3-Clause License. Copyright (c) 2024-2026, DKFZ."
 
 #: Case-insensitive prefixes of files in a ``.dist-info`` directory that hold license texts.
 _LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE")
@@ -264,7 +265,10 @@ class AboutDialog(QDialog):
         logo.setFixedSize(width, height)
         root.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._lbl_title = QLabel(f"<b>pyRadPlan</b> {getattr(pyRadPlan, '__version__', '')}")
+        self._lbl_title = QLabel(
+            f"<b>pyRadPlan</b> {getattr(pyRadPlan, '__version__', '')}"
+            f" (Python {platform.python_version()})"
+        )
         self._lbl_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         root.addWidget(self._lbl_title)
 

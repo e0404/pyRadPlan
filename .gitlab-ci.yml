@@ -264,7 +264,7 @@ installer-linux:
         # checks for the system packaging format.
         - python3 -m venv /opt/briefcase-venv
         - /opt/briefcase-venv/bin/python -m pip install --upgrade pip
-        - /opt/briefcase-venv/bin/python -m pip install "briefcase==0.4.5"
+        - /opt/briefcase-venv/bin/python -m pip install "briefcase==0.4.7"
         - export PATH=/opt/briefcase-venv/bin:$PATH
         - python packaging/briefcase/scripts/sync_version.py
         - cd packaging/briefcase
