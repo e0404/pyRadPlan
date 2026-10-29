@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Windows desktop installer: a "Create a desktop shortcut" option next to the installation folder and a "Launch pyRadPlan" option on the final page, both checked by default
+
 ### Changed
 
 - macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS

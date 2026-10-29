@@ -126,11 +126,11 @@ jobs:
             # what Briefcase checks for the system packaging format.
             python3 -m venv "$HOME/briefcase-venv"
             "$HOME/briefcase-venv/bin/python" -m pip install --upgrade pip
-            "$HOME/briefcase-venv/bin/python" -m pip install "briefcase==0.4.5"
+            "$HOME/briefcase-venv/bin/python" -m pip install "briefcase==0.4.7"
             echo "$HOME/briefcase-venv/bin" >> "$GITHUB_PATH"
           else
             python -m pip install --upgrade pip
-            python -m pip install "briefcase==0.4.5"
+            python -m pip install "briefcase==0.4.7"
           fi
 
       - name: Sync the app version and changelog with pyRadPlan

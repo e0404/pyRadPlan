@@ -54,6 +54,10 @@ test_requires = []
 system_installer = false
 # Install into ...\Programs\pyRadPlan rather than ...\Programs\<author>\pyRadPlan.
 use_full_install_path = false
+# Installer checkboxes, both checked by default: "Create a desktop shortcut" (the Start
+# menu entry is always created) and "Launch pyRadPlan" on the final page (Briefcase >= 0.4.6).
+create_desktop_shortcut = true
+installer_completion_launch_app = true
 # Installer bitmaps (493x312 welcome/finish side panel, 493x58 banner), rendered by
 # scripts/make_icons.py; the .bmp suffix is added by Briefcase.
 installer_background = "src/pyradplan_app/resources/installer-dialog"
