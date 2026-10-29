@@ -480,3 +480,34 @@ def test_resolve_iso_centers_without_number_of_beams():
 def test_resolve_iso_centers_rejects_invalid(iso_center):
     with pytest.raises(ValueError):
         resolve_iso_centers(iso_center, _CenterOfMassCst(), 3)
+
+
+def test_ray_padding_is_symmetric_for_bixels_below_ct_resolution(tg119):
+    # With 2 mm bixels on the 3 mm TG119 CT, every ray is padded by one bixel on all sides,
+    # so a single target voxel at the isocenter yields the full 3 x 3 grid of ray positions.
+    ct, cst = tg119["ct"], tg119["cst"]
+    pln = create_pln(
+        {
+            "radiation_mode": "photons",
+            "machine": "Generic",
+            "prop_stf": {"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 2.0},
+        }
+    )
+    generator = StfGeneratorPhotonIMRT(pln)
+    generator._ct, generator._cst = ct, cst
+    generator._initialize()
+    generator._initialize_patient_geometry()
+
+    iso_center = np.asarray(cst.target_center_of_mass())
+    generator._target_voxel_coordinates = iso_center.reshape(3, 1)
+    beam = {
+        "gantry_angle": 0.0,
+        "couch_angle": 0.0,
+        "sad": 1000.0,
+        "bixel_width": 2.0,
+        "iso_center": iso_center,
+    }
+    ray_pos = generator._generate_ray_positions_in_isocenter_plane(beam)
+
+    offsets = {(float(x), float(z)) for x, z in ray_pos[[0, 2]].T}
+    assert offsets == {(x, z) for x in (-2.0, 0.0, 2.0) for z in (-2.0, 0.0, 2.0)}
