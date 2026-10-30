@@ -73,6 +73,20 @@ def test_file_copied_by_hand_is_found_like_an_added_one(data_dir):
     ]
 
 
+def test_names_resolve_case_insensitively(data_dir):
+    """As on Windows and macOS file systems, also where the file system is case-sensitive."""
+    folder = user_base_data_dir("stopping_power_tables", create=True)
+    (folder / "SP_Mine.mat").write_bytes(
+        _shipped("stopping_power_tables", "SPtable.mat").read_bytes()
+    )
+
+    machine = find_base_data("machines", "protons_generic.mat").path
+    assert os.path.samefile(machine, _shipped("machines", "protons_Generic.mat"))
+    entry = find_base_data("stopping_power_tables", "sp_mine.MAT")
+    assert entry.source == "user"
+    assert os.path.samefile(entry.path, folder / "SP_Mine.mat")
+
+
 def test_add_and_remove_base_data_file(data_dir):
     source = _shipped("stopping_power_tables", "SPtable.mat")
     with pytest.raises(FileExistsError, match="ships with pyRadPlan"):

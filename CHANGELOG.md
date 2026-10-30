@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged
 - `keep_rad_depth_cubes=True` failed with a `Dij` validation error: the radiological depth cubes are now stored as arrays (one per beam, dose grid in z, y, x order)
 - Particle pencil-beam engines: beams after the first used the lateral cutoffs computed for an earlier beam wherever they share an energy, since the kernels were cached with their cutoffs while the cutoffs are recomputed per beam from its SSDs. This affected dose calculations with beams of different SSDs (only voxels at the lateral cutoff)
+- Keyboard cancellation of optimizations on Linux and macOS: an arrow or function key pressed in the terminal stopped the optimization as if it were ESC, and an optimization started as a background job (`python run.py &`) was stopped by the shell with `SIGTTOU`
+- Base data files (machines, RBE and stopping power tables) are found by name case-insensitively on Linux too, as on Windows and macOS, so e.g. `machine="generic"` no longer fails there only
+- `pyRadPlanGUI` can be stopped with Ctrl+C in the terminal it was started from
+- OpenMP clash detection: a package installed behind a symlink (e.g. a venv's `lib64 -> lib` on Linux) or loaded through an 8.3 short path or a junction on Windows was reported as clashing with its own runtime, which disabled that solver
+- GUI "Load patient data": files with an uppercase extension (e.g. `A.MAT`) were hidden in the case-sensitive GTK file dialogs on Linux
+- Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
+- `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
+- DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
 
 ## [0.6.0] - 2026-10-28
 

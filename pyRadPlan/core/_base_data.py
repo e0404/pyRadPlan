@@ -205,7 +205,9 @@ def find_base_data(kind: Union[str, BaseDataKind], name: str) -> Optional[BaseDa
         path = folder.joinpath(name)
         if path.is_file():
             return BaseDataFile(kind, name, path, folder_source)
-    return None
+    # Case-sensitive file systems (Linux) need this to match names like Windows and macOS do
+    folded = name.casefold()
+    return next((entry for entry in list_base_data(kind) if entry.name.casefold() == folded), None)
 
 
 def check_base_data_file_name(kind: Union[str, BaseDataKind], name: str) -> None:
