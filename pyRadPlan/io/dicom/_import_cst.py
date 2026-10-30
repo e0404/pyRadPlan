@@ -1,8 +1,9 @@
 """Structure import: DICOM RTSTRUCT/SEG to pyRadPlan VOIs.
 
-Refactored from a previous (overengineered) implementation. The contour->mask
-and SEG orientation handling are preserved; the output is now a list of
-pyRadPlan :class:`VOI` objects backed by SimpleITK masks aligned to the CT.
+Contours and SEG frames are placed on CT slices through the CT image's own
+geometry (origin, spacing and direction), so feet-first CTs work. The output is
+a list of pyRadPlan :class:`VOI` objects backed by SimpleITK masks aligned to
+the CT.
 """
 
 import logging
@@ -111,7 +112,8 @@ def import_seg(
     seg_dataset : pydicom.Dataset
         The SEG DICOM dataset (with pixel data).
     ct_datasets : list
-        The CT pydicom datasets (geometry only is required) for orientation.
+        The CT pydicom datasets. Unused: the frames are placed through *ct*'s
+        geometry. Kept for compatibility.
     ct : CT
         The reference pyRadPlan CT object.
     reporter : ProgressReporter, optional
@@ -131,7 +133,9 @@ def import_seg(
     segments = seg_dataset.SegmentSequence
 
     frame_positions, frame_segments = _map_seg_frames(seg_dataset)
-    ct_z = ct.z
+    if pixel_array.ndim == 2:
+        # A single-frame SEG
+        pixel_array = pixel_array[None, :, :]
 
     reporter = reporter if reporter is not None else ProgressReporter()
     logger.info("Converting %d SEG segment(s) to masks.", len(segments))
@@ -147,14 +151,24 @@ def import_seg(
             idx for idx, seg_num in enumerate(frame_segments) if seg_num == segment_number
         ]
 
+        num_skipped = 0
         for frame_idx in segment_frame_indices:
-            seg_z_pos = frame_positions[frame_idx]
-            ct_slice_idx = int(np.argmin(np.abs(ct_z - seg_z_pos)))
+            ct_slice_idx = _seg_frame_slice_index(
+                ct, frame_positions[frame_idx], pixel_array.shape[1:]
+            )
+            if ct_slice_idx is None:
+                num_skipped += 1
+                continue
+            # A SEG frame lies in the CT pixel grid: frame row = CT y, frame column = CT x
+            cube_xyz[:, :, ct_slice_idx] |= pixel_array[frame_idx, :, :].T.astype(np.uint8)
 
-            if pixel_array.ndim == 3:
-                frame_data = pixel_array[frame_idx, :, :]
-                frame_data = _apply_seg_orientation_correction(frame_data, ct_datasets)
-                cube_xyz[:, :, ct_slice_idx] = frame_data.T
+        if num_skipped:
+            logger.warning(
+                "Skipped %d of %d frame(s) of SEG segment '%s' that do not lie on a CT slice.",
+                num_skipped,
+                len(segment_frame_indices),
+                segment_label,
+            )
 
         if not cube_xyz.any():
             logger.info("Skipping empty SEG segment '%s'.", segment_label)
@@ -219,20 +233,38 @@ def _axis_interpolators(ct):
     return _create_axis_interpolator(ct, 0), _create_axis_interpolator(ct, 1)
 
 
+def _slice_index(ct, point):
+    """Return the index of the CT slice containing a world point, or None.
+
+    Uses the CT image's origin, spacing and direction, so a feet-first CT (slice
+    positions decreasing with the index) maps correctly, and rounds the
+    continuous index, so decimal slice positions need not match bit for bit.
+    A point up to half a slice beyond the first or last slice maps to that slice.
+    """
+    continuous = ct.cube_hu.TransformPhysicalPointToContinuousIndex([float(c) for c in point])
+    if not np.isfinite(continuous[2]):
+        return None
+    slice_idx = int(np.floor(continuous[2] + 0.5))
+    if not 0 <= slice_idx < ct.cube_dim[2]:
+        return None
+    return slice_idx
+
+
 def _create_slice_mask(points, ct, x_interp, y_interp):
     """Rasterize one contour into the slice grid.
 
-    Returns ``(window, x_start, y_start, z_pos)``, where *window* covers only the
-    contour's bounding box in voxel indices -- a voxel outside that box cannot be
-    inside the contour, so testing the whole slice against every contour (a
+    Returns ``(window, x_start, y_start, slice_idx)``, where *window* covers only
+    the contour's bounding box in voxel indices -- a voxel outside that box cannot
+    be inside the contour, so testing the whole slice against every contour (a
     512x512 slice is 262144 point-in-polygon tests) is wasted work. The caller
-    ORs the window into the cube at the given offsets.
+    combines the window into slice *slice_idx* of the cube at the given offsets.
 
     ``(None, ...)`` is returned when the contour lies outside the CT grid.
     """
-    points_x, points_y, z_pos = points[:, 0], points[:, 1], points[0, 2]
+    points_x, points_y = points[:, 0], points[:, 1]
 
-    if not (min(ct.z) <= z_pos <= max(ct.z)):
+    slice_idx = _slice_index(ct, points[0])
+    if slice_idx is None:
         return None, 0, 0, None
 
     vertices = np.column_stack((x_interp(points_x), y_interp(points_y)))
@@ -251,7 +283,7 @@ def _create_slice_mask(points, ct, x_interp, y_interp):
         return None, 0, 0, None
 
     window = _fill_polygon(vertices, x_start, x_stop, y_start, y_stop)
-    return window, x_start, y_start, z_pos
+    return window, x_start, y_start, slice_idx
 
 
 def _fill_polygon(vertices, x_start, x_stop, y_start, y_stop):
@@ -347,6 +379,9 @@ def _compute_segment_mask(ct, roi_contour, interpolators=None):
 
     *interpolators* is the ``(x, y)`` pair from :func:`_axis_interpolators`; it
     depends only on *ct*, so the caller builds it once for the whole structure set.
+
+    Contours on the same slice are combined with the even-odd rule (XOR), as
+    within one contour: a contour inside another one is a hole.
     """
     if not hasattr(roi_contour, "ContourSequence") or not roi_contour.ContourSequence:
         return None
@@ -354,18 +389,16 @@ def _compute_segment_mask(ct, roi_contour, interpolators=None):
     x_interp, y_interp = interpolators if interpolators is not None else _axis_interpolators(ct)
 
     segment_cube = np.zeros(ct.cube_dim, dtype=np.uint8)
-    ct_z_positions = ct.z
 
     for sequence in roi_contour.ContourSequence:
         points = _process_contour_points(sequence)
         if points is None:
             continue
-        window, x_start, y_start, z_pos = _create_slice_mask(points, ct, x_interp, y_interp)
+        window, x_start, y_start, slice_idx = _create_slice_mask(points, ct, x_interp, y_interp)
         if window is None:
             continue
-        slice_idx = int(np.argmin(np.abs(ct_z_positions - z_pos)))
         num_x, num_y = window.shape
-        segment_cube[x_start : x_start + num_x, y_start : y_start + num_y, slice_idx] |= (
+        segment_cube[x_start : x_start + num_x, y_start : y_start + num_y, slice_idx] ^= (
             window.astype(np.uint8)
         )
 
@@ -378,52 +411,42 @@ def _compute_segment_mask(ct, roi_contour, interpolators=None):
 
 
 def _map_seg_frames(seg_dataset):
-    """Map SEG frames to z-positions and referenced segment numbers."""
+    """Map SEG frames to their ImagePositionPatient and referenced segment numbers."""
     frame_positions = []
     frame_segments = []
 
     if hasattr(seg_dataset, "PerFrameFunctionalGroupsSequence"):
         for frame_group in seg_dataset.PerFrameFunctionalGroupsSequence:
-            z_pos = None
+            position = None
             seg_num = None
 
             if hasattr(frame_group, "PlanePositionSequence"):
                 pos_seq = frame_group.PlanePositionSequence[0]
                 if hasattr(pos_seq, "ImagePositionPatient"):
-                    z_pos = float(pos_seq.ImagePositionPatient[2])
+                    position = [float(c) for c in pos_seq.ImagePositionPatient]
 
             if hasattr(frame_group, "SegmentIdentificationSequence"):
                 seg_id = frame_group.SegmentIdentificationSequence[0]
                 if hasattr(seg_id, "ReferencedSegmentNumber"):
                     seg_num = int(seg_id.ReferencedSegmentNumber)
 
-            frame_positions.append(z_pos)
+            frame_positions.append(position)
             frame_segments.append(seg_num)
 
     return frame_positions, frame_segments
 
 
-def _apply_seg_orientation_correction(mask_data, ct_datasets):
-    """Apply orientation and patient position corrections to SEG mask data."""
-    corrected_mask = mask_data.copy()
+def _seg_frame_slice_index(ct, position, frame_shape):
+    """Return the CT slice a SEG frame covers, or None if it is not a CT slice.
 
-    if not ct_datasets:
-        return corrected_mask
-
-    if hasattr(ct_datasets[0], "ImageOrientationPatient"):
-        orientation = ct_datasets[0].ImageOrientationPatient
-        is_radiological = orientation[0] < 0 and orientation[4] < 0
-        if is_radiological:
-            corrected_mask = np.flip(corrected_mask, axis=(0, 1))
-
-    if hasattr(ct_datasets[0], "PatientPosition"):
-        patient_position = getattr(ct_datasets[0], "PatientPosition", "HFS")
-
-        if patient_position == "HFP":
-            corrected_mask = np.flip(corrected_mask, axis=0)
-        elif patient_position == "FFP":
-            corrected_mask = np.flip(corrected_mask, axis=(0, 1))
-        elif patient_position == "HFS":
-            corrected_mask = np.flip(corrected_mask, axis=1)
-
-    return corrected_mask
+    A frame is placed only when its first pixel (ImagePositionPatient) is the first
+    voxel of a CT slice and it has the CT's rows and columns, i.e. when it lies in
+    the CT pixel grid.
+    """
+    num_x, num_y = ct.cube_dim[0], ct.cube_dim[1]
+    if position is None or tuple(frame_shape) != (num_y, num_x):
+        return None
+    continuous = ct.cube_hu.TransformPhysicalPointToContinuousIndex(position)
+    if abs(continuous[0]) > 0.5 or abs(continuous[1]) > 0.5:
+        return None
+    return _slice_index(ct, position)

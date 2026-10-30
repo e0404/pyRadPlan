@@ -4,11 +4,14 @@ import logging
 import warnings
 from typing import Optional
 
+import numpy as np
 import pydicom
 import SimpleITK as sitk
 
 from pyRadPlan.core import ProgressReporter
 from pyRadPlan.ct import validate_ct, CT
+
+from ._helpers import warn_if_not_equally_spaced
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,7 @@ def import_ct(
         )
 
     reader.SetFileNames(file_names)
+    reader.MetaDataDictionaryArrayUpdateOn()
 
     num_slices = len(file_names)
     logger.info("Reading %d CT slice(s) from %s.", num_slices, directory)
@@ -68,6 +72,24 @@ def import_ct(
         image = reader.Execute()
         step.update(num_slices)
 
+    warn_if_not_equally_spaced(_slice_positions(reader, num_slices), "CT slices")
+
     image = sitk.Cast(image, sitk.sitkFloat32)
 
     return validate_ct(cube_hu=image)
+
+
+def _slice_positions(reader: sitk.ImageSeriesReader, num_slices: int) -> list[float]:
+    """Return the slice positions (mm) along the slice normal from the read headers."""
+    try:
+        orientation = [float(v) for v in reader.GetMetaData(0, "0020|0037").split("\\")]
+        normal = np.cross(orientation[:3], orientation[3:])
+        return [
+            float(
+                np.dot([float(v) for v in reader.GetMetaData(i, "0020|0032").split("\\")], normal)
+            )
+            for i in range(num_slices)
+        ]
+    except (RuntimeError, ValueError):
+        # Missing or malformed ImagePositionPatient / ImageOrientationPatient
+        return []
