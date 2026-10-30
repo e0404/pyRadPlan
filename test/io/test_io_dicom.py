@@ -379,6 +379,7 @@ def test_dicom_ct_with_equal_spacing_does_not_warn(dicom_dir):
         ([-100.7, -100.1, -99.5, -98.9], False),  # decimal positions
         ([0.0, 5.0, 10.0, 20.0, 25.0], True),  # a missing slice
         ([0.0, 2.0, 4.0, 7.0, 10.0], True),  # a change of slice thickness
+        ([0.0, 5.0], False),  # too few positions to judge
     ],
 )
 def test_warn_if_not_equally_spaced(positions, warns):
@@ -386,6 +387,78 @@ def test_warn_if_not_equally_spaced(positions, warns):
         warnings.simplefilter("always")
         warn_if_not_equally_spaced(positions, "Slices")
     assert bool(caught) == warns
+
+
+def test_slice_positions_without_position_headers_are_skipped():
+    """A series without ImagePositionPatient is not checked rather than raised over."""
+    from pyRadPlan.io.dicom._import_ct import _slice_positions
+
+    reader = mock.Mock()
+    reader.GetMetaData.side_effect = RuntimeError("Key not found")
+    assert _slice_positions(reader, 3) == []
+
+
+def test_seg_frame_slice_index():
+    """A SEG frame is placed only where it covers a CT slice exactly."""
+    from pyRadPlan.io.dicom._import_cst import _seg_frame_slice_index
+
+    ct = _unit_ct()  # 8 x 8 x 3, voxel index = world coordinate
+    assert _seg_frame_slice_index(ct, [0.0, 0.0, 2.0], (8, 8)) == 2
+    assert _seg_frame_slice_index(ct, None, (8, 8)) is None
+    assert _seg_frame_slice_index(ct, [0.0, 0.0, 1.0], (4, 8)) is None, "other rows"
+    assert _seg_frame_slice_index(ct, [3.0, 0.0, 1.0], (8, 8)) is None, "shifted in x"
+    assert _seg_frame_slice_index(ct, [0.0, 0.0, 7.0], (8, 8)) is None, "beyond the CT"
+
+
+def _seg_dataset(pixel_array, positions):
+    """A minimal SEG dataset with one segment, one frame per position."""
+    frames = [
+        mock.Mock(
+            PlanePositionSequence=[mock.Mock(ImagePositionPatient=position)],
+            SegmentIdentificationSequence=[mock.Mock(ReferencedSegmentNumber=1)],
+        )
+        for position in positions
+    ]
+    return mock.Mock(
+        pixel_array=pixel_array,
+        SegmentSequence=[mock.Mock(SegmentNumber=1, SegmentLabel="Organ")],
+        PerFrameFunctionalGroupsSequence=frames,
+    )
+
+
+def test_import_seg_single_frame():
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1  # row 2 = y, column 5 = x
+
+    (voi,) = import_seg(_seg_dataset(frame, [[0.0, 0.0, 1.0]]), [], _unit_ct())
+
+    mask = sitk.GetArrayFromImage(voi.mask)  # (z, y, x)
+    assert mask.sum() == 1 and mask[1, 2, 5] == 1
+
+
+def test_import_seg_skips_frames_off_the_ct_grid(caplog):
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frames = np.ones((2, 8, 8), dtype=np.uint8)
+    seg = _seg_dataset(frames, [[0.0, 0.0, 0.0], [2.0, 0.0, 1.0]])  # second one shifted
+
+    with caplog.at_level("WARNING"):
+        (voi,) = import_seg(seg, [], _unit_ct())
+
+    mask = sitk.GetArrayFromImage(voi.mask)
+    assert mask[0].all() and not mask[1:].any()
+    assert "Skipped 1 of 2 frame(s)" in caplog.text
+
+
+def test_contour_outside_the_ct_is_skipped():
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _create_slice_mask
+
+    ct = _unit_ct()
+    points = np.array([[1.0, 1.0, 5.0], [3.0, 1.0, 5.0], [3.0, 3.0, 5.0]])  # slices are z 0..2
+    window, _, _, _ = _create_slice_mask(points, ct, *_axis_interpolators(ct))
+    assert window is None
 
 
 def test_dicom_exporter_rejects_bad_structure_format(tmp_path):
