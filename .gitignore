@@ -77,7 +77,7 @@ docs/api/generated/
 .doc
 # Notebooks generated from examples/*.py by the docs build (docs/execute_examples.py). The
 # executed notebooks of the last release stay tracked here: `python docs/execute_examples.py
-# --release` force-adds them on rc/X.Y.Z (see .gitlab/merge_request_templates/Release.md).
+# --release` force-adds them on rc/X.Y.Z (see .github/PULL_REQUEST_TEMPLATE/release.md).
 docs/tutorials/examples/
 # Examples are committed as jupytext scripts only; notebooks converted locally stay untracked
 examples/*.ipynb
