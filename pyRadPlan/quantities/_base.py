@@ -293,6 +293,16 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                 self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
             )
 
+    def _backproject(self, matrix, d_quantity: Array) -> Array:
+        """Compute ``d_quantity @ matrix`` for a sparse influence matrix."""
+        if array_api_compat.is_jax_array(d_quantity):
+            # JAX sparse matrices do not implement __rmatmul__
+            product = (matrix.T @ d_quantity.T).T
+        else:
+            # Called on the matrix so scipy accepts array_api_strict operands
+            product = matrix.__rmatmul__(d_quantity)
+        return self.array_backend.asarray(product, copy=False)
+
     @abstractmethod
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         """

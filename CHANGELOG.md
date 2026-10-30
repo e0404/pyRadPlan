@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-30
+
 ### Added
 
 - GUI: the info widget and the About dialog show the Python version next to the pyRadPlan version, e.g. "pyRadPlan v0.6.0 (Python 3.12.7)"
@@ -14,10 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bumped ipax to 0.13.0 containing a bugfix to consistently allocate on the correct device
 - macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
 
 ### Fixed
 
+- FRED retries start with a clean temporary directory after a failed simulation, so partial scorer files from the failed run cannot be read or saved as output of the retry
+- The online documentation builds again on Read the Docs (the 0.6.0 build failed on numpydantic array annotations with current `sphinx-autodoc-typehints`)
 - IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)
 - Dose engines can be reused for several calculations. A second calculation on the same engine object computed every quantity twice (twice the forward dose, an `IndexError` in a following influence calculation), and kept what the first one resolved for its own patient: the dose grid and voxel subset (dose was then computed only on the first cst's voxels), the scenario model and the biological model (one dropped for unsuitable tissues stayed dropped). A calculation now leaves these settings as the user gave them, also the particle lateral model ("auto" / "fastest" resolve per machine) and the LET scorers a LET-based model switches on in TOPAS and FRED. TOPAS no longer compounds `scaling_factor` with the weights of every call, and FRED no longer writes into the folder tree a previous calculation deleted
 - `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged
@@ -31,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- JAX backend: converting a Dij to JAX (`Dij.to_namespace`) failed for pencil-beam dose influence matrices, and fluence optimization failed on JAX arrays
 
 ## [0.6.0] - 2026-10-28
 
@@ -623,7 +629,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1

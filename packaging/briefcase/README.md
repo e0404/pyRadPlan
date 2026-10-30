@@ -162,8 +162,8 @@ On failure the Briefcase logs (`packaging/briefcase/logs/`) are uploaded as
 ### GitLab: the `installer-linux` job
 
 The job `installer-linux` of `.gitlab-ci.yml` (stage `package`, so it runs once the tests pass)
-builds the Linux `.deb` in an `ubuntu:24.04` container with the same Briefcase steps, for
-`main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
+builds the Linux `.deb` in a `debian:trixie` container (for its system Python 3.13) with the
+same Briefcase steps, for `main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
 macOS DMG are only built on GitHub. The package is not kept as a job artifact (the runners
 limit their size and the `.deb` is almost 300 MB): the job only shows that the installer
 builds, and keeps the Briefcase logs for a week when it fails. A merge request from `rc/X.Y.Z` into `main` shows the pipeline of its source

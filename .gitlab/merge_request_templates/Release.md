@@ -31,11 +31,9 @@ Version: `vX.Y.Z`
 - [ ] Documentation builds without errors.
 - [ ] The desktop installers build: the `installer-linux` job of the pipeline of `rc/X.Y.Z` (GitLab) and the "Desktop installers" workflow (GitHub, all three platforms) are green.
 - [ ] No outstanding deprecations are due to be removed in this version (or they have been removed).
-- [ ] Version bumped in `pyproject.toml`.
-- [ ] `CHANGELOG.md` `[Unreleased]` section renamed to `[X.Y.Z] - YYYY-MM-DD` and a fresh empty `[Unreleased]` section added on top.
-- [ ] `CITATION.cff` updated (version, date-released, authors if applicable).
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
-- [ ] Executed example notebooks committed on `rc/X.Y.Z` as the last step before merging (examples are never executed in CI or on Read the Docs): `python docs/execute_examples.py --release` executes all runnable examples without errors into `docs/tutorials/examples/` and stages them (`git add -f`, the folder is git-ignored); commit them on `rc/X.Y.Z`. A local docs build shows their outputs and no "older than its script" warning (rerun `--release <name>` for an example changed afterwards).
+- [ ] Executed example notebooks up to date on `rc/X.Y.Z` once the review is addressed and CI is green (examples are never executed in CI or on Read the Docs). They stay tracked in `docs/tutorials/examples/` from the last release: for every example whose script or results changed, `python docs/execute_examples.py --release <name>` executes it without errors and stages it (`git add -f`, the folder is git-ignored; without a name it runs all runnable examples); commit them on `rc/X.Y.Z`. A local docs build shows their outputs and no "older than its script" warning.
+- [ ] Last commit before merging, once the release code is final: version bumped in `pyproject.toml`, `CHANGELOG.md` `[Unreleased]` section renamed to `[X.Y.Z] - YYYY-MM-DD` with a fresh empty `[Unreleased]` section added on top, and `CITATION.cff` updated (version, date-released, authors if applicable).
 
 ## Post-Merge Actions
 
@@ -47,14 +45,7 @@ Version: `vX.Y.Z`
 - [ ] Once the "Desktop installers" workflow of the tag has finished, verify the GitHub release carries the Windows (`.msi`), macOS (`.dmg`) and Linux (`.deb`) installers.
 - [ ] Once the release is published, verify the PyPI release: version `X.Y.Z` is listed, the sdist and wheel are present, and `pip install pyRadPlan==X.Y.Z` resolves in a clean environment.
 - [ ] Verify Read the Docs built the release (`stable` / `vX.Y.Z`) with the example outputs.
-- [ ] Merge `main` back into `develop` to keep branches in sync, without the executed notebooks (they are tracked on `main` and the tags only):
-  ```bash
-  git switch develop
-  git merge --no-ff --no-commit main
-  git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples
-  git commit
-  ```
-  `git ls-files docs/tutorials/examples` must print nothing on `develop` afterwards.
+- [ ] Merge `main` back into `develop` to keep branches in sync, including the executed notebooks.
 - [ ] Delete the `rc/X.Y.Z` branch.
 
 ## Additional Notes
