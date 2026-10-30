@@ -103,7 +103,11 @@ dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.
 pyRadPlanGUI = "pyRadPlan.gui:main"
 
 [project.urls]
-"Homepage" = "https://git.dkfz.de"
+"Homepage" = "https://github.com/e0404/pyRadPlan"
+"Repository" = "https://github.com/e0404/pyRadPlan"
+"Issues" = "https://github.com/e0404/pyRadPlan/issues"
+"Documentation" = "https://pyradplan.readthedocs.io/"
+"Changelog" = "https://github.com/e0404/pyRadPlan/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 # The test suite lives in test/ only. benchmark/ holds pytest-benchmark harnesses
