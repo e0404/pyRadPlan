@@ -7,7 +7,7 @@ from pathlib import Path
 import logging
 
 from pyRadPlan.biology.models import Wedenberg, create_bio_model
-from pyRadPlan.dose import calc_dose_forward
+from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import (
     ParticleTOPASMCEngine,
     DoseEngineBase,
@@ -237,6 +237,53 @@ def test_topas_reports_missing_let_output(test_data_protons, tmp_path):
         calc_dose_forward(ct, cst, stf, pln)
 
 
+def test_topas_reports_missing_dose_output(test_data_protons, tmp_path):
+    """A missing run file must not shift the remaining runs into the wrong beam."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    probe = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path / "inp"))
+    probe._init_dose_calc(ct, cst, stf)
+    shape = tuple(probe.dose_grid.dimensions[::-1])
+    _write_topas_output(tmp_path, "physicalDose", [np.ones(shape)] * len(stf.beams), 2)
+    (tmp_path / "score_pyRadPlan_plan_field0_run1_physicalDose.bin").unlink()
+
+    pln = _topas_plan(pln, "none", external_calculation=str(tmp_path))
+    with pytest.raises(ValueError, match="TOPAS dose output is missing"):
+        calc_dose_forward(ct, cst, stf, pln)
+
+
+def test_topas_rejects_non_identity_ct_direction(test_data_protons, tmp_path):
+    """The isocenter would be mirrored relative to the anatomy written for TOPAS."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    flipped = ct.model_copy(deep=True)
+    flipped.cube_hu.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
+
+    engine = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path))
+    with pytest.raises(NotImplementedError, match="identity direction"):
+        engine.calc_dose_forward(flipped, cst, stf, np.asarray(_stf_weights(stf)))
+    assert not (tmp_path / "pyRadPlan_cube.dat").exists()
+
+
+def test_topas_input_geometry_and_physics(test_data_protons, tmp_path):
+    """The patient file lists the voxels in x, y, z order and the beam files parse."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    resolution = {"x": 10.0, "y": 8.0, "z": 10.0}
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path, dose_grid={"resolution": resolution})
+    calc_dose_forward(ct, cst, stf, pln)
+
+    nx, ny, nz = ct.grid.resample(resolution).dimensions
+    assert nx != ny
+    patient = (tmp_path / "pyRadPlan_cube.txt").read_text()
+    assert f"NumberOfVoxelsX = {nx}\n" in patient
+    assert f"NumberOfVoxelsY = {ny}\n" in patient
+    assert f"NumberOfVoxelsZ = 1 {nz}\n" in patient
+
+    for beam_file in tmp_path.glob("beamSetup_pyRadPlan_plan_field*.txt"):
+        modules = next(
+            line for line in beam_file.read_text().splitlines() if "PhysicsList/Modules" in line
+        )
+        assert modules.count('"') % 2 == 0, modules
+
+
 def _stf_weights(stf):
     return [b.weight for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
 
@@ -285,3 +332,130 @@ def test_topas_let_scorer_is_set_per_calculation(test_data_protons, tmp_path):
 
     assert '= "ProtonLET"' in _run_files_text(tmp_path)
     assert engine.scorer == scorer
+
+
+# ------------------------------------------------------------- materials, scorers, physics
+def _converter_lines(patient_text):
+    return sum(
+        line.startswith("s:Ge/Patient/ImagingToMaterialConverter")
+        for line in patient_text.splitlines()
+    )
+
+
+def _patient_cube(simu_dir):
+    return np.fromfile(Path(simu_dir) / "pyRadPlan_cube.dat", dtype=np.int16)
+
+
+def test_topas_schneider_mode_uses_the_default_converter(test_data_protons, tmp_path):
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path, material_converter={"mode": "Schneider"})
+    calc_dose_forward(ct, cst, stf, pln)
+
+    patient = (tmp_path / "pyRadPlan_cube.txt").read_text()
+    assert _converter_lines(patient) == 1
+    assert 's:Ge/Patient/ImagingToMaterialConverter = "Schneider"' in patient
+    assert "iv:Ge/Patient/SchneiderHounsfieldUnitSections = 8 -1000" in patient
+    assert "dv:Ge/Patient/DensityCorrection = 3996 " in patient
+    assert "MaterialTagNumbers" not in patient
+    cube = _patient_cube(tmp_path)
+    assert cube.min() >= -1000 and cube.max() <= 2995
+
+
+def test_topas_schneider_mode_reads_a_custom_converter(test_data_protons, tmp_path):
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    converter = tmp_path / "my_converter.txt"
+    converter.write_text(
+        's:Ge/Patient/ImagingToMaterialConverter = "Schneider"\n'
+        "iv:Ge/Patient/SchneiderHounsfieldUnitSections = 3 -500 0 101\n"
+    )
+    settings = {"mode": "Schneider", "converter_file": str(converter)}
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path / "inp", material_converter=settings)
+    calc_dose_forward(ct, cst, stf, pln)
+
+    patient = (tmp_path / "inp" / "pyRadPlan_cube.txt").read_text()
+    assert _converter_lines(patient) == 1
+    assert "SchneiderHounsfieldUnitSections = 3 -500 0 101" in patient
+    cube = _patient_cube(tmp_path / "inp")
+    assert cube.min() == -500 and cube.max() <= 100
+
+
+@pytest.mark.parametrize(
+    ("settings", "error"),
+    [
+        ({"mode": "Schneider", "converter_file": "missing.txt"}, FileNotFoundError),
+        ({"mode": "Stoichiometric"}, ValueError),
+    ],
+)
+def test_topas_material_converter_errors(test_data_protons, tmp_path, settings, error):
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path, material_converter=settings)
+    with pytest.raises(error):
+        calc_dose_forward(ct, cst, stf, pln)
+
+
+def test_topas_settings_dicts_are_per_instance(test_data_protons):
+    """Changing an entry of one engine's settings leaves new engines at the defaults."""
+    first = ParticleTOPASMCEngine(test_data_protons[0])
+    first.material_converter["mode"] = "Schneider"
+    first.input_filenames["beam_biGaussian"] = "elsewhere.txt"
+
+    second = ParticleTOPASMCEngine(test_data_protons[0])
+    assert second.material_converter["mode"] == "RSP"
+    assert second.input_filenames["beam_biGaussian"] != "elsewhere.txt"
+
+
+def test_topas_reads_dose_to_water_when_only_that_is_scored(test_data_protons, tmp_path):
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    probe = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path / "inp"))
+    probe._init_dose_calc(ct, cst, stf)
+    shape = tuple(probe.dose_grid.dimensions[::-1])
+    rng = np.random.default_rng(7)
+    cube = rng.random(shape)
+    _write_topas_output(tmp_path, "doseToWater", [cube] * len(stf.beams), 2)
+    _write_topas_output(tmp_path, "physicalDose", [10 * cube] * len(stf.beams), 2)
+
+    w = np.ones(stf.total_number_of_bixels)
+    scorer = {"dose_to_medium": False, "dose_to_water": True, "LET": False}
+    pln_water = _topas_plan(
+        pln, "none", external_calculation=str(tmp_path), scorer={**scorer, "output_type": "binary"}
+    )
+    water = ParticleTOPASMCEngine(pln_water).calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+    pln_medium = _topas_plan(pln, "none", external_calculation=str(tmp_path))
+    medium = ParticleTOPASMCEngine(pln_medium).calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+
+    water, medium = sitk.GetArrayFromImage(water), sitk.GetArrayFromImage(medium)
+    assert water.max() > 0
+    np.testing.assert_allclose(medium, 10 * water, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        (
+            {},
+            '= 7 "g4em-standard_opt4" "g4h-phy_QGSP_BIC_HP" "g4decay" "g4h-elastic_HP" '
+            '"g4stopping" "g4ion-QMD" "g4radioactivedecay"',
+        ),
+        (
+            {"physics_modules": ["g4em-standard_opt3", "g4decay"]},
+            '= 2 "g4em-standard_opt3" "g4decay"',
+        ),
+    ],
+)
+def test_topas_physics_modules(test_data_protons, tmp_path, settings, expected):
+    """The preset is written unless a list of modules is given."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path, **settings)
+    calc_dose_forward(ct, cst, stf, pln)
+
+    beam_file = (tmp_path / "beamSetup_pyRadPlan_plan_field0.txt").read_text()
+    assert f"sv:Ph/PhysicsList/Modules {expected}\n" in beam_file
+
+
+def test_topas_rejects_dose_influence(test_data_protons, tmp_path):
+    """TOPAS only computes forward doses; the influence path says so up front."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    pln = _topas_plan(pln, "none", simu_dir=tmp_path)
+    with pytest.raises(NotImplementedError, match="forward doses only"):
+        calc_dose_influence(ct, cst, stf, pln)
+    assert not any(tmp_path.iterdir())

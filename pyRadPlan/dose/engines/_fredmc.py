@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, ClassVar, Optional, Union, cast, Literal
+from typing import Annotated, Any, ClassVar, Optional, Union, cast, Literal
 import time
 import textwrap
 from pathlib import Path
@@ -35,8 +35,8 @@ import SimpleITK as sitk
 from scipy import sparse
 
 from ...biology.models import bio_influence_from_let
-from ...core import Grid
-from ...ct import CT, resample_ct
+from ...core import AlgorithmParameterMetadata, Grid
+from ...ct import CT, resample_ct, default_hlut
 from ...cst import StructureSet
 from ...dij import Dij
 from ...plan import Plan
@@ -62,6 +62,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     _per_calculation_settings: ClassVar[tuple[str, ...]] = (
         *MonteCarloEngineAbstract._per_calculation_settings,
         "scorers",
+        "hlut",
     )
 
     computes_bio_influence = True
@@ -71,7 +72,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
     available_source_models = ["gaussian", "emittance", "sigmaSqrModel"]
 
-    available_versions = ["3.70.0", "3.76.0"]
+    available_versions = ["3.70.0", "3.76.0", "3.60.0"]
 
     external_calculation: Union[str, bool]
     calc_bio_dose: Union[Literal["auto"], bool]
@@ -92,6 +93,11 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     source_model: str
     room_material: str
     HU_table_file: str
+    material_converter: Literal["hlut", "RSP"]
+    # HU to rSP lookup table shared with the analytical engines (default_hlut() if None)
+    hlut: Annotated[
+        Optional[np.ndarray], AlgorithmParameterMetadata(configurable=False, kind="data")
+    ] = None
     scaling_factor: int
 
     def __init__(self, pln: Union[Plan, dict] = None):
@@ -110,6 +116,9 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self.source_model = "gaussian"
         self.room_material = "Air"
         self.HU_table_file = "hLut.inp"
+        # "hlut": FRED interpolates the hlut itself.
+        # "RSP": one water entry per HU value in the CT, interpolated like TOPAS's RSP mode.
+        self.material_converter = "hlut"
         self.scaling_factor = 1e6
         self.fred_version = "3.70.0"
         self.print_output = False
@@ -138,7 +147,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self._output_score = "/score/Phantom.Dose.mhd"
         self._conversion_factor = 1e6
         self._HU_clamping: bool = False
-        self._max_hu_table_value: int = 3000  # TODO: set up max hu value using custom hu table
+        self._ct_hu_values: Optional[np.ndarray] = None
         self._simulated_particles_per_bixel = 1e2
         self._create_working_dirs()
 
@@ -291,10 +300,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 else:
                     f.write("\tscoreij=[")
 
-                if len(self.scorers) > 1:
-                    for scorer in self.scorers:
-                        f.write("{},".format(scorer))
-                f.write("{}]\n".format(self.scorers[-1]))
+                f.write("{}]\n".format(",".join(self.scorers)))
 
                 # Write Room parameters
                 f.write("region>\n")
@@ -342,25 +348,46 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         sitk.WriteImage(resampled_ct.cube_hu, file_path)
 
-        max_ct_hu_value = sitk.GetArrayFromImage(resampled_ct.cube_hu).max()
-
-        if max_ct_hu_value > self._max_hu_table_value:
-            self._HU_clamping = True
-            logger.warning(("HU outside of boundaries"))
+        self._ct_hu_values = np.unique(sitk.GetArrayFromImage(resampled_ct.cube_hu))
 
     def _set_up_hu_table(self) -> None:
-        """Write the HU table file for the FRED engine, defining the mapping of HU values to material properties."""
-        file_content = textwrap.dedent("""
-        matColumns: HU rho RSP Ipot Lrad C Ca H N O P Ti S
-        mat: -1024  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:  -999  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   -90   0.95 0.95   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   -45   0.99 0.99   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:     0      1 1      78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   100  1.095 1.095  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   350  1.199 1.199  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:  3000  2.505 2.505  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        """)
+        """
+        Write the HU table file for the FRED engine, defining the mapping of HU values to material properties.
+
+        The table is ``hlut``, the HU to rSP lookup table the analytical engines use
+        (:func:`~pyRadPlan.ct.default_hlut` unless set). Every entry is water with density
+        and RSP set to the table value. With ``material_converter="hlut"`` FRED interpolates
+        the table itself. With ``"RSP"`` every HU value of the CT gets its own entry with
+        the value interpolated from the table, as TOPAS does in its RSP mode.
+        """
+        if self.hlut is None:
+            self.hlut = default_hlut()
+        hlut = np.asarray(self.hlut, dtype=float)
+        hlut = hlut[np.argsort(hlut[:, 0])]
+
+        if self.material_converter == "RSP":
+            hus = self._ct_hu_values
+            values = np.interp(hus, hlut[:, 0], hlut[:, 1])
+            # Every HU of the CT has its own table entry, so nothing needs clamping
+            self._HU_clamping = False
+        elif self.material_converter == "hlut":
+            hus, values = hlut[:, 0], hlut[:, 1]
+            self._HU_clamping = bool(
+                self._ct_hu_values.min() < hus[0] or self._ct_hu_values.max() > hus[-1]
+            )
+            if self._HU_clamping:
+                logger.warning(("HU outside of boundaries"))
+        else:
+            raise ValueError(
+                f"Unknown material_converter '{self.material_converter}' (use 'hlut' or 'RSP')."
+            )
+
+        lines = ["", "matColumns: HU rho RSP Ipot Lrad C Ca H N O P Ti S"]
+        lines += [
+            f"mat: {hu:5g} {value:.8g} {value:.8g} 78.0 36.1 0 0 11.189400 0 88.810600 0 0 0"
+            for hu, value in zip(hus, values)
+        ]
+        file_content = "\n".join(lines) + "\n"
         try:
             file_path = self._get_path(self._regions_foldername, self.HU_table_file)
             with open(file_path, "w") as f:
@@ -674,6 +701,14 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             The dose influence matrix containing the calculated dose.
         """
         dij = self._init_dose_calc(ct, cst, stf)
+        # The CT goes to FRED with an identity direction and the isocenter is placed in the
+        # same frame, so a rotated or mirrored grid would put the anatomy in the wrong place
+        if not np.allclose(self.dose_grid.direction, np.eye(3)):
+            raise NotImplementedError(
+                "FRED only supports CTs with an identity direction matrix, got "
+                f"{self.dose_grid.direction.tolist()}. Resample the CT to an identity "
+                "direction first."
+            )
         counter = 0
         self.dose_cube = None
         self.fred_order = None
@@ -1021,8 +1056,8 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         ct : CT
             The CT object containing the patient data.
         """
-        self._set_up_hu_table()
         self._set_up_patient_ct(ct)
+        self._set_up_hu_table()
         self._write_run_file()
         self._write_regions_file()
         self._write_plan_delivery_file()
@@ -1052,7 +1087,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 try:
                     let_cube = self.read_sparse_dij_bin(letd_file_name)
                 except Exception as e:
-                    logger.error(f"Unable to load file: {letd_file_name}. Error: {e}")
+                    raise ValueError(self._missing_let_message(letd_file_name)) from e
 
         else:
             # Handle direct dose calculation mode
@@ -1068,22 +1103,24 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 logger.error(f"Unable to find file: {load_file_name}")
 
             if self._use_let_kernel:
-                letd_dij_folder = dose_cube_folder
-                letd_cube_file_name = "Phantom.LETd.mhd"
+                letd_file_name = os.path.join(dose_cube_folder, "Phantom.LETd.mhd")
 
                 try:
-                    let_cube = sitk.GetArrayFromImage(
-                        sitk.ReadImage(os.path.join(letd_dij_folder, letd_cube_file_name))
-                    )
+                    let_cube = sitk.GetArrayFromImage(sitk.ReadImage(letd_file_name))
                 except Exception as e:
-                    logger.error(
-                        f"Unable to load file: {os.path.join(letd_dij_folder, letd_cube_file_name)}. Error: {e}"
-                    )
+                    raise ValueError(self._missing_let_message(letd_file_name)) from e
 
         # Store the results for further processing
 
         self.dose_cube = dose_cube
         self.let_cube = let_cube
+
+    @staticmethod
+    def _missing_let_message(file_name: str) -> str:
+        return (
+            f"FRED LETd output could not be read from '{file_name}': the biological model or "
+            "calc_let needs the LETd scorer. Rerun FRED with the LETd scorer enabled."
+        )
 
     def read_sparse_dij_bin(self, f_name: str) -> sparse.csc_array:
         """

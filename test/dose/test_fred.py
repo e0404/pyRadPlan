@@ -16,6 +16,7 @@ from pyRadPlan.dose.engines import (
     get_engine_class,
 )
 from pyRadPlan.dose.engines._fredmc import FRED_PARTICLES
+from pyRadPlan.ct import default_hlut
 
 # from pyRadPlan import generate_stf, plot_slice
 from pyRadPlan.plan import IonPlan
@@ -39,6 +40,16 @@ def is_latest_version():
 
     m = re.search(r"Version\s+(\d+\.\d+)", out)
     return bool(m and m.group(1).startswith("3.76"))
+
+
+def _read_hu_table(input_dir):
+    """Return the HU, density and RSP columns of a written hLut.inp."""
+    rows = [
+        line.split()[1:4]
+        for line in (input_dir / "inp/regions/hLut.inp").read_text().splitlines()
+        if line.startswith("mat:")
+    ]
+    return np.array(rows, dtype=float).T
 
 
 @pytest.fixture
@@ -138,6 +149,87 @@ class Test_file_handling:
         assert len(set(first)) == len(first)
         assert engine.scorers == scorers
 
+    def test_rsp_material_converter_writes_ct_hu_values(
+        self, test_data_protons, test_plan_fred, tmp_path
+    ):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update(
+            {
+                "external_calculation": True,
+                "save_input": str(tmp_path),
+                "material_converter": "RSP",
+            }
+        )
+
+        engine = get_engine(pln)
+        engine.calc_dose_influence(ct_mat, cst_mat, stf)
+
+        hu, rho, rsp = _read_hu_table(tmp_path)
+        hlut = default_hlut()
+        np.testing.assert_array_equal(hu, engine._ct_hu_values)
+        np.testing.assert_allclose(rsp, np.interp(hu, hlut[:, 0], hlut[:, 1]), rtol=1e-7)
+        np.testing.assert_array_equal(rho, rsp)
+        assert "lAllowHUClamping" not in (tmp_path / "inp/regions/regions.inp").read_text()
+
+    def test_each_scorer_is_written_once(self, test_data_protons, test_plan_fred, tmp_path):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": True, "save_input": str(tmp_path)})
+        pln.bio_model = "MCN"
+
+        calc_dose_influence(ct_mat, cst_mat, stf, pln)
+
+        regions = (tmp_path / "inp/regions/regions.inp").read_text()
+        assert "\tscoreij=[Dose,LETd]\n" in regions
+
+    def test_missing_let_output_is_an_error(self, test_data_protons, test_plan_fred):
+        """Output without the LETd scorer must not give zero LET and bio dose."""
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"use_output": "test/data/mc_fred/out"})
+        pln.bio_model = "MCN"
+
+        with pytest.raises(ValueError, match="FRED LETd output could not be read"):
+            calc_dose_forward(ct_mat, cst_mat, stf, pln)
+
+    def test_non_identity_ct_direction_is_rejected(
+        self, test_data_protons, test_plan_fred, tmp_path
+    ):
+        """The isocenter would be mirrored relative to the anatomy written for FRED."""
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": True, "save_input": str(tmp_path)})
+        engine = get_engine(pln)
+
+        flipped = ct_mat.model_copy(deep=True)
+        flipped.cube_hu.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
+        with pytest.raises(NotImplementedError, match="identity direction"):
+            engine.calc_dose_influence(flipped, cst_mat, stf)
+
+    def test_hu_table_uses_the_engine_hlut(self, test_data_protons, test_plan_fred, tmp_path):
+        """FRED's HU table is the hlut the analytical engines use, a custom one included."""
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": True, "save_input": str(tmp_path)})
+        custom_hlut = np.array([[2000.0, 2.0], [-1000.0, 0.0], [0.0, 1.0]])
+
+        engine = get_engine(pln)
+        engine.hlut = custom_hlut
+        engine.calc_dose_influence(ct_mat, cst_mat, stf)
+
+        hu, _, rsp = _read_hu_table(tmp_path)
+        np.testing.assert_array_equal(hu, [-1000, 0, 2000])
+        np.testing.assert_array_equal(rsp, [0.0, 1.0, 2.0])
+
+        # The default is filled in for one calculation only, as in the pencil-beam engines
+        engine.hlut = None
+        engine.calc_dose_influence(ct_mat, cst_mat, stf)
+        assert engine.hlut is None
+        hu, _, rsp = _read_hu_table(tmp_path)
+        np.testing.assert_array_equal(hu, default_hlut()[:, 0])
+        np.testing.assert_array_equal(rsp, default_hlut()[:, 1])
+
     # this test basically tests if fred is properly working.
     @pytest.mark.skipif(
         not is_fred_installed(),
@@ -204,6 +296,11 @@ class Test_file_correctness:
         for key, reference_content in test_data_fred_inp.items():
             generated_file = generated_files[key]
             assert generated_file.exists(), f"Generated file {generated_file} does not exist."
+
+            # The HU table is generated from the hlut, so its column alignment may differ
+            if key == "hLut":
+                assert generated_file.read_text().split() == reference_content.split()
+                continue
 
             # Handle binary files separately
             if key == "CTpatient.raw":
