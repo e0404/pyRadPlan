@@ -132,6 +132,8 @@ extend-include = [
 ]
 
 [tool.ruff.lint]
+# Explicit, so that upgrading ruff does not silently enable new default rules
+select = ["E4", "E7", "E9", "F"]
 extend-select = ["PL","D", "NPY", "N"]
 extend-ignore = ["E203", "E701", "F722", "RET504", "C901", "D202", "PLR2004", "N813", "N999", "UP007"]
 exclude = ["test/**/*.py", "benchmark/**/*.py"]
