@@ -127,18 +127,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
         if not self.add_margin:
             self._target_voxels = self._cst.optimization_target_voxels(order="numpy")
         if self.add_margin:
-            added_margin = self._computed_target_margin()  # pbMargin in matRad
-
-            max_iso_shift, range_margin = self._scenario_margins()
-
-            constant_margin = added_margin + range_margin
-
-            # Dimension specific margins
-            dim_margins = (
-                np.max((self._ct.resolution["x"], max_iso_shift[0], constant_margin)),
-                np.max((self._ct.resolution["y"], max_iso_shift[1], constant_margin)),
-                np.max((self._ct.resolution["z"], max_iso_shift[2], constant_margin)),
-            )
+            dim_margins = self._target_margins()
 
             voxel_margin = np.ceil(
                 np.array(dim_margins)
@@ -176,6 +165,20 @@ class StfGeneratorBase(ProgressReporter, ABC):
         # Multiply with target mask to ignore densities outside of target
         apply_mask = sitk.MaskImageFilter()
         self._cube_hu = apply_mask.Execute(self._cube_hu, self._patient_mask)
+
+    def _target_margins(self) -> tuple[float, float, float]:
+        """
+        Margin per axis [mm] by which the target is grown for beamlet placement.
+
+        As in matRad: the largest setup shift magnitude along the axis plus the range and
+        beamlet margins, at least one CT voxel.
+        """
+        added_margin = self._computed_target_margin()  # pbMargin in matRad
+        max_iso_shift, range_margin = self._scenario_margins()
+        return tuple(
+            float(max(self._ct.resolution[axis], max_iso_shift[i] + range_margin + added_margin))
+            for i, axis in enumerate(("x", "y", "z"))
+        )
 
     def _scenario_margins(self) -> tuple[np.ndarray, float]:
         """
@@ -215,20 +218,18 @@ class StfGeneratorBase(ProgressReporter, ABC):
         # pln.prop_stf is a dictionary. For every key we try to assign the value
         # If the key is not existing as an attribute, we throw a warning
         for key in pln.prop_stf:
+            attr = "mult_scen" if key == "scenarios" else key
             try:
-                setattr(self, key, pln.prop_stf[key])
+                setattr(self, attr, pln.prop_stf[key])
             except AttributeError:
                 warnings.warn(f"Attribute {key} not existing in {self.name} generator")
 
         self.machine = pln.machine
 
-        if "mult_scen" in pln:
-            self.mult_scen = (
-                pln.mult_scen
-            )  # Validation will be performed as soon as we have the ct
-        elif self.mult_scen is None:
+        # The plan's scenario model, unless prop_stf names one; validated once the ct is known
+        if not {"mult_scen", "scenarios"} & set(pln.prop_stf):
+            self.mult_scen = pln.scenarios
+        if self.mult_scen is None:
             self.mult_scen = "nomScen"
-        else:
-            pass
 
         # TODO: self.bio_param = pln.bio_param

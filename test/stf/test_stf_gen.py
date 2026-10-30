@@ -523,3 +523,48 @@ def test_margins_without_setup_and_range_dimensions(sample_ct, sample_cst, sampl
     max_iso_shift, range_margin = stf_gen._scenario_margins()
     np.testing.assert_array_equal(max_iso_shift, np.zeros(3))
     assert range_margin == 0.0
+
+
+def test_generator_takes_the_plans_scenario_model(sample_photon_pln):
+    """``pln.scenarios`` reaches the generator (``"mult_scen" in pln`` never did)."""
+    from pyRadPlan.stf.generators import get_generator
+
+    sample_photon_pln.scenarios = {"model": "wcScen", "combinations": "none"}
+    generator = get_generator(sample_photon_pln)
+    assert getattr(generator.mult_scen, "short_name", None) == "wcScen"
+
+
+def test_scenario_model_in_prop_stf_takes_precedence(sample_photon_pln):
+    from pyRadPlan.stf.generators import get_generator
+
+    sample_photon_pln.scenarios = {"model": "wcScen", "combinations": "none"}
+    sample_photon_pln.prop_stf["mult_scen"] = "nomScen"
+    assert get_generator(sample_photon_pln).mult_scen == "nomScen"
+
+    sample_photon_pln.prop_stf.pop("mult_scen")
+    sample_photon_pln.prop_stf["scenarios"] = "rndScen"
+    assert get_generator(sample_photon_pln).mult_scen == "rndScen"
+
+
+def test_target_margin_adds_shift_range_and_beamlet_margin(
+    sample_ct, sample_cst, sample_photon_pln
+):
+    """matRad: margin = max(resolution, max |shift| + range margin + beamlet margin) per axis."""
+    shift_set = _scenario_set(
+        {
+            "setup": [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, -4.0, 0.0)],
+            "range": [(0.0, 0.0), (1.0, 0.02), (0.0, 0.0)],
+        }
+    )
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, shift_set)
+    added = stf_gen._computed_target_margin()
+    range_margin = 1.0 + 0.02
+    res = sample_ct.resolution
+    expected = (
+        max(res["x"], 10.0 + range_margin + added),
+        max(res["y"], 4.0 + range_margin + added),
+        max(res["z"], range_margin + added),
+    )
+    assert stf_gen._target_margins() == pytest.approx(expected)
+    # the sum exceeds the former max(shift, range + beamlet) rule along the shifted axes
+    assert stf_gen._target_margins()[0] > max(res["x"], 10.0, range_margin + added)

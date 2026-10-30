@@ -507,6 +507,13 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         scen_set.require_supported(
             tuple(self.supported_uncertainties) + _nominal_only_dimensions(scen_set)
         )
+        if self._calc_dose_direct and scen_set.num_computed > 1:
+            # The forward result holds one dose per quantity; returning one scenario of
+            # several would look like the nominal dose
+            raise NotImplementedError(
+                "Forward dose calculation supports one scenario only; the scenario set has "
+                f"{scen_set.num_computed} computed scenarios. Use calc_dose_influence."
+            )
 
         num_phases = ct.num_of_ct_scen
         phases = scen_set.ct_phases()

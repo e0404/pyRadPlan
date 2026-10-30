@@ -9,7 +9,7 @@ from scipy import sparse
 
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.ct import CT
-from pyRadPlan.dose import calc_dose_influence
+from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import ParticleFredMCEngine, get_engine
 from pyRadPlan.raytracer import RayTracerSiddon
 from pyRadPlan.scenarios import (
@@ -320,3 +320,71 @@ def test_public_entry_point_scenario_override(test_data_protons):
     assert dij.scenarios is scen_set
     assert dij.physical_dose.shape == (2,)
     assert pln.mult_scen.model_dump() == model_before
+
+
+def test_forward_dose_refuses_several_scenarios(test_data_photons):
+    """The forward result holds one dose; one of several scenarios would look nominal."""
+    pln, ct, cst, stf, _, _ = test_data_photons
+    scen_set = _scenario_set(setup=[(0.0, 0.0, 0.0), SHIFT_X])
+    with pytest.raises(NotImplementedError, match="Forward dose calculation supports one"):
+        calc_dose_forward(
+            ct, cst, stf, pln, np.ones(stf.total_number_of_bixels), scenarios=scen_set
+        )
+    # a derived (alias) scenario does not count as a second computed one
+    alias_set = _scenario_set(
+        setup=[(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)],
+        bases=[None, ScenarioBasis(coefficients={0: 1.0})],
+    )
+    result = calc_dose_forward(
+        ct, cst, stf, pln, np.ones(stf.total_number_of_bixels), scenarios=alias_set
+    )
+    assert "physical_dose" in result
+
+
+BIO_SHIFTS = [(3.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, -3.0, 0.0), (2.0, 2.0, 0.0)]
+
+
+def _bio_shift_dijs(test_data_protons):
+    """MCN dij with four setup-shift scenarios and a nominal dij per shift on a shifted stf."""
+    pln, ct, cst, stf, _, _ = test_data_protons
+    pln.bio_model = "MCN"
+    _, dij, _ = _calc(pln, ct, cst, stf, scenarios=_scenario_set(setup=BIO_SHIFTS))
+    refs = [_calc(pln, ct, cst, _shifted(stf, shift))[1] for shift in BIO_SHIFTS]
+    return dij, refs
+
+
+def test_shift_scenarios_in_biological_results(test_data_protons):
+    """Result assembly reads the reference alpha/beta of every shift scenario correctly."""
+    dij, refs = _bio_shift_dijs(test_data_protons)
+    w = np.ones(dij.total_num_of_bixels)
+    for k, ref_dij in enumerate(refs):
+        got = dij.get_result_arrays_from_intensity(w, scenario_index=k)
+        ref = ref_dij.get_result_arrays_from_intensity(w)
+        for name in ("physical_dose", "effect", "rbe_x_dose"):
+            np.testing.assert_allclose(got[name], ref[name], rtol=1e-5, atol=1e-7)
+
+
+def test_shift_scenarios_in_biological_quantities(test_data_protons):
+    """RBExDose and the indirect AlphaDose / SqrtBetaDose paths per scenario."""
+    from pyRadPlan.core.xp_utils import to_numpy
+    from pyRadPlan.quantities import QuantityResolver
+
+    dij, refs = _bio_shift_dijs(test_data_protons)
+    w = np.ones(dij.total_num_of_bixels)
+
+    def without_lq(d):
+        return d.model_copy(update={"alpha_dose": None, "sqrt_beta_dose": None})
+
+    for name, indirect in (("rbe_x_dose", False), ("alpha_dose", True), ("sqrt_beta_dose", True)):
+        source = without_lq(dij) if indirect else dij
+        quantity = QuantityResolver(source).get(name)
+        xp = quantity.array_backend
+        values = quantity.compute(xp.asarray(w, dtype=xp.float32))
+        for k, ref_dij in enumerate(refs):
+            ref_source = without_lq(ref_dij) if indirect else ref_dij
+            ref_values = (
+                QuantityResolver(ref_source).get(name).compute(xp.asarray(w, dtype=xp.float32))
+            )
+            np.testing.assert_allclose(
+                to_numpy(values.flat[k]), to_numpy(ref_values.flat[0]), rtol=1e-4, atol=1e-6
+            )
