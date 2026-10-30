@@ -1,7 +1,11 @@
 """GUI helpers for running pydantic-ai tasks."""
 
 import importlib.util
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from ._ai_task_dialog import AiTask, AiTaskDialog
 
@@ -24,16 +28,30 @@ def ai_disabled_reason() -> Optional[str]:
     """Why AI features cannot run right now, or ``None`` if they can.
 
     Checks that pydantic-ai is installed and that at least one model is usable
-    (see :func:`pyRadPlan.ai_agents.available_models`); the returned string is
+    (see :func:`pyRadPlan.ai.agents.available_models`); the returned string is
     suitable as a tooltip on disabled AI buttons.
     """
     if not ai_available():
         return AI_MISSING_TIP
-    from pyRadPlan.ai_agents import available_models  # noqa: PLC0415
+    from pyRadPlan.ai.agents import available_models  # noqa: PLC0415
 
     if not available_models():
         return AI_NO_MODEL_TIP
     return None
+
+
+@contextmanager
+def busy_cursor() -> Iterator[None]:
+    """Show a wait cursor while the block runs.
+
+    Used around the first import of the agents, which loads pydantic-ai and can
+    take a few seconds.
+    """
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
 
 
 __all__ = [
@@ -43,4 +61,5 @@ __all__ = [
     "AiTaskDialog",
     "ai_available",
     "ai_disabled_reason",
+    "busy_cursor",
 ]

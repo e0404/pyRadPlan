@@ -38,7 +38,7 @@ ct, cst = load_tg119()
 
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
-pln.prop_opt = {"solver": "scipy"}
+pln.prop_opt = {"solver": "scipy", "convert_dose_objectives": False}
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
@@ -80,12 +80,12 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result.physical_dose.values,
+        overlay=result.physical_dose,
         view_slice=view_slice,
     )
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result.let.values,
+        overlay=result.let,
         view_slice=view_slice,
     )

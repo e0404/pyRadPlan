@@ -52,6 +52,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         Use the given density cube ct.cube and omit conversion from cubeHU.
     ignore_outside_densities : bool
         Ignore densities outside of cst contours.
+
+        Both flags mirror the properties of the same name on the ion stf generators and are
+        checked against the stf in ``_check_stf_density_consistency``.
     num_of_dij_fill_steps : int
         Number of times during dose calculation the temporary containers are moved to a sparse
         matrix.
@@ -107,7 +110,11 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         float, Field(gt=0.0, description="Density threshold for SSD computation")
     ] = 0.0500
     use_given_eq_density_cube: bool = False
-    ignore_outside_densities: bool = True
+    ignore_outside_densities: bool = False
+    # Radiation modes whose stf generators select energies by tracing the densities
+    _density_dependent_stf_modes: ClassVar[frozenset[str]] = frozenset(
+        {"protons", "helium", "carbon", "oxygen"}
+    )
     trace_on_dose_grid: bool = True
     assumed_sparsity: Annotated[float, Field(gt=0.0, le=1.0)] = 5e-4
     cube_wed: Annotated[
@@ -287,15 +294,19 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         dij = super()._init_dose_calc(ct, cst, stf)
 
         # calculate rED or rSP from HU or take provided wedCube
-        if self.use_given_eq_density_cube and not hasattr(ct, "cube_hu"):
+        if self.use_given_eq_density_cube and getattr(ct, "cube", None) is None:
             logging.warning(
                 "HU Conversion requested to be omitted but no ct.cube exists! "
                 "Will override and do the conversion anyway!"
             )
             self.use_given_eq_density_cube = False
 
+        # The stf's geometry (for ions: its energy layers) was placed on a density cube of
+        # its own. Warn before tracing a differently built one.
+        self._check_stf_density_consistency(stf)
+
         if self.use_given_eq_density_cube:
-            ct_wed = ct.cube_hu
+            ct_wed = ct.cube
             logging.info("Omitting HU to rED/rSP conversion and using existing ct.cube!\n")
         else:
             # TODO: obtain correct hlut
@@ -336,6 +347,54 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._raytracer.lateral_cut_off = self.geometric_lateral_cutoff
 
         return dij
+
+    def _check_stf_density_consistency(self, stf: SteeringInformation) -> None:
+        """
+        Warn if the stf's density assumptions are unknown or differ from the engine's.
+
+        The ion stf generators record which density cube they selected the energy layers
+        on. If the engine now traces a differently built cube, the Bragg peaks no longer
+        land where the energy selection put them.
+
+        Parameters
+        ----------
+        stf : SteeringInformation
+            The steering information to check against the engine configuration.
+
+        Notes
+        -----
+        Only beams of radiation modes in ``_density_dependent_stf_modes`` are checked,
+        since photon and VHEE beamlet placement does not depend on densities. Beams not
+        recording a setting (``None``, e.g. an stf imported from matRad) cause a separate
+        warning, as their consistency cannot be verified.
+        """
+
+        beams = [
+            beam for beam in stf.beams if beam.radiation_mode in self._density_dependent_stf_modes
+        ]
+        if not beams:
+            return
+
+        names = ("use_given_eq_density_cube", "ignore_outside_densities")
+        unknown = [name for name in names if any(getattr(b, name) is None for b in beams)]
+        if unknown:
+            settings = ", ".join(f"{name}={getattr(self, name)}" for name in unknown)
+            warnings.warn(
+                f"stf does not record {' and '.join(unknown)} (e.g. because it was imported), "
+                f"so its energy selection cannot be verified against the dose engine "
+                f"({settings}). Make sure the stf was generated with the same settings."
+            )
+
+        for name in names:
+            engine_value = getattr(self, name)
+            stf_values = {getattr(beam, name) for beam in beams} - {None}
+            if stf_values and stf_values != {engine_value}:
+                warnings.warn(
+                    f"stf was generated with {name}="
+                    f"{'/'.join(str(value) for value in sorted(stf_values))}, but the dose "
+                    f"engine uses {name}={engine_value}. Beamlet placement and dose "
+                    "calculation will see different densities."
+                )
 
     def _allocate_quantity_matrices(self, dij: dict[str, Any], names: list[str]):
         device = "cpu"
@@ -485,7 +544,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._raytracer.lateral_cut_off = beam_info["beam"].get(
             "effective_lateral_cut_off", self._effective_lateral_cutoff
         )
-        rad_depth_cubes = self._raytracer.trace_cubes(beam_info["beam"])
+        patient_coords = rot_coords_vdose_grid if self.trace_on_dose_grid else rot_coords_v
+        rad_depth_cubes = self._raytracer.trace_cubes(
+            beam_info["beam"], patient_coords=patient_coords
+        )
         self._raytracer.debug_core_performance = False
 
         # TODO: add universal time-debugging method
@@ -854,7 +916,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                     # Trigger resize for all quantities associated with this scenario
                     for q in self._computed_quantities:
                         dij[q][sub_scen_idx]["data"].resize((new_size,), refcheck=False)
-
                 bixel["ix"] = to_numpy(bixel["ix"])
                 shared_struct["indices"][start:end] = bixel["ix"]
                 shared_struct["nnz"] += ix_size
@@ -1067,13 +1128,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
                     ],
                     dtype=cross_ab.dtype,
-                    device=self.device,
+                    device=array_api_compat.device(cross_ab),
                 )
 
             ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
 
             derived_rot_mat = (
-                xp.eye(3, dtype=a.dtype, device=self.device)
+                xp.eye(3, dtype=a.dtype, device=array_api_compat.device(a))
                 + ssc_matrix
                 + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
             )

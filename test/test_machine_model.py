@@ -2,15 +2,22 @@ import pytest
 from datetime import datetime
 import numpy as np
 from numpydantic import NDArray, Shape
+import pymatreader
+import scipy.io
 
 from pyRadPlan.machines import (
     Machine,
     PhotonLINAC,
     IonAccelerator,
+    find_machine_file,
     load_from_name,
+    load_machine_from_mat,
+    get_available_machines,
+    validate_machine,
     ParticlePencilBeamKernel,
     PhotonSVDKernel,
 )
+from pyRadPlan.biology.tissues import LEMTissueProperties
 
 
 def test_basic_machine_model():
@@ -173,3 +180,83 @@ def test_carbon_machine_model_get_kernel():
 
     assert kernel.alpha.shape == (abratio.size, kernel.depths.size)
     assert kernel.beta.shape == (abratio.size, kernel.depths.size)
+
+
+def test_get_available_machines_lists_shipped_machines():
+    machines = get_available_machines()
+    for radiation_mode in ("photons", "protons", "helium", "carbon", "oxygen", "VHEE"):
+        assert "Generic" in machines[radiation_mode]
+        assert machines[radiation_mode] == sorted(machines[radiation_mode], key=str.casefold)
+        for machine_name in machines[radiation_mode]:
+            assert isinstance(load_from_name(radiation_mode, machine_name), Machine)
+
+
+def test_get_available_machines_for_single_mode():
+    assert get_available_machines("VHEE") == {"VHEE": get_available_machines()["VHEE"]}
+    assert get_available_machines("not_a_radiation_mode") == {"not_a_radiation_mode": []}
+
+
+def _tissue_parameters_as_read_mat_delivers(tmp_path, tissue_parameters):
+    """Round trip a matRad ``tissueParameters`` struct through a .mat file and read_mat."""
+    path = tmp_path / "tissue_parameters.mat"
+    scipy.io.savemat(path, {"tissueParameters": tissue_parameters})
+    return pymatreader.read_mat(str(path))["tissueParameters"]
+
+
+def _carbon_machine_with_tissue_parameters(tissue_parameters):
+    raw = load_machine_from_mat(find_machine_file("carbon", "Generic"))
+    raw["meta"]["tissueParameters"] = tissue_parameters
+    return validate_machine(raw)
+
+
+@pytest.mark.parametrize("first_field", ["cell_Line", "alphaX"])
+def test_machine_with_a_single_tissue_class(tmp_path, first_field):
+    """read_mat squeezes a one-class struct to scalars and strings."""
+    fields = {
+        "cell_Line": "Generic_LEMax05",
+        "alphaX": 0.5,
+        "betaX": 0.05,
+        "Dt": 30.0,
+        "rNucleus": 5.0,
+        "model": "LEM",
+    }
+    ordered = {first_field: fields[first_field], **fields}
+    tissue_parameters = _tissue_parameters_as_read_mat_delivers(tmp_path, ordered)
+    assert isinstance(tissue_parameters["alphaX"], float)
+    assert isinstance(tissue_parameters["cell_Line"], str)
+
+    machine = _carbon_machine_with_tissue_parameters(tissue_parameters)
+
+    assert len(machine.tissue_properties) == 1
+    tissue = machine.tissue_properties[0]
+    assert isinstance(tissue, LEMTissueProperties)
+    assert (tissue.cell_line, tissue.alpha_x, tissue.beta_x) == ("Generic_LEMax05", 0.5, 0.05)
+
+
+def test_machine_with_several_tissue_classes(tmp_path):
+    tissue_parameters = _tissue_parameters_as_read_mat_delivers(
+        tmp_path,
+        {
+            "cell_Line": np.array(["Generic_LEMax01", "Generic_LEMax05"], dtype=object),
+            "alphaX": np.array([0.1, 0.5]),
+            "betaX": np.array([0.05, 0.05]),
+            "Dt": np.array([30.0, 30.0]),
+            "rNucleus": np.array([5.0, 5.0]),
+            "model": np.array(["LEM", "LEM"], dtype=object),
+        },
+    )
+
+    machine = _carbon_machine_with_tissue_parameters(tissue_parameters)
+
+    assert [(t.cell_line, t.alpha_x) for t in machine.tissue_properties] == [
+        ("Generic_LEMax01", 0.1),
+        ("Generic_LEMax05", 0.5),
+    ]
+    assert all(isinstance(t, LEMTissueProperties) for t in machine.tissue_properties)
+
+
+def test_machine_tissue_parameters_with_differing_class_counts_are_rejected():
+    with pytest.raises(ValueError, match="differing numbers of tissue classes"):
+        _carbon_machine_with_tissue_parameters(
+            {"alphaX": [0.1, 0.5], "betaX": 0.05, "model": "LEM"}
+        )

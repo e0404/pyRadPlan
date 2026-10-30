@@ -123,7 +123,7 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result.physical_dose.values,
+        overlay=result.physical_dose,
         view_slice=view_slice,
         plane="axial",
         overlay_unit="Gy",

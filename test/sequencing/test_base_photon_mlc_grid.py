@@ -17,7 +17,8 @@ def _pln_with_mlc(pln, leaf_width: float, number_of_elements: int, device_type: 
     machine.mlc = MLC(
         device_type=device_type, leaf_width=leaf_width, number_of_elements=number_of_elements
     )
-    pln.machine = machine.model_dump(by_alias=True)
+    # The object, not a dict: Plan validates a machine dict into the generic Machine
+    pln.machine = machine
     return pln
 
 

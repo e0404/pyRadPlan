@@ -72,7 +72,7 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
 
 def central_axis_peak(result, ct, stf):
     # TODO: adjust to central axis
-    return float(np.max(sitk.GetArrayFromImage(result.physical_dose.values)))
+    return float(np.max(sitk.GetArrayViewFromImage(result.physical_dose.values)))
 
 
 def build_water_phantom(ct_dim, ct_resolution):  # , num_of_ct_scen):

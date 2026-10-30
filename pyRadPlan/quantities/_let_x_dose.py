@@ -1,15 +1,13 @@
-import pint
-
 from ..core.xp_utils.typing import Array
 from pyRadPlan.quantities._base import FluenceDependentQuantity
 
-ureg = pint.UnitRegistry()
+from pyRadPlan.core._units import ureg
 
 
 class LETxDose(FluenceDependentQuantity):
     """LET-weighted dose quantity backed directly by the dij.let_dose matrix."""
 
-    unit = ureg.gray * ureg.micrometer / ureg.keV
+    unit = ureg.gray * ureg.keV / ureg.micrometer
     dim = 1
     identifier = "let_dose"
     name = "LETxDose"

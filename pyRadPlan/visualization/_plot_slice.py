@@ -6,10 +6,8 @@ import SimpleITK as sitk
 import matplotlib.pyplot as plt
 import pint
 from pyRadPlan import CT, validate_ct, StructureSet, validate_cst
+from pyRadPlan.core._units import ureg
 from pyRadPlan.result import QuantityDistribution
-
-# Initialize Units
-ureg = pint.UnitRegistry()
 
 
 class PlotSliceKwargs(TypedDict, total=False):
@@ -130,7 +128,7 @@ def _resolve_view_slices(
 def _normalize_overlay_unit(overlay_unit: Union[str, pint.Unit, pint.Quantity]) -> pint.Unit:
     """Normalize ``overlay_unit`` to a ``pint.Unit`` so formatting and predicates are uniform."""
     if isinstance(overlay_unit, str):
-        return ureg(overlay_unit).units
+        return ureg.Unit(overlay_unit)
     if isinstance(overlay_unit, pint.Quantity):
         return overlay_unit.units
     return overlay_unit
@@ -169,8 +167,7 @@ def _draw_contours(
 ) -> None:
     for voi in cst.vois:
         mask = sitk.GetArrayViewFromImage(voi.mask)[slice_indexing]
-        color = voi.visible_color
-        color = [tuple(float(c) / 255.0 for c in voi.visible_color)]
+        color = [tuple(float(c) / 255.0 for c in voi.color)]
 
         if ctx.transpose:
             mask = mask.T

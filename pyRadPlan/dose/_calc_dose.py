@@ -7,6 +7,7 @@ from pyRadPlan.ct import validate_ct, CT
 from pyRadPlan.cst import validate_cst, StructureSet
 from pyRadPlan.plan import validate_pln, Plan
 from pyRadPlan.dij import Dij
+from pyRadPlan.result import PlanResult
 
 from .engines import get_engine
 
@@ -52,9 +53,9 @@ def calc_dose_forward(
     stf: Union[SteeringInformation, dict],
     pln: Union[Plan, dict],
     weights: np.ndarray = None,
-) -> Dij:
+) -> PlanResult:
     """
-    Calculate the dose forward matrix.
+    Calculate forward-dose results on the CT grid.
 
     Parameters
     ----------
@@ -70,7 +71,7 @@ def calc_dose_forward(
     Returns
     -------
     PlanResult
-        A PlanResult object.
+        Result quantities on the CT grid.
     """
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct=ct)
@@ -79,5 +80,4 @@ def calc_dose_forward(
 
     engine = get_engine(pln)
 
-    dij = engine.calc_dose_forward(ct, cst, stf, weights)
-    return dij
+    return engine.calc_dose_forward(ct, cst, stf, weights)

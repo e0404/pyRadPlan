@@ -1,0 +1,24 @@
+{
+    "model_name": "YourModelClass",
+    "preprocessor_name": null,
+    "_preprocessor_name_help": "Optional. Class in preprocessor.py to use; only needed if it defines more than one BasePreprocessor subclass.",
+
+    "model_params": {},
+    "_model_params_help": "Kwargs passed directly to the model constructor (the class named by 'model_name' in model.py). Model-specific; do not put any key here that the constructor does not accept.",
+
+    "model_preprocessing": {},
+    "_model_preprocessing_help": "Passed whole to the preprocessor's constructor (available as self.config); it configures BOTH preprocess() and postprocess(). Contents are model-specific.",
+
+    "metadata": {
+        "_help": "Free-form apart from 'task'. Use it to record how the model was trained and any assumptions it makes.",
+        "task": "dose_calc | outcome",
+        "_task_help": "What the model does. Read by list_local_models(); falls back to the 'dosecalc-*'/'outcome-*' repository-name prefix when absent. Distinct from the radiation modality under 'training'.",
+        "description": "Short human-readable description of the model.",
+        "training": {
+            "dataset": "...",
+            "modality": "protons | photons | ...",
+            "input_resolution_mm": [3.0, 3.0, 2.5],
+            "notes": "How the data was trained / assumptions the model makes."
+        }
+    }
+}

@@ -10,6 +10,7 @@ from matplotlib import pyplot as plt  # noqa: E402
 
 from pyRadPlan import load_tg119  # noqa: E402
 from pyRadPlan.analysis import (  # noqa: E402
+    DEFAULT_REF_VOLS,
     DX,
     QICollection,
     StructureQIs,
@@ -18,6 +19,8 @@ from pyRadPlan.analysis import (  # noqa: E402
     Min,
     Std,
     VX,
+    format_metric_label,
+    format_unit_symbol,
 )
 from pyRadPlan.analysis._dvh import ureg  # shared registry  # noqa: E402
 
@@ -366,3 +369,106 @@ def test_qi_units():
 
     with pytest.raises(ValueError):
         Mean(value=1.0, unit="not_a_unit")
+
+
+def test_structure_qis_from_voxels(simple_dose_array):
+    """from_voxels builds the standard metric set from pre-extracted voxels."""
+    qis = StructureQIs.from_voxels(simple_dose_array, name="test", ref_vols=[50], ref_doses=[5.0])
+
+    assert qis.name == "test"
+    assert set(qis.keys()) == {"mean", "std", "max", "min", "D50", "V5Gy"}
+    assert qis["mean"].value == pytest.approx(np.mean(simple_dose_array))
+    assert qis["max"].value == pytest.approx(np.max(simple_dose_array))
+
+
+def test_structure_qis_from_voxels_defaults(simple_dose_array):
+    """ref_vols defaults to DEFAULT_REF_VOLS; ref_doses defaults to no VX metrics."""
+    qis = StructureQIs.from_voxels(simple_dose_array)
+
+    for ref_vol in DEFAULT_REF_VOLS:
+        assert f"D{ref_vol:g}" in qis
+    assert not [k for k in qis.keys() if k.startswith("V")]
+
+
+def test_structure_qis_compute_from_matches_direct(dose, cst):
+    """compute_from agrees with the single-metric compute_from constructors."""
+    voi = cst.vois[0]
+    qis = StructureQIs.compute_from(dose, voi.mask, name=voi.name, ref_vols=[50], ref_doses=[0.5])
+
+    assert qis.name == voi.name
+    assert qis["mean"].value == pytest.approx(
+        Mean.compute_from(quantity=dose, mask=voi.mask).value, nan_ok=True
+    )
+    assert qis["D50"].value == pytest.approx(
+        DX.compute_from(quantity=dose, mask=voi.mask, ref_vol=50).value, nan_ok=True
+    )
+    assert qis["V0.5Gy"].value == pytest.approx(
+        VX.compute_from(quantity=dose, mask=voi.mask, ref_dose=0.5).value, nan_ok=True
+    )
+
+
+def test_from_masks_matches_from_structure_set(cst, dose):
+    """The mask-level entry point reproduces the structure-set one exactly."""
+    from_cst = QICollection.from_structure_set(
+        cst=cst, dose=dose, ref_vols=[2, 50], ref_doses=[0.5, 1.0]
+    )
+    masks = {voi.name: voi.mask for voi in cst.vois}
+    from_masks = QICollection.from_masks(masks, dose, ref_vols=[2, 50], ref_doses=[0.5, 1.0])
+
+    assert set(from_masks.structures) == set(from_cst.structures)
+    for name, structure in from_cst.structures.items():
+        for metric, qi in structure.items():
+            other = from_masks[name][metric]
+            assert other.value == pytest.approx(qi.value, nan_ok=True)
+            assert other.unit == qi.unit
+
+
+def test_from_masks_default_ref_doses(cst, dose):
+    """Defaults are resolved in from_masks, so both entry points agree."""
+    masks = {voi.name: voi.mask for voi in cst.vois}
+    from_masks = QICollection.from_masks(masks, dose, ref_vols=[50])
+    from_cst = QICollection.from_structure_set(cst=cst, dose=dose, ref_vols=[50])
+
+    name = cst.vois[0].name
+    assert list(from_masks[name].keys()) == list(from_cst[name].keys())
+    assert "V0Gy" not in from_masks[name]
+
+
+def test_metric_ids(cst, dose):
+    """metric_ids returns the union of metric ids in first-seen order."""
+    qis = QICollection.from_structure_set(cst=cst, dose=dose, ref_vols=[50], ref_doses=[1.0])
+
+    assert qis.metric_ids() == ["mean", "std", "max", "min", "D50", "V1Gy"]
+    assert qis.metric_ids([cst.vois[0].name]) == qis.metric_ids()
+    # Unknown names are ignored rather than raising
+    assert qis.metric_ids(["not-a-voi"]) == []
+
+
+def test_format_metric_label():
+    """Column labels carry the unit, except when there is nothing useful to show."""
+    assert format_metric_label("mean", Mean(value=1.0, unit=ureg.gray)) == "mean [Gy]"
+    assert (
+        format_metric_label("V1Gy", VX(value=1.0, unit=ureg.percent, ref_dose=1.0)) == "V1Gy [%]"
+    )
+    # Dimensionless would render as an empty "[]"
+    assert format_metric_label("mean", Mean(value=1.0, unit=ureg.dimensionless)) == "mean"
+    assert format_metric_label("mean", None) == "mean"
+
+
+LET_UNIT = ureg.keV / ureg.micrometer
+GREEK_MU = "μ"
+
+
+def test_format_unit_symbol_writes_greek_mu():
+    """Micro is always Greek mu (U+03BC), whichever symbol the installed pint prefers."""
+    assert format_unit_symbol(ureg.gray) == "Gy"
+    assert format_unit_symbol(LET_UNIT) == f"keV / {GREEK_MU}m"
+    assert "µ" not in format_unit_symbol(ureg.gray * LET_UNIT)
+
+
+def test_micro_units_in_metric_ids_and_labels():
+    """VX metric ids and column labels use the stable micro symbol."""
+    vx = VX(value=10.0, unit=ureg.percent, ref_dose=2.0, ref_unit=LET_UNIT)
+    assert vx.metric == f"V2keV / {GREEK_MU}m"
+    mean = Mean(value=1.0, unit=LET_UNIT)
+    assert format_metric_label("mean", mean) == f"mean [keV / {GREEK_MU}m]"

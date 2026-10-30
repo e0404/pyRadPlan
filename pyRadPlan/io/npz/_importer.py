@@ -56,19 +56,26 @@ class NpzImporter(BaseImporter):
             mask = linear_indices_to_sitk_mask(
                 npz[vmeta["indices_array"]], ct.cube_hu, order="numpy"
             )
-            vois.append(
-                validate_voi(
-                    name=vmeta["name"],
-                    voi_type=vmeta["voi_type"],
-                    mask=mask,
-                    ct_image=ct,
-                    alpha_x=vmeta["alpha_x"],
-                    beta_x=vmeta["beta_x"],
-                    overlap_priority=vmeta["overlap_priority"],
-                    visible=vmeta["visible"],
-                    visible_color=vmeta["visible_color"],
-                )
-            )
+            kwargs = {
+                "name": vmeta["name"],
+                "voi_type": vmeta["voi_type"],
+                "mask": mask,
+                "ct_image": ct,
+                "overlap_priority": vmeta["overlap_priority"],
+                "visible": vmeta["visible"],
+            }
+            # Archives written before tissue properties were stored only carry alpha/beta.
+            if vmeta.get("tissue_properties") is not None:
+                kwargs["tissue_properties"] = vmeta["tissue_properties"]
+            else:
+                kwargs.update(alpha_x=vmeta["alpha_x"], beta_x=vmeta["beta_x"])
+            # Files written before the rename carry the color under "visible_color",
+            # where it may also be null; either way a VOI without one falls back to
+            # its type's default.
+            color = vmeta.get("color", vmeta.get("visible_color"))
+            if color is not None:
+                kwargs["color"] = color
+            vois.append(validate_voi(**kwargs))
         return validate_cst(vois, ct)
 
     def load_dose(self) -> Optional[sitk.Image]:
