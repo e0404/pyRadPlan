@@ -1,3 +1,6 @@
+<!-- GitLab is only used for confidential work on internal/* branches. Everything else goes
+     through a pull request on GitHub, and main and develop are mirrored from there. -->
+
 ## Description
 
 <!-- Provide a clear summary of the changes and the motivation behind them.
@@ -22,7 +25,7 @@ Closes #<!-- issue number -->
 
 <!-- All items must be checked before this MR can be merged. -->
 
-- [ ] This MR targets the `develop` branch (or `main` for hotfixes and documentation only).
+- [ ] This MR targets another `internal/*` branch, not the mirrored `main` or `develop`.
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
 - [ ] Unit tests pass locally (`pytest test`).
 - [ ] New or changed code is covered by tests; coverage has not dropped significantly.
