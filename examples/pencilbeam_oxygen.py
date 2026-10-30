@@ -37,10 +37,11 @@ ct, cst = load_tg119()
 # %% [markdown]
 # In this section, we create an oxygen ion therapy plan with biological effect calculation.
 # %%
-# Create a plan object
-pln = IonPlan(radiation_mode="oxygen", machine="Generic")
+# Create a plan object. The Generic oxygen machine ships alpha/beta kernels computed with
+# LEM I; "alpha_beta_kernels" (the oxygen default) evaluates them and is selected explicitly.
+pln = IonPlan(radiation_mode="oxygen", machine="Generic", bio_model="alpha_beta_kernels")
 pln.prop_stf = {"bixel_width": 4}
-pln.prop_dose_calc = {"calc_bio_dose": True, "dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
+pln.prop_dose_calc = {"dose_grid": {"resolution": {"x": 3, "y": 3, "z": 3}}}
 
 pln.prop_opt = {"solver": "scipy"}
 
@@ -62,10 +63,7 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 
 # %%
 # Optimize
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %%
 if GUI_AVAILABLE:
@@ -81,7 +79,7 @@ else:
     plot_multiple_slices(
         image_volume=ct,
         cst=cst,
-        overlays=[result["physical_dose"], result["rbe_x_dose"]],
+        overlays=[result.physical_dose, result.rbe_x_dose],
         view_slice=view_slice,
         plane="axial",
         overlay_unit=[

@@ -56,8 +56,9 @@ the graphical user interface:
 
 This pulls in all mandatory dependencies — NumPy, SciPy, SimpleITK, pydantic,
 pydantic-ai, and everything else needed to run a full treatment planning workflow on
-the CPU with the NumPy backend — plus PySide6 and pyqtgraph for the interactive
-matRad-style GUI.  It also provides the ``pyRadPlanGUI`` command:
+the CPU with the NumPy backend — plus the core Qt modules of PySide6
+(``pyside6-essentials``) and pyqtgraph for the interactive matRad-style GUI.  It also
+provides the ``pyRadPlanGUI`` command:
 
 .. code-block:: bash
 
@@ -118,13 +119,23 @@ by appending them in brackets, e.g. ``pip install pyRadPlan[dev,gui]``.
        sphinx-autodoc-typehints)
      - Development, testing, and documentation builds
    * - ``[gui]``
-     - PySide6 ≥ 6.0.1, pyqtgraph ≥ 0.12.0
+     - PySide6-Essentials ≥ 6.4 (the core Qt modules of PySide6), pyqtgraph ≥ 0.12.0
      - The matRad-style main GUI and interactive visualization widgets — recommended
        for all desktop installs (see :ref:`installation` above); skip on headless
        systems
    * - ``[numba]``
      - numba ≥ 0.61.0
-     - JIT-compiled acceleration of selected CPU code paths
+     - JIT-compiled NumPy execution paths for selected hot-path kernels (currently in the
+       Siddon ray tracer); enabled by default when installed, see
+       :ref:`jit-compiled-kernels`
+   * - ``[torch]``, ``[cupy]``, ``[jax]``
+     - torch ≥ 2.0 / cupy ≥ 13.0 / jax ≥ 0.4.35
+     - Alternate array-API compute backends.  Prefer the vendor-specific install
+       commands under :ref:`gpu-backends` when you need a particular CUDA build
+   * - ``[profiling]``
+     - line_profiler ≥ 4.0
+     - Running the line-profiling harnesses in ``benchmark/`` (see
+       :ref:`benchmarks-profiling`)
    * - ``[matlab]``
      - matlabengine
      - Calling MATLAB / matRad directly from Python (see :ref:`matlab-octave`)
@@ -139,6 +150,8 @@ Example — full developer install from source:
    pip install -e .[dev,gui]
 
 ----
+
+.. _gpu-backends:
 
 GPU / alternate compute backends
 ---------------------------------
@@ -196,8 +209,62 @@ For a CPU-only PyTorch backend:
 JAX
 ~~~
 
-JAX is auto-detected when present but is not an official optional extra.  Install
-it manually following the `JAX install guide <https://jax.readthedocs.io/en/latest/installation.html>`_.
+JAX is auto-detected when present.  A CPU build can be installed via the extra
+(``pip install pyRadPlan[jax]``); for a CUDA build follow the
+`JAX install guide <https://jax.readthedocs.io/en/latest/installation.html>`_, since the
+right wheel depends on your CUDA version.
+
+.. _ipax-accelerations:
+
+Optional accelerations for the ipax solver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :ref:`ipax <concept_ipax>` interior-point solver is installed with pyRadPlan and works
+without further packages.  Its sparse-direct linear-solve route can use faster or more robust
+factorizations when the packages providing them are installed.  ipax looks for them at solve
+time and falls back to what is available, so none of them is required.  They come as extras of
+ipax itself:
+
+.. code-block:: bash
+
+   pip install "ipax[sparse-cpu]"   # CPU: SciPy assembly + Feral sparse LDLᵀ
+   pip install "ipax[sparse-cuda]"  # CUDA: nvmath-python bindings for cuDSS / cuSOLVER
+   pip install "ipax[sparse]"       # both
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 30 48
+
+   * - Package
+     - Installed by
+     - What it enables
+   * - ``feral-solver``
+     - ``ipax[sparse-cpu]``
+     - Sparse LDLᵀ factorization of the symmetric KKT systems on the CPU, with certified
+       inertia.  Without it, ipax falls back to SciPy's ``splu``.
+   * - ``PyMUMPS`` (``mumps``)
+     - installed manually
+     - Inertia from MUMPS on the SciPy fallback path; without it (and without Feral) the inertia
+       is only computed densely at small scale.  Few platforms provide wheels.
+   * - ``nvmath-python``
+     - ``ipax[sparse-cuda]``
+     - On CuPy, the NVIDIA cuDSS sparse direct solver for the sparse-direct route and the
+       cuSOLVER dense bindings for the augmented dense route.  Requires CuPy and, for cuDSS, its
+       runtime (see below).
+
+The CUDA packages are user-managed, as for the backends above: install the CuPy wheel matching
+your CUDA version first, then the cuDSS runtime, e.g. for CUDA 12:
+
+.. code-block:: bash
+
+   pip install cupy-cuda12x nvidia-cudss-cu12
+   pip install "ipax[sparse-cuda]"
+
+Without a cuDSS runtime, the CuPy route falls back to ``cupyx.scipy.sparse.linalg.spsolve``,
+which cannot report inertia.  cuDSS factorizations are not reproducible run to run by default;
+setting ``options.sparse.deterministic`` makes repeated solves bitwise identical on the same
+machine at some cost per factorization.  See the ipax guide on
+`backends and hardware <https://ipax.readthedocs.io/>`_ for the details.
 
 Verifying backend detection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -245,6 +312,54 @@ Building the documentation locally:
 .. code-block:: bash
 
    sphinx-build -b html docs docs/_build/html
+
+The tutorials are generated from the scripts in ``examples/`` and rendered without outputs;
+neither CI nor Read the Docs executes the examples. Run
+``python docs/execute_examples.py [name ...]`` to check that examples run without building
+the documentation (the executed notebooks go to ``docs/_build/executed_examples``). Set
+``PYRADPLAN_DOCS_NB_EXECUTION=cache`` to execute them during a local build instead; outputs
+are cached in ``docs/_build/.jupyter_cache``, so only changed examples run again.
+
+Only release commits carry executed notebooks: while preparing a release, the release
+manager runs ``python docs/execute_examples.py --release`` on the ``rc/X.Y.Z`` branch and
+commits the notebooks it writes and stages in ``docs/tutorials/examples/``. The build
+renders these as they are while their script is unchanged and warns about (and shows without
+outputs) those whose script changed since, so the documentation of a release shows the
+outputs of its examples.
+
+----
+
+.. _benchmarks-profiling:
+
+Benchmarks and profiling
+------------------------
+
+Performance work lives in ``benchmark/`` and is deliberately kept out of the test
+suite.  ``pytest`` is configured with ``testpaths = ["test"]``, so a bare ``pytest``
+run never picks these up — you have to invoke them explicitly.
+
+``benchmark_*.py``
+   `pytest-benchmark <https://pytest-benchmark.readthedocs.io/>`_ harnesses, included
+   in the ``[dev]`` extra.  Name the file directly, or override ``python_files`` to run
+   the whole folder (the ``benchmark_`` prefix does not match pytest's default
+   ``test_*.py`` pattern):
+
+   .. code-block:: bash
+
+      pytest benchmark/benchmark_interp1d.py
+      pytest benchmark/ -o python_files="benchmark_*.py"
+
+``profile_*.py``
+   Standalone `line_profiler <https://kernprof.readthedocs.io/>`_ scripts with their
+   own command-line interface.  They require the ``[profiling]`` extra:
+
+   .. code-block:: bash
+
+      pip install -e .[profiling]
+      python benchmark/profile_pencilbeam_photon_forward_lineprof.py --runs 2
+
+When adding new performance work, keep to these two prefixes so the separation from
+``test/`` stays obvious.
 
 ----
 
@@ -303,6 +418,14 @@ Troubleshooting
 **PyTorch does not see the GPU**
    Confirm with ``python -c "import torch; print(torch.cuda.is_available())"`` and
    ensure the CUDA wheel matches your driver.
+
+**RuntimeWarning: "jit execution of kernel ... failed" mentioning Triton**
+   ``settings.xp.jit_backends`` includes ``"torch"``, but ``torch.compile`` needs a working
+   Triton install (not available on all platforms, e.g. plain CPU/Windows PyTorch builds).
+   This is a performance-only warning: the affected kernel falls back to its plain Array API
+   implementation automatically. Either install a Triton build compatible with your PyTorch
+   version, or drop ``"torch"`` from ``settings.xp.jit_backends`` /
+   ``PYRADPLAN_XP_JIT_BACKENDS``. See :ref:`jit-compiled-kernels`.
 
 **Pre-commit hook fails on first commit**
    The hook auto-fixes most style issues and then aborts the commit so you can review

@@ -131,19 +131,6 @@ class PlanResult(PyRadPlanBaseModel):
         """Return the list of stored beam quantities."""
         return list(self.beam_quantities.keys()) if self.beam_quantities else []
 
-    def to_display_dict(self) -> Dict[str, Any]:
-        """Return quantities as slice-viewer-ready arrays."""
-
-        def _arr(qd: QuantityDistribution) -> np.ndarray:
-            return np.transpose(sitk.GetArrayFromImage(qd.values), (0, 2, 1))
-
-        out: Dict[str, Any] = {}
-        for name, qd in self.quantities.items():
-            out[name] = _arr(qd)
-        for name, qds in self.beam_quantities.items():
-            out[f"{name}_beam"] = [_arr(qd) for qd in qds]
-        return out
-
     @property
     def beam(self) -> BeamAccessor:
         """Per-beam quantities, accessible as ``result.beam.physical_dose[i]``."""

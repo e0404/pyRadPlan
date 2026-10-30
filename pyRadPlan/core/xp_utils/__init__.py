@@ -7,40 +7,33 @@ from types import ModuleType
 
 import array_api_compat
 
+from typing import Any, Optional
+
 from ..._settings import get_settings
-
-try:
-    from numba import cuda as numba_cuda
-except ImportError:
-    numba_cuda = None
-from typing import Optional, Union
-
-try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
-
-try:
-    import jax
-except ImportError:
-    jax = None
+from ._backends import (
+    BACKENDS,
+    backend_installed,
+    import_backend,
+    observe_backend_imports,
+)
 
 from .helpers import (
     DLPACK_CPU,
     DLPACK_CUDA,
+    device_cache_key,
     get_device_info,
     is_on_gpu,
+    is_host_device,
+    openblas_has_gemm_race,
+    warn_on_unreliable_openblas,
     get_current_stream,
     create_stream,
     synchronize,
+    stream_wait_event,
     free_gpu_memory,
     record_event,
     elapsed_time,
+    scatter,
     to_numpy,
     from_numpy,
     to_namespace,
@@ -51,6 +44,10 @@ from .typing import (
     ArrayNamespace,
 )
 
+from .helpers import dlpack_to_backend_device
+
+from .jittable import jittable, JittableKernel
+
 from .compat import (
     quantile,
     interp1d,
@@ -60,27 +57,30 @@ from .compat import (
 # Check if GPU is available
 def cupy_available() -> bool:
     """Check if CuPy is available and a compatible GPU is present."""
+    cp = import_backend("cupy")
     return cp is not None and cp.cuda.is_available()
 
 
 def pytorch_available() -> bool:
     """Check if PyTorch is available."""
-    return torch is not None
+    return import_backend("torch") is not None
 
 
 def pytorch_gpu_available() -> bool:
     """Check if PyTorch is available and a compatible GPU is present."""
+    torch = import_backend("torch")
     return torch is not None and torch.cuda.is_available()
 
 
 def jax_available() -> bool:
     """Check if JAX is available."""
-    return jax is not None
+    return import_backend("jax") is not None
 
 
 # TODO: Check if this here is working as intended.
 def jax_gpu_available() -> bool:
     """Check if JAX is available and a compatible GPU is present."""
+    jax = import_backend("jax")
     if jax is None:
         return False
     try:
@@ -93,7 +93,9 @@ def jax_gpu_available() -> bool:
 def numba_cuda_available() -> bool:
     """Check if Numba CUDA is available."""
     try:
-        return numba_cuda.is_available()
+        from numba import cuda  # noqa: PLC0415
+
+        return cuda.is_available()
     except (ImportError, AttributeError):
         return False
 
@@ -126,23 +128,34 @@ def choose_array_api_namespace(namespace: Optional[str] = None) -> ArrayNamespac
     """
     if namespace is None:
         xp_settings = get_settings().xp
-        gpu_backend = xp_settings.preferred_gpu_array_backend or _get_preferred_gpu_backend()
-        if xp_settings.prefer_gpu and gpu_backend is not None:
+        gpu_backend = None
+        if xp_settings.prefer_gpu:
+            # Probing imports the candidate backends, so only probe when a GPU is wanted
+            gpu_backend = xp_settings.preferred_gpu_array_backend or _get_preferred_gpu_backend()
+        if gpu_backend is not None:
             namespace = gpu_backend
         else:
             namespace = xp_settings.preferred_cpu_array_backend
     else:
         namespace = namespace.lower()
 
+    # Announces the backend import to observers, e.g. the GUI startup splash
+    import_backend(namespace.split(".")[0])
     try:
         return importlib.import_module(f"array_api_compat.{namespace}")
     except ModuleNotFoundError:
+        if namespace == "jax":
+            return importlib.import_module("jax.numpy")
         return importlib.import_module(namespace)
 
 
-def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Union[str, None]:
+def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Any:
     """
     Choose the default device for the given array namespace.
+
+    Returns the backend's native device object (``torch.device``, ``cupy.cuda.Device``,
+    ``jax.Device``) or ``None`` for namespaces without a device concept (NumPy,
+    array-api-strict), so it can be passed straight to ``xp.asarray(..., device=...)``.
 
     Parameters
     ----------
@@ -157,16 +170,39 @@ def choose_device(xp: Optional[ArrayNamespace] = None, gpu_index: int = 0) -> Un
 
     if get_settings().xp.prefer_gpu:
         if array_api_compat.is_torch_namespace(xp) and pytorch_gpu_available():
-            return f"cuda:{gpu_index}"
+            return dlpack_to_backend_device(xp, (2, int(gpu_index)))
         if array_api_compat.is_cupy_namespace(xp) and cupy_available():
-            return str(gpu_index)
+            return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+        if array_api_compat.is_jax_namespace(xp) and jax_gpu_available():
+            if len(import_backend("jax").devices("gpu")) > gpu_index:
+                return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+            warnings.warn(
+                f"Requested GPU index {gpu_index} is out of range for available JAX devices. Defaulting to GPU index 0.",
+                UserWarning,
+            )
+            return dlpack_to_backend_device(xp, (2, 0))
+        warnings.warn(
+            f"Requested GPU device is not available on {xp.__name__}. Falling back to CPU.",
+            UserWarning,
+        )
 
-    # We need to handle array_api_strict separately, as it does not provide device info!
-    if array_api_compat.is_array_api_strict_namespace(xp):
-        return None
+    # CPU fallback, also reached when a GPU was preferred but none is available
+    if array_api_compat.is_torch_namespace(xp) and pytorch_available():
+        return dlpack_to_backend_device(xp, (1, 0))
+    if array_api_compat.is_cupy_namespace(xp) and cupy_available():
+        # CuPy is GPU-only, so the namespace choice already implies a CUDA device
+        return dlpack_to_backend_device(xp, (2, int(gpu_index)))
+    if array_api_compat.is_jax_namespace(xp) and jax_available():
+        return dlpack_to_backend_device(xp, (1, 0))
+    if array_api_compat.is_numpy_namespace(xp) or array_api_compat.is_array_api_strict_namespace(
+        xp
+    ):
+        return dlpack_to_backend_device(xp, (1, 0))
 
-    return "cpu"
+    raise RuntimeError(f"No compatible device found for the given array namespace: {xp.__name__}")
 
+
+_BACKEND_ATTRIBUTES = {"cp": "cupy", "torch": "torch", "jax": "jax"}
 
 _DEPRECATED_SETTINGS_ALIASES = {
     "PREFER_GPU": "prefer_gpu",
@@ -187,6 +223,9 @@ class _SettingsAliasModule(ModuleType):
     """Redirect the legacy module-level backend constants to pyRadPlan.settings.xp."""
 
     def __getattr__(self, name: str):
+        if name in _BACKEND_ATTRIBUTES:
+            # The backend module if installed, else None, as when they were imported eagerly
+            return import_backend(_BACKEND_ATTRIBUTES[name])
         field = _DEPRECATED_SETTINGS_ALIASES.get(name)
         if field is None:
             raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
@@ -209,14 +248,26 @@ class _SettingsAliasModule(ModuleType):
 # settings, which requires intercepting attribute writes on the module itself.
 sys.modules[__name__].__class__ = _SettingsAliasModule
 
+warn_on_unreliable_openblas()
+
 
 __all__ = [
+    "BACKENDS",
+    "backend_installed",
+    "import_backend",
+    "observe_backend_imports",
+    "JittableKernel",
+    "jittable",
     "DLPACK_CPU",
     "DLPACK_CUDA",
     "choose_array_api_namespace",
     "choose_device",
+    "device_cache_key",
     "get_device_info",
     "is_on_gpu",
+    "is_host_device",
+    "openblas_has_gemm_race",
+    "warn_on_unreliable_openblas",
     "cp",
     "torch",
     "jax",
@@ -228,8 +279,10 @@ __all__ = [
     "get_current_stream",
     "create_stream",
     "synchronize",
+    "stream_wait_event",
     "free_gpu_memory",
     "elapsed_time",
+    "scatter",
     "to_numpy",
     "from_numpy",
     "to_namespace",

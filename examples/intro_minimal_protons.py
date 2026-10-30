@@ -31,6 +31,6 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 plot_slice(
     image_volume=ct,
     cst=cst,
-    overlay=result.physical_dose.values,
+    overlay=result.physical_dose,
     overlay_unit="Gy",
 )

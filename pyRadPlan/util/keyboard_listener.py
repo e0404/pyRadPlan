@@ -124,7 +124,10 @@ class KeyboardListener:
         elif _HAS_MS_KBHIT and os.name == "nt":
             target = self._kb_listener_windows
         else:
-            # No supported backend available
+            self.logger.info(
+                "Keyboard cancellation requested but unavailable (no non-blocking keyboard "
+                "input on this platform, or stdin is not a terminal). Continuing without it."
+            )
             return
 
         self._thread = Thread(target=target, daemon=True)
@@ -136,10 +139,11 @@ class KeyboardListener:
 
     def finalize(self) -> None:
         """Stop the background keyboard listener thread."""
+        aborted_by_user = self.stop_event.is_set()
         if self._thread and self._thread.is_alive():
             self.stop_event.set()
             self._thread.join(timeout=0.2)
-        if self.stop_event.is_set():
+        if aborted_by_user:
             logger.info("Optimization aborted by user. Returning last known iterate.")
 
     def cancel(self) -> None:

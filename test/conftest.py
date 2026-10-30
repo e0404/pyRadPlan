@@ -19,6 +19,32 @@ settings.xp.preferred_gpu_array_backend = "array_api_strict"
 collect_ignore_glob = [] if importlib.util.find_spec("PySide6") is not None else ["gui/**/*.py"]
 
 
+def pytest_sessionfinish(session, exitstatus):
+    session.config._pyradplan_exitstatus = int(exitstatus)
+
+
+# PySide6/pyqtgraph objects destroyed during interpreter shutdown segfault on some Python
+# versions (GC order is not deterministic), turning a green run into exit code 139. All
+# reports (junit, coverage) are written by now, so skip the teardown, as pyqtgraph.exit()
+# recommends.
+#
+# On Windows, os._exit still runs the DLLs' detach handlers (ExitProcess); with the
+# QApplication alive, PySide6's then faults (access violation in pyside6.abi3.dll) after the
+# summary, ending with exit code 0 or a crash code. Deleting the application first avoids it.
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config):
+    qt_widgets = sys.modules.get("PySide6.QtWidgets")
+    app = None if qt_widgets is None else qt_widgets.QApplication.instance()
+    if app is None:
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        app.processEvents()
+        app.shutdown()
+    os._exit(getattr(config, "_pyradplan_exitstatus", 0))
+
+
 @pytest.fixture
 def tg119_raw():
     phantom_data_str = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")

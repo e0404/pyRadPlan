@@ -37,8 +37,7 @@ ct, cst = load_tg119()
 # Create a plan object
 pln = IonPlan(radiation_mode="carbon", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
-# Lets calc the biological dose too
-pln.prop_dose_calc = {"calc_bio_dose": True}
+# The default carbon bio_model (alpha_beta_kernels) computes the biological dose
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
@@ -54,10 +53,10 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 # %%
 
 # Visualize only ct and chosen quantity
-plot_slice(image_volume=ct, overlay=result.physical_dose.values)
+plot_slice(image_volume=ct, overlay=result.physical_dose)
 
 # Visualize ct, cst and chosen quantity
-plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values)
+plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose)
 
 # %% [markdown]
 # ## Visualze more abstract settings using `plot_slice()` <br>
@@ -80,7 +79,7 @@ plot_slice(image_volume=ct, cst=cst, overlay=result.physical_dose.values)
 plot_slice(
     image_volume=ct,
     cst=cst,
-    overlay=result.physical_dose.values,
+    overlay=result.physical_dose,
     view_slice=64,  # Visualize slice 64
     plane="coronal",  # axial, coronal or sagittal
     overlay_alpha=0.5,  # Transparency of the overlay
@@ -119,7 +118,7 @@ plot_multiple_slices(
 plot_multiple_slices(
     image_volume=ct,
     cst=cst,
-    overlays=[result.physical_dose.values, result.effect.values],
+    overlays=[result.physical_dose, result.effect],
     view_slice=[64, 65],  # Visualize slices 64 and 65
     plane="axial",  # axial, coronal or sagittal
     overlay_alpha=0.5,  # Transparency of the overlay
@@ -145,7 +144,7 @@ for i, slice_idx in enumerate(slices):
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result.physical_dose.values,
+        overlay=result.physical_dose,
         view_slice=slice_idx,  # Single slice
         plane="axial",
         overlay_unit="Gy",
@@ -159,7 +158,7 @@ for i, slice_idx in enumerate(slices):
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result.effect.values,
+        overlay=result.effect,
         view_slice=slice_idx,  # Single slice
         plane="axial",
         overlay_unit="dimensionless",

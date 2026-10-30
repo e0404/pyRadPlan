@@ -82,6 +82,16 @@ def test_calc_dose_forward(test_data_protons, fake_dij):
     assert np.all(arr == 12)
 
 
+def test_calc_dose_forward_stores_the_applied_weights(test_data_protons, fake_dij):
+    pln, ct, cst, stf, _, _ = test_data_protons
+    dose_engine = DummyDoseEngine(pln, fake_dij=fake_dij)
+    w = np.full(stf.total_number_of_bixels, 2.0)
+
+    result = dose_engine.calc_dose_forward(ct, cst, stf, w=w)
+
+    assert result.fluence is w
+
+
 def test_calc_dose_influence(test_data_protons, fake_dij):
     pln, ct, cst, stf, _, _ = test_data_protons
 

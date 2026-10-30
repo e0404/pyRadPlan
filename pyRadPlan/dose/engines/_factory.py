@@ -1,6 +1,6 @@
 import warnings
 import logging
-from typing import Union, Type
+from typing import Optional, Union, Type
 from pyRadPlan.plan import validate_pln, Plan
 from pyRadPlan.dose.engines import DoseEngineBase
 
@@ -60,6 +60,44 @@ def get_available_engines(pln: Union[Plan, dict[str], str]) -> dict[str, Type[Do
         for name, cls in DOSE_ENGINES.items()
         if radiation_mode in cls.possible_radiation_modes
     }
+
+
+def get_engine_class(
+    pln: Union[Plan, dict, str], engine: Optional[str] = None
+) -> Optional[Type[DoseEngineBase]]:
+    """
+    Dose engine class a plan is calculated with, as :func:`get_engine` chooses it.
+
+    Unlike :func:`get_engine`, nothing is instantiated and nothing is warned about, so it can
+    be used to judge what an engine can compute (e.g.
+    :func:`~pyRadPlan.biology.models.bio_model_options`) before a calculation.
+
+    Parameters
+    ----------
+    pln : Plan, dict or str
+        The plan, or directly a radiation mode.
+    engine : str, optional
+        Short name of the engine, instead of the plan's ``prop_dose_calc["engine"]``.
+
+    Returns
+    -------
+    type[DoseEngineBase] or None
+        The requested engine if it is available for the radiation mode, otherwise the
+        first available engine; None if no engine is available.
+    """
+    if isinstance(pln, str):
+        radiation_mode, prop_dose_calc = pln, None
+    else:
+        pln = validate_pln(pln)
+        radiation_mode, prop_dose_calc = pln.radiation_mode, pln.prop_dose_calc
+    if isinstance(prop_dose_calc, DoseEngineBase):
+        return type(prop_dose_calc)
+    if engine is None and isinstance(prop_dose_calc, dict):
+        engine = prop_dose_calc.get("engine")
+    engines = get_available_engines(radiation_mode)
+    if engine in engines:
+        return engines[engine]
+    return next(iter(engines.values()), None)
 
 
 def get_engine(pln: Union[Plan, dict]) -> DoseEngineBase:

@@ -85,4 +85,5 @@ Development is lead by the `Radiotherapy Optimization group <https://www.dkfz.de
       api/index
       installation/index
       user_guide/index
-      help/help
+      tutorials/index
+      help/index

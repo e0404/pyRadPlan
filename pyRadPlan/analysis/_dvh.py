@@ -15,12 +15,50 @@ import SimpleITK as sitk
 import matplotlib.pyplot as plt
 
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core._units import ureg
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import QuantityDistribution
 
 logger = logging.getLogger(__name__)
 
-ureg = pint.UnitRegistry()
+
+def dose_at_volume(
+    bins: NDArray, cum_volume: NDArray, y: Union[float, NDArray]
+) -> Union[float, NDArray]:
+    """Return the dose (or other quantity) value covering *y* percent of the volume.
+
+    Parameters
+    ----------
+    bins : NDArray
+        Left bin edges of a cumulative DVH.
+    cum_volume : NDArray
+        Cumulative volume percentages at *bins*, decreasing with dose.
+    y : float or NDArray
+        Volume percentage(s) between 0 and 100.
+
+    Returns
+    -------
+    float or NDArray
+        The largest bin value still covering at least *y* percent of the volume.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    if np.any(y < 0) or np.any(y > 100):
+        raise ValueError("Volume percentage must be between 0 and 100.")
+
+    # Dy is the largest quantity value still covering at least y percent of the
+    # volume, matching the "at least" reading of the cumulative DVH documented on
+    # :attr:`DVH.cumulative`. cum_volume decreases with dose, so the search runs
+    # over the reversed (increasing) array and the index is mapped back.
+    #
+    # This is deliberately not an interpolation across the cumulative curve: a
+    # uniformly irradiated region is a plateau in the DVH, and interpolating over
+    # it reports the dose at the wrong end of that plateau.
+    reversed_volume = np.asarray(cum_volume)[::-1]
+    last = reversed_volume.size - 1
+    index = last - np.searchsorted(reversed_volume, y, side="left")
+    index = np.clip(index, 0, last)
+    values = np.asarray(bins)[index]
+    return float(values) if values.ndim == 0 else values
 
 
 class DVH(PyRadPlanBaseModel):
@@ -225,16 +263,12 @@ class DVH(PyRadPlanBaseModel):
         -------
             float: Dose/quantity value corresponding to the given volume percentage.
         """
-        if y < 0 or y > 100:
-            raise ValueError("Volume percentage must be between 0 and 100.")
-
-        # Interpolate to find the dose value
-        return np.interp(y / 100, self.cum_volume, self.bins)
+        return dose_at_volume(self.bins, self.cum_volume, y)
 
     @classmethod
     def compute(
         cls,
-        quantity: Union[sitk.Image, NDArray],
+        quantity: Union[QuantityDistribution, sitk.Image, NDArray],
         mask: Optional[Union[sitk.Image, NDArray]] = None,
         num_points: int = 1000,
         max_value: Optional[float] = None,
@@ -246,8 +280,8 @@ class DVH(PyRadPlanBaseModel):
 
         Parameters
         ----------
-        quantity : Union[sitk.Image, NDArray]
-            The dose-like quantity to update the DVH with. Can be a SimpleITK image or a numpy array.
+        quantity : Union[QuantityDistribution, sitk.Image, NDArray]
+            The dose-like quantity to update the DVH with, e.g. ``result.physical_dose``.
         mask : Optional[Union[sitk.Image, NDArray]], optional
             The mask to apply to the dose quantity. If None, the whole image / array will be used.
             If provided, it must either have the same shape as the quantity.
@@ -297,7 +331,15 @@ class DVH(PyRadPlanBaseModel):
         # Remove the last bin
         hist = hist / len(q_array) * 100
 
-        return DVH(diff_volume=hist, bin_edges=edges, **kwargs)
+        # np.histogram takes the bin dtype from the quantity, so a float32 input --
+        # what a DICOM-imported dose is -- would produce float32 edges, which the
+        # model declares as float64 and rejects. Widening float32 is exact, so this
+        # only changes the storage dtype, never a bin edge.
+        return DVH(
+            diff_volume=np.asarray(hist, dtype=np.float64),
+            bin_edges=np.asarray(edges, dtype=np.float64),
+            **kwargs,
+        )
 
     def plot(self, ax=None, line_width=2, plot_legend=True, **kwargs):
         """Plot the DVH curve.
@@ -354,7 +396,7 @@ class DVHCollection(PyRadPlanBaseModel):
     def from_structure_set(
         cls,
         cst: StructureSet,
-        dose: Union[NDArray, sitk.Image],
+        dose: Union[QuantityDistribution, NDArray, sitk.Image],
     ) -> Self:
         """
         Create DVH collection from a structure set.
@@ -363,8 +405,8 @@ class DVHCollection(PyRadPlanBaseModel):
         ----------
         cst : StructureSet
             The structure set containing the VOIs (Volumes of Interest).
-        dose : Union[NDArray, sitk.Image]
-            The dose-like quantity to compute the DVH from. Can be a SimpleITK image or a numpy array.
+        dose : Union[QuantityDistribution, NDArray, sitk.Image]
+            The dose-like quantity to compute the DVH from, e.g. ``result.physical_dose``.
 
         Returns
         -------

@@ -1,12 +1,14 @@
 """Factory methods to manage available Machines."""
 
-from typing import Union, Optional, Type, Dict
+from typing import TYPE_CHECKING, Union, Optional, Type, Dict
 import warnings
 import logging
 
 
 from ._base import Machine
-from pyRadPlan.plan import Plan, validate_pln
+
+if TYPE_CHECKING:
+    from pyRadPlan.plan import Plan
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +48,13 @@ def get_machine(radiation_mode: Optional[str] = None) -> Type[Machine]:
             return cls
 
 
-def get_machine_from_pln(pln: Union[Plan, dict]) -> Machine:
+def get_machine_from_pln(pln: Union["Plan", dict]) -> Machine:
     """Obtain a Machine instance from a Plan (or plan dict).
 
     The Plan's ``machine`` field can be one of the accepted ``machine_desc`` types.
     """
+    # Deferred: a Plan's machine may be a Machine, so pyRadPlan.plan imports this package.
+    from pyRadPlan.plan import validate_pln  # noqa: PLC0415
+
     _pln = validate_pln(pln)
     return get_machine(_pln.radiation_mode)

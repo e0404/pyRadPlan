@@ -1,7 +1,12 @@
 import pytest
 import numpy as np
 import SimpleITK as sitk
-from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi
+from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi, DEFAULT_VOI_COLORS
+from pyRadPlan.biology.tissues import (
+    LEMTissueProperties,
+    MKMTissueProperties,
+    TissueProperties,
+)
 
 
 def test_create_voi_no_args():
@@ -38,8 +43,8 @@ def test_target_constructor_3d(generic_input_3d):
 
     # test non default alpha_x and beta_x
     target_2 = Target(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert target_2.alpha_x == alpha_x
-    assert target_2.beta_x == beta_x
+    assert target_2.tissue_properties.alpha_x == alpha_x
+    assert target_2.tissue_properties.beta_x == beta_x
 
 
 def test_target_constructor_4d(generic_input_4d):
@@ -60,7 +65,7 @@ def test_target_constructor_4d(generic_input_4d):
 
     # test non default alpha_x and beta_x
     target_2 = Target(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert target_2.alpha_x == alpha_x
+    assert target_2.tissue_properties.alpha_x == alpha_x
     assert target_2.beta_x == beta_x
 
 
@@ -75,7 +80,7 @@ def test_target_constructor_4d_np(generic_input_4d):
 
     # test non default alpha_x and beta_x
     target_2 = Target(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert target_2.alpha_x == alpha_x
+    assert target_2.tissue_properties.alpha_x == alpha_x
     assert target_2.beta_x == beta_x
 
 
@@ -100,7 +105,7 @@ def test_oar_constructor(generic_input_3d):
 
     # test non default alpha_x and beta_x
     oar_2 = OAR(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert oar_2.alpha_x == alpha_x
+    assert oar_2.tissue_properties.alpha_x == alpha_x
     assert oar_2.beta_x == beta_x
 
 
@@ -115,8 +120,8 @@ def test_helper_voi_constructor(generic_input_3d):
 
     # test non default alpha_x and beta_x
     helper_voi_2 = HelperVOI(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert helper_voi_2.alpha_x == alpha_x
-    assert helper_voi_2.beta_x == beta_x
+    assert helper_voi_2.tissue_properties.alpha_x == alpha_x
+    assert helper_voi_2.tissue_properties.beta_x == beta_x
 
 
 def test_external_voi_constructor(generic_input_3d):
@@ -130,8 +135,8 @@ def test_external_voi_constructor(generic_input_3d):
 
     # test non default alpha_x and beta_x
     external_voi_2 = ExternalVOI(name=name, ct_image=ct, mask=mask, alpha_x=alpha_x, beta_x=beta_x)
-    assert external_voi_2.alpha_x == alpha_x
-    assert external_voi_2.beta_x == beta_x
+    assert external_voi_2.tissue_properties.alpha_x == alpha_x
+    assert external_voi_2.tissue_properties.beta_x == beta_x
 
 
 def test_voi_idx_wrong_shape(generic_input_3d):
@@ -536,8 +541,8 @@ def test_create_target_camel_case(generic_input_3d):
     assert tuple(voi.grid.direction_vector) == ct.cube_hu.GetDirection()
     assert isinstance(voi.mask, sitk.Image)
     assert voi.voi_type == "TARGET"
-    assert voi.alpha_x == alpha_x
-    assert voi.beta_x == beta_x
+    assert voi.tissue_properties.alpha_x == alpha_x
+    assert voi.tissue_properties.beta_x == beta_x
 
 
 def test_create_oar_camel_case(generic_input_3d):
@@ -558,8 +563,8 @@ def test_create_oar_camel_case(generic_input_3d):
     assert tuple(voi.grid.direction_vector) == ct.cube_hu.GetDirection()
     assert isinstance(voi.mask, sitk.Image)
     assert voi.voi_type == "OAR"
-    assert voi.alpha_x == alpha_x
-    assert voi.beta_x == beta_x
+    assert voi.tissue_properties.alpha_x == alpha_x
+    assert voi.tissue_properties.beta_x == beta_x
 
 
 def test_create_helper_camel_case(generic_input_3d):
@@ -580,8 +585,8 @@ def test_create_helper_camel_case(generic_input_3d):
     assert tuple(voi.grid.direction_vector) == ct.cube_hu.GetDirection()
     assert isinstance(voi.mask, sitk.Image)
     assert voi.voi_type == "HELPER"
-    assert voi.alpha_x == alpha_x
-    assert voi.beta_x == beta_x
+    assert voi.tissue_properties.alpha_x == alpha_x
+    assert voi.tissue_properties.beta_x == beta_x
 
 
 def test_resample_on_new_ct_binary_mask_3d():
@@ -1082,14 +1087,35 @@ def test_voi_geometry_in_model_dump(generic_input_3d):
         ((10, 20, 30), (10, 20, 30)),
         (np.array([40, 50, 60]), (40, 50, 60)),
         (np.array([0.5, 0.25, 0.0]), (128, 64, 0)),
-        (None, None),
     ],
 )
-def test_voi_visible_color_validator(generic_input_3d, color_in, color_expected):
+def test_voi_color_validator(generic_input_3d, color_in, color_expected):
     name, ct, mask, _, _ = generic_input_3d
     kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
-    voi = create_voi(**kwargs, visible_color=color_in)
-    assert voi.visible_color == color_expected
+    voi = create_voi(**kwargs, color=color_in)
+    assert voi.color == color_expected
+
+
+def test_voi_deprecated_visible_color_maps_to_color(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    kwargs = {"voi_type": "TARGET", "name": name, "ct_image": ct, "mask": mask}
+
+    with pytest.warns(DeprecationWarning, match="visible_color"):
+        voi = create_voi(**kwargs, visible_color=(1, 2, 3))
+    assert voi.color == (1, 2, 3)
+    assert "color" in voi.model_fields_set
+
+    with pytest.warns(DeprecationWarning, match="visible_color"):
+        voi = create_voi(**kwargs, visible_color=None)
+    assert voi.color == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert "color" not in voi.model_fields_set
+
+    with pytest.warns(DeprecationWarning, match="default_color"):
+        voi = create_voi(**kwargs, default_color=(4, 5, 6))
+    assert voi.color == DEFAULT_VOI_COLORS["TARGET"][0]
+
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="not both"):
+        create_voi(**kwargs, color=(1, 2, 3), visible_color=(4, 5, 6))
 
 
 def test_voi_objectives_from_matrad_object_array(generic_input_3d):
@@ -1157,3 +1183,185 @@ def test_voi_single_objective_dict_still_works(generic_input_3d):
     voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=obj)
     assert len(voi.objectives) == 1
     assert isinstance(voi.objectives[0], SquaredOverdosing)
+
+
+# Tissue properties
+
+
+@pytest.mark.parametrize("preset", [("HSG", "LEM_II"), ("CHO", "MKM")])
+def test_voi_dump_round_trip_keeps_the_tissue_class(generic_input_3d, preset):
+    name, ct, mask, _, _ = generic_input_3d
+    tissue = TissueProperties.from_preset(*preset)
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, tissue_properties=tissue)
+
+    for dumped in (voi.model_dump(), voi.model_dump(by_alias=True)):
+        restored = OAR.model_validate(dumped)
+        assert type(restored.tissue_properties) is type(tissue)
+        assert restored.tissue_properties == tissue
+        assert restored.alpha_x == tissue.alpha_x
+        assert restored.beta_x == tissue.beta_x
+
+    dumped_tissue = voi.model_dump()["tissue_properties"]
+    assert dumped_tissue["model"] == tissue.model
+    assert set(type(tissue).model_fields) <= set(dumped_tissue)
+
+
+def test_voi_tissue_properties_from_dict(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    tissue = {"model": "MKM", "r_domain": 0.3, "r_nucleus": 4.0, "alpha_0": 0.1, "beta_0": 0.05}
+    tissue_before = dict(tissue)
+    data = {"voi_type": "OAR", "name": name, "ct_image": ct, "mask": mask}
+    data["tissue_properties"] = tissue
+    keys_before = set(data)
+
+    voi = OAR.model_validate(data)
+
+    assert isinstance(voi.tissue_properties, MKMTissueProperties)
+    assert voi.tissue_properties.r_domain == pytest.approx(0.3)
+    assert voi.alpha_x == voi.tissue_properties.alpha_x
+    assert voi.beta_x == pytest.approx(0.05)
+    assert set(data) == keys_before
+    assert data["tissue_properties"] is tissue
+    assert tissue == tissue_before
+
+    lem = create_voi(
+        voi_type="OAR",
+        name=name,
+        ct_image=ct,
+        mask=mask,
+        tissueProperties={"model": "LEM_III", "alphaX": 0.2, "betaX": 0.02, "Dt": 19},
+    )
+    assert isinstance(lem.tissue_properties, LEMTissueProperties)
+    assert lem.tissue_properties.version == "III"
+    assert lem.tissue_properties.d_t == pytest.approx(19.0)
+    assert lem.alpha_x == pytest.approx(0.2)
+
+
+def test_voi_tissue_sync_does_not_mutate_the_input(generic_input_3d):
+    name, ct, mask, alpha_x, _ = generic_input_3d
+    data = {"voiType": "OAR", "name": name, "ctImage": ct, "mask": mask, "alphaX": alpha_x}
+    snapshot = dict(data)
+    voi = create_voi(data=data)
+    assert data == snapshot
+    assert voi.tissue_properties.alpha_x == alpha_x
+
+
+def test_voi_tissue_sync_rejects_conflicting_input(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    tissue = LEMTissueProperties(alpha_x=0.3, beta_x=0.03)
+
+    with pytest.raises(ValueError, match="alpha_x"):
+        OAR(name=name, ct_image=ct, mask=mask, tissue_properties=tissue, alpha_x=0.2)
+    with pytest.raises(ValueError, match="beta_x"):
+        OAR(name=name, ct_image=ct, mask=mask, tissue_properties=tissue.model_dump(), beta_x=0.2)
+    with pytest.raises(ValueError, match="alphaX"):
+        OAR(name=name, ct_image=ct, mask=mask, alpha_x=0.2, alphaX=0.3)
+
+    voi = OAR(name=name, ct_image=ct, mask=mask, tissue_properties=tissue, alpha_x=0.3)
+    assert voi.tissue_properties == tissue
+    assert voi.beta_x == pytest.approx(0.03)
+
+    legacy = OAR(name=name, ct_image=ct, mask=mask, alpha_x=0.4)
+    assert type(legacy.tissue_properties) is TissueProperties
+    assert legacy.tissue_properties.alpha_x == pytest.approx(0.4)
+    assert legacy.beta_x == pytest.approx(0.05)
+
+
+def test_voi_assigning_tissue_properties_updates_alpha_beta(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask)
+
+    voi.tissue_properties = LEMTissueProperties(alpha_x=0.5, beta_x=0.04, version="II", d_t=6)
+    assert (voi.alpha_x, voi.beta_x) == (0.5, 0.04)
+
+    voi.tissue_properties = {"model": "LEM_III", "alpha_x": 0.25, "beta_x": 0.025}
+    assert isinstance(voi.tissue_properties, LEMTissueProperties)
+    assert voi.tissue_properties.version == "III"
+    assert (voi.alpha_x, voi.beta_x) == (0.25, 0.025)
+
+
+def test_voi_assigning_alpha_beta_updates_tissue_properties(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    tissue = LEMTissueProperties(alpha_x=0.5, beta_x=0.04, version="II", d_t=6)
+    voi = OAR(name=name, ct_image=ct, mask=mask, tissue_properties=tissue)
+
+    voi.alpha_x = 0.3
+    voi.beta_x = 0.03
+    assert voi.tissue_properties == tissue.model_copy(update={"alpha_x": 0.3, "beta_x": 0.03})
+    assert tissue.alpha_x == 0.5
+
+    with pytest.raises(ValueError):
+        voi.alpha_x = "not a number"
+    assert voi.alpha_x == 0.3
+    assert voi.tissue_properties.alpha_x == 0.3
+
+
+def test_voi_model_copy_keeps_tissue_parameters_consistent(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask)
+    tissue = LEMTissueProperties(alpha_x=0.5, beta_x=0.04)
+
+    copied = voi.model_copy(update={"tissue_properties": tissue})
+    assert copied.tissue_properties is tissue
+    assert (copied.alpha_x, copied.beta_x) == (0.5, 0.04)
+
+    copied = copied.model_copy(update={"alpha_x": 0.2})
+    assert isinstance(copied.tissue_properties, LEMTissueProperties)
+    assert copied.tissue_properties.alpha_x == 0.2
+    assert copied.tissue_properties.beta_x == 0.04
+
+    with pytest.raises(ValueError):
+        voi.model_copy(update={"tissue_properties": tissue, "alpha_x": 0.1})
+
+
+def test_voi_to_matrad_carries_the_tissue_properties(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    tissue = TissueProperties.from_preset("HSG", "LEM_II")
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, tissue_properties=tissue)
+
+    props = voi.to_matrad()[4]
+    assert props["alphaX"] == tissue.alpha_x
+    assert props["betaX"] == tissue.beta_x
+    assert TissueProperties.from_dict(props["tissueProperties"]) == tissue
+    assert props["tissueProperties"]["referenceSources"] == {
+        "alpha_x": "published",
+        "beta_x": "published",
+    }
+
+
+def test_voi_assigning_alpha_beta_makes_the_reference_explicit(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask)
+    assert voi.tissue_properties.reference_source == "default"
+
+    voi.alpha_x = 0.3
+    assert voi.tissue_properties.reference_sources == {"alpha_x": "explicit", "beta_x": "default"}
+    assert voi.tissue_properties.alpha_x == 0.3
+
+    copied = OAR(name=name, ct_image=ct, mask=mask).model_copy(update={"beta_x": 0.02})
+    assert copied.tissue_properties.reference_sources["beta_x"] == "explicit"
+    both = OAR(name=name, ct_image=ct, mask=mask).model_copy(
+        update={"alpha_x": 0.3, "beta_x": 0.02}
+    )
+    assert both.tissue_properties.reference_source == "explicit"
+
+    voi.beta_x = float("nan")
+    assert voi.beta_x == voi.tissue_properties.beta_x == 0.05
+
+
+def test_voi_from_an_old_file_with_unset_reference_parameters(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    nan = float("nan")
+    voi = OAR(
+        name=name,
+        ct_image=ct,
+        mask=mask,
+        alpha_x=nan,
+        beta_x=nan,
+        tissue_properties={"model": "LEM_I", "alphaX": nan, "betaX": nan, "Dt": 30.0},
+    )
+    assert (voi.alpha_x, voi.beta_x) == (0.1, 0.05)
+    assert voi.tissue_properties.reference_source == "default"
+
+    only_alpha = OAR(name=name, ct_image=ct, mask=mask, alpha_x=nan)
+    assert only_alpha.alpha_x == only_alpha.tissue_properties.alpha_x == 0.1

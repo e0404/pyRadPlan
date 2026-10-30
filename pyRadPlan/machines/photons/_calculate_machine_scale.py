@@ -1,4 +1,5 @@
 import numpy as np
+import SimpleITK as sitk
 
 from pyRadPlan import (
     StructureSet,
@@ -46,19 +47,19 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
     stf.beams[0].iso_center = np.array([0.0, 0.0, 0.0])
     stf.beams[0].sad = 1000.0
 
-    # Calculate Dose Influence Matrix ("dij")
-    dij = calc_dose_forward(ct, cst, stf, pln)
+    # Forward dose calculation
+    result = calc_dose_forward(ct, cst, stf, pln)
 
     # Get peak dose
-    peak_dose = central_axis_peak(dij, ct, stf)
+    peak_dose = central_axis_peak(result, ct, stf)
 
     # Calculate weight to normalize dose at isocenter to dose_at_isocenter_per_mu Gy per MU
     return dose_at_isocenter_per_mu / peak_dose if peak_dose > 0 else 1.0
 
 
-def central_axis_peak(dij, ct, stf):
+def central_axis_peak(result, ct, stf):
     # TODO: adjust to central axis
-    return np.max(dij["physical_dose"])
+    return np.max(sitk.GetArrayViewFromImage(result.physical_dose.values))
 
 
 def build_water_phantom(ct_dim, ct_resolution):  # , num_of_ct_scen):

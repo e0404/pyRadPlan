@@ -70,9 +70,8 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # Objectives are taken from the TG119 cst
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-result_pb = dij.compute_result_ct_grid(fluence)
+result_pb = fluence_optimization(ct, cst, stf, dij, pln)
+fluence = result_pb.fluence
 
 # %% [markdown]
 # ## TOPAS recalculation, pass 1: write the input files
@@ -113,10 +112,10 @@ else:
 # The viewer takes a dict of named quantities and lets you switch between them. Keeping
 # the ``physical_dose`` prefix makes it pick up the correct label and unit.
 # %%
-result = {"physical_dose (pencil beam)": result_pb["physical_dose"]}
+result = {"physical_dose (pencil beam)": result_pb.physical_dose}
 if result_mc is not None:
-    result["physical_dose (TOPAS)"] = result_mc["physical_dose"]
-    result["physical_dose_var (TOPAS)"] = result_mc["physical_dose_var"]
+    result["physical_dose (TOPAS)"] = result_mc.physical_dose
+    result["physical_dose_var (TOPAS)"] = result_mc.physical_dose_var
 
 if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed
