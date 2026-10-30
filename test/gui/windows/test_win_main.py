@@ -155,8 +155,24 @@ def test_view_menu_stubs_disabled(qapp):
     win = MainWindow(WorkspaceManager())
     actions = {a.text(): a for a in win._view_menu.actions() if a.text()}
 
-    for stub in ("Screenshot", "Zoom In", "Pan", "Toggle Dark Mode"):
+    for stub in ("Screenshot", "Zoom In", "Pan"):
         assert not actions[stub].isEnabled()
+
+
+def test_view_menu_toggles_dark_mode(qapp):
+    from PySide6.QtCore import Qt
+
+    hints = qapp.styleHints()
+    original = hints.colorScheme()
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    try:
+        action.setChecked(True)
+        assert hints.colorScheme() == Qt.ColorScheme.Dark
+        action.setChecked(False)
+        assert hints.colorScheme() == Qt.ColorScheme.Light
+    finally:
+        hints.setColorScheme(original)
 
 
 def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):

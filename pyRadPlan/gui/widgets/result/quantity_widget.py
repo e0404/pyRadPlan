@@ -9,7 +9,16 @@ import numpy as np
 import SimpleITK as sitk
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPen, QPolygonF, QShortcut
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -45,6 +54,28 @@ _ORBIT_COLOR = (200, 200, 200, 170)
 _ORIENTATION_MARGIN = 8
 #: Image direction of each viewer axis in (x, y, z); the viewer volume is (z, x, y).
 _VIEWER_AXES_XYZ = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+#: Colour and line width of the isocenter cross on its slice, and of the half cross
+#: on nearby slices.
+_ISO_COLOR = (255, 0, 0)
+_ISO_HINT_COLOR = (255, 0, 0, 90)
+_ISO_WIDTH = 5
+#: Slices on either side of the isocenter that show a half cross towards it.
+_ISO_HINT_SLICES = 5
+
+
+def _iso_symbol(arms: Sequence[tuple[float, float]]) -> QPainterPath:
+    """Scatter symbol of lines from the centre to *arms*, in pixel-like units (y down)."""
+    path = QPainterPath()
+    for x, y in arms:
+        path.moveTo(0.0, 0.0)
+        path.lineTo(x, y)
+    return path
+
+
+_ISO_CROSS = _iso_symbol([(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)])
+#: Half crosses named by where they point: arms down make an upward arrowhead (∧).
+_ISO_HALF_UP = _iso_symbol([(-0.5, 0.5), (0.5, 0.5)])
+_ISO_HALF_DOWN = _iso_symbol([(-0.5, -0.5), (0.5, -0.5)])
 
 
 class _BeamWedgeItem(pg.GraphicsObject):
@@ -1298,22 +1329,29 @@ class QuantityWidget(QWidget):
             return
 
         axis = self._PLANE_MAP.get(self._plane, 2)
-        iso_slice_idx = int(round(self._isocenter[axis]))
+        offset = int(round(self._isocenter[axis])) - idx
 
-        if idx == iso_slice_idx:
-            h_axis, v_axis = self._plane_axes()
-            x, y = self._isocenter[h_axis], self._isocenter[v_axis]
+        if offset == 0:
+            symbol, color = _ISO_CROSS, _ISO_COLOR
+        elif abs(offset) <= _ISO_HINT_SLICES:
+            # The wheel scrolls up towards higher slices, so the half cross points up then.
+            symbol = _ISO_HALF_UP if offset > 0 else _ISO_HALF_DOWN
+            color = _ISO_HINT_COLOR
+        else:
+            return
 
-            self._isocenter_item = pg.ScatterPlotItem(
-                [x],
-                [y],
-                symbol="+",
-                size=20,
-                pen=pg.mkPen("r", width=2),
-                brush=pg.mkBrush("r"),
-            )
-            self._isocenter_item.setZValue(20)
-            self._view_box.addItem(self._isocenter_item)
+        h_axis, v_axis = self._plane_axes()
+        x, y = self._isocenter[h_axis], self._isocenter[v_axis]
+        self._isocenter_item = pg.ScatterPlotItem(
+            [x],
+            [y],
+            symbol=symbol,
+            size=20,
+            pen=pg.mkPen(color, width=_ISO_WIDTH),
+            brush=pg.mkBrush(None),
+        )
+        self._isocenter_item.setZValue(20)
+        self._view_box.addItem(self._isocenter_item)
 
     @staticmethod
     def _extract_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
