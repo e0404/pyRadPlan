@@ -56,6 +56,10 @@ authors:
     family-names: Ortkamp
     email: tim.ortkamp@kit.edu
     affiliation: Karlsruhe Institute of Technology (KIT)
+  - given-names: Leopold
+    family-names: Reiche
+    email: leopold.reiche@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Victoria
     family-names: Santiago Aguilar
     email: victoria.santiagoaguilar@dkfz-heidelberg.de
