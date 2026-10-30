@@ -40,7 +40,7 @@ def _answer_message_boxes(monkeypatch, button_text=None):
     def exec_(box):
         shown.append(f"{box.text()}\n{box.informativeText()}")
         assert button_text is not None, f"unexpected message box: {shown[-1]}"
-        next(b for b in box.buttons() if b.text() == button_text).click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == button_text).click()
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", exec_)
