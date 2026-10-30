@@ -92,5 +92,7 @@ def test_background_job_is_not_stopped_by_the_terminal():
         assert "DONE" in out and "stopped" not in out.lower(), out
     finally:
         os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
+        # Close the pty first: on macOS the killed shell does not finish exiting while
+        # its unread terminal output is pending, so waitpid would block forever
         os.close(fd)
+        os.waitpid(pid, 0)
