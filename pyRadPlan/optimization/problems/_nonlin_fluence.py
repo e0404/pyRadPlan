@@ -104,7 +104,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     obj.priority * obj.compute_objective(q_vectors[obj.quantity].flat[scen_ix][ix])
                     for scen_ix in q_scenarios[obj.quantity]
                 ]
-                f_vals[obj_ix] = xp.sum(xp.stack(f_tmp_scen))
+                f_vals = xp_utils.scatter(f_vals, obj_ix, xp.sum(xp.stack(f_tmp_scen)))
                 obj_ix += 1
 
         return f_vals
@@ -150,7 +150,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 )
             else:
                 # The trailing ellipsis here is needed for array_api compatibility
-                self._grad_cache_intermediate[q.identifier][:, ...] = 0.0
+                self._grad_cache_intermediate[q.identifier] = xp_utils.scatter(
+                    self._grad_cache_intermediate[q.identifier], (slice(None), ...), 0.0
+                )
 
     def _update_objective_grad_cache(self, x: Array, num_objectives: int, q_scenarios: dict):
         """Update the objective gradient / jacobian cache by computing the chain rule."""
@@ -170,7 +172,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 device=self._device,
             )
         else:
-            self._grad_cache[:, ...] = 0.0
+            self._grad_cache = xp_utils.scatter(self._grad_cache, (slice(None), ...), 0.0)
 
         for q in self._objective_quantities:
             if self.bypass_objective_jacobian:
@@ -184,7 +186,11 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 ).flat[scen_ix]
                 # Row by row, as the Array API has no integer-array (scatter) indexing.
                 for row, obj_ix in enumerate(cache_ix):
-                    self._grad_cache[obj_ix, :] += derivative[row, :]
+                    self._grad_cache = xp_utils.scatter(
+                        self._grad_cache,
+                        (obj_ix, slice(None)),
+                        self._grad_cache[obj_ix, :] + derivative[row, :],
+                    )
 
     def _objective_jacobian(self, x: Array) -> Array:
         """Define the objective jacobian."""
@@ -205,16 +211,19 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     q_cache_index = 0
                 else:
                     q_cache_index = self._q_cache_index[cnt]
+                cache = self._grad_cache_intermediate[obj.quantity]
+                # A view on mutable backends, so the scatter below writes through to cache
+                cache_row = cache[q_cache_index, ...]
                 for scen_ix in q_scenarios[obj.quantity]:
-                    self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][ix] += (
-                        xp.astype(
-                            obj.priority
-                            * obj.compute_gradient(q_vectors[obj.quantity].flat[scen_ix][ix]),
-                            self._grad_cache_intermediate[obj.quantity][q_cache_index, ...][
-                                ix
-                            ].dtype,
-                            copy=False,
-                        )
+                    grad = obj.priority * obj.compute_gradient(
+                        q_vectors[obj.quantity].flat[scen_ix][ix]
+                    )
+                    cache_row = xp_utils.scatter(
+                        cache_row, ix, cache_row[ix] + xp.astype(grad, cache.dtype, copy=False)
+                    )
+                if array_api_compat.is_jax_array(cache):
+                    self._grad_cache_intermediate[obj.quantity] = cache.at[q_cache_index, ...].set(
+                        cache_row
                     )
                 cnt += 1
 

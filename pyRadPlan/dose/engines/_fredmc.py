@@ -1255,15 +1255,12 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     def _init_dose_calc(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation
     ) -> dict[str, Any]:
-        # A finished calculation deletes its folder tree (and may have redirected the output
-        # folder to `use_output`), so create a fresh one. After a failed calculation the old
-        # tree is reused, which is harmless: every input file is written anew
-        if not self._fred_root_folder.exists() or self._output_dir != (
-            self._fred_root_folder / self._output_folder
-        ):
-            if self._fred_root_folder.exists():
-                shutil.rmtree(self._fred_root_folder)
-            self._create_working_dirs()
+        # Failed simulations can leave partial scorer files as well as inputs. Start every
+        # attempt with a clean tree so a retry cannot read or save an earlier run's output.
+        # Only our temporary tree is removed; `use_output` belongs to the caller.
+        if self._fred_root_folder.exists():
+            shutil.rmtree(self._fred_root_folder)
+        self._create_working_dirs()
 
         dij = super()._init_dose_calc(ct, cst, stf)
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])

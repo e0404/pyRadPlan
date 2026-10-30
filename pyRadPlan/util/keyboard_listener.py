@@ -63,6 +63,10 @@ __all__ = ["KeyboardListener"]
 
 logger = logging.getLogger(__name__)
 
+# Seconds without input after which an escape sequence is over. Its parts can arrive apart on
+# a slow connection (e.g. SSH); the delay this adds to the ESC key is not noticeable.
+_ESCAPE_SEQUENCE_GAP = 0.1
+
 
 def _in_terminal_foreground() -> bool:
     """Whether this process owns the terminal on stdin.
@@ -190,8 +194,14 @@ class KeyboardListener:
                 # sequence where select() no longer sees it.
                 keys = os.read(fd, 64).decode(errors="ignore")
                 if keys.startswith("\x1b"):
-                    # A terminal sends an escape sequence (arrow keys, ...) in one go, so
-                    # only a lone ESC is the ESC key.
+                    # Consume the rest of an escape sequence (arrow keys, ...): only an ESC
+                    # that nothing follows is the ESC key.
+                    while not self.stop_event.is_set():
+                        r, _, _ = select.select([fd], [], [], _ESCAPE_SEQUENCE_GAP)  # type: ignore[attr-defined]
+                        chunk = os.read(fd, 64) if r else b""
+                        if not chunk:
+                            break
+                        keys += chunk.decode(errors="ignore")
                     cancel = self.allow_esc_cancel and keys == "\x1b"
                 else:
                     cancel = self.cancel_key in keys

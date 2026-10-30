@@ -138,6 +138,35 @@ class Test_file_handling:
         assert len(set(first)) == len(first)
         assert engine.scorers == scorers
 
+    def test_retry_does_not_reuse_output_from_failed_calculation(
+        self, test_data_protons, test_plan_fred, monkeypatch
+    ):
+        _, ct, cst, stf, _, _ = test_data_protons
+        engine = get_engine(test_plan_fred)
+        attempts = 0
+
+        def simulate_fred():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                engine._output_dir.mkdir()
+                (engine._output_dir / "partial-score.bin").write_bytes(b"incomplete output")
+                raise subprocess.CalledProcessError(1, "fred")
+            # A failed simulation can leave scorer files that the next simulation does
+            # not overwrite. Neither reading nor saving the retry may pick these up.
+            assert not engine._output_dir.exists()
+            shutil.copytree("test/data/mc_fred/out", engine._output_dir)
+
+        monkeypatch.setattr(engine, "_call_fred", simulate_fred)
+        try:
+            with pytest.raises(subprocess.CalledProcessError):
+                engine.calc_dose_influence(ct, cst, stf)
+            dij = engine.calc_dose_influence(ct, cst, stf)
+            assert attempts == 2
+            assert dij.physical_dose.flat[0].nnz > 0
+        finally:
+            shutil.rmtree(engine._fred_root_folder, ignore_errors=True)
+
     # this test basically tests if fred is properly working.
     @pytest.mark.skipif(
         not is_fred_installed(),

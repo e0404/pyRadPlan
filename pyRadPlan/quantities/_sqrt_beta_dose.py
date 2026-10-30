@@ -27,11 +27,8 @@ class SqrtBetaDose(FluenceDependentQuantity):
         )
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
-        # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
         if self._mode == "direct":
-            return self.array_backend.asarray(
-                self._dij.sqrt_beta_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
-            )
+            return self._backproject(self._dij.sqrt_beta_dose.flat[scenario_index], d_quantity)
         # Chain rule for sqrt_beta_x * Dose: d/dw = sqrt_beta_x * dDose/dw, scaled by d_quantity.
         scaled = self.array_backend.sqrt(self._dij.betax[:, scenario_index]) * d_quantity
         return self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
