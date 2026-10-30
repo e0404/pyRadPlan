@@ -123,6 +123,8 @@ def import_dose(
         scaling = float(getattr(ds, "DoseGridScaling", 1.0))
         if scaling != 1.0:
             image = image * scaling
+        # Same orientation as the imported CT (see import_ct)
+        image = sitk.DICOMOrient(image, "LPS")
         step.advance()
 
     return image

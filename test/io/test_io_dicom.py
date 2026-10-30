@@ -398,31 +398,54 @@ def test_slice_positions_without_position_headers_are_skipped():
     assert _slice_positions(reader, 3) == []
 
 
-def test_seg_frame_slice_index():
-    """A SEG frame is placed only where it covers a CT slice exactly."""
-    from pyRadPlan.io.dicom._import_cst import _seg_frame_slice_index
+_UNIT_AXES = (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+
+
+def test_seg_frame_voxels():
+    """A SEG frame is placed where its pixels fall on CT voxels of one slice."""
+    from pyRadPlan.io.dicom._import_cst import _seg_frame_voxels
 
     ct = _unit_ct()  # 8 x 8 x 3, voxel index = world coordinate
-    assert _seg_frame_slice_index(ct, [0.0, 0.0, 2.0], (8, 8)) == 2
-    assert _seg_frame_slice_index(ct, None, (8, 8)) is None
-    assert _seg_frame_slice_index(ct, [0.0, 0.0, 1.0], (4, 8)) is None, "other rows"
-    assert _seg_frame_slice_index(ct, [3.0, 0.0, 1.0], (8, 8)) is None, "shifted in x"
-    assert _seg_frame_slice_index(ct, [0.0, 0.0, 7.0], (8, 8)) is None, "beyond the CT"
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1  # row 2, column 5
+
+    def placed(position, axes=_UNIT_AXES):
+        voxels = _seg_frame_voxels(ct, position, axes, frame)
+        return None if voxels is None else [tuple(int(v) for v in vox) for vox in zip(*voxels)]
+
+    assert placed([0.0, 0.0, 2.0]) == [(5, 2, 2)]
+    assert placed([1.0, 1.0, 1.0]) == [(6, 3, 1)], "frame starting inside the slice"
+    assert placed([3.0, 1.0, 1.0]) == [], "pixel beyond the CT's x extent is dropped"
+    # Flipped frame axes (a prone SEG next to a CT reoriented to LPS)
+    flipped = (-_UNIT_AXES[0], -_UNIT_AXES[1])
+    assert placed([7.0, 7.0, 0.0], flipped) == [(2, 5, 0)]
+    assert placed(None) is None
+    assert placed([0.0, 0.0, 7.0]) is None, "beyond the CT"
+    assert placed([0.0, 0.0, 1.0], (2 * _UNIT_AXES[0], _UNIT_AXES[1])) is None, "other spacing"
+    tilted = (np.array([0.0, 0.0, 1.0]), _UNIT_AXES[1])
+    assert placed([0.0, 0.0, 1.0], tilted) is None, "not in a CT slice"
 
 
 def _seg_dataset(pixel_array, positions):
-    """A minimal SEG dataset with one segment, one frame per position."""
+    """A minimal SEG dataset with one segment, one frame per position, unit pixel spacing."""
+    from types import SimpleNamespace as NS
+
     frames = [
-        mock.Mock(
-            PlanePositionSequence=[mock.Mock(ImagePositionPatient=position)],
-            SegmentIdentificationSequence=[mock.Mock(ReferencedSegmentNumber=1)],
+        NS(
+            PlanePositionSequence=[NS(ImagePositionPatient=position)],
+            SegmentIdentificationSequence=[NS(ReferencedSegmentNumber=1)],
         )
         for position in positions
     ]
-    return mock.Mock(
+    shared = NS(
+        PlaneOrientationSequence=[NS(ImageOrientationPatient=[1, 0, 0, 0, 1, 0])],
+        PixelMeasuresSequence=[NS(PixelSpacing=[1.0, 1.0])],
+    )
+    return NS(
         pixel_array=pixel_array,
-        SegmentSequence=[mock.Mock(SegmentNumber=1, SegmentLabel="Organ")],
+        SegmentSequence=[NS(SegmentNumber=1, SegmentLabel="Organ")],
         PerFrameFunctionalGroupsSequence=frames,
+        SharedFunctionalGroupsSequence=[shared],
     )
 
 
@@ -442,7 +465,7 @@ def test_import_seg_skips_frames_off_the_ct_grid(caplog):
     from pyRadPlan.io.dicom._import_cst import import_seg
 
     frames = np.ones((2, 8, 8), dtype=np.uint8)
-    seg = _seg_dataset(frames, [[0.0, 0.0, 0.0], [2.0, 0.0, 1.0]])  # second one shifted
+    seg = _seg_dataset(frames, [[0.0, 0.0, 0.0], [0.0, 0.0, 9.0]])  # second one beyond the CT
 
     with caplog.at_level("WARNING"):
         (voi,) = import_seg(seg, [], _unit_ct())
@@ -450,6 +473,88 @@ def test_import_seg_skips_frames_off_the_ct_grid(caplog):
     mask = sitk.GetArrayFromImage(voi.mask)
     assert mask[0].all() and not mask[1:].any()
     assert "Skipped 1 of 2 frame(s)" in caplog.text
+
+
+def _rewrite_series(src, dst, position):
+    """Store the bundled CT series as the same physical volume in another patient position."""
+    dst.mkdir()
+    for f in src.glob("ct_slice_*.dcm"):
+        ds = pydicom.dcmread(f)
+        ipp = [float(v) for v in ds.ImagePositionPatient]
+        row_spacing, column_spacing = (float(v) for v in ds.PixelSpacing)
+        pixels = ds.pixel_array[:, ::-1]  # first column is now the +x edge
+        ipp[0] += (ds.Columns - 1) * column_spacing
+        if position == "HFP":
+            pixels = pixels[::-1, :]  # first row is now the +y edge
+            ipp[1] += (ds.Rows - 1) * row_spacing
+            ds.ImageOrientationPatient = [-1, 0, 0, 0, -1, 0]
+        else:  # FFS: slice normal along -z
+            ds.ImageOrientationPatient = [-1, 0, 0, 0, 1, 0]
+        ds.ImagePositionPatient = ipp
+        ds.PatientPosition = position
+        ds.PixelData = np.ascontiguousarray(pixels).tobytes()
+        ds.save_as(dst / f.name)
+    shutil.copy(src / "RTstruct.dcm", dst)
+
+
+@pytest.mark.parametrize("position", ["HFP", "FFS"])
+def test_dicom_prone_and_feet_first_series(dicom_dir, tmp_path, position):
+    """Prone and feet-first series import as the head-first one, in LPS orientation.
+
+    The dose engines do not support a non-identity CT direction: the ray tracer missed
+    the patient and photon and proton calculations failed.
+    """
+    reference = DicomImporter(dicom_dir)
+    ct_ref = reference.load_ct()
+    cst_ref = reference.load_cst(ct_ref)
+
+    series = tmp_path / position
+    _rewrite_series(dicom_dir, series, position)
+    importer = DicomImporter(series)
+    ct = importer.load_ct()
+    cst = importer.load_cst(ct)
+
+    assert ct.cube_hu.GetDirection() == ct_ref.cube_hu.GetDirection()
+    assert np.allclose(ct.cube_hu.GetOrigin(), ct_ref.cube_hu.GetOrigin())
+    assert np.array_equal(
+        sitk.GetArrayFromImage(ct.cube_hu), sitk.GetArrayFromImage(ct_ref.cube_hu)
+    )
+    assert _voxel_sets(cst) == _voxel_sets(cst_ref)
+
+
+def test_dicom_seg_of_a_prone_ct(dicom_dir, tmp_path):
+    """A SEG written for a prone CT lands on the same voxels after the CT is reoriented."""
+    series = tmp_path / "HFP"
+    _rewrite_series(dicom_dir, series, "HFP")
+
+    # The prone CT as stored, without reorientation, and an asymmetric structure on it
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(reader.GetGDCMSeriesFileNames(str(series)))
+    ct_prone = validate_ct(cube_hu=sitk.Cast(reader.Execute(), sitk.sitkFloat32))
+    assert ct_prone.cube_hu.GetDirection()[0] == -1.0
+    arr = np.zeros(sitk.GetArrayFromImage(ct_prone.cube_hu).shape, dtype=np.uint8)
+    arr[4:7, 9:11, 2:4] = 1
+    mask = sitk.GetImageFromArray(arr)
+    mask.CopyInformation(ct_prone.cube_hu)
+    cst_prone = validate_cst(
+        [validate_voi(name="Asym", voi_type="OAR", mask=mask, ct_image=ct_prone)], ct_prone
+    )
+    DicomExporter(tmp_path / "export", structure_format="seg").save(ct=ct_prone, cst=cst_prone)
+    shutil.copy(tmp_path / "export" / "SEG.dcm", series)
+    (series / "RTstruct.dcm").unlink()
+
+    imported = DicomImporter(series).load_cst()
+
+    (voi,) = imported.vois
+    points = {
+        tuple(np.round(voi.mask.TransformIndexToPhysicalPoint([int(i) for i in idx[::-1]]), 3))
+        for idx in np.argwhere(sitk.GetArrayFromImage(voi.mask))
+    }
+    expected = {
+        tuple(np.round(mask.TransformIndexToPhysicalPoint([int(i) for i in idx[::-1]]), 3))
+        for idx in np.argwhere(arr)
+    }
+    assert points == expected
 
 
 def test_contour_outside_the_ct_is_skipped():

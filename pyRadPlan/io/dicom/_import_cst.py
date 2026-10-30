@@ -112,8 +112,8 @@ def import_seg(
     seg_dataset : pydicom.Dataset
         The SEG DICOM dataset (with pixel data).
     ct_datasets : list
-        The CT pydicom datasets. Unused: the frames are placed through *ct*'s
-        geometry. Kept for compatibility.
+        The CT pydicom datasets. Their orientation and pixel spacing are used for
+        the frames when the SEG itself does not state them.
     ct : CT
         The reference pyRadPlan CT object.
     reporter : ProgressReporter, optional
@@ -133,6 +133,7 @@ def import_seg(
     segments = seg_dataset.SegmentSequence
 
     frame_positions, frame_segments = _map_seg_frames(seg_dataset)
+    frame_axes = _seg_frame_axes(seg_dataset, ct_datasets)
     if pixel_array.ndim == 2:
         # A single-frame SEG
         pixel_array = pixel_array[None, :, :]
@@ -153,14 +154,13 @@ def import_seg(
 
         num_skipped = 0
         for frame_idx in segment_frame_indices:
-            ct_slice_idx = _seg_frame_slice_index(
-                ct, frame_positions[frame_idx], pixel_array.shape[1:]
+            voxels = _seg_frame_voxels(
+                ct, frame_positions[frame_idx], frame_axes, pixel_array[frame_idx]
             )
-            if ct_slice_idx is None:
+            if voxels is None:
                 num_skipped += 1
                 continue
-            # A SEG frame lies in the CT pixel grid: frame row = CT y, frame column = CT x
-            cube_xyz[:, :, ct_slice_idx] |= pixel_array[frame_idx, :, :].T.astype(np.uint8)
+            cube_xyz[voxels] = 1
 
         if num_skipped:
             logger.warning(
@@ -436,17 +436,68 @@ def _map_seg_frames(seg_dataset):
     return frame_positions, frame_segments
 
 
-def _seg_frame_slice_index(ct, position, frame_shape):
-    """Return the CT slice a SEG frame covers, or None if it is not a CT slice.
+def _seg_frame_axes(seg_dataset, ct_datasets):
+    """Return a SEG frame's column and row step vectors in mm, or None.
 
-    A frame is placed only when its first pixel (ImagePositionPatient) is the first
-    voxel of a CT slice and it has the CT's rows and columns, i.e. when it lies in
-    the CT pixel grid.
+    Read from the SEG's shared functional groups (ImageOrientationPatient and
+    PixelSpacing), falling back to the first CT slice for whichever is missing.
     """
-    num_x, num_y = ct.cube_dim[0], ct.cube_dim[1]
-    if position is None or tuple(frame_shape) != (num_y, num_x):
+    orientation = spacing = None
+    shared = getattr(seg_dataset, "SharedFunctionalGroupsSequence", None)
+    if shared:
+        group = shared[0]
+        if hasattr(group, "PlaneOrientationSequence"):
+            orientation = group.PlaneOrientationSequence[0].ImageOrientationPatient
+        if hasattr(group, "PixelMeasuresSequence"):
+            spacing = group.PixelMeasuresSequence[0].PixelSpacing
+    if ct_datasets:
+        if orientation is None:
+            orientation = getattr(ct_datasets[0], "ImageOrientationPatient", None)
+        if spacing is None:
+            spacing = getattr(ct_datasets[0], "PixelSpacing", None)
+    if orientation is None or spacing is None:
         return None
-    continuous = ct.cube_hu.TransformPhysicalPointToContinuousIndex(position)
-    if abs(continuous[0]) > 0.5 or abs(continuous[1]) > 0.5:
+
+    # ImageOrientationPatient: direction of increasing column, then of increasing row.
+    # PixelSpacing: distance between rows, then between columns.
+    orientation = np.asarray(orientation, dtype=float)
+    row_spacing, column_spacing = (float(v) for v in spacing)
+    return orientation[:3] * column_spacing, orientation[3:] * row_spacing
+
+
+def _seg_frame_voxels(ct, position, axes, frame):
+    """Return the CT voxel indices ``(x, y, z)`` of a SEG frame's set pixels, or None.
+
+    The frame must lie in a CT slice with its pixels on CT voxels, in any flip or
+    transposition of the CT's x and y axes (e.g. a SEG of a prone CT next to that CT
+    reoriented on import). Pixels beyond the CT's x/y extent are dropped.
+    """
+    if position is None or axes is None:
         return None
-    return _slice_index(ct, position)
+    slice_idx = _slice_index(ct, position)
+    if slice_idx is None:
+        return None
+
+    position = np.asarray(position, dtype=float)
+    to_index = ct.cube_hu.TransformPhysicalPointToContinuousIndex
+    start = np.asarray(to_index(position.tolist()))
+    steps = np.stack([np.asarray(to_index((position + axis).tolist())) - start for axis in axes])
+    unit_steps = np.round(steps)
+    if (
+        not np.allclose(steps, unit_steps, atol=1e-3)
+        or np.any(unit_steps[:, 2] != 0)
+        or np.any(np.abs(unit_steps).sum(axis=1) != 1)
+    ):
+        return None
+
+    rows, cols = np.nonzero(frame)
+    xy = np.round(
+        start[None, :2] + cols[:, None] * unit_steps[0, :2] + rows[:, None] * unit_steps[1, :2]
+    ).astype(np.intp)
+    inside = (
+        (xy[:, 0] >= 0)
+        & (xy[:, 0] < ct.cube_dim[0])
+        & (xy[:, 1] >= 0)
+        & (xy[:, 1] < ct.cube_dim[1])
+    )
+    return xy[inside, 0], xy[inside, 1], np.full(int(inside.sum()), slice_idx)

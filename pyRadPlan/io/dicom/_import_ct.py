@@ -75,6 +75,10 @@ def import_ct(
     warn_if_not_equally_spaced(_slice_positions(reader, num_slices), "CT slices")
 
     image = sitk.Cast(image, sitk.sitkFloat32)
+    # Prone and feet-first series have a non-identity direction, which the dose engines
+    # do not support (the ray tracer misses the patient). Flipping the axes to LPS keeps
+    # every voxel at its physical position.
+    image = sitk.DICOMOrient(image, "LPS")
 
     return validate_ct(cube_hu=image)
 
