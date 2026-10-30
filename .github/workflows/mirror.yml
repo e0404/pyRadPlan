@@ -1,0 +1,54 @@
+name: Mirror to GitLab
+
+# Keeps main, develop and the tags of the internal GitLab up to date with this repository, which
+# GitLab's own pull mirroring cannot do in its free tier. A run always pushes all of them, so it
+# also catches up after a failed run, and a run started by hand does the same. Nothing is forced:
+# if GitLab has diverged, the run fails instead of overwriting it. internal/* branches are not
+# touched.
+#
+# GITLAB_PUSH_TOKEN is a project access token of the GitLab project with the Maintainer role and
+# the write_repository scope, which needs to be allowed to push to its protected branches and tags.
+# DKFZ_INTERNAL_REPOSITORY is the address of the project, without the leading https://. Both are
+# secrets of the environment "mirror", which only main, develop and the v* tags can use: a workflow
+# on any other branch cannot read them.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror
+
+jobs:
+  mirror:
+    if: github.repository == 'e0404/pyRadPlan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: mirror
+    steps:
+      # A plain fetch instead of actions/checkout, which needs a worktree and does not reliably
+      # keep annotated tags as they are.
+      - name: Fetch the branches and tags
+        run: |
+          git init --bare --quiet .
+          git fetch --quiet --no-tags "https://github.com/$GITHUB_REPOSITORY.git" \
+            '+refs/heads/main:refs/heads/main' \
+            '+refs/heads/develop:refs/heads/develop' \
+            '+refs/tags/*:refs/tags/*'
+
+      - name: Push them to GitLab
+        env:
+          GITLAB_PUSH_TOKEN: ${{ secrets.GITLAB_PUSH_TOKEN }}
+          DKFZ_INTERNAL_REPOSITORY: ${{ secrets.DKFZ_INTERNAL_REPOSITORY }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          git push "https://oauth2:$GITLAB_PUSH_TOKEN@$DKFZ_INTERNAL_REPOSITORY" \
+            refs/heads/main refs/heads/develop 'refs/tags/*:refs/tags/*'

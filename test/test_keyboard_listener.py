@@ -10,14 +10,18 @@ import pytest
 
 pty = pytest.importorskip("pty", reason="needs a POSIX pseudo terminal")
 
+# The longer gap keeps a loaded machine (macOS CI runners) from delaying the parts of a split
+# escape sequence so much that they read as separate key presses.
 _CHILD = """
 import time
+from pyRadPlan.util import keyboard_listener
 from pyRadPlan.util.keyboard_listener import KeyboardListener
+keyboard_listener._ESCAPE_SEQUENCE_GAP = 1.0
 kb = KeyboardListener(allow_keyboard_cancel=True)
 kb.initialize()
 print("READY", flush=True)
 t0 = time.time()
-while time.time() - t0 < 2 and not kb.stop_event.is_set():
+while time.time() - t0 < 3 and not kb.stop_event.is_set():
     time.sleep(0.05)
 print("CANCELLED" if kb.stop_event.is_set() else "RUNNING", flush=True)
 kb.finalize()
@@ -92,5 +96,7 @@ def test_background_job_is_not_stopped_by_the_terminal():
         assert "DONE" in out and "stopped" not in out.lower(), out
     finally:
         os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
+        # Close the pty first: on macOS the killed shell does not finish exiting while
+        # its unread terminal output is pending, so waitpid would block forever
         os.close(fd)
+        os.waitpid(pid, 0)

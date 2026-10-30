@@ -23,8 +23,11 @@ pre-commit install
 | `devops/*` | CI, tooling, docs |
 | `dev/*` | experimental |
 | `rc/X.Y.Z` | release candidate, branched from `develop`, merged into `main` |
+| `internal/*` | confidential work, only on the internal GitLab; never push these to GitHub |
 
 Always branch from `develop` (not `main`) for regular work.
+
+GitHub (remote `github`) is the primary repository: pull requests, CI, releases and issues live there. `main`, `develop` and tags reach the internal GitLab through the workflow `mirror.yml`, so never push them to GitLab directly.
 
 ## Code Style
 
@@ -39,7 +42,7 @@ pytest                        # run all tests
 pytest --cov=pyRadPlan        # with coverage
 ```
 
-GitHub CI runs on Python 3.10–3.14. GitLab CI runs on 3.13 for every push, and also on 3.10 and 3.14 for open merge requests, `main`, `develop`, `rc/*`, `devops/*` and tags. Do not reduce existing coverage.
+GitHub CI runs on Python 3.10–3.14 for pull requests into `main` and `develop` and for pushes to `main`, `develop`, `rc/*` and `devops/*`, plus Windows, macOS and the torch and JAX backends on 3.13. GitLab CI only tests `internal/*` and `devops/*` branches: 3.13 for every push, and 3.10, 3.14 and the backends on `devops/*` and for open merge requests. Do not reduce existing coverage.
 
 Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
 so a bare `pytest` run never collects it — invoke it explicitly:
@@ -56,7 +59,7 @@ Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance 
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
 
-## PR / MR Checklist
+## PR Checklist
 
 - [ ] All existing tests pass; new behaviour has tests
 - [ ] Coverage not reduced
@@ -69,7 +72,8 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
 stays open for regular work while the candidate is stabilised:
 
-1. Branch `rc/X.Y.Z` from `develop` and open the release MR/PR from `rc/X.Y.Z` into `main`.
+1. Branch `rc/X.Y.Z` from `develop` and open the release PR from `rc/X.Y.Z` into `main`
+   (`gh pr create --base main --template release.md`).
 2. Review `rc/X.Y.Z` and address the remaining concerns on it.
 3. Once the review is addressed and approved and CI is green, update the executed example
    notebooks, which stay tracked in `docs/tutorials/examples/` from the last release:
@@ -83,9 +87,9 @@ stays open for regular work while the candidate is stabilised:
    `main` back into `develop`, and delete `rc/X.Y.Z`.
 
 When proposing or preparing a release, follow
-[.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
-the authoritative checklist for both the pre-merge and post-merge steps, and it applies whichever
-platform hosts the release. Do not tag, publish, or push a release without explicit confirmation.
+[.github/PULL_REQUEST_TEMPLATE/release.md](.github/PULL_REQUEST_TEMPLATE/release.md) — it is
+the authoritative checklist for both the pre-merge and post-merge steps. Do not tag, publish, or
+push a release without explicit confirmation.
 
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).

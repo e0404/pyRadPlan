@@ -28,6 +28,7 @@ Closes #<!-- issue number -->
 - [ ] New or changed code is covered by tests; coverage has not dropped significantly.
 - [ ] `CHANGELOG.md` has been updated in the `[UNRELEASED]` section following [Keep a Changelog](https://keepachangelog.com/) conventions.
 - [ ] If example scripts in `examples/` were added or changed: they run (`python docs/execute_examples.py <name>`); no notebooks are committed, the docs build generates them (executed notebooks only change on release commits).
+- [ ] If new contributor: Authors in `CITATION.cff` and `pyproject.toml` have been updated.
 
 ## Testing
 

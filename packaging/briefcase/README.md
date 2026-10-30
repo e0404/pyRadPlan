@@ -126,11 +126,11 @@ shipped in the bundle.
 
 ## CI: building the installers
 
-The installers are built on GitHub (all three platforms) and on the internal GitLab (the Linux
-package only). Both build on `main`, on the release candidate branches `rc/*`, on `devops/*`
-branches (for trying out changes to the pipelines) and for `v*` tags;
-GitHub also builds pull requests into `main`, so the release PR from `rc/X.Y.Z` shows a broken
-installer before the release.
+The installers are built on GitHub, for all three platforms, on `main`, on the release candidate
+branches `rc/*`, on `devops/*` branches (for trying out changes to the pipelines), for `v*` tags
+and for pull requests into `main`, so the release PR from `rc/X.Y.Z` shows a broken installer
+before the release. The internal GitLab only builds the Linux package, for branches that do not
+reach GitHub.
 
 ### GitHub: the "Desktop installers" workflow
 
@@ -163,13 +163,11 @@ On failure the Briefcase logs (`packaging/briefcase/logs/`) are uploaded as
 
 The job `installer-linux` of `.gitlab-ci.yml` (stage `package`, so it runs once the tests pass)
 builds the Linux `.deb` in a `debian:trixie` container (for its system Python 3.13) with the
-same Briefcase steps, for `main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
-macOS DMG are only built on GitHub. The package is not kept as a job artifact (the runners
-limit their size and the `.deb` is almost 300 MB): the job only shows that the installer
-builds, and keeps the Briefcase logs for a week when it fails. A merge request from `rc/X.Y.Z` into `main` shows the pipeline of its source
-branch, which includes this job; the job has no `merge_request_event` rule on purpose, as
-that would create a second, installer-only pipeline which GitLab then reports as the merge
-request's pipeline in place of the one that runs the tests.
+same Briefcase steps, for `devops/*` branches, and when started by hand on `internal/*` branches.
+The runners are Docker runners, so the Windows MSI and the macOS DMG are only built on GitHub.
+The package is not kept as a job artifact (the runners limit their size and the `.deb` is almost
+300 MB): the job only shows that the installer builds, and keeps the Briefcase logs for a week
+when it fails.
 
 ## Code signing (not yet done)
 
