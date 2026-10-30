@@ -29,6 +29,7 @@ instance, or -- when the instance is created internally (e.g. by
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -373,7 +374,10 @@ class ProgressReporter:
 
         with self.progress(name, total) as handle:
             iterator: Iterable[T] = iterable
-            if self.console_progress:
+            # Without a console (pythonw, a windowed app) sys.stderr is None. tqdm's write
+            # would then raise while holding tqdm's global lock and leave it held, so the next
+            # bar anywhere in the process (or the failed bar's __del__) blocks forever.
+            if self.console_progress and sys.stderr is not None:
                 try:
                     from tqdm import tqdm  # noqa: PLC0415
 

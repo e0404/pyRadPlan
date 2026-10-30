@@ -54,7 +54,12 @@ Defects found while reading, to be fixed by the rewrite (each gets a regression 
 4. `Dij.get_result_arrays_from_intensity` indexes `alphax[:, scenario_index]`; the column is a
    CT phase, not a scenario. `test_multi_scenario_quantities.py` currently enforces the
    conflation (`alphax` columns == number of scenarios).
-5. `NominalScenario.extract_single_scenario` is a stub; `ct_scen_prob` with several phases
+5. The stf generators tested `"mult_scen" in pln`, which is never true for a pydantic model, so
+   the plan's scenario model never reached beamlet placement; the target margin took the maximum
+   of shift, range and beamlet margin where matRad adds them; and a forward dose calculation with
+   several scenarios returned slot 0 silently. (Found independently on
+   `bugfix/multi_shift_scenarios` and ported from there with its tests.)
+6. `NominalScenario.extract_single_scenario` is a stub; `ct_scen_prob` with several phases
    builds `scen_mask` from a list index and silently ignores `num_of_available_ct_scen`.
 
 ## 3. Design

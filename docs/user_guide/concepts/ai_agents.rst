@@ -26,7 +26,9 @@ objects, so their output can be fed directly into the rest of the pipeline.
        export OPENAI_API_KEY=sk-...          # OpenAI
        export GOOGLE_API_KEY=...             # Google Gemini
 
-   API keys can also be stored in a ``.env`` file in the working directory.
+   API keys can also be stored in a ``.env`` file in the working directory or,
+   e.g. for the installed desktop application, in the per-user
+   ``~/.pyradplan/.env`` (see :doc:`/api/settings`).
 
 Overview
 --------

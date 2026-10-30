@@ -24,6 +24,8 @@ from ._base_data import (
     get_base_data_kind,
     list_base_data,
     remove_base_data_file,
+    shared_base_data_dirs,
+    shared_base_data_roots,
     user_base_data_dir,
 )
 from ._grids import Grid
@@ -62,6 +64,8 @@ __all__ = [
     "get_base_data_kind",
     "list_base_data",
     "remove_base_data_file",
+    "shared_base_data_dirs",
+    "shared_base_data_roots",
     "user_base_data_dir",
     "PyRadPlanBaseModel",
     "AlgorithmConfig",

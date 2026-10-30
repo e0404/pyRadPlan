@@ -10,6 +10,7 @@ class Effect(FluenceDependentQuantity):
     identifier = "effect"
     biological = True
     name = "Effect"
+    fraction_exponent = 1.0
     required_dependencies = ("alpha_dose", "sqrt_beta_dose")
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:

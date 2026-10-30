@@ -275,9 +275,6 @@ class OptimizationWidget(WorkspaceWidget):
         penalty = AdaptiveDoubleSpinBox()
         penalty.setRange(0.0, 1.0e9)
         penalty.setValue(float(obj.priority))
-        # The size hint of the spinbox spans its full 1e9 range, which blows up
-        # the ResizeToContents column; typical penalties are much shorter.
-        penalty.setMaximumWidth(100)
         penalty.valueChanged.connect(
             lambda value, v=voi_idx, o=obj_idx: self._on_penalty_changed(v, o, value)
         )
@@ -441,14 +438,16 @@ class OptimizationWidget(WorkspaceWidget):
         if cst is None or pln is None:
             return
 
+        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog, busy_cursor  # noqa: PLC0415
+
         # Deferred: keeps the optional ai.agents stack out of widget construction.
-        from pyRadPlan.ai.agents import (  # noqa: PLC0415
-            available_models,
-            cst_context_summary,
-            generate_voi_objectives,
-            objectives_system_prompt,
-        )
-        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+        with busy_cursor():
+            from pyRadPlan.ai.agents import (  # noqa: PLC0415
+                available_models,
+                cst_context_summary,
+                generate_voi_objectives,
+                objectives_system_prompt,
+            )
 
         qis, accepted = self._prompt_qi_adaptation(cst)
         if not accepted:

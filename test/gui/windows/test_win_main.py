@@ -66,8 +66,7 @@ def test_single_menu_bar_with_expected_menus(qapp):
     ]
     assert installed == []
     titles = [a.text() for a in win.menuBar().actions()]
-    assert "&File" in titles and "&View" in titles and "&Settings" in titles
-    assert "&Base Data" in titles
+    assert titles == ["&File", "&View", "&Base Data", "&Settings", "&Help"]
 
 
 def test_base_data_menu_add_and_remove_refresh_plan_widget(qapp, tmp_path, monkeypatch):
@@ -160,6 +159,46 @@ def test_view_menu_stubs_disabled(qapp):
         assert not actions[stub].isEnabled()
 
 
+def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):
+    from pyRadPlan._settings import get_settings
+    from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+    from pyRadPlan.io import phantom_path
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(get_settings(), "base_data_path", str(tmp_path / "course"))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        lambda self, fn, *args, on_success=None, **kwargs: on_success(fn(*args)),
+    )
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    menu = win._file_menu._phantom_menu
+
+    def phantoms():
+        menu.aboutToShow.emit()
+        return {a.data(): a for a in menu.actions() if a.data()}
+
+    assert list(phantoms()) == ["TG119"]
+    assert phantoms()["TG119"].toolTip().startswith("Shipped with pyRadPlan")
+
+    # files dropped into the user's and a shared phantom folder show up without a restart
+    (tmp_path / "data" / "phantoms").mkdir(parents=True)
+    (tmp_path / "data" / "phantoms" / "Mine.mat").write_bytes(phantom_path("TG119").read_bytes())
+    (tmp_path / "course" / "phantoms").mkdir(parents=True)
+    (tmp_path / "course" / "phantoms" / "Course.mat").write_bytes(
+        phantom_path("TG119").read_bytes()
+    )
+    listed = phantoms()
+    assert list(listed) == ["TG119", "Mine", "Course"]
+    assert str(tmp_path / "course" / "phantoms") in listed["Course"].toolTip()
+
+    listed["Course"].trigger()
+
+    assert ws.has("ct", "cst")
+    assert {voi.name for voi in ws.cst.vois} >= {"Core", "OuterTarget", "BODY"}
+
+
 # def test_file_menu_save_actions_track_workspace(qapp, test_data_photons):
 #     ct, cst, _ = test_data_photons
 #     ws = WorkspaceManager()
@@ -195,9 +234,9 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
 
     dialog = SettingsDialog()
     titles = [dialog._tabs.tabText(i) for i in range(dialog._tabs.count())]
-    # All top-level fields are sub-configurations, so there is no General tab.
-    assert dialog._general_form is None
-    assert "General" not in titles
+    # The top-level fields that are no sub-configuration form the General tab.
+    assert titles[0] == "General"
+    assert list(dialog._general_form._editors) == ["base_data_path"]
     assert "XP (Backend)" in titles
     assert "AI" in titles
     assert "GUI" in titles
@@ -228,6 +267,8 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
     settings = get_settings()
     orig_prefer_gpu = settings.xp.prefer_gpu
     orig_ai_model = settings.ai.agents_model
+    monkeypatch.setattr(settings, "base_data_path", "")
+    monkeypatch.delenv("PYRADPLAN_BASE_DATA_PATH", raising=False)
     monkeypatch.delenv("PYRADPLAN_XP_PREFER_GPU", raising=False)
     monkeypatch.delenv("PYRADPLAN_AI_AGENTS_MODEL", raising=False)
     monkeypatch.setenv("PYRADPLAN_AI_MODEL", "stale-legacy-value")
@@ -236,7 +277,11 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
         dialog = SettingsDialog()
         dialog._sub_forms["xp"]._set_value("prefer_gpu", False)
         dialog._sub_forms["ai"]._set_value("agents_model", "test-model")
+        dialog._general_form._set_value("base_data_path", "course-cases")
         dialog.apply()
+
+        assert settings.base_data_path == "course-cases"
+        assert os.environ["PYRADPLAN_BASE_DATA_PATH"] == "course-cases"
 
         assert settings.xp.prefer_gpu is False
         assert os.environ["PYRADPLAN_XP_PREFER_GPU"] == "False"
@@ -247,6 +292,7 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
     finally:
         os.environ.pop("PYRADPLAN_XP_PREFER_GPU", None)
         os.environ.pop("PYRADPLAN_AI_AGENTS_MODEL", None)
+        os.environ.pop("PYRADPLAN_BASE_DATA_PATH", None)
         settings.xp.prefer_gpu = orig_prefer_gpu
         settings.ai.agents_model = orig_ai_model
 

@@ -65,7 +65,9 @@ base_topas_folder : pathlib.Path
     Base directory containing TOPAS template and configuration files.
 
 simu_dir : str
-    Output directory for simulation runs, typically date-stamped.
+    Output directory for simulation runs, typically date-stamped. Defaults to
+    ``<data_dir>/topas/<date>`` (see :func:`pyRadPlan.core.get_data_dir`), so the
+    installed package directory is never written to.
 
 
 """
@@ -74,17 +76,17 @@ import logging
 import os
 from datetime import datetime
 import sys
-from typing import Any, Literal, Union
+from typing import Any, ClassVar, Literal, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
 
 from pyRadPlan.biology.models import bio_influence_from_let
+from pyRadPlan.core import get_data_dir
 from pyRadPlan.ct import CT, resample_ct, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from pyRadPlan.machines._load import load_from_name
 from pyRadPlan.stf import SteeringInformation
 from ._base_montecarlo import MonteCarloEngineAbstract, ScoredLETBioMixin
 
@@ -118,6 +120,14 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     bio_scored_radiation_modes = ("protons",)
 
     available_source_models = ["biGaussian"]
+
+    # scaling_factor is multiplied by the sum of the weights in every calculation, and a
+    # LET-based biological model adds the LET scorer
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *MonteCarloEngineAbstract._per_calculation_settings,
+        "scaling_factor",
+        "scorer",
+    )
 
     radiation_mode: str
 
@@ -208,7 +218,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             ]
         }
 
-        self.simu_dir: str = self.base_topas_folder.joinpath(datetime.now().strftime("%Y-%m-%d"))
+        self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
         self._computed_quantities = []
@@ -522,8 +532,10 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         )
 
         if self.external_calculation is True:
+            # The weights are replaced by history counts below; keep the caller's stf as it is
+            stf = stf.model_copy(deep=True)
             os.makedirs(self.simu_dir, exist_ok=True)
-            tmp_machine = load_from_name(stf.beams[0].radiation_mode, stf.beams[0].machine)
+            tmp_machine = self._machine
             sad = tmp_machine.sad / 10
             beams_topas = []
 

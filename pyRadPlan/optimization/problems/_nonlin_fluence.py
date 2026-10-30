@@ -68,6 +68,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         self._device = getattr(self._quantities[0], "device", None)
         self.solver.device = self._device
 
+        # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
+        # quantities using them; computing them here would cost an extra matrix product.
+        self._objective_quantities = [
+            q for q in self._quantities if self._objectives_per_quantity[q.identifier]
+        ]
+
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
@@ -81,7 +87,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         q_scenarios = {}
 
         # Check & get Caches
-        for q in self._quantities:
+        for q in self._objective_quantities:
             q_vectors[q.identifier] = q(x)
             q_scenarios[q.identifier] = q.scenarios
 
@@ -128,7 +134,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         # One cotangent block per scenario the quantity evaluates, so that each scenario's
         # objective gradient is back-projected through its own influence matrix.
-        for q in self._quantities:
+        for q in self._objective_quantities:
             if initialize_cache:
                 if self.bypass_objective_jacobian:
                     cache_rows = 1
@@ -168,11 +174,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         else:
             self._grad_cache[:, ...] = 0.0
 
-        for q in self._quantities:
-            # A pure dependency has an all-zero upstream gradient; the quantities using it
-            # already differentiate it through the chain rule.
-            if not self._objectives_per_quantity[q.identifier]:
-                continue
+        for q in self._objective_quantities:
             if self.bypass_objective_jacobian:
                 cache_ix = [0]
             else:
@@ -195,8 +197,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._set_quantity_imtermediate_gradient_cache()
 
-        q_vectors = {q.identifier: q(x) for q in self._quantities}
-        q_scenarios = {q.identifier: q.scenarios for q in self._quantities}
+        q_vectors = {q.identifier: q(x) for q in self._objective_quantities}
+        q_scenarios = {q.identifier: q.scenarios for q in self._objective_quantities}
 
         cnt = 0
         for obj_info in self._objective_list:

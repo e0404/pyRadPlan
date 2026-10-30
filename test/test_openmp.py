@@ -127,6 +127,7 @@ def test_kmp_env_from_dotenv_reads_only_that_key(tmp_path, monkeypatch):
         "\n".join(["_TEST_OPENMP_SENTINEL=should-not-be-touched", "KMP_DUPLICATE_LIB_OK=TRUE", ""])
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     before = set(os.environ)
 
     assert _real_kmp_env_from_dotenv() == "TRUE"
@@ -135,7 +136,22 @@ def test_kmp_env_from_dotenv_reads_only_that_key(tmp_path, monkeypatch):
 
 def test_kmp_env_from_dotenv_missing_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     assert _real_kmp_env_from_dotenv() is None
+
+
+def test_kmp_env_from_user_dotenv(tmp_path, monkeypatch):
+    """The per-user <data_dir>/.env is consulted too; the working directory's wins."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / ".env").write_text("KMP_DUPLICATE_LIB_OK=TRUE\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(data))
+
+    assert _real_kmp_env_from_dotenv() == "TRUE"
+
+    (tmp_path / ".env").write_text("KMP_DUPLICATE_LIB_OK=FALSE\n")
+    assert _real_kmp_env_from_dotenv() == "FALSE"
 
 
 # --------------------------------------------------------------------------

@@ -42,9 +42,9 @@ class ParticleAccelerator(ExternalBeamMachine):
     )
     lut_spot_size: NDArray[Shape["2,*"], np.float64] = Field(
         description="2D array of look up table latteral spotspacing to foxus index",
-        alias=AliasChoices(
-            "LUTspotSize", "LUT_bxWidthminFWHM"
-        ),  # We have two aliases here to capture version changes in matRad base data files
+        # Two matRad names to capture version changes in matRad base data files
+        validation_alias=AliasChoices("LUTspotSize", "LUT_bxWidthminFWHM", "lut_spot_size"),
+        serialization_alias="LUTspotSize",
     )
     # kernel_data: Annotated[np.recarray, Field(description="Pencil beam kernel data")]
 

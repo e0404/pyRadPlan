@@ -302,8 +302,8 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_dose_convention.setToolTip(
             "Convention for dose values in objectives and results:\n"
             "per fraction - objective doses and reported doses refer to one fraction;\n"
-            "total - objective doses are total-course doses (scaled by 1/fractions for "
-            "optimization) and reported doses are multiplied by the number of fractions."
+            "total - objective values (including reference images) and reported results\n"
+            "refer to the whole course; doses scale with the number of fractions, LET does not."
         )
         fractions_row = QHBoxLayout()
         fractions_row.setContentsMargins(0, 0, 0, 0)
@@ -446,8 +446,10 @@ class PlanWidget(WorkspaceWidget):
         self._set_not_implemented(
             self._cmb_quantity,
             "Choosing a global optimized quantity",
-            hint="The optimizer derives the quantity from the objectives table, "
-            'where "Change all quantities…" sets it on all objectives at once.',
+            hint="The optimizer derives the quantity from the objectives table: with a "
+            "biological model, physical-dose objectives are optimized on RBE-weighted dose, "
+            "unless other objectives already use a biological quantity. "
+            '"Change all quantities…" sets the quantity on all objectives at once.',
         )
 
         self._btn_tissue = QPushButton("Set tissue parameters")
@@ -1590,14 +1592,16 @@ class PlanWidget(WorkspaceWidget):
             self._set_status(f"Cannot prepare plan for AI: {exc}", error=True)
             return
 
+        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog, busy_cursor  # noqa: PLC0415
+
         # Deferred: keeps the optional ai.agents stack out of widget construction.
-        from pyRadPlan.ai.agents import (  # noqa: PLC0415
-            available_models,
-            beam_angles_system_prompt,
-            cst_geometry_summary,
-            generate_beam_angles,
-        )
-        from pyRadPlan.gui.widgets.ai import AiTask, AiTaskDialog  # noqa: PLC0415
+        with busy_cursor():
+            from pyRadPlan.ai.agents import (  # noqa: PLC0415
+                available_models,
+                beam_angles_system_prompt,
+                cst_geometry_summary,
+                generate_beam_angles,
+            )
 
         cst = self._ws.cst
 

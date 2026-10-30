@@ -259,9 +259,34 @@ in objectives (``d_ref``, ``d_max``, ...) and in reported results are to be read
     rescaled.
 
 ``"total"``
-    Objective doses refer to the whole course and are divided by ``pln.num_of_fractions``
-    when the problem is set up (the objectives in the structure set are left untouched);
-    result doses are multiplied by ``num_of_fractions``.
+    Objective references (scalar values and reference images such as the ``d_ref`` of
+    ``SquaredMimicking``) refer to the whole course and are converted to one fraction when the
+    problem is set up (the objectives in the structure set are left untouched); results are
+    converted to the whole course.
+
+Both conversions follow how each quantity accumulates over ``n = pln.num_of_fractions``
+identical fractions, declared by its ``fraction_exponent`` (total = ``n**fraction_exponent``
+× per fraction):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Quantity
+     - Total course
+     - Objective reference used for optimization
+   * - ``physical_dose``, ``rbe_x_dose``, ``effect``, ``alpha_dose``, ``let_dose``
+     - ``n`` × per fraction
+     - total / ``n``
+   * - ``sqrt_beta_dose``
+     - ``sqrt(n)`` × per fraction, so that the total effect remains
+       ``alpha_dose + sqrt_beta_dose**2``
+     - total / ``sqrt(n)``
+   * - ``let``
+     - unchanged
+     - unchanged
+
+A custom quantity has to declare its ``fraction_exponent`` to be used with ``"total"``;
+otherwise setting up the problem raises an error rather than guessing.
 
 The optimizer logs which interpretation it applies.
 

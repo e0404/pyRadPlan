@@ -10,6 +10,7 @@ class AlphaDose(FluenceDependentQuantity):
     identifier = "alpha_dose"
     biological = True
     name = "AlphaDose"
+    fraction_exponent = 1.0
     optional_dependencies = ("physical_dose",)
     indirect_dij_fields = ("alphax",)
 

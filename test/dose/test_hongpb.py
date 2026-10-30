@@ -314,3 +314,26 @@ def test_carbon_multi_gaussian_reduces_to_single(test_data_carbon, monkeypatch):
     dose_multi = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0].toarray()
     assert dose_multi.max() > 0
     assert np.allclose(dose_multi, dose_single, rtol=1e-6, atol=1e-8)
+
+
+def test_protons_cd_forward_uses_loaded_plan_machine(test_data_protons):
+    from pyRadPlan.machines import load_from_name
+
+    pln, ct, cst, stf, dij, result = test_data_protons
+    reference = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+
+    machine = load_from_name(pln.radiation_mode, pln.machine)
+    for kernel in machine.pb_kernels.values():
+        kernel.idd = 2 * kernel.idd
+    original_idd = {energy: kernel.idd.copy() for energy, kernel in machine.pb_kernels.items()}
+    pln.machine = machine
+
+    doubled = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+
+    assert reference.max() > 0
+    assert np.allclose(doubled, 2 * reference, rtol=1e-5, atol=1e-10)
+    # the dose calculation works on a copy of the plan: its machine keeps its kernels
+    assert pln.machine is machine
+    for energy, kernel in machine.pb_kernels.items():
+        assert kernel.lateral_cut_off is None
+        assert np.array_equal(kernel.idd, original_idd[energy])

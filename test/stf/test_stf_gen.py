@@ -10,6 +10,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan.io import load_patient
+from pyRadPlan.machines import load_from_name
 from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
@@ -255,6 +256,30 @@ def test_single_ion_spot(sample_ct, sample_cst, sample_proton_pln):
         assert np.isclose(field["source_point"], expected_source_points[i]).all()
         assert np.isclose(field["rays"][0].ray_pos_bev, expected_ray_pos_bev).all()
         assert np.isclose(field["rays"][0].ray_pos, expected_ray_pos).all()
+
+
+@pytest.mark.parametrize("default_mode", [False, True], ids=["loaded", "default-mode"])
+@pytest.mark.parametrize("radiation_mode", ["protons", "photons"])
+def test_generate_with_round_tripped_plan_machine(
+    sample_ct, sample_cst, radiation_mode, default_mode
+):
+    """Steering generation works with a loaded machine after a plan dump round trip."""
+    machine = load_from_name(radiation_mode, "Generic")
+    if default_mode:
+        data = machine.model_dump(exclude_unset=True)
+        del data["radiation_mode"]
+        machine = type(machine).model_validate(data)
+    pln = create_pln(radiation_mode=radiation_mode, machine=machine, prop_stf={"bixel_width": 5})
+    pln = create_pln(pln.model_dump())
+
+    stf_gen = get_generator(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert type(stf_gen.machine) is type(machine)
+    assert len(stf) == 1
+    assert stf[0]["machine"] == "Generic"
 
 
 def test_impt(sample_ct, sample_cst, sample_proton_pln):
@@ -568,3 +593,34 @@ def test_target_margin_adds_shift_range_and_beamlet_margin(
     assert stf_gen._target_margins() == pytest.approx(expected)
     # the sum exceeds the former max(shift, range + beamlet) rule along the shifted axes
     assert stf_gen._target_margins()[0] > max(res["x"], 10.0, range_margin + added)
+
+
+def test_ray_padding_is_symmetric_for_bixels_below_ct_resolution(tg119):
+    # With 2 mm bixels on the 3 mm TG119 CT, every ray is padded by one bixel on all sides,
+    # so a single target voxel at the isocenter yields the full 3 x 3 grid of ray positions.
+    ct, cst = tg119["ct"], tg119["cst"]
+    pln = create_pln(
+        {
+            "radiation_mode": "photons",
+            "machine": "Generic",
+            "prop_stf": {"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 2.0},
+        }
+    )
+    generator = StfGeneratorPhotonIMRT(pln)
+    generator._ct, generator._cst = ct, cst
+    generator._initialize()
+    generator._initialize_patient_geometry()
+
+    iso_center = np.asarray(cst.target_center_of_mass())
+    generator._target_voxel_coordinates = iso_center.reshape(3, 1)
+    beam = {
+        "gantry_angle": 0.0,
+        "couch_angle": 0.0,
+        "sad": 1000.0,
+        "bixel_width": 2.0,
+        "iso_center": iso_center,
+    }
+    ray_pos = generator._generate_ray_positions_in_isocenter_plane(beam)
+
+    offsets = {(float(x), float(z)) for x, z in ray_pos[[0, 2]].T}
+    assert offsets == {(x, z) for x in (-2.0, 0.0, 2.0) for z in (-2.0, 0.0, 2.0)}
