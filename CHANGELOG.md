@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- Stf generators take the scenario model from `pln.mult_scen`; before, it was never copied from the plan and the nominal scenario was always used
+- Importing a matRad stf with a beam that has only one ray no longer fails
+- `FieldShapeAsMask` accepts masks given as nested lists, and the warning about padding an even-sized mask is logged correctly instead of raising a logging error
 
 ## [0.6.0] - 2026-10-28
 

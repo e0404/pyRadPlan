@@ -14,6 +14,7 @@ from pyRadPlan.machines import load_from_name
 from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
+from pyRadPlan.scenarios import ScenarioModel
 
 from pyRadPlan.stf import Ray, get_available_generators, get_generator, resolve_iso_centers
 from pyRadPlan.stf.generators import (
@@ -511,3 +512,9 @@ def test_ray_padding_is_symmetric_for_bixels_below_ct_resolution(tg119):
 
     offsets = {(float(x), float(z)) for x, z in ray_pos[[0, 2]].T}
     assert offsets == {(x, z) for x in (-2.0, 0.0, 2.0) for z in (-2.0, 0.0, 2.0)}
+
+
+def test_generator_takes_scenario_model_from_plan(sample_proton_pln):
+    stf_gen = StfGeneratorIMPT(sample_proton_pln)
+    assert isinstance(stf_gen.mult_scen, ScenarioModel)
+    assert stf_gen.mult_scen.name == sample_proton_pln.mult_scen.name

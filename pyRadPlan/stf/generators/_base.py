@@ -201,7 +201,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
 
         self.machine = pln.machine
 
-        if "mult_scen" in pln:
+        if hasattr(pln, "mult_scen"):
             self.mult_scen = (
                 pln.mult_scen
             )  # Validation will be performed as soon as we have the ct

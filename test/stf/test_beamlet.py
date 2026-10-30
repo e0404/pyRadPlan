@@ -54,6 +54,8 @@ def test_photon_beamlet_all():
 
 
 ########################## FieldShapes #############################
+import logging
+
 import numpy as np
 import pytest
 from pyRadPlan.machines import create_bld
@@ -272,3 +274,21 @@ def test_shape_composite():
 #     # TODO:
 #     # - non-square mask
 #     # - test padding for even mask widths
+
+
+def test_shape_from_list_mask():
+    shape = FieldShapeAsMask(energy=6, mask=[[0, 1, 0], [1, 1, 1], [0, 1, 0]], resolution=1.0)
+    assert isinstance(shape.mask, np.ndarray)
+    np.testing.assert_array_equal(shape.grid, [-1.0, 0.0, 1.0])
+
+
+def test_shape_even_mask_is_padded(caplog):
+    with caplog.at_level(logging.WARNING, logger="pyRadPlan.stf._beamlet"):
+        shape = FieldShapeAsMask(energy=6, mask=np.ones((4, 4)), resolution=1.0)
+    assert shape.mask.shape == (5, 5)
+    assert "Mask size 4 is even" in caplog.records[0].getMessage()
+
+
+def test_shape_missing_field_width_message():
+    with pytest.raises(ValueError, match="field_width or grid"):
+        FieldShape._resolve_field_width(None, None)
