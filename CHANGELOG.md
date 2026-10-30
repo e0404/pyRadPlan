@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- `Plan.to_matrad` (and `.mat` export): `propStf`, `propOpt`, `propDoseCalc` and `propSeq` keys were snake_case, so matRad ignored them (e.g. `gantry_angles`)
+- `create_pln(radiation_mode="VHEE")` raised "Unknown radiation mode"
+- `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
+- An invalid `mult_scen` raised a `TypeError` instead of a `ValidationError`
 
 ## [0.6.0] - 2026-10-28
 

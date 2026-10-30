@@ -445,3 +445,44 @@ def test_plan_round_trip_keeps_a_default_radiation_mode(machine_cls, radiation_m
     assert type(restored.machine) is machine_cls
     assert restored.machine.radiation_mode == radiation_mode
     assert restored.machine.model_fields_set - {"radiation_mode"} == machine.model_fields_set
+
+
+def test_create_pln_kwargs_vhee():
+    plan = create_pln(radiation_mode="VHEE")
+    assert isinstance(plan, IonPlan)
+    assert plan.radiation_mode == "VHEE"
+
+
+def test_plan_invalid_mult_scen_raises_validation_error():
+    with pytest.raises(ValidationError):
+        IonPlan(mult_scen="does_not_exist")
+
+
+def test_create_pln_dict_without_radiation_mode_uses_its_bio_default():
+    plan = create_pln({"num_of_fractions": 5})
+    assert plan.radiation_mode == "protons"
+    assert plan.bio_model.model == IonPlan().bio_model.model == "constant_rbe"
+
+
+def test_plan_to_matrad_prop_keys_are_camel_case(tmp_path):
+    from pyRadPlan.io import load_data, save_data  # noqa: PLC0415
+
+    pln = IonPlan(
+        prop_stf={"gantry_angles": [0.0, 90.0], "bixel_width": 5.0},
+        prop_opt={"quantity_opt": "physical_dose"},
+        prop_dose_calc={"calc_let": True},
+        prop_seq={"run_sequencing": False},
+    )
+    matrad = pln.to_matrad()
+    assert matrad["propStf"] == {"gantryAngles": [0.0, 90.0], "bixelWidth": 5.0}
+    assert matrad["propOpt"] == {"quantityOpt": "physical_dose"}
+    assert matrad["propDoseCalc"] == {"calcLet": True}
+    assert matrad["propSeq"] == {"runSequencing": False}
+    assert pln.prop_stf == {"gantry_angles": [0.0, 90.0], "bixel_width": 5.0}
+
+    assert create_pln(matrad).prop_stf == pln.prop_stf
+    out = tmp_path / "pln.mat"
+    save_data(pln=pln, file_name=str(out))
+    reloaded = load_data(out)["pln"]
+    assert np.array_equal(reloaded.prop_stf["gantry_angles"], [0.0, 90.0])
+    assert reloaded.prop_opt == pln.prop_opt
