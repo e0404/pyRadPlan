@@ -11,4 +11,5 @@ from pyRadPlan.gui import main as gui_main
 
 def main() -> None:
     """Launch the pyRadPlan main window and exit with its status."""
-    sys.exit(gui_main(sys.argv[1:]))
+    # The Linux desktop entry passes every selected file (Exec=... %F); open the first one.
+    sys.exit(gui_main(sys.argv[1:2]))

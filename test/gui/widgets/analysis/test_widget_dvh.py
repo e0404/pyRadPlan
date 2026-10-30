@@ -1,6 +1,7 @@
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from pyRadPlan.analysis._dvh import DVH
 from pyRadPlan.gui.widgets.analysis._dvh import DVHPlotWidget
@@ -158,6 +159,9 @@ def _plot_with_markers(widget):
 def _shown(qapp, widget):
     widget.resize(600, 400)
     widget.show()
+    # A real X11 window manager maps the window asynchronously; the view range is only
+    # laid out once it is exposed.
+    QTest.qWaitForWindowExposed(widget)
     qapp.processEvents()
 
 
