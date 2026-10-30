@@ -80,7 +80,7 @@ jobs:
             package-args: --adhoc-sign
             timeout-minutes: 60
           # Pinned: the .deb is built for, and needs, the distribution it is built on, and
-          # ubuntu-latest moves to Ubuntu 26 in October 2026. The GitLab job uses the same.
+          # ubuntu-latest moves to Ubuntu 26 in October 2026. The GitLab job uses Debian 13.
           - os: ubuntu-24.04
             label: linux system
             platform: linux

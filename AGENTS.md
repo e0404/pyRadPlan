@@ -39,7 +39,7 @@ pytest                        # run all tests
 pytest --cov=pyRadPlan        # with coverage
 ```
 
-CI runs on Python 3.10–3.13. Do not reduce existing coverage.
+GitHub CI runs on Python 3.10–3.14. GitLab CI runs on 3.13 for every push, and also on 3.10 and 3.14 for open merge requests, `main`, `develop`, `rc/*`, `devops/*` and tags. Do not reduce existing coverage.
 
 Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
 so a bare `pytest` run never collects it — invoke it explicitly:
