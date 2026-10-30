@@ -52,7 +52,7 @@ autosummary_generate = True
 # The scripts in ../examples (jupytext percent format) are the source of the examples. When the
 # build starts (see setup() below) they are converted to notebooks without outputs in
 # tutorials/examples/ (ignored by git), and nothing is executed: neither Read the Docs nor CI run
-# the examples. Release commits instead carry executed notebooks there, written by
+# the examples. The executed notebooks of the last release stay tracked there, written by
 # `python docs/execute_examples.py --release`; they are rendered as is while their script is
 # unchanged (they opt out of execution in their metadata), and replaced by a conversion without
 # outputs, with a warning, once their script changed. PYRADPLAN_DOCS_NB_EXECUTION=cache is a
