@@ -80,7 +80,7 @@ jobs:
             package-args: --adhoc-sign
             timeout-minutes: 60
           # Pinned: the .deb is built for, and needs, the distribution it is built on, and
-          # ubuntu-latest moves to Ubuntu 26 in October 2026. The GitLab job uses the same.
+          # ubuntu-latest moves to Ubuntu 26 in October 2026. The GitLab job uses Debian 13.
           - os: ubuntu-24.04
             label: linux system
             platform: linux
@@ -126,11 +126,11 @@ jobs:
             # what Briefcase checks for the system packaging format.
             python3 -m venv "$HOME/briefcase-venv"
             "$HOME/briefcase-venv/bin/python" -m pip install --upgrade pip
-            "$HOME/briefcase-venv/bin/python" -m pip install "briefcase==0.4.5"
+            "$HOME/briefcase-venv/bin/python" -m pip install "briefcase==0.4.7"
             echo "$HOME/briefcase-venv/bin" >> "$GITHUB_PATH"
           else
             python -m pip install --upgrade pip
-            python -m pip install "briefcase==0.4.5"
+            python -m pip install "briefcase==0.4.7"
           fi
 
       - name: Sync the app version and changelog with pyRadPlan

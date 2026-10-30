@@ -75,10 +75,9 @@ instance/
 docs/_build/
 docs/api/generated/
 .doc
-# Notebooks generated from examples/*.py by the docs build (docs/execute_examples.py). Only
-# release commits on rc/X.Y.Z track executed notebooks here: `python docs/execute_examples.py
-# --release` force-adds them, and merging main back into develop untracks them again (see
-# .gitlab/merge_request_templates/Release.md).
+# Notebooks generated from examples/*.py by the docs build (docs/execute_examples.py). The
+# executed notebooks of the last release stay tracked here: `python docs/execute_examples.py
+# --release` force-adds them on rc/X.Y.Z (see .gitlab/merge_request_templates/Release.md).
 docs/tutorials/examples/
 # Examples are committed as jupytext scripts only; notebooks converted locally stay untracked
 examples/*.ipynb

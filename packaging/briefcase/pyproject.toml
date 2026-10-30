@@ -54,6 +54,10 @@ test_requires = []
 system_installer = false
 # Install into ...\Programs\pyRadPlan rather than ...\Programs\<author>\pyRadPlan.
 use_full_install_path = false
+# Installer checkboxes, both checked by default: "Create a desktop shortcut" (the Start
+# menu entry is always created) and "Launch pyRadPlan" on the final page (Briefcase >= 0.4.6).
+create_desktop_shortcut = true
+installer_completion_launch_app = true
 # Installer bitmaps (493x312 welcome/finish side panel, 493x58 banner), rendered by
 # scripts/make_icons.py; the .bmp suffix is added by Briefcase.
 installer_background = "src/pyradplan_app/resources/installer-dialog"
@@ -61,7 +65,9 @@ installer_banner = "src/pyradplan_app/resources/installer-banner"
 
 [tool.briefcase.app.pyradplan_app.macOS]
 universal_build = false
-min_os_version = "13.0"
+# Briefcase selects wheels for this version, not the build machine's: NumPy and SciPy only
+# link Accelerate in their macosx_14_0 wheels, below 14.0 they bundle OpenBLAS.
+min_os_version = "14.0"
 requires = [
     "std-nslog~=2.0.0",
 ]

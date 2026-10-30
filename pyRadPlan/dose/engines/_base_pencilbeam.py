@@ -111,6 +111,12 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     ] = 0.0500
     use_given_eq_density_cube: bool = False
     ignore_outside_densities: bool = False
+    # The density settings are adjusted per calculation (no ct.cube, default HLUT)
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *DoseEngineBase._per_calculation_settings,
+        "use_given_eq_density_cube",
+        "hlut",
+    )
     # Radiation modes whose stf generators select energies by tracing the densities
     _density_dependent_stf_modes: ClassVar[frozenset[str]] = frozenset(
         {"protons", "helium", "carbon", "oxygen"}
@@ -290,6 +296,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         containing initialization which is specifically needed for
         pencil beam calculation and not for other engines.
         """
+
+        # Start from scratch when the engine is reused for another calculation
+        self._rad_depth_cubes = []
 
         dij = super()._init_dose_calc(ct, cst, stf)
 
@@ -1015,7 +1024,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         dij[q_name].flat[i] = tmp_matrix
 
         if self.keep_rad_depth_cubes and self._rad_depth_cubes:
-            dij["rad_depth_cubes"] = self._rad_depth_cubes
+            dij["rad_depth_cubes"] = [
+                sitk.GetArrayFromImage(cube) for cube in self._rad_depth_cubes
+            ]
 
         # Call the finalizeDose method from the base class
         return super()._finalize_dose(dij)

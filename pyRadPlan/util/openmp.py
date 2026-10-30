@@ -126,14 +126,16 @@ def loaded_runtimes() -> dict[str, set[str]]:
     Returns
     -------
     dict[str, set[str]]
-        Runtime stem -> the (case-normalized) files it is loaded from.  Empty on
-        platforms where the loaded modules cannot be enumerated.
+        Runtime stem -> the (resolved, case-normalized) files it is loaded from.  Empty
+        on platforms where the loaded modules cannot be enumerated.
     """
     runtimes: dict[str, set[str]] = {}
     for path in _loaded_modules():
         key = runtime_key(path)
         if key is not None:
-            runtimes.setdefault(key, set()).add(os.path.normcase(path))
+            # Resolved like runtimes_shipped_by(): Windows reports modules by the path
+            # they were loaded from, which may hold 8.3 short names or junctions.
+            runtimes.setdefault(key, set()).add(os.path.normcase(os.path.realpath(path)))
     return runtimes
 
 
@@ -167,7 +169,7 @@ def runtimes_shipped_by(package: str) -> dict[str, frozenset[str]]:
     Returns
     -------
     dict[str, frozenset[str]]
-        Runtime stem -> the (case-normalized) files the package ships it in.
+        Runtime stem -> the (resolved, case-normalized) files the package ships it in.
         Empty if the package is not installed or ships no OpenMP runtime.
     """
     try:
@@ -193,7 +195,8 @@ def runtimes_shipped_by(package: str) -> dict[str, frozenset[str]]:
             for entry in entries:
                 key = runtime_key(entry.name) if entry.is_file() else None
                 if key is not None:
-                    runtimes.setdefault(key, set()).add(os.path.normcase(entry.path))
+                    path = os.path.realpath(entry.path)
+                    runtimes.setdefault(key, set()).add(os.path.normcase(path))
     return {key: frozenset(paths) for key, paths in runtimes.items()}
 
 

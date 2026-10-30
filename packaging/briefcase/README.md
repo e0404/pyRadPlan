@@ -35,7 +35,7 @@ test keeps them equal). The requirements are installed into the bundle's
 ## Building locally
 
 Briefcase picks the Python support package matching the interpreter that runs it; CI uses
-Python 3.12. Install it with `pip install briefcase` (CI pins `briefcase==0.4.5`) and run
+Python 3.12. Install it with `pip install briefcase` (CI pins `briefcase==0.4.7`) and run
 everything from this directory:
 
 ```bash
@@ -61,7 +61,9 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
 `<platform> <format>` is one of:
 
 - **Windows:** `windows app`, run on Windows. Produces `dist/pyRadPlan-<version>.msi`, a
-  per-user installer (`system_installer = false`, no admin rights). Briefcase downloads the WiX
+  per-user installer (`system_installer = false`, no admin rights) that creates a Start menu
+  entry, offers a desktop shortcut (`create_desktop_shortcut`) and launches the app from its
+  final page (`installer_completion_launch_app`). Briefcase downloads the WiX
   toolset on first use. Without `--identity` the MSI is unsigned (Briefcase prints a warning).
 - **macOS:** `macOS app`, run on macOS. Produces `dist/pyRadPlan-<version>.dmg` for the
   architecture of the build machine (`universal_build = false`), so Apple silicon and Intel
@@ -69,7 +71,8 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
   name. `--adhoc-sign` is required for an unsigned build and skips notarization. Several
   dependencies have no Intel Mac wheels in their latest releases, so the Intel app bundles
   older ones. The GUI dependencies follow the root project's `gui` extra on both
-  architectures.
+  architectures. The app needs macOS 14 or later (`min_os_version`), which makes Briefcase
+  bundle the NumPy and SciPy wheels linked against Apple's Accelerate instead of OpenBLAS.
 - **Linux:** `linux system`, run on the target distribution. Produces
   `dist/pyradplan-app_<version>-1~<distro>-<codename>_<arch>.deb` (or an RPM/pkg on other
   families). Briefcase must run under the distribution's `/usr/bin/python3` (a venv created
@@ -159,8 +162,8 @@ On failure the Briefcase logs (`packaging/briefcase/logs/`) are uploaded as
 ### GitLab: the `installer-linux` job
 
 The job `installer-linux` of `.gitlab-ci.yml` (stage `package`, so it runs once the tests pass)
-builds the Linux `.deb` in an `ubuntu:24.04` container with the same Briefcase steps, for
-`main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
+builds the Linux `.deb` in a `debian:trixie` container (for its system Python 3.13) with the
+same Briefcase steps, for `main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
 macOS DMG are only built on GitHub. The package is not kept as a job artifact (the runners
 limit their size and the `.deb` is almost 300 MB): the job only shows that the installer
 builds, and keeps the Briefcase logs for a week when it fails. A merge request from `rc/X.Y.Z` into `main` shows the pipeline of its source
@@ -177,7 +180,7 @@ corresponding warnings when installing.
   from a CA, or Azure Trusted Signing). Briefcase signs with `signtool` from the Windows SDK:
   `briefcase package windows app --identity <SHA-1 thumbprint of the certificate>`, optionally
   with `--cert-store`, `--use-local-machine-stores`, `--file-digest` and `--timestamp-url`
-  (Briefcase 0.4.5 has no `pyproject.toml` key for the identity; it is a command line option). Unsigned MSIs trigger a Microsoft Defender SmartScreen warning; even signed
+  (Briefcase has no `pyproject.toml` key for the identity; it is a command line option). Unsigned MSIs trigger a Microsoft Defender SmartScreen warning; even signed
   ones do until the certificate has built up reputation (EV certificates are trusted at
   once).
 - **macOS:** a "Developer ID Application" certificate from an Apple Developer account,

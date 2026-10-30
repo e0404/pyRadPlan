@@ -5,6 +5,7 @@ matRad's InfoWidget equivalent.  Static (no workspace listener needed).
 
 from __future__ import annotations
 
+import platform
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
@@ -29,7 +30,7 @@ class InfoWidget(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(2)
 
-        ver = QLabel(f"pyRadPlan v{_package_version()}")
+        ver = QLabel(f"pyRadPlan v{_package_version()} (Python {platform.python_version()})")
         ver.setAlignment(Qt.AlignCenter)
         ver.setStyleSheet("font-weight: bold;")
 

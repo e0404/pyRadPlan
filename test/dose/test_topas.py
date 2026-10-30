@@ -1,4 +1,5 @@
 import numpy as np
+import SimpleITK as sitk
 import os
 import pytest
 from pathlib import Path
@@ -234,3 +235,53 @@ def test_topas_reports_missing_let_output(test_data_protons, tmp_path):
     pln = _topas_plan(pln, "WED", external_calculation=str(tmp_path))
     with pytest.raises(ValueError, match="TOPAS LET output is missing"):
         calc_dose_forward(ct, cst, stf, pln)
+
+
+def _stf_weights(stf):
+    return [b.weight for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
+
+
+def test_topas_input_pass_leaves_the_stf_and_engine_alone(test_data_protons, tmp_path):
+    """Writing the input replaces weights by history counts in a copy, not in the stf."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    engine = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path / "inp"))
+    weights = _stf_weights(stf)
+    scaling_factor = engine.scaling_factor
+
+    for _ in range(2):
+        engine.calc_dose_forward(ct, cst, stf, None)
+        assert _stf_weights(stf) == weights
+        assert engine.scaling_factor == scaling_factor
+
+
+def test_topas_read_back_on_a_reused_engine(test_data_protons, tmp_path):
+    """The scored cubes are normalized the same way by a fresh and a reused engine."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    probe = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path / "inp"))
+    probe._init_dose_calc(ct, cst, stf)
+    shape = tuple(probe.dose_grid.dimensions[::-1])
+    rng = np.random.default_rng(5)
+    _write_topas_output(tmp_path, "physicalDose", [rng.random(shape)] * len(stf.beams), 2)
+
+    w = np.linspace(0.5, 2.0, stf.total_number_of_bixels)
+    pln = _topas_plan(pln, "none", external_calculation=str(tmp_path))
+    engine = ParticleTOPASMCEngine(pln)
+    first = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+    second = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+    fresh = ParticleTOPASMCEngine(pln).calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+
+    reference = sitk.GetArrayFromImage(fresh)
+    np.testing.assert_array_equal(sitk.GetArrayFromImage(first), reference)
+    np.testing.assert_array_equal(sitk.GetArrayFromImage(second), reference)
+
+
+def test_topas_let_scorer_is_set_per_calculation(test_data_protons, tmp_path):
+    """The LET scorer a LET-based model switches on does not stay on the engine."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    engine = ParticleTOPASMCEngine(_topas_plan(pln, "MCN", simu_dir=tmp_path))
+    scorer = dict(engine.scorer)
+
+    engine.calc_dose_forward(ct, cst, stf, None)
+
+    assert '= "ProtonLET"' in _run_files_text(tmp_path)
+    assert engine.scorer == scorer
