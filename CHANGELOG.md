@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- `CT`: creating one from a dict no longer modifies the dict or the given SimpleITK image (e.g. a second CT built from `ct.cube_hu` with a new origin moved the first one too)
+- `CT.x`, `CT.y`, `CT.z` could have one element too many due to floating-point rounding
+- `CT.to_matrad`: `cubeDim` was in x, y, z instead of matRad's y, x, z order, and multi-scenario CTs failed; a single-cell `cubeHU` (as `to_matrad` writes it) was read back as a 4D CT
+- Multi-scenario CTs: `compute_wet` failed, a centered origin had -1 instead of 0 in its 4th component, and a 3-element `origin` (as `CT.origin` returns it) was rejected
+- `CT.compute_wet` accepted HLUTs with more than two columns or a single row
 
 ## [0.6.0] - 2026-10-28
 
