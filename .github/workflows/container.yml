@@ -39,7 +39,7 @@ jobs:
       packages: write  # for publishing; the token of a pull request from a fork is read-only anyway
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build the image
         env:
