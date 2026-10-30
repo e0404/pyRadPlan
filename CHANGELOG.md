@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- `StructureSet` from a matRad cst: a cst on a 4D CT failed with a SimpleITK error (and a single index list was repeated 4 times instead of once per CT scenario), and index cells given as numpy object arrays (e.g. the output of `StructureSet.to_matrad`) failed for VOIs with more than one voxel
+- `VOI.to_matrad` for a 4D VOI wrote 0-based indices in numpy order instead of matRad's 1-based column-major indices
+- 4D structure sets: `apply_overlap_priorities`, `get_reference_lq_params`, `get_tissue_class_indices` and `resample_on_new_ct` failed; the LQ parameters and tissue class indices now have one column per CT scenario taken from that scenario's masks
+- `apply_overlap_priorities` and `get_reference_lq_params` failed with an `IndexError` on an empty structure set
+- `create_voi` rejected a lowercase or padded `voi_type` (e.g. `"target"`), which the `voi_type` field itself accepts
 
 ## [0.6.0] - 2026-10-28
 
