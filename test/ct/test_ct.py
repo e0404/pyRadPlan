@@ -216,3 +216,82 @@ def test_hlut_unsorted(sample_ct):
         sitk.GetArrayViewFromImage(wet_image_unsorted)
         == sitk.GetArrayViewFromImage(wet_image_sorted)
     )
+
+
+@pytest.fixture
+def two_scenario_cubes():
+    cubes = np.empty((2,), dtype=object)
+    cubes[0] = np.zeros((4, 3, 2))
+    cubes[1] = np.ones((4, 3, 2))
+    return cubes
+
+
+def test_ct_creation_does_not_modify_input(sample_image):
+    image = sample_image[0]
+    ct_dict = {"cubeHU": image, "origin": (7, 8, 9), "resolution": {"x": 3, "y": 3, "z": 3}}
+    ct = create_ct(ct_dict)
+    assert ct.origin == (7, 8, 9)
+    assert image.GetOrigin() == (0, 0, 0)
+    assert image.GetSpacing() == (1, 1, 2)
+    assert list(ct_dict.keys()) == ["cubeHU", "origin", "resolution"]
+
+
+def test_world_vectors_match_size():
+    image = sitk.GetImageFromArray(np.zeros((3, 3, 3)))
+    image.SetSpacing((0.1, 0.1, 0.1))
+    image.SetOrigin((-0.15, -0.15, -0.15))
+    ct = create_ct(cube_hu=image)
+    for axis, vec in enumerate((ct.x, ct.y, ct.z)):
+        assert vec.shape == (ct.size[axis],)
+        assert np.allclose(vec, -0.15 + 0.1 * np.arange(3))
+
+
+def test_to_matrad_cube_dim_matches_cube_hu():
+    ct = create_ct(cube_hu=sitk.GetImageFromArray(np.zeros((4, 3, 2))))
+    matrad_dict = ct.to_matrad()
+    assert matrad_dict["cubeHU"][0].shape == (3, 2, 4)
+    assert matrad_dict["cubeDim"].tolist() == [3.0, 2.0, 4.0]
+
+
+def test_matrad_roundtrip():
+    array = np.random.rand(4, 3, 2)
+    ct = create_ct(cube_hu=sitk.GetImageFromArray(array))
+    ct2 = create_ct(ct.to_matrad())
+    assert ct2.num_of_ct_scen == 1
+    assert ct2.cube_hu.GetDimension() == 3
+    assert np.array_equal(sitk.GetArrayFromImage(ct2.cube_hu), array)
+
+
+def test_matrad_roundtrip_multiple_scenarios(two_scenario_cubes):
+    ct = create_ct({"cube_hu": two_scenario_cubes})
+    matrad_dict = ct.to_matrad()
+    assert matrad_dict["cubeHU"].shape == (2,)
+    assert matrad_dict["cubeHU"][1].shape == (3, 2, 4)
+    ct2 = create_ct(matrad_dict)
+    assert ct2.num_of_ct_scen == 2
+    assert np.array_equal(sitk.GetArrayFromImage(ct2.cube_hu), sitk.GetArrayFromImage(ct.cube_hu))
+
+
+def test_multiple_scenarios_origin(two_scenario_cubes):
+    ct = create_ct({"cube_hu": two_scenario_cubes, "resolution": {"x": 1, "y": 2, "z": 3}})
+    assert ct.cube_hu.GetOrigin() == (-1, -3, -6, 0)
+
+    ct = create_ct({"cube_hu": two_scenario_cubes, "origin": (1, 2, 3)})
+    assert ct.cube_hu.GetOrigin() == (1, 2, 3, 0)
+
+    ct2 = create_ct(ct.model_dump())
+    assert ct2.cube_hu.GetOrigin() == (1, 2, 3, 0)
+    assert ct2.num_of_ct_scen == 2
+
+
+def test_compute_wet_multiple_scenarios(two_scenario_cubes):
+    ct = create_ct({"cube_hu": two_scenario_cubes})
+    wet_image = ct.compute_wet(np.array([[0, 0], [1, 2]]))
+    assert wet_image.GetSize() == ct.cube_hu.GetSize()
+    assert np.all(sitk.GetArrayFromImage(wet_image)[1] == 2)
+
+
+@pytest.mark.parametrize("hlut", [np.ones((3, 3)), np.ones((1, 2)), np.ones(4)])
+def test_compute_wet_invalid_hlut_shapes(sample_ct, hlut):
+    with pytest.raises(ValueError):
+        sample_ct.compute_wet(hlut)
