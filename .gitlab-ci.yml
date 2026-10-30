@@ -1,7 +1,20 @@
+# GitHub is the primary repository and runs the CI of everything that reaches it, see
+# .github/workflows. This pipeline only covers what is left, see workflow:rules below:
+#   - internal/* branches, the confidential work that stays on this GitLab: the tests and checks
+#   - devops/* branches: all jobs except the deploy stage, for trying out changes to this file
+#   - main, mirrored from GitHub: the internal documentation (docs, pages-internal)
+#   - release tags, mirrored from GitHub: the internal package registry (packaging,
+#     deploy-tag-internal). PyPI, the installers and the images are published from GitHub.
+#
 # Nothing is cached between jobs: the caches of the virtual environments filled up the disks
 # of the runners. Jobs that need pyRadPlan install it with uv (see .venv), the others only
-# install their tool. Which jobs run depends on the branch, see the rules of tests-matrix
-# and tests-backends. GitHub runs the tests on all supported Python versions.
+# install their tool.
+workflow:
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
+        - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+        - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+
 default:
     image: python:3.13-slim-bookworm
     interruptible: true
@@ -26,7 +39,27 @@ stages:
         - uv venv /opt/venv
         - . /opt/venv/bin/activate
 
+.work-branches:
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
+
+# The expensive jobs, once an internal branch is about to be merged. A merge request shows the
+# pipeline of its source branch, so the merge request needs to be open at the time of the push.
+.before-merge:
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\// && $CI_OPEN_MERGE_REQUESTS'
+
+# The jobs building what GitHub builds as well: an internal branch only needs them on request.
+.on-request:
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\//'
+          when: manual
+          allow_failure: true
+
 lint:
+    extends: .work-branches
     stage: test
     script:
         - pip install ruff==0.15.22
@@ -46,12 +79,14 @@ lint:
     allow_failure: true
 
 format:
+    extends: .work-branches
     stage: test
     script:
         - pip install ruff==0.15.22
         - ruff format --check
 
 codespell:
+    extends: .work-branches
     stage: test
     script:
         - pip install codespell
@@ -104,30 +139,28 @@ codespell:
 
 # The reference Python version, for every push.
 tests:
-    extends: .test
+    extends:
+        - .test
+        - .work-branches
     variables:
         PYTHON_VERSION: "3.13"
 
-# The oldest and newest supported Python version, once a branch is about to be merged. A merge
-# request shows the pipeline of its source branch, so the merge request needs to be open at the
-# time of the push. CI_COMMIT_BRANCH is not set in a merge request pipeline: without it, the
-# last rule would create a second pipeline that GitLab reports in place of the complete one.
+# The oldest and newest supported Python version.
 tests-matrix:
-    extends: .test
+    extends:
+        - .test
+        - .before-merge
     parallel:
         matrix:
             - PYTHON_VERSION: ["3.10", "3.14"]
-    rules:
-        - if: '$CI_COMMIT_TAG'
-        - if: '$CI_COMMIT_BRANCH =~ /^(main|develop)$|^(rc|devops)\//'
-        - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
 
 # Exercise the optional array-API backends on their CPU builds, once per backend as
 # the *default* namespace (PYRADPLAN_XP_*), so engines and tracers run on it too.
-# CuPy needs a GPU runner and is therefore not covered here. Marked allow_failure
-# while JAX support is still being brought up - remove that once the JAX path is green.
+# CuPy needs a GPU runner and is therefore not covered here.
 tests-backends:
-    extends: .venv
+    extends:
+        - .venv
+        - .before-merge
     stage: test
     parallel:
         matrix:
@@ -135,14 +168,10 @@ tests-backends:
     variables:
         PYRADPLAN_XP_PREFER_GPU: "false"
         PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND: "${XP_BACKEND}"
-    rules:
-        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
-        - if: '$CI_COMMIT_TAG'
     script:
         - uv pip install -e ".[jax]" pytest pytest-timeout
         - uv pip install torch --index-url https://download.pytorch.org/whl/cpu
         - pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q --timeout=300
-    allow_failure: true
 
 packaging:
     stage: package
@@ -150,6 +179,9 @@ packaging:
     variables:
         TWINE_USERNAME: gitlab-ci-token
         TWINE_PASSWORD: $CI_JOB_TOKEN
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
+        - if: '$CI_COMMIT_TAG'
     script:
         - pip install --upgrade build
         - python -m build
@@ -163,13 +195,8 @@ packaging:
 # "Desktop installers" GitHub workflow. Briefcase builds a Linux system package under the
 # target distribution's own python3, hence the Debian image for Python 3.13 instead of the
 # python one. The release .deb comes from GitHub and is built on Ubuntu 24.04.
-#
-# Runs for main, the release candidate branches (rc/*), the devops/* branches for trying out
-# changes to the pipeline, and tags. A merge request from rc/X.Y.Z into
-# main shows the pipeline of its source branch, so there is deliberately no merge_request_event
-# rule: it would add a second, installer-only pipeline that GitLab then reports as the merge
-# request's pipeline in place of the one running the tests.
 installer-linux:
+    extends: .on-request
     stage: package
     image: debian:trixie
     dependencies: []
@@ -177,9 +204,6 @@ installer-linux:
         DEBIAN_FRONTEND: noninteractive
         PYTHONUTF8: "1"
         QT_QPA_PLATFORM: "offscreen"
-    rules:
-        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
-        - if: '$CI_COMMIT_TAG'
     script:
         # git: Briefcase fetches its app template with it; gnupg: its package command looks for
         # gpg. The Qt libraries are the system_runtime_requires of the Briefcase project plus
@@ -218,12 +242,11 @@ installer-linux:
         expire_in: 1 week
 
 # The pyRadPlan GUI in a web browser (packaging/container, see its README), built with
-# Docker-in-Docker like the "Container" GitHub workflow, and tested with the same script.
-# For a tag the image is pushed to the container registry of this project as
-# pyradplan-web:<version>, and as :latest unless the version is a pre-release. Needs a
-# privileged runner for the docker:dind service; without TLS, as the runner need not share
-# the certificate volume.
+# Docker-in-Docker like the "Container" GitHub workflow, and tested with the same script. The
+# images are published from GitHub. Needs a privileged runner for the docker:dind service;
+# without TLS, as the runner need not share the certificate volume.
 container:
+    extends: .on-request
     stage: package
     image: docker:27
     dependencies: []
@@ -232,29 +255,14 @@ container:
     variables:
         DOCKER_HOST: tcp://docker:2375
         DOCKER_TLS_CERTDIR: ""
-    rules:
-        - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(rc|devops)\//'
-        - if: '$CI_COMMIT_TAG'
     script:
         - >
             docker build -f packaging/container/Dockerfile
-            --build-arg VERSION="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+            --build-arg VERSION="$CI_COMMIT_SHORT_SHA"
             --build-arg REVISION="$CI_COMMIT_SHA" --build-arg SOURCE="$CI_PROJECT_URL"
             -t pyradplan-web .
         - docker run -d --name web -e XPRA_PASSWORD=ci-test pyradplan-web
         - sh packaging/container/smoke_test.sh web
-        - |
-          if [ -n "$CI_COMMIT_TAG" ]; then
-            image="$CI_REGISTRY_IMAGE/pyradplan-web"
-            version="${CI_COMMIT_TAG#v}"
-            echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-            docker tag pyradplan-web "$image:$version"
-            docker push "$image:$version"
-            if echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-              docker tag pyradplan-web "$image:latest"
-              docker push "$image:latest"
-            fi
-          fi
     after_script:
         - docker logs web || true
 
@@ -262,6 +270,9 @@ docs:
     extends: .venv
     stage: package
     dependencies: []
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
+        - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     script:
         - uv pip install -e ".[gui]" -r docs/requirements.txt
         # Examples are never executed in CI: release commits carry the executed notebooks
@@ -279,24 +290,10 @@ deploy-tag-internal:
         TWINE_USERNAME: gitlab-ci-token
         TWINE_PASSWORD: $CI_JOB_TOKEN
     rules:
-        - if: '$CI_COMMIT_TAG =~ /^v\d+.\d+.\d+$/'
+        - if: '$CI_COMMIT_TAG'
     script:
         - pip install --upgrade twine
         - python -m twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
-    dependencies:
-        - packaging
-
-deploy-tag-pypi:
-    stage: deploy
-    interruptible: false
-    variables:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: $PYPI_TOKEN
-    rules:
-        - if: '$CI_COMMIT_TAG =~ /^v\d+.\d+.\d+$/'
-    script:
-        - pip install --upgrade twine
-        - python -m twine upload dist/*
     dependencies:
         - packaging
 
