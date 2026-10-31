@@ -684,6 +684,26 @@ class ScenarioSet(PyRadPlanBaseModel):
                 return int(i)
         raise ValueError("Scenario set has no nominal scenario")
 
+    def nominal_indices(self) -> np.ndarray:
+        """
+        Flat indices of the scenarios without a perturbation of any continuous dimension.
+
+        One index per realization of the discrete dimensions (e.g. per CT phase of a 4D set,
+        matRad's ``useNominalCtScen``); derived scenarios count only when they alias a computed
+        one. Falls back to :meth:`nominal_index` and raises ``ValueError`` if there is none.
+        """
+        hit = np.ones(len(self), dtype=bool)
+        for d in self.dimensions:
+            if d.kind == "discrete":
+                continue
+            hit &= np.all(np.isclose(self.points[d.name], d.nominal()), axis=1)
+        indices = [
+            int(i) for i in np.flatnonzero(hit) if self.bases[i] is None or self.bases[i].is_alias
+        ]
+        if not indices:
+            indices = [self.nominal_index()]
+        return np.asarray(indices, dtype=int)
+
     def alias_of(self, index: int) -> Optional[int]:
         """Index of the scenario whose matrices scenario ``index`` shares, if it is an alias."""
         basis = self.bases[index]
