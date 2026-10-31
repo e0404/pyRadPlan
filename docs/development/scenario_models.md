@@ -311,6 +311,14 @@ with `set.extent("setup")` and `set.extent("range")`.
   `supported_uncertainties` and select `v_alpha_x` by `voxel_param_set`; engines without it refuse
   the dimension. Only the `affects` declaration, the `voxel_param_set` mapping and the slot sharing
   are implemented in this pass.
+- **Shared index storage.** `Dij.share_scenario_structure()` (applied by the engines' default
+  `share_scenario_structure=True`) rewrites the matrices of all computed scenarios and quantities
+  over the union of their sparsity patterns: one int32 `indices`/`indptr` pair for the whole Dij
+  and, per quantity, a `(matrices, nnz)` value block whose rows are the scenarios' data arrays
+  (explicit zeros where a scenario misses a voxel). `to_namespace` uploads the shared index arrays
+  once. The block is the storage a later fused multi-scenario matvec / transposed product (one
+  gather of the fluence per nonzero, one FMA per scenario; voxel-wise worst case and derived
+  scenarios as elementwise operations on the block) would work on; that step is not implemented.
 - **Robust optimization.** The optimization problem keeps summing over `q.scenarios`; the
   weights and tags on the set are what expected-value / worst-case strategies will consume. No
   change there in this pass beyond defaulting `scenarios=None` to all computed scenarios of the
@@ -354,7 +362,7 @@ dose = PhysicalDose(dij)                                 # all computed scenario
 | `scenarios/_base.py` | rewrite `ScenarioModel` (lazy, nested dims, matRad aliases) |
 | `scenarios/_nominal.py`, `_gridded.py`, `_worst_case.py`, `_importance.py`, `_random.py` | models |
 | `scenarios/__init__.py` | registry, factory, matRad dict validation, 1-based `ctScenProb` conversion |
-| `dij/_dij.py` | `scenarios: Optional[ScenarioSet]` field; container-size validator; `alphax`/`betax`/`tissue_class_ix` columns validated against the number of voxel parameter sets and selected via `voxel_param_set(i)`; shared slots for scenarios with a unit-coefficient basis; `extend_scenarios`; matRad export via layout |
+| `dij/_dij.py` | `scenarios: Optional[ScenarioSet]` field; container-size validator; `alphax`/`betax`/`tissue_class_ix` columns validated against the number of voxel parameter sets and selected via `voxel_param_set(i)`; shared slots for scenarios with a unit-coefficient basis; `extend_scenarios`; `share_scenario_structure` (union sparsity pattern, one index array for all scenarios and quantities); matRad export via layout |
 | `dose/engines/_base.py` | resolve set, `supported_uncertainties`, `dij["scenarios"]`, optional `scenarios=` argument on the public calc functions |
 | `dose/engines/_base_pencilbeam.py`, `_base_pencilbeam_particle.py` | loop restructure (3.7), fix defects 1 and 2, allocation and finalize over flat container |
 | `dose/engines/_fredmc.py`, `_topasmc.py` | allocation shape, `supported_uncertainties = ("ct_phase",)` |

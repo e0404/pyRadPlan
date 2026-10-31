@@ -5,6 +5,7 @@ import pytest
 import scipy.sparse as sp
 import SimpleITK as sitk
 
+from pyRadPlan.core import xp_utils
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.io.matlab import _matfile
 from pyRadPlan.scenarios import (
@@ -253,3 +254,108 @@ def test_scenario_labels_list_perturbed_dimensions_only():
         "phase 1, setup (-0.25, 0.0, +1.5) mm, range 0.0 mm / -1.0 %",
     ]
     assert scen_set.label(-1) == scen_set.labels()[-1]
+
+
+def _union_nnz(matrices) -> int:
+    pattern = sum((sp.csc_array(m) != 0).astype(int) for m in matrices)
+    return (pattern != 0).nnz
+
+
+def _with_let_dose(dij: Dij) -> Dij:
+    rng = np.random.default_rng(1)
+    container = np.empty_like(dij.physical_dose)
+    for i in range(container.size):
+        container[i] = sp.csc_matrix(
+            sp.random(N_VOX, N_BIX, density=0.3, random_state=rng, dtype=np.float32)
+        )
+    return dij.model_copy(update={"let_dose": container})
+
+
+def test_share_scenario_structure_puts_all_matrices_on_one_pattern(sparse_grid_set):
+    dij = _with_let_dose(_dij(sparse_grid_set))
+    shared = dij.share_scenario_structure()
+
+    ref = shared.physical_dose[0]
+    assert ref.indices.dtype == np.int32
+    assert ref.indices.size == _union_nnz([*dij.physical_dose, *dij.let_dose])
+    for q in ("physical_dose", "let_dose"):
+        for before, after in zip(getattr(dij, q), getattr(shared, q)):
+            assert type(after) is type(before)
+            assert (sp.csc_array(before) != sp.csc_array(after)).nnz == 0
+            assert np.shares_memory(after.indices, ref.indices)
+            assert np.shares_memory(after.indptr, ref.indptr)
+    assert shared.scenarios is dij.scenarios
+    # the source keeps its separate matrices
+    assert not np.shares_memory(dij.physical_dose[0].indices, dij.physical_dose[1].indices)
+
+
+def test_share_scenario_structure_keeps_aliases_and_derived_slots():
+    scen_set = ScenarioSet.from_points(
+        _dimensions(),
+        {"setup": np.array([[0, 0, 0], [1.0, 0, 0], [0.5, 0, 0], [1.0, 0, 0]])},
+        bases=[None, None, {"coefficients": {0: 0.5, 1: 0.5}}, {"coefficients": {1: 1.0}}],
+    )
+    computed = _dij(scen_set.computed())
+    container = np.empty((4,), dtype=object)
+    container[:2] = list(computed.physical_dose.flat)
+    container[3] = container[1]
+    dij = computed.model_copy(update={"physical_dose": container, "scenarios": scen_set})
+
+    shared = dij.share_scenario_structure()
+
+    assert shared.physical_dose[2] is None
+    assert shared.physical_dose[3] is shared.physical_dose[1]
+    assert np.shares_memory(shared.physical_dose[0].indices, shared.physical_dose[1].indices)
+    assert (sp.csc_array(shared.physical_dose[1]) != sp.csc_array(container[1])).nnz == 0
+
+
+def test_share_scenario_structure_sums_duplicates_without_touching_the_source(two_scenario_set):
+    dij = _dij(two_scenario_set)
+    duplicated = sp.csc_matrix(
+        (np.array([1.0, 2.0, 3.0]), np.array([0, 0, 1]), np.array([0, 2, 3] + [3] * (N_BIX - 2))),
+        shape=(N_VOX, N_BIX),
+    )
+    assert not duplicated.has_canonical_format
+    dij.physical_dose[0] = duplicated
+
+    shared = dij.share_scenario_structure()
+
+    assert shared.physical_dose[0][0, 0] == 3.0
+    assert shared.physical_dose[0][1, 1] == 3.0
+    assert shared.physical_dose[0].has_canonical_format
+    assert duplicated.nnz == 3 and not duplicated.has_canonical_format
+
+
+def test_share_scenario_structure_with_a_single_matrix_returns_self():
+    dij = _dij(ScenarioSet.from_points(_dimensions(), {"setup": np.zeros((1, 3))}))
+    assert dij.share_scenario_structure() is dij
+
+
+def test_share_scenario_structure_rejects_dense_matrices(two_scenario_set):
+    dij = _dij(two_scenario_set)
+    dij.physical_dose[1] = np.zeros((N_VOX, N_BIX), dtype=np.float32)
+    with pytest.raises(TypeError, match="compressed sparse"):
+        dij.share_scenario_structure()
+
+
+@pytest.mark.skipif(not xp_utils.cupy_available(), reason="cupy not installed")
+def test_shared_structure_is_uploaded_once_to_cupy(sparse_grid_set):
+    import cupy as cp
+
+    dij = _with_let_dose(_dij(sparse_grid_set))
+    shared = dij.share_scenario_structure()
+
+    on_gpu = shared.to_namespace("cupy")
+    pointers = {
+        mat.indices.data.ptr for q in ("physical_dose", "let_dose") for mat in getattr(on_gpu, q)
+    }
+    assert len(pointers) == 1
+    assert on_gpu.physical_dose[0].indices.dtype == cp.int32
+    for before, after in zip(shared.physical_dose, on_gpu.physical_dose):
+        assert (sp.csc_array(after.get()) != sp.csc_array(before)).nnz == 0
+
+    # the union can also be built from cupy matrices
+    rebuilt = dij.to_namespace("cupy").share_scenario_structure()
+    assert len({mat.indices.data.ptr for mat in rebuilt.physical_dose}) == 1
+    for before, after in zip(dij.physical_dose, rebuilt.physical_dose):
+        assert (sp.csc_array(after.get()) != sp.csc_array(before)).nnz == 0

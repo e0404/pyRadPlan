@@ -4,12 +4,12 @@ import logging
 import warnings
 import time
 from contextlib import contextmanager
-from typing import Any, ClassVar, Optional, Union, Literal
+from typing import Annotated, Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
 import numpy as np
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from pyRadPlan.core import ConfigurableAlgorithm, Grid, ProgressReporter
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
@@ -133,6 +133,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         The biological model.
     dose_grid : Union[Grid,dict]
         The dose grid to use (struct with at least doseGrid.resolution.x/y/z set).
+    share_scenario_structure : bool
+        Store the influence matrices of several computed scenarios on one shared sparsity
+        pattern (:meth:`Dij.share_scenario_structure`): one row-index array for all scenarios
+        and quantities, explicit zeros where a scenario does not reach a voxel.
     """
 
     # Constant, Abstract properties
@@ -165,6 +169,13 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     dose_grid: Optional[Union[Grid, dict]] = None
 
     select_voxels_in_scenarios: Optional[bool] = None
+    share_scenario_structure: Annotated[
+        bool,
+        Field(
+            description="Store several computed scenarios on one shared sparsity pattern "
+            "(one row-index array, explicit zeros where a scenario misses a voxel)"
+        ),
+    ] = True
 
     # selection of where to calculate / store dose, empty by default
     voxel_sub_ix: Optional[Any] = None
@@ -1047,7 +1058,15 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         return machine
 
     def _finalize_dose(self, dij: dict) -> Dij:
-        return validate_dij(dij)
+        result = validate_dij(dij)
+        if (
+            self.share_scenario_structure
+            and not self._calc_dose_direct
+            and result.scenarios is not None
+            and result.scenarios.num_computed > 1
+        ):
+            result = result.share_scenario_structure()
+        return result
 
     def _create_bio_evaluator(
         self, model: BiologicalModel, voxel_params: dict[str, Any]

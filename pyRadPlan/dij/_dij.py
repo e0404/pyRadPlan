@@ -2,6 +2,7 @@
 
 from typing import Any, Union, Annotated, Optional, Sequence, cast, ClassVar
 from typing_extensions import Self
+import importlib
 import logging
 
 from pydantic import (
@@ -48,6 +49,54 @@ _VOXEL_FIELDS: tuple[str, ...] = ("alphax", "betax", "tissue_class_ix")
 
 
 logger = logging.getLogger(__name__)
+
+_INT32_MAX = np.iinfo(np.int32).max
+
+
+def _is_csc_like(mat: Any) -> bool:
+    """Whether ``mat`` is a compressed sparse matrix exposing ``data``/``indices``/``indptr``."""
+    return all(hasattr(mat, attr) for attr in ("data", "indices", "indptr", "format"))
+
+
+def _compact_index_array(indices: Array) -> Array:
+    """Return ``indices`` as int32 when its values fit, so that cupy keeps sharing the array."""
+    if indices.dtype.itemsize <= 4 or indices.size == 0:
+        return indices
+    if int(indices.max()) <= _INT32_MAX and int(indices.min()) >= 0:
+        return indices.astype(np.int32)
+    return indices
+
+
+def _resolve_namespace(xp_new: Union[ArrayNamespace, str]) -> ArrayNamespace:
+    """Import a namespace given by name (``"cupy"``, ``"array_api_strict"``, ...)."""
+    if not isinstance(xp_new, str):
+        return xp_new
+    try:
+        return importlib.import_module(xp_new)
+    except ImportError:
+        return importlib.import_module(f"array_api_compat.{xp_new}")
+
+
+def _buffer_address(arr: Any) -> int:
+    """Address of an array's memory buffer (numpy or cupy)."""
+    if isinstance(arr, np.ndarray):
+        return arr.ctypes.data
+    return arr.data.ptr
+
+
+def _column_keys(mat: Any, xp: ArrayNamespace, n_rows: int) -> Array:
+    """Linear ``column * n_rows + row`` key of every stored entry of a CSC matrix."""
+    nnz = mat.indices.shape[0]
+    positions = xp.arange(nnz, dtype=mat.indptr.dtype, device=array_api_compat.device(mat.indptr))
+    cols = xp.searchsorted(mat.indptr, positions, side="right") - 1
+    return xp.astype(cols, xp.int64) * n_rows + xp.astype(mat.indices, xp.int64)
+
+
+def _sorted_union(xp: ArrayNamespace, a: Array, b: Array) -> Array:
+    """Sorted union of two sorted key arrays without duplicates."""
+    merged = xp.sort(xp.concat([a, b]))
+    first = xp.asarray([True], device=array_api_compat.device(merged))
+    return merged[xp.concat([first, merged[1:] != merged[:-1]])]
 
 
 def _check_influence_matrix(mat: Any, info: ValidationInfo):
@@ -1129,6 +1178,115 @@ class Dij(PyRadPlanBaseModel):
                 out[key] = resample(value)
         return out
 
+    def share_scenario_structure(self) -> Self:
+        """
+        Store all scenario influence matrices on one shared sparsity pattern.
+
+        The compressed sparse column matrices of every scenario and quantity are rewritten over
+        the union of their patterns: one row-index array and one column-pointer array for the
+        whole Dij, and per quantity one ``(matrices, nnz)`` value block whose rows are the
+        scenarios' data arrays. Entries a scenario does not reach are stored as explicit zeros.
+        The index arrays use int32 when the values fit, so :meth:`to_namespace` uploads them once
+        and cupy keeps sharing them. Scenarios sharing a matrix (unit-coefficient bases) keep
+        sharing it, derived slots stay empty. Matrices with duplicate entries are summed first.
+
+        Returns
+        -------
+        Dij
+            A shallow copy holding the shared matrices, or ``self`` when the Dij holds fewer
+            than two matrices.
+
+        Raises
+        ------
+        TypeError
+            A quantity holds a dense array or an unsupported sparse type (convert torch or jax
+            matrices to numpy or cupy first).
+        """
+        matrices: dict[int, Any] = {}
+        slots: list[tuple[str, int, int]] = []
+        for q in self.quantities:
+            container = getattr(self, q)
+            for i in range(container.size):
+                mat = container.flat[i]
+                if mat is None:
+                    continue
+                if not _is_csc_like(mat):
+                    raise TypeError(
+                        f"share_scenario_structure needs compressed sparse matrices, {q} slot {i}"
+                        f" holds {type(mat).__name__}"
+                    )
+                if id(mat) not in matrices:
+                    mat_csc = mat if mat.format == "csc" else mat.tocsc()
+                    if not mat_csc.has_canonical_format:
+                        mat_csc = mat_csc.copy() if mat_csc is mat else mat_csc
+                        mat_csc.sum_duplicates()
+                    matrices[id(mat)] = mat_csc
+                slots.append((q, i, id(mat)))
+        if len(matrices) < 2:
+            return self
+
+        shapes = {tuple(m.shape) for m in matrices.values()}
+        if len(shapes) != 1:
+            raise ValueError(f"influence matrices differ in shape: {sorted(shapes)}")
+        (n_rows, n_cols) = shapes.pop()
+        xp = array_api_compat.array_namespace(*(m.indices for m in matrices.values()))
+
+        union = None
+        for mat in matrices.values():
+            keys = _column_keys(mat, xp, n_rows)
+            union = keys if union is None else _sorted_union(xp, union, keys)
+        nnz_union = int(union.shape[0])
+
+        idx_dtype = xp.int32 if max(n_rows, n_cols, nnz_union) <= _INT32_MAX else xp.int64
+        indices = xp.astype(union % n_rows, idx_dtype)
+        column_ends = xp.arange(n_cols + 1, dtype=xp.int64, device=array_api_compat.device(union))
+        indptr = xp.astype(xp.searchsorted(union // n_rows, column_ends, side="left"), idx_dtype)
+
+        positions = {
+            key: xp.searchsorted(union, _column_keys(mat, xp, n_rows))
+            for key, mat in matrices.items()
+        }
+
+        dij_copy = self.model_copy(deep=False)
+        for q in self.quantities:
+            fresh = np.empty_like(getattr(self, q))
+            fresh.flat[:] = None
+            object.__setattr__(dij_copy, q, fresh)
+
+        rebuilt: dict[int, Any] = {}
+        for q in self.quantities:
+            keys = [key for name, _, key in slots if name == q]
+            unique_keys = list(dict.fromkeys(keys))
+            dtype = xp.result_type(*(matrices[key].data.dtype for key in unique_keys))
+            block = xp.zeros(
+                (len(unique_keys), nnz_union), dtype=dtype, device=array_api_compat.device(union)
+            )
+            for row, key in enumerate(unique_keys):
+                mat = matrices[key]
+                block[row, positions[key]] = mat.data
+                rebuilt[key] = type(mat)(
+                    (block[row], indices, indptr), shape=(n_rows, n_cols), copy=False
+                )
+            container = getattr(dij_copy, q)
+            for name, i, key in slots:
+                if name == q:
+                    container.flat[i] = rebuilt[key]
+
+        stored = sum(m.indices.shape[0] for m in matrices.values())
+        index_buffers = {_buffer_address(m.indices): m.indices for m in matrices.values()}
+        index_bytes_before = sum(a.shape[0] * a.dtype.itemsize for a in index_buffers.values())
+        logger.info(
+            "Shared scenario structure: %d matrices on %d stored entries each (mean %d before, "
+            "%.1f%% explicit zeros); row indices %.1f MB -> %.1f MB",
+            len(matrices),
+            nnz_union,
+            stored // len(matrices),
+            100.0 * (1.0 - stored / (nnz_union * len(matrices))) if nnz_union else 0.0,
+            index_bytes_before / 2**20,
+            nnz_union * indices.dtype.itemsize / 2**20,
+        )
+        return dij_copy
+
     def to_namespace(
         self,
         xp_new: Union[ArrayNamespace, str],
@@ -1152,6 +1310,7 @@ class Dij(PyRadPlanBaseModel):
         device : Optional[str]
             Target device for the arrays (e.g. "cuda:0", "cpu").
         """
+        xp_new = _resolve_namespace(xp_new)
 
         # record memory addresses here, before model_copy would break the sharing.
         _shared_idx_cache: dict[int, tuple | None] = {}
@@ -1214,8 +1373,12 @@ class Dij(PyRadPlanBaseModel):
                         if addr in _shared_idx_cache:
                             if _shared_idx_cache[addr] is None:
                                 # First encounter for this index array: convert once
-                                conv_indices = to_namespace(xp_new, mat.indices, device=device)
-                                conv_indptr = to_namespace(xp_new, mat.indptr, device=device)
+                                conv_indices = to_namespace(
+                                    xp_new, _compact_index_array(mat.indices), device=device
+                                )
+                                conv_indptr = to_namespace(
+                                    xp_new, _compact_index_array(mat.indptr), device=device
+                                )
                                 _shared_idx_cache[addr] = (conv_indices, conv_indptr)
                             conv_indices, conv_indptr = _shared_idx_cache[addr]
                             conv_data = to_namespace(xp_new, mat.data, device=device)

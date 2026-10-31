@@ -417,3 +417,24 @@ def test_progress_counts_the_computed_scenarios(case):
     levels = [r.levels for r in reports if isinstance(r, ProgressReport) and r.levels]
     assert levels
     assert {lv[0].name for lv in levels} == {"Beam"}
+
+
+def test_computed_scenarios_share_one_index_array(case):
+    pln, ct, cst, stf = case
+    scen_set = _scenario_set(
+        setup=[(0.0, 0.0, 0.0), SHIFT_X, (0.0, 0.0, 0.0)],
+        range_=[(0.0, 0.0), (0.0, 0.0), RANGE_ABS],
+    )
+    pln.prop_dose_calc["share_scenario_structure"] = False
+    _, _, separate = _calc(pln, ct, cst, stf, scenarios=scen_set)
+    pln.prop_dose_calc["share_scenario_structure"] = True
+    _, dij, shared = _calc(pln, ct, cst, stf, scenarios=scen_set)
+
+    assert not np.shares_memory(separate[0].indices, separate[1].indices)
+    ref = shared[0]
+    assert ref.indices.dtype == np.int32
+    for before, after in zip(separate, shared):
+        _assert_equal(before, after)
+        assert np.shares_memory(after.indices, ref.indices)
+        assert np.shares_memory(after.indptr, ref.indptr)
+    assert dij.num_of_scenarios == 3

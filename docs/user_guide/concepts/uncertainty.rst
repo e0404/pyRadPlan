@@ -150,6 +150,13 @@ per-voxel parameter arrays (``alphax``, ``betax``, ``tissue_class_ix``) carry on
 *voxel parameter set*, i.e. per unique combination of the dimensions affecting them (today the
 CT phase); ``scen_set.voxel_param_set(i)`` maps a scenario to its column.
 
+The matrices of several computed scenarios are stored on one shared sparsity pattern, the union
+of the scenarios' patterns: a single row-index array serves all scenarios and quantities and is
+uploaded to the GPU once, and a scenario that does not reach a voxel stores an explicit zero
+there. The dose engines do this by default (engine option ``share_scenario_structure``);
+``dij.share_scenario_structure()`` applies it to any Dij, for instance after
+``extend_scenarios``, and logs the share of explicit zeros the union added.
+
 Quantities (:ref:`concept_quantities`) evaluate all computed scenarios of ``dij.scenarios`` by
 default and expose them in the same flat layout; the optimization problem aggregates over them.
 Robust objectives (expected value, worst case, voxel-wise worst case) build on the set's
