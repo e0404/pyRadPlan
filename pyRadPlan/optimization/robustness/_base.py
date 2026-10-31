@@ -182,4 +182,4 @@ class ScenarioStack(RobustnessOperator):
         objective = entries[0].objective
         xp = array_api_compat.array_namespace(values[0])
         grad = objective.compute_gradient(values[0], weights=self.weights)
-        return [xp.asarray(objective.priority * grad, dtype=values[0].dtype, copy=False)]
+        return [xp.astype(objective.priority * grad, values[0].dtype, copy=False)]

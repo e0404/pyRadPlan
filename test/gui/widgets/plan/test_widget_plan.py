@@ -2855,3 +2855,99 @@ def test_optimization_keeps_a_live_solver_instance(qapp):
     widget._txt_gantry.setText("0 90")
     widget._on_apply()
     assert ws.pln.prop_opt["solver"] is solver
+
+
+# ----------------------------------------------------------------------
+# Scenario model configuration ("…" button next to the scenario model)
+# ----------------------------------------------------------------------
+
+
+def test_scenario_config_dialog_round_trip(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    dialog = ConfigFormDialog(
+        WorstCaseScenarioModel, initial={"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    )
+    assert dialog.windowTitle() == "Configure"
+    assert dialog.form._editors["setup.sd"].text() == "1 1 1"
+    assert {"range.rel_sd", "range.abs_sd", "ct_phase.phases", "combinations"} <= set(
+        dialog.form._editors
+    )
+    dialog.form._editors["range.rel_sd"].setValue(0.0)
+    dialog.form._set_value("num_setup_grid_points", 1)
+    assert dialog.values() == {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 1.0, 1.0)},
+        "range": {"rel_sd": 0.0},
+        "num_setup_grid_points": 1,
+    }
+
+
+def test_apply_writes_the_scenario_model_configuration(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_scenario.setCurrentText("wcScen")
+    # simulate values confirmed in the [...] config popup
+    widget._scenario_props["wcScen"] = {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 2.0, 3.0)},
+        "range": {"rel_sd": 0.0},
+    }
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+
+    model = ws.pln.scenarios
+    assert model.short_name == "wcScen"
+    assert model.wc_sigma == 2.0
+    assert model.setup.sd == (1.0, 2.0, 3.0)
+    assert model.range.rel_sd == 0.0
+    assert model.range.abs_sd == 1.0  # untouched parameters keep their defaults
+    assert not widget.has_pending_changes()
+
+    # Re-applying without edits keeps the plan's model (and its generated set)
+    first = ws.pln.scenarios
+    first.scenarios()
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+    assert ws.pln.scenarios == first
+    assert ws.pln.scenarios.scenarios() is not None
+
+
+def test_do_update_restores_the_scenario_configuration_from_pln(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        scenarios={"model": "wcScen", "wc_sigma": 2.0, "shift_sd": (1.0, 1.0, 1.0)}
+    )
+
+    assert widget._cmb_scenario.currentText() == "wcScen"
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    assert not widget.has_pending_changes()
+
+    ws.pln = PhotonPlan(scenarios="wcScen")
+    assert widget._scenario_props["wcScen"] == {}
+    assert not widget.has_pending_changes()
+
+
+def test_discard_restores_the_scenario_configuration(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(scenarios={"model": "wcScen", "wc_sigma": 2.0})
+
+    widget._scenario_props["wcScen"] = {"wc_sigma": 3.0}
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+    assert widget._btn_scenario_config.styleSheet() != ""
+
+    widget._btn_discard.click()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert not widget.has_pending_changes()
+    assert widget._btn_scenario_config.styleSheet() == ""
+
+
+def test_scenario_config_button_is_advanced(qapp):
+    widget, _ = _make_widget()
+    widget.set_ui_mode(UIMode.EDUCATIONAL)
+    assert _locked(widget._btn_scenario_config)
+    widget.set_ui_mode(UIMode.DEFAULT)
+    assert not _locked(widget._btn_scenario_config)

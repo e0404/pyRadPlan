@@ -388,3 +388,32 @@ def test_shift_scenarios_in_biological_quantities(test_data_protons):
             np.testing.assert_allclose(
                 to_numpy(values.flat[k]), to_numpy(ref_values.flat[0]), rtol=1e-4, atol=1e-6
             )
+
+
+def test_progress_counts_the_computed_scenarios(case):
+    from pyRadPlan.core import ProgressReport, observe_reports
+
+    pln, ct, cst, stf = case
+    scen_set = _scenario_set(
+        setup=[(0.0, 0.0, 0.0), SHIFT_X, SHIFT_Y, (0.0, 0.0, 0.0)],
+        bases=[None, None, None, ScenarioBasis(coefficients={0: 1.0})],
+    )
+    reports = []
+    with observe_reports(reports.append):
+        _calc(pln, ct, cst, stf, scenarios=scen_set)
+
+    levels = [r.levels for r in reports if isinstance(r, ProgressReport) and r.levels]
+    assert levels
+    # the outermost level counts the computed scenarios (the derived one is not computed)
+    assert {lv[0].name for lv in levels} == {"Scenarios"}
+    assert {lv[0].total for lv in levels} == {3}
+    assert max(lv[0].current for lv in levels) == 3
+    assert any(len(lv) > 1 and lv[1].name == "Beam" for lv in levels)
+
+    # a single scenario keeps the beam/ray levels only
+    reports.clear()
+    with observe_reports(reports.append):
+        _calc(pln, ct, cst, stf)
+    levels = [r.levels for r in reports if isinstance(r, ProgressReport) and r.levels]
+    assert levels
+    assert {lv[0].name for lv in levels} == {"Beam"}

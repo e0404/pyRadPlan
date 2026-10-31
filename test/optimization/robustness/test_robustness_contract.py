@@ -219,3 +219,38 @@ def test_nominal_indices_on_sets():
     )
     np.testing.assert_array_equal(scen_set.nominal_indices(), [0, 1, 3])
     assert scen_set.nominal_index() == 0
+
+
+class _Float64Gradient(SquaredOverdosing):
+    """Objective whose gradient comes back in float64 whatever the values' dtype.
+
+    cupy promotes ``float32_array / <large Python int>`` to float64 (NumPy keeps float32), so
+    the voxel-count normalization of the objectives upcasts their gradient on the GPU.
+    """
+
+    def compute_gradient(self, values, weights=None):
+        return xp.astype(super().compute_gradient(values), xp.float64)
+
+
+class _Float64StackGradient(_Float64Gradient):
+    scenario_aware = True
+
+    def compute_objective(self, values, weights=None):
+        return xp.sum(values)
+
+    def compute_gradient(self, values, weights=None):
+        return xp.ones(values.shape, dtype=xp.float64)
+
+
+@pytest.mark.parametrize("robustness", ["none", "expected_value", "scenario_stack"])
+def test_gradient_follows_the_dtype_of_the_values(three_scenarios, robustness):
+    objective = (
+        _Float64StackGradient(d_max=1.0)
+        if robustness == "scenario_stack"
+        else _Float64Gradient(d_max=1.0)
+    )
+    op = get_robustness_operator(robustness, three_scenarios)
+    values = xp.asarray(np.full((op.num_scenarios, 3), 2.0), dtype=xp.float32)
+    grad = op.gradient([RobustTermEntry(objective)], [values])[0]
+    assert grad.dtype == xp.float32
+    assert grad.shape == values.shape

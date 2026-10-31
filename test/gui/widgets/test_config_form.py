@@ -221,3 +221,53 @@ def test_invalid_initial_nested_override_is_dropped(qapp):
     )
     assert form.values() == {}
     assert form.config().options == _Options()
+
+
+# ----------------------------------------------------------------------
+# Pydantic models with nested models (e.g. scenario models)
+# ----------------------------------------------------------------------
+
+
+def test_scenario_model_form_edits_nested_dimensions(qapp):
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    form = ConfigFormWidget(
+        WorstCaseScenarioModel, initial={"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    )
+    assert form._editors["wc_sigma"].value() == 2.0
+    assert form._editors["setup.sd"].text() == "1 1 1"
+    assert isinstance(form._editors["combinations"], QComboBox)
+    assert isinstance(form._editors["range.combined"], QCheckBox)
+    assert isinstance(form._editors["distribution"], QLineEdit)
+    assert form._editors["distribution"].text() == "independent_gaussian"
+    assert form._editors["range.rel_sd"].toolTip() == "Relative range SD in percent."
+    assert form.values() == {"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+
+    form._editors["range.rel_sd"].setValue(0.0)
+    form._editors["setup.sd"].setText("2 3 4")
+    form._editors["setup.sd"].editingFinished.emit()
+    assert form.values() == {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (2.0, 3.0, 4.0)},
+        "range": {"rel_sd": 0.0},
+    }
+    assert form.config().setup.sd == (2.0, 3.0, 4.0)
+    assert form.config().range.rel_sd == 0.0
+
+    model = WorstCaseScenarioModel.model_validate(form.values())
+    assert model.setup.sd == (2.0, 3.0, 4.0)
+    assert model.range.rel_sd == 0.0
+    assert model.setup.shift_mean == (0.0, 0.0, 0.0)
+
+
+def test_scenario_model_form_rejects_invalid_nested_values(qapp):
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    form = ConfigFormWidget(WorstCaseScenarioModel)
+    failures = []
+    form.validation_failed.connect(lambda name, msg: failures.append(name))
+    form._set_nested("setup", ("sd",), (1.0, 1.0))  # three directions are required
+    form._set_nested("ct_phase", ("probabilities",), [0.5, 0.5])  # one phase only
+    assert failures == ["setup.sd", "ct_phase.probabilities"]
+    assert form.values() == {}
+    assert form.config().setup.sd == (2.25, 2.25, 2.25)

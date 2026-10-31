@@ -37,4 +37,4 @@ class ExpectedValue(RobustnessOperator):
         )
         weights = as_backend(self.weights, values[0])
         scaled = xp.astype(grads, weights.dtype) * weights[:, None]
-        return [xp.asarray(objective.priority * scaled, dtype=values[0].dtype, copy=False)]
+        return [xp.astype(objective.priority * scaled, values[0].dtype, copy=False)]

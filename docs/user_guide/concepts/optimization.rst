@@ -509,7 +509,10 @@ Robustness in the GUI
 ~~~~~~~~~~~~~~~~~~~~~
 
 In the GUI, the objective editor has a *Robustness* column that offers the robustness names an
-objective accepts, and the scenario model is configured in the plan widget. When the influence
+objective accepts, and the scenario model is chosen in the plan widget, where the "…" button
+next to it opens the model's parameters (setup and range standard deviations, CT phases,
+worst-case extent, grid points or sample count). While the dose influence is calculated, the
+status line counts the computed scenarios ahead of the beams and rays. When the influence
 data holds several scenarios, the result selector lists ``scenario i`` components next to the
 beams, labelled by the scenario's realization, with the nominal scenario marked. The DVH widget
 can overlay the DVH of every scenario behind the nominal one, which gives a band that shows

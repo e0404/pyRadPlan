@@ -1,6 +1,7 @@
 """Base class for pencil beam dose calculation algorithms."""
 
 from abc import abstractmethod
+from contextlib import nullcontext
 from typing import Annotated, Any, ClassVar, Literal, Optional
 import warnings
 import logging
@@ -193,68 +194,81 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         )
         self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
 
-        for setup_shift, scen_ix in self._geometry_groups():
-            scen_stf = self._shift_stf(stf, setup_shift)
-            self._init_geometry_group()
+        groups = self._geometry_groups()
+        num_computed = sum(len(scen_ix) for _, scen_ix in groups)
+        scenario_progress = (
+            self.progress("Scenarios", total=num_computed, console=True, unit="scen")
+            if num_computed > 1
+            else nullcontext(None)
+        )
+        with scenario_progress as scenarios_done:
+            for setup_shift, scen_ix in groups:
+                scen_stf = self._shift_stf(stf, setup_shift)
+                self._init_geometry_group()
 
-            if len(self._scenarios) > 1:
-                logger.info(
-                    "Geometry scenario group with setup shift %s: scenarios %s",
-                    setup_shift.tolist(),
-                    scen_ix,
-                )
+                if len(self._scenarios) > 1:
+                    logger.info(
+                        "Geometry scenario group with setup shift %s: scenarios %s",
+                        setup_shift.tolist(),
+                        scen_ix,
+                    )
 
-            bixel_counter = 0
+                bixel_counter = 0
 
-            # Loop over all beams
-            with logging_redirect_tqdm():
-                for i in self.track(range(dij["num_of_beams"]), name="Beam", unit="b"):
-                    # Initialize Beam Geometry
-                    t = time.time()
-                    curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
-                    logger.info("Beam %d initialized in %f seconds.", i + 1, time.time() - t)
+                # Loop over all beams
+                with logging_redirect_tqdm():
+                    for i in self.track(range(dij["num_of_beams"]), name="Beam", unit="b"):
+                        # Initialize Beam Geometry
+                        t = time.time()
+                        curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
+                        logger.info("Beam %d initialized in %f seconds.", i + 1, time.time() - t)
 
-                    # Ray calculation
-                    for j in self.track(
-                        range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
-                    ):
-                        # Initialize Ray Geometry
-                        curr_ray = self._init_ray(curr_beam, j)
+                        # Ray calculation
+                        for j in self.track(
+                            range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
+                        ):
+                            # Initialize Ray Geometry
+                            curr_ray = self._init_ray(curr_beam, j)
 
-                        # Even if the ray hits nothing, we still emit empty bixel columns
-                        # so that CSC structures and bookkeeping stay consistent.
+                            # Even if the ray hits nothing, we still emit empty bixel columns
+                            # so that CSC structures and bookkeeping stay consistent.
 
-                        for s in scen_ix:
-                            scen_ray = self._apply_scenario_to_ray(curr_ray, self._scenarios[s])
-
-                            for k in range(curr_ray["num_of_bixels"]):
-                                # Bixel Computation
-                                curr_bixel = self._compute_bixel(scen_ray, k)
-                                # fill the current bixel in the sparse dose influence matrix
-                                self._fill_dij(
-                                    curr_bixel,
-                                    dij,
-                                    scen_stf,
-                                    s,
-                                    i,
-                                    j,
-                                    k,
-                                    bixel_counter + k,
+                            for s in scen_ix:
+                                scen_ray = self._apply_scenario_to_ray(
+                                    curr_ray, self._scenarios[s]
                                 )
-                        # Progress Update & Bookkeeping
-                        bixel_counter += curr_ray["num_of_bixels"]
 
-                    # Free GPU memory from curr_beam
-                    del curr_beam["bev_coords"]
-                    del curr_beam["rad_depths"]
-                    del curr_beam["geo_depths"]
-                    del curr_beam["valid_coords"]
-                    del curr_beam["valid_coords_all"]
-                    del curr_beam["rot_mat_system_T"]
-                    curr_beam = None
+                                for k in range(curr_ray["num_of_bixels"]):
+                                    # Bixel Computation
+                                    curr_bixel = self._compute_bixel(scen_ray, k)
+                                    # fill the current bixel in the sparse dose influence matrix
+                                    self._fill_dij(
+                                        curr_bixel,
+                                        dij,
+                                        scen_stf,
+                                        s,
+                                        i,
+                                        j,
+                                        k,
+                                        bixel_counter + k,
+                                    )
+                            # Progress Update & Bookkeeping
+                            bixel_counter += curr_ray["num_of_bixels"]
 
-                    # Force GPU memory cleanup
-                    free_gpu_memory(self.xp)
+                        # Free GPU memory from curr_beam
+                        del curr_beam["bev_coords"]
+                        del curr_beam["rad_depths"]
+                        del curr_beam["geo_depths"]
+                        del curr_beam["valid_coords"]
+                        del curr_beam["valid_coords_all"]
+                        del curr_beam["rot_mat_system_T"]
+                        curr_beam = None
+
+                        # Force GPU memory cleanup
+                        free_gpu_memory(self.xp)
+
+                if scenarios_done is not None:
+                    scenarios_done.advance(len(scen_ix))
 
         # Finalize dose calculation
         logger.info("Finalizing dose calculation...")

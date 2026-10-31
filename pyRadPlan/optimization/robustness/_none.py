@@ -35,4 +35,4 @@ class NoRobustness(RobustnessOperator):
         grads = xp.stack(
             [objective.compute_gradient(values[0][s, ...]) for s in range(self.num_scenarios)]
         )
-        return [xp.asarray(objective.priority * grads, dtype=values[0].dtype, copy=False)]
+        return [xp.astype(objective.priority * grads, values[0].dtype, copy=False)]
