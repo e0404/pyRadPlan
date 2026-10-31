@@ -965,6 +965,31 @@ class ScenarioSet(PyRadPlanBaseModel):
         return xr.DataArray(layout.index_grid, dims=layout.axis_names, coords=coords)
 
     # ------------------------------------------------------------------ presentation
+    def label(self, index: int) -> str:
+        """
+        Short human-readable label of scenario ``index``.
+
+        ``"nominal"`` for the nominal scenario (tagged, or without any perturbed dimension),
+        ``"derived"`` for linear combinations; otherwise the perturbed dimensions in canonical
+        order, e.g. ``"phase 1, setup (+3.0, 0.0, 0.0) mm"`` or ``"range +1.0 mm / +3.5 %"``.
+        """
+        scenario = self[index]
+        basis = scenario.basis
+        if basis is not None and not basis.is_alias:
+            return "derived"
+        if scenario.is_nominal:
+            return TAG_NOMINAL
+        parts = [
+            d.label(scenario.values[d.name])
+            for d in self.dimensions
+            if not np.allclose(scenario.values[d.name], d.nominal())
+        ]
+        return ", ".join(parts) if parts else TAG_NOMINAL
+
+    def labels(self) -> list[str]:
+        """:meth:`label` of every scenario, by flat index."""
+        return [self.label(i) for i in range(len(self))]
+
     def to_table(self) -> list[list[Any]]:
         """Rows ``[index, *component values..., probability, weight, tags]``."""
         rows = []

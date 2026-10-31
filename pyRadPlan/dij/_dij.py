@@ -1,6 +1,6 @@
 """Contains the dij class as a (collection of) influence matrices."""
 
-from typing import Any, Union, Annotated, Optional, cast, ClassVar
+from typing import Any, Union, Annotated, Optional, Sequence, cast, ClassVar
 from typing_extensions import Self
 import logging
 
@@ -777,7 +777,7 @@ class Dij(PyRadPlanBaseModel):
         from pyRadPlan.quantities import get_quantity  # noqa: PLC0415
 
         for key, value in out.items():
-            name = key.removesuffix("_beam")
+            name = key.removesuffix("_beam").removesuffix("_scenario")
             if name in cls._RESULT_FRACTION_EXPONENTS:
                 factor = num_of_fractions ** cls._RESULT_FRACTION_EXPONENTS[name]
             else:
@@ -785,14 +785,53 @@ class Dij(PyRadPlanBaseModel):
             if factor == 1:
                 continue
             if isinstance(value, list):
-                out[key] = [factor * v for v in value]
+                out[key] = [None if v is None else factor * v for v in value]
             else:
                 out[key] = factor * value
         return out
 
+    def _result_scenario_indices(self, scenarios: Union[bool, Sequence[int]]) -> list[int]:
+        """Flat indices of the scenarios a result is requested for (see ``scenarios``)."""
+        if scenarios is False:
+            return []
+        if scenarios is True:
+            if self.scenarios is not None:
+                return [
+                    i
+                    for i in range(len(self.scenarios))
+                    if self.scenarios.bases[i] is None or self.scenarios.alias_of(i) is not None
+                ]
+            containers = [getattr(self, q) for q in _QUANTITY_FIELDS]
+            container = next((c for c in containers if c is not None), None)
+            if container is None:
+                return []
+            return [i for i in range(container.size) if container.flat[i] is not None]
+        indices = [int(i) for i in scenarios]
+        for i in indices:
+            if not 0 <= i < self.num_of_scenarios:
+                raise IndexError(
+                    f"Scenario index {i} out of range for {self.num_of_scenarios} scenarios"
+                )
+        return indices
+
+    def scenario_labels(self) -> list[str]:
+        """
+        Short human-readable label per scenario slot.
+
+        See :meth:`ScenarioSet.labels`. Without a scenario set, the first slot is ``"nominal"``
+        and the others are labelled ``"scenario <i>"``.
+        """
+        if self.scenarios is not None:
+            return self.scenarios.labels()
+        return ["nominal"] + [f"scenario {i}" for i in range(1, self.num_of_scenarios)]
+
     def get_result_arrays_from_intensity(
-        self, intensity: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
-    ) -> dict[str, np.ndarray]:
+        self,
+        intensity: np.ndarray,
+        scenario_index: int = 0,
+        num_of_fractions: int = 1,
+        scenarios: Union[bool, Sequence[int]] = False,
+    ) -> dict[str, Any]:
         """
         Compute result arrays from an intensity vector.
 
@@ -801,14 +840,44 @@ class Dij(PyRadPlanBaseModel):
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
         scenario_index : int
-            The scenario index to apply the intensity to.
+            The scenario the unsuffixed results (and the ``"<key>_beam"`` lists) are
+            computed for.
+        num_of_fractions : int
+            Report doses for this many identical fractions.
+        scenarios : bool or sequence of int
+            Additionally compute the results per scenario. ``True`` selects every scenario
+            with influence matrices (computed scenarios and aliases), a sequence the given
+            flat indices. When this selects more than one scenario, every full (non-beam)
+            result ``"<key>"`` gets a list ``"<key>_scenario"`` with one entry per scenario
+            slot of the Dij (``None`` for scenarios not selected), so that the list index is
+            the flat scenario index.
 
         Returns
         -------
-        dict[str,sitk.Image]
-            A dictionary containing the quantity images for each scenario.
+        dict[str, Any]
+            Result arrays by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are
+            lists of arrays.
         """
+        out = self._result_arrays(intensity, scenario_index)
+        indices = self._result_scenario_indices(scenarios)
+        if len(indices) > 1:
+            full_keys = [k for k, v in out.items() if not isinstance(v, list)]
+            per_scenario: list[Optional[dict[str, Any]]] = [None] * self.num_of_scenarios
+            for i in indices:
+                if i == scenario_index:
+                    per_scenario[i] = {k: out[k] for k in full_keys}
+                else:
+                    per_scenario[i] = self._result_arrays(intensity, i, beams=False)
+            for key in full_keys:
+                out[f"{key}_scenario"] = [
+                    None if res is None else res[key] for res in per_scenario
+                ]
+        return self._scale_result_to_fractions(out, num_of_fractions)
 
+    def _result_arrays(
+        self, intensity: np.ndarray, scenario_index: int, beams: bool = True
+    ) -> dict[str, Any]:
+        """Unscaled result arrays of one scenario (with per-beam lists if ``beams``)."""
         if self.scenarios is not None:
             basis = self.scenarios[scenario_index].basis
             if basis is not None and not basis.is_alias:
@@ -822,7 +891,8 @@ class Dij(PyRadPlanBaseModel):
         beam_num = xp.asarray(self.beam_num, device=array_api_compat.device(intensity))
         zero_intensity = xp.zeros_like(intensity)
         beam_intensities = [
-            xp.where(beam_num == i, intensity, zero_intensity) for i in range(self.num_of_beams)
+            xp.where(beam_num == i, intensity, zero_intensity)
+            for i in range(self.num_of_beams if beams else 0)
         ]
 
         # TODO: implement quantity system to select the corresponding quantities automatically
@@ -951,11 +1021,17 @@ class Dij(PyRadPlanBaseModel):
                 self.rbe * phys_beam for phys_beam in out["physical_dose_beam"]
             ]
 
-        return self._scale_result_to_fractions(out, num_of_fractions)
+        if not beams:
+            out = {k: v for k, v in out.items() if not k.endswith("_beam")}
+        return out
 
     def compute_result_dose_grid(
-        self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
-    ) -> dict[str, sitk.Image]:
+        self,
+        intensities: np.ndarray,
+        scenario_index: int = 0,
+        num_of_fractions: int = 1,
+        scenarios: Union[bool, Sequence[int]] = False,
+    ) -> dict[str, Any]:
         """
         Compute results on the dose grid from intensity vector.
 
@@ -964,45 +1040,50 @@ class Dij(PyRadPlanBaseModel):
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
         scenario_index : int
-            The scenario index to apply the intensity to.
+            The scenario the unsuffixed results are computed for.
         num_of_fractions : int
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
+        scenarios : bool or sequence of int
+            Additionally compute ``"<key>_scenario"`` lists, see
+            :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
-        dict[str,sitk.Image]
-            A dictionary containing the quantity images for each scenario.
+        dict[str, Any]
+            Result images by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are lists
+            of images (``None`` for scenarios not computed).
         """
-
         out = self.get_result_arrays_from_intensity(
-            intensities, scenario_index=scenario_index, num_of_fractions=num_of_fractions
+            intensities,
+            scenario_index=scenario_index,
+            num_of_fractions=num_of_fractions,
+            scenarios=scenarios,
         )
-        # Create a sitk image for each scenario
+
+        def to_image(value: Any) -> Optional[sitk.Image]:
+            if value is None:
+                return None
+            image = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
+            image.SetOrigin(self.dose_grid.origin)
+            image.SetSpacing(self.dose_grid.resolution_vector)
+            image.SetDirection(self.dose_grid.direction.ravel())
+            return image
 
         for key, value in out.items():
-            # Create a sitk image for each scenario
             if isinstance(value, list):
-                #  handle every single beam information
-                for i in range(len(value)):
-                    value[i] = sitk.GetImageFromArray(
-                        value[i].reshape(self.dose_grid.dimensions[::-1])
-                    )
-                    value[i].SetOrigin(self.dose_grid.origin)
-                    value[i].SetSpacing(self.dose_grid.resolution_vector)
-                    value[i].SetDirection(self.dose_grid.direction.ravel())
+                out[key] = [to_image(v) for v in value]
             else:
-                # handling collective of all beams
-                out[key] = sitk.GetImageFromArray(value.reshape(self.dose_grid.dimensions[::-1]))
-                out[key].SetOrigin(self.dose_grid.origin)
-                out[key].SetSpacing(self.dose_grid.resolution_vector)
-                out[key].SetDirection(self.dose_grid.direction.ravel())
-
+                out[key] = to_image(value)
         return out
 
     def compute_result_ct_grid(
-        self, intensities: np.ndarray, scenario_index: int = 0, num_of_fractions: int = 1
-    ) -> dict[str, sitk.Image]:
+        self,
+        intensities: np.ndarray,
+        scenario_index: int = 0,
+        num_of_fractions: int = 1,
+        scenarios: Union[bool, Sequence[int]] = False,
+    ) -> dict[str, Any]:
         """
         Compute results on the CT grid from intensity vector.
 
@@ -1011,38 +1092,41 @@ class Dij(PyRadPlanBaseModel):
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
         scenario_index : int
-            The scenario index to apply the intensity to.
+            The scenario the unsuffixed results are computed for.
         num_of_fractions : int
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
+        scenarios : bool or sequence of int
+            Additionally compute ``"<key>_scenario"`` lists, see
+            :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
-        dict[str,sitk.Image]
-            A dictionary containing the quantity images for each scenario.
+        dict[str, Any]
+            Result images by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are lists
+            of images (``None`` for scenarios not computed).
         """
-
         out = self.compute_result_dose_grid(
-            intensities, scenario_index=scenario_index, num_of_fractions=num_of_fractions
+            intensities,
+            scenario_index=scenario_index,
+            num_of_fractions=num_of_fractions,
+            scenarios=scenarios,
         )
-        # Create a sitk image for each scenario
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetOutputDirection(self.ct_grid.direction.ravel())
+        resampler.SetOutputOrigin(self.ct_grid.origin)
+        resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
+        resampler.SetSize(self.ct_grid.dimensions)
+
+        def resample(image: Optional[sitk.Image]) -> Optional[sitk.Image]:
+            return None if image is None else resampler.Execute(image)
 
         for key, value in out.items():
-            # Create a sitk image for each scenario
-            resampler = sitk.ResampleImageFilter()
-            resampler.SetInterpolator(sitk.sitkLinear)
-            resampler.SetOutputDirection(self.ct_grid.direction.ravel())
-            resampler.SetOutputOrigin(self.ct_grid.origin)
-            resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
-            resampler.SetSize(self.ct_grid.dimensions)
-
             if isinstance(value, list):
-                #  handle every single beam information
-                for i in range(len(value)):
-                    out[key][i] = resampler.Execute(value[i])
+                out[key] = [resample(v) for v in value]
             else:
-                # handle the collective of all beams
-                out[key] = resampler.Execute(value)
+                out[key] = resample(value)
         return out
 
     def to_namespace(

@@ -52,6 +52,11 @@ from .._tissue_params import (
 
 logger = logging.getLogger(__name__)
 
+#: Suffix of the per-scenario result lists (see ``Dij.compute_result_ct_grid``).
+_SCENARIO_SUFFIX = "_scenario"
+#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
+_RESERVED_TAGS = ("beam", "scenario")
+
 
 def _human_name(fmt: str, importer_cls) -> str:
     """Best-effort human-readable label for a format, falling back to the key."""
@@ -1274,7 +1279,10 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
+            scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
+            result = dij.compute_result_ct_grid(
+                weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
+            )
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -1366,7 +1374,13 @@ class WorkflowWidget(WorkspaceWidget):
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
-            result = dict(prev_result)
+            # The forward calculation yields nominal results only; per-scenario results
+            # of the previous optimization no longer match them.
+            result = {
+                key: val
+                for key, val in prev_result.items()
+                if self._is_tagged(key) or not key.endswith(_SCENARIO_SUFFIX)
+            }
             result.update(new_result)
             if recalc_stf is stf:
                 self._ws.result = result
@@ -1396,6 +1410,13 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
+        if tag in _RESERVED_TAGS:
+            QMessageBox.warning(
+                self,
+                "Save Result",
+                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
+            )
+            return
 
         result: dict[str, Any] = dict(self._ws.result or {})
         # Snapshot the current active quantities: every key that is not itself

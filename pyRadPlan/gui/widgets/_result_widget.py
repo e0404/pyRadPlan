@@ -103,7 +103,12 @@ def _process_dict_result(result_dict: dict) -> dict:
 
 
 def _process_list_quantity(items: list) -> list:
-    """Transpose each 3-D array in a list of images/arrays."""
+    """Transpose each 3-D array in a list of images/arrays.
+
+    Other entries (e.g. ``None`` for scenarios without a result) become ``None``, so that
+    list positions keep their meaning (beam or flat scenario index).  A list without any
+    3-D entry yields ``[]``.
+    """
     processed = []
     for item in items:
         if isinstance(item, sitk.Image):
@@ -111,10 +116,11 @@ def _process_list_quantity(items: list) -> list:
         elif isinstance(item, np.ndarray):
             arr = item
         else:
-            continue
-        if arr.ndim == 3:
-            processed.append(np.transpose(arr, (0, 2, 1)))
-    return processed
+            arr = None
+        processed.append(
+            np.transpose(arr, (0, 2, 1)) if arr is not None and arr.ndim == 3 else None
+        )
+    return processed if any(p is not None for p in processed) else []
 
 
 def _process_raw_result(result: object) -> np.ndarray:
@@ -335,8 +341,8 @@ class ViewingWidget(WorkspaceWidget):
     voi_metadata_changed = Signal(str)  # voi name whose metadata was edited
 
     # Only the data, the computed result and the beam geometry drive the
-    # display; dij is an upstream planning object the viewer does not render.
-    _watched_keys = ("ct", "cst", "pln", "stf", "result")
+    # display; of the dij, only its scenario labels are shown.
+    _watched_keys = ("ct", "cst", "pln", "stf", "dij", "result")
 
     def __init__(
         self,
@@ -358,6 +364,8 @@ class ViewingWidget(WorkspaceWidget):
         #: Beam angles edited in a plan form but not applied yet (see set_beam_editor).
         self._edited_angles: Optional[tuple[list[float], list[float]]] = None
         self._beam_editor: Optional[Callable[[int, float], None]] = None
+        #: Labels of the workspace dij's scenarios, by flat scenario index.
+        self._scenario_labels: list[str] = []
 
         # Create and wire the four sub-widgets.  Whether they are arranged here
         # (standalone use) or placed individually by a host window (e.g. the
@@ -441,6 +449,9 @@ class ViewingWidget(WorkspaceWidget):
     def _do_update(self, changed_keys: list) -> None:
         """Derive viewer arrays from the workspace and drive the child widgets."""
         ws = self.workspace
+        full = not changed_keys
+        if full or "dij" in changed_keys:
+            self._apply_scenario_labels(ws.dij)
         ct = ws.ct
         if ct is None:
             # Workspace was cleared: drop the previous patient's display state
@@ -448,7 +459,6 @@ class ViewingWidget(WorkspaceWidget):
             self._clear_data()
             return
 
-        full = not changed_keys
         data_changed = full or "ct" in changed_keys or "result" in changed_keys
         cst_changed = full or "cst" in changed_keys or "ct" in changed_keys
         # The beam axes are anchored to the (target-derived) isocenter, so a new
@@ -464,6 +474,11 @@ class ViewingWidget(WorkspaceWidget):
 
         if data_changed or beams_changed:
             self._apply_beams(ct, ws.cst, ws.pln, ws.stf)
+
+    def _apply_scenario_labels(self, dij) -> None:
+        labels = dij.scenario_labels() if hasattr(dij, "scenario_labels") else []
+        self._scenario_labels = labels
+        self.vis_widget.set_scenario_labels(labels)
 
     def _clear_data(self) -> None:
         self._has_data = False
@@ -858,4 +873,5 @@ class ViewingWidget(WorkspaceWidget):
             initial_quantity=initial_quantity,
             initial_vois=initial_vois,
             voi_types=voi_types,
+            scenario_labels=self._scenario_labels,
         )

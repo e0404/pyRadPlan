@@ -71,6 +71,15 @@ def create_dimension(spec: Any) -> "UncertaintyDimension":
     return cls.model_validate(params)
 
 
+def _format_number(value: float) -> str:
+    """Signed number with one to two decimals (``"+3.0"``, ``"-0.25"``, ``"0.0"``)."""
+    value = float(value)
+    if abs(value) < 5e-3:
+        return "0.0"
+    text = f"{value:+.2f}"
+    return text[:-1] if text.endswith("0") else text
+
+
 class UncertaintyDimension(PyRadPlanBaseModel, ABC):
     """
     One source of uncertainty with named components.
@@ -147,6 +156,24 @@ class UncertaintyDimension(PyRadPlanBaseModel, ABC):
 
     def validate_against_ct(self, ct: Any) -> None:
         """Raise ``ValueError`` if the dimension is inconsistent with ``ct`` (default: no-op)."""
+
+    def label(self, values: Any) -> str:
+        """
+        Short human-readable description of a realization, e.g. ``"setup (+3.0, 0.0, 0.0) mm"``.
+
+        Parameters
+        ----------
+        values : array_like
+            Component values of the realization.
+        """
+        vals = [_format_number(v) for v in self.coerce(values)]
+        units = set(self.units)
+        if len(units) == 1:
+            unit = f" {self.units[0]}" if self.units[0] else ""
+            body = vals[0] if len(vals) == 1 else f"({', '.join(vals)})"
+            return f"{self.name} {body}{unit}"
+        parts = [f"{v} {u}".rstrip() for v, u in zip(vals, self.units)]
+        return f"{self.name} {' / '.join(parts)}"
 
     def coerce(self, value: Any) -> np.ndarray:
         """Coerce ``value`` to a 1-D float array with one entry per component."""
@@ -234,6 +261,10 @@ class RangeUncertainty(UncertaintyDimension):
     def std(self) -> np.ndarray:
         return np.asarray([self.abs_sd, self.rel_sd / 100.0], dtype=float)
 
+    def label(self, values: Any) -> str:
+        abs_shift, rel_shift = self.coerce(values)
+        return f"range {_format_number(abs_shift)} mm / {_format_number(100.0 * rel_shift)} %"
+
 
 @register_dimension
 class CTPhaseUncertainty(UncertaintyDimension):
@@ -288,6 +319,9 @@ class CTPhaseUncertainty(UncertaintyDimension):
     def pairs(self) -> list[tuple[int, float]]:
         """``[(phase, probability), ...]`` pairs (0-based)."""
         return [(int(p), float(w)) for p, w in zip(self.phases, self.probabilities)]
+
+    def label(self, values: Any) -> str:
+        return f"phase {int(round(float(self.coerce(values)[0])))}"
 
     def support(self) -> np.ndarray:
         return np.asarray(self.phases, dtype=float).reshape(-1, 1)
