@@ -427,10 +427,13 @@ phantom-based scenario tests in section 6. Depends on step 0 only; uses a tempor
 docs and changelog, full test suite, GPU smoke via `docs/execute_examples.py` for one proton
 example (the GUI runs cupy).
 
-Later passes (not scheduled): robust strategies (expected value, voxel/objective worst case,
-probabilistic via weights), a model that emits derived scenarios, a PCE driver using
-`from_points`/`extend_scenarios`, the `BioUncertainty` dimension with its CST hook, dimensions
-beyond that (HU, machine).
+Robust optimization (expected value, voxel/objective/composite worst case, `Variance`) landed in
+the pass described in `robust_optimization.md`. Still open: per-scenario forward results
+(`calc_dose_forward` stays nominal only), robust constraints (the term model is ready), Dij-level
+backward accumulation, matRad reference values for the robust objectives, a model that emits
+derived scenarios, a PCE driver using `from_points`/`extend_scenarios`, the `BioUncertainty`
+dimension with its CST hook, dimensions beyond that (HU, machine), and the fused multi-scenario
+kernels on the shared value block.
 
 ## 8. Decisions (confirmed 2026-10-22)
 
