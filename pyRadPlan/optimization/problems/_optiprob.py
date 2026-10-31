@@ -69,6 +69,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         when the dose influence data carries a biological model, skipped when objectives
         already use a biological quantity. Set to ``False`` to use every objective's
         quantity literally.
+    evaluate_all_scenarios : bool, default=False
+        Evaluate every scenario of the dose influence data's set in every quantity. By default
+        a quantity evaluates only the scenarios its objectives need (a ``robustness="none"``
+        objective the nominal scenario, a worst-case objective all of them).
     """
 
     # Constant, Abstract properties are realized as ClassVars
@@ -104,6 +108,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     solver: Union[str, dict, SolverBase] = "ipopt"
     obj_history: Annotated[Optional[list], AlgorithmParameterMetadata(configurable=False)] = None
     convert_dose_objectives: bool = True
+    evaluate_all_scenarios: bool = False
 
     # Private properties
     _ct: CT
@@ -451,6 +456,15 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         for term in self._terms:
             for identifier in term.quantities:
                 quantity_scenarios.setdefault(identifier, set()).update(term.scenario_indices)
+        if self.evaluate_all_scenarios:
+            for indices in quantity_scenarios.values():
+                indices.update(range(len(self._scenario_set)))
+        if len(self._scenario_set) > 1:
+            logger.info(
+                "Scenarios evaluated per quantity: %s (set has %d scenario(s))",
+                {k: sorted(v) for k, v in quantity_scenarios.items()},
+                len(self._scenario_set),
+            )
 
         # Resolve all requested quantities (plus their transitive dependencies) through a
         # shared resolver so that any quantity referenced by multiple roots is instantiated

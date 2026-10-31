@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `Plan.mult_scen` is now `Plan.scenarios` (also accepting a model name, a parameter dictionary or a `ScenarioSet`); `mult_scen` / `multScen` remain as input aliases and matRad export keeps writing `multScen`. The engine and stf-generator parameter keeps the name `mult_scen` for now
-- Objectives without a robustness setting are evaluated on the nominal scenario(s) only when the dose influence data holds several scenarios (before, their values were summed over all scenarios). Quantities compute only the scenarios the objectives need (`QuantityResolver(dij, scenarios={identifier: [...]})` per quantity, widened to the consumers of a dependency), and the planning problem reports one value and one jacobian row per robust term (a composite worst case over several objectives counts once)
+- Objectives without a robustness setting are evaluated on the nominal scenario(s) only when the dose influence data holds several scenarios (before, their values were summed over all scenarios). Quantities compute only the scenarios the objectives need (`QuantityResolver(dij, scenarios={identifier: [...]})` per quantity, widened to the consumers of a dependency), and the planning problem reports one value and one jacobian row per robust term (a composite worst case over several objectives counts once). The problem logs which scenarios each quantity evaluates, and `pln.prop_opt["evaluate_all_scenarios"] = True` makes every quantity evaluate the whole set regardless of the objectives' needs
 
 ### Deprecated
 

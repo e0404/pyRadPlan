@@ -408,6 +408,13 @@ Objectives with ``robustness="none"`` evaluate only the nominal scenario(s) of t
 when the influence data contains many scenarios, so a plan that mixes robust and non-robust
 objectives optimizes the non-robust goals on the nominal dose.
 
+Each quantity computes only the scenarios the objectives reading it need, so an optimization
+with every objective at ``robustness="none"`` on a worst-case influence data set evaluates the
+nominal scenario alone in every iteration. The planning problem logs the scenarios per quantity
+when it initializes. ``pln.prop_opt["evaluate_all_scenarios"] = True`` makes every quantity
+evaluate the whole set regardless of the objectives, for instance to inspect all scenario doses
+of the result.
+
 Smooth maximum
 ~~~~~~~~~~~~~~
 

@@ -188,6 +188,21 @@ def test_none_evaluates_only_the_nominal_scenario(proton_case):
         assert all(q._q_cache.flat[s] is None for s in range(1, len(SCALES)))
 
 
+def test_evaluate_all_scenarios_overrides_the_objectives_needs(proton_case):
+    pln, ct, cst, stf, dij = proton_case
+    single = _problem(proton_case, _dij_with(dij, (1.0,)))
+    robust = _problem(
+        proton_case, _dij_with(dij, SCALES, _scenario_set()), evaluate_all_scenarios=True
+    )
+    x = _fluence(single)
+
+    assert robust.evaluate_all_scenarios is True
+    assert _value(robust, x) == pytest.approx(_value(single, x), rel=1e-12)
+    for q in robust._quantities:
+        assert q.scenarios.tolist() == [0, 1, 2]
+        assert all(q._q_cache.flat[s] is not None for s in range(len(SCALES)))
+
+
 def test_expected_value_is_the_weighted_sum_of_scenario_values(proton_case):
     pln, ct, cst, stf, dij = proton_case
     _set_robustness(cst, "expected_value")
