@@ -180,16 +180,25 @@ vanishes). Matrix-free; no Ω matrices on the dij.
 
 ### 3.7 Results and GUI
 
-- `Dij.compute_result_*` gain `scenarios: bool | Sequence[int] = False`. With several
-  scenarios they add `"<quantity>_scenario"` lists (one image per computed or alias scenario of
-  the set, index = flat set index) next to the existing `"<quantity>_beam"` lists.
-  `fluence_optimization` is unchanged; the GUI workflow asks for scenarios when the dij's set has
-  more than one.
-- `_display_names.group_result_keys` learns the `_scenario` component kind: the
-  `QuantitySelector` component combo lists `full`, `beam i`, `scenario i`, labelling scenarios
-  from the workspace dij's set (`setup (+3, 0, 0) mm, range +1 mm` style, nominal marked).
-- DVH widget: with scenario components present, an "all scenarios" option overlays one thin
-  curve per scenario behind the nominal one (band-like view).
+- `Dij.get_result_arrays_from_intensity` / `compute_result_*` gain
+  `scenarios: bool | Sequence[int] = False`. With several scenarios selected they add, for every
+  full (non-beam) result, a `"<quantity>_scenario"` list with one entry per slot of the set
+  (index = flat set index; `None` for derived or unselected scenarios) next to the existing
+  `"<quantity>_beam"` lists, which stay nominal-only. `True` selects the computed and alias
+  scenarios. `fluence_optimization` and `calc_dose_forward` are unchanged; the GUI workflow asks
+  for scenarios after optimizing when the dij's set has more than one (a forward recalculation
+  drops the stale per-scenario lists). "beam" and "scenario" are rejected as snapshot names.
+- Labels: `ScenarioSet.label(i)` / `labels()` (built from `UncertaintyDimension.label(values)`
+  of the perturbed dimensions: `"setup (+3.0, 0.0, 0.0) mm"`, `"range +1.0 mm / +3.5 %"`,
+  `"phase 1"`, joined by `", "`; `"nominal"`, `"derived"`); `Dij.scenario_labels()` delegates.
+- `_display_names.group_result_keys` learns the `_scenario` component kind (`ResultGroup.kinds`,
+  `keys_of(kind)`): the `QuantitySelector` component combo lists `full`, `beam i`,
+  `scenario i: <label>`; the viewer pushes `dij.scenario_labels()` into it
+  (`set_scenario_labels`) whenever the workspace dij changes, and hands them to the analysis
+  window.
+- DVH widget: with scenario components present, an "All scenarios" option overlays one thin,
+  semi-transparent curve per scenario and structure behind the selected one (band-like view,
+  `DVHPlot.band_curves`).
 - Objective editor: a `Robustness` column (combo of `Objective.available_robustness()`), stored
   on the objective; the plan widget's scenario model row is the only other GUI entry point.
 

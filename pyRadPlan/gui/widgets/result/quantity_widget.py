@@ -479,7 +479,7 @@ class QuantityWidget(QWidget):
         labels = result_key_labels(self._quantities)
         for name, arr in self._quantities.items():
             base = name.split()[0] if " " in name else name
-            if base.endswith("_beam"):
+            if base.endswith(("_beam", "_scenario")):
                 continue
             unit = self._overlay_units.get(name, getattr(self, "_overlay_units_default", ""))
             value = f"{labels[name]}: {arr[iz, ix, iy]:.4g}"

@@ -230,6 +230,77 @@ def test_change_quantity_writes_through(qapp, tg119):
     assert _objectives(ws.cst.vois[voi_idx])[0].quantity == new_quantity
 
 
+def _robustness_combo(widget, voi_idx, obj_idx=0):
+    """Robustness combo box of the *obj_idx*-th objective row of VOI *voi_idx*."""
+    rows = [
+        (v, o)
+        for v, voi in enumerate(widget._ws.cst.vois)
+        for o in range(len(widget._iter_objectives(voi)))
+    ]
+    return widget._table.cellWidget(rows.index((voi_idx, obj_idx)), widget._COL_ROBUSTNESS)
+
+
+def test_robustness_column_writes_through(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    header = widget._table.horizontalHeaderItem(OptimizationWidget._COL_ROBUSTNESS).text()
+    assert header == "Robustness"
+    assert OptimizationWidget._COL_ROBUSTNESS == OptimizationWidget._COL_QUANTITY + 1
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    cmb = _robustness_combo(widget, voi_idx)
+    options = [cmb.itemText(i) for i in range(cmb.count())]
+    assert options == type(obj).available_robustness()
+    assert cmb.currentText() == "none"
+    assert cmb.isEnabled()
+    assert "nominal scenario only" in cmb.toolTip()
+
+    new = next(name for name in options if name != "none")
+    cmb.setCurrentText(new)
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == new
+    # the edit does not rebuild the table, so the combo stays in place
+    assert _robustness_combo(widget, voi_idx) is cmb
+
+
+def test_objective_type_change_keeps_robustness(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    _robustness_combo(widget, voi_idx).setCurrentText("expected_value")
+    current = _objectives(ws.cst.vois[voi_idx])[0].name
+    other = next(name for name in widget._available if name != current)
+    widget._on_objective_changed(voi_idx, 0, other)
+
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    assert obj.name == other
+    assert obj.robustness == "expected_value"
+    assert _robustness_combo(widget, voi_idx).currentText() == "expected_value"
+
+
+def test_scenario_aware_objectives_show_their_single_robustness(qapp, tg119, monkeypatch):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    monkeypatch.setattr(
+        type(_objectives(ws.cst.vois[voi_idx])[0]), "scenario_aware", True, raising=False
+    )
+    widget._rebuild_table(ws.cst)
+
+    cmb = _robustness_combo(widget, voi_idx)
+    assert [cmb.itemText(i) for i in range(cmb.count())] == ["scenario_stack"]
+    assert not cmb.isEnabled()
+
+
 def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
     from pyRadPlan.quantities import get_available_quantities
 

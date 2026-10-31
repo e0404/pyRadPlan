@@ -1,8 +1,9 @@
-"""matRad cell-array import / export of multi-scenario Dijs."""
+"""Multi-scenario Dijs: matRad cell-array import / export, per-scenario results and labels."""
 
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import SimpleITK as sitk
 
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.io.matlab import _matfile
@@ -139,3 +140,116 @@ def test_matrad_export_rejects_derived_and_foreign_dimensions():
     dij_derived = dij.model_copy(update={"physical_dose": container, "scenarios": derived})
     with pytest.raises(ValueError, match="Derived scenarios"):
         dij_derived.to_matrad()
+
+
+def _derived_dij() -> Dij:
+    """Two computed scenarios and a derived one (their mean)."""
+    derived = ScenarioSet.from_points(
+        _dimensions(),
+        {"setup": np.array([[0, 0, 0], [1.0, 0, 0], [0.5, 0, 0]])},
+        bases=[None, None, {"coefficients": {0: 0.5, 1: 0.5}}],
+    )
+    dij = _dij(derived.computed())
+    container = np.empty((3,), dtype=object)
+    container[:2] = list(dij.physical_dose.flat)
+    return dij.model_copy(update={"physical_dose": container, "scenarios": derived})
+
+
+def test_results_per_scenario(sparse_grid_set):
+    dij = _dij(sparse_grid_set)
+    w = np.linspace(0.5, 1.5, N_BIX)
+
+    out = dij.get_result_arrays_from_intensity(w, scenarios=True)
+
+    per_scenario = out["physical_dose_scenario"]
+    assert len(per_scenario) == len(sparse_grid_set)
+    for i, dose in enumerate(per_scenario):
+        np.testing.assert_allclose(dose, dij.physical_dose.flat[i] @ w)
+    np.testing.assert_allclose(out["physical_dose"], per_scenario[0])
+    assert len(out["physical_dose_beam"]) == 1
+    assert not any(key.endswith("_beam_scenario") for key in out)
+
+
+def test_results_per_scenario_follow_the_nominal_index(sparse_grid_set):
+    dij = _dij(sparse_grid_set)
+    w = np.ones(N_BIX)
+    out = dij.get_result_arrays_from_intensity(w, scenario_index=2, scenarios=[0, 2])
+
+    np.testing.assert_allclose(out["physical_dose"], dij.physical_dose.flat[2] @ w)
+    assert out["physical_dose_scenario"][1] is None
+    np.testing.assert_allclose(out["physical_dose_scenario"][0], dij.physical_dose.flat[0] @ w)
+
+
+@pytest.mark.parametrize("scenarios", [False, [1]])
+def test_results_without_several_scenarios_have_no_scenario_keys(sparse_grid_set, scenarios):
+    dij = _dij(sparse_grid_set)
+    out = dij.get_result_arrays_from_intensity(np.ones(N_BIX), scenarios=scenarios)
+    assert not any(key.endswith("_scenario") for key in out)
+
+
+def test_results_per_scenario_with_a_single_scenario_set(two_scenario_set):
+    dij = _dij(two_scenario_set.subset([0]))
+    out = dij.get_result_arrays_from_intensity(np.ones(N_BIX), scenarios=True)
+    assert "physical_dose_scenario" not in out
+
+
+def test_results_per_scenario_scale_with_fractions(sparse_grid_set):
+    dij = _dij(sparse_grid_set)
+    w = np.ones(N_BIX)
+    single = dij.get_result_arrays_from_intensity(w, scenarios=True)
+    course = dij.get_result_arrays_from_intensity(w, num_of_fractions=30, scenarios=True)
+    for one, total in zip(single["physical_dose_scenario"], course["physical_dose_scenario"]):
+        np.testing.assert_allclose(total, 30 * one)
+
+
+def test_results_per_scenario_skip_derived_scenarios():
+    dij = _derived_dij()
+    w = np.ones(N_BIX)
+
+    out = dij.get_result_arrays_from_intensity(w, scenarios=True)
+    assert [d is None for d in out["physical_dose_scenario"]] == [False, False, True]
+
+    images = dij.compute_result_ct_grid(w, scenarios=True)["physical_dose_scenario"]
+    assert images[2] is None
+    scenario_1 = dij.compute_result_ct_grid(w, scenario_index=1)["physical_dose"]
+    np.testing.assert_allclose(
+        sitk.GetArrayFromImage(images[1]), sitk.GetArrayFromImage(scenario_1)
+    )
+
+    with pytest.raises(ValueError, match="derived"):
+        dij.get_result_arrays_from_intensity(w, scenarios=[0, 2])
+    with pytest.raises(IndexError):
+        dij.get_result_arrays_from_intensity(w, scenarios=[0, 3])
+
+
+def test_scenario_labels(sparse_grid_set):
+    assert _dij(sparse_grid_set).scenario_labels() == [
+        "nominal",
+        "setup (+2.25, 0.0, 0.0) mm",
+        "range +1.0 mm / +3.5 %",
+    ]
+    assert _derived_dij().scenario_labels() == [
+        "nominal",
+        "setup (+1.0, 0.0, 0.0) mm",
+        "derived",
+    ]
+    no_set = _dij(sparse_grid_set).model_copy(update={"scenarios": None})
+    assert no_set.scenario_labels() == ["nominal", "scenario 1", "scenario 2"]
+
+
+def test_scenario_labels_list_perturbed_dimensions_only():
+    phases = CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5])
+    scen_set = ScenarioSet.from_points(
+        [phases, SetupUncertainty(), RangeUncertainty()],
+        {
+            "ct_phase": np.array([[0], [1], [1]]),
+            "setup": np.array([[0, 0, 0], [0, 0, 0], [-0.25, 0, 1.5]]),
+            "range": np.array([[0, 0], [0, 0], [0, -0.01]]),
+        },
+    )
+    assert scen_set.labels() == [
+        "nominal",
+        "phase 1",
+        "phase 1, setup (-0.25, 0.0, +1.5) mm, range 0.0 mm / -1.0 %",
+    ]
+    assert scen_set.label(-1) == scen_set.labels()[-1]

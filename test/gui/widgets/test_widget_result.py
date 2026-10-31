@@ -687,3 +687,30 @@ def test_viewer_shows_rbe_weighted_dose_of_a_biological_result(qapp, test_data_p
     )
     assert widget.quantity_widget._active_quantity_name == "rbe_x_dose"
     assert widget.vis_widget.quantity_selector.current_key() == "rbe_x_dose"
+
+
+def test_viewer_lists_results_per_scenario_with_dij_labels(qapp, test_data_photons):
+    from types import SimpleNamespace
+
+    ct, cst, _ = test_data_photons
+    dose = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
+    result = {"physical_dose": dose, "physical_dose_scenario": [dose, None, 1.1 * dose]}
+    ws = _make_workspace(ct, cst, result)
+    widget = ViewingWidget(ws)
+
+    # The derived scenario 1 has no image; the others keep their flat index.
+    available = widget.quantity_widget.get_available_quantities()
+    assert "physical_dose_scenario 0" in available and "physical_dose_scenario 2" in available
+    assert "physical_dose_scenario 1" not in available
+
+    selector = widget.vis_widget.quantity_selector
+    combo = selector.component_combo
+
+    def components():
+        return [combo.itemText(i) for i in range(combo.count())]
+
+    assert components() == ["full", "scenario 0", "scenario 2"]
+    ws.dij = SimpleNamespace(scenario_labels=lambda: ["nominal", "derived", "range +1.0 mm"])
+    assert components() == ["full", "scenario 0: nominal", "scenario 2: range +1.0 mm"]
+    ws.dij = None
+    assert components() == ["full", "scenario 0", "scenario 2"]
