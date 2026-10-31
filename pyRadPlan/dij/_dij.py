@@ -102,20 +102,27 @@ def _merge_sorted_keys(xp: ArrayNamespace, keys: list[Array]) -> tuple[Array, li
 
     A stable sort of the concatenation merges the presorted runs in near-linear time; the rank
     of each merged entry among the distinct keys, scattered back through the sort permutation,
-    gives the positions without any binary search.
+    gives the positions without any binary search. The intermediates are released as soon as
+    possible (``keys`` is emptied) since each one is as large as all stored entries together.
     """
-    stacked = xp.concat(keys)
-    device = array_api_compat.device(stacked)
-    order = xp.argsort(stacked, stable=True)
-    merged = stacked[order]
-    first = xp.concat([xp.asarray([True], device=device), merged[1:] != merged[:-1]])
-    ranks = xp.cumulative_sum(xp.astype(first, xp.int64)) - 1
-    positions = xp.empty_like(ranks)
-    positions[order] = ranks
     bounds = [0]
     for k in keys:
         bounds.append(bounds[-1] + k.shape[0])
-    return merged[first], [positions[a:b] for a, b in zip(bounds[:-1], bounds[1:])]
+    stacked = xp.concat(keys)
+    keys.clear()
+    device = array_api_compat.device(stacked)
+    order = xp.argsort(stacked, stable=True)
+    merged = stacked[order]
+    del stacked
+    first = xp.concat([xp.asarray([True], device=device), merged[1:] != merged[:-1]])
+    union = merged[first]
+    del merged
+    ranks = xp.cumulative_sum(first, dtype=xp.int64)
+    del first
+    ranks -= 1
+    positions = xp.empty_like(ranks)
+    positions[order] = ranks
+    return union, [positions[a:b] for a, b in zip(bounds[:-1], bounds[1:])]
 
 
 def _check_influence_matrix(mat: Any, info: ValidationInfo):
