@@ -428,8 +428,9 @@ docs and changelog, full test suite, GPU smoke via `docs/execute_examples.py` fo
 example (the GUI runs cupy).
 
 Robust optimization (expected value, voxel/objective/composite worst case, `Variance`) landed in
-the pass described in `robust_optimization.md`. Still open: per-scenario forward results
-(`calc_dose_forward` stays nominal only), robust constraints (the term model is ready), Dij-level
+the pass described in `robust_optimization.md`; `calc_dose_forward` returns per-scenario doses
+(`<quantity>_scenario` lists next to the nominal result). Still open: robust constraints (the
+term model is ready), Dij-level
 backward accumulation, matRad reference values for the robust objectives, a model that emits
 derived scenarios, a PCE driver using `from_points`/`extend_scenarios`, the `BioUncertainty`
 dimension with its CST hook, dimensions beyond that (HU, machine), and the fused multi-scenario

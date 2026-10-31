@@ -1374,8 +1374,8 @@ class WorkflowWidget(WorkspaceWidget):
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
-            # The forward calculation yields nominal results only; per-scenario results
-            # of the previous optimization no longer match them.
+            # Per-scenario results of the previous optimization no longer match the new
+            # doses; the forward calculation brings its own when the plan has scenarios.
             result = {
                 key: val
                 for key, val in prev_result.items()

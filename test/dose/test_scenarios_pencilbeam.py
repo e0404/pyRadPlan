@@ -322,23 +322,55 @@ def test_public_entry_point_scenario_override(test_data_protons):
     assert pln.mult_scen.model_dump() == model_before
 
 
-def test_forward_dose_refuses_several_scenarios(test_data_photons):
-    """The forward result holds one dose; one of several scenarios would look nominal."""
+def test_forward_dose_returns_every_scenario(test_data_photons):
+    """The unsuffixed result is the nominal scenario, the list holds one image per slot."""
     pln, ct, cst, stf, _, _ = test_data_photons
-    scen_set = _scenario_set(setup=[(0.0, 0.0, 0.0), SHIFT_X])
-    with pytest.raises(NotImplementedError, match="Forward dose calculation supports one"):
-        calc_dose_forward(
-            ct, cst, stf, pln, np.ones(stf.total_number_of_bixels), scenarios=scen_set
+    w = np.ones(stf.total_number_of_bixels)
+    # the nominal scenario is deliberately not the first slot
+    scen_set = _scenario_set(setup=[SHIFT_X, (0.0, 0.0, 0.0)])
+
+    result = calc_dose_forward(ct, cst, stf, pln, w, scenarios=scen_set)
+
+    per_scenario = result["physical_dose_scenario"]
+    assert len(per_scenario) == 2 and all(img is not None for img in per_scenario)
+    nominal = sitk.GetArrayFromImage(result["physical_dose"])
+    assert np.array_equal(nominal, sitk.GetArrayFromImage(per_scenario[1]))
+    assert not np.allclose(nominal, sitk.GetArrayFromImage(per_scenario[0]))
+    assert len(result["physical_dose_beam"]) == len(stf.beams)
+    assert "physical_dose_beam_scenario" not in result
+
+    single = calc_dose_forward(
+        ct, cst, stf, pln, w, scenarios=_scenario_set(setup=[(0.0, 0.0, 0.0)])
+    )
+    assert np.allclose(nominal, sitk.GetArrayFromImage(single["physical_dose"]))
+
+    # the scenario doses agree with those weighted from the influence matrices
+    dij = calc_dose_influence(ct, cst, stf, pln, scenarios=scen_set)
+    reference = dij.compute_result_ct_grid(
+        w, scenario_index=1, num_of_fractions=pln.result_dose_factor, scenarios=True
+    )
+    for forward, influence in zip(per_scenario, reference["physical_dose_scenario"]):
+        assert np.allclose(
+            sitk.GetArrayFromImage(forward), sitk.GetArrayFromImage(influence), atol=1e-6
         )
+
+
+def test_forward_dose_single_scenario_has_no_scenario_lists(test_data_photons):
+    pln, ct, cst, stf, _, _ = test_data_photons
+    w = np.ones(stf.total_number_of_bixels)
     # a derived (alias) scenario does not count as a second computed one
     alias_set = _scenario_set(
         setup=[(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)],
         bases=[None, ScenarioBasis(coefficients={0: 1.0})],
     )
-    result = calc_dose_forward(
-        ct, cst, stf, pln, np.ones(stf.total_number_of_bixels), scenarios=alias_set
-    )
+    result = calc_dose_forward(ct, cst, stf, pln, w, scenarios=alias_set)
     assert "physical_dose" in result
+    assert not any(key.endswith("_scenario") for key in result)
+
+    # a single shifted scenario is the unsuffixed result itself
+    shifted = calc_dose_forward(ct, cst, stf, pln, w, scenarios=_scenario_set(setup=[SHIFT_X]))
+    assert "physical_dose" in shifted
+    assert not any(key.endswith("_scenario") for key in shifted)
 
 
 BIO_SHIFTS = [(3.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, -3.0, 0.0), (2.0, 2.0, 0.0)]

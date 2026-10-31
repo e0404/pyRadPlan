@@ -418,7 +418,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         -------
         dict
             Result quantities on the CT grid, keyed by quantity name, with the
-            weights already applied.
+            weights already applied. The unsuffixed results are those of the nominal
+            scenario (the first computed one if the set has no nominal); when the set
+            has several computed scenarios, every quantity also gets a
+            ``"<quantity>_scenario"`` list with one image per scenario slot
+            (see :meth:`Dij.compute_result_ct_grid`).
 
         Notes
         -----
@@ -457,13 +461,25 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # This is done because the engine might store the individual fields
         result = dij.compute_result_ct_grid(
             np.ones(dij.total_num_of_bixels, dtype=np.float32),
+            scenario_index=self._forward_result_scenario(dij),
             num_of_fractions=self._result_dose_factor,
+            scenarios=dij.scenarios is not None and dij.scenarios.num_computed > 1,
         )
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)
 
         return result
+
+    @staticmethod
+    def _forward_result_scenario(dij: Dij) -> int:
+        """Slot of the unsuffixed forward result: the nominal scenario, else the first computed."""
+        if dij.scenarios is None:
+            return 0
+        try:
+            return int(dij.scenarios.nominal_indices()[0])
+        except ValueError:
+            return int(dij.scenarios.computed_indices()[0])
 
     def calc_dose_influence(
         self,
@@ -557,14 +573,6 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         scen_set.require_supported(
             tuple(self.supported_uncertainties) + _nominal_only_dimensions(scen_set)
         )
-        if self._calc_dose_direct and scen_set.num_computed > 1:
-            # The forward result holds one dose per quantity; returning one scenario of
-            # several would look like the nominal dose
-            raise NotImplementedError(
-                "Forward dose calculation supports one scenario only; the scenario set has "
-                f"{scen_set.num_computed} computed scenarios. Use calc_dose_influence."
-            )
-
         num_phases = ct.num_of_ct_scen
         phases = scen_set.ct_phases()
         if phases.size and (phases.min() < 0 or phases.max() >= num_phases):

@@ -74,6 +74,10 @@ The model goes into the plan:
 
 ``mult_scen`` (matRad's name) is still accepted as an alias of ``scenarios``. The dose
 calculation also takes a set directly: ``calc_dose_influence(ct, cst, stf, pln, scenarios=...)``.
+A forward calculation (``calc_dose_forward``) over a set with several computed scenarios
+returns the nominal scenario's doses under the usual keys and adds a ``"<quantity>_scenario"``
+list with one image per scenario slot, in the same form as the per-scenario optimization
+results.
 
 A set can also be built without a model from explicit points, which is the hook for adaptive
 schemes (e.g. quadrature points of a polynomial chaos expansion) and for single hand-picked
