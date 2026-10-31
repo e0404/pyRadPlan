@@ -4,10 +4,8 @@ orphan: true
 
 # Robust optimization on scenario sets: design and implementation plan
 
-Status: contract committed (operator base, registry, `none` / `expected_value` operators,
-`Objective.robustness`, `ScenarioSet.nominal_indices`); operators, problem integration, GUI and
-docs implemented in parallel on top of it. Section 6 records the decisions and the Dij-level
-caching investigation.
+Status: implemented (operators, problem integration, per-scenario results, GUI, user docs).
+Section 4 records the Dij-level caching investigation and section 6 the decisions.
 
 Reference: matRad's `matRad_objectiveFunction.m` / `matRad_objectiveGradient.m` (robustness
 switch per objective: `none`, `STOCH`, `PROB`, `VWWC`, `VWWC_INV`, `COWC`, `OWC`) and its smooth
@@ -220,30 +218,39 @@ the dij.
 ## 4. Dij-level evaluation and caching (investigation)
 
 Question: move evaluation and caches (matrix-vector products) into the `Dij` to simplify the
-quantities and speed up scenario evaluation?
+quantities and speed up scenario evaluation? Measured on the proton test case (2000 voxels, 12
+bixels, 3 computed scenarios, numpy, bypass jacobian) and on a synthetic 2000 x 3000 matrix with
+realistic 300 nnz per voxel; scratch scripts in the session scratchpad (`investigation_c/`).
 
-Findings (see 6.2 for the measurement):
+Findings:
 
-- Forward products are not duplicated today: the `QuantityResolver` instantiates each quantity
-  once and `FluenceDependentQuantity.compute` caches by fluence, so `physical_dose` used by
-  `Dose` and by the indirect `RBExDose` path is one `D_s w` per scenario.
-- Backward products *are* duplicated whenever several consumers send cotangents into the same
-  matrix (physical-dose and RBE-weighted-dose objectives, or `effect` through the alpha and
-  sqrt-beta paths): one `D_s^T g` per consumer instead of one per matrix. This multiplies with
-  the number of scenarios and is independent of robustness.
-- A Dij-level cache cannot remove that duplication: the chain derivative is linear in the
-  cotangent, so cached products are never reusable. Only accumulation (sum cotangents per
-  matrix, then one transpose product) removes it, which is the reverse-mode backward pass over
-  the quantity graph recorded as a follow-up (`project_quantity_backward_pass` memory).
-- Derived (expected-value) scenarios are vector combinations of cached per-scenario values; no
-  extra products.
+- Forward products are not duplicated: one `D_s w` per matrix and scenario in every
+  configuration (the resolver instantiates each quantity once and `compute` caches by fluence).
+- Backward products are duplicated only when *different quantities* send cotangents into the same
+  matrix in scalarized mode: constant RBE + physical-dose objectives 6 vs 3 products,
+  indirect `effect` (alpha and sqrt-beta paths) 9 vs 3, LQ-direct RBE + effect 12 vs 6. None for
+  physical-only, direct LQ matrices with one consumer, or in jacobian mode (one row per term needs
+  its own product anyway). The problem already sums all objective cotangents of a quantity slot
+  before one `compute_chain_derivative`, so several robust terms on one quantity cost nothing
+  extra.
+- A cache cannot remove the remaining duplication (the chain derivative is linear in the
+  cotangent); only accumulating cotangents per matrix can, i.e. the reverse-mode backward pass
+  over the resolver graph (`project_quantity_backward_pass` memory).
+- Derived scenarios were free in the forward pass but cost one extra `D_k^T` per basis element per
+  consumer in the per-slot backward branch. Folding derived cotangents onto their basis slots
+  first (`g_k += c_k g_s`, then one product per computed slot) is exact and is implemented in
+  `FluenceDependentQuantity._compute_chain_derivative_cache`; the problem sums the non-empty
+  derivative slots.
+- Sparse products are ~80-85 % of one objective + gradient evaluation at realistic sizes, so the
+  upside of accumulation across quantities is at most ~25-30 % in the mixed configurations and
+  zero in the common ones.
 
-Decision: keep evaluation in the quantities for this pass. The robust operators only change
-*which* scenarios a quantity evaluates (union over terms) and what the cotangents are. The
-Dij-level step worth doing later is the accumulating backward pass, with a `Dij.apply(field,
-w, scenarios)` / `Dij.apply_transpose(field, cotangents)` pair as the place where one product
-per matrix is enforced; it is a separate branch because it changes every quantity's derivative
-contract.
+Decision: keep evaluation in the quantities. A `Dij.apply(field, w, scenarios)` /
+`Dij.apply_transpose(field, cotangents)` pair with reverse-mode accumulation stays a follow-up on
+its own branch: it would collapse `Dose`, `AlphaDose`, `SqrtBetaDose`, `LETxDose` to field
+declarations and `Effect` to a pointwise `vjp`, delete ~120 lines of per-quantity cache
+bookkeeping, but replace every quantity's `_compute_chain_derivative_single_scenario` contract
+(custom quantities included).
 
 ## 5. Work packages
 
@@ -270,6 +277,15 @@ contract.
 - `expected_value` uses normalized set weights, not matRad's raw densities.
 - Evaluation stays in the quantities; Dij-level backward accumulation is a follow-up.
 
-### 6.2 Investigation record
+### 6.2 Implementation record
 
-Filled in by the orchestrator from package C's report.
+- Operators (`f4e33cd6`): composite worst case with all `F_s <= 0` uses the exact maximum for value
+  and gradient (matRad guards the value only); `Variance` normalizes the weights it receives;
+  `expected_quantity` has no matRad export (writing `PROB` would reintroduce the variance term).
+- Problem (`71cc8c20`): `QuantityResolver(dij, scenarios={identifier: [indices]})` with
+  propagation to dependencies (union of the consumers' scenarios); `RTQuantity.scenarios` is a
+  property whose setter invalidates the caches; a multi-slot dij without a set evaluates slot 0
+  with a warning for `none` objectives and raises for robust ones. The shared proton test
+  fixture's dij lacks the CT origin on its dose grid, so the robust tests place the grid on the CT.
+- Finite-difference checks of the full problem gradient cover every shipped operator with
+  `logsumexp` and `pnorm` (`test_robust_fluence_optiprob.py`).
