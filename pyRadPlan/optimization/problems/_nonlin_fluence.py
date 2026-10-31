@@ -194,9 +194,12 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             cotangents = np.empty_like(q._q_cache)
             for pos, scen_ix in enumerate(q_scenarios[q.identifier]):
                 cotangents.flat[scen_ix] = self._grad_cache_intermediate[q.identifier][pos, ...]
+            # Derived scenarios are folded onto their basis slots by the quantity, so the
+            # non-empty slots sum to the full derivative.
             derivatives = q.compute_chain_derivative(cotangents, x)
-            for scen_ix in q_scenarios[q.identifier]:
-                derivative = derivatives.flat[scen_ix]
+            for derivative in derivatives.flat:
+                if derivative is None:
+                    continue
                 # Row by row, as the Array API has no integer-array (scatter) indexing.
                 for row, obj_ix in enumerate(cache_ix):
                     self._grad_cache = xp_utils.scatter(

@@ -389,40 +389,51 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         """
         Compute the fluence derivative from the quantity derivative into the cache.
 
-        With one cotangent per slot (object array), a derived slot is
-        ``sum(c_k * chain_k(cotangent_s))`` with its own cotangent; with a single cotangent the
-        combination of the computed slots' derivatives is used instead. Slots whose per-slot
-        cotangent is ``None`` are skipped.
+        With a single cotangent, every slot of the plan gets its derivative and a derived slot
+        is the combination of its basis slots' derivatives. With one cotangent per slot (object
+        array), the cotangents of derived slots are folded onto their basis slots first
+        (``g_k += c_k g_s``), so that every computed slot costs one back-projection; derived
+        slots and slots without a cotangent are then ``None`` and the sum over the non-empty
+        slots is the full derivative.
         """
         per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
 
-        def cotangent(index: int) -> Array:
-            return d_quantity.flat[index] if per_slot else d_quantity
+        if not per_slot:
+            for scenario_index, kind, coefficients in self._evaluation_plan:
+                if kind == "compute":
+                    self._qgrad_cache.flat[scenario_index] = (
+                        self._compute_chain_derivative_single_scenario(d_quantity, scenario_index)
+                    )
+                else:
+                    self._qgrad_cache.flat[scenario_index] = self._combine(
+                        self._qgrad_cache, coefficients
+                    )
+            return
+
+        accumulated: dict[int, Array] = {}
+
+        def add(index: int, term: Array) -> None:
+            accumulated[index] = term if index not in accumulated else accumulated[index] + term
 
         for scenario_index, kind, coefficients in self._evaluation_plan:
-            if per_slot and cotangent(scenario_index) is None:
-                # A basis slot computed only for derived scenarios, which back-project their
-                # own cotangents through it.
-                self._qgrad_cache.flat[scenario_index] = None
-            elif kind == "compute":
+            cotangent = d_quantity.flat[scenario_index]
+            if cotangent is None:
+                continue
+            if kind == "compute":
+                add(scenario_index, cotangent)
+            else:
+                for k, c in coefficients.items():
+                    add(k, cotangent if c == 1.0 else c * cotangent)
+
+        for scenario_index, kind, _ in self._evaluation_plan:
+            if kind == "compute" and scenario_index in accumulated:
                 self._qgrad_cache.flat[scenario_index] = (
                     self._compute_chain_derivative_single_scenario(
-                        cotangent(scenario_index), scenario_index
+                        accumulated[scenario_index], scenario_index
                     )
-                )
-            elif not per_slot:
-                self._qgrad_cache.flat[scenario_index] = self._combine(
-                    self._qgrad_cache, coefficients
                 )
             else:
-                result = None
-                for k, c in coefficients.items():
-                    term = self._compute_chain_derivative_single_scenario(
-                        cotangent(scenario_index), k
-                    )
-                    term = term if c == 1.0 else c * term
-                    result = term if result is None else result + term
-                self._qgrad_cache.flat[scenario_index] = result
+                self._qgrad_cache.flat[scenario_index] = None
 
     @staticmethod
     def _combine(cache: np.ndarray, coefficients: dict[int, float]) -> Array:

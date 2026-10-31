@@ -2,8 +2,8 @@
 
 import array_api_compat
 
-from ...core import xp_utils
 from ._base import RobustnessOperator
+from ._utils import as_backend
 
 
 class ExpectedValue(RobustnessOperator):
@@ -18,13 +18,6 @@ class ExpectedValue(RobustnessOperator):
     aliases = ("STOCH", "stochastic", "probabilistic")
     matrad_name = "STOCH"
 
-    def _weights_as(self, values):
-        xp = array_api_compat.array_namespace(values)
-        return xp.asarray(
-            xp_utils.from_numpy(xp, self.weights, device=array_api_compat.device(values)),
-            dtype=values.dtype,
-        )
-
     def evaluate(self, entries, values):
         self._check(entries, values)
         objective = entries[0].objective
@@ -32,7 +25,7 @@ class ExpectedValue(RobustnessOperator):
         per_scenario = xp.stack(
             [objective.compute_objective(values[0][s, ...]) for s in range(self.num_scenarios)]
         )
-        weights = self._weights_as(values[0])
+        weights = as_backend(self.weights, values[0])
         return objective.priority * xp.sum(xp.astype(per_scenario, weights.dtype) * weights)
 
     def gradient(self, entries, values):
@@ -42,6 +35,6 @@ class ExpectedValue(RobustnessOperator):
         grads = xp.stack(
             [objective.compute_gradient(values[0][s, ...]) for s in range(self.num_scenarios)]
         )
-        weights = self._weights_as(values[0])
+        weights = as_backend(self.weights, values[0])
         scaled = xp.astype(grads, weights.dtype) * weights[:, None]
         return [xp.asarray(objective.priority * scaled, dtype=values[0].dtype, copy=False)]

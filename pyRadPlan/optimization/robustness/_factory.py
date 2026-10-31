@@ -61,7 +61,8 @@ def resolve_robustness_name(name: str) -> str:
         raise ValueError(f"robustness must be a string, got {type(name).__name__}")
     canonical = _ALIASES.get(name)
     if canonical is None:
-        canonical = _ALIASES.get(name.strip().lower())
+        key = name.strip().lower()
+        canonical = next((v for k, v in _ALIASES.items() if k.lower() == key), None)
     if canonical is None:
         raise ValueError(f"Unknown robustness {name!r}. Available: {available_robustness()}")
     return canonical

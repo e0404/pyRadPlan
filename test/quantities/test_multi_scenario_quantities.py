@@ -397,6 +397,42 @@ def test_derived_scenario_is_linear_combination(derived_dij, quantity_cls):
         assert np.allclose(np.asarray(ref_result.flat[s]), np.asarray(result.flat[s]))
 
 
+def test_per_slot_cotangents_fold_derived_slots_onto_their_basis(derived_dij, monkeypatch):
+    """One back-projection per computed slot; the derived slot's cotangent lands on its basis."""
+    dose = Dose(derived_dij, scenarios=[0, 1, 2])
+    fluence = xp.arange(N_BIX, dtype=xp.float32)
+    rng = np.random.default_rng(5)
+    g = [rng.standard_normal((1, N_VOX)).astype(np.float32) for _ in range(3)]
+    cotangents = np.empty((3,), dtype=object)
+    for s in range(3):
+        cotangents.flat[s] = xp.asarray(g[s])
+
+    calls = []
+    original = Dose._compute_chain_derivative_single_scenario
+
+    def counted(self, d_quantity, scenario_index):
+        calls.append(scenario_index)
+        return original(self, d_quantity, scenario_index)
+
+    monkeypatch.setattr(Dose, "_compute_chain_derivative_single_scenario", counted)
+    deriv = dose.compute_chain_derivative(cotangents, fluence)
+
+    assert sorted(calls) == [0, 1]
+    assert deriv.flat[2] is None
+    matrices = [derived_dij.physical_dose.flat[s] for s in range(2)]
+    expected = (g[0] + 0.25 * g[2]) @ matrices[0] + (g[1] + 0.75 * g[2]) @ matrices[1]
+    total = np.asarray(deriv.flat[0]) + np.asarray(deriv.flat[1])
+    assert np.allclose(total, expected, rtol=1e-4, atol=1e-5)
+
+    # a slot without a cotangent is skipped, its basis slot still carries the derived one
+    cotangents.flat[0] = None
+    dose._w_grad_cache = None
+    deriv = dose.compute_chain_derivative(cotangents, fluence)
+    assert np.allclose(
+        np.asarray(deriv.flat[0]), (0.25 * g[2]) @ matrices[0], rtol=1e-4, atol=1e-5
+    )
+
+
 def test_derived_scenario_alone_computes_its_basis(derived_dij):
     dose = Dose(derived_dij, scenarios=[2])
     result = dose(xp.arange(N_BIX, dtype=xp.float32))

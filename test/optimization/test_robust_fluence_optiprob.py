@@ -328,3 +328,82 @@ def test_resolver_widens_dependencies_to_their_consumers(proton_case):
     resolver = QuantityResolver(robust_dij, scenarios={"rbe_x_dose": [1]})
     resolver.resolve(["rbe_x_dose"])
     assert resolver.instances["physical_dose"].scenarios.tolist() == [1]
+
+
+@pytest.fixture
+def worst_case_problem(proton_case, request):
+    """Every shipped operator on the proton case: OWC, COWC, VWWC (both), expected quantity."""
+    from pyRadPlan.optimization.objectives import Variance
+
+    pln, ct, cst, stf, dij = proton_case
+    target, body = cst.vois[0], cst.vois[1]
+    target.objectives = [
+        SquaredDeviation(priority=2.0, d_ref=1.0, robustness="objective_worst_case"),
+        SquaredUnderdosing(priority=1.5, d_min=0.9, robustness="composite_worst_case"),
+        SquaredDeviation(priority=0.7, d_ref=1.0, robustness="voxel_worst_case"),
+        Variance(priority=4.0),
+    ]
+    body.objectives = [
+        SquaredOverdosing(priority=3.0, d_max=0.1, robustness="voxel_worst_case_inverted"),
+        SquaredOverdosing(priority=0.5, d_max=0.05, robustness="composite_worst_case"),
+        SquaredOverdosing(priority=1.0, d_max=0.2, robustness="expected_quantity"),
+    ]
+    robust_dij = _dij_with(dij, SCALES, _scenario_set())
+    return _problem(proton_case, robust_dij, cst=cst, max_approximation=request.param)
+
+
+@pytest.mark.parametrize("worst_case_problem", ["logsumexp", "pnorm"], indirect=True)
+def test_shipped_operators_match_finite_differences(worst_case_problem):
+    prob = worst_case_problem
+    names = [term.operator.name for term in prob._terms]
+    assert names == [
+        "objective_worst_case",
+        "composite_worst_case",
+        "voxel_worst_case",
+        "scenario_stack",
+        "voxel_worst_case_inverted",
+        "expected_quantity",
+    ]
+    assert len(prob._terms[1].items) == 2
+    rng = np.random.default_rng(2)
+    for seed in range(2):
+        x = _fluence(prob, seed)
+        gradient = xp_utils.to_numpy(prob._objective_gradient(x))
+        x_np = xp_utils.to_numpy(x)
+        for _ in range(3):
+            direction = rng.standard_normal(x_np.size)
+            direction /= np.linalg.norm(direction)
+            h = 1e-5 * np.linalg.norm(x_np)
+            f_plus = _value(prob, xp_utils.from_numpy(prob._array_backend, x_np + h * direction))
+            f_minus = _value(prob, xp_utils.from_numpy(prob._array_backend, x_np - h * direction))
+            numeric = (f_plus - f_minus) / (2 * h)
+            assert gradient @ direction == pytest.approx(numeric, rel=1e-4, abs=1e-10)
+
+
+def test_robust_fluence_optimization_end_to_end(proton_case):
+    from pyRadPlan.optimization import fluence_optimization
+    from pyRadPlan.plan import validate_pln
+
+    pln, ct, cst, stf, dij = proton_case
+    cst.vois[0].objectives = [
+        SquaredDeviation(priority=100.0, d_ref=1.0, robustness="composite_worst_case")
+    ]
+    cst.vois[1].objectives = [
+        SquaredOverdosing(priority=10.0, d_max=0.3, robustness="expected_value")
+    ]
+    pln = validate_pln(
+        {
+            **dict(pln),
+            "prop_opt": {
+                "solver": {"name": "scipy", "max_iter": 3, "display": False},
+                "convert_dose_objectives": False,
+                "max_approximation": "logsumexp",
+            },
+        }
+    )
+    robust_dij = _dij_with(dij, SCALES, _scenario_set())
+    w = fluence_optimization(ct, cst, stf, robust_dij, pln)
+    assert w.shape == (robust_dij.total_num_of_bixels,)
+    assert np.all(np.isfinite(w)) and np.all(w >= 0)
+    result = robust_dij.get_result_arrays_from_intensity(w, scenario_index=2)
+    assert "physical_dose" in result

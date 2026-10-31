@@ -65,6 +65,8 @@ def test_registry_and_aliases():
     assert resolve_robustness_name("STOCH") == "expected_value"
     assert resolve_robustness_name("stochastic") == "expected_value"
     assert resolve_robustness_name(" None ") == "none"
+    assert resolve_robustness_name("owc") == resolve_robustness_name("OWC")
+    assert resolve_robustness_name("Stoch") == "expected_value"
     assert get_robustness_operator_class("STOCH") is ExpectedValue
     with pytest.raises(ValueError, match="Unknown robustness"):
         resolve_robustness_name("unknown")
