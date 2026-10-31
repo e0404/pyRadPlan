@@ -136,7 +136,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     share_scenario_structure : bool
         Store the influence matrices of several computed scenarios on one shared sparsity
         pattern (:meth:`Dij.share_scenario_structure`): one row-index array for all scenarios
-        and quantities, explicit zeros where a scenario does not reach a voxel.
+        and quantities, explicit zeros where a scenario does not reach a voxel. Off by default;
+        building the union costs a few seconds per million stored entries and scenario.
     """
 
     # Constant, Abstract properties
@@ -175,7 +176,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             description="Store several computed scenarios on one shared sparsity pattern "
             "(one row-index array, explicit zeros where a scenario misses a voxel)"
         ),
-    ] = True
+    ] = False
 
     # selection of where to calculate / store dose, empty by default
     voxel_sub_ix: Optional[Any] = None

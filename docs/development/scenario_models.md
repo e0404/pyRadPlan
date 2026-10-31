@@ -311,8 +311,9 @@ with `set.extent("setup")` and `set.extent("range")`.
   `supported_uncertainties` and select `v_alpha_x` by `voxel_param_set`; engines without it refuse
   the dimension. Only the `affects` declaration, the `voxel_param_set` mapping and the slot sharing
   are implemented in this pass.
-- **Shared index storage.** `Dij.share_scenario_structure()` (applied by the engines' default
-  `share_scenario_structure=True`) rewrites the matrices of all computed scenarios and quantities
+- **Shared index storage.** `Dij.share_scenario_structure()` (applied by the engines when
+  `share_scenario_structure=True`, off by default: the vectorized union is O(n log n) and takes
+  ~85 s for 9 x 20M entries on the CPU) rewrites the matrices of all computed scenarios and quantities
   over the union of their sparsity patterns: one int32 `indices`/`indptr` pair for the whole Dij
   and, per quantity, a `(matrices, nnz)` value block whose rows are the scenarios' data arrays
   (explicit zeros where a scenario misses a voxel). `to_namespace` uploads the shared index arrays
