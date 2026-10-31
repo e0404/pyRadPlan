@@ -367,6 +367,13 @@ class Objective(PyRadPlanBaseModel):
         name = resolve_robustness_name(v)
         if name == "scenario_stack":
             raise ValueError("'scenario_stack' is reserved for scenario-aware objectives")
+        if v.strip().upper() == "PROB":
+            logger.warning(
+                "matRad's 'PROB' robustness of objective '%s' is used as 'expected_quantity' "
+                "without its variance term; add a 'Variance' objective to penalize the "
+                "variance over the scenarios.",
+                cls.model_fields["name"].default,
+            )
         return name
 
     @field_validator("quantity")
