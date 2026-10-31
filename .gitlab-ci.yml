@@ -62,7 +62,7 @@ lint:
     extends: .work-branches
     stage: test
     script:
-        - pip install ruff==0.15.22
+        - pip install ruff==0.17.3
         - return_code=0
         - ruff check --output-format grouped || return_code=$(($return_code + $?))
         - ruff check --exit-zero --output-format grouped --output-file ruff.txt
@@ -82,7 +82,7 @@ format:
     extends: .work-branches
     stage: test
     script:
-        - pip install ruff==0.15.22
+        - pip install ruff==0.17.3
         - ruff format --check
 
 codespell:
