@@ -426,8 +426,11 @@ def test_seg_frame_voxels():
     assert placed([0.0, 0.0, 1.0], tilted) is None, "not in a CT slice"
 
 
-def _seg_dataset(pixel_array, positions):
-    """A minimal SEG dataset with one segment, one frame per position, unit pixel spacing."""
+def _seg_dataset(pixel_array, positions, shared_groups=True):
+    """A minimal SEG dataset with one segment, one frame per position, unit pixel spacing.
+
+    Without ``shared_groups`` it states neither orientation nor pixel spacing.
+    """
     from types import SimpleNamespace as NS
 
     frames = [
@@ -445,7 +448,7 @@ def _seg_dataset(pixel_array, positions):
         pixel_array=pixel_array,
         SegmentSequence=[NS(SegmentNumber=1, SegmentLabel="Organ")],
         PerFrameFunctionalGroupsSequence=frames,
-        SharedFunctionalGroupsSequence=[shared],
+        SharedFunctionalGroupsSequence=[shared] if shared_groups else [],
     )
 
 
@@ -459,6 +462,25 @@ def test_import_seg_single_frame():
 
     mask = sitk.GetArrayFromImage(voi.mask)  # (z, y, x)
     assert mask.sum() == 1 and mask[1, 2, 5] == 1
+
+
+def test_import_seg_without_geometry_uses_the_ct_slices(caplog):
+    """A SEG without orientation and spacing takes them from the CT; without a CT it is skipped."""
+    from types import SimpleNamespace as NS
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1
+    seg = _seg_dataset(frame, [[0.0, 0.0, 1.0]], shared_groups=False)
+    ct_slice = NS(ImageOrientationPatient=[1, 0, 0, 0, 1, 0], PixelSpacing=[1.0, 1.0])
+
+    (voi,) = import_seg(seg, [ct_slice], _unit_ct())
+    mask = sitk.GetArrayFromImage(voi.mask)
+    assert mask.sum() == 1 and mask[1, 2, 5] == 1
+
+    with caplog.at_level("WARNING"):
+        assert import_seg(seg, [], _unit_ct()) == []  # an empty segment gives no VOI
+    assert "Skipped 1 of 1 frame(s)" in caplog.text
 
 
 def test_import_seg_skips_frames_off_the_ct_grid(caplog):
