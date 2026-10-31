@@ -240,7 +240,13 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
 
 @pytest.mark.parametrize("backend", [None, "jax.numpy"])
 def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_proton_case, backend):
-    """Gradient over several scenarios is sum_s D_s^T g_s, not sum_s D_s^T (sum_s' g_s')."""
+    """
+    Gradient over several scenarios is sum_s w_s D_s^T g_s, not sum_s D_s^T (sum_s' g_s').
+
+    Non-robust objectives evaluate the nominal scenario only, so the objectives use the
+    expected value over the set; equal weights keep the expectation a plain (scaled) sum over
+    the scenarios, which is what this test checks the back-projection of.
+    """
     xp_new = None if backend is None else pytest.importorskip(backend)
     from pyRadPlan.scenarios import (
         CTPhaseUncertainty,
@@ -263,7 +269,11 @@ def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_pro
     dij.scenarios = ScenarioSet.from_points(
         (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()),
         {"setup": [[0, 0, 0], [3, 0, 0]]},
+        weights=[0.5, 0.5],
     )
+    for voi in cst.vois:
+        for obj in voi.objectives:
+            obj.robustness = "expected_value"
     pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
 
     prob = NonLinearFluencePlanningProblem(pln)
@@ -281,8 +291,12 @@ def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_pro
             for s in range(2):
                 mat = dij.physical_dose.flat[s]
                 quantity = factor * (mat @ x_np)
-                g = obj.priority * xp_utils.to_numpy(
-                    obj.compute_gradient(xp.asarray(quantity[ix], dtype=xp.float64))
+                g = (
+                    0.5
+                    * obj.priority
+                    * xp_utils.to_numpy(
+                        obj.compute_gradient(xp.asarray(quantity[ix], dtype=xp.float64))
+                    )
                 )
                 cotangent = np.zeros(mat.shape[0])
                 cotangent[ix] = g

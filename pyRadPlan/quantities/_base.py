@@ -38,7 +38,20 @@ class RTQuantity(ABC):
     def __init__(self, dij: Dij, scenarios=None):
         if scenarios is None:
             scenarios = self.default_scenarios(dij)
-        self.scenarios = np.asarray(scenarios, dtype=np.int64)
+        self.scenarios = scenarios
+
+    @property
+    def scenarios(self) -> np.ndarray:
+        """Flat scenario indices the quantity evaluates."""
+        return self._scenarios
+
+    @scenarios.setter
+    def scenarios(self, scenarios) -> None:
+        self._scenarios = np.asarray(scenarios, dtype=np.int64)
+        self._invalidate_scenario_caches()
+
+    def _invalidate_scenario_caches(self) -> None:
+        """Drop whatever depends on the evaluated scenarios (nothing in the base class)."""
 
     @staticmethod
     def default_scenarios(dij: Dij) -> list[int]:
@@ -301,6 +314,15 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self._qgrad_cache
 
+    def _invalidate_scenario_caches(self) -> None:
+        self._evaluation_plan_cache = None
+        self._w_cache = None
+        self._w_grad_cache = None
+        q_cache = getattr(self, "_q_cache", None)
+        if q_cache is not None:
+            self._q_cache = np.empty_like(q_cache)
+            self._qgrad_cache = np.empty_like(q_cache)
+
     def uses_voxel_params(self) -> bool:
         """
         Whether the quantity reads per-voxel parameters (``alphax``, ``betax``, ...).
@@ -369,7 +391,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         With one cotangent per slot (object array), a derived slot is
         ``sum(c_k * chain_k(cotangent_s))`` with its own cotangent; with a single cotangent the
-        combination of the computed slots' derivatives is used instead.
+        combination of the computed slots' derivatives is used instead. Slots whose per-slot
+        cotangent is ``None`` are skipped.
         """
         per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
 
@@ -377,7 +400,11 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             return d_quantity.flat[index] if per_slot else d_quantity
 
         for scenario_index, kind, coefficients in self._evaluation_plan:
-            if kind == "compute":
+            if per_slot and cotangent(scenario_index) is None:
+                # A basis slot computed only for derived scenarios, which back-project their
+                # own cotangents through it.
+                self._qgrad_cache.flat[scenario_index] = None
+            elif kind == "compute":
                 self._qgrad_cache.flat[scenario_index] = (
                     self._compute_chain_derivative_single_scenario(
                         cotangent(scenario_index), scenario_index

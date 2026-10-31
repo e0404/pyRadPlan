@@ -133,10 +133,14 @@ class RobustTerm:
     scenario_indices: list[int]    # operator.scenario_indices
 ```
 
-`build_robust_terms(objectives_per_voi, scenarios, options)` creates one term per objective-scope
-objective and one per composite-scope operator name. The planning problem keeps `self._terms`
-and reports one value / one jacobian row per *term* (`f_vals`, `_grad_cache`), not per
-objective. A composite term's priorities are applied inside its operator, so the outer
+`build_robust_terms(voi_objectives, scenarios, options, masks=None)` creates one term per
+objective-scope objective and one per composite-scope operator name (placed at its first
+objective; scenario-aware objectives always use `scenario_stack`). The planning problem keeps
+`self._terms` and reports one value / one jacobian row per *term* (`f_vals`, `_grad_cache`), not
+per objective; `_num_objectives` counts terms, `_objectives_per_quantity[q]` lists the terms
+reading `q` (one cache row each) and `_q_cache_index[t]` maps each quantity of term `t` to its
+row, so a composite term over several quantities has a row in each. `_objective_list` (the
+`(mask, objectives)` pairs) is kept for inspection. A composite term's priorities are applied inside its operator, so the outer
 scalarization sees priority 1 for it. This is the shape `refactor/optimization` expects: a term
 is one function of the strategy's function list, a constraint term is a term whose operator
 value is bounded, and "a constraint on all scenarios" is a term over `expected_value` /
@@ -146,6 +150,10 @@ Scenario selection per quantity: the resolver is created with the union of
 `term.scenario_indices` over the terms on that quantity, so a `none` objective on a
 `wcScen` dij computes only the nominal slot, while robust objectives compute all slots they
 need. Quantities shared by terms with different needs take the union.
+`QuantityResolver(dij, scenarios=...)` accepts a mapping `identifier -> indices` for this;
+`resolve()` then widens every dependency to the union of its consumers' scenarios (and its own
+entry), and `RTQuantity.scenarios` is a property whose setter drops the evaluation plan and
+caches.
 
 Evaluation (`_objective_functions`): for each term, stack `q_vectors[item.quantity].flat[s][ix]`
 over `term.scenario_indices`, call `operator.evaluate`. Gradient (`_objective_jacobian`): call
@@ -155,7 +163,9 @@ over `term.scenario_indices`, call `operator.evaluate`. Gradient (`_objective_ja
 is unchanged.
 
 Legacy dijs without a scenario set: a single-slot dij gets an implicit nominal set; a multi-slot
-dij without a set raises when any objective is robust, asking for `Dij.attach_scenarios`.
+dij without a set raises when any objective is robust, asking for `Dij.attach_scenarios`, and
+otherwise evaluates slot 0 as the nominal scenario with a warning (previously every filled slot
+was summed).
 
 ### 3.5 `Objective.robustness`
 
