@@ -102,7 +102,7 @@ class DicomImporter(BaseImporter):
         path = self._require_path()
         if os.path.isdir(path):
             directory = path
-            files = [os.path.join(path, f) for f in os.listdir(path)]
+            files = [os.path.join(path, f) for f in sorted(os.listdir(path))]
         else:
             directory = os.path.dirname(path) or "."
             files = [path]

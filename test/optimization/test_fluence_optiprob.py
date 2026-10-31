@@ -238,8 +238,10 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     assert np.allclose(jacobian.sum(axis=0), gradient, rtol=1e-5)
 
 
-def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_proton_case):
+@pytest.mark.parametrize("backend", [None, "jax.numpy"])
+def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_proton_case, backend):
     """Gradient over several scenarios is sum_s D_s^T g_s, not sum_s D_s^T (sum_s' g_s')."""
+    xp_new = None if backend is None else pytest.importorskip(backend)
     from pyRadPlan.scenarios import (
         CTPhaseUncertainty,
         RangeUncertainty,
@@ -265,7 +267,7 @@ def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_pro
     pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
 
     prob = NonLinearFluencePlanningProblem(pln)
-    prob.solve(ct, cst, stf, dij)
+    prob.solve(ct, cst, stf, dij if xp_new is None else dij.to_namespace(xp_new))
     xp = prob._array_backend
     x = xp.full((dij.total_num_of_bixels,), 0.5, dtype=xp.float64)
     gradient = xp_utils.to_numpy(prob._objective_gradient(x))

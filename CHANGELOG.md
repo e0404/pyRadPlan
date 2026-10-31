@@ -9,14 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- GUI: the info widget and the About dialog show the Python version next to the pyRadPlan version, e.g. "pyRadPlan v0.6.0 (Python 3.12.7)"
-- Windows desktop installer: a "Create a desktop shortcut" option next to the installation folder and a "Launch pyRadPlan" option on the final page, both checked by default
 - Scenario models for uncertainty handling, matching matRad's `nomScen`, `wcScen`, `impScen` and `rndScen` (realizations, probabilities, weights and the `(ct, shift, range)` layout verified against matRad reference tables): `NominalScenarioModel`, `WorstCaseScenarioModel`, `ImportanceScenarioModel` and `RandomScenarioModel` in `pyRadPlan.scenarios`, with matRad's `combinations`, `combineRange`, grid-point counts, `nSamples` and `includeNominalScenario`. A model is a pydantic configuration of *uncertainty dimensions* (`SetupUncertainty`, `RangeUncertainty`, `CTPhaseUncertainty`; each declares whether it affects geometry, range or per-voxel parameters) and a joint distribution (`IndependentGaussian` as in matRad, or a `MultivariateGaussian` with full covariance), and generates a `ScenarioSet` lazily. The set lists the realizations with probability, weight, tags and a flat index, answers `group_by`, `extent`, `voxel_param_set` and `nominal_index`, can be built from explicit points (`ScenarioSet.from_points`) and extended (`extend`), may hold *derived* scenarios defined as linear combinations of computed ones (`ScenarioBasis`; a unit coefficient shares the referenced matrices), and offers a re-tieable grid view (`layout`, `with_axes`, `isel`, `sel`, `grid_view`, optional `to_xarray`). `ExplicitScenarioModel` wraps a hand-built set; new dimensions, distributions and models register with `register_dimension`, `register_distribution` and `register_scenario_model`. User guide: *Uncertainty and Scenarios*
 - Dose calculation over scenario sets: the pencil-beam engines compute one influence matrix per scenario (flat `(n,)` containers addressed by the scenario's flat index), sharing the ray tracing between scenarios with the same setup shift and applying CT phase and range perturbations per scenario; engines declare `supported_uncertainties` and refuse sets with dimensions they cannot apply. `calc_dose_influence` / `calc_dose_forward` accept a `scenarios=` override. `Dij.scenarios` records the set (validated against the containers), `Dij.num_of_scenarios`, `voxel_param_column`, `attach_scenarios` and `extend_scenarios` were added, and the per-voxel parameter arrays (`alphax`, `betax`, `tissue_class_ix`) carry one column per voxel parameter set (per used CT phase). matRad `dij` cell arrays are flattened on import and written back on the `(ct, shift, range)` grid on export. The quantities evaluate every scenario of the set, including derived ones, and the stf generators derive their target margins from the set's extents
 
 ### Changed
 
-- macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
 - `Plan.mult_scen` is now `Plan.scenarios` (also accepting a model name, a parameter dictionary or a `ScenarioSet`); `mult_scen` / `multScen` remain as input aliases and matRad export keeps writing `multScen`. The engine and stf-generator parameter keeps the name `mult_scen` for now
 
 ### Deprecated
@@ -25,13 +22,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multi-scenario dose calculation: isocenter shifts no longer accumulate across setup scenarios (the stf is copied per shift), every scenario selects its own CT phase (the first phase was used for all), the particle engines take the reference tissue parameters of each phase, the relative range margin of the stf generators no longer reuses the absolute one, and the per-voxel parameter column of a scenario is its CT phase rather than its scenario index. The stf generators now take the plan's scenario model (the plan's model was ignored and the nominal one used) and grow the target by setup shift plus range plus beamlet margin as matRad does, and a forward dose calculation refuses a set with several computed scenarios instead of returning the first one
+- Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
+
+## [0.6.1] - 2026-10-30
+
+### Added
+
+- GUI: the info widget and the About dialog show the Python version next to the pyRadPlan version, e.g. "pyRadPlan v0.6.0 (Python 3.12.7)"
+- Windows desktop installer: a "Create a desktop shortcut" option next to the installation folder and a "Launch pyRadPlan" option on the final page, both checked by default
+
+### Changed
+
+- Bumped ipax to 0.13.0 containing a bugfix to consistently allocate on the correct device
+- macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
+
+### Fixed
+
+- FRED retries start with a clean temporary directory after a failed simulation, so partial scorer files from the failed run cannot be read or saved as output of the retry
+- The online documentation builds again on Read the Docs (the 0.6.0 build failed on numpydantic array annotations with current `sphinx-autodoc-typehints`)
 - IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)
 - Dose engines can be reused for several calculations. A second calculation on the same engine object computed every quantity twice (twice the forward dose, an `IndexError` in a following influence calculation), and kept what the first one resolved for its own patient: the dose grid and voxel subset (dose was then computed only on the first cst's voxels), the scenario model and the biological model (one dropped for unsuitable tissues stayed dropped). A calculation now leaves these settings as the user gave them, also the particle lateral model ("auto" / "fastest" resolve per machine) and the LET scorers a LET-based model switches on in TOPAS and FRED. TOPAS no longer compounds `scaling_factor` with the weights of every call, and FRED no longer writes into the folder tree a previous calculation deleted
 - `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged
 - `keep_rad_depth_cubes=True` failed with a `Dij` validation error: the radiological depth cubes are now stored as arrays (one per beam, dose grid in z, y, x order)
 - Particle pencil-beam engines: beams after the first used the lateral cutoffs computed for an earlier beam wherever they share an energy, since the kernels were cached with their cutoffs while the cutoffs are recomputed per beam from its SSDs. This affected dose calculations with beams of different SSDs (only voxels at the lateral cutoff)
-- Multi-scenario dose calculation: isocenter shifts no longer accumulate across setup scenarios (the stf is copied per shift), every scenario selects its own CT phase (the first phase was used for all), the particle engines take the reference tissue parameters of each phase, the relative range margin of the stf generators no longer reuses the absolute one, and the per-voxel parameter column of a scenario is its CT phase rather than its scenario index The stf generators now take the plan's scenario model (the plan's model was ignored and the nominal one used) and grow the target by setup shift plus range plus beamlet margin as matRad does, and a forward dose calculation refuses a set with several computed scenarios instead of returning the first one
-- Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
+- Keyboard cancellation of optimizations on Linux and macOS: an arrow or function key pressed in the terminal stopped the optimization as if it were ESC, and an optimization started as a background job (`python run.py &`) was stopped by the shell with `SIGTTOU`
+- Base data files (machines, RBE and stopping power tables) are found by name case-insensitively on Linux too, as on Windows and macOS, so e.g. `machine="generic"` no longer fails there only
+- `pyRadPlanGUI` can be stopped with Ctrl+C in the terminal it was started from
+- OpenMP clash detection: a package installed behind a symlink (e.g. a venv's `lib64 -> lib` on Linux) or loaded through an 8.3 short path or a junction on Windows was reported as clashing with its own runtime, which disabled that solver
+- GUI "Load patient data": files with an uppercase extension (e.g. `A.MAT`) were hidden in the case-sensitive GTK file dialogs on Linux
+- Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
+- `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
+- DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- JAX backend: converting a Dij to JAX (`Dij.to_namespace`) failed for pencil-beam dose influence matrices, and fluence optimization failed on JAX arrays
 
 ## [0.6.0] - 2026-10-28
 
@@ -624,7 +647,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1

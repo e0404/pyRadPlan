@@ -30,10 +30,7 @@ class AlphaDose(FluenceDependentQuantity):
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         if self._mode == "direct":
-            # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
-            return self.array_backend.asarray(
-                self._dij.alpha_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
-            )
+            return self._backproject(self._dij.alpha_dose.flat[scenario_index], d_quantity)
         # Chain rule for alpha_x * Dose: d/dw = alpha_x * dDose/dw, scaled by d_quantity.
         column = self._dij.voxel_param_column(scenario_index)
         scaled = self._dij.alphax[:, column] * d_quantity

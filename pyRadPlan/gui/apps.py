@@ -57,6 +57,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     process's command line (e.g. Jupyter's ``-f kernel.json``).
     """
     import argparse  # noqa: PLC0415
+    import signal  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(
         prog="pyRadPlanGUI",
@@ -71,7 +72,11 @@ def main(argv: Optional[list[str]] = None) -> None:
             "or the name of a bundled phantom, e.g. TG119."
         ),
     )
-    gui(parser.parse_args(argv).patient)
+    args = parser.parse_args(argv)
+    # Python's SIGINT handler only runs once Qt's event loop hands control back, which
+    # it never does, so Ctrl+C in the launching terminal would not stop the GUI.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    gui(args.patient)
 
 
 def gui(patient: Optional[str] = None) -> None:

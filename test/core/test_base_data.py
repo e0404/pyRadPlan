@@ -73,6 +73,53 @@ def test_file_copied_by_hand_is_found_like_an_added_one(data_dir):
     ]
 
 
+def test_names_resolve_case_insensitively(data_dir):
+    """As on Windows and macOS file systems, also where the file system is case-sensitive."""
+    folder = user_base_data_dir("stopping_power_tables", create=True)
+    (folder / "SP_Mine.mat").write_bytes(
+        _shipped("stopping_power_tables", "SPtable.mat").read_bytes()
+    )
+
+    machine = find_base_data("machines", "protons_generic.mat").path
+    assert os.path.samefile(machine, _shipped("machines", "protons_Generic.mat"))
+    entry = find_base_data("stopping_power_tables", "sp_mine.MAT")
+    assert entry.source == "user"
+    assert os.path.samefile(entry.path, folder / "SP_Mine.mat")
+
+
+def test_folder_precedence_comes_before_the_exact_case_of_a_name(data_dir, shared_roots):
+    """A lower-priority exact name must not win here but lose on Windows and macOS."""
+    table = _shipped("stopping_power_tables", "SPtable.mat").read_bytes()
+    user = user_base_data_dir("stopping_power_tables", create=True)
+    shared = shared_roots[0] / "physics" / "stopping"
+    shared.mkdir(parents=True)
+    (user / "SPTABLE.mat").write_bytes(table)
+    (user / "SP_Mine.mat").write_bytes(table)
+    (shared / "SP_mine.mat").write_bytes(table)
+
+    assert find_base_data("stopping_power_tables", "SPTABLE.mat").source == "bundled"
+    assert find_base_data("stopping_power_tables", "SP_mine.mat").source == "user"
+    names = [(e.name, e.source) for e in list_base_data("stopping_power_tables")]
+    assert names == [("SPtable.mat", "bundled"), ("SP_Mine.mat", "user")]
+    with pytest.raises(FileExistsError, match="ships with pyRadPlan"):
+        add_base_data_file("stopping_power_tables", user / "SP_Mine.mat", name="sptable.mat")
+
+
+def test_exact_name_wins_within_a_folder(data_dir):
+    folder = user_base_data_dir("stopping_power_tables", create=True)
+    (folder / "SP_Mine.mat").write_bytes(b"upper")
+    if (folder / "sp_mine.mat").exists():
+        pytest.skip("needs a case-sensitive file system")
+    (folder / "sp_mine.mat").write_bytes(b"lower")
+
+    assert find_base_data("stopping_power_tables", "sp_mine.mat").path.read_bytes() == b"lower"
+    assert find_base_data("stopping_power_tables", "SP_Mine.mat").path.read_bytes() == b"upper"
+    assert [e.name for e in list_base_data("stopping_power_tables", source="user")] == [
+        "SP_Mine.mat",
+        "sp_mine.mat",
+    ]
+
+
 def test_add_and_remove_base_data_file(data_dir):
     source = _shipped("stopping_power_tables", "SPtable.mat")
     with pytest.raises(FileExistsError, match="ships with pyRadPlan"):

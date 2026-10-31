@@ -150,11 +150,24 @@ def test_gui_gives_a_windowed_process_standard_streams(captured_main_window, mon
 
 
 def test_main_passes_patient_to_gui(monkeypatch):
+    import signal
+
     received = []
     monkeypatch.setattr(apps, "gui", received.append)
+    monkeypatch.setattr(signal, "signal", lambda *args: None)
     main(["TG119"])
     main([])
     assert received == ["TG119", None]
+
+
+def test_main_lets_ctrl_c_stop_the_gui(monkeypatch):
+    import signal
+
+    installed = {}
+    monkeypatch.setattr(apps, "gui", lambda patient: None)
+    monkeypatch.setattr(signal, "signal", installed.__setitem__)
+    main([])
+    assert installed == {signal.SIGINT: signal.SIG_DFL}
 
 
 def test_analysis_viewer_starts_on_rbe_weighted_dose(qapp, no_event_loop, test_data_photons, dose):

@@ -63,6 +63,22 @@ __all__ = ["KeyboardListener"]
 
 logger = logging.getLogger(__name__)
 
+# Seconds without input after which an escape sequence is over. Its parts can arrive apart on
+# a slow connection (e.g. SSH); the delay this adds to the ESC key is not noticeable.
+_ESCAPE_SEQUENCE_GAP = 0.1
+
+
+def _in_terminal_foreground() -> bool:
+    """Whether this process owns the terminal on stdin.
+
+    Changing the terminal mode from a background job (``python run.py &``) makes the
+    kernel stop the whole process with ``SIGTTOU``.
+    """
+    try:
+        return os.tcgetpgrp(sys.stdin.fileno()) == os.getpgrp()
+    except OSError:
+        return False
+
 
 class KeyboardListener:
     """Cross-platform non-blocking keyboard listener.
@@ -119,14 +135,15 @@ class KeyboardListener:
             return
 
         # Choose platform-specific listener
-        if _HAS_POSIX_TERMIOS and sys.stdin.isatty():
+        if _HAS_POSIX_TERMIOS and sys.stdin.isatty() and _in_terminal_foreground():
             target = self._kb_listener_posix
         elif _HAS_MS_KBHIT and os.name == "nt":
             target = self._kb_listener_windows
         else:
             self.logger.info(
                 "Keyboard cancellation requested but unavailable (no non-blocking keyboard "
-                "input on this platform, or stdin is not a terminal). Continuing without it."
+                "input on this platform, or stdin is not a terminal in the foreground). "
+                "Continuing without it."
             )
             return
 
@@ -170,19 +187,25 @@ class KeyboardListener:
         try:
             tty.setcbreak(fd)  # type: ignore[attr-defined]
             while not self.stop_event.is_set():
-                r, _, _ = select.select([sys.stdin], [], [], 0.1)  # type: ignore[attr-defined]
+                r, _, _ = select.select([fd], [], [], 0.1)  # type: ignore[attr-defined]
                 if not r:
                     continue
-                ch = sys.stdin.read(1)
-                if ch == self.cancel_key:
-                    self.cancel()
-                    break
-                if self.allow_esc_cancel and ch == "\x1b":
-                    # Check for escape sequence start; if more chars follow, skip
-                    r2, _, _ = select.select([sys.stdin], [], [], 0.02)  # type: ignore[attr-defined]
-                    if r2:
-                        sys.stdin.read(1)  # consume seq char
-                        continue
+                # Read the descriptor itself: sys.stdin buffers the rest of an escape
+                # sequence where select() no longer sees it.
+                keys = os.read(fd, 64).decode(errors="ignore")
+                if keys.startswith("\x1b"):
+                    # Consume the rest of an escape sequence (arrow keys, ...): only an ESC
+                    # that nothing follows is the ESC key.
+                    while not self.stop_event.is_set():
+                        r, _, _ = select.select([fd], [], [], _ESCAPE_SEQUENCE_GAP)  # type: ignore[attr-defined]
+                        chunk = os.read(fd, 64) if r else b""
+                        if not chunk:
+                            break
+                        keys += chunk.decode(errors="ignore")
+                    cancel = self.allow_esc_cancel and keys == "\x1b"
+                else:
+                    cancel = self.cancel_key in keys
+                if cancel:
                     self.cancel()
                     break
         finally:

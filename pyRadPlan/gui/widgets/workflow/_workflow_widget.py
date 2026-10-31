@@ -69,9 +69,11 @@ def _build_load_filter() -> str:
             importer_cls = get_importer(fmt)
         except ValueError:
             continue  # export-only format
-        patterns = " ".join(f"*{ext}" for ext in importer_cls.extensions)
+        # GTK file dialogs (Linux) match patterns case-sensitively.
+        exts = [e for ext in importer_cls.extensions for e in dict.fromkeys((ext, ext.upper()))]
+        patterns = " ".join(f"*{ext}" for ext in exts)
         per_format.append(f"{_human_name(fmt, importer_cls)} ({patterns})")
-        all_patterns.extend(f"*{ext}" for ext in importer_cls.extensions)
+        all_patterns.extend(f"*{ext}" for ext in exts)
 
     entries = [f"All supported ({' '.join(sorted(set(all_patterns)))})", *per_format]
     entries.append("All files (*)")

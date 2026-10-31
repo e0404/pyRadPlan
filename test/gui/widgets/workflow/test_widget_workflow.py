@@ -679,7 +679,7 @@ def _answer_message_boxes(monkeypatch, button_text):
 
     def exec_(box):
         shown.append(f"{box.text()}\n{box.informativeText()}")
-        next(b for b in box.buttons() if b.text() == button_text).click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == button_text).click()
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", exec_)
@@ -916,7 +916,7 @@ def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
 
     def exec_(box):
         shown.append([b.text() for b in box.buttons()])
-        next(b for b in box.buttons() if b.text() == "Cancel").click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == "Cancel").click()
         return 0
 
     from PySide6.QtWidgets import QMessageBox
