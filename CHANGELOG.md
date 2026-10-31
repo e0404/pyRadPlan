@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prone and feet-first patients could not be planned: the DICOM import kept their CT direction (e.g. HFP diag(-1, -1, 1)), which the ray tracer does not support, so photon dose calculation and proton stf generation failed. The CT and RTDOSE import now reorient to LPS (no resampling, every voxel keeps its position), and SEG frames are placed through their own orientation, spacing and position
+- DICOM structure import: SEG segments were mirrored left-right whenever the CT carries `PatientPosition` HFS (other positions flipped too), since frames were flipped by the patient position although they lie in the CT pixel grid; they are now placed through their `ImagePositionPatient`. RTSTRUCT contours were mapped to slices with coordinates that ignore the CT direction and a float-exact range check, so a feet-first CT lost all structures and decimal slice positions (e.g. 0.6 mm steps) often lost the last slice; contours are now mapped through the CT geometry. Several contours on one slice were OR-ed, which filled holes (a ring became a disk); they are now combined with the even-odd rule
+- DICOM import warns when CT slices or RTDOSE frames are not equally spaced (a missing slice, a change of slice thickness). SimpleITK reads them onto a uniform grid, which displaces them in z, and previously reported this only on stderr for CTs and not at all for RTDOSE
+
 ## [0.6.1] - 2026-10-30
 
 ### Added
