@@ -61,10 +61,10 @@ class Variance(Objective):
         if values.ndim == 1:
             return xp.zeros((), dtype=values.dtype, device=array_api_compat.device(values))
         xp, weights, deviation = self._deviation(values, weights)
-        return xp.sum(weights[:, None] * deviation**2) / values.shape[1]
+        return xp.sum(weights[:, None] * deviation**2) / float(values.shape[1])
 
     def compute_gradient(self, values: Array, weights: Optional[Array] = None) -> Array:
         if values.ndim == 1:
             return array_api_compat.array_namespace(values).zeros_like(values)
         _, weights, deviation = self._deviation(values, weights)
-        return 2.0 * weights[:, None] * deviation / values.shape[1]
+        return 2.0 * weights[:, None] * deviation / float(values.shape[1])

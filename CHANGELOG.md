@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Multi-scenario dose calculation: isocenter shifts no longer accumulate across setup scenarios (the stf is copied per shift), every scenario selects its own CT phase (the first phase was used for all), the particle engines take the reference tissue parameters of each phase, the relative range margin of the stf generators no longer reuses the absolute one, and the per-voxel parameter column of a scenario is its CT phase rather than its scenario index. The stf generators now take the plan's scenario model (the plan's model was ignored and the nominal one used) and grow the target by setup shift plus range plus beamlet margin as matRad does, and a forward dose calculation refuses a set with several computed scenarios instead of returning the first one
 - Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
+- Objectives normalize by the voxel count as a Python float, so their values and gradients keep the dose's float32 dtype on cupy (cupy promoted the division by a large integer to float64)
 
 ## [0.6.1] - 2026-10-30
 
