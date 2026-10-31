@@ -98,7 +98,7 @@ uses `array_api_compat.array_namespace(values)`.
 |---|---|---|---|---|
 | `none` | | objective | `sum_{s in nominal} p f_s` | `p g_s` on nominal scenarios |
 | `expected_value` | `STOCH`, `stochastic`, `probabilistic` | objective | `p sum_s w_s f_s` | `p w_s g_s` |
-| `expected_quantity` | | objective | `p phi(sum_s w_s q_s)` | `p w_s g(q_bar)` |
+| `expected_quantity` | `PROB` (no export) | objective | `p phi(sum_s w_s q_s)` | `p w_s g(q_bar)` |
 | `voxel_worst_case` | `VWWC` | objective | `p phi(d~)`, `d~ = min_s q_s` (TARGET) / `max_s q_s` (OAR) | `p g(d~) * 1[argmin/argmax == s]` |
 | `voxel_worst_case_inverted` | `VWWC_INV` | objective | as above with max (TARGET) / min (OAR) | likewise |
 | `objective_worst_case` | `OWC` | objective | `smoothmax_s (p f_s)` | `(d smoothmax / d f_s) p g_s` |
@@ -116,7 +116,8 @@ normalization constant, which the documentation states.
 `smoothmax` lives in `_smooth_max.py`: matRad's stable `logsumexp` (`f_max + log1p(sum_{s !=
 max} exp(f_s - f_max))`, gradient `exp(f - f_max) / (1 + sum)`), its normalized `pnorm`
 (`f_max (1/n)^(1/p) ||f/f_max||_p`, gradient `(1/n)^(1/p) (f/f_max / ||.||_p)^(p-1)`), and the
-exact maximum with a one-hot gradient. All three are checked against finite differences.
+exact maximum with a one-hot gradient. All three are checked against finite differences. As in
+matRad, `composite_worst_case` uses the exact maximum while all `F_s <= 0`.
 
 Voxel-wise operators need the VOI type, which is why entries carry `voi_type`; an unknown type
 (`EXTERNAL`, `HELPER`) is treated like an OAR with a warning. They raise for sets whose CT phases
@@ -175,8 +176,9 @@ routes such objectives through the `scenario_stack` operator regardless of their
 string (the field is forced to `scenario_stack`).
 
 `Variance` (name `"Variance"`): `f = (1/n) sum_v Var_w[q_v] = (1/n) sum_s w_s ||q_s - q_bar||^2`
-with `q_bar = sum_s w_s q_s`; gradient `2 w_s (q_s - q_bar) / n` (the chain through `q_bar`
-vanishes). Matrix-free; no Ω matrices on the dij.
+with `q_bar = sum_s w_s q_s` (weights normalized, uniform by default); gradient
+`2 w_s (q_s - q_bar) / n` (the chain through `q_bar` vanishes). Matrix-free; no Ω matrices on
+the dij.
 
 ### 3.7 Results and GUI
 
