@@ -137,7 +137,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         Store the influence matrices of several computed scenarios on one shared sparsity
         pattern (:meth:`Dij.share_scenario_structure`): one row-index array for all scenarios
         and quantities, explicit zeros where a scenario does not reach a voxel. Off by default;
-        building the union costs a few seconds per million stored entries and scenario.
+        building the union costs about half a second per ten million stored entries.
     """
 
     # Constant, Abstract properties

@@ -86,17 +86,36 @@ def _buffer_address(arr: Any) -> int:
 
 def _column_keys(mat: Any, xp: ArrayNamespace, n_rows: int) -> Array:
     """Linear ``column * n_rows + row`` key of every stored entry of a CSC matrix."""
-    nnz = mat.indices.shape[0]
-    positions = xp.arange(nnz, dtype=mat.indptr.dtype, device=array_api_compat.device(mat.indptr))
-    cols = xp.searchsorted(mat.indptr, positions, side="right") - 1
+    # cupy's repeat takes no array of repeat counts, so the column of each entry is the
+    # running count of column starts (empty columns skipped) mapped back to the column index
+    counts = mat.indptr[1:] - mat.indptr[:-1]
+    nonempty = xp.nonzero(counts > 0)[0]
+    starts = xp.zeros(mat.indices.shape[0], dtype=xp.int64, device=array_api_compat.device(counts))
+    starts[mat.indptr[:-1][nonempty]] = 1
+    cols = nonempty[xp.cumulative_sum(starts) - 1]
     return xp.astype(cols, xp.int64) * n_rows + xp.astype(mat.indices, xp.int64)
 
 
-def _sorted_union(xp: ArrayNamespace, a: Array, b: Array) -> Array:
-    """Sorted union of two sorted key arrays without duplicates."""
-    merged = xp.sort(xp.concat([a, b]))
-    first = xp.asarray([True], device=array_api_compat.device(merged))
-    return merged[xp.concat([first, merged[1:] != merged[:-1]])]
+def _merge_sorted_keys(xp: ArrayNamespace, keys: list[Array]) -> tuple[Array, list[Array]]:
+    """
+    Union of sorted key arrays and the position of every key in it.
+
+    A stable sort of the concatenation merges the presorted runs in near-linear time; the rank
+    of each merged entry among the distinct keys, scattered back through the sort permutation,
+    gives the positions without any binary search.
+    """
+    stacked = xp.concat(keys)
+    device = array_api_compat.device(stacked)
+    order = xp.argsort(stacked, stable=True)
+    merged = stacked[order]
+    first = xp.concat([xp.asarray([True], device=device), merged[1:] != merged[:-1]])
+    ranks = xp.cumulative_sum(xp.astype(first, xp.int64)) - 1
+    positions = xp.empty_like(ranks)
+    positions[order] = ranks
+    bounds = [0]
+    for k in keys:
+        bounds.append(bounds[-1] + k.shape[0])
+    return merged[first], [positions[a:b] for a, b in zip(bounds[:-1], bounds[1:])]
 
 
 def _check_influence_matrix(mat: Any, info: ValidationInfo):
@@ -1231,21 +1250,16 @@ class Dij(PyRadPlanBaseModel):
         (n_rows, n_cols) = shapes.pop()
         xp = array_api_compat.array_namespace(*(m.indices for m in matrices.values()))
 
-        union = None
-        for mat in matrices.values():
-            keys = _column_keys(mat, xp, n_rows)
-            union = keys if union is None else _sorted_union(xp, union, keys)
+        union, position_list = _merge_sorted_keys(
+            xp, [_column_keys(mat, xp, n_rows) for mat in matrices.values()]
+        )
+        positions = dict(zip(matrices.keys(), position_list))
         nnz_union = int(union.shape[0])
 
         idx_dtype = xp.int32 if max(n_rows, n_cols, nnz_union) <= _INT32_MAX else xp.int64
         indices = xp.astype(union % n_rows, idx_dtype)
         column_ends = xp.arange(n_cols + 1, dtype=xp.int64, device=array_api_compat.device(union))
         indptr = xp.astype(xp.searchsorted(union // n_rows, column_ends, side="left"), idx_dtype)
-
-        positions = {
-            key: xp.searchsorted(union, _column_keys(mat, xp, n_rows))
-            for key, mat in matrices.items()
-        }
 
         dij_copy = self.model_copy(deep=False)
         for q in self.quantities:

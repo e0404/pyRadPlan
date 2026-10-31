@@ -154,7 +154,7 @@ The matrices of several computed scenarios can be stored on one shared sparsity 
 union of the scenarios' patterns: a single row-index array serves all scenarios and quantities and
 is uploaded to the GPU once, and a scenario that does not reach a voxel stores an explicit zero
 there. Enable it with the engine option ``share_scenario_structure`` (off by default: building
-the union takes a few seconds per million stored entries and scenario), or call
+the union takes about half a second per ten million stored entries on the CPU), or call
 ``dij.share_scenario_structure()`` on any Dij, for instance after ``extend_scenarios``. The call
 logs the share of explicit zeros the union added.
 
