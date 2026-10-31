@@ -152,8 +152,10 @@ CT phase); ``scen_set.voxel_param_set(i)`` maps a scenario to its column.
 
 Quantities (:ref:`concept_quantities`) evaluate all computed scenarios of ``dij.scenarios`` by
 default and expose them in the same flat layout; the optimization problem aggregates over them.
-Robust objectives (expected value, worst case) build on the set's ``weights`` and ``tags`` and
-are not part of the first release of the scenario system.
+Robust objectives (expected value, worst case, voxel-wise worst case) build on the set's
+``weights`` and ``tags`` and are chosen per objective through its ``robustness`` option, see
+:ref:`concept_robust_optimization`. An objective with ``robustness="none"`` evaluates only the
+nominal scenario(s) of the set.
 
 matRad interoperability
 -----------------------

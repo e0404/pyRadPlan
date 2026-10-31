@@ -290,6 +290,275 @@ otherwise setting up the problem raises an error rather than guessing.
 
 The optimizer logs which interpretation it applies.
 
+.. _concept_robust_optimization:
+
+Robust optimization
+-------------------
+
+A plan that is optimized on the nominal scenario only can degrade when the patient is set up
+with an offset, the particle range deviates or the anatomy moves. *Robust optimization* takes
+the uncertainty into account by evaluating the objectives on a
+:ref:`scenario set <concept_uncertainty>` instead of a single dose distribution. The scenario
+set comes from the plan's scenario model and is attached to the influence data
+(``dij.scenarios``); how the scenarios enter an objective is chosen per objective through its
+``robustness`` option.
+
+Concepts
+~~~~~~~~
+
+Let :math:`f_s` be the value of an objective on the quantity of scenario :math:`s`, and
+:math:`w_s` the normalized weight of that scenario in the set. The robustness operator of an
+objective combines the per-scenario values into the value the optimizer sees.
+
+*Objective-wise* operators act on one objective at a time. The *expected value* averages
+:math:`f_s` over the scenarios with the weights :math:`w_s`, i.e. it optimizes the average
+objective. The *objective-wise worst case* takes the maximum of :math:`f_s` over the scenarios
+for each objective separately, so every objective is protected against its own worst scenario.
+
+*Composite* operators act on all objectives that carry the operator. The *composite worst case*
+first sums the (priority-weighted) objectives of each scenario and then takes the maximum over
+scenarios, so the optimizer minimizes the plan's worst scenario as a whole. This is the
+classical formulation for target coverage together with sparing of organs at risk.
+
+*Voxel-wise* operators take the worst case per voxel before the objective is evaluated: the
+minimum dose over scenarios in a target and the maximum in an organ at risk, which mimics a
+dose distribution that is as bad as the worst scenario in every voxel. The inverted variant
+takes the maximum in a target and the minimum in an organ at risk. Voxel-wise operators are not
+available for 4D scenario sets, whose CT phases differ in anatomy.
+
+*Probabilistic* operators optimize the statistics of the dose over the scenarios. Besides the
+expected value, *expected quantity* evaluates the objective on the expected dose
+:math:`\bar q = \sum_s w_s q_s`, and the :class:`~pyRadPlan.optimization.objectives.Variance`
+objective penalizes the spread of the dose over the scenarios (see below).
+
+Setting ``robustness``
+~~~~~~~~~~~~~~~~~~~~~~
+
+Every objective has a ``robustness`` option, a string that defaults to ``"none"``:
+
+.. code-block:: python
+
+    from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing
+
+    ptv.objectives = [
+        SquaredDeviation(priority=1000, d_ref=60.0, robustness="composite_worst_case"),
+    ]
+    oar.objectives = [
+        SquaredOverdosing(priority=500, d_max=45.0, robustness="expected_value"),
+    ]
+
+    SquaredDeviation.available_robustness()   # names accepted by the objective
+
+The accepted names are listed below. The matRad names and short forms are accepted as well and
+normalized to the canonical name (``"OWC"`` becomes ``"objective_worst_case"``). When an
+objective is exported to matRad, the matRad name is written.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 22 14 40
+
+   * - ``robustness``
+     - matRad name / aliases
+     - Scope
+     - Value optimized
+   * - ``"none"``
+     -
+     - objective
+     - The nominal scenario only. In a 4D set, one nominal scenario per CT phase, summed.
+   * - ``"expected_value"``
+     - ``STOCH``, ``stochastic``, ``probabilistic``
+     - objective
+     - Weighted average of the objective over all scenarios.
+   * - ``"expected_quantity"``
+     - ``PROB``
+     - objective
+     - The objective evaluated on the weighted average of the quantity.
+   * - ``"voxel_worst_case"``
+     - ``VWWC``
+     - objective
+     - The objective evaluated on the voxel-wise worst quantity: minimum over scenarios in
+       targets, maximum in organs at risk.
+   * - ``"voxel_worst_case_inverted"``
+     - ``VWWC_INV``
+     - objective
+     - As ``voxel_worst_case`` with maximum in targets and minimum in organs at risk.
+   * - ``"objective_worst_case"``
+     - ``OWC``
+     - objective
+     - Maximum over scenarios of the objective, per objective.
+   * - ``"composite_worst_case"``
+     - ``COWC``
+     - composite
+     - Maximum over scenarios of the sum of all objectives carrying this operator.
+
+A few details differ from matRad:
+
+- ``"expected_value"`` uses the set's normalized aggregation weights ``weights``, whereas
+  matRad's ``STOCH`` multiplies by the raw scenario densities. The values differ by a constant
+  factor, which does not change the optimum of a single operator but matters when several
+  operators are mixed.
+- matRad's ``PROB`` adds a variance term built from large covariance matrices of the influence
+  data. pyRadPlan drops that term with a warning, so ``"expected_quantity"`` evaluates only the
+  expected-quantity part. Use the :class:`~pyRadPlan.optimization.objectives.Variance`
+  objective to penalize the spread of the dose.
+- A structure type other than target or organ at risk (``EXTERNAL``, ``HELPER``) is treated
+  like an organ at risk by the voxel-wise operators, with a warning.
+
+Objectives with ``robustness="none"`` evaluate only the nominal scenario(s) of the set, even
+when the influence data contains many scenarios, so a plan that mixes robust and non-robust
+objectives optimizes the non-robust goals on the nominal dose.
+
+Smooth maximum
+~~~~~~~~~~~~~~
+
+The worst-case operators need a maximum over scenarios, which is not differentiable. By default
+pyRadPlan uses a smooth approximation, selected on the planning problem through
+``pln.prop_opt`` (matRad's ``useMaxApprox`` and ``p``):
+
+.. code-block:: python
+
+    pln.prop_opt = {
+        "problem": "nonlin_fluence",
+        "max_approximation": "logsumexp",   # "logsumexp" (default), "pnorm" or "none"
+        "p_norm": 30.0,                     # exponent of the p-norm approximation
+    }
+
+``"logsumexp"`` is the log-sum-exp approximation, ``"pnorm"`` a normalized p-norm with the
+exponent ``p_norm``, and ``"none"`` the exact maximum, whose gradient follows the currently
+worst scenario only. The exact maximum is not smooth, so the approximations are usually the
+better choice for gradient-based solvers.
+
+The ``Variance`` objective
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`~pyRadPlan.optimization.objectives.Variance` (name ``"Variance"``) is a
+*scenario-aware* objective: instead of being evaluated scenario by scenario, it receives the
+quantity of the whole scenario set. It minimizes the mean over the structure's voxels of the
+weighted variance of the quantity over the scenarios,
+
+.. math::
+
+    f = \frac{1}{n} \sum_{v} \sum_s w_s \left(q_{s,v} - \bar q_v\right)^2 ,
+
+with :math:`\bar q_v = \sum_s w_s q_{s,v}`. It always evaluates the whole set and ignores the
+``robustness`` option. It is evaluated matrix-free from the per-scenario quantities, so no
+covariance matrices of the influence data are needed.
+
+.. code-block:: python
+
+    from pyRadPlan.optimization.objectives import Variance
+
+    ptv.objectives = [
+        SquaredDeviation(priority=1000, d_ref=60.0, robustness="expected_value"),
+        Variance(priority=100),
+    ]
+
+Worked example
+~~~~~~~~~~~~~~
+
+The following sketch optimizes a plan on a worst-case scenario grid. The target is protected
+by the composite worst case, the organ at risk by the expected value:
+
+.. code-block:: python
+
+    from pyRadPlan import IonPlan, calc_dose_influence, fluence_optimization
+    from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing
+
+    pln = IonPlan(
+        radiation_mode="protons",
+        scenarios={"model": "wcScen", "combinations": "all"},
+    )
+
+    dij = calc_dose_influence(ct, cst, stf, pln)    # one influence matrix per scenario
+
+    ptv = next(v for v in cst.vois if v.voi_type == "TARGET")
+    ptv.objectives = [
+        SquaredDeviation(priority=1000, d_ref=60.0, robustness="composite_worst_case"),
+    ]
+
+    oar = next(v for v in cst.vois if v.name == "Spinal_Cord")
+    oar.objectives = [
+        SquaredOverdosing(priority=500, d_max=45.0, robustness="expected_value"),
+    ]
+
+    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+
+The optimization reads the scenario set from the influence data and evaluates each scenario's
+dose through that scenario's influence matrix.
+
+Per-scenario results
+~~~~~~~~~~~~~~~~~~~~
+
+To inspect how the optimized plan behaves in each scenario, ask for the scenario results when
+computing the result images:
+
+.. code-block:: python
+
+    result = dij.compute_result_ct_grid(fluence, scenarios=True)
+
+    nominal = result["physical_dose"]
+    per_scenario = result["physical_dose_scenario"]   # one image per scenario
+    third = per_scenario[3]                           # index = flat index in dij.scenarios
+
+Next to the usual ``"<quantity>"`` and ``"<quantity>_beam"`` entries, the result holds a
+``"<quantity>_scenario"`` list with one image per scenario. The position in the list is the
+flat index of the scenario in the set, which is also the slot in the influence-matrix
+containers of the Dij.
+
+Robustness in the GUI
+~~~~~~~~~~~~~~~~~~~~~
+
+In the GUI, the objective editor has a *Robustness* column that offers the robustness names an
+objective accepts, and the scenario model is configured in the plan widget. When the influence
+data holds several scenarios, the result selector lists ``scenario i`` components next to the
+beams, labelled by the scenario's realization, with the nominal scenario marked. The DVH widget
+can overlay the DVH of every scenario behind the nominal one, which gives a band that shows
+the plan's sensitivity to the uncertainties.
+
+Adding a robustness operator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Robustness operators are registered by name, like objectives and problems, so a custom operator
+becomes available to every objective through ``robustness="<name>"``. An operator subclasses
+:class:`~pyRadPlan.optimization.robustness.RobustnessOperator`, sets a ``name`` and a
+``scope`` (``"objective"`` for one objective, ``"composite"`` for all objectives carrying the
+name), and implements ``evaluate(entries, values)`` and ``gradient(entries, values)``. The
+``entries`` are :class:`~pyRadPlan.optimization.robustness.RobustTermEntry` objects holding the
+objective and its structure type; ``values[j]`` is the quantity of entry ``j`` as an array of
+shape ``(S, n)`` over the operator's ``scenario_indices``. ``evaluate`` returns the scalar
+value including priorities, ``gradient`` the derivative with respect to each entry's values,
+one array per entry with the shape of ``values[j]``.
+
+.. code-block:: python
+
+    import array_api_compat
+    from pyRadPlan.optimization.robustness import (
+        RobustnessOperator,
+        register_robustness_operator,
+    )
+
+
+    class FirstScenarioOnly(RobustnessOperator):
+        name = "first_scenario_only"
+        scope = "objective"
+
+        def evaluate(self, entries, values):
+            objective = entries[0].objective
+            return objective.priority * objective.compute_objective(values[0][0])
+
+        def gradient(self, entries, values):
+            objective = entries[0].objective
+            xp = array_api_compat.array_namespace(values[0])
+            grad = xp.zeros_like(values[0])
+            grad[0, ...] = objective.priority * objective.compute_gradient(values[0][0])
+            return [grad]
+
+
+    register_robustness_operator(FirstScenarioOnly)
+
+Operators receive the values in the compute backend of the optimization and should use
+``array_api_compat.array_namespace`` rather than NumPy directly.
+
 Compute backend
 ---------------
 
