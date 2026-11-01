@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CT.to_matrad`: `cubeDim` was in x, y, z instead of matRad's y, x, z order, and multi-scenario CTs failed; a single-cell `cubeHU` (as `to_matrad` writes it) was read back as a 4D CT
 - Multi-scenario CTs: `compute_wet` failed, a centered origin had -1 instead of 0 in its 4th component, and a 3-element `origin` (as `CT.origin` returns it) was rejected
 - `CT.compute_wet` accepted HLUTs with more than two columns or a single row
+- Importing a matRad stf with a beam that has only one ray no longer fails
+- `FieldShapeAsMask` accepts masks given as nested lists, and the warning about padding an even-sized mask is logged correctly instead of raising a logging error
 
 ## [0.6.1] - 2026-10-30
 
