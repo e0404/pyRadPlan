@@ -92,3 +92,28 @@ def test_bixel_based_lateral_cutoff_includes_half_diagonal(test_data_photons):
 
     expected = engine.geometric_lateral_cutoff + stf.beams[0].bixel_width / np.sqrt(2)
     assert engine._effective_lateral_cutoff == pytest.approx(expected)
+
+
+def test_bixel_dose_is_mirror_symmetric(test_data_photons):
+    """Opposed beams on the symmetric test data give a mirror-symmetric dose."""
+    pln, ct, cst, stf, _, _ = test_data_photons
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    assert np.allclose(dose, dose[::-1, ::-1, ::-1], atol=1e-3 * dose.max())
+
+
+def test_bixel_based_custom_primary_fluence(test_data_photons):
+    """A uniform fluence matches the default bixel dose, the primary fluence changes it."""
+    pln, ct, cst, stf, _, _ = test_data_photons
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    default = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+
+    pln.prop_dose_calc["use_custom_primary_photon_fluence"] = True
+    pln.prop_dose_calc["force_uniform_fluence"] = True
+    uniform = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    assert np.allclose(uniform, default)
+
+    pln.prop_dose_calc["force_uniform_fluence"] = False
+    custom = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    assert np.all(np.isfinite(custom))
+    assert not np.allclose(custom, default)

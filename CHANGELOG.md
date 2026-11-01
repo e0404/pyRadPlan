@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comparing CTs, VOIs or structure sets (`==`) ignored their voxel values (SimpleITK's image comparison is always truthy) and raised for a 3D and a 4D image; models holding images now compare geometry and voxel values
 - Pencil-beam dose calculation failed with a broadcasting error when some rays of a beam missed the patient (e.g. under large setup shifts); such rays now take the SSD of the closest ray that hits the patient, and a beam missing the patient entirely reports it
 - 4D CTs: `calc_dose_influence`, `calc_dose_forward`, `generate_stf` and the planning problems accept a 3D structure set with a 4D CT (its structures are repeated for every phase, as in matRad) as well as 4D structure sets; before, the structure set validation, the stf generators and the structure resampling of the planning problems failed with SimpleITK errors
+- Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
 
 ## [0.6.1] - 2026-10-30
 

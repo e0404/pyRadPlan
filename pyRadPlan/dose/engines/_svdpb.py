@@ -170,7 +170,12 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        if field_based_dose_calc:
+            field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        else:
+            # Keeps the bixel centered on its ray for any number of pixels
+            n = np.floor(field_width / self.int_conv_resolution).astype(int)
+            field_grid = self.int_conv_resolution * (np.arange(n) - (n - 1) / 2)
 
         # The resampled field shapes go into this beam's dose calculation only; the stf
         # stays as the caller passed it
@@ -259,8 +264,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # calculate also the total size and distance as we need this during convolution extensively
         kernel_conv_limit = field_limit + gauss_limit + kernel_limit
-        kernel_conv_grid = self.int_conv_resolution * xp.arange(
-            -kernel_conv_limit, kernel_conv_limit
+        field_grid_shift = float(field_grid[0]) + float(field_limit) * self.int_conv_resolution
+        kernel_conv_grid = (
+            self.int_conv_resolution * xp.arange(-kernel_conv_limit, kernel_conv_limit)
+            + field_grid_shift
         )
         conv_mx_x, conv_mx_z = array_meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
 
@@ -268,8 +275,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:
-            n = np.floor(field_width / self.int_conv_resolution).astype(int)
-            f_pre = xp.ones((n, n), dtype=xp.float32)
+            f_pre = xp.ones_like(beam_info["f_x"], dtype=xp.float32)
 
             if not self.use_custom_primary_photon_fluence:
                 f_pre = _ifft2(
@@ -312,10 +318,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["kernel_conv_grid"] = kernel_conv_grid
         beam_info["kernel_conv_size"] = kernel_conv_size
 
-        if not field_based_dose_calc and not self.use_custom_primary_photon_fluence:
+        if not field_based_dose_calc:
             beam_info["f_pre"] = f_pre
-            kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
-            beam_info["kernel_interpolators"] = kernel_interpolators
+            if not self.use_custom_primary_photon_fluence:
+                kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
+                beam_info["kernel_interpolators"] = kernel_interpolators
 
         return beam_info
 
@@ -544,7 +551,6 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     # Not in-place: f may alias the beamlet's stored mask
                     f = f * to_namespace(xp, beamlet["mask"], device=self.device)
             else:
-                # TODO: Not saved yet
                 f = to_namespace(xp, beam_info["f_pre"], device=self.device)
 
             f_x = to_namespace(xp, beam_info["f_x"], device=self.device)
