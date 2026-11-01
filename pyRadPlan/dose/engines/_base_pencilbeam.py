@@ -2,7 +2,7 @@
 
 from abc import abstractmethod
 from contextlib import nullcontext
-from typing import Annotated, Any, ClassVar, Literal, Optional
+from typing import Annotated, Any, ClassVar, Optional
 import warnings
 import logging
 import time
@@ -649,21 +649,19 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self,
         beam_info: dict,
         _ct: CT,
-        mode: Literal["first"] = "first",
         density_threshold: float = 0.05,
         show_warning: bool = True,
     ):
         """
-        Compute SSD (Source to Surface Distance) for each ray.
+        Compute the SSD (Source to Surface Distance) of each ray for every CT phase.
 
         Parameters
         ----------
         beam_info : dict
-            Beam Information, will be modified to include SSD.
+            Beam Information, will be modified to include SSD: ``ray["SSD"]`` is a list with
+            one value per CT phase, in the order of the CT's phases.
         ct : CT
             The CT object.
-        mode : Literal["first"], optional
-            Mode for handling multiple cubes to compute one SSD. Only 'first' is implemented.
         density_threshold : float, optional
             Value determining the skin threshold.
         show_warning : bool, optional
@@ -672,50 +670,51 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         beam = beam_info["beam"]
 
-        # TODO: Add MultiScenario Support - remove this line
-        if mode == "first":
-            ssd = [None] * beam["num_of_rays"]
+        xp = array_api_compat.array_namespace(beam["iso_center"], beam["source_point"])
 
-            xp = array_api_compat.array_namespace(beam["iso_center"], beam["source_point"])
+        # Build stacked arrays using the backend's stack (works for numpy, cupy, torch)
+        ray_pos_bev = xp.stack([xp.asarray(ray["ray_pos_bev"]) for ray in beam["rays"]])
+        target_points = xp.stack([xp.asarray(ray["target_point"]) for ray in beam["rays"]])
 
-            # Build stacked arrays using the backend's stack (works for numpy, cupy, torch)
-            ray_pos_bev = xp.stack([xp.asarray(ray["ray_pos_bev"]) for ray in beam["rays"]])
-            target_points = xp.stack([xp.asarray(ray["target_point"]) for ray in beam["rays"]])
+        alpha, _, rho, d12, _ = self._raytracer.trace_rays(
+            beam["iso_center"],
+            xp.reshape(beam["source_point"], (1, 3)),
+            target_points,
+        )
 
-            alpha, _, rho, d12, _ = self._raytracer.trace_rays(
-                beam["iso_center"],
-                xp.reshape(beam["source_point"], (1, 3)),
-                target_points,
-            )
+        alpha = to_namespace(xp, alpha, device=self.device)
+        rho = [to_namespace(xp, r, device=self.device) for r in rho]
+        d12 = to_namespace(xp, d12.squeeze(), device=self.device)
+        # prevent d12 from being 0d array which causes issues with indexing later on
+        if d12.ndim == 0:
+            d12 = xp.reshape(d12, (1,))
 
-            alpha = to_namespace(xp, alpha, device=self.device)
-            rho = [to_namespace(xp, r, device=self.device) for r in rho]
-            d12 = to_namespace(xp, d12.squeeze(), device=self.device)
-            # prevent d12 from being 0d array which causes issues with indexing later on
-            if d12.ndim == 0:
-                d12 = xp.reshape(d12, (1,))
-            # find rays that do not hit patients
-            ix_nan = xp.all(xp.isnan(rho[0]), axis=1)
+        for ray in beam["rays"]:
+            ray["SSD"] = []
+
+        for rho_phase in rho:
+            # find rays that do not hit the patient in this phase
+            ix_nan = xp.all(xp.isnan(rho_phase), axis=1)
+
             if xp.any(ix_nan):
-                msg = f"{xp.count_nonzero(ix_nan)} rays do not hit patient. Trying to fix afterwards..."
+                msg = (
+                    f"{xp.count_nonzero(ix_nan)} rays do not hit patient. "
+                    "Trying to fix afterwards..."
+                )
                 if show_warning:
                     warnings.warn(msg)
                 else:
                     logger.warning(msg)
 
-            ix_ssd = -1 * xp.ones_like(ix_nan, dtype=xp.int64)
-
             # Work with explicit row indices to avoid unsupported boolean argmax on some backends
             row_idx = xp.nonzero(~ix_nan)[0]
 
             # Compute boolean condition, convert to integers for argmax
-            cond = xp.take(rho[0], row_idx, axis=0) > density_threshold
+            cond = xp.take(rho_phase, row_idx, axis=0) > density_threshold
             cond_int = xp.where(cond, xp.asarray(1, dtype=xp.int64), xp.asarray(0, dtype=xp.int64))
             arg = xp.argmax(cond_int, axis=1)
 
-            ix_ssd = xp.where(~ix_nan, xp.astype(arg, xp.int64), ix_ssd)
-
-            ssd = beam["sad"] * xp.ones_like(ix_ssd, dtype=xp.float32)
+            ssd = beam["sad"] * xp.ones_like(ix_nan, dtype=xp.float32)
 
             d12_sel = xp.reshape(xp.take(d12, row_idx, axis=0), (-1,))
             alpha_rows = xp.take(alpha, row_idx, axis=0)
@@ -725,15 +724,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             ssd_vals = xp.astype(d12_sel, xp.float32) * xp.astype(alpha_sel, xp.float32)
             ssd = xp.where(~ix_nan, ssd_vals, ssd)
 
-            # Now assign the ssd to all rays
             for j, ray in enumerate(beam["rays"]):
                 if ix_nan[j]:  # Try to fix SSD by using SSD of closest neighboring ray
-                    ray["SSD"] = self._closest_neighbor_ssd(ray_pos_bev, ssd, ray["ray_pos_bev"])
+                    ray["SSD"].append(
+                        self._closest_neighbor_ssd(ray_pos_bev, ssd, ray["ray_pos_bev"])
+                    )
                 else:
-                    ray["SSD"] = float(ssd[j])
-
-        else:
-            raise ValueError(f"Invalid mode {mode} for SSD calculation")
+                    ray["SSD"].append(float(ssd[j]))
 
         beam_info["beam"] = beam
 
@@ -846,6 +843,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "geo_depths",
             "lat_dists",
             "iso_lat_dists",
+            "SSD",
         ):
             if key in scen_ray:
                 scen_ray[key] = scen_ray[key][ct_phase]

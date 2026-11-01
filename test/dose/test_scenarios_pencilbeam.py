@@ -92,6 +92,11 @@ def _assert_differs(a, b):
     assert (sparse.csc_array(a) != sparse.csc_array(b)).nnz > 0
 
 
+def _assert_close(a, b, rtol):
+    a, b = sparse.csc_array(a), sparse.csc_array(b)
+    assert np.abs((a - b).data).max(initial=0.0) <= rtol * np.abs(a.data).max()
+
+
 def test_nominal_set_has_one_flat_slot(case):
     pln, ct, cst, stf = case
     engine, dij, slots = _calc(pln, ct, cst, stf)
@@ -197,6 +202,56 @@ def _two_phase_ct(ct: CT, hu_offset: float = 300.0) -> tuple[CT, CT]:
     phase1 = sitk.GetImageFromArray(arr1)
     phase1.CopyInformation(ct.cube_hu)
     return CT(cube_hu=sitk.JoinSeries([ct.cube_hu, phase1])), CT(cube_hu=phase1)
+
+
+def _two_phase_ct_moved_outline(ct: CT, shift: int = 3) -> tuple[CT, CT]:
+    """CT whose phase 1 is phase 0 moved by ``shift`` voxels (the outline moves), and phase 1."""
+    arr = sitk.GetArrayFromImage(ct.cube_hu)
+    moved = sitk.GetImageFromArray(np.roll(arr, shift, axis=(0, 1, 2)))
+    moved.CopyInformation(ct.cube_hu)
+    return CT(cube_hu=sitk.JoinSeries([ct.cube_hu, moved])), CT(cube_hu=moved)
+
+
+def test_ct_phase_with_moved_outline_matches_standalone(case):
+    """SSD-dependent quantities follow the phase, also when phase 0 is not computed."""
+    pln, ct, cst, stf = case
+    ct2, ct_phase1 = _two_phase_ct_moved_outline(ct)
+
+    _, _, nominal = _calc(pln, ct, cst, stf)
+    _, _, standalone = _calc(pln, ct_phase1, cst, stf)
+    _assert_differs(standalone[0], nominal[0])
+
+    _, dij, slots = _calc(pln, ct2, cst, stf, scenarios=_scenario_set(ct_phase=[1], phases=(0, 1)))
+    assert dij.physical_dose.shape == (1,)
+    _assert_equal(slots[0], standalone[0])
+
+    # With both phases computed, the per-beam approximations derived from the SSD (particle
+    # lateral cutoff, photon kernel selection) follow the lowest phase, so phase 0 is exact and
+    # phase 1 matches its standalone run up to those approximations
+    _, _, slots = _calc(
+        pln, ct2, cst, stf, scenarios=_scenario_set(ct_phase=[1, 0], phases=(0, 1))
+    )
+    _assert_equal(slots[1], nominal[0])
+    _assert_close(slots[0], standalone[0], rtol=1e-2)
+
+
+def test_ct_phase_selection_bio_single_and_reordered(test_data_protons):
+    pln, ct, cst, stf, _, _ = test_data_protons
+    pln.bio_model = "MCN"
+    ct2, ct_phase1 = _two_phase_ct_moved_outline(ct)
+    _, ref, _ = _calc(pln, ct_phase1, cst, stf)
+    quantities = ("physical_dose", "alpha_dose", "sqrt_beta_dose")
+
+    _, dij, _ = _calc(pln, ct2, cst, stf, scenarios=_scenario_set(ct_phase=[1], phases=(0, 1)))
+    assert dij.alphax.shape[1] == 1
+    for quantity in quantities:
+        _assert_equal(getattr(dij, quantity)[0], getattr(ref, quantity)[0])
+
+    # phase 1 computed next to phase 0: exact up to the lateral cutoff taken at phase 0's SSD
+    _, dij, _ = _calc(pln, ct2, cst, stf, scenarios=_scenario_set(ct_phase=[1, 0], phases=(0, 1)))
+    assert dij.alphax.shape[1] == 2
+    for quantity in quantities:
+        _assert_close(getattr(dij, quantity)[0], getattr(ref, quantity)[0], rtol=1e-2)
 
 
 def test_ct_phase_selection(case):

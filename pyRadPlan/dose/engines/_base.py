@@ -210,6 +210,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._tissue_classes = None  # tissue classes the dij's tissue_class_ix refers to
         self._scenarios: Optional[ScenarioSet] = None  # scenario set of the current calculation
         self._scenarios_override = None  # scenarios passed to a calc_* call
+        self._voxel_param_phases: list[int] = []  # CT phase behind each voxel parameter column
+        # CT phase whose SSDs feed the per-beam approximations (particle lateral cutoff,
+        # photon kernel selection): the lowest computed phase, as matRad uses the first one
+        self._reference_ct_phase = 0
 
         # Protected properties with private get access
         self._calc_dose_direct = False
@@ -766,6 +770,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         radiation_mode = radiation_mode[0]
 
         self._scenarios = self._resolve_scenarios(ct)
+        computed = self._scenarios.computed_indices()
+        self._reference_ct_phase = (
+            int(self._scenarios.ct_phases()[computed].min()) if computed.size else 0
+        )
 
         # TODO: Add BioModel Support
         # if not np.isnan(self.bio_param["RBE"]):
@@ -911,6 +919,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         for key in ("alphax", "betax", "tissue_class_ix"):
             if dij[key] is not None:
                 dij[key] = np.ascontiguousarray(dij[key][:, phase_columns])
+        self._voxel_param_phases = phase_columns
         self._tissue_classes = cst.get_tissue_classes()
 
         # TODO: this function has not yet been implemented

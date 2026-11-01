@@ -436,6 +436,13 @@ derived scenarios, a PCE driver using `from_points`/`extend_scenarios`, the `Bio
 dimension with its CST hook, dimensions beyond that (HU, machine), and the fused multi-scenario
 kernels on the shared value block.
 
+CT phases in the pencil-beam engines (2026-11-01): the SSD, and the initial particle spot width
+and air-gap depth offset derived from it, are computed per CT phase (`ray["SSD"]` etc. are lists
+over the CT's phases, selected in `_apply_scenario_to_ray`); the reference tissue parameter columns
+are addressed through `_voxel_param_phases` (one column per voxel parameter set, not per phase).
+Per-beam approximations that need one SSD (particle lateral cutoff LUT, photon SVD kernel
+selection) use `_reference_ct_phase`, the lowest computed phase, as matRad uses the first.
+
 ## 8. Decisions (confirmed 2026-10-22)
 
 1. Flat canonical container layout; dimensional access through the derived, re-tieable

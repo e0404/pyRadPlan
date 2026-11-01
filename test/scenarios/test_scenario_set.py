@@ -405,3 +405,16 @@ def test_equality_ignores_caches_and_compares_content(wc_like_set):
     assert a.with_weights(np.ones(len(a))) != a
     assert a.with_axes("ct_phase", ("setup", "range")) != a
     assert a != "nomScen"
+
+
+def test_with_weights_refreshes_cached_scenarios(wc_like_set):
+    first = wc_like_set[0]
+    reweighted = wc_like_set.with_weights(np.arange(1, 7, dtype=float))
+
+    assert reweighted[0].weight == reweighted.weights[0] == 1.0
+    assert reweighted[5].weight == 6.0
+    assert wc_like_set[0] is first and first.weight == wc_like_set.weights[0]
+    assert reweighted.with_axes("setup")[0].weight == 1.0
+
+    with pytest.raises(ValueError, match="shape"):
+        wc_like_set.with_weights(np.ones(5))

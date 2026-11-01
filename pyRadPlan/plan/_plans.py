@@ -13,6 +13,7 @@ from pydantic import (
     Field,
     field_validator,
     field_serializer,
+    SerializeAsAny,
     SerializationInfo,
     SerializerFunctionWrapHandler,
     model_validator,
@@ -79,7 +80,7 @@ class Plan(PyRadPlanBaseModel, ABC):
     )
     machine: Union[Machine, Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
-    scenarios: ScenarioModel = Field(
+    scenarios: SerializeAsAny[ScenarioModel] = Field(
         default_factory=create_scenario_model,
         validation_alias=AliasChoices("scenarios", "mult_scen", "multScen"),
         serialization_alias="multScen",

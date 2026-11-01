@@ -846,8 +846,18 @@ class ScenarioSet(PyRadPlanBaseModel):
         )
 
     def with_weights(self, weights: Any) -> "ScenarioSet":
-        """Copy with new aggregation weights."""
-        return self.model_copy(update={"weights": self._coerce_vectors(weights)})
+        """Copy with new aggregation weights (one per scenario)."""
+        weights = self._coerce_vectors(weights)
+        if weights.shape != self.weights.shape:
+            raise ValueError(f"weights must have shape {self.weights.shape}, got {weights.shape}")
+        weights.setflags(write=False)
+        return self._copy_with(weights=weights)
+
+    def _copy_with(self, **update: Any) -> "ScenarioSet":
+        """Shallow copy with ``update`` applied and its own scenario cache."""
+        new = self.model_copy(update=update)
+        new._scenario_cache = {}
+        return new
 
     def normalized(self) -> "ScenarioSet":
         """Copy whose weights sum to one."""
@@ -864,8 +874,7 @@ class ScenarioSet(PyRadPlanBaseModel):
 
     def with_axes(self, *axes: AxisSpec) -> "ScenarioSet":
         """Copy whose default layout ties the given axes (see :meth:`from_points`)."""
-        new = self.model_copy(update={"axes": self._normalize_axes(axes)})
-        return new
+        return self._copy_with(axes=self._normalize_axes(axes))
 
     def layout_for(self, *axes: AxisSpec) -> ScenarioLayout:
         """Grid view for an explicit axis tying without changing the set."""
