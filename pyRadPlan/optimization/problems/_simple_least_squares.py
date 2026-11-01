@@ -87,7 +87,8 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
             2.0 / self._patient_voxels.size * (dose[self._patient_voxels])
         )
 
-        self._grad_cache = self._dij.physical_dose.flat[0].T @ self._grad_cache_intermediate
+        nominal = self._dij.physical_dose.flat[self._dij.nominal_scenario_index()]
+        self._grad_cache = nominal.T @ self._grad_cache_intermediate
 
         return self._grad_cache
 

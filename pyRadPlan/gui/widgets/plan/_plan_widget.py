@@ -41,7 +41,11 @@ from pyRadPlan.machines import Machine, get_available_machines
 from pyRadPlan.optimization.problems import get_available_problems
 from pyRadPlan.optimization.solvers import SolverBase
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, default_bio_models
-from pyRadPlan.scenarios import available_scenario_models
+from pyRadPlan.scenarios import (
+    ScenarioModel,
+    available_scenario_models,
+    get_scenario_model_class,
+)
 from pyRadPlan.stf import get_beam_angle_presets
 from pyRadPlan.biology.tissues import provenance_label
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
@@ -152,6 +156,9 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Scenario model parameters per model short name (nested overrides of the model's
+        #: defaults), edited via the [...] popup and written into ``pln.scenarios`` on Apply.
+        self._scenario_props: dict[str, dict] = {}
         #: ``pln.prop_opt`` entries per planning problem short name (without the
         #: ``"problem"`` key), edited via the [...] popup.
         self._problem_props: dict[str, dict] = {}
@@ -215,6 +222,7 @@ class PlanWidget(WorkspaceWidget):
             "iso_per_beam": self._txt_iso,
             "iso": self._txt_iso,
             "scenario": self._cmb_scenario,
+            "scenario_props": self._btn_scenario_config,
             "res_x": self._spn_res_x,
             "res_y": self._spn_res_y,
             "res_z": self._spn_res_z,
@@ -434,9 +442,19 @@ class PlanWidget(WorkspaceWidget):
 
         self._cmb_scenario = QComboBox()
         self._cmb_scenario.addItems(available_scenario_models())
-        for model in ("wcScen", "impScen", "rndScen"):
-            self._add_disabled_item(self._cmb_scenario, model)
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
+        self._btn_scenario_config = QPushButton("…")
+        self._btn_scenario_config.setFixedWidth(28)
+        self._btn_scenario_config.setToolTip(
+            "Configure the selected scenario model: setup and range uncertainties, CT phases, "
+            "worst-case extent and sampling"
+        )
+        self._btn_scenario_config.clicked.connect(self._on_scenario_config)
+        scenario_row = QHBoxLayout()
+        scenario_row.setContentsMargins(0, 0, 0, 0)
+        scenario_row.setSpacing(4)
+        scenario_row.addWidget(self._cmb_scenario, 1)
+        scenario_row.addWidget(self._btn_scenario_config)
 
         # Plan-level target/reporting quantity, as opposed to the quantities the
         # individual objectives are evaluated on.
@@ -473,7 +491,7 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(QLabel("Biological model:"), 4, 0)
         grid.addLayout(bio_row, 4, 1)
         self._add_advanced(grid, QLabel("Scenario model:"), 4, 2)
-        self._add_advanced(grid, self._cmb_scenario, 4, 3)
+        self._add_advanced(grid, scenario_row, 4, 3)
 
         self._add_advanced(grid, QLabel("Optimized quantity:"), 5, 0)
         self._add_advanced(grid, self._cmb_quantity, 5, 1)
@@ -579,13 +597,6 @@ class PlanWidget(WorkspaceWidget):
         if hint:
             tooltip += f"\n{hint}"
         widget.setToolTip(tooltip)
-
-    @staticmethod
-    def _add_disabled_item(combo: QComboBox, text: str) -> None:
-        combo.addItem(text)
-        item = combo.model().item(combo.count() - 1)
-        item.setEnabled(False)
-        item.setToolTip("Not yet implemented")
 
     def _build_engine_selector(self) -> QHBoxLayout:
         self._cmb_engine = QComboBox()
@@ -1176,6 +1187,54 @@ class PlanWidget(WorkspaceWidget):
             self._update_dirty_state()
 
     # ------------------------------------------------------------------
+    # Scenario model handling
+    # ------------------------------------------------------------------
+
+    def _on_scenario_config(self) -> None:
+        model_name = self._cmb_scenario.currentText()
+        try:
+            model_cls = get_scenario_model_class(model_name)
+        except (ValueError, NotImplementedError):
+            return
+
+        dialog = ConfigFormDialog(
+            model_cls,
+            initial=self._scenario_props.get(model_name, {}),
+            title=f"Configure {model_cls.name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._scenario_props[model_name] = dialog.values()
+            self._update_dirty_state()
+
+    def _restore_scenario_from_pln(self, pln: Plan) -> None:
+        model = pln.scenarios
+        name = getattr(model, "short_name", None)
+        if not name or self._cmb_scenario.findText(name) < 0:
+            return
+        self._cmb_scenario.setCurrentText(name)
+        # An empty override mapping means defaults, not "keep the form's edits".
+        self._scenario_props[name] = self._scenario_overrides(model)
+
+    @staticmethod
+    def _scenario_overrides(model: ScenarioModel) -> dict:
+        """Parameters set on *model*, nested per uncertainty dimension (the [...] popup's values)."""
+        overrides = model.model_dump(exclude_unset=True)
+        overrides.pop("model", None)
+        for key, value in list(overrides.items()):
+            if isinstance(value, dict):
+                nested = {k: v for k, v in value.items() if k != "dimension"}
+                if nested:
+                    overrides[key] = nested
+                else:
+                    del overrides[key]
+        return overrides
+
+    @staticmethod
+    def _props_key(props: dict) -> str:
+        return json.dumps(props, default=str, sort_keys=True)
+
+    # ------------------------------------------------------------------
     # Optimization (planning problem / solver) handling
     # ------------------------------------------------------------------
 
@@ -1327,9 +1386,7 @@ class PlanWidget(WorkspaceWidget):
 
         self._restore_iso_center(stf.get("iso_center"))
 
-        scenario = getattr(pln.mult_scen, "short_name", None)
-        if scenario and self._cmb_scenario.findText(scenario) >= 0:
-            self._cmb_scenario.setCurrentText(scenario)
+        self._restore_scenario_from_pln(pln)
 
         spacing = stf.get("bixel_width")
         if spacing is not None:
@@ -1704,9 +1761,17 @@ class PlanWidget(WorkspaceWidget):
             if current is not None
             else {}
         )
-        scenario = self._cmb_scenario.currentText()
-        if current is not None and getattr(current.mult_scen, "short_name", None) == scenario:
-            scenario = deepcopy(current.mult_scen)
+        scenario_name = self._cmb_scenario.currentText()
+        scenario_props = deepcopy(self._scenario_props.get(scenario_name, {}))
+        scenario: Any = {"model": scenario_name, **scenario_props}
+        if (
+            current is not None
+            and getattr(current.scenarios, "short_name", None) == scenario_name
+            and self._props_key(self._scenario_overrides(current.scenarios))
+            == self._props_key(scenario_props)
+        ):
+            # Unchanged: keep the plan's model instance (and its generated scenario set).
+            scenario = deepcopy(current.scenarios)
         plan_data.update(
             {
                 "radiation_mode": radiation_mode,
@@ -1714,7 +1779,7 @@ class PlanWidget(WorkspaceWidget):
                 "num_of_fractions": int(self._spn_fractions.value()),
                 "dose_convention": self._cmb_dose_convention.currentData(),
                 "bio_model": self._selected_bio_model(),
-                "mult_scen": scenario,
+                "scenarios": scenario,
                 "prop_stf": prop_stf,
                 "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
                 "prop_dose_calc": prop_dose_calc,
@@ -1797,6 +1862,9 @@ class PlanWidget(WorkspaceWidget):
             "iso_per_beam": self._per_beam_iso_center is not None,
             "iso": self._txt_iso.text() if not_auto else None,
             "scenario": self._cmb_scenario.currentText(),
+            "scenario_props": self._props_key(
+                self._scenario_props.get(self._cmb_scenario.currentText(), {})
+            ),
             "res_x": self._spn_res_x.value(),
             "res_y": self._spn_res_y.value(),
             "res_z": self._spn_res_z.value(),

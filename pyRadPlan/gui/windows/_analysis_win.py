@@ -42,6 +42,7 @@ class AnalysisWindow(QMainWindow):
         initial_quantity: str = "",
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
+        scenario_labels: list[str] | None = None,
     ) -> None:
         # Keep ownership separate from Qt parenting to preserve the taskbar entry.
         super().__init__()
@@ -61,6 +62,7 @@ class AnalysisWindow(QMainWindow):
             initial_quantity=initial_quantity,
             initial_vois=initial_vois,
             voi_types=voi_types,
+            scenario_labels=scenario_labels,
         )
 
         _OPEN_WINDOWS.add(self)
@@ -94,6 +96,7 @@ def show_analysis(
     initial_quantity: str = "",
     initial_vois: list[str] | None = None,
     voi_types: dict[str, str] | None = None,
+    scenario_labels: list[str] | None = None,
 ) -> Any:
     """Create and show an :class:`AnalysisWindow` for the given data.
 
@@ -122,6 +125,11 @@ def show_analysis(
         Quantity name to preselect in the primary quantity dropdown.
     initial_vois:
         VOI names to pre-check. Defaults to all available masks.
+    voi_types:
+        Optional VOI name → type mapping used to group the structure list.
+    scenario_labels:
+        Labels of the uncertainty scenarios by flat index, shown for the
+        ``"<quantity>_scenario <i>"`` entries.
 
     Returns
     -------
@@ -179,6 +187,7 @@ def show_analysis(
         initial_quantity=initial_quantity,
         initial_vois=initial_vois,
         voi_types=voi_types,
+        scenario_labels=scenario_labels,
     )
     window.show()
     return window

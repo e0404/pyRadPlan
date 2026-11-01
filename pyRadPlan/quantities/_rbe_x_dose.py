@@ -123,15 +123,18 @@ class RBExDose(FluenceDependentQuantity):
             "matrices nor a constant RBE."
         )
 
+    def uses_voxel_params(self) -> bool:
+        return self._path == "effect" or super().uses_voxel_params()
+
     # ------------------------------------------------------------------ effect path
     def _reference_params(self, scenario_index: int):
-        # TODO: correct handling of ct scenarios
         # Cast once to the quantity's dtype: the dij stores them in double precision, which
         # would promote every evaluation (and the upstream gradient) to slow float64 math.
         if scenario_index not in self._reference_params_cache:
             xp = self.array_backend
-            alphax = xp.asarray(self._dij.alphax[:, scenario_index])
-            betax = xp.asarray(self._dij.betax[:, scenario_index])
+            column = self._dij.voxel_param_column(scenario_index)
+            alphax = xp.asarray(self._dij.alphax[:, column])
+            betax = xp.asarray(self._dij.betax[:, column])
             self._reference_params_cache[scenario_index] = (
                 xp.astype(alphax, self._dtype),
                 xp.astype(betax, self._dtype),

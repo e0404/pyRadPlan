@@ -7,6 +7,7 @@ from ._configurable import (
     AlgorithmParameterMetadata,
     ConfigurableAlgorithm,
     field_constraints,
+    is_nested_instance,
     replace_nested,
 )
 from .resample import resample_image, resample_numpy_array
@@ -72,6 +73,7 @@ __all__ = [
     "AlgorithmParameterMetadata",
     "ConfigurableAlgorithm",
     "field_constraints",
+    "is_nested_instance",
     "replace_nested",
     "Grid",
     "ProgressReporter",

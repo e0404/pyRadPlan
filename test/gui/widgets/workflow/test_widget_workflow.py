@@ -928,3 +928,99 @@ def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
     assert len(shown) == 1
     assert not any(text.startswith("Use the base data's model") for text in shown[0])
     assert runs == []
+
+
+@pytest.mark.parametrize(("scenarios", "expected"), [(None, False), (1, False), (3, True)])
+def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, expected):
+    import numpy as np
+    from types import SimpleNamespace
+
+    from pyRadPlan.plan import PhotonPlan
+
+    calls = []
+
+    def compute_result_ct_grid(weights, **kwargs):
+        calls.append(kwargs)
+        return {"physical_dose": object()}
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(
+        pln=PhotonPlan(),
+        cst=SimpleNamespace(vois=[]),
+        dij=SimpleNamespace(
+            bio_model=None,
+            alpha_dose=None,
+            scenarios=None if scenarios is None else list(range(scenarios)),
+            compute_result_ct_grid=compute_result_ct_grid,
+        ),
+    )
+    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: np.ones(2))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+
+    w._on_optimize()
+
+    assert len(calls) == 1
+    assert calls[0]["scenarios"] is expected
+    assert "physical_dose" in ws.result
+
+
+def test_recalculate_drops_stale_results_per_scenario(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value={"physical_dose": object()})
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    w._saved_tags = ["saved"]
+    snapshot = [object(), object()]
+    ws.result = {
+        **ws.result,
+        "physical_dose_scenario": [object(), object()],
+        "physical_dose_scenario_saved": snapshot,
+    }
+
+    w._on_recalc_dose()
+
+    assert "physical_dose_scenario" not in ws.result
+    assert ws.result["physical_dose_scenario_saved"] is snapshot
+
+
+def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from pyRadPlan.gui.widgets._display_names import group_result_keys
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    scenario_doses = [object(), object()]
+    ws.result = {"physical_dose": object(), "physical_dose_scenario": scenario_doses}
+    names = iter(["scenario", "robust"])
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kw: (next(names), True))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    w._on_save_result()  # "scenario" would read as the per-scenario suffix
+    assert len(warnings) == 1
+    assert set(ws.result) == {"physical_dose", "physical_dose_scenario"}
+
+    w._on_save_result()
+    assert ws.result["physical_dose_scenario_robust"] is scenario_doses
+    assert w._is_tagged("physical_dose_scenario_robust")
+    assert not w._is_tagged("physical_dose_scenario")
+
+    flattened = [
+        f"{key} {i}" if isinstance(value, list) else key
+        for key, value in ws.result.items()
+        for i in (range(len(value)) if isinstance(value, list) else [0])
+    ]
+    groups = {(g.base, g.tag): g for g in group_result_keys(flattened)}
+    assert set(groups) == {("physical_dose", ""), ("physical_dose", "robust")}
+    assert [label for label, _ in groups["physical_dose", "robust"].components] == [
+        "full",
+        "scenario 0",
+        "scenario 1",
+    ]

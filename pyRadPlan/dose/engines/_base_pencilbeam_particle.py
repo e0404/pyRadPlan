@@ -27,6 +27,7 @@ from pyRadPlan.biology.models import (
     BioModelUnavailableError,
 )
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.scenarios import Scenario
 from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
@@ -770,7 +771,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # TODO: these for loops can be simplified!
         for ray in stf_element["beam"]["rays"]:
             len_ray_energy = len([beamlet["energy"] for beamlet in ray["beamlets"]])
-            v_ssd[cnt : cnt + len_ray_energy] = ray["SSD"]
+            v_ssd[cnt : cnt + len_ray_energy] = ray["SSD"][self._reference_ct_phase]
             # TODO: what's the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
             cnt += len_ray_energy
 
@@ -965,45 +966,61 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Calculate initial sigma for all bixels on the current ray
         # TODO: here [ray] since calc_sigma_ini takes multiple rays (why?)
         # TODO: use to_namespace here. Issues with api_strict due to float64!
-        ray["sigma_ini"] = xp.asarray(
-            self._calc_sigma_ini_on_ray(ray), dtype=xp.float64, device=self.device
-        )
+        # One value per CT phase, like the SSD they derive from
+        ray["sigma_ini"] = [
+            xp.asarray(self._calc_sigma_ini_on_ray(ray, ssd), dtype=xp.float64, device=self.device)
+            for ssd in ray["SSD"]
+        ]
 
         # Since pyRadPlan's ray cast starts at the skin and base data
         # is generated at some source to phantom distance
         # we can explicitly correct for the nozzle to air WEPL in
         # the current case.
         if self.air_offset_correction:
-            nozzle_to_skin = (ray["SSD"] + self._machine.bams_to_iso_dist) - self._machine.sad
-            ray["rad_depth_offset"] = 0.0011 * (nozzle_to_skin - self._machine.fit_air_offset)
+            ray["rad_depth_offset"] = [
+                0.0011
+                * (
+                    (ssd + self._machine.bams_to_iso_dist)
+                    - self._machine.sad
+                    - self._machine.fit_air_offset
+                )
+                for ssd in ray["SSD"]
+            ]
         else:
-            ray["rad_depth_offset"] = 0
+            ray["rad_depth_offset"] = [0] * len(ray["SSD"])
 
-        # Reference LQ parameters of the voxels found by the ray tracer, per CT scenario
-        # TODO: multi-scenario support (ray["ix"] currently only carries the first CT scenario)
+        # Reference LQ parameters of the voxels found by the ray tracer, keyed by CT phase.
+        # The parameter arrays hold one column per voxel parameter set of the scenario set,
+        # not per CT phase.
         if self._calc_bio_dose:
-            ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_tissue_class_ix"] = [None] * self.mult_scen.num_of_ct_scen
-            for s in range(self.mult_scen.num_of_ct_scen):
-                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x[:, s], ray["ix"][0], axis=0)
-                ray["v_beta_x"][s] = xp.take(self._v_beta_x[:, s], ray["ix"][0], axis=0)
-                ray["v_tissue_class_ix"][s] = xp.take(
-                    self._v_tissue_class_ix[:, s], ray["ix"][0], axis=0
+            ray["v_alpha_x"] = {}
+            ray["v_beta_x"] = {}
+            ray["v_tissue_class_ix"] = {}
+            for column, phase in enumerate(self._voxel_param_phases):
+                ix = ray["ix"][phase]
+                ray["v_alpha_x"][phase] = xp.take(self._v_alpha_x[:, column], ix, axis=0)
+                ray["v_beta_x"][phase] = xp.take(self._v_beta_x[:, column], ix, axis=0)
+                ray["v_tissue_class_ix"][phase] = xp.take(
+                    self._v_tissue_class_ix[:, column], ix, axis=0
                 )
 
         return ray
 
-    def _extract_single_scenario_ray(self, ray, scen_idx):
-        scen_ray = super()._extract_single_scenario_ray(ray, scen_idx)
-        # TODO: Add multscen support
-        # Gets number of scenario
-        ct_scen = self.mult_scen.linear_mask[0][scen_idx]
+    def _init_geometry_group(self) -> None:
+        # Cached kernels carry lateral cutoffs computed for an earlier geometry (SSDs)
+        self._kernel_cache.clear()
+
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
+        scen_ray = super()._apply_scenario_to_ray(ray, scenario)
+
+        ct_phase = scenario.ct_phase
+        scen_ray["sigma_ini"] = ray["sigma_ini"][ct_phase]
+        scen_ray["rad_depth_offset"] = ray["rad_depth_offset"][ct_phase]
 
         if self._calc_bio_dose:
-            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
-            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
-            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_scen]
+            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_phase]
+            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_phase]
+            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_phase]
 
         return scen_ray
 
