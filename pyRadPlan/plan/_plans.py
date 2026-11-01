@@ -9,12 +9,13 @@ from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
 from pydantic import (
+    AliasChoices,
     Field,
     field_validator,
     field_serializer,
+    SerializeAsAny,
     SerializationInfo,
     SerializerFunctionWrapHandler,
-    ValidationError,
     model_validator,
 )
 from pydantic.alias_generators import to_snake
@@ -79,7 +80,13 @@ class Plan(PyRadPlanBaseModel, ABC):
     )
     machine: Union[Machine, Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
-    mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
+    scenarios: SerializeAsAny[ScenarioModel] = Field(
+        default_factory=create_scenario_model,
+        validation_alias=AliasChoices("scenarios", "mult_scen", "multScen"),
+        serialization_alias="multScen",
+        description="Uncertainty scenario model (name, {'model': name, **parameters}, model "
+        "instance or ScenarioSet). ``mult_scen`` / ``multScen`` are accepted as aliases.",
+    )
     bio_model: Optional[Any] = Field(
         default=None,
         description="Biological model: name, {'model': name, **parameters} or instance. "
@@ -170,36 +177,33 @@ class Plan(PyRadPlanBaseModel, ABC):
         dumped.setdefault(mode_key or "radiation_mode", value.radiation_mode)
         return dumped
 
-    @field_validator("mult_scen", mode="before")
+    @field_validator("scenarios", mode="before")
     @classmethod
-    def _validate_mult_scen(
-        cls, v: Union[Union[Dict[str, Any], ScenarioModel], str]
-    ) -> ScenarioModel:
+    def _validate_scenarios(cls, v: Any) -> ScenarioModel:
         """
-        Validate the mult_scen attribute.
-
-        Parameters
-        ----------
-        v : Union[Dict[str, Any], ScenarioModel]
-            The mult_scen attribute to be validated.
-
-        Returns
-        -------
-        ScenarioModel
-            The validated mult_scen attribute.
+        Validate the scenario model (name, dictionary, model instance or ScenarioSet).
 
         Raises
         ------
         ValueError
-            If the mult_scen attribute is not a valid ScenarioModel object.
+            If the value is not a valid scenario model definition.
         """
-
         try:
             return validate_scenario_model(v)
         except ValueError as exc:
-            raise ValidationError(
-                "mult_scen must be a ScenarioModel object or respective dictionary"
+            raise ValueError(
+                "scenarios must be a ScenarioModel, a ScenarioSet, a model name or a model "
+                "dictionary"
             ) from exc
+
+    @property
+    def mult_scen(self) -> ScenarioModel:
+        """Deprecated alias of :attr:`scenarios` (matRad name), kept for one release."""
+        return self.scenarios
+
+    @mult_scen.setter
+    def mult_scen(self, value: Any) -> None:
+        self.scenarios = value
 
     @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="before")
     @classmethod

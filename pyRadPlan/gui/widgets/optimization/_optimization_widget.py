@@ -3,7 +3,8 @@
 Python translation of matRad's ``matRad_OptimizationWidget``: a per-VOI editor of
 the optimization objectives stored on the structure set (``cst``).  Each row binds
 one objective on one VOI; the user can change the objective type, its penalty
-(priority) and its numeric parameters, and add or remove objectives. A "Change all
+(priority), its quantity, its robustness (how it is combined over uncertainty scenarios) and its
+numeric parameters, and add or remove objectives. A "Change all
 quantities" selector above the table sets one quantity on the objectives of all VOIs at once.
 Constraints are intentionally out of scope because pyRadPlan currently ships objectives only.
 """
@@ -55,6 +56,11 @@ _DEFAULT_OBJECTIVE_BY_TYPE = {
 }
 _FALLBACK_OBJECTIVE = "Squared Overdosing"
 
+_ROBUSTNESS_TOOLTIP = (
+    "How the objective is combined over the scenarios of the dose influence data; "
+    "'none' uses the nominal scenario only"
+)
+
 
 class OptimizationWidget(WorkspaceWidget):
     """Editor for the optimization objectives held on the workspace ``cst``.
@@ -82,9 +88,10 @@ class OptimizationWidget(WorkspaceWidget):
     _COL_OBJECTIVE = 1
     _COL_PENALTY = 2
     _COL_QUANTITY = 3
-    _COL_PARAMS = 4
-    _COL_REMOVE = 5
-    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Parameters", "")
+    _COL_ROBUSTNESS = 4
+    _COL_PARAMS = 5
+    _COL_REMOVE = 6
+    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Robustness", "Parameters", "")
 
     def __init__(
         self,
@@ -293,6 +300,23 @@ class OptimizationWidget(WorkspaceWidget):
             )
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
+
+        cmb_robustness = QComboBox()
+        cmb_robustness.setToolTip(_ROBUSTNESS_TOOLTIP)
+        options = type(obj).available_robustness()
+        cmb_robustness.addItems(options)
+        # A scenario-aware objective has a single option, which applies regardless of the
+        # value stored on it.
+        if len(options) > 1:
+            if obj.robustness not in options:
+                cmb_robustness.addItem(obj.robustness)
+            cmb_robustness.setCurrentText(obj.robustness)
+        else:
+            cmb_robustness.setEnabled(False)
+        cmb_robustness.currentTextChanged.connect(
+            lambda text, v=voi_idx, o=obj_idx: self._on_robustness_changed(v, o, text)
+        )
+        self._table.setCellWidget(row, self._COL_ROBUSTNESS, cmb_robustness)
 
         self._table.setCellWidget(
             row, self._COL_PARAMS, self._build_param_editor(voi_idx, obj_idx, obj)
@@ -541,8 +565,11 @@ class OptimizationWidget(WorkspaceWidget):
         if objectives[obj_idx].name == name:
             return
         priority = objectives[obj_idx].priority
+        robustness = objectives[obj_idx].robustness
         new_obj = get_objective(name)
         new_obj.priority = priority
+        if robustness in type(new_obj).available_robustness():
+            new_obj.robustness = robustness
         objectives[obj_idx] = new_obj
         self._write_objectives(cst, voi_idx, objectives)
 
@@ -573,6 +600,22 @@ class OptimizationWidget(WorkspaceWidget):
             objectives[obj_idx].quantity = quantity
         except (ValueError, TypeError) as exc:
             self._set_status(f"Rejected quantity {quantity!r}: {exc}")
+            return
+        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+
+    def _on_robustness_changed(self, voi_idx: int, obj_idx: int, robustness: str) -> None:
+        cst = self._ws.cst
+        if cst is None:
+            return
+        objectives = self._iter_objectives(cst.vois[voi_idx])
+        if not (0 <= obj_idx < len(objectives)):
+            return
+        if objectives[obj_idx].robustness == robustness:
+            return
+        try:
+            objectives[obj_idx].robustness = robustness
+        except (ValueError, TypeError) as exc:
+            self._set_status(f"Rejected robustness {robustness!r}: {exc}")
             return
         self._write_objectives(cst, voi_idx, objectives, rebuild=False)
 

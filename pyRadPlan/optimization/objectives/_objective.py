@@ -14,6 +14,7 @@ from ...core.datamodel import PyRadPlanBaseModel
 from ...quantities import get_available_quantities, get_quantity
 from ...core import Grid
 from ...core.resample import resample_numpy_array
+from ..robustness import available_robustness, resolve_robustness_name
 
 ParameterType = Union[
     Literal["reference", "numeric", "relative_volume", "image_reference"], list[str]
@@ -76,14 +77,24 @@ class Objective(PyRadPlanBaseModel):
         tagged unions and for round-tripping serialized objectives.
     has_hessian : ClassVar[bool]
         Whether the objective function has a Hessian implementation.
+    scenario_aware : ClassVar[bool]
+        Whether the objective evaluates all scenarios at once: ``compute_objective`` /
+        ``compute_gradient`` then receive the values stacked over the scenarios, shape
+        ``(S, n)``, and the scenario ``weights``, and the gradient has the same shape.
     priority : float
         Weight/Priority assigned to the objective function.
     quantity : str
         The quantity this objective is connected to (e.g. 'physical_dose', 'RBExDose').
+    robustness : str
+        Name of the :mod:`~pyRadPlan.optimization.robustness` operator combining the
+        objective's values over the scenarios of the dose influence data (``"none"``: the
+        nominal scenario only). matRad's names (``STOCH``, ``OWC``, ...) are accepted as
+        aliases and normalized.
     """
 
     name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
+    scenario_aware: ClassVar[bool] = False
     priority: float = Field(
         default=1.0,
         ge=0.0,
@@ -93,6 +104,13 @@ class Objective(PyRadPlanBaseModel):
     quantity: str = Field(
         default="physical_dose",
         description="Quantity the objective is evaluated on (e.g. 'physical_dose').",
+    )
+    robustness: str = Field(
+        default="none",
+        description=(
+            "Robustness operator combining the objective over the scenarios of the dose "
+            "influence data ('none': nominal scenario only)."
+        ),
     )
 
     _resampled_image_reference_cache: dict[str, Array] = PrivateAttr(default_factory=dict)
@@ -301,11 +319,62 @@ class Objective(PyRadPlanBaseModel):
             )
             return None
 
+        # Deferred import to avoid a circular import with the factory module.
+        from ..robustness import get_robustness_operator_class  # noqa: PLC0415
+
+        matrad_robustness = get_robustness_operator_class(self.robustness).matrad_name
+        if matrad_robustness is None:
+            logger.warning(
+                "Robustness '%s' of objective '%s' has no matRad equivalent and is exported as "
+                "'none'.",
+                self.robustness,
+                self.name,
+            )
+            matrad_robustness = "none"
+
         return {
             "className": class_name,
             "parameters": list(self.parameters),
             "penalty": self.priority,
+            "robustness": matrad_robustness,
         }
+
+    @classmethod
+    def available_robustness(cls) -> list[str]:
+        """
+        Names of the robustness operators this objective accepts.
+
+        Scenario-aware objectives evaluate the scenario stack themselves and accept only
+        ``"scenario_stack"``; all other objectives accept every registered operator.
+        """
+        if cls.scenario_aware:
+            return ["scenario_stack"]
+        return [name for name in available_robustness() if name != "scenario_stack"]
+
+    @field_validator("robustness")
+    @classmethod
+    def _validate_robustness(cls, v):
+        """Normalize aliases to the canonical operator name and check it is applicable."""
+        if cls.scenario_aware:
+            if v not in ("none", "scenario_stack"):
+                logger.warning(
+                    "Objective '%s' evaluates the scenarios itself; robustness '%s' is replaced "
+                    "by 'scenario_stack'.",
+                    cls.model_fields["name"].default,
+                    v,
+                )
+            return "scenario_stack"
+        name = resolve_robustness_name(v)
+        if name == "scenario_stack":
+            raise ValueError("'scenario_stack' is reserved for scenario-aware objectives")
+        if v.strip().upper() == "PROB":
+            logger.warning(
+                "matRad's 'PROB' robustness of objective '%s' is used as 'expected_quantity' "
+                "without its variance term; add a 'Variance' objective to penalize the "
+                "variance over the scenarios.",
+                cls.model_fields["name"].default,
+            )
+        return name
 
     @field_validator("quantity")
     @classmethod

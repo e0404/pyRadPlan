@@ -10,7 +10,7 @@ from pyRadPlan.machines import (
     validate_machine,
 )
 from pyRadPlan.scenarios import NominalScenario
-from pyRadPlan.plan import create_pln, PhotonPlan, IonPlan
+from pyRadPlan.plan import create_pln, validate_pln, PhotonPlan, IonPlan
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, Wedenberg
 
 
@@ -109,7 +109,7 @@ def test_create_pln_dict_photons_snake():
     pln_from_dict = pln.model_dump()
     # print(set(pln_dict) ^ set(pln_from_dict))
     pln_dict.pop("mult_scen")
-    pln_from_dict.pop("mult_scen")
+    pln_from_dict.pop("scenarios")
     assert pln_from_dict.pop("bio_model") == {"model": "none"}
     assert pln_from_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict == pln_from_dict
@@ -160,7 +160,7 @@ def test_create_pln_dict_photons_camel():
     pln_dict_camel.pop("multScen")
 
     pln_to_dict = pln.model_dump()
-    pln_to_dict.pop("mult_scen")
+    pln_to_dict.pop("scenarios")
     assert pln_to_dict.pop("bio_model") == {"model": "none"}
     assert pln_to_dict.pop("dose_convention") == "per_fraction"
     assert pln_dict_snake == pln_to_dict
@@ -445,3 +445,40 @@ def test_plan_round_trip_keeps_a_default_radiation_mode(machine_cls, radiation_m
     assert type(restored.machine) is machine_cls
     assert restored.machine.radiation_mode == radiation_mode
     assert restored.machine.model_fields_set - {"radiation_mode"} == machine.model_fields_set
+
+
+def test_plan_round_trip_keeps_scenario_model_parameters():
+    from pyRadPlan.scenarios import (
+        ExplicitScenarioModel,
+        RandomScenarioModel,
+        ScenarioSet,
+        SetupUncertainty,
+        WorstCaseScenarioModel,
+    )
+
+    pln = validate_pln(
+        {
+            "radiation_mode": "protons",
+            "machine": "Generic",
+            "scenarios": {"model": "wcScen", "combinations": "all", "shift_sd": (2.0, 2.0, 2.0)},
+        }
+    )
+    dumped = pln.model_dump()
+    assert dumped["scenarios"]["combinations"] == "all"
+    reloaded = validate_pln(dumped).scenarios
+    assert isinstance(reloaded, WorstCaseScenarioModel)
+    assert reloaded.combinations == "all"
+    assert reloaded == pln.scenarios
+
+    pln.scenarios = {"model": "rndScen", "n_samples": 5, "seed": 3}
+    reloaded = validate_pln(pln.model_dump()).scenarios
+    assert isinstance(reloaded, RandomScenarioModel)
+    assert (reloaded.n_samples, reloaded.seed) == (5, 3)
+
+    scen_set = ScenarioSet.from_points(
+        dimensions=[SetupUncertainty()], points={"setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]}
+    )
+    pln.scenarios = ExplicitScenarioModel.from_set(scen_set)
+    reloaded = validate_pln(pln.model_dump()).scenarios
+    assert isinstance(reloaded, ExplicitScenarioModel)
+    assert reloaded.scenario_set == scen_set

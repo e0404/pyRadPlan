@@ -15,6 +15,7 @@ optimization.objectives
     SquaredMimicking
     SquaredOverdosing
     SquaredUnderdosing
+    Variance
 
 
 Base Classes
