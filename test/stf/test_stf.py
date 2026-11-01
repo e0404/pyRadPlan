@@ -1,6 +1,8 @@
 import pytest
 
 import numpy as np
+import pymatreader
+import scipy.io
 
 from pyRadPlan.ct import validate_ct
 from pyRadPlan.cst import validate_cst
@@ -254,3 +256,23 @@ def test_from_matlab_multi_beam(test_data_stf_n_beams_raw):
 #     stf1 = create_stf(Beam={"Beam":{"gantry_angle":0}})
 #     assert isinstance(stf1, SteeringInformation)
 #     assert stf1.gantry_angle == 0
+
+
+@pytest.mark.parametrize("num_bixels", [None, 1], ids=["all-bixels", "single-bixel"])
+def test_from_matlab_single_ray_beam(tmp_path, num_bixels):
+    """A beam with one ray is a 1x1 struct, which pymatreader reads as a plain dict."""
+    mat = scipy.io.loadmat("test/data/stf/stf_test_data_one_beam.mat", squeeze_me=False)
+    beam = mat["new_stf"]
+    ray = beam["ray"][0, 0][:, :1].copy()
+    for field in ("energy", "focusIx", "numParticlesPerMU", "minMU", "maxMU", "rangeShifter"):
+        ray[0, 0][field] = ray[0, 0][field][:, :num_bixels]
+    beam["ray"][0, 0] = ray
+    scipy.io.savemat(tmp_path / "stf.mat", {"stf": beam})
+
+    stf = create_stf(pymatreader.read_mat(tmp_path / "stf.mat"))
+
+    assert stf.num_of_rays == 1
+    stf_ray = stf.beams[0].rays[0]
+    assert np.allclose(stf_ray.ray_pos_bev, ray[0, 0]["rayPos_bev"].ravel())
+    assert np.allclose([b.energy for b in stf_ray.beamlets], ray[0, 0]["energy"].ravel())
+    assert stf.total_number_of_bixels == ray[0, 0]["energy"].size
