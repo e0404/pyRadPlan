@@ -216,3 +216,14 @@ def test_hlut_unsorted(sample_ct):
         sitk.GetArrayViewFromImage(wet_image_unsorted)
         == sitk.GetArrayViewFromImage(wet_image_sorted)
     )
+
+
+def test_ct_equality_compares_voxel_values_and_dimensionality():
+    a = sitk.GetImageFromArray(np.zeros((4, 5, 6), dtype=np.float32))
+    b = sitk.GetImageFromArray(np.ones((4, 5, 6), dtype=np.float32))
+    assert CT(cube_hu=a) == CT(cube_hu=a)
+    assert CT(cube_hu=a) != CT(cube_hu=b)
+    four_d = CT(cube_hu=sitk.JoinSeries([a, a]))
+    assert CT(cube_hu=a) != four_d
+    assert four_d != CT(cube_hu=a)
+    assert four_d == CT(cube_hu=sitk.JoinSeries([a, a]))

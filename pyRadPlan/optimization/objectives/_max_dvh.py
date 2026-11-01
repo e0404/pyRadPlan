@@ -53,7 +53,7 @@ class MaxDVH(Objective):
             xp.logical_or(values < self.d, values > values_quantile), 0, deviation
         )
 
-        return (deviation @ deviation) / array_api_compat.size(values)
+        return (deviation @ deviation) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
@@ -66,4 +66,4 @@ class MaxDVH(Objective):
             xp.logical_or(values < self.d, values > values_quantile), 0, deviation
         )
 
-        return 2.0 * deviation / array_api_compat.size(values)
+        return 2.0 * deviation / float(array_api_compat.size(values))

@@ -124,7 +124,7 @@ jobs:
         - name: Install dependencies
           run: |
             python -m pip install --upgrade pip
-            python -m pip install ruff==0.15.22
+            python -m pip install ruff==0.17.3
         - name: Lint with ruff
           run: |
             if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
