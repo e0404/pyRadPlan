@@ -443,6 +443,22 @@ are addressed through `_voxel_param_phases` (one column per voxel parameter set,
 Per-beam approximations that need one SSD (particle lateral cutoff LUT, photon SVD kernel
 selection) use `_reference_ct_phase`, the lowest computed phase, as matRad uses the first.
 
+Review round of 2026-11-01 (PR #26): `ScenarioSet.reference_indices()` is the nominal scenario
+or, without one, the first computed scenario per CT phase; `Dij.nominal_scenario_index()` and
+`NoRobustness` use it. `matrad_layout` addresses the CT axis by phase index (one row per phase,
+used or not), and the cell import accepts more rows than the set uses. The engines resolve
+scenario dictionaries through `validate_scenario_model` (1-based `ctScenProb` like the plan), and
+`_nominal_only_dimensions` treats a non-zero mean (setup offset) as a perturbation. The Monte
+Carlo engines simulate the CT phase of their single scenario (`_scenario_ct`). 4D workflow:
+`PyRadPlanBaseModel.__eq__` compares images by geometry and voxel values, `create_cst` attaches
+a structure set to a CT on the same 3D grid (`resample_on_new_ct` repeats 3D structures over the
+phases of a 4D CT and resamples 4D structures phase by phase; PR #13 made the overlap priorities
+and tissue columns 4D-aware), the engines take per-phase voxel lists (`_phase_voxel_lists`), the
+optimization indexes the first phase (`voi_linear_mask`), and the stf generators work on
+`_geometry_ct`, the first phase. Still open: matRad export writes `max phase + 1` CT rows (the
+Dij knows no CT), the GUI's Apply replaces an `ExplicitScenarioModel` with the combo box model,
+and all phases are ray-traced even when one is used.
+
 ## 8. Decisions (confirmed 2026-10-22)
 
 1. Flat canonical container layout; dimensional access through the derived, re-tieable

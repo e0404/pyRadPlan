@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4D structure sets: `apply_overlap_priorities`, `get_reference_lq_params`, `get_tissue_class_indices` and `resample_on_new_ct` failed; the LQ parameters and tissue class indices now have one column per CT scenario taken from that scenario's masks
 - `apply_overlap_priorities` and `get_reference_lq_params` failed with an `IndexError` on an empty structure set
 - `create_voi` rejected a lowercase or padded `voi_type` (e.g. `"target"`), which the `voi_type` field itself accepts
+- Comparing CTs, VOIs or structure sets (`==`) ignored their voxel values (SimpleITK's image comparison is always truthy) and raised for a 3D and a 4D image; models holding images now compare geometry and voxel values
+- Pencil-beam dose calculation failed with a broadcasting error when some rays of a beam missed the patient (e.g. under large setup shifts); such rays now take the SSD of the closest ray that hits the patient, and a beam missing the patient entirely reports it
+- 4D CTs: `calc_dose_influence`, `calc_dose_forward`, `generate_stf` and the planning problems accept a 3D structure set with a 4D CT (its structures are repeated for every phase, as in matRad) as well as 4D structure sets; before, the structure set validation, the stf generators and the structure resampling of the planning problems failed with SimpleITK errors
 
 ## [0.6.1] - 2026-10-30
 

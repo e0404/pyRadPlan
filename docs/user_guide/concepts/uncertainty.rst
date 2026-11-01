@@ -77,7 +77,16 @@ calculation also takes a set directly: ``calc_dose_influence(ct, cst, stf, pln, 
 A forward calculation (``calc_dose_forward``) over a set with several computed scenarios
 returns the nominal scenario's doses under the usual keys and adds a ``"<quantity>_scenario"``
 list with one image per scenario slot, in the same form as the per-scenario optimization
-results.
+results. Results of a Dij (``compute_result_ct_grid`` and friends) refer to the nominal scenario
+by default; a set without a nominal scenario (random samples without the nominal point, an even
+grid) uses the first computed scenario of each CT phase instead, as do objectives with
+``robustness="none"``.
+
+4D CTs: the pencil-beam engines compute every CT phase the set selects, the Monte Carlo engines
+simulate the phase of their single scenario, and the stf generators place the beamlets on the
+first phase, as matRad does. A 3D structure set handed to a 4D CT (``validate_cst(cst, ct=ct)``,
+which the top-level functions call) is repeated for every phase; 4D structure sets are used phase
+by phase.
 
 A set can also be built without a model from explicit points, which is the hook for adaptive
 schemes (e.g. quadrature points of a polynomial chaos expansion) and for single hand-picked
@@ -167,7 +176,7 @@ default and expose them in the same flat layout; the optimization problem aggreg
 Robust objectives (expected value, worst case, voxel-wise worst case) build on the set's
 ``weights`` and ``tags`` and are chosen per objective through its ``robustness`` option, see
 :ref:`concept_robust_optimization`. An objective with ``robustness="none"`` evaluates only the
-nominal scenario(s) of the set.
+nominal scenario(s) of the set (the first computed scenario per CT phase if the set has none).
 
 matRad interoperability
 -----------------------

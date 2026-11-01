@@ -136,7 +136,6 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     def __init__(self, pln: Union[Plan, dict] = None):
         super().__init__()
 
-        self._scenario_model = None
         self._solver_explicit = False
         self._init_config_defaults()
 
@@ -312,7 +311,8 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
         for voi, objs in voi_objectives:
-            cube_ix = voi.indices_numpy
+            # one 3D grid: a 4D structure contributes its first phase, like voi_linear_mask
+            cube_ix = voi.scenario_indices(0, order="numpy")
             linear_mask = voi_linear_mask(voi)
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
@@ -408,6 +408,17 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         logger.warning(message)
         self.report_warning(message)
 
+    def _dij_tissue_columns(self, values: np.ndarray) -> np.ndarray:
+        """Columns of a per-CT-phase voxel parameter array that the Dij's scenarios compute."""
+        scenarios = self._dij.scenarios
+        if scenarios is None or values.shape[1] == self._dij.alphax.shape[1]:
+            return values
+        computed = scenarios.computed_indices()
+        phases = sorted(set(scenarios.ct_phases()[computed].tolist()))
+        if phases and phases[-1] < values.shape[1]:
+            return values[:, phases]
+        return values
+
     def _initialize(self):
         """Initialize the data for the planning problem."""
 
@@ -422,8 +433,13 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # check consistency of bio models and dij
         if getattr(self._dij, "alphax", None) is not None:
-            [ax, bx] = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
-            if not np.array_equal(ax, self._dij.alphax) or not np.array_equal(bx, self._dij.betax):
+            ax, bx = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
+            ax, bx = self._dij_tissue_columns(ax), self._dij_tissue_columns(bx)
+            if (
+                ax.shape != self._dij.alphax.shape
+                or not np.array_equal(ax, self._dij.alphax)
+                or not np.array_equal(bx, self._dij.betax)
+            ):
                 logger.error(
                     "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
                 )

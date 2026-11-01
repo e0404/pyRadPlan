@@ -637,7 +637,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 dij["ray_num"][b] = b
                 dij["bixel_num"][b] = b
 
-            self._write_patient_file(ct)
+            self._write_patient_file(self._scenario_ct(ct))
         else:
             dij = self._read_external(dij)
             # set dose outside of the patient to 0

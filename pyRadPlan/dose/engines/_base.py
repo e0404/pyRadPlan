@@ -19,7 +19,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
-from pyRadPlan.scenarios import create_scenario_model, ScenarioModel, ScenarioSet
+from pyRadPlan.scenarios import validate_scenario_model, ScenarioModel, ScenarioSet
 from pyRadPlan.machines import load_from_name, validate_machine, Machine
 from pyRadPlan.biology.models import (
     BiologicalModel,
@@ -38,13 +38,20 @@ logger = logging.getLogger(__name__)
 
 
 def _nominal_only_dimensions(scen_set: ScenarioSet) -> tuple[str, ...]:
-    """Dimensions every computed scenario of ``scen_set`` realizes at their nominal value."""
+    """
+    Dimensions no computed scenario of ``scen_set`` perturbs.
+
+    A continuous dimension counts when every computed scenario realizes it at zero; its mean
+    (e.g. a systematic setup offset) is a perturbation an engine has to apply. A discrete
+    dimension counts when every computed scenario takes its nominal state.
+    """
     computed = scen_set.computed_indices()
-    return tuple(
-        dim.name
-        for dim in scen_set.dimensions
-        if np.all(np.isclose(scen_set.values(dim.name)[computed], dim.nominal()))
-    )
+    names = []
+    for dim in scen_set.dimensions:
+        identity = np.zeros(dim.num_components) if dim.kind == "continuous" else dim.nominal()
+        if np.all(np.isclose(scen_set.values(dim.name)[computed], identity)):
+            names.append(dim.name)
+    return tuple(names)
 
 
 def ct_phase_images(image: sitk.Image) -> list[sitk.Image]:
@@ -558,7 +565,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         if isinstance(spec, ScenarioSet):
             scen_set = spec
         else:
-            model = create_scenario_model(spec, ct)
+            # the same conversion of matRad's 1-based ctScenProb as Plan and the stf generators
+            model = validate_scenario_model(spec, ct)
             if not override:
                 self.mult_scen = model
             scen_set = model.scenarios(ct)
@@ -574,6 +582,15 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                 f"has {num_phases} phase(s)"
             )
         return scen_set
+
+    @staticmethod
+    def _phase_voxel_lists(cst: StructureSet, num_phases: int) -> list[np.ndarray]:
+        """Voxels covered by the structures, one list per CT phase (a 3D structure covers all)."""
+        per_voi = [voi.scenario_indices(order="numpy") for voi in cst.vois]
+        return [
+            np.unique(np.concatenate([ix[p if len(ix) > 1 else 0] for ix in per_voi]))
+            for p in range(num_phases)
+        ]
 
     def set_overlap_priorities(self, cst: StructureSet, resample: bool = True) -> StructureSet:
         """Apply overlap priorities and, if enabled, resample the CST to the dose grid."""
@@ -819,11 +836,10 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         dij["num_of_particles_per_mu"] = np.ones(self._num_of_columns_dij) * 1e6
 
         if self.voxel_sub_ix is None:
-            self.voxel_sub_ix = np.unique(
-                np.concatenate([cst.vois[c].indices_numpy for c in range(0, len(cst.vois))])
-            )
-
-        tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
+            tmp_vct_grid_scen = self._phase_voxel_lists(cst, ct.num_of_ct_scen)
+            self.voxel_sub_ix = np.unique(np.concatenate(tmp_vct_grid_scen))
+        else:
+            tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
 
         self._vct_grid = np.unique(np.concatenate(tmp_vct_grid_scen))
 

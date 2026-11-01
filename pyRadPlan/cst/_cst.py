@@ -596,8 +596,38 @@ class StructureSet(PyRadPlanBaseModel):
 
         if new_model["ct_image"] != new_ct:
             new_model["ct_image"] = new_ct
-            new_model["vois"] = [voi._resample_on_new_ct(new_ct) for voi in self.vois]
+            new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
         return self.model_validate(new_model)
+
+    @staticmethod
+    def _voi_on_ct(voi: VOI, new_ct: CT) -> VOI:
+        """
+        Resample ``voi`` onto ``new_ct``, phase by phase for a 4D CT.
+
+        A 3D structure on a 4D CT is repeated for every phase (matRad's convention for a
+        structure set without per-phase contours).
+        """
+        cube = new_ct.cube_hu
+        if cube.GetDimension() == 3:
+            return voi._resample_on_new_ct(new_ct)
+        num_phases = cube.GetSize()[3]
+        phase_ct = CT(cube_hu=cube[:, :, :, 0])
+        if voi.mask.GetDimension() == 4:
+            masks = []
+            for i in range(num_phases):
+                phase_mask = voi.mask[:, :, :, i]
+                phase_voi = voi.model_copy(
+                    update={"mask": phase_mask, "grid": Grid.from_sitk_image(phase_mask)}
+                )
+                masks.append(phase_voi._resample_on_new_ct(phase_ct).mask)
+        else:
+            masks = [voi._resample_on_new_ct(phase_ct).mask] * num_phases
+        grid = Grid.from_sitk_image(cube)
+        mask = sitk.JoinSeries(masks)
+        mask.SetOrigin(grid.origin)
+        mask.SetSpacing(grid.resolution_vector)
+        mask.SetDirection(grid.direction_vector)
+        return voi.model_copy(update={"mask": mask, "grid": grid})
 
     def apply_overlap_priorities(self) -> Self:
         """
@@ -747,7 +777,8 @@ class StructureSet(PyRadPlanBaseModel):
 
     def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
         """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""
-        original_grid = self.ct_image.grid
+        # the columns live on one 3D phase of the CT, also when the CT itself is 4D
+        original_grid = _phase_grid(self.ct_image)
         return np.stack(
             [
                 resample_numpy_array(
@@ -861,6 +892,12 @@ class StructureSet(PyRadPlanBaseModel):
         return self
 
 
+def _phase_grid(ct: CT) -> Grid:
+    """Grid of one phase of ``ct``: its 3D geometry, also for a 4D CT."""
+    cube = ct.cube_hu
+    return Grid.from_sitk_image(cube[:, :, :, 0] if cube.GetDimension() == 4 else cube)
+
+
 def create_cst(
     cst_data: Union[dict[str, Any], StructureSet, None] = None,
     ct: Union[CT, dict, None] = None,
@@ -889,9 +926,16 @@ def create_cst(
     """
 
     if isinstance(cst_data, StructureSet):
-        if ct and cst_data.ct_image != validate_ct(ct):
-            raise ValueError("CT image mismatch between StructureSet and provided CT")
-        return cst_data
+        if ct is None:
+            return cst_data
+        ct = validate_ct(ct)
+        if cst_data.ct_image == ct:
+            return cst_data
+        if _phase_grid(cst_data.ct_image) == _phase_grid(ct):
+            # same voxel grid: attach the structures to this CT; a 3D structure set on a 4D CT
+            # is repeated for every phase
+            return cst_data.resample_on_new_ct(ct)
+        raise ValueError("CT image mismatch between StructureSet and provided CT")
     elif isinstance(cst_data, dict):
         cst_data.update(kwargs)
         cst_data["ct_image"] = ct

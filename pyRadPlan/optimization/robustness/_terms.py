@@ -80,9 +80,13 @@ class RobustTerm:
 
 
 def voi_linear_mask(voi: Any) -> np.ndarray:
-    """Boolean mask of a VOI over the linear (numpy-ordered) voxels of its grid."""
-    mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
-    mask[voi.indices_numpy] = True
+    """
+    Boolean mask of a VOI over the linear (numpy-ordered) voxels of one 3D grid.
+
+    A 4D structure contributes its first phase, as matRad optimizes on ``cst{i,4}{1}``.
+    """
+    mask = np.zeros(int(np.prod(voi.mask.GetSize()[:3])), dtype=np.bool_)
+    mask[voi.scenario_indices(0, order="numpy")] = True
     return mask
 
 

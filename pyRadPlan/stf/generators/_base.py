@@ -57,6 +57,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
         self.bio_param: Any = None  # Biological Model #TODO: Merge Biological Model Developments
         self.machine: Union[str, Machine] = None  # Machine name
         self._ct: CT = None  # CT Object
+        self._geometry_ct_cache: tuple[CT, CT] = None  # (4D CT, its first phase)
         self._cst: StructureSet = None  # CST Object, TODO: Merge CST development
         self._mult_scen: ScenarioModel = None  # Scenario Model Object validated from mult_scen
         self._target_voxels: np.ndarray = None  # Target Voxels
@@ -86,6 +87,16 @@ class StfGeneratorBase(ProgressReporter, ABC):
 
         # TODO: stf = validate_stf(stf)
         return stf
+
+    @property
+    def _geometry_ct(self) -> CT:
+        """The CT the stf is placed on: the CT itself, or the first phase of a 4D CT (as matRad)."""
+        ct = self._ct
+        if ct is None or ct.num_of_ct_scen == 1:
+            return ct
+        if self._geometry_ct_cache is None or self._geometry_ct_cache[0] is not ct:
+            self._geometry_ct_cache = (ct, CT(cube_hu=ct.cube_hu[:, :, :, 0]))
+        return self._geometry_ct_cache[1]
 
     def _initialize(self):
         """Initializion Procedure."""
@@ -153,13 +164,13 @@ class StfGeneratorBase(ProgressReporter, ABC):
             raise GeometryError("No target found in CST")
 
         # pre-process CT
-        self._cube_hu = self._ct.cube_hu
+        self._cube_hu = self._geometry_ct.cube_hu
 
         # Now obtain the target voxel coordinates
         # TODO: 4D issues? And can this be done more
 
         self._target_voxel_coordinates = np2sitk.linear_indices_to_grid_coordinates(
-            self._target_voxels, self._ct.grid, index_type="numpy"
+            self._target_voxels, self._geometry_ct.grid, index_type="numpy"
         ).T
 
         # Multiply with target mask to ignore densities outside of target

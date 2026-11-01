@@ -692,9 +692,11 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         for ray in beam["rays"]:
             ray["SSD"] = []
 
+        sad = xp.asarray(beam["sad"], dtype=xp.float32, device=self.device)
         for rho_phase in rho:
-            # find rays that do not hit the patient in this phase
+            # rays that do not hit the patient in this phase have no density along them
             ix_nan = xp.all(xp.isnan(rho_phase), axis=1)
+            hit = ~ix_nan
 
             if xp.any(ix_nan):
                 msg = (
@@ -706,66 +708,70 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 else:
                     logger.warning(msg)
 
-            # Work with explicit row indices to avoid unsupported boolean argmax on some backends
-            row_idx = xp.nonzero(~ix_nan)[0]
+            if not xp.any(hit):
+                raise ValueError(
+                    "Error in SSD calculation: no ray of the beam hits the patient. Check the "
+                    "beam geometry and the setup shifts of the scenarios."
+                )
 
-            # Compute boolean condition, convert to integers for argmax
-            cond = xp.take(rho_phase, row_idx, axis=0) > density_threshold
-            cond_int = xp.where(cond, xp.asarray(1, dtype=xp.int64), xp.asarray(0, dtype=xp.int64))
-            arg = xp.argmax(cond_int, axis=1)
-
-            ssd = beam["sad"] * xp.ones_like(ix_nan, dtype=xp.float32)
-
-            d12_sel = xp.reshape(xp.take(d12, row_idx, axis=0), (-1,))
-            alpha_rows = xp.take(alpha, row_idx, axis=0)
-            idx = xp.reshape(xp.astype(arg, xp.int64), (-1, 1))
-            alpha_sel = xp.reshape(xp.take_along_axis(alpha_rows, idx, axis=1), (-1,))
-
-            ssd_vals = xp.astype(d12_sel, xp.float32) * xp.astype(alpha_sel, xp.float32)
-            ssd = xp.where(~ix_nan, ssd_vals, ssd)
+            # first voxel above the skin threshold along every ray (NaN compares False);
+            # integers for argmax, since some backends have no boolean argmax
+            cond = xp.where(
+                rho_phase > density_threshold,
+                xp.asarray(1, dtype=xp.int64),
+                xp.asarray(0, dtype=xp.int64),
+            )
+            idx = xp.reshape(xp.astype(xp.argmax(cond, axis=1), xp.int64), (-1, 1))
+            alpha_sel = xp.reshape(xp.take_along_axis(alpha, idx, axis=1), (-1,))
+            ssd_vals = xp.astype(d12, xp.float32) * xp.astype(alpha_sel, xp.float32)
+            ssd = xp.where(hit, ssd_vals, sad)
 
             for j, ray in enumerate(beam["rays"]):
-                if ix_nan[j]:  # Try to fix SSD by using SSD of closest neighboring ray
+                if ix_nan[j]:  # take the SSD of the closest ray that hits the patient
                     ray["SSD"].append(
-                        self._closest_neighbor_ssd(ray_pos_bev, ssd, ray["ray_pos_bev"])
+                        self._closest_neighbor_ssd(ray_pos_bev, ssd, hit, ray["ray_pos_bev"])
                     )
                 else:
                     ray["SSD"].append(float(ssd[j]))
 
         beam_info["beam"] = beam
 
-    def _closest_neighbor_ssd(self, ray_pos_bev: Array, ssd: Array, curr_pos: Array) -> float:
+    def _closest_neighbor_ssd(
+        self, ray_pos_bev: Array, ssd: Array, hit: Array, curr_pos: Array
+    ) -> float:
         """
-        Find the closest neighboring ray's SSD.
+        SSD of the closest ray that hits the patient.
 
         Parameters
         ----------
-        ray_pos_bev : np.ndarray
-            Array of ray positions.
-        curr_pos : np.ndarray
-            Current ray position.
+        ray_pos_bev : Array
+            ``(num_rays, 3)`` ray positions in the beam's eye view.
+        ssd : Array
+            SSD per ray.
+        hit : Array
+            Boolean per ray, whether it hits the patient (its SSD is valid).
+        curr_pos : Array
+            Position of the ray whose SSD is missing.
 
         Returns
         -------
         float
-            SSD value of the closest neighboring ray.
+            SSD value of the closest ray hitting the patient.
+
+        Raises
+        ------
+        ValueError
+            No ray of the beam hits the patient.
         """
         xp = array_api_compat.array_namespace(ray_pos_bev, ssd, curr_pos)
-        distances = xp.sum((ray_pos_bev - curr_pos) ** 2, axis=1)
-        sorted_indices = xp.argsort(distances)
-        for ix in sorted_indices:
-            if ssd[ix] is not None:
+        distances = xp.sum((ray_pos_bev - xp.asarray(curr_pos)) ** 2, axis=1)
+        for ix in xp.argsort(distances):
+            if bool(hit[ix]):
                 return float(ssd[ix])
         raise ValueError(
-            "Error in SSD calculation: Could not fix SSD calculation by using closest neighboring "
-            "ray."
+            "Error in SSD calculation: no ray of the beam hits the patient, so there is no "
+            "neighboring ray to take the SSD from."
         )
-
-        #
-        # """Find the closest neighbor to ray j and return its SSD."""
-        # distances = np.linalg.norm(ray_pos_bev - ray_pos_bev[j], axis=1)
-        # distances[j] = np.inf
-        # return SSD[np.argmin(distances)]
 
     def _geometry_groups(self) -> list[tuple[np.ndarray, list[int]]]:
         """

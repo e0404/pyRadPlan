@@ -538,3 +538,64 @@ def test_negative_range_shift_and_a_set_without_range_dimension(test_data_proton
     no_range = ScenarioSet.from_points([SetupUncertainty()], {"setup": [[0.0, 0.0, 0.0]]})
     _, _, same = _calc(pln, ct, cst, stf, scenarios=no_range)
     _assert_equal(same[0], nominal[0])
+
+
+def test_rays_missing_the_patient_take_the_ssd_of_their_neighbors(test_data_photons):
+    pln, ct, cst, stf, _, _ = test_data_photons
+    scen_set = _scenario_set(setup=[(0.0, 0.0, 0.0), (0.0, 0.0, 60.0)])
+    with pytest.warns(UserWarning, match="do not hit patient"):
+        _, _, slots = _calc(pln, ct, cst, stf, scenarios=scen_set)
+    shifted = sparse.csc_array(slots[1])
+    assert shifted.nnz > 0
+    assert np.all(np.isfinite(shifted.data))
+
+    # a beam missing the patient entirely has no neighbor to take the SSD from
+    with pytest.raises(ValueError, match="no ray of the beam hits"), pytest.warns(UserWarning):
+        _calc(pln, ct, cst, stf, scenarios=_scenario_set(setup=[(0.0, 0.0, 120.0)]))
+
+
+def test_public_api_accepts_a_3d_structure_set_on_a_4d_ct(test_data_photons):
+    from pyRadPlan import generate_stf
+
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, ct_phase1 = _two_phase_ct(ct)
+    scen_set = _scenario_set(ct_phase=[1], phases=(0, 1))
+
+    dij = calc_dose_influence(ct2, cst, stf, pln, scenarios=scen_set)
+    _, _, standalone = _calc(pln, ct_phase1, cst, stf)
+    _assert_equal(dij.physical_dose[0], standalone[0])
+
+    result = calc_dose_forward(
+        ct2, cst, stf, pln, np.ones(stf.total_number_of_bixels), scenarios=scen_set
+    )
+    assert "physical_dose" in result
+    assert generate_stf(ct2, cst, pln).total_number_of_bixels > 0
+
+
+def test_4d_structure_set_gives_the_same_influence_matrices(case):
+    from pyRadPlan.cst import validate_cst
+
+    pln, ct, cst, stf = case
+    ct2, _ = _two_phase_ct(ct)
+    cst4d = validate_cst(cst, ct=ct2)
+    assert cst4d.num_of_scenarios == 2
+
+    scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
+    _, _, with_3d = _calc(pln, ct2, cst, stf, scenarios=scen_set)
+    _, _, with_4d = _calc(pln, ct2, cst4d, stf, scenarios=scen_set)
+    for a, b in zip(with_3d, with_4d):
+        _assert_equal(a, b)
+
+
+def test_optimization_runs_on_a_4d_ct(test_data_photons):
+    from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
+
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
+    dij = calc_dose_influence(ct2, cst, stf, pln, scenarios=scen_set)
+
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+    w, _ = NonLinearFluencePlanningProblem(pln).solve(ct2, cst, stf, dij)
+    assert w.shape == (dij.total_num_of_bixels,)
+    assert np.all(np.isfinite(w))
