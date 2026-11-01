@@ -475,3 +475,34 @@ class TestIonRadiationModes:
         engine._machine = type("Machine", (), {"radiation_mode": "electrons"})()
         with pytest.raises(ValueError, match="FRED cannot simulate radiation mode 'electrons'"):
             engine._write_plan_delivery_file()
+
+
+def test_mc_engine_reduces_a_4d_ct_to_the_scenario_phase(test_data_protons, test_plan_fred):
+    from pyRadPlan.ct import CT, validate_ct
+    from pyRadPlan.scenarios import (
+        CTPhaseUncertainty,
+        RangeUncertainty,
+        ScenarioSet,
+        SetupUncertainty,
+    )
+
+    ct = validate_ct(test_data_protons[1])
+    phase1 = ct.cube_hu + 100.0
+    ct4d = CT(cube_hu=sitk.JoinSeries([ct.cube_hu, phase1]))
+    engine = ParticleFredMCEngine(test_plan_fred)
+    engine._scenarios_override = ScenarioSet.from_points(
+        (
+            CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5]),
+            SetupUncertainty(),
+            RangeUncertainty(),
+        ),
+        {"ct_phase": [[1]]},
+    )
+    engine._scenarios = engine._resolve_scenarios(ct4d)
+
+    reduced = engine._scenario_ct(ct4d)
+    assert reduced.num_of_ct_scen == 1
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(reduced.cube_hu), sitk.GetArrayFromImage(phase1)
+    )
+    assert engine._scenario_ct(ct) is ct

@@ -290,7 +290,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
         center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
 
-        center_ssd = beam_info["beam"]["rays"][center]["SSD"]
+        center_ssd = beam_info["beam"]["rays"][center]["SSD"][self._reference_ct_phase]
 
         # get correct kernel for given SSD at central ray
         kernels_at_ssd = xp.asarray(kernel.get_kernels_at_ssd(center_ssd))

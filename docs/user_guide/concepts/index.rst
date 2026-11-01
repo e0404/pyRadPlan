@@ -17,6 +17,7 @@ in :ref:`quickstart`.
     patient_data
     steering
     dose_calculation
+    uncertainty
     optimization
     quantities
     visualization
