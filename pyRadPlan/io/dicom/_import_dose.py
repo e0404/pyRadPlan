@@ -11,6 +11,8 @@ import SimpleITK as sitk
 
 from pyRadPlan.core import ProgressReporter
 
+from ._helpers import warn_if_not_equally_spaced
+
 logger = logging.getLogger(__name__)
 
 #: ``DoseSummationType`` values that denote a per-beam (rather than plan-level)
@@ -115,9 +117,14 @@ def import_dose(
         image = sitk.Cast(image, sitk.sitkFloat32)
 
         ds = pydicom.dcmread(dose_file, stop_before_pixels=True)
+        offsets = getattr(ds, "GridFrameOffsetVector", None)
+        if offsets is not None and len(offsets) > 2:
+            warn_if_not_equally_spaced(offsets, "RTDOSE frames (GridFrameOffsetVector)")
         scaling = float(getattr(ds, "DoseGridScaling", 1.0))
         if scaling != 1.0:
             image = image * scaling
+        # Same orientation as the imported CT (see import_ct)
+        image = sitk.DICOMOrient(image, "LPS")
         step.advance()
 
     return image

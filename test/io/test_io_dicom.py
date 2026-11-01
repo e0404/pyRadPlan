@@ -8,6 +8,7 @@ round-trips.
 
 import os
 import shutil
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -17,12 +18,16 @@ import pytest
 
 from pyRadPlan.core import ProgressReport, observe_reports
 from pyRadPlan.ct import CT, validate_ct
-from pyRadPlan.cst import StructureSet, validate_cst
+from pyRadPlan.cst import StructureSet, validate_cst, validate_voi
 from pyRadPlan.io import load_patient, load_data
 from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.io.dicom import DicomImporter, DicomExporter, DicomHandler
 from pyRadPlan.io.dicom._import_dose import import_dose
-from pyRadPlan.io.dicom._helpers import determine_structure_type, generate_colors
+from pyRadPlan.io.dicom._helpers import (
+    determine_structure_type,
+    generate_colors,
+    warn_if_not_equally_spaced,
+)
 
 
 def _voxel_sets(cst: StructureSet) -> dict:
@@ -315,6 +320,272 @@ def test_dicom_roundtrip_structures_as_seg(dicom_dir, tmp_path):
     assert set(sets) == set(sets2)
     for name, voxels in sets.items():
         assert voxels == sets2[name], f"VOI '{name}' changed in SEG roundtrip"
+
+
+def test_dicom_seg_next_to_a_ct_with_patient_position_is_not_mirrored(dicom_dir, tmp_path):
+    """SEG frames lie in the CT pixel grid and are placed as they are.
+
+    The import used to flip them by the CT's PatientPosition (HFS: left-right). The SEG
+    round trip above did not see it: pyRadPlan's exported CT carries no PatientPosition,
+    and the bundled structures are mirror-symmetric in x.
+    """
+    ct = DicomImporter(dicom_dir).load_ct()
+    assert pydicom.dcmread(dicom_dir / "ct_slice_1.dcm").PatientPosition == "HFS"
+
+    arr = np.zeros(sitk.GetArrayFromImage(ct.cube_hu).shape, dtype=np.uint8)  # (z, y, x)
+    arr[4:7, 9:11, 2:4] = 1  # low-x side only
+    mask = sitk.GetImageFromArray(arr)
+    mask.CopyInformation(ct.cube_hu)
+    cst = validate_cst([validate_voi(name="Asym", voi_type="OAR", mask=mask, ct_image=ct)], ct)
+
+    export_dir = tmp_path / "export"
+    DicomExporter(export_dir, structure_format="seg").save(ct=ct, cst=cst)
+
+    # The SEG next to the original CT slices, which carry PatientPosition
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    shutil.copy(export_dir / "SEG.dcm", mixed)
+    for f in dicom_dir.glob("ct_slice_*.dcm"):
+        shutil.copy(f, mixed)
+
+    imported = DicomImporter(mixed).load_cst()
+    assert _voxel_sets(imported)["asym"] == _voxel_sets(cst)["asym"]
+
+
+def test_dicom_ct_with_a_missing_slice_warns(dicom_dir, tmp_path):
+    """A gap in the slice positions is reported; SimpleITK reads it onto a uniform grid."""
+    slices = sorted(
+        dicom_dir.glob("ct_slice_*.dcm"),
+        key=lambda f: float(pydicom.dcmread(f, stop_before_pixels=True).ImagePositionPatient[2]),
+    )
+    for f in slices[: len(slices) // 2] + slices[len(slices) // 2 + 1 :]:
+        shutil.copy(f, tmp_path)
+
+    with pytest.warns(UserWarning, match="CT slices are not equally spaced"):
+        DicomImporter(tmp_path).load_ct()
+
+
+def test_dicom_ct_with_equal_spacing_does_not_warn(dicom_dir):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="CT slices are not equally spaced")
+        DicomImporter(dicom_dir).load_ct()
+
+
+@pytest.mark.parametrize(
+    ("positions", "warns"),
+    [
+        ([0.0, 5.0, 10.0, 15.0], False),
+        ([15.0, 10.0, 5.0, 0.0], False),  # descending GridFrameOffsetVector
+        ([-100.7, -100.1, -99.5, -98.9], False),  # decimal positions
+        ([0.0, 5.0, 10.0, 20.0, 25.0], True),  # a missing slice
+        ([0.0, 2.0, 4.0, 7.0, 10.0], True),  # a change of slice thickness
+        ([0.0, 5.0], False),  # too few positions to judge
+    ],
+)
+def test_warn_if_not_equally_spaced(positions, warns):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warn_if_not_equally_spaced(positions, "Slices")
+    assert bool(caught) == warns
+
+
+def test_slice_positions_without_position_headers_are_skipped():
+    """A series without ImagePositionPatient is not checked rather than raised over."""
+    from pyRadPlan.io.dicom._import_ct import _slice_positions
+
+    reader = mock.Mock()
+    reader.GetMetaData.side_effect = RuntimeError("Key not found")
+    assert _slice_positions(reader, 3) == []
+
+
+_UNIT_AXES = (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+
+
+def test_seg_frame_voxels():
+    """A SEG frame is placed where its pixels fall on CT voxels of one slice."""
+    from pyRadPlan.io.dicom._import_cst import _seg_frame_voxels
+
+    ct = _unit_ct()  # 8 x 8 x 3, voxel index = world coordinate
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1  # row 2, column 5
+
+    def placed(position, axes=_UNIT_AXES):
+        voxels = _seg_frame_voxels(ct, position, axes, frame)
+        return None if voxels is None else [tuple(int(v) for v in vox) for vox in zip(*voxels)]
+
+    assert placed([0.0, 0.0, 2.0]) == [(5, 2, 2)]
+    assert placed([1.0, 1.0, 1.0]) == [(6, 3, 1)], "frame starting inside the slice"
+    assert placed([3.0, 1.0, 1.0]) == [], "pixel beyond the CT's x extent is dropped"
+    # Flipped frame axes (a prone SEG next to a CT reoriented to LPS)
+    flipped = (-_UNIT_AXES[0], -_UNIT_AXES[1])
+    assert placed([7.0, 7.0, 0.0], flipped) == [(2, 5, 0)]
+    assert placed(None) is None
+    assert placed([0.0, 0.0, 7.0]) is None, "beyond the CT"
+    assert placed([0.0, 0.0, 1.0], (2 * _UNIT_AXES[0], _UNIT_AXES[1])) is None, "other spacing"
+    tilted = (np.array([0.0, 0.0, 1.0]), _UNIT_AXES[1])
+    assert placed([0.0, 0.0, 1.0], tilted) is None, "not in a CT slice"
+
+
+def _seg_dataset(pixel_array, positions, shared_groups=True):
+    """A minimal SEG dataset with one segment, one frame per position, unit pixel spacing.
+
+    Without ``shared_groups`` it states neither orientation nor pixel spacing.
+    """
+    from types import SimpleNamespace as NS
+
+    frames = [
+        NS(
+            PlanePositionSequence=[NS(ImagePositionPatient=position)],
+            SegmentIdentificationSequence=[NS(ReferencedSegmentNumber=1)],
+        )
+        for position in positions
+    ]
+    shared = NS(
+        PlaneOrientationSequence=[NS(ImageOrientationPatient=[1, 0, 0, 0, 1, 0])],
+        PixelMeasuresSequence=[NS(PixelSpacing=[1.0, 1.0])],
+    )
+    return NS(
+        pixel_array=pixel_array,
+        SegmentSequence=[NS(SegmentNumber=1, SegmentLabel="Organ")],
+        PerFrameFunctionalGroupsSequence=frames,
+        SharedFunctionalGroupsSequence=[shared] if shared_groups else [],
+    )
+
+
+def test_import_seg_single_frame():
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1  # row 2 = y, column 5 = x
+
+    (voi,) = import_seg(_seg_dataset(frame, [[0.0, 0.0, 1.0]]), [], _unit_ct())
+
+    mask = sitk.GetArrayFromImage(voi.mask)  # (z, y, x)
+    assert mask.sum() == 1 and mask[1, 2, 5] == 1
+
+
+def test_import_seg_without_geometry_uses_the_ct_slices(caplog):
+    """A SEG without orientation and spacing takes them from the CT; without a CT it is skipped."""
+    from types import SimpleNamespace as NS
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    frame[2, 5] = 1
+    seg = _seg_dataset(frame, [[0.0, 0.0, 1.0]], shared_groups=False)
+    ct_slice = NS(ImageOrientationPatient=[1, 0, 0, 0, 1, 0], PixelSpacing=[1.0, 1.0])
+
+    (voi,) = import_seg(seg, [ct_slice], _unit_ct())
+    mask = sitk.GetArrayFromImage(voi.mask)
+    assert mask.sum() == 1 and mask[1, 2, 5] == 1
+
+    with caplog.at_level("WARNING"):
+        assert import_seg(seg, [], _unit_ct()) == []  # an empty segment gives no VOI
+    assert "Skipped 1 of 1 frame(s)" in caplog.text
+
+
+def test_import_seg_skips_frames_off_the_ct_grid(caplog):
+    from pyRadPlan.io.dicom._import_cst import import_seg
+
+    frames = np.ones((2, 8, 8), dtype=np.uint8)
+    seg = _seg_dataset(frames, [[0.0, 0.0, 0.0], [0.0, 0.0, 9.0]])  # second one beyond the CT
+
+    with caplog.at_level("WARNING"):
+        (voi,) = import_seg(seg, [], _unit_ct())
+
+    mask = sitk.GetArrayFromImage(voi.mask)
+    assert mask[0].all() and not mask[1:].any()
+    assert "Skipped 1 of 2 frame(s)" in caplog.text
+
+
+def _rewrite_series(src, dst, position):
+    """Store the bundled CT series as the same physical volume in another patient position."""
+    dst.mkdir()
+    for f in src.glob("ct_slice_*.dcm"):
+        ds = pydicom.dcmread(f)
+        ipp = [float(v) for v in ds.ImagePositionPatient]
+        row_spacing, column_spacing = (float(v) for v in ds.PixelSpacing)
+        pixels = ds.pixel_array[:, ::-1]  # first column is now the +x edge
+        ipp[0] += (ds.Columns - 1) * column_spacing
+        if position == "HFP":
+            pixels = pixels[::-1, :]  # first row is now the +y edge
+            ipp[1] += (ds.Rows - 1) * row_spacing
+            ds.ImageOrientationPatient = [-1, 0, 0, 0, -1, 0]
+        else:  # FFS: slice normal along -z
+            ds.ImageOrientationPatient = [-1, 0, 0, 0, 1, 0]
+        ds.ImagePositionPatient = ipp
+        ds.PatientPosition = position
+        ds.PixelData = np.ascontiguousarray(pixels).tobytes()
+        ds.save_as(dst / f.name)
+    shutil.copy(src / "RTstruct.dcm", dst)
+
+
+@pytest.mark.parametrize("position", ["HFP", "FFS"])
+def test_dicom_prone_and_feet_first_series(dicom_dir, tmp_path, position):
+    """Prone and feet-first series import as the head-first one, in LPS orientation.
+
+    The dose engines do not support a non-identity CT direction: the ray tracer missed
+    the patient and photon and proton calculations failed.
+    """
+    reference = DicomImporter(dicom_dir)
+    ct_ref = reference.load_ct()
+    cst_ref = reference.load_cst(ct_ref)
+
+    series = tmp_path / position
+    _rewrite_series(dicom_dir, series, position)
+    importer = DicomImporter(series)
+    ct = importer.load_ct()
+    cst = importer.load_cst(ct)
+
+    assert ct.cube_hu.GetDirection() == ct_ref.cube_hu.GetDirection()
+    assert np.allclose(ct.cube_hu.GetOrigin(), ct_ref.cube_hu.GetOrigin())
+    assert np.array_equal(
+        sitk.GetArrayFromImage(ct.cube_hu), sitk.GetArrayFromImage(ct_ref.cube_hu)
+    )
+    assert _voxel_sets(cst) == _voxel_sets(cst_ref)
+
+
+def test_dicom_seg_of_a_prone_ct(dicom_dir, tmp_path):
+    """A SEG written for a prone CT lands on the same voxels after the CT is reoriented."""
+    series = tmp_path / "HFP"
+    _rewrite_series(dicom_dir, series, "HFP")
+
+    # The prone CT as stored, without reorientation, and an asymmetric structure on it
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(reader.GetGDCMSeriesFileNames(str(series)))
+    ct_prone = validate_ct(cube_hu=sitk.Cast(reader.Execute(), sitk.sitkFloat32))
+    assert ct_prone.cube_hu.GetDirection()[0] == -1.0
+    arr = np.zeros(sitk.GetArrayFromImage(ct_prone.cube_hu).shape, dtype=np.uint8)
+    arr[4:7, 9:11, 2:4] = 1
+    mask = sitk.GetImageFromArray(arr)
+    mask.CopyInformation(ct_prone.cube_hu)
+    cst_prone = validate_cst(
+        [validate_voi(name="Asym", voi_type="OAR", mask=mask, ct_image=ct_prone)], ct_prone
+    )
+    DicomExporter(tmp_path / "export", structure_format="seg").save(ct=ct_prone, cst=cst_prone)
+    shutil.copy(tmp_path / "export" / "SEG.dcm", series)
+    (series / "RTstruct.dcm").unlink()
+
+    imported = DicomImporter(series).load_cst()
+
+    (voi,) = imported.vois
+    points = {
+        tuple(np.round(voi.mask.TransformIndexToPhysicalPoint([int(i) for i in idx[::-1]]), 3))
+        for idx in np.argwhere(sitk.GetArrayFromImage(voi.mask))
+    }
+    expected = {
+        tuple(np.round(mask.TransformIndexToPhysicalPoint([int(i) for i in idx[::-1]]), 3))
+        for idx in np.argwhere(arr)
+    }
+    assert points == expected
+
+
+def test_contour_outside_the_ct_is_skipped():
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _create_slice_mask
+
+    ct = _unit_ct()
+    points = np.array([[1.0, 1.0, 5.0], [3.0, 1.0, 5.0], [3.0, 3.0, 5.0]])  # slices are z 0..2
+    window, _, _, _ = _create_slice_mask(points, ct, *_axis_interpolators(ct))
+    assert window is None
 
 
 def test_dicom_exporter_rejects_bad_structure_format(tmp_path):
@@ -659,6 +930,67 @@ def test_compute_segment_mask_ors_contours_on_the_same_slice():
     assert filled[2, 2] and filled[3, 3], "first contour"
     assert filled[5, 5] and filled[6, 6], "second contour"
     assert filled.sum() == 8, "both contours, nothing between them"
+
+
+def _square_contour(x0, x1, y0, y1, z_pos):
+    item = mock.Mock()
+    item.ContourGeometricType = "CLOSED_PLANAR"
+    item.ContourData = [x0, y0, z_pos, x1, y0, z_pos, x1, y1, z_pos, x0, y1, z_pos]
+    return item
+
+
+def test_compute_segment_mask_inner_contour_is_a_hole():
+    """A contour inside another one on the same slice is a hole (even-odd), not filled."""
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    ct = _unit_ct()
+    roi = mock.Mock()
+    roi.ContourSequence = [
+        _square_contour(0.5, 6.5, 0.5, 6.5, 1.0),
+        _square_contour(2.5, 4.5, 2.5, 4.5, 1.0),
+    ]
+
+    filled = _compute_segment_mask(ct, roi, _axis_interpolators(ct))[:, :, 1]
+
+    assert filled[1, 1] and filled[6, 6], "ring"
+    assert not filled[3:5, 3:5].any(), "hole"
+    assert filled.sum() == 36 - 4
+
+
+def test_compute_segment_mask_feet_first_ct():
+    """Contours land on the right slice of a CT whose slice positions decrease."""
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    arr = np.zeros((3, 8, 8), dtype=np.float32)
+    img = sitk.GetImageFromArray(arr)
+    img.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
+    img.SetOrigin((0.0, 0.0, 2.0))  # slices at z = 2, 1, 0
+    ct = validate_ct(cube_hu=img)
+
+    roi = mock.Mock()
+    roi.ContourSequence = [_square_contour(1.5, 3.5, 1.5, 3.5, z) for z in (2.0, 1.0, 0.0)]
+
+    cube = _compute_segment_mask(ct, roi, _axis_interpolators(ct))
+
+    assert [int(cube[:, :, k].sum()) for k in range(3)] == [4, 4, 4]
+
+
+def test_compute_segment_mask_keeps_the_last_slice_at_decimal_positions():
+    """A contour on the last slice is kept although float slice positions are inexact."""
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    arr = np.zeros((10, 8, 8), dtype=np.float32)
+    img = sitk.GetImageFromArray(arr)
+    img.SetSpacing((1.0, 1.0, 0.6))
+    img.SetOrigin((0.0, 0.0, -100.7))  # last slice at -95.3
+    ct = validate_ct(cube_hu=img)
+
+    roi = mock.Mock()
+    roi.ContourSequence = [_square_contour(1.5, 3.5, 1.5, 3.5, -95.3)]
+
+    cube = _compute_segment_mask(ct, roi, _axis_interpolators(ct))
+
+    assert cube[:, :, 9].sum() == 4
 
 
 # --------------------------------------------------------------------------
