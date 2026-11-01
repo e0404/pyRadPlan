@@ -442,9 +442,6 @@ class PlanWidget(WorkspaceWidget):
 
         self._cmb_scenario = QComboBox()
         self._cmb_scenario.addItems(available_scenario_models())
-        for model in ("wcScen", "impScen", "rndScen"):
-            if model not in available_scenario_models():
-                self._add_disabled_item(self._cmb_scenario, model)
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
         self._btn_scenario_config = QPushButton("…")
         self._btn_scenario_config.setFixedWidth(28)
@@ -600,13 +597,6 @@ class PlanWidget(WorkspaceWidget):
         if hint:
             tooltip += f"\n{hint}"
         widget.setToolTip(tooltip)
-
-    @staticmethod
-    def _add_disabled_item(combo: QComboBox, text: str) -> None:
-        combo.addItem(text)
-        item = combo.model().item(combo.count() - 1)
-        item.setEnabled(False)
-        item.setToolTip("Not yet implemented")
 
     def _build_engine_selector(self) -> QHBoxLayout:
         self._cmb_engine = QComboBox()

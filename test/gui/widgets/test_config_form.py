@@ -271,3 +271,19 @@ def test_scenario_model_form_rejects_invalid_nested_values(qapp):
     assert failures == ["setup.sd", "ct_phase.probabilities"]
     assert form.values() == {}
     assert form.config().setup.sd == (2.25, 2.25, 2.25)
+
+
+def test_companion_field_edits_stay_pending_until_consistent(qapp):
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    dialog = ConfigFormDialog(WorstCaseScenarioModel)
+    form = dialog.form
+
+    # two more phases are rejected until their probabilities follow
+    form._set_nested("ct_phase", ("phases",), [0, 1])
+    assert "ct_phase" not in dialog.values()
+    assert "red" in form._editors["ct_phase.phases"].styleSheet()
+
+    form._set_nested("ct_phase", ("probabilities",), [0.5, 0.5])
+    assert dialog.values()["ct_phase"] == {"phases": [0, 1], "probabilities": [0.5, 0.5]}
+    assert form._editors["ct_phase.phases"].styleSheet() == ""

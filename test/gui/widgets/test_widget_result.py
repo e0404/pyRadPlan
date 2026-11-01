@@ -714,3 +714,15 @@ def test_viewer_lists_results_per_scenario_with_dij_labels(qapp, test_data_photo
     assert components() == ["full", "scenario 0: nominal", "scenario 2: range +1.0 mm"]
     ws.dij = None
     assert components() == ["full", "scenario 0", "scenario 2"]
+
+
+def test_overlay_meta_covers_per_scenario_lists():
+    from pyRadPlan.gui.widgets._result_widget import _build_overlay_meta
+
+    arr = np.zeros((2, 2, 2))
+    units, labels = _build_overlay_meta(
+        {"rbe_x_dose": arr, "rbe_x_dose_scenario": [arr, None], "physical_dose_beam": [arr]}
+    )
+    assert labels["rbe_x_dose_scenario 0"] == "RBE-weighted Dose"
+    assert units["rbe_x_dose_scenario 1"] == "Gy (RBE)"
+    assert labels["physical_dose_beam 0"] == "Dose"

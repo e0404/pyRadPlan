@@ -183,6 +183,9 @@ class ConfigFormWidget(QWidget):
         self._editors: dict[str, QWidget] = {}
         #: Overrides of each dataclass- or model-valued field, edited through its sub-form.
         self._nested: dict[str, dict] = {}
+        self._nested_pending: dict[
+            str, dict
+        ] = {}  # edits rejected until a companion field follows
         #: Value of each dataclass- or model-valued field its overrides apply to.
         self._nested_base: dict[str, Any] = {}
 
@@ -523,7 +526,7 @@ class ConfigFormWidget(QWidget):
             form.addRow(QLabel(label + ":"), editor)
 
     def _set_nested(self, name: str, path: tuple[str, ...], value: Any) -> None:
-        overrides = deepcopy(self._nested.get(name, {}))
+        overrides = deepcopy(self._nested_pending.get(name, self._nested.get(name, {})))
         node = overrides
         for key in path[:-1]:
             child = node.get(key)
@@ -536,12 +539,17 @@ class ConfigFormWidget(QWidget):
             updated = self._validated_nested(name, self._nested_base[name], overrides)
             setattr(self._draft, name, updated)
         except (TypeError, ValueError) as exc:
+            # An edit may be invalid only together with the current value of a companion
+            # field (CT phases and their probabilities): keep it pending for the next edit.
+            self._nested_pending[name] = overrides
             self._flag_error(key, str(exc))
             return
+        self._nested_pending.pop(name, None)
         self._nested[name] = overrides
-        editor = self._editors.get(key)
-        if editor is not None:
-            editor.setStyleSheet("")
+        prefix = name + "."
+        for editor_key, editor in self._editors.items():
+            if editor_key == name or editor_key.startswith(prefix):
+                editor.setStyleSheet("")
         self.value_changed.emit(name, self._nested_value(name))
 
     def _validated_nested(self, name: str, base: Any, overrides: dict) -> Any:

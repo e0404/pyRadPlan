@@ -142,6 +142,10 @@ def _build_overlay_meta(
     if isinstance(quantity_data, dict):
         for k, v in quantity_data.items():
             base = k.split()[0] if " " in k else k
+            # per-beam and per-scenario lists carry their quantity's label and unit
+            for suffix in ("_beam", "_scenario"):
+                if base not in QUANTITY_META and base.endswith(suffix):
+                    base = base.removesuffix(suffix)
             qname, unit = QUANTITY_META.get(base, ("Quantity", ""))
             if isinstance(v, list):
                 for i in range(len(v)):
