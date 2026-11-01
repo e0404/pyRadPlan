@@ -179,7 +179,11 @@ class CT(PyRadPlanBaseModel, ABC):
 
         # Apply direction
         if "direction" in data:
-            data["cube_hu"].SetDirection(data["direction"])
+            direction = data["direction"]
+            # 4D metadata of a single scenario, whose cube is a 3D image
+            if not is4d and len(direction) == 16:
+                direction = np.reshape(direction, (4, 4))[:3, :3].ravel().tolist()
+            data["cube_hu"].SetDirection(direction)
 
         # Apply spacing from resolution
         cls._apply_spacing(data, cube_hu, is4d)
@@ -212,6 +216,8 @@ class CT(PyRadPlanBaseModel, ABC):
             origin = tuple(data["origin"])
             if is4d and len(origin) == 3:
                 origin += (0.0,)
+            elif not is4d and len(origin) == 4:
+                origin = origin[:3]
             data["cube_hu"].SetOrigin(origin)
         elif all(key in data for key in ("x", "y", "z")):
             # Strategy 2: Calculate origin from x, y, z coordinate vectors

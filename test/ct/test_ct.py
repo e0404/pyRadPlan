@@ -306,3 +306,25 @@ def test_ct_equality_compares_voxel_values_and_dimensionality():
     assert CT(cube_hu=a) != four_d
     assert four_d != CT(cube_hu=a)
     assert four_d == CT(cube_hu=sitk.JoinSeries([a, a]))
+
+
+def test_single_scenario_cell_reduces_4d_metadata():
+    cubes = np.empty((1,), dtype=object)
+    cubes[0] = np.zeros((4, 3, 2))
+    ct = create_ct(
+        {"cube_hu": cubes, "direction": tuple(np.eye(4).ravel()), "origin": (1, 2, 3, 0)}
+    )
+    assert ct.cube_hu.GetDimension() == 3
+    assert ct.cube_hu.GetOrigin() == (1, 2, 3)
+    assert ct.cube_hu.GetDirection() == tuple(np.eye(3).ravel())
+
+
+def test_matrad_roundtrip_single_scenario_4d_image():
+    array = np.random.rand(4, 3, 2)
+    volume = sitk.GetImageFromArray(array)
+    volume.SetDirection(tuple(np.diag([-1.0, -1.0, 1.0]).ravel()))
+    ct = create_ct(cube_hu=sitk.JoinSeries([volume]))
+    ct2 = create_ct(ct.to_matrad())
+    assert ct2.cube_hu.GetDimension() == 3
+    assert ct2.cube_hu.GetDirection() == volume.GetDirection()
+    assert np.array_equal(sitk.GetArrayFromImage(ct2.cube_hu), array)
