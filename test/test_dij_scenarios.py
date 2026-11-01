@@ -445,3 +445,70 @@ def test_validate_dij_attaches_a_scenario_model(two_scenario_set):
     model = ExplicitScenarioModel.from_set(two_scenario_set)
     assert validate_dij(Dij(**_dij_kwargs(2)), scenario_model=model).scenarios == two_scenario_set
     assert validate_dij(scenario_model=model, **_dij_kwargs(2)).scenarios == two_scenario_set
+
+
+def _phase_set(phases, ct_phase, setup):
+    dims = (
+        CTPhaseUncertainty(phases=list(phases), probabilities=[1.0 / len(phases)] * len(phases)),
+        SetupUncertainty(),
+        RangeUncertainty(),
+    )
+    return ScenarioSet.from_points(dims, {"ct_phase": ct_phase, "setup": setup})
+
+
+def test_matrad_cells_follow_the_phase_index():
+    from pyRadPlan.dij._dij import _flat_to_matrad_cells, _matrad_cells_to_flat
+
+    scen_set = _phase_set((0, 2), [[2], [0]], [[0, 0, 0], [0, 0, 0]])
+    dij = _dij(scen_set)
+    assert dij.to_matrad()["physicalDose"].shape == (3, 1, 1)
+    cells = _flat_to_matrad_cells(dij.physical_dose, scen_set)
+    assert cells[2, 0, 0] is dij.physical_dose[0]
+    assert cells[0, 0, 0] is dij.physical_dose[1]
+    assert cells[1, 0, 0].size == 0
+
+    # matRad allocates one row per phase of the CT, also for phases the set does not use
+    cells4 = np.full((4, 1, 1), None, dtype=object)
+    cells4[2, 0, 0], cells4[0, 0, 0] = dij.physical_dose[0], dij.physical_dose[1]
+    flat = _matrad_cells_to_flat(cells4, scen_set)
+    assert flat[0] is dij.physical_dose[0] and flat[1] is dij.physical_dose[1]
+
+
+def test_voxel_columns_are_checked_against_the_context_scenario_set():
+    scen_set = _phase_set(
+        (0, 1), [[0], [0], [0], [1], [1], [1]], [[0, 0, 0], [3, 0, 0], [-3, 0, 0]] * 2
+    )
+    kwargs = _dij_kwargs(6)
+    dij = validate_dij(
+        scenario_model=scen_set,
+        alphax=np.full((N_VOX, 2), 0.1),
+        betax=np.full((N_VOX, 2), 0.05),
+        **kwargs,
+    )
+    assert dij.alphax.shape == (N_VOX, 2) and dij.scenarios == scen_set
+    with pytest.raises(ValueError, match="column"):
+        validate_dij(
+            scenario_model=scen_set,
+            alphax=np.full((N_VOX, 3), 0.1),
+            betax=np.full((N_VOX, 3), 0.05),
+            **kwargs,
+        )
+
+
+def test_dij_with_a_derived_first_slot():
+    from pyRadPlan.quantities import QuantityResolver
+    from pyRadPlan.scenarios import ScenarioBasis
+
+    scen_set = ScenarioSet.from_points(
+        _dimensions(),
+        {"setup": [[0, 0, 0], [3, 0, 0], [-3, 0, 0]]},
+        bases=[ScenarioBasis(coefficients={1: 0.5, 2: 0.5}), None, None],
+    )
+    kwargs = _dij_kwargs(3)
+    kwargs["physical_dose"][0] = None
+    dij = Dij(**kwargs, scenarios=scen_set)
+    assert dij.num_of_voxels == N_VOX
+    assert dij.first_matrix() is dij.physical_dose[1]
+    assert dij.nominal_scenario_index() == 1
+    quantity = QuantityResolver(dij).get("physical_dose")
+    assert quantity is not None

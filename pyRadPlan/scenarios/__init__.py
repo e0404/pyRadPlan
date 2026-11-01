@@ -156,6 +156,10 @@ def validate_scenario_model(
     """
     Validate a scenario model definition, converting matRad's 1-based ``ctScenProb``.
 
+    A model instance is returned as is (not copied), so that the stf generators and the dose
+    engines working from the same plan share its generated set, including unseeded random
+    samples.
+
     Parameters
     ----------
     model_def : ScenarioModel or ScenarioSet or str or dict
@@ -167,7 +171,8 @@ def validate_scenario_model(
     -------
     ScenarioModel
     """
-    model_def = deepcopy(model_def)
+    if isinstance(model_def, dict):
+        model_def = deepcopy(model_def)
     if isinstance(model_def, dict) and "ctScenProb" in model_def:
         # Normalize to (n, 2), so squeezed 1-D pairs loaded from .mat files, 2-D
         # arrays and Python lists of tuples all become an (index, prob) matrix.

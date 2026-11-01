@@ -1,8 +1,12 @@
 """Non-robust evaluation on the nominal scenario(s)."""
 
+import logging
+
 import array_api_compat
 
 from ._base import RobustnessOperator
+
+logger = logging.getLogger(__name__)
 
 
 class NoRobustness(RobustnessOperator):
@@ -10,14 +14,24 @@ class NoRobustness(RobustnessOperator):
     Evaluate the objective on the nominal scenario(s) only.
 
     With a 4D set this is one scenario per CT phase (matRad's ``useNominalCtScen``), summed
-    without weights as matRad does.
+    without weights as matRad does. A set without a nominal scenario (e.g. random samples
+    without the nominal point) evaluates the first computed scenario of each phase instead.
     """
 
     name = "none"
     matrad_name = "none"
 
     def _select_scenarios(self):
-        return [int(i) for i in self.scenarios.nominal_indices()]
+        try:
+            return [int(i) for i in self.scenarios.nominal_indices()]
+        except ValueError:
+            indices = [int(i) for i in self.scenarios.reference_indices()]
+            logger.warning(
+                "The scenario set has no nominal scenario; objectives without robustness "
+                "setting evaluate scenario(s) %s instead",
+                indices,
+            )
+            return indices
 
     def evaluate(self, entries, values):
         self._check(entries, values)

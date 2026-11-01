@@ -422,3 +422,32 @@ def test_robust_fluence_optimization_end_to_end(proton_case):
     assert np.all(np.isfinite(w)) and np.all(w >= 0)
     result = robust_dij.get_result_arrays_from_intensity(w, scenario_index=2)
     assert "physical_dose" in result
+
+
+def test_least_squares_gradient_uses_the_nominal_slot(proton_case):
+    from pyRadPlan.optimization.problems._simple_least_squares import (
+        SimpleLeastSquaresFluenceOptimization,
+    )
+
+    pln, ct, cst, stf, dij = proton_case
+    scen = ScenarioSet.from_points(
+        (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()),
+        {"setup": [[3, 0, 0], [0, 0, 0]]},
+    )
+    robust_dij = _dij_with(dij, (0.7, 1.0), scen)
+    assert robust_dij.nominal_scenario_index() == 1
+
+    pln = dict(pln)
+    pln["prop_opt"] = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+    prob = SimpleLeastSquaresFluenceOptimization(pln)
+    prob._ct, prob._cst, prob._stf, prob._dij = ct, cst, stf, robust_dij
+    prob._initialize()
+
+    w = np.random.default_rng(0).uniform(0.5, 1.5, robust_dij.total_num_of_bixels)
+    grad = prob._objective_gradient(w)
+    eps = 1e-6
+    for k in range(5):
+        step = np.zeros_like(w)
+        step[k] = eps
+        fd = (prob._objective_function(w + step) - prob._objective_function(w - step)) / (2 * eps)
+        np.testing.assert_allclose(grad[k], fd, rtol=1e-4, atol=1e-8)

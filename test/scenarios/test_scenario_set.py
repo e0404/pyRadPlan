@@ -524,3 +524,40 @@ def test_component_keys_axis_lookup_and_normalization_errors(wc_like_set):
         assert 0 <= layout.axis(key) < len(layout.axis_names)
     with pytest.raises(ValueError, match="sum to zero"):
         wc_like_set.with_weights(np.zeros(len(wc_like_set))).normalized()
+
+
+def test_matrad_layout_addresses_the_ct_axis_by_phase_index():
+    dims = (
+        CTPhaseUncertainty(phases=[0, 2], probabilities=[0.5, 0.5]),
+        SetupUncertainty(),
+        RangeUncertainty(),
+    )
+    s = ScenarioSet.from_points(
+        dims, {"ct_phase": [[2], [0], [2]], "setup": [[0, 0, 0], [0, 0, 0], [3, 0, 0]]}
+    )
+    shape, position = s.matrad_layout()
+    assert shape == (3, 2, 1)
+    assert position[:, 0].tolist() == [2, 0, 2]
+
+
+def test_reference_indices_fall_back_to_the_first_computed_scenario_per_phase():
+    dims = _dims((0, 1))
+    s = ScenarioSet.from_points(
+        dims, {"ct_phase": [[1], [1], [0]], "setup": [[2, 0, 0], [-2, 0, 0], [2, 0, 0]]}
+    )
+    assert not s.has_nominal()
+    assert s.reference_indices().tolist() == [2, 0]
+
+    with_nominal = ScenarioSet.from_points(
+        dims, {"ct_phase": [[0], [1]], "setup": [[2, 0, 0], [0, 0, 0]]}
+    )
+    assert with_nominal.reference_indices().tolist() == with_nominal.nominal_indices().tolist()
+
+
+def test_input_arrays_stay_writable():
+    setup = np.zeros((2, 3))
+    weights = np.ones(2)
+    s = ScenarioSet.from_points([SetupUncertainty()], {"setup": setup}, weights=weights)
+    assert setup.flags.writeable and weights.flags.writeable
+    assert not s.points["setup"].flags.writeable
+    assert not s.weights.flags.writeable

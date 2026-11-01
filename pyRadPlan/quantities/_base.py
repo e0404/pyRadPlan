@@ -227,11 +227,10 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                     )
 
     def _infer_dtype(self, xp: ArrayNamespace):
-        if self._mode == "direct":
-            container = getattr(self._dij, self.identifier)
-            sample = container.flat[0]
-        else:
-            sample = self._dij.physical_dose.flat[0]
+        quantity = self.identifier if self._mode == "direct" else "physical_dose"
+        sample = self._dij.first_matrix(quantity)
+        if sample is None:
+            raise ValueError(f"The Dij holds no {quantity!r} matrix to infer the dtype from")
         try:
             return getattr(xp, sample.dtype.name)
         except AttributeError:

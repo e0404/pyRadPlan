@@ -294,3 +294,15 @@ def test_factory_registration_and_lookup_errors():
     assert isinstance(get_robustness_operator({"name": "STOCH"}, scen), ExpectedValue)
     with pytest.raises(ValueError, match="'name' entry"):
         get_robustness_operator({}, scen)
+
+
+def test_none_operator_without_a_nominal_scenario_uses_the_first_computed(caplog):
+    import logging
+
+    from pyRadPlan.optimization.robustness import get_robustness_operator
+
+    scen = _set([[2.0, 0.0, 0.0], [-2.0, 0.0, 0.0]])
+    with caplog.at_level(logging.WARNING):
+        operator = get_robustness_operator("none", scen)
+    assert list(operator.scenario_indices) == [0]
+    assert "no nominal scenario" in caplog.text

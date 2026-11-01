@@ -213,7 +213,8 @@ def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.nd
         return flat
 
     shape, position = scenarios.matrad_layout()
-    if cells.shape != shape:
+    more_ct_rows = cells.ndim == 3 and cells.shape[1:] == shape[1:] and cells.shape[0] >= shape[0]
+    if cells.shape != shape and not more_ct_rows:
         squeezed = tuple(d for d in shape if d != 1)
         if tuple(d for d in cells.shape if d != 1) != squeezed:
             raise ValueError(
@@ -553,7 +554,15 @@ class Dij(PyRadPlanBaseModel):
     @property
     def num_of_voxels(self) -> int:
         """Number of voxels in the dose influence matrix."""
-        return self.physical_dose.flat[0].shape[0]
+        matrix = self.first_matrix()
+        return int(matrix.shape[0]) if matrix is not None else int(self.dose_grid.num_voxels)
+
+    def first_matrix(self, quantity: str = "physical_dose") -> Any:
+        """First stored influence matrix of ``quantity`` (slots of derived scenarios are empty)."""
+        container = getattr(self, quantity)
+        if container is None:
+            return None
+        return next((m for m in container.flat if m is not None), None)
 
     @computed_field
     @property
@@ -742,9 +751,12 @@ class Dij(PyRadPlanBaseModel):
             mats = [m for m in dij_matrices.flat if m is not None]
             if mats and v.shape[0] != mats[0].shape[0]:
                 raise ValueError("Voxel arrays shape inconsistent with number of voxels")
-            # With a scenario set, the column count is checked against its voxel parameter
-            # sets in the model validator.
-            if info.data.get("scenarios") is None and v.shape[1] not in (1, dij_matrices.size):
+            # With a scenario set (given or attached from the validation context), the column
+            # count is checked against its voxel parameter sets in the model validator.
+            scenarios = info.data.get("scenarios")
+            if scenarios is None:
+                scenarios = _as_scenario_set((info.context or {}).get("scenario_model"))
+            if scenarios is None and v.shape[1] not in (1, dij_matrices.size):
                 raise ValueError(
                     "Voxel arrays need one column or one column per scenario slot "
                     f"({dij_matrices.size}), got {v.shape[1]}: inconsistent with number of "
@@ -904,15 +916,12 @@ class Dij(PyRadPlanBaseModel):
         """
         Slot of the scenario the unsuffixed results refer to by default.
 
-        The first index of :meth:`ScenarioSet.nominal_indices`, the first computed scenario when
-        the set has no nominal one, and ``0`` without a scenario set.
+        The first of :meth:`ScenarioSet.reference_indices` (the nominal scenario, else the first
+        computed one), and ``0`` without a scenario set.
         """
         if self.scenarios is None:
             return 0
-        try:
-            return int(self.scenarios.nominal_indices()[0])
-        except ValueError:
-            return int(self.scenarios.computed_indices()[0])
+        return int(self.scenarios.reference_indices()[0])
 
     def get_result_arrays_from_intensity(
         self,

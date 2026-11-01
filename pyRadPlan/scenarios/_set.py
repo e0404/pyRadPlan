@@ -336,12 +336,13 @@ class ScenarioSet(PyRadPlanBaseModel):
     def _coerce_points(cls, v: Any) -> dict[str, np.ndarray]:
         if not isinstance(v, dict):
             raise ValueError("points must map dimension names to (n, components) arrays")
-        return {str(k): np.asarray(val, dtype=float) for k, val in v.items()}
+        # copies, since the set marks its arrays read-only
+        return {str(k): np.array(val, dtype=float) for k, val in v.items()}
 
     @field_validator("probabilities", "weights", mode="before")
     @classmethod
     def _coerce_vectors(cls, v: Any) -> np.ndarray:
-        arr = np.atleast_1d(np.asarray(v, dtype=float))
+        arr = np.atleast_1d(np.array(v, dtype=float))
         if arr.ndim != 1:
             raise ValueError("probabilities and weights must be 1-D")
         if np.any(arr < 0) or not np.all(np.isfinite(arr)):
@@ -704,6 +705,26 @@ class ScenarioSet(PyRadPlanBaseModel):
             indices = [self.nominal_index()]
         return np.asarray(indices, dtype=int)
 
+    def reference_indices(self) -> np.ndarray:
+        """
+        Scenarios standing in for the nominal one(s) when a result or objective needs them.
+
+        :meth:`nominal_indices` when the set has a nominal scenario; otherwise the first
+        computed scenario of every CT phase (e.g. a random set without the nominal point or an
+        even grid). Raises ``ValueError`` if the set computes nothing.
+        """
+        try:
+            return self.nominal_indices()
+        except ValueError:
+            pass
+        computed = self.computed_indices()
+        if computed.size == 0:
+            raise ValueError("Scenario set has no computed scenario")
+        first: dict[int, int] = {}
+        for i, phase in zip(computed, self.ct_phases()[computed]):
+            first.setdefault(int(phase), int(i))
+        return np.asarray([first[p] for p in sorted(first)], dtype=int)
+
     def alias_of(self, index: int) -> Optional[int]:
         """Index of the scenario whose matrices scenario ``index`` shares, if it is an alias."""
         basis = self.bases[index]
@@ -946,8 +967,10 @@ class ScenarioSet(PyRadPlanBaseModel):
         """
         Return the matRad cell shape ``(ct, shift, range)`` and per-scenario subscripts.
 
-        Dimensions the set lacks have extent one and subscript zero. Raises ``ValueError``
-        for dimensions matRad cannot express.
+        The CT subscript is the phase index (matRad's cell array has one row per phase, used
+        or not), the shift and range subscripts follow the set's grid. Dimensions the set lacks
+        have extent one and subscript zero. Raises ``ValueError`` for dimensions matRad cannot
+        express.
         """
         self.require_matrad_compatible(allow_alias=True)
         present = [d for d in MATRAD_DIMENSIONS if self.has_dimension(d)]
@@ -956,8 +979,14 @@ class ScenarioSet(PyRadPlanBaseModel):
         position = np.zeros((len(self), 3), dtype=int)
         for k, dim in enumerate(present):
             column = MATRAD_DIMENSIONS.index(dim)
-            shape[column] = layout.shape[k]
-            position[:, column] = layout.position[:, k]
+            if dim == "ct_phase":
+                # matRad addresses the CT axis by phase index, one row per phase of the CT
+                phases = self.ct_phases()
+                shape[column] = int(phases.max(initial=-1)) + 1
+                position[:, column] = phases
+            else:
+                shape[column] = layout.shape[k]
+                position[:, column] = layout.position[:, k]
         return (shape[0], shape[1], shape[2]), position
 
     def to_xarray(self):

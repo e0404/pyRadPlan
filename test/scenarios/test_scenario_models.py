@@ -277,3 +277,13 @@ def test_generate_must_return_a_set():
 def test_legacy_parameter_cannot_combine_with_a_non_dimension_value():
     with pytest.raises(ValidationError, match="Cannot combine legacy"):
         NominalScenarioModel(shift_sd=(1.0, 1.0, 1.0), setup=5)
+
+
+def test_validate_scenario_model_keeps_the_instance():
+    from pyRadPlan.scenarios import RandomScenarioModel, validate_scenario_model
+
+    model = RandomScenarioModel(n_samples=3)
+    assert validate_scenario_model(model) is model
+    spec = {"model": "nomScen", "ctScenProb": [(1, 1.0)]}
+    assert validate_scenario_model(spec).ct_phase.phases == [0]
+    assert spec["ctScenProb"] == [(1, 1.0)]
