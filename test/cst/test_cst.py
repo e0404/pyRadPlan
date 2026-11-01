@@ -1002,3 +1002,106 @@ def test_optimization_target_union(cst_mixed_targets):
 
     assert sitk.GetArrayFromImage(cst.target_union_mask()).sum() == 2
     assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1
+
+
+def test_matrad_numpy_cell_array_multi_voxel_roundtrip():
+    """Regression: cst{i,4} as an object array holding a multi-voxel index list."""
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    mask = np.zeros((3, 4, 5), dtype=np.uint8)
+    mask[1, 2, 0:3] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(restored.vois[0].indices_numpy, voi.indices_numpy)
+
+
+def _ct_4d(num_scenarios=3):
+    cube_3d = sitk.Image([5, 4, 3], sitk.sitkFloat32)
+    return create_ct(cube_hu=sitk.JoinSeries([cube_3d] * num_scenarios))
+
+
+def test_cst_from_matrad_on_4d_ct_single_index_list():
+    """A single index list is used for every scenario of a 4D CT."""
+    ct = _ct_4d(num_scenarios=3)
+
+    cst = create_cst([[0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []]], ct=ct)
+
+    mask = sitk.GetArrayViewFromImage(cst.vois[0].mask)
+    assert mask.shape == (3, 3, 4, 5)
+    assert all(mask[s].sum() == 2 for s in range(3))
+    assert np.array_equal(mask[0], mask[2])
+
+
+def test_cst_from_matrad_on_4d_ct_rejects_wrong_number_of_index_lists():
+    ct = _ct_4d(num_scenarios=3)
+    idx = [np.array([1.0]), np.array([2.0])]
+
+    with pytest.raises(ValueError):
+        create_cst([[0, "Target", "TARGET", idx, {}, []]], ct=ct)
+
+
+def test_cst_to_matrad_roundtrip_4d():
+    ct = _ct_4d(num_scenarios=2)
+    mask = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    mask[0, 1, 2, 3] = 1
+    mask[1, 2, 0, 1] = 1
+    mask[1, 0, 3, 4] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(restored.vois[0].mask), mask)
+
+
+def test_empty_cst_overlap_and_lq_params(generic_ct):
+    cst = StructureSet(vois=[], ct_image=generic_ct)
+
+    assert cst.apply_overlap_priorities().vois == []
+    alpha, beta = cst.get_reference_lq_params()
+    assert alpha.shape == beta.shape == (np.prod(generic_ct.size), 1)
+    assert not alpha.any() and not beta.any()
+
+
+def test_apply_overlap_priorities_4d():
+    ct = _ct_4d(num_scenarios=2)
+    target = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    target[0, 1, 1, 1] = 1
+    oar = np.zeros_like(target)
+    oar[:, 1, 1, 1] = 1
+    cst = StructureSet(
+        vois=[
+            create_voi(name="T", voi_type="TARGET", mask=target, ct_image=ct),
+            create_voi(name="O", voi_type="OAR", mask=oar, ct_image=ct),
+        ],
+        ct_image=ct,
+    )
+
+    overlapped = cst.apply_overlap_priorities()
+
+    oar_mask = sitk.GetArrayViewFromImage(overlapped.vois[1].mask)
+    assert overlapped.vois[1].mask.GetDimension() == 4
+    assert oar_mask[0].sum() == 0  # covered by the target in scenario 0
+    assert oar_mask[1, 1, 1, 1] == 1  # free in scenario 1
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(overlapped.vois[0].mask), target)
+
+
+def test_reference_lq_params_and_tissue_indices_4d_per_scenario():
+    cst, exp = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    dims = exp["dims_zyx"]
+
+    alpha, beta = cst.get_reference_lq_params()
+    tissue_ix = cst.get_tissue_class_indices()
+
+    assert alpha.shape == beta.shape == tissue_ix.shape == (int(np.prod(dims)), 2)
+    oar_class = list(cst.get_tissue_classes()).index(cst.vois[1].tissue_properties)
+    assert oar_class != 0
+    for s in range(2):
+        ix = _flat_idx(exp["oar"][s], dims, "numpy")
+        other = 1 - s
+        assert alpha[ix, s] == 0.5 and beta[ix, s] == 0.05
+        assert tissue_ix[ix, s] == oar_class
+        # the OAR moved away from this voxel in the other scenario
+        assert alpha[ix, other] == 0.0
+        assert tissue_ix[ix, other] == 0

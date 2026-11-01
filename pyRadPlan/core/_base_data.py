@@ -160,13 +160,27 @@ def base_data_dirs(kind: Union[str, BaseDataKind]) -> list:
     return [folder for _, folder in _sourced_dirs(kind)]
 
 
+def _folder_entries(kind: BaseDataKind, folder: Path) -> list[Path]:
+    """Return the ``kind`` files directly in ``folder``, sorted by name."""
+    if not folder.is_dir():
+        return []
+    return sorted(
+        (
+            entry
+            for entry in folder.iterdir()
+            if entry.is_file() and os.path.splitext(entry.name)[1] in kind.endings
+        ),
+        key=lambda entry: entry.name.casefold(),
+    )
+
+
 def list_base_data(
     kind: Union[str, BaseDataKind], source: Optional[BaseDataSource] = None
 ) -> list[BaseDataFile]:
     """Return the base data files of a kind in order of precedence, each folder sorted by name.
 
-    A file named like one in a folder of higher precedence is not listed: it is never found
-    by name.
+    A file named like one in a folder of higher precedence, in any case, is not listed: it is
+    never found by name.
 
     Parameters
     ----------
@@ -179,35 +193,30 @@ def list_base_data(
     files: list[BaseDataFile] = []
     seen: set[str] = set()
     for folder_source, folder in _sourced_dirs(kind):
-        if not folder.is_dir():
-            continue
-        entries = sorted(
-            (
-                entry
-                for entry in folder.iterdir()
-                if entry.is_file() and os.path.splitext(entry.name)[1] in kind.endings
-            ),
-            key=lambda entry: entry.name.casefold(),
-        )
+        entries = _folder_entries(kind, folder)
         for entry in entries:
-            if entry.name in seen:
+            if entry.name.casefold() in seen:
                 continue
-            seen.add(entry.name)
             if source is None or source == folder_source:
                 files.append(BaseDataFile(kind, entry.name, entry, folder_source))
+        seen.update(entry.name.casefold() for entry in entries)
     return files
 
 
 def find_base_data(kind: Union[str, BaseDataKind], name: str) -> Optional[BaseDataFile]:
     """Locate the ``kind`` file named ``name`` without reading it, ``None`` if absent."""
     kind = get_base_data_kind(kind)
+    folded = name.casefold()
     for folder_source, folder in _sourced_dirs(kind):
         path = folder.joinpath(name)
         if path.is_file():
             return BaseDataFile(kind, name, path, folder_source)
-    # Case-sensitive file systems (Linux) need this to match names like Windows and macOS do
-    folded = name.casefold()
-    return next((entry for entry in list_base_data(kind) if entry.name.casefold() == folded), None)
+        # Case-sensitive file systems (Linux) need this to match names like Windows and macOS
+        # do, within the folder so that every platform selects a file of the same folder
+        for entry in _folder_entries(kind, folder):
+            if entry.name.casefold() == folded:
+                return BaseDataFile(kind, entry.name, entry, folder_source)
+    return None
 
 
 def check_base_data_file_name(kind: Union[str, BaseDataKind], name: str) -> None:
