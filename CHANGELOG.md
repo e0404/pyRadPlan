@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CT.compute_wet` accepted HLUTs with more than two columns or a single row
 - Importing a matRad stf with a beam that has only one ray no longer fails
 - `FieldShapeAsMask` accepts masks given as nested lists, and the warning about padding an even-sized mask is logged correctly instead of raising a logging error
+- `Plan.to_matrad` (and `.mat` export): `propStf`, `propOpt`, `propDoseCalc` and `propSeq` keys were snake_case, so matRad ignored them (e.g. `gantry_angles`)
+- `create_pln(radiation_mode="VHEE")` raised "Unknown radiation mode"
+- `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
+- An invalid `scenarios` (`mult_scen`) raised a `TypeError` instead of a `ValidationError`
 
 ## [0.6.1] - 2026-10-30
 
