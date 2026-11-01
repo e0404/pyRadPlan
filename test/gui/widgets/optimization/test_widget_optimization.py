@@ -531,3 +531,21 @@ def test_objectives_normalized_to_instances(qapp, tg119):
 
     for obj in ws.cst.vois[voi_idx].objectives:
         assert isinstance(obj, Objective)
+
+
+def test_robustness_change_guards_and_rejections(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    widget._on_robustness_changed(0, 0, "expected_value")  # no structures loaded yet
+
+    ws.set_many(ct=ct, cst=cst)
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    before = _objectives(ws.cst.vois[voi_idx])[0].robustness
+
+    widget._on_robustness_changed(voi_idx, 99, "expected_value")
+    widget._on_robustness_changed(voi_idx, 0, before)
+    widget._on_robustness_changed(voi_idx, 0, "not_a_robustness")
+
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == before
+    assert "Rejected robustness" in widget._lbl_status.text()

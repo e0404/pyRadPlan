@@ -256,3 +256,24 @@ def test_validate_scenario_model_ctscenprob_shapes(ct_scen_prob):
     scenario = validate_scenario_model({"model": "nomScen", "ctScenProb": ct_scen_prob})
     assert isinstance(scenario, NominalScenarioModel)
     assert scenario.ct_scen_prob == [(0, 1.0)]
+
+
+def test_to_matrad_context_handling():
+    model = NominalScenarioModel()
+    assert model.to_matrad({"matRad": "mat-file"}) == model.to_matrad()
+    with pytest.raises(ValueError, match="not supported"):
+        model.to_matrad("json")
+
+
+def test_generate_must_return_a_set():
+    class Broken(NominalScenarioModel):
+        def _generate(self):
+            return None
+
+    with pytest.raises(TypeError, match="must return a ScenarioSet"):
+        Broken().scenarios()
+
+
+def test_legacy_parameter_cannot_combine_with_a_non_dimension_value():
+    with pytest.raises(ValidationError, match="Cannot combine legacy"):
+        NominalScenarioModel(shift_sd=(1.0, 1.0, 1.0), setup=5)

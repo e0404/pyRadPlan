@@ -525,3 +525,16 @@ def test_computed_scenarios_share_one_index_array(case):
         assert np.shares_memory(after.indices, ref.indices)
         assert np.shares_memory(after.indptr, ref.indptr)
     assert dij.num_of_scenarios == 3
+
+
+def test_negative_range_shift_and_a_set_without_range_dimension(test_data_protons):
+    pln, ct, cst, stf, _, _ = test_data_protons
+    _, _, nominal = _calc(pln, ct, cst, stf)
+
+    _, _, shrunk = _calc(pln, ct, cst, stf, scenarios=_scenario_set(range_=[[-20.0, 0.0]]))
+    _assert_differs(shrunk[0], nominal[0])
+    assert np.all(np.isfinite(sparse.csc_array(shrunk[0]).data))
+
+    no_range = ScenarioSet.from_points([SetupUncertainty()], {"setup": [[0.0, 0.0, 0.0]]})
+    _, _, same = _calc(pln, ct, cst, stf, scenarios=no_range)
+    _assert_equal(same[0], nominal[0])

@@ -418,3 +418,109 @@ def test_with_weights_refreshes_cached_scenarios(wc_like_set):
 
     with pytest.raises(ValueError, match="shape"):
         wc_like_set.with_weights(np.ones(5))
+
+
+def test_basis_and_scenario_input_validation():
+    with pytest.raises(ValidationError, match="mapping of scenario index"):
+        ScenarioBasis(coefficients=[1.0])
+    with pytest.raises(ValidationError, match="non-negative"):
+        ScenarioBasis(coefficients={-1: 1.0})
+    with pytest.raises(ValidationError, match="values must map"):
+        Scenario(index=0, values=[0.0], probability=1.0, weight=1.0)
+
+    scenario = Scenario(
+        index=0,
+        values={"setup": [1.0, 0.0, 0.0], "range": [0.0, 0.0]},
+        probability=1.0,
+        weight=1.0,
+        component_names={"setup": ("x", "y", "z")},
+    )
+    assert scenario.dimension_names == ("setup", "range")
+    assert scenario.model_dump(mode="json")["values"] == {
+        "setup": [1.0, 0.0, 0.0],
+        "range": [0.0, 0.0],
+    }
+    assert isinstance(scenario.model_dump()["values"]["setup"], np.ndarray)
+    assert scenario.value("setup.x") == 1.0
+    with pytest.raises(KeyError, match="components"):
+        scenario.value("setup")
+    with pytest.raises(KeyError, match="Unknown component"):
+        scenario.value("setup.w")
+    assert scenario.__eq__(1) is NotImplemented
+
+
+def test_set_construction_rejects_inconsistent_input():
+    good = dict(
+        dimensions=_dims(),
+        points={"ct_phase": [[0.0]], "setup": [[0, 0, 0]], "range": [[0, 0]]},
+        probabilities=[1.0],
+        weights=[1.0],
+    )
+    assert len(ScenarioSet(**good)) == 1
+
+    def bad(match, **kwargs):
+        with pytest.raises(ValidationError, match=match):
+            ScenarioSet(**{**good, **kwargs})
+
+    bad("points must map", points=[[0, 0, 0]])
+    bad("1-D", probabilities=[[1.0]])
+    bad(
+        "unique",
+        dimensions=(SetupUncertainty(), SetupUncertainty()),
+        points={"setup": [[0, 0, 0]]},
+    )
+    bad("cover exactly", points={"setup": [[0, 0, 0]]})
+    bad("must have shape", points={"ct_phase": [[0.0]], "setup": [[0, 0]], "range": [[0, 0]]})
+    bad(
+        "same number of scenarios",
+        points={"ct_phase": [[0.0], [0.0]], "setup": [[0, 0, 0]], "range": [[0, 0]]},
+    )
+    bad(r"shape \(1,\)", probabilities=[1.0, 1.0])
+    bad("tags must have", tags=(frozenset(), frozenset()))
+    bad("bases must have", bases=(None, None))
+
+    flat = ScenarioSet(**{**good, "points": {**good["points"], "ct_phase": [0.0]}})
+    assert flat.points["ct_phase"].shape == (1, 1)
+    single = ScenarioSet(
+        dimensions=SetupUncertainty(),
+        points={"setup": [[0, 0, 0]]},
+        probabilities=[1.0],
+        weights=[1.0],
+    )
+    assert single.dimension_names == ("setup",)
+
+
+def test_from_points_errors_and_flat_vectors():
+    with pytest.raises(ValueError, match="at least one dimension"):
+        ScenarioSet.from_points([], {})
+    with pytest.raises(ValueError, match="at least one dimension"):
+        ScenarioSet.from_points(_dims(), {})
+    one = ScenarioSet.from_points(_dims(), {"setup": [1.0, 0.0, 0.0]})
+    assert one.num_scenarios == 1
+    assert one.points["setup"].shape == (1, 3)
+
+
+def test_queries_without_optional_dimensions_and_with_tags():
+    s = ScenarioSet.from_points([SetupUncertainty()], {"setup": [[0, 0, 0], [2.0, 0, 0]]})
+    assert s.ct_phase(1) == 0
+    assert np.array_equal(s.ct_phases(), [0, 0])
+    assert s.has_nominal()
+    tagged = ScenarioSet.from_points(
+        [SetupUncertainty()], {"setup": [[2.0, 0, 0]]}, tags=[frozenset({TAG_NOMINAL})]
+    )
+    assert tagged.label(0) == TAG_NOMINAL
+    assert s.__eq__(1) is NotImplemented
+
+
+def test_component_keys_axis_lookup_and_normalization_errors(wc_like_set):
+    with pytest.raises(KeyError, match="several components"):
+        wc_like_set.component_values("setup")
+    with pytest.raises(KeyError, match="no component"):
+        wc_like_set.component_values("setup.w")
+    layout = wc_like_set.layout
+    with pytest.raises(KeyError, match="does not identify"):
+        layout.axis("nonsense")
+    for key in ("setup.x", "range.abs", "ct_phase"):
+        assert 0 <= layout.axis(key) < len(layout.axis_names)
+    with pytest.raises(ValueError, match="sum to zero"):
+        wc_like_set.with_weights(np.zeros(len(wc_like_set))).normalized()

@@ -2951,3 +2951,37 @@ def test_scenario_config_button_is_advanced(qapp):
     assert _locked(widget._btn_scenario_config)
     widget.set_ui_mode(UIMode.DEFAULT)
     assert not _locked(widget._btn_scenario_config)
+
+
+def test_scenario_config_button_stores_the_dialog_values(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    widget, _ = _make_widget()
+    widget._cmb_scenario.setCurrentText("wcScen")
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 2.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert widget.has_pending_changes()
+
+    # cancelling keeps the stored values
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 9.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+
+    # a model name without a class has nothing to configure
+    widget._cmb_scenario.addItem("noSuchModel")
+    widget._cmb_scenario.setCurrentText("noSuchModel")
+    widget._on_scenario_config()
+    assert "noSuchModel" not in widget._scenario_props
+
+
+def test_scenario_overrides_drop_dimensions_without_parameters():
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    model = WorstCaseScenarioModel(setup={}, range={"rel_sd": 0.0}, wc_sigma=2.0)
+    assert PlanWidget._scenario_overrides(model) == {"wc_sigma": 2.0, "range": {"rel_sd": 0.0}}

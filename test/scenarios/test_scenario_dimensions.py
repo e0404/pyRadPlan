@@ -207,3 +207,58 @@ def test_create_distribution():
     assert {"independent_gaussian", "multivariate_gaussian"} <= set(available_distributions())
     with pytest.raises(ValueError):
         IndependentGaussian(dims).pdf(np.zeros((2, 3)))
+
+
+def test_dimension_registry_rejects_a_second_class_under_a_name():
+    class Clash(SetupUncertainty):
+        pass
+
+    with pytest.raises(ValueError, match="already registered"):
+        register_dimension(Clash)
+
+
+def test_dimension_interfaces_by_kind():
+    phase = CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5])
+    with pytest.raises(TypeError, match="no mean"):
+        phase.mean()
+    with pytest.raises(TypeError, match="no mass function"):
+        SetupUncertainty().pmf()
+    assert RangeUncertainty().label([1.0, 0.035]) == "range +1.0 mm / +3.5 %"
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"phases": [], "probabilities": []}, "At least one"),
+        ({"phases": [-1], "probabilities": [1.0]}, "non-negative"),
+    ],
+)
+def test_ct_phase_validation_errors(kwargs, match):
+    with pytest.raises(ValidationError, match=match):
+        CTPhaseUncertainty(**kwargs)
+
+
+def test_ct_phase_from_pairs_rejects_wrong_shape():
+    with pytest.raises(ValueError, match=r"\(n, 2\)"):
+        CTPhaseUncertainty.from_pairs([[0, 0.5, 0.5]])
+
+
+def test_distribution_edge_cases():
+    from pyRadPlan.scenarios import MultivariateGaussian
+
+    dims = (SetupUncertainty(), RangeUncertainty())
+    gaussian = IndependentGaussian(dims)
+    assert gaussian.validate_points([0, 0, 0, 0, 0]).shape == (1, 5)
+    assert repr(gaussian) == f"IndependentGaussian(keys={gaussian.keys})"
+
+    discrete_only = IndependentGaussian(
+        [CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5])]
+    )
+    assert discrete_only.ndim == 0
+    assert discrete_only.mean().shape == (0,)
+    assert discrete_only.std().shape == (0,)
+
+    with pytest.raises(ValueError, match="symmetric"):
+        MultivariateGaussian(dims, cov=np.triu(np.ones((5, 5))))
+    shifted = MultivariateGaussian(dims, mean=np.arange(5.0))
+    assert np.array_equal(shifted.mean(), np.arange(5.0))

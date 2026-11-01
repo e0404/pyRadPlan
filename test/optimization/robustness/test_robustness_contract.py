@@ -254,3 +254,43 @@ def test_gradient_follows_the_dtype_of_the_values(three_scenarios, robustness):
     grad = op.gradient([RobustTermEntry(objective)], [values])[0]
     assert grad.dtype == xp.float32
     assert grad.shape == values.shape
+
+
+def test_factory_registration_and_lookup_errors():
+    from pyRadPlan.optimization.robustness import (
+        ExpectedValue,
+        RobustnessOperator,
+        available_robustness,
+        get_robustness_operator,
+        register_robustness_operator,
+        resolve_robustness_name,
+    )
+
+    with pytest.raises(TypeError, match="subclass"):
+        register_robustness_operator(int)
+
+    class Nameless(RobustnessOperator):
+        pass
+
+    with pytest.raises(ValueError, match="non-empty 'name'"):
+        register_robustness_operator(Nameless)
+
+    class AliasClash(RobustnessOperator):
+        name = "alias_clash_test"
+        aliases = ("STOCH",)
+
+    with pytest.raises(ValueError, match="already refers"):
+        register_robustness_operator(AliasClash)
+    assert "alias_clash_test" not in available_robustness()
+
+    with pytest.raises(ValueError, match="must be a string"):
+        resolve_robustness_name(3)
+    assert resolve_robustness_name(" Stoch ") == "expected_value"
+    assert available_robustness()[0] == "none"
+
+    scen = _set([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    operator = get_robustness_operator("expected_value", scen)
+    assert get_robustness_operator(operator) is operator
+    assert isinstance(get_robustness_operator({"name": "STOCH"}, scen), ExpectedValue)
+    with pytest.raises(ValueError, match="'name' entry"):
+        get_robustness_operator({}, scen)
