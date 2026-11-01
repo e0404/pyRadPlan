@@ -900,10 +900,24 @@ class Dij(PyRadPlanBaseModel):
             return self.scenarios.labels()
         return ["nominal"] + [f"scenario {i}" for i in range(1, self.num_of_scenarios)]
 
+    def nominal_scenario_index(self) -> int:
+        """
+        Slot of the scenario the unsuffixed results refer to by default.
+
+        The first index of :meth:`ScenarioSet.nominal_indices`, the first computed scenario when
+        the set has no nominal one, and ``0`` without a scenario set.
+        """
+        if self.scenarios is None:
+            return 0
+        try:
+            return int(self.scenarios.nominal_indices()[0])
+        except ValueError:
+            return int(self.scenarios.computed_indices()[0])
+
     def get_result_arrays_from_intensity(
         self,
         intensity: np.ndarray,
-        scenario_index: int = 0,
+        scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
     ) -> dict[str, Any]:
@@ -914,9 +928,9 @@ class Dij(PyRadPlanBaseModel):
         ----------
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
-        scenario_index : int
+        scenario_index : int, optional
             The scenario the unsuffixed results (and the ``"<key>_beam"`` lists) are
-            computed for.
+            computed for. Defaults to the nominal scenario (:meth:`nominal_scenario_index`).
         num_of_fractions : int
             Report doses for this many identical fractions.
         scenarios : bool or sequence of int
@@ -933,6 +947,8 @@ class Dij(PyRadPlanBaseModel):
             Result arrays by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are
             lists of arrays.
         """
+        if scenario_index is None:
+            scenario_index = self.nominal_scenario_index()
         out = self._result_arrays(intensity, scenario_index)
         indices = self._result_scenario_indices(scenarios)
         if len(indices) > 1:
@@ -1103,7 +1119,7 @@ class Dij(PyRadPlanBaseModel):
     def compute_result_dose_grid(
         self,
         intensities: np.ndarray,
-        scenario_index: int = 0,
+        scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
     ) -> dict[str, Any]:
@@ -1114,8 +1130,9 @@ class Dij(PyRadPlanBaseModel):
         ----------
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
-        scenario_index : int
-            The scenario the unsuffixed results are computed for.
+        scenario_index : int, optional
+            The scenario the unsuffixed results are computed for. Defaults to the nominal
+            scenario (:meth:`nominal_scenario_index`).
         num_of_fractions : int
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
@@ -1155,7 +1172,7 @@ class Dij(PyRadPlanBaseModel):
     def compute_result_ct_grid(
         self,
         intensities: np.ndarray,
-        scenario_index: int = 0,
+        scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
     ) -> dict[str, Any]:
@@ -1166,8 +1183,9 @@ class Dij(PyRadPlanBaseModel):
         ----------
         intensity : np.ndarray
             The intensity to apply to the dose influence matrix.
-        scenario_index : int
-            The scenario the unsuffixed results are computed for.
+        scenario_index : int, optional
+            The scenario the unsuffixed results are computed for. Defaults to the nominal
+            scenario (:meth:`nominal_scenario_index`).
         num_of_fractions : int
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.

@@ -171,6 +171,30 @@ def test_results_per_scenario(sparse_grid_set):
     assert not any(key.endswith("_beam_scenario") for key in out)
 
 
+def test_results_default_to_the_nominal_scenario():
+    """The unsuffixed results are the nominal scenario's, wherever it sits in the set."""
+    dij = _dij(_set([[2.25, 0, 0], [0, 0, 0]], [[0, 0], [0, 0]]))
+    w = np.linspace(0.5, 1.5, N_BIX)
+    assert dij.nominal_scenario_index() == 1
+
+    out = dij.get_result_arrays_from_intensity(w, scenarios=True)
+    nominal = dij.physical_dose.flat[1] @ w
+    np.testing.assert_allclose(out["physical_dose"], nominal)
+    np.testing.assert_allclose(out["physical_dose_scenario"][1], nominal)
+    assert not np.allclose(out["physical_dose_scenario"][0], nominal)
+
+    image = dij.compute_result_ct_grid(w)["physical_dose"]
+    np.testing.assert_allclose(sitk.GetArrayFromImage(image).ravel(), nominal, rtol=1e-6)
+
+    # without a nominal scenario the first computed one stands in
+    shifted = _dij(_set([[2.25, 0, 0], [-2.25, 0, 0]], [[0, 0], [0, 0]]))
+    assert shifted.nominal_scenario_index() == 0
+    np.testing.assert_allclose(
+        shifted.get_result_arrays_from_intensity(w)["physical_dose"],
+        shifted.physical_dose.flat[0] @ w,
+    )
+
+
 def test_results_per_scenario_follow_the_nominal_index(sparse_grid_set):
     dij = _dij(sparse_grid_set)
     w = np.ones(N_BIX)
@@ -359,3 +383,65 @@ def test_shared_structure_is_uploaded_once_to_cupy(sparse_grid_set):
     assert len({mat.indices.data.ptr for mat in rebuilt.physical_dose}) == 1
     for before, after in zip(dij.physical_dose, rebuilt.physical_dose):
         assert (sp.csc_array(after.get()) != sp.csc_array(before)).nnz == 0
+
+
+def _dij_kwargs(num_matrices: int) -> dict:
+    rng = np.random.default_rng(1)
+    container = np.empty((num_matrices,), dtype=object)
+    for i in range(num_matrices):
+        container[i] = sp.csc_matrix(sp.random(N_VOX, N_BIX, density=0.3, random_state=rng))
+    grid = {"resolution": {"x": 2.0, "y": 3.0, "z": 4.0}, "dimensions": DIMS}
+    return dict(
+        ct_grid=grid,
+        dose_grid=grid,
+        physical_dose=container,
+        num_of_beams=1,
+        bixel_num=np.arange(1, N_BIX + 1),
+        ray_num=np.arange(1, N_BIX + 1),
+        beam_num=np.ones(N_BIX, dtype=int),
+    )
+
+
+def test_scenario_set_input_forms(two_scenario_set):
+    from_dict = Dij(**_dij_kwargs(2), scenarios=two_scenario_set.model_dump())
+    assert from_dict.scenarios == two_scenario_set
+    with pytest.raises(ValueError, match="Cannot interpret"):
+        Dij(**_dij_kwargs(2), scenarios=3)
+
+
+def test_scenario_queries_without_a_scenario_set():
+    dij = Dij(**_dij_kwargs(2))
+    assert dij.scenarios is None
+    assert dij.num_of_scenarios == 2
+    assert dij.voxel_param_column(1) == 0
+    assert dij.nominal_scenario_index() == 0
+    out = dij.get_result_arrays_from_intensity(np.ones(N_BIX), scenarios=True)
+    assert len(out["physical_dose_scenario"]) == 2
+    np.testing.assert_allclose(
+        out["physical_dose_scenario"][1], dij.physical_dose[1] @ np.ones(N_BIX)
+    )
+
+
+def test_extend_scenarios_rejects_mismatched_dijs(two_scenario_set):
+    dij = _dij(two_scenario_set)
+    other_grid = {"resolution": {"x": 1.0, "y": 3.0, "z": 4.0}, "dimensions": DIMS}
+    with pytest.raises(ValueError, match="identical dose and CT grids"):
+        dij.extend_scenarios(
+            Dij(**{**_dij_kwargs(2), "dose_grid": other_grid}, scenarios=two_scenario_set)
+        )
+    with_bio = Dij(
+        **_dij_kwargs(2),
+        scenarios=two_scenario_set,
+        alphax=np.full((N_VOX, 1), 0.1),
+        betax=np.full((N_VOX, 1), 0.05),
+    )
+    with pytest.raises(ValueError, match="present on only one"):
+        dij.extend_scenarios(with_bio)
+
+
+def test_validate_dij_attaches_a_scenario_model(two_scenario_set):
+    from pyRadPlan.scenarios import ExplicitScenarioModel
+
+    model = ExplicitScenarioModel.from_set(two_scenario_set)
+    assert validate_dij(Dij(**_dij_kwargs(2)), scenario_model=model).scenarios == two_scenario_set
+    assert validate_dij(scenario_model=model, **_dij_kwargs(2)).scenarios == two_scenario_set

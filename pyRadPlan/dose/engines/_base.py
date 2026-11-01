@@ -423,7 +423,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         dict
             Result quantities on the CT grid, keyed by quantity name, with the
             weights already applied. The unsuffixed results are those of the nominal
-            scenario (the first computed one if the set has no nominal); when the set
+            scenario (:meth:`Dij.nominal_scenario_index`); when the set
             has several computed scenarios, every quantity also gets a
             ``"<quantity>_scenario"`` list with one image per scenario slot
             (see :meth:`Dij.compute_result_ct_grid`).
@@ -465,7 +465,6 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         # This is done because the engine might store the individual fields
         result = dij.compute_result_ct_grid(
             np.ones(dij.total_num_of_bixels, dtype=np.float32),
-            scenario_index=self._forward_result_scenario(dij),
             num_of_fractions=self._result_dose_factor,
             scenarios=dij.scenarios is not None and dij.scenarios.num_computed > 1,
         )
@@ -474,16 +473,6 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)
 
         return result
-
-    @staticmethod
-    def _forward_result_scenario(dij: Dij) -> int:
-        """Slot of the unsuffixed forward result: the nominal scenario, else the first computed."""
-        if dij.scenarios is None:
-            return 0
-        try:
-            return int(dij.scenarios.nominal_indices()[0])
-        except ValueError:
-            return int(dij.scenarios.computed_indices()[0])
 
     def calc_dose_influence(
         self,
