@@ -9,15 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Scenario models for uncertainty handling, matching matRad's `nomScen`, `wcScen`, `impScen` and `rndScen` (realizations, probabilities, weights and the `(ct, shift, range)` layout verified against matRad reference tables): `NominalScenarioModel`, `WorstCaseScenarioModel`, `ImportanceScenarioModel` and `RandomScenarioModel` in `pyRadPlan.scenarios`, with matRad's `combinations`, `combineRange`, grid-point counts, `nSamples` and `includeNominalScenario`. A model is a pydantic configuration of *uncertainty dimensions* (`SetupUncertainty`, `RangeUncertainty`, `CTPhaseUncertainty`; each declares whether it affects geometry, range or per-voxel parameters) and a joint distribution (`IndependentGaussian` as in matRad, or a `MultivariateGaussian` with full covariance), and generates a `ScenarioSet` lazily. The set lists the realizations with probability, weight, tags and a flat index, answers `group_by`, `extent`, `voxel_param_set` and `nominal_index`, can be built from explicit points (`ScenarioSet.from_points`) and extended (`extend`), may hold *derived* scenarios defined as linear combinations of computed ones (`ScenarioBasis`; a unit coefficient shares the referenced matrices), and offers a re-tieable grid view (`layout`, `with_axes`, `isel`, `sel`, `grid_view`, optional `to_xarray`). `ExplicitScenarioModel` wraps a hand-built set; new dimensions, distributions and models register with `register_dimension`, `register_distribution` and `register_scenario_model`. User guide: *Uncertainty and Scenarios*
+- Dose calculation over scenario sets: the pencil-beam engines compute one influence matrix per scenario (flat `(n,)` containers addressed by the scenario's flat index), sharing the ray tracing between scenarios with the same setup shift and applying CT phase and range perturbations per scenario; engines declare `supported_uncertainties` and refuse sets with dimensions they cannot apply. `calc_dose_influence` / `calc_dose_forward` accept a `scenarios=` override. The progress reporting (console bars and the GUI status line) counts the computed scenarios as the outermost level ahead of the beams and rays; `ProgressReporter.progress()` handles can advance by any step and optionally show a console bar. `Dij.scenarios` records the set (validated against the containers), `Dij.num_of_scenarios`, `voxel_param_column`, `attach_scenarios` and `extend_scenarios` were added, and the per-voxel parameter arrays (`alphax`, `betax`, `tissue_class_ix`) carry one column per voxel parameter set (per used CT phase). matRad `dij` cell arrays are flattened on import and written back on the `(ct, shift, range)` grid on export. The quantities evaluate every scenario of the set, including derived ones, and the stf generators derive their target margins from the set's extents
+- The influence matrices of several computed scenarios share one sparsity pattern: `Dij.share_scenario_structure()` rewrites them over the union of their patterns with a single row-index array (int32 where it fits) and explicit zeros where a scenario misses a voxel, so the index arrays are stored and uploaded to the GPU once; the dose engines apply it when the option `share_scenario_structure` is set (off by default) and log the share of explicit zeros. `Dij.to_namespace` also uploads index arrays shared by several matrices as int32, so cupy keeps sharing them instead of copying them per matrix
+- Robust optimization on scenario sets. Objectives carry a `robustness` setting (matRad's property; its names `STOCH`, `VWWC`, `VWWC_INV`, `OWC`, `COWC` are accepted and normalized) selecting a robustness operator from `pyRadPlan.optimization.robustness`: `none` (nominal scenario only), `expected_value` (weighted average over the scenarios with the set's weights), `expected_quantity` (objective of the expected dose), `voxel_worst_case` / `voxel_worst_case_inverted` (per-voxel minimum in targets and maximum in organs at risk, or the reverse), `objective_worst_case` and `composite_worst_case` (worst scenario per objective or over all objectives sharing the operator, with matRad's `logsumexp` / `pnorm` smooth maximum or the exact maximum, configured through `pln.prop_opt["max_approximation"]` and `["p_norm"]`). Operators return per-scenario cotangents, so every scenario's gradient is back-projected through its own influence matrix; custom operators register with `register_robustness_operator`
+- `Variance` objective: minimizes the voxel-mean variance of the quantity over the scenarios (matrix-free; the probabilistic counterpart of matRad's `PROB` variance term)
+- Per-scenario optimization results: `Dij.compute_result_ct_grid` / `compute_result_dose_grid` / `get_result_arrays_from_intensity` take `scenarios=True` (or a list of flat indices) and add `"<quantity>_scenario"` lists with one image per scenario of the set (`ScenarioSet.label(i)` / `Dij.scenario_labels()` name them). `ScenarioSet.nominal_indices()` lists the unperturbed scenario per CT phase. The unsuffixed results default to the nominal scenario (`Dij.nominal_scenario_index()`; the first computed scenario when the set has none) instead of the first slot
+- Per-scenario forward dose: `calc_dose_forward` over a scenario set with several computed scenarios returns the nominal scenario's doses as before plus a `"<quantity>_scenario"` list with one image per scenario (before, a forward calculation over several scenarios returned the first slot silently, then refused the set)
+- GUI: the result selector offers the scenarios of a robust result as components next to the beams (labelled from the dose influence data's scenario set, e.g. "scenario 3: setup (+3.0, 0.0, 0.0) mm"), the DVH widget can overlay the curves of all scenarios behind the nominal ones, the objective editor has a Robustness column, and the plan widget's scenario model has a "…" button configuring the model's parameters (setup and range uncertainties, CT phases, worst-case extent, grid points, samples); the configuration forms now also edit nested pydantic models and tuple-valued parameters
+
+### Changed
+
+- `Plan.mult_scen` is now `Plan.scenarios` (also accepting a model name, a parameter dictionary or a `ScenarioSet`); `mult_scen` / `multScen` remain as input aliases and matRad export keeps writing `multScen`. The engine and stf-generator parameter keeps the name `mult_scen` for now
+- Objectives without a robustness setting are evaluated on the nominal scenario(s) only when the dose influence data holds several scenarios (before, their values were summed over all scenarios). Quantities compute only the scenarios the objectives need (`QuantityResolver(dij, scenarios={identifier: [...]})` per quantity, widened to the consumers of a dependency), and the planning problem reports one value and one jacobian row per robust term (a composite worst case over several objectives counts once). The problem logs which scenarios each quantity evaluates, and `pln.prop_opt["evaluate_all_scenarios"] = True` makes every quantity evaluate the whole set regardless of the objectives' needs
+
+### Deprecated
+
+- `NominalScenario` (use `NominalScenarioModel`) and the flat scenario parameters `range_rel_sd`, `range_abs_sd`, `shift_sd`, `ct_scen_prob` and the matRad-style derived properties (`scen_mask`, `linear_mask`, `iso_shift`, ...) of the scenario models; configure the nested `setup`, `range` and `ct_phase` dimensions and query the `ScenarioSet` instead
+
+### Fixed
+
+- Multi-scenario dose calculation: isocenter shifts no longer accumulate across setup scenarios (the stf is copied per shift), every scenario selects its own CT phase (the first phase was used for all), the particle engines take the reference tissue parameters of each phase, the relative range margin of the stf generators no longer reuses the absolute one, and the per-voxel parameter column of a scenario is its CT phase rather than its scenario index. The stf generators now take the plan's scenario model (the plan's model was ignored and the nominal one used) and grow the target by setup shift plus range plus beamlet margin as matRad does
+- Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
+- Objectives normalize by the voxel count as a Python float, so their values and gradients keep the dose's float32 dtype on cupy (cupy promoted the division by a large integer to float64)
+- GPU ray tracing (cupy, torch) could read unfinished inputs when the GPU was busy with other work, silently dropping parts of the dose and making dose calculations and optimizations irreproducible: the plane-alpha side streams of the Siddon ray tracer now wait for the current stream before they start
+- `StructureSet` from a matRad cst: a cst on a 4D CT failed with a SimpleITK error (and a single index list was repeated 4 times instead of once per CT scenario), and index cells given as numpy object arrays (e.g. the output of `StructureSet.to_matrad`) failed for VOIs with more than one voxel
+- `VOI.to_matrad` for a 4D VOI wrote 0-based indices in numpy order instead of matRad's 1-based column-major indices
+- 4D structure sets: `apply_overlap_priorities`, `get_reference_lq_params`, `get_tissue_class_indices` and `resample_on_new_ct` failed; the LQ parameters and tissue class indices now have one column per CT scenario taken from that scenario's masks
+- `apply_overlap_priorities` and `get_reference_lq_params` failed with an `IndexError` on an empty structure set
+- `create_voi` rejected a lowercase or padded `voi_type` (e.g. `"target"`), which the `voi_type` field itself accepts
+- Comparing CTs, VOIs or structure sets (`==`) ignored their voxel values (SimpleITK's image comparison is always truthy) and raised for a 3D and a 4D image; models holding images now compare geometry and voxel values
+- Pencil-beam dose calculation failed with a broadcasting error when some rays of a beam missed the patient (e.g. under large setup shifts); such rays now take the SSD of the closest ray that hits the patient, and a beam missing the patient entirely reports it
+- 4D CTs: `calc_dose_influence`, `calc_dose_forward`, `generate_stf` and the planning problems accept a 3D structure set with a 4D CT (its structures are repeated for every phase, as in matRad) as well as 4D structure sets; before, the structure set validation, the stf generators and the structure resampling of the planning problems failed with SimpleITK errors
+- `Plan.to_matrad` (and `.mat` export): `propStf`, `propOpt`, `propDoseCalc` and `propSeq` keys were snake_case, so matRad ignored them (e.g. `gantry_angles`)
+- `create_pln(radiation_mode="VHEE")` raised "Unknown radiation mode"
+- `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
+- An invalid `scenarios` (`mult_scen`) raised a `TypeError` instead of a `ValidationError`
+
+## [0.6.1] - 2026-10-30
+
+### Added
+
 - GUI: the info widget and the About dialog show the Python version next to the pyRadPlan version, e.g. "pyRadPlan v0.6.0 (Python 3.12.7)"
 - Windows desktop installer: a "Create a desktop shortcut" option next to the installation folder and a "Launch pyRadPlan" option on the final page, both checked by default
 
 ### Changed
 
+- Bumped ipax to 0.13.0 containing a bugfix to consistently allocate on the correct device
 - macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
 
 ### Fixed
 
+- FRED retries start with a clean temporary directory after a failed simulation, so partial scorer files from the failed run cannot be read or saved as output of the retry
+- The online documentation builds again on Read the Docs (the 0.6.0 build failed on numpydantic array annotations with current `sphinx-autodoc-typehints`)
 - IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)
 - Dose engines can be reused for several calculations. A second calculation on the same engine object computed every quantity twice (twice the forward dose, an `IndexError` in a following influence calculation), and kept what the first one resolved for its own patient: the dose grid and voxel subset (dose was then computed only on the first cst's voxels), the scenario model and the biological model (one dropped for unsuitable tissues stayed dropped). A calculation now leaves these settings as the user gave them, also the particle lateral model ("auto" / "fastest" resolve per machine) and the LET scorers a LET-based model switches on in TOPAS and FRED. TOPAS no longer compounds `scaling_factor` with the weights of every call, and FRED no longer writes into the folder tree a previous calculation deleted
 - `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged
@@ -31,10 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
-- `Plan.to_matrad` (and `.mat` export): `propStf`, `propOpt`, `propDoseCalc` and `propSeq` keys were snake_case, so matRad ignored them (e.g. `gantry_angles`)
-- `create_pln(radiation_mode="VHEE")` raised "Unknown radiation mode"
-- `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
-- An invalid `mult_scen` raised a `TypeError` instead of a `ValidationError`
+- JAX backend: converting a Dij to JAX (`Dij.to_namespace`) failed for pencil-beam dose influence matrices, and fluence optimization failed on JAX arrays
 
 ## [0.6.0] - 2026-10-28
 
@@ -627,7 +668,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1

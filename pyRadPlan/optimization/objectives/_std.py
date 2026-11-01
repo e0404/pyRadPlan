@@ -22,7 +22,7 @@ class DoseUniformity(Objective):
         xp = array_api_compat.array_namespace(values)
         std_val = xp.std(values, correction=1)
         if std_val > 0.0:
-            n = array_api_compat.size(values)
+            n = float(array_api_compat.size(values))
             grad = values - xp.mean(values)
             grad /= std_val * (n - 1)
         else:

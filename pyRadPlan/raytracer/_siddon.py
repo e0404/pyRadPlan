@@ -265,8 +265,13 @@ class RayTracerSiddon(RayTracerBase):
 
         dev = self._get_device_arrays(xp)
 
+        # The side streams do not synchronize with the current stream, so they must
+        # wait for the entry/exit indices and ray geometry computed above
+        inputs_ready = xp_utils.record_event(xp, s)
+
         # Compute alphas for each plane and merge parametric sets
         s1 = xp_utils.create_stream(xp)
+        xp_utils.stream_wait_event(xp, s1, inputs_ready)
         with s1:
             alpha_x = self._compute_plane_alphas(
                 i_min,
@@ -276,6 +281,7 @@ class RayTracerSiddon(RayTracerBase):
                 self._ray_vec[:, 0],
             )
         s2 = xp_utils.create_stream(xp)
+        xp_utils.stream_wait_event(xp, s2, inputs_ready)
         with s2:
             alpha_y = self._compute_plane_alphas(
                 j_min,
@@ -285,6 +291,7 @@ class RayTracerSiddon(RayTracerBase):
                 self._ray_vec[:, 1],
             )
         s3 = xp_utils.create_stream(xp)
+        xp_utils.stream_wait_event(xp, s3, inputs_ready)
         with s3:
             alpha_z = self._compute_plane_alphas(
                 k_min,
