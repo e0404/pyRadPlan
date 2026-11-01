@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
 - Objectives normalize by the voxel count as a Python float, so their values and gradients keep the dose's float32 dtype on cupy (cupy promoted the division by a large integer to float64)
 - GPU ray tracing (cupy, torch) could read unfinished inputs when the GPU was busy with other work, silently dropping parts of the dose and making dose calculations and optimizations irreproducible: the plane-alpha side streams of the Siddon ray tracer now wait for the current stream before they start
+- `StructureSet` from a matRad cst: a cst on a 4D CT failed with a SimpleITK error (and a single index list was repeated 4 times instead of once per CT scenario), and index cells given as numpy object arrays (e.g. the output of `StructureSet.to_matrad`) failed for VOIs with more than one voxel
+- `VOI.to_matrad` for a 4D VOI wrote 0-based indices in numpy order instead of matRad's 1-based column-major indices
+- 4D structure sets: `apply_overlap_priorities`, `get_reference_lq_params`, `get_tissue_class_indices` and `resample_on_new_ct` failed; the LQ parameters and tissue class indices now have one column per CT scenario taken from that scenario's masks
+- `apply_overlap_priorities` and `get_reference_lq_params` failed with an `IndexError` on an empty structure set
+- `create_voi` rejected a lowercase or padded `voi_type` (e.g. `"target"`), which the `voi_type` field itself accepts
 
 ## [0.6.1] - 2026-10-30
 
