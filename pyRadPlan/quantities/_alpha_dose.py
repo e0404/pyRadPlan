@@ -14,6 +14,9 @@ class AlphaDose(FluenceDependentQuantity):
     optional_dependencies = ("physical_dose",)
     indirect_dij_fields = ("alphax",)
 
+    def uses_voxel_params(self) -> bool:
+        return self._mode == "indirect" or super().uses_voxel_params()
+
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         if self._mode == "direct":
             return self.array_backend.asarray(
@@ -21,16 +24,16 @@ class AlphaDose(FluenceDependentQuantity):
             )
         # Indirect path: alpha_x * physical_dose
         dose = self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index]
-        return self.array_backend.asarray(self._dij.alphax[:, scenario_index] * dose, copy=False)
+        return self.array_backend.asarray(
+            self._dij.alphax[:, self._dij.voxel_param_column(scenario_index)] * dose, copy=False
+        )
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         if self._mode == "direct":
-            # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
-            return self.array_backend.asarray(
-                self._dij.alpha_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
-            )
+            return self._backproject(self._dij.alpha_dose.flat[scenario_index], d_quantity)
         # Chain rule for alpha_x * Dose: d/dw = alpha_x * dDose/dw, scaled by d_quantity.
-        scaled = self._dij.alphax[:, scenario_index] * d_quantity
+        column = self._dij.voxel_param_column(scenario_index)
+        scaled = self._dij.alphax[:, column] * d_quantity
         return self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
             scaled, scenario_index
         )

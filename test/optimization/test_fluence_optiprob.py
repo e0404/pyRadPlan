@@ -236,3 +236,70 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     assert prob._num_objectives == num_objectives
     assert jacobian.shape == (num_objectives, dij.total_num_of_bixels)
     assert np.allclose(jacobian.sum(axis=0), gradient, rtol=1e-5)
+
+
+@pytest.mark.parametrize("backend", [None, "jax.numpy"])
+def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_proton_case, backend):
+    """
+    Gradient over several scenarios is sum_s w_s D_s^T g_s, not sum_s D_s^T (sum_s' g_s').
+
+    Non-robust objectives evaluate the nominal scenario only, so the objectives use the
+    expected value over the set; equal weights keep the expectation a plain (scaled) sum over
+    the scenarios, which is what this test checks the back-projection of.
+    """
+    xp_new = None if backend is None else pytest.importorskip(backend)
+    from pyRadPlan.scenarios import (
+        CTPhaseUncertainty,
+        RangeUncertainty,
+        ScenarioSet,
+        SetupUncertainty,
+    )
+
+    pln, ct, cst, stf, dij = small_proton_case
+    rbe = 1.1
+    dij.bio_model = {"model": "constant_rbe", "rbe": rbe}
+    base = dij.physical_dose.flat[0]
+    for name in dij.quantities:
+        if name != "physical_dose":
+            setattr(dij, name, None)
+    container = np.empty((2,), dtype=object)
+    container[0] = base
+    container[1] = 0.8 * base
+    dij.physical_dose = container
+    dij.scenarios = ScenarioSet.from_points(
+        (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()),
+        {"setup": [[0, 0, 0], [3, 0, 0]]},
+        weights=[0.5, 0.5],
+    )
+    for voi in cst.vois:
+        for obj in voi.objectives:
+            obj.robustness = "expected_value"
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+
+    prob = NonLinearFluencePlanningProblem(pln)
+    prob.solve(ct, cst, stf, dij if xp_new is None else dij.to_namespace(xp_new))
+    xp = prob._array_backend
+    x = xp.full((dij.total_num_of_bixels,), 0.5, dtype=xp.float64)
+    gradient = xp_utils.to_numpy(prob._objective_gradient(x))
+    x_np = xp_utils.to_numpy(x)
+
+    expected = np.zeros(dij.total_num_of_bixels)
+    for ix, objectives in prob._objective_list:
+        for obj in objectives:
+            assert obj.quantity in ("rbe_x_dose", "physical_dose")
+            factor = rbe if obj.quantity == "rbe_x_dose" else 1.0
+            for s in range(2):
+                mat = dij.physical_dose.flat[s]
+                quantity = factor * (mat @ x_np)
+                g = (
+                    0.5
+                    * obj.priority
+                    * xp_utils.to_numpy(
+                        obj.compute_gradient(xp.asarray(quantity[ix], dtype=xp.float64))
+                    )
+                )
+                cotangent = np.zeros(mat.shape[0])
+                cotangent[ix] = g
+                expected += factor * (mat.T @ cotangent)
+
+    assert np.allclose(gradient, expected, rtol=1e-4, atol=1e-8 * np.abs(expected).max())

@@ -35,19 +35,15 @@ leaves numba out.
 
 ## Published images
 
-Both pipelines build the image from the same Dockerfile and check it with the same
-`smoke_test.sh` (the web client answers, the GUI shows its main window, and the container ends
-with exit code 0 when the GUI is closed): the "Container" workflow on GitHub
-(`.github/workflows/container.yml`) and the `container` job of the internal GitLab pipeline.
-Branches (`main`, `rc/*`, `devops/*`) are built and tested only. A release tag `vX.Y.Z`
-publishes the tested image:
+The "Container" workflow on GitHub (`.github/workflows/container.yml`) builds the image and
+checks it with `smoke_test.sh` (the web client answers, the GUI shows its main window, and the
+container ends with exit code 0 when the GUI is closed). Branches (`main`, `rc/*`, `devops/*`)
+are built and tested only. A release tag `vX.Y.Z` publishes the tested image as
+`ghcr.io/e0404/pyradplan-web:X.Y.Z`, and as `:latest` except for pre-release tags such as
+`v0.6.0rc1`.
 
-| Registry | Image |
-|---|---|
-| GitHub | `ghcr.io/e0404/pyradplan-web:X.Y.Z` |
-| Internal GitLab | `pyradplan-web:X.Y.Z` in the container registry of the project |
-
-Both also get `:latest`, except for pre-release tags such as `v0.6.0rc1`.
+The `container` job of the internal GitLab pipeline builds and tests the image the same way, for
+branches that do not reach GitHub. It does not publish anything.
 
 ```bash
 docker run --rm -p 10000:10000 -e XPRA_PASSWORD=choose-one ghcr.io/e0404/pyradplan-web:latest

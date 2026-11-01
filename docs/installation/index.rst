@@ -320,12 +320,14 @@ the documentation (the executed notebooks go to ``docs/_build/executed_examples`
 ``PYRADPLAN_DOCS_NB_EXECUTION=cache`` to execute them during a local build instead; outputs
 are cached in ``docs/_build/.jupyter_cache``, so only changed examples run again.
 
-Only release commits carry executed notebooks: while preparing a release, the release
-manager runs ``python docs/execute_examples.py --release`` on the ``rc/X.Y.Z`` branch and
-commits the notebooks it writes and stages in ``docs/tutorials/examples/``. The build
+The executed notebooks of the last release stay tracked in ``docs/tutorials/examples/``, and
+only release commits change them: while preparing a release, the release manager runs
+``python docs/execute_examples.py --release`` on the ``rc/X.Y.Z`` branch for the examples
+whose script or results changed and commits the notebooks it writes and stages. The build
 renders these as they are while their script is unchanged and warns about (and shows without
 outputs) those whose script changed since, so the documentation of a release shows the
-outputs of its examples.
+outputs of its examples. Undo such a replacement locally with
+``git restore docs/tutorials/examples`` instead of committing it.
 
 ----
 

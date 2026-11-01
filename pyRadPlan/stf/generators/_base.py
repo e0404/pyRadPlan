@@ -53,10 +53,11 @@ class StfGeneratorBase(ProgressReporter, ABC):
             True  # Add margins to target (for numerical stability and robustness)
         )
 
-        self.mult_scen: Any = None  # Scenario Model, #TODO: Merge Scenario Model Developments
+        self.mult_scen: Any = None  # Scenario model, its name / definition, or a ScenarioSet
         self.bio_param: Any = None  # Biological Model #TODO: Merge Biological Model Developments
         self.machine: Union[str, Machine] = None  # Machine name
         self._ct: CT = None  # CT Object
+        self._geometry_ct_cache: tuple[CT, CT] = None  # (4D CT, its first phase)
         self._cst: StructureSet = None  # CST Object, TODO: Merge CST development
         self._mult_scen: ScenarioModel = None  # Scenario Model Object validated from mult_scen
         self._target_voxels: np.ndarray = None  # Target Voxels
@@ -86,6 +87,16 @@ class StfGeneratorBase(ProgressReporter, ABC):
 
         # TODO: stf = validate_stf(stf)
         return stf
+
+    @property
+    def _geometry_ct(self) -> CT:
+        """The CT the stf is placed on: the CT itself, or the first phase of a 4D CT (as matRad)."""
+        ct = self._ct
+        if ct is None or ct.num_of_ct_scen == 1:
+            return ct
+        if self._geometry_ct_cache is None or self._geometry_ct_cache[0] is not ct:
+            self._geometry_ct_cache = (ct, CT(cube_hu=ct.cube_hu[:, :, :, 0]))
+        return self._geometry_ct_cache[1]
 
     def _initialize(self):
         """Initializion Procedure."""
@@ -127,21 +138,7 @@ class StfGeneratorBase(ProgressReporter, ABC):
         if not self.add_margin:
             self._target_voxels = self._cst.optimization_target_voxels(order="numpy")
         if self.add_margin:
-            added_margin = self._computed_target_margin()  # pbMargin in matRad
-
-            max_iso_shift = np.max(self._mult_scen.iso_shift, axis=0)
-            range_margin = (
-                self._mult_scen.max_abs_range_shift + self._mult_scen.max_rel_range_shift
-            )
-
-            constant_margin = added_margin + range_margin
-
-            # Dimension specific margins
-            dim_margins = (
-                np.max((self._ct.resolution["x"], max_iso_shift[0], constant_margin)),
-                np.max((self._ct.resolution["y"], max_iso_shift[1], constant_margin)),
-                np.max((self._ct.resolution["z"], max_iso_shift[2], constant_margin)),
-            )
+            dim_margins = self._target_margins()
 
             voxel_margin = np.ceil(
                 np.array(dim_margins)
@@ -167,18 +164,56 @@ class StfGeneratorBase(ProgressReporter, ABC):
             raise GeometryError("No target found in CST")
 
         # pre-process CT
-        self._cube_hu = self._ct.cube_hu
+        self._cube_hu = self._geometry_ct.cube_hu
 
         # Now obtain the target voxel coordinates
         # TODO: 4D issues? And can this be done more
 
         self._target_voxel_coordinates = np2sitk.linear_indices_to_grid_coordinates(
-            self._target_voxels, self._ct.grid, index_type="numpy"
+            self._target_voxels, self._geometry_ct.grid, index_type="numpy"
         ).T
 
         # Multiply with target mask to ignore densities outside of target
         apply_mask = sitk.MaskImageFilter()
         self._cube_hu = apply_mask.Execute(self._cube_hu, self._patient_mask)
+
+    def _target_margins(self) -> tuple[float, float, float]:
+        """
+        Margin per axis [mm] by which the target is grown for beamlet placement.
+
+        As in matRad: the largest setup shift magnitude along the axis plus the range and
+        beamlet margins, at least one CT voxel.
+        """
+        added_margin = self._computed_target_margin()  # pbMargin in matRad
+        max_iso_shift, range_margin = self._scenario_margins()
+        return tuple(
+            float(max(self._ct.resolution[axis], max_iso_shift[i] + range_margin + added_margin))
+            for i, axis in enumerate(("x", "y", "z"))
+        )
+
+    def _scenario_margins(self) -> tuple[np.ndarray, float]:
+        """
+        Target margins required by the scenarios.
+
+        Returns
+        -------
+        tuple[np.ndarray, float]
+            The largest setup shift magnitude per direction in mm, and the range margin, the
+            sum of the largest absolute (mm) and relative range shift magnitudes. Dimensions
+            the scenario set does not realize contribute zero.
+        """
+        scen_set = self._mult_scen.scenarios(self._ct)
+
+        max_iso_shift = np.zeros(3)
+        if scen_set.has_dimension("setup"):
+            max_iso_shift = np.asarray(scen_set.extent("setup"), dtype=float)
+
+        range_margin = 0.0
+        if scen_set.has_dimension("range"):
+            range_extent = scen_set.extent("range")
+            range_margin = float(range_extent[0] + range_extent[1])
+
+        return max_iso_shift, range_margin
 
     @abstractmethod
     def _generate_source_geometry(self):
@@ -194,20 +229,18 @@ class StfGeneratorBase(ProgressReporter, ABC):
         # pln.prop_stf is a dictionary. For every key we try to assign the value
         # If the key is not existing as an attribute, we throw a warning
         for key in pln.prop_stf:
+            attr = "mult_scen" if key == "scenarios" else key
             try:
-                setattr(self, key, pln.prop_stf[key])
+                setattr(self, attr, pln.prop_stf[key])
             except AttributeError:
                 warnings.warn(f"Attribute {key} not existing in {self.name} generator")
 
         self.machine = pln.machine
 
-        if hasattr(pln, "mult_scen"):
-            self.mult_scen = (
-                pln.mult_scen
-            )  # Validation will be performed as soon as we have the ct
-        elif self.mult_scen is None:
+        # The plan's scenario model, unless prop_stf names one; validated once the ct is known
+        if not {"mult_scen", "scenarios"} & set(pln.prop_stf):
+            self.mult_scen = pln.scenarios
+        if self.mult_scen is None:
             self.mult_scen = "nomScen"
-        else:
-            pass
 
         # TODO: self.bio_param = pln.bio_param

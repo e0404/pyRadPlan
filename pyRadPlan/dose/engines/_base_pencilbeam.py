@@ -1,7 +1,8 @@
 """Base class for pencil beam dose calculation algorithms."""
 
 from abc import abstractmethod
-from typing import Annotated, Any, ClassVar, Literal, Optional
+from contextlib import nullcontext
+from typing import Annotated, Any, ClassVar, Optional
 import warnings
 import logging
 import time
@@ -20,7 +21,9 @@ from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.geometry import get_beam_rotation_matrix
 from pyRadPlan.raytracer import RayTracerSiddon
 
-from ._base import DoseEngineBase
+from pyRadPlan.scenarios import AFFECTS_GEOMETRY, Scenario
+
+from ._base import DoseEngineBase, ct_phase_images
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import cupy_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy, free_gpu_memory
@@ -81,8 +84,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         Initializes the beam.
     _init_ray(curr_beam, j)
         Initializes the ray.
-    _extract_single_scenario_ray(ray, scen_idx)
-        Extracts a single scenario ray.
+    _apply_scenario_to_ray(ray, scenario)
+        Selects a scenario's CT phase on a ray and applies its range shift.
     _get_ray_geometry_from_beam(ray, curr_beam)
         Gets ray geometry from beam.
     _get_lateral_distance_from_dose_cutoff_on_ray(ray)
@@ -111,6 +114,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     ] = 0.0500
     use_given_eq_density_cube: bool = False
     ignore_outside_densities: bool = False
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("ct_phase", "setup", "range")
     # The density settings are adjusted per calculation (no ct.cube, default HLUT)
     _per_calculation_settings: ClassVar[tuple[str, ...]] = (
         *DoseEngineBase._per_calculation_settings,
@@ -190,94 +194,81 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         )
         self._vdose_grid = to_namespace(self.xp, self._vdose_grid, device=self.device)
 
-        # We loop over scenario in the scenario model
-        # TODO: we need to correctly work out scenarios
-        for shift_scen in range(self.mult_scen.tot_num_shift_scen):
-            # Find first instance of the shift to select the shift values
-            # TODO!: Check for more than one Scenario
-            ix_shift_scen = np.where(self.mult_scen.linear_mask[:, 1] == shift_scen)
+        groups = self._geometry_groups()
+        num_computed = sum(len(scen_ix) for _, scen_ix in groups)
+        scenario_progress = (
+            self.progress("Scenarios", total=num_computed, console=True, unit="scen")
+            if num_computed > 1
+            else nullcontext(None)
+        )
+        with scenario_progress as scenarios_done:
+            for setup_shift, scen_ix in groups:
+                scen_stf = self._shift_stf(stf, setup_shift)
+                self._init_geometry_group()
 
-            scen_stf = stf
-            # Manipulate isocenter
-            for beam in scen_stf.beams:
-                beam.iso_center += self.mult_scen.iso_shift[ix_shift_scen, :].reshape(-1)
+                if len(self._scenarios) > 1:
+                    logger.info(
+                        "Geometry scenario group with setup shift %s: scenarios %s",
+                        setup_shift.tolist(),
+                        scen_ix,
+                    )
 
-            if self.mult_scen.tot_num_shift_scen > 1:
-                logger.info(
-                    f"Shift scenario {shift_scen} of {self.mult_scen.tot_num_shift_scen}: \n"
-                )
+                bixel_counter = 0
 
-            bixel_counter = 0
+                # Loop over all beams
+                with logging_redirect_tqdm():
+                    for i in self.track(range(dij["num_of_beams"]), name="Beam", unit="b"):
+                        # Initialize Beam Geometry
+                        t = time.time()
+                        curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
+                        logger.info("Beam %d initialized in %f seconds.", i + 1, time.time() - t)
 
-            # Loop over all beams
-            with logging_redirect_tqdm():
-                for i in self.track(range(dij["num_of_beams"]), name="Beam", unit="b"):
-                    # Initialize Beam Geometry
-                    t = time.time()
-                    curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
-                    logger.info("Beam %d initialized in %f seconds.", i + 1, time.time() - t)
+                        # Ray calculation
+                        for j in self.track(
+                            range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
+                        ):
+                            # Initialize Ray Geometry
+                            curr_ray = self._init_ray(curr_beam, j)
 
-                    # Keep tabs on bixels computed in this beam
-                    bixel_beam_counter = 0
-                    # Ray calculation
-                    for j in self.track(
-                        range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
-                    ):
-                        # Initialize Ray Geometry
-                        curr_ray = self._init_ray(curr_beam, j)
+                            # Even if the ray hits nothing, we still emit empty bixel columns
+                            # so that CSC structures and bookkeeping stay consistent.
 
-                        # Even if the ray hits nothing, we still emit empty bixel columns
-                        # so that CSC structures and bookkeeping stay consistent.
-                        # The following block might be re-enabled in future to skip empty rays.
-
-                        # check if ray hit anything. If so, skip the computation
-                        # if all(not arr.size for arr in curr_ray["rad_depths"]):
-                        #     continue #continue
-
-                        # TODO: incorporate scenarios correctly
-                        for ct_scen in range(self.mult_scen.num_of_ct_scen):
-                            for range_scen in range(self.mult_scen.tot_num_range_scen):
-                                # Obtain scenario index
-                                full_scen_idx = self.mult_scen.sub2scen_ix(
-                                    ct_scen, shift_scen, range_scen
+                            for s in scen_ix:
+                                scen_ray = self._apply_scenario_to_ray(
+                                    curr_ray, self._scenarios[s]
                                 )
 
-                                if self.mult_scen.scen_mask[full_scen_idx]:
-                                    # Extract single scenario ray
-                                    scen_ray = self._extract_single_scenario_ray(
-                                        curr_ray, full_scen_idx
+                                for k in range(curr_ray["num_of_bixels"]):
+                                    # Bixel Computation
+                                    curr_bixel = self._compute_bixel(scen_ray, k)
+                                    # fill the current bixel in the sparse dose influence matrix
+                                    self._fill_dij(
+                                        curr_bixel,
+                                        dij,
+                                        scen_stf,
+                                        s,
+                                        i,
+                                        j,
+                                        k,
+                                        bixel_counter + k,
                                     )
+                            # Progress Update & Bookkeeping
+                            bixel_counter += curr_ray["num_of_bixels"]
 
-                                    for k in range(curr_ray["num_of_bixels"]):
-                                        # Bixel Computation
-                                        curr_bixel = self._compute_bixel(scen_ray, k)
-                                        # fill the current bixel in the sparse dose influence
-                                        # matrix
-                                        self._fill_dij(
-                                            curr_bixel,
-                                            dij,
-                                            scen_stf,
-                                            full_scen_idx,
-                                            i,
-                                            j,
-                                            k,
-                                            bixel_counter + k,
-                                        )
-                        # Progress Update & Bookkeeping
-                        bixel_counter += curr_ray["num_of_bixels"]
-                        bixel_beam_counter += curr_ray["num_of_bixels"]
+                        # Free GPU memory from curr_beam
+                        del curr_beam["bev_coords"]
+                        del curr_beam["rad_depths"]
+                        del curr_beam["geo_depths"]
+                        del curr_beam["valid_coords"]
+                        del curr_beam["valid_coords_all"]
+                        del curr_beam["rot_mat_system_T"]
+                        curr_beam = None
 
-                    # Free GPU memory from curr_beam
-                    del curr_beam["bev_coords"]
-                    del curr_beam["rad_depths"]
-                    del curr_beam["geo_depths"]
-                    del curr_beam["valid_coords"]
-                    del curr_beam["valid_coords_all"]
-                    del curr_beam["rot_mat_system_T"]
-                    curr_beam = None
+                        # Force GPU memory cleanup
+                        free_gpu_memory(self.xp)
 
-                    # Force GPU memory cleanup
-                    free_gpu_memory(self.xp)
+                if scenarios_done is not None:
+                    scenarios_done.advance(len(scen_ix))
 
         # Finalize dose calculation
         logger.info("Finalizing dose calculation...")
@@ -315,44 +306,46 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._check_stf_density_consistency(stf)
 
         if self.use_given_eq_density_cube:
-            ct_wed = ct.cube
+            wed_cubes = ct_phase_images(ct.cube)
             logging.info("Omitting HU to rED/rSP conversion and using existing ct.cube!\n")
         else:
             # TODO: obtain correct hlut
             if self.hlut is None:
                 self.hlut = default_hlut()
-            ct_wed = ct.compute_wet(self.hlut)
-
-        self.cube_wed = ct_wed
+            if ct.num_of_ct_scen == 1:
+                wed_cubes = [ct.compute_wet(self.hlut)]
+            else:
+                wed_cubes = [
+                    CT(cube_hu=phase).compute_wet(self.hlut)
+                    for phase in ct_phase_images(ct.cube_hu)
+                ]
 
         # Ignore densities outside of contours
         if self.ignore_outside_densities:  # TODO: default = None (not tested yet)
             mask_image = np2sitk.linear_indices_to_sitk_mask(
-                self._vct_grid, self.cube_wed, order="numpy"
+                self._vct_grid, wed_cubes[0], order="numpy"
             )
+            wed_cubes = [sitk.Mask(cube, mask_image, outsideValue=0) for cube in wed_cubes]
 
-            # # TODO: ct does not yet support multi_scen
-            # for i in range(ct.num_of_ct_scen):
-            #     self.cube_wed.ToScalarImage()
-            #     self.cube_wed[erase_ct_dens_mask == 1] = 0
-
-            # Apply the mask to the cube_wed image
-            self.cube_wed = sitk.Mask(self.cube_wed, mask_image, outsideValue=0)
+        self.cube_wed = wed_cubes[0] if len(wed_cubes) == 1 else sitk.JoinSeries(wed_cubes)
 
         # Allocate memory for quantity containers
         dij = self._allocate_quantity_matrices(dij, ["physical_dose"])
 
-        # Initialize ray-tracer
+        # Initialize ray-tracer with one cube per CT phase
         if self.trace_on_dose_grid:
-            wed_cube_trace = resample_image(
-                input_image=self.cube_wed,
-                interpolator=sitk.sitkLinear,
-                target_grid=self.dose_grid,
-            )
+            wed_cubes_trace = [
+                resample_image(
+                    input_image=cube,
+                    interpolator=sitk.sitkLinear,
+                    target_grid=self.dose_grid,
+                )
+                for cube in wed_cubes
+            ]
         else:
-            wed_cube_trace = self.cube_wed
+            wed_cubes_trace = wed_cubes
 
-        self._raytracer = RayTracerSiddon([wed_cube_trace])
+        self._raytracer = RayTracerSiddon(wed_cubes_trace)
         self._raytracer.lateral_cut_off = self.geometric_lateral_cutoff
 
         return dij
@@ -409,50 +402,48 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         device = "cpu"
         xp = np  # self.xp
         # initialize shared structure container on first call
+        num_scenarios = len(self._scenarios)
         if "shared_structure" not in dij:
-            dij["shared_structure"] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+            dij["shared_structure"] = np.empty((num_scenarios,), dtype=object)
 
         # Loop over all requested quantities
         for q_name in names:
             # Create dij list for each quantity
-            dij[q_name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+            dij[q_name] = np.empty((num_scenarios,), dtype=object)
 
-            # Loop over all scenarios and preallocate quantity containers
-            # TODO: write test for this
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    if self._calc_dose_direct:
-                        dij[q_name].flat[i] = xp.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]),
-                            dtype=xp.float32,
-                            device=device,
-                        )
-                    else:
-                        # We allocate raw csc sparse matrix structures using
-                        # a rough estimat ebased on number of voxels and
-                        # beamlets
+            # Derived scenarios are not computed and keep an empty slot
+            for i in self._scenarios.computed_indices():
+                if self._calc_dose_direct:
+                    dij[q_name].flat[i] = xp.zeros(
+                        (self.dose_grid.num_voxels, dij["num_of_beams"]),
+                        dtype=xp.float32,
+                        device=device,
+                    )
+                else:
+                    # We allocate raw csc sparse matrix structures using
+                    # a rough estimat ebased on number of voxels and
+                    # beamlets
 
-                        if dij["shared_structure"].flat[i] is None:
-                            est_nnz = np.fix(
-                                self.assumed_sparsity
-                                * self.dose_grid.num_voxels
-                                * self._num_of_columns_dij
-                            ).astype(np.int64)
-                            dij["shared_structure"].flat[i] = {
-                                "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
-                                "indptr": xp.zeros(
-                                    (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
-                                ),
-                                "nnz": 0,
-                            }
-                        else:
-                            # If shared structure already exists, we use its size
-                            est_nnz = dij["shared_structure"].flat[i]["indices"].size
-
-                        dij[q_name].flat[i] = {
-                            "data": xp.empty((est_nnz,), dtype=xp.float32, device=device),
+                    if dij["shared_structure"].flat[i] is None:
+                        est_nnz = np.fix(
+                            self.assumed_sparsity
+                            * self.dose_grid.num_voxels
+                            * self._num_of_columns_dij
+                        ).astype(np.int64)
+                        dij["shared_structure"].flat[i] = {
+                            "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
+                            "indptr": xp.zeros(
+                                (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
+                            ),
+                            "nnz": 0,
                         }
+                    else:
+                        # If shared structure already exists, we use its size
+                        est_nnz = dij["shared_structure"].flat[i]["indices"].size
+
+                    dij[q_name].flat[i] = {
+                        "data": xp.empty((est_nnz,), dtype=xp.float32, device=device),
+                    }
 
             self._computed_quantities.append(q_name)
 
@@ -658,21 +649,19 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self,
         beam_info: dict,
         _ct: CT,
-        mode: Literal["first"] = "first",
         density_threshold: float = 0.05,
         show_warning: bool = True,
     ):
         """
-        Compute SSD (Source to Surface Distance) for each ray.
+        Compute the SSD (Source to Surface Distance) of each ray for every CT phase.
 
         Parameters
         ----------
         beam_info : dict
-            Beam Information, will be modified to include SSD.
+            Beam Information, will be modified to include SSD: ``ray["SSD"]`` is a list with
+            one value per CT phase, in the order of the CT's phases.
         ct : CT
             The CT object.
-        mode : Literal["first"], optional
-            Mode for handling multiple cubes to compute one SSD. Only 'first' is implemented.
         density_threshold : float, optional
             Value determining the skin threshold.
         show_warning : bool, optional
@@ -681,148 +670,204 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         beam = beam_info["beam"]
 
-        # TODO: Add MultiScenario Support - remove this line
-        if mode == "first":
-            ssd = [None] * beam["num_of_rays"]
+        xp = array_api_compat.array_namespace(beam["iso_center"], beam["source_point"])
 
-            xp = array_api_compat.array_namespace(beam["iso_center"], beam["source_point"])
+        # Build stacked arrays using the backend's stack (works for numpy, cupy, torch)
+        ray_pos_bev = xp.stack([xp.asarray(ray["ray_pos_bev"]) for ray in beam["rays"]])
+        target_points = xp.stack([xp.asarray(ray["target_point"]) for ray in beam["rays"]])
 
-            # Build stacked arrays using the backend's stack (works for numpy, cupy, torch)
-            ray_pos_bev = xp.stack([xp.asarray(ray["ray_pos_bev"]) for ray in beam["rays"]])
-            target_points = xp.stack([xp.asarray(ray["target_point"]) for ray in beam["rays"]])
+        alpha, _, rho, d12, _ = self._raytracer.trace_rays(
+            beam["iso_center"],
+            xp.reshape(beam["source_point"], (1, 3)),
+            target_points,
+        )
 
-            alpha, _, rho, d12, _ = self._raytracer.trace_rays(
-                beam["iso_center"],
-                xp.reshape(beam["source_point"], (1, 3)),
-                target_points,
-            )
+        alpha = to_namespace(xp, alpha, device=self.device)
+        rho = [to_namespace(xp, r, device=self.device) for r in rho]
+        d12 = to_namespace(xp, d12.squeeze(), device=self.device)
+        # prevent d12 from being 0d array which causes issues with indexing later on
+        if d12.ndim == 0:
+            d12 = xp.reshape(d12, (1,))
 
-            alpha = to_namespace(xp, alpha, device=self.device)
-            rho = [to_namespace(xp, r, device=self.device) for r in rho]
-            d12 = to_namespace(xp, d12.squeeze(), device=self.device)
-            # prevent d12 from being 0d array which causes issues with indexing later on
-            if d12.ndim == 0:
-                d12 = xp.reshape(d12, (1,))
-            # find rays that do not hit patients
-            ix_nan = xp.all(xp.isnan(rho[0]), axis=1)
+        for ray in beam["rays"]:
+            ray["SSD"] = []
+
+        sad = xp.asarray(beam["sad"], dtype=xp.float32, device=self.device)
+        for rho_phase in rho:
+            # rays that do not hit the patient in this phase have no density along them
+            ix_nan = xp.all(xp.isnan(rho_phase), axis=1)
+            hit = ~ix_nan
+
             if xp.any(ix_nan):
-                msg = f"{xp.count_nonzero(ix_nan)} rays do not hit patient. Trying to fix afterwards..."
+                msg = (
+                    f"{xp.count_nonzero(ix_nan)} rays do not hit patient. "
+                    "Trying to fix afterwards..."
+                )
                 if show_warning:
                     warnings.warn(msg)
                 else:
                     logger.warning(msg)
 
-            ix_ssd = -1 * xp.ones_like(ix_nan, dtype=xp.int64)
+            if not xp.any(hit):
+                raise ValueError(
+                    "Error in SSD calculation: no ray of the beam hits the patient. Check the "
+                    "beam geometry and the setup shifts of the scenarios."
+                )
 
-            # Work with explicit row indices to avoid unsupported boolean argmax on some backends
-            row_idx = xp.nonzero(~ix_nan)[0]
+            # first voxel above the skin threshold along every ray (NaN compares False);
+            # integers for argmax, since some backends have no boolean argmax
+            cond = xp.where(
+                rho_phase > density_threshold,
+                xp.asarray(1, dtype=xp.int64),
+                xp.asarray(0, dtype=xp.int64),
+            )
+            idx = xp.reshape(xp.astype(xp.argmax(cond, axis=1), xp.int64), (-1, 1))
+            alpha_sel = xp.reshape(xp.take_along_axis(alpha, idx, axis=1), (-1,))
+            ssd_vals = xp.astype(d12, xp.float32) * xp.astype(alpha_sel, xp.float32)
+            ssd = xp.where(hit, ssd_vals, sad)
 
-            # Compute boolean condition, convert to integers for argmax
-            cond = xp.take(rho[0], row_idx, axis=0) > density_threshold
-            cond_int = xp.where(cond, xp.asarray(1, dtype=xp.int64), xp.asarray(0, dtype=xp.int64))
-            arg = xp.argmax(cond_int, axis=1)
-
-            ix_ssd = xp.where(~ix_nan, xp.astype(arg, xp.int64), ix_ssd)
-
-            ssd = beam["sad"] * xp.ones_like(ix_ssd, dtype=xp.float32)
-
-            d12_sel = xp.reshape(xp.take(d12, row_idx, axis=0), (-1,))
-            alpha_rows = xp.take(alpha, row_idx, axis=0)
-            idx = xp.reshape(xp.astype(arg, xp.int64), (-1, 1))
-            alpha_sel = xp.reshape(xp.take_along_axis(alpha_rows, idx, axis=1), (-1,))
-
-            ssd_vals = xp.astype(d12_sel, xp.float32) * xp.astype(alpha_sel, xp.float32)
-            ssd = xp.where(~ix_nan, ssd_vals, ssd)
-
-            # Now assign the ssd to all rays
             for j, ray in enumerate(beam["rays"]):
-                if ix_nan[j]:  # Try to fix SSD by using SSD of closest neighboring ray
-                    ray["SSD"] = self._closest_neighbor_ssd(ray_pos_bev, ssd, ray["ray_pos_bev"])
+                if ix_nan[j]:  # take the SSD of the closest ray that hits the patient
+                    ray["SSD"].append(
+                        self._closest_neighbor_ssd(ray_pos_bev, ssd, hit, ray["ray_pos_bev"])
+                    )
                 else:
-                    ray["SSD"] = float(ssd[j])
-
-        else:
-            raise ValueError(f"Invalid mode {mode} for SSD calculation")
+                    ray["SSD"].append(float(ssd[j]))
 
         beam_info["beam"] = beam
 
-    def _closest_neighbor_ssd(self, ray_pos_bev: Array, ssd: Array, curr_pos: Array) -> float:
+    def _closest_neighbor_ssd(
+        self, ray_pos_bev: Array, ssd: Array, hit: Array, curr_pos: Array
+    ) -> float:
         """
-        Find the closest neighboring ray's SSD.
+        SSD of the closest ray that hits the patient.
 
         Parameters
         ----------
-        ray_pos_bev : np.ndarray
-            Array of ray positions.
-        curr_pos : np.ndarray
-            Current ray position.
+        ray_pos_bev : Array
+            ``(num_rays, 3)`` ray positions in the beam's eye view.
+        ssd : Array
+            SSD per ray.
+        hit : Array
+            Boolean per ray, whether it hits the patient (its SSD is valid).
+        curr_pos : Array
+            Position of the ray whose SSD is missing.
 
         Returns
         -------
         float
-            SSD value of the closest neighboring ray.
+            SSD value of the closest ray hitting the patient.
+
+        Raises
+        ------
+        ValueError
+            No ray of the beam hits the patient.
         """
         xp = array_api_compat.array_namespace(ray_pos_bev, ssd, curr_pos)
-        distances = xp.sum((ray_pos_bev - curr_pos) ** 2, axis=1)
-        sorted_indices = xp.argsort(distances)
-        for ix in sorted_indices:
-            if ssd[ix] is not None:
+        distances = xp.sum((ray_pos_bev - xp.asarray(curr_pos)) ** 2, axis=1)
+        for ix in xp.argsort(distances):
+            if bool(hit[ix]):
                 return float(ssd[ix])
         raise ValueError(
-            "Error in SSD calculation: Could not fix SSD calculation by using closest neighboring "
-            "ray."
+            "Error in SSD calculation: no ray of the beam hits the patient, so there is no "
+            "neighboring ray to take the SSD from."
         )
 
-        #
-        # """Find the closest neighbor to ray j and return its SSD."""
-        # distances = np.linalg.norm(ray_pos_bev - ray_pos_bev[j], axis=1)
-        # distances[j] = np.inf
-        # return SSD[np.argmin(distances)]
-
-    def _extract_single_scenario_ray(self, ray: dict, scen_idx: int):
+    def _geometry_groups(self) -> list[tuple[np.ndarray, list[int]]]:
         """
-        Extract a single scenario ray and adapt radiological depths.
+        Group the computed scenarios by the beam geometry their ray tracing needs.
 
-        Parameters
-        ----------
-        ray (dict):
-            The ray data.
-        scen_idx (int):
-            The scenario index.
+        CT phases are not grouped on, since every beam traces all phases at once and
+        :meth:`_apply_scenario_to_ray` selects a scenario's phase from the ray.
 
         Returns
         -------
-        dict:
-            The scenario ray with adapted radiological depths.
+        list[tuple[np.ndarray, list[int]]]
+            Per group the setup (isocenter) shift in mm and the flat indices of its computed
+            scenarios. Derived scenarios are left out.
         """
-        # Gets number of scenario
-        xp = array_api_compat.array_namespace(ray["rad_depths"][0])
-        scen_num = self.mult_scen.scen_num(scen_idx)
-        ct_scen = self.mult_scen.linear_mask[0][scen_num]
-
-        # First, create a ray of the specific scenario to adapt rad depths
-        scen_ray = ray.copy()
-        scen_ray["rad_depths"] = scen_ray["rad_depths"][ct_scen]
-        scen_ray["rad_depths"] = (
-            1 + xp.asarray(self.mult_scen.rel_range_shift[scen_num], device=self.device)
-        ) * scen_ray["rad_depths"] + xp.asarray(
-            self.mult_scen.abs_range_shift[scen_num], device=self.device
+        scen_set = self._scenarios
+        keys = tuple(
+            name for name in scen_set.dimensions_affecting(AFFECTS_GEOMETRY) if name != "ct_phase"
         )
-        scen_ray["radial_dist_sq"] = scen_ray["radial_dist_sq"][ct_scen]
-        scen_ray["ix"] = scen_ray["ix"][ct_scen]
+        groups = []
+        for values, indices in scen_set.group_by(*keys):
+            computed = [i for i in indices if scen_set.bases[i] is None]
+            if computed:
+                shift = values.get("setup", np.zeros(3))
+                groups.append((np.asarray(shift, dtype=np.float64), computed))
+        return groups
 
-        if self.mult_scen.abs_range_shift[scen_num] < 0:
-            # TODO: better way to handle this?
-            scen_ray["rad_depths"][scen_ray["rad_depths"] < 0] = 0
+    def _init_geometry_group(self) -> None:
+        """Reset state derived from the beam geometry of a previous geometry group."""
 
-        if "geo_depths" in scen_ray:
-            scen_ray["geo_depths"] = scen_ray["geo_depths"][ct_scen]
+    @staticmethod
+    def _shift_stf(stf: SteeringInformation, shift: np.ndarray) -> SteeringInformation:
+        """
+        Copy of ``stf`` with every beam's isocenter moved by ``shift``.
 
-        if "lat_dists" in scen_ray:
-            scen_ray["lat_dists"] = scen_ray["lat_dists"][ct_scen]
+        Parameters
+        ----------
+        stf : SteeringInformation
+            The steering information; it is not modified.
+        shift : np.ndarray
+            Isocenter shift in mm.
 
-        if "iso_lat_dists" in scen_ray:
-            scen_ray["iso_lat_dists"] = scen_ray["iso_lat_dists"][ct_scen]
+        Returns
+        -------
+        SteeringInformation
+            The shifted deep copy.
+        """
+        scen_stf = stf.model_copy(deep=True)
+        for beam in scen_stf.beams:
+            beam.iso_center = beam.iso_center + shift
+        return scen_stf
+
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
+        """
+        Select a scenario's CT phase from a ray and apply its range shift.
+
+        Parameters
+        ----------
+        ray : dict
+            The ray data with one entry per CT phase for the geometric quantities.
+        scenario : Scenario
+            The scenario; a missing ``range`` dimension counts as no range shift.
+
+        Returns
+        -------
+        dict
+            A shallow copy of the ray for the scenario, with radiological depths scaled as
+            ``(1 + rel) * d + abs`` and clipped at zero.
+        """
+        ct_phase = scenario.ct_phase
+        scen_ray = ray.copy()
+        for key in (
+            "rad_depths",
+            "radial_dist_sq",
+            "ix",
+            "geo_depths",
+            "lat_dists",
+            "iso_lat_dists",
+            "SSD",
+        ):
+            if key in scen_ray:
+                scen_ray[key] = scen_ray[key][ct_phase]
+
+        range_shift = scenario.values.get("range")
+        if range_shift is None:
+            abs_shift, rel_shift = np.float64(0.0), np.float64(0.0)
+        else:
+            abs_shift, rel_shift = range_shift[0], range_shift[1]
+
+        rad_depths = scen_ray["rad_depths"]
+        xp = array_api_compat.array_namespace(rad_depths)
+        rad_depths = (1 + xp.asarray(rel_shift, device=self.device)) * rad_depths + xp.asarray(
+            abs_shift, device=self.device
+        )
+        if abs_shift < 0:
+            rad_depths = xp.where(rad_depths < 0, xp.zeros_like(rad_depths), rad_depths)
+        scen_ray["rad_depths"] = rad_depths
 
         return scen_ray
 
@@ -904,10 +949,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             ix_val = bixel["ix"]
             ix_size = ix_val.shape[0]
 
-        sub_scen_idx = tuple(np.unravel_index(scen_idx, self.mult_scen.scen_mask.shape))
-
         if not self._calc_dose_direct:
-            shared_struct = dij["shared_structure"][sub_scen_idx]
+            shared_struct = dij["shared_structure"][scen_idx]
             # Advance column pointer even when ix_size == 0 to keep CSC valid
             start = shared_struct["indptr"][bixel_counter]
             end = start + ix_size
@@ -924,7 +967,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
                     # Trigger resize for all quantities associated with this scenario
                     for q in self._computed_quantities:
-                        dij[q][sub_scen_idx]["data"].resize((new_size,), refcheck=False)
+                        dij[q][scen_idx]["data"].resize((new_size,), refcheck=False)
                 bixel["ix"] = to_numpy(bixel["ix"])
                 shared_struct["indices"][start:end] = bixel["ix"]
                 shared_struct["nnz"] += ix_size
@@ -934,14 +977,14 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                 if ix_size > 0:
                     bixel["ix"] = to_numpy(bixel["ix"])
                     bixel[q_name] = to_numpy(bixel[q_name])
-                    dij[q_name][sub_scen_idx][bixel["ix"], curr_beam_idx] += (
+                    dij[q_name][scen_idx][bixel["ix"], curr_beam_idx] += (
                         bixel["weight"] * bixel[q_name]
                     )
             else:
-                data_dict = dij[q_name][sub_scen_idx]
+                data_dict = dij[q_name][scen_idx]
 
                 if ix_size > 0:
-                    start = dij["shared_structure"][sub_scen_idx]["indptr"][bixel_counter]
+                    start = dij["shared_structure"][scen_idx]["indptr"][bixel_counter]
                     end = start + ix_size
                     # Fill values into the allocated slice
                     bixel[q_name] = to_numpy(bixel[q_name])
@@ -977,51 +1020,49 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
 
         # Loop over all scenarios and remove dose influence for voxels outside of segmentations
-        for i in range(self.mult_scen.scen_mask.size):
-            # Only if there is a scenario we will allocate
-            if self.mult_scen.scen_mask.flat[i]:
-                shared_struct = None
+        for i in self._scenarios.computed_indices():
+            shared_struct = None
+            if not self._calc_dose_direct:
+                shared_struct = dij["shared_structure"].flat[i]
+                # Resize shared indices to actual NNZ
+                shared_struct["indices"].resize((shared_struct["nnz"],), refcheck=False)
+
+            # Loop over all used quantities
+            for q_name in self._computed_quantities:
                 if not self._calc_dose_direct:
-                    shared_struct = dij["shared_structure"].flat[i]
-                    # Resize shared indices to actual NNZ
-                    shared_struct["indices"].resize((shared_struct["nnz"],), refcheck=False)
+                    # tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
+                    # tmp_matrix = tmp_matrix.tocsr().T
+                    data_dict = dij[q_name].flat[i]
 
-                # Loop over all used quantities
-                for q_name in self._computed_quantities:
-                    if not self._calc_dose_direct:
-                        # tmp_matrix = cast(sparse.lil_matrix, dij[q_name].flat[i])
-                        # tmp_matrix = tmp_matrix.tocsr().T
-                        data_dict = dij[q_name].flat[i]
+                    indices = shared_struct["indices"]
+                    indptr = shared_struct["indptr"]
+                    nnz = shared_struct["nnz"]
 
-                        indices = shared_struct["indices"]
-                        indptr = shared_struct["indptr"]
-                        nnz = shared_struct["nnz"]
+                    # Resize to the actual number of non-zero elements
+                    data_dict["data"].resize((nnz,), refcheck=False)
 
-                        # Resize to the actual number of non-zero elements
-                        data_dict["data"].resize((nnz,), refcheck=False)
+                    # Create the matrix, avoid copies
+                    tmp_matrix = sparse.csc_array(
+                        (data_dict["data"], indices, indptr),
+                        shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
+                        dtype=np.float32,
+                        copy=False,
+                    )
 
-                        # Create the matrix, avoid copies
-                        tmp_matrix = sparse.csc_array(
-                            (data_dict["data"], indices, indptr),
-                            shape=(self.dose_grid.num_voxels, self._num_of_columns_dij),
-                            dtype=np.float32,
-                            copy=False,
-                        )
+                    if not self._dij_guarantee_nonzero:
+                        tmp_matrix.eliminate_zeros()
 
-                        if not self._dij_guarantee_nonzero:
-                            tmp_matrix.eliminate_zeros()
+                    if not self._dij_guarantee_canonical:
+                        # make sure indices are sorted and matrix is canonical
+                        if not tmp_matrix.has_sorted_indices:
+                            logger.debug("Sorting indices for %s...", q_name)
+                            tmp_matrix.sort_indices()
 
-                        if not self._dij_guarantee_canonical:
-                            # make sure indices are sorted and matrix is canonical
-                            if not tmp_matrix.has_sorted_indices:
-                                logger.debug("Sorting indices for %s...", q_name)
-                                tmp_matrix.sort_indices()
+                        if not tmp_matrix.has_canonical_format:
+                            logger.debug("Matrix is not in canonical format for %s...", q_name)
+                            tmp_matrix.sum_duplicates()
 
-                            if not tmp_matrix.has_canonical_format:
-                                logger.debug("Matrix is not in canonical format for %s...", q_name)
-                                tmp_matrix.sum_duplicates()
-
-                        dij[q_name].flat[i] = tmp_matrix
+                    dij[q_name].flat[i] = tmp_matrix
 
         if self.keep_rad_depth_cubes and self._rad_depth_cubes:
             dij["rad_depth_cubes"] = [
