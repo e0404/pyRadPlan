@@ -2985,3 +2985,70 @@ def test_scenario_overrides_drop_dimensions_without_parameters():
 
     model = WorstCaseScenarioModel(setup={}, range={"rel_sd": 0.0}, wc_sigma=2.0)
     assert PlanWidget._scenario_overrides(model) == {"wc_sigma": 2.0, "range": {"rel_sd": 0.0}}
+
+
+def _explicit_scenario_plan():
+    from pyRadPlan.scenarios import ScenarioSet, SetupUncertainty
+
+    scenario_set = ScenarioSet.from_points(
+        dimensions=[SetupUncertainty()], points={"setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]}
+    )
+    return PhotonPlan(scenarios=scenario_set), scenario_set
+
+
+def test_apply_keeps_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    pln, scenario_set = _explicit_scenario_plan()
+    ws.pln = pln
+
+    assert widget._cmb_scenario.currentText() == "explicit"
+    assert not widget._btn_scenario_config.isEnabled()
+    assert not widget.has_pending_changes()
+
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+
+    assert ws.pln.scenarios.short_name == "explicit"
+    assert ws.pln.scenarios.scenario_set == scenario_set
+    assert ws.pln.num_of_fractions == widget._spn_fractions.value()
+    assert widget._cmb_scenario.currentText() == "explicit"
+
+
+def test_selecting_another_model_replaces_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+
+    widget._cmb_scenario.setCurrentText("wcScen")
+    assert widget._btn_scenario_config.isEnabled()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+    assert ws.pln.scenarios.short_name == "wcScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+
+
+def test_discard_returns_to_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, scenario_set = _explicit_scenario_plan()
+
+    widget._cmb_scenario.setCurrentText("wcScen")
+    widget._btn_discard.click()
+
+    assert widget._cmb_scenario.currentText() == "explicit"
+    assert not widget.has_pending_changes()
+    assert ws.pln.scenarios.scenario_set == scenario_set
+
+
+def test_explicit_scenario_entry_leaves_with_its_plan(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = PhotonPlan()
+    assert widget._cmb_scenario.currentText() == "nomScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._btn_scenario_config.isEnabled()
+
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = None
+    assert widget._cmb_scenario.currentText() == "nomScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._build_plan().scenarios.short_name == "nomScen"
