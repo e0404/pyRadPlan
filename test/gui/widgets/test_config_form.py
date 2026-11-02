@@ -131,6 +131,15 @@ class _Options:
     tol: Optional[float] = None
 
 
+@dataclasses.dataclass(frozen=True)
+class _OptionsWithMapping:
+    extra: dict = dataclasses.field(default_factory=lambda: {"x": 1})
+
+
+class _MappingAlgorithm(ConfigurableAlgorithm):
+    options: _OptionsWithMapping = _OptionsWithMapping()
+
+
 class _NestedAlgorithm(ConfigurableAlgorithm):
     options: Annotated[_Options, AlgorithmParameterMetadata(hidden_entries=("max_iter",))] = (
         _Options()
@@ -287,3 +296,10 @@ def test_companion_field_edits_stay_pending_until_consistent(qapp):
     form._set_nested("ct_phase", ("probabilities",), [0.5, 0.5])
     assert dialog.values()["ct_phase"] == {"phases": [0, 1], "probabilities": [0.5, 0.5]}
     assert form._editors["ct_phase.phases"].styleSheet() == ""
+
+
+def test_mapping_option_of_a_nested_option_can_be_edited(qapp):
+    form = ConfigFormWidget(_MappingAlgorithm.config_model())
+    form._set_nested("options", ("extra",), {"y": 2})
+    assert form.config().options.extra == {"y": 2}
+    assert form.values()["options"]["extra"] == {"y": 2}

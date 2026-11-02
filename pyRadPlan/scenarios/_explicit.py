@@ -43,3 +43,9 @@ class ExplicitScenarioModel(ScenarioModel):
 
     def _generate(self) -> ScenarioSet:
         return self.scenario_set
+
+    def _matrad_dict(self) -> dict[str, Any]:
+        raise ValueError(
+            "An explicit scenario set cannot be exported to matRad, whose multScen struct only "
+            "holds the parameters of a model. Select one of the models for the export."
+        )

@@ -5,6 +5,7 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
+import warnings
 from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
@@ -199,10 +200,16 @@ class Plan(PyRadPlanBaseModel, ABC):
     @property
     def mult_scen(self) -> ScenarioModel:
         """Deprecated alias of :attr:`scenarios` (matRad name), kept for one release."""
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
         return self.scenarios
 
     @mult_scen.setter
     def mult_scen(self, value: Any) -> None:
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
         self.scenarios = value
 
     @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="before")

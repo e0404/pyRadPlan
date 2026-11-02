@@ -27,6 +27,7 @@ from pyRadPlan.stf import resolve_iso_centers
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
+from ._display_names import SCENARIO_LABELS_KEY
 from ._tissue_params import load_machine_quietly, plan_dose_engine
 from .result.quantity_widget import QuantityWidget
 from .result.visualization_widget import VisualizationWidget
@@ -454,8 +455,8 @@ class ViewingWidget(WorkspaceWidget):
         """Derive viewer arrays from the workspace and drive the child widgets."""
         ws = self.workspace
         full = not changed_keys
-        if full or "dij" in changed_keys:
-            self._apply_scenario_labels(ws.dij)
+        if full or "dij" in changed_keys or "result" in changed_keys:
+            self._apply_scenario_labels(ws.dij, ws.result)
         ct = ws.ct
         if ct is None:
             # Workspace was cleared: drop the previous patient's display state
@@ -479,8 +480,13 @@ class ViewingWidget(WorkspaceWidget):
         if data_changed or beams_changed:
             self._apply_beams(ct, ws.cst, ws.pln, ws.stf)
 
-    def _apply_scenario_labels(self, dij) -> None:
-        labels = dij.scenario_labels() if hasattr(dij, "scenario_labels") else []
+    def _apply_scenario_labels(self, dij, result=None) -> None:
+        # The result's own labels: it can stem from another scenario set than the current dij
+        labels = result.get(SCENARIO_LABELS_KEY) if isinstance(result, dict) else None
+        if labels is not None:
+            labels = list(labels)
+        else:
+            labels = dij.scenario_labels() if hasattr(dij, "scenario_labels") else []
         self._scenario_labels = labels
         self.vis_widget.set_scenario_labels(labels)
 
