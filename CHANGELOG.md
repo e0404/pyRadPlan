@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+- GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
+- GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
+- GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
 
 ## [0.7.0] - 2026-11-02
 
