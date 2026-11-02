@@ -151,6 +151,30 @@ def test_isocenter_known_later_positions_the_slice_until_the_user_scrolls(qapp):
     assert widget.slice_slider.value() == 15
 
 
+def test_isocenter_cross_and_scroll_hint_on_nearby_slices(qapp):
+    from pyRadPlan.gui.widgets.result.quantity_widget import (
+        _ISO_CROSS,
+        _ISO_HALF_DOWN,
+        _ISO_HALF_UP,
+        _ISO_HINT_SLICES,
+    )
+
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((20, 10, 10)), isocenter=np.array([10.0, 3.0, 7.0]))
+    widget.set_isocenter_visible(True)
+
+    def symbol_at(idx):
+        widget.slice_slider.setValue(idx)
+        item = widget._isocenter_item
+        return None if item is None else item.opts["symbol"]
+
+    assert symbol_at(10) is _ISO_CROSS
+    assert symbol_at(10 - _ISO_HINT_SLICES) is _ISO_HALF_UP  # scroll up to reach it
+    assert symbol_at(10 + _ISO_HINT_SLICES) is _ISO_HALF_DOWN
+    assert symbol_at(10 - _ISO_HINT_SLICES - 1) is None
+    assert symbol_at(10 + _ISO_HINT_SLICES + 1) is None
+
+
 def _beam_widget(spacing=(1.0, 1.0, 1.0)):
     widget = QuantityWidget()
     widget.set_data(ct_volume=np.zeros((21, 21, 21)))

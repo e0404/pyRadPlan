@@ -159,20 +159,82 @@ def test_view_menu_stubs_disabled(qapp):
         assert not actions[stub].isEnabled()
 
 
-def test_view_menu_toggles_dark_mode(qapp):
-    from PySide6.QtCore import Qt
+@pytest.fixture
+def ignored_color_scheme_requests(qapp, monkeypatch):
+    """Record color scheme requests to a platform that ignores them and reports none."""
+    from PySide6.QtGui import QStyleHints
 
-    hints = qapp.styleHints()
-    original = hints.colorScheme()
+    from pyRadPlan.gui.menus._view import set_dark_mode
+
+    requested = []
+    monkeypatch.setattr(QStyleHints, "setColorScheme", lambda self, s: requested.append(s))
+    monkeypatch.setattr(QStyleHints, "colorScheme", lambda self: Qt.ColorScheme.Unknown)
+    set_dark_mode(False)
+    requested.clear()
+    yield requested
+    set_dark_mode(False)
+
+
+def _is_dark(qapp):
+    from PySide6.QtGui import QPalette
+
+    return qapp.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def test_view_menu_toggles_dark_mode(qapp, ignored_color_scheme_requests):
     win = MainWindow(WorkspaceManager())
     action = win._view_menu.dark_mode_action
-    try:
-        action.setChecked(True)
-        assert hints.colorScheme() == Qt.ColorScheme.Dark
-        action.setChecked(False)
-        assert hints.colorScheme() == Qt.ColorScheme.Light
-    finally:
-        hints.setColorScheme(original)
+
+    action.trigger()
+    action.trigger()
+
+    assert ignored_color_scheme_requests == [Qt.ColorScheme.Dark, Qt.ColorScheme.Light]
+
+
+def test_view_menu_follows_os_color_scheme_without_pinning_it(qapp, ignored_color_scheme_requests):
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    hints = qapp.styleHints()
+
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert action.isChecked()
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+    assert not action.isChecked()
+    assert ignored_color_scheme_requests == []
+
+
+def test_dark_mode_falls_back_to_fusion_where_the_platform_ignores_it(
+    qapp, ignored_color_scheme_requests
+):
+    from pyRadPlan.gui.menus import ViewMenu
+
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    other_window_menu = ViewMenu()
+
+    win._view_menu.dark_mode_action.trigger()
+    assert qapp.style().name() == "fusion"
+    assert _is_dark(qapp)
+    assert other_window_menu.dark_mode_action.isChecked()
+
+    win._view_menu.dark_mode_action.trigger()
+    assert qapp.style().name() == native_style
+    assert not other_window_menu.dark_mode_action.isChecked()
+
+
+def test_dark_mode_fallback_ends_when_the_platform_catches_up(qapp, ignored_color_scheme_requests):
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    action.trigger()
+
+    qapp.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Light)
+    assert qapp.style().name() == "fusion"  # the user's choice overrides the platform
+    assert action.isChecked()
+
+    qapp.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert qapp.style().name() == native_style
+    assert action.isChecked()
 
 
 def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):
