@@ -1143,7 +1143,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         Raises
         ------
-        SystemExit
+        RuntimeError
             If the FRED execution fails.
         """
         output_path = os.path.abspath(os.path.join(self._fred_root_folder, self._output_folder))
@@ -1159,12 +1159,14 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             )
             logger.info("FRED command: %s", execute_cmd)
             self._run_fred_process(execute_cmd)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             logger.error(
                 "FRED did not finish within execution_timeout=%s s (GPU busy or hung?).",
                 self.execution_timeout,
             )
-            raise SystemExit("Aborting... FRED execution timed out")
+            raise RuntimeError(
+                f"FRED did not finish within execution_timeout={self.execution_timeout} s"
+            ) from e
         except subprocess.CalledProcessError as e:
             stdout_msg = e.stdout.decode(errors="ignore") if e.stdout else ""
             stderr_msg = e.stderr.decode(errors="ignore") if e.stderr else ""
@@ -1174,13 +1176,13 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 stdout_msg,
                 stderr_msg or "No error details available",
             )
-            raise SystemExit("Aborting...")
+            raise RuntimeError(f"FRED execution failed with return code {e.returncode}") from e
         except FileNotFoundError as e:
             logger.error(
                 "FRED executable not found: %s. Ensure 'fred' is in PATH.",
                 e,
             )
-            raise SystemExit("Aborting... FRED not found")
+            raise RuntimeError(f"FRED executable not found: {e}") from e
         else:
             t_end = time.time()
             logger.info("Done in %f seconds.", t_end - t_start)

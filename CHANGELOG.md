@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
 - An invalid `scenarios` (`mult_scen`) raised a `TypeError` instead of a `ValidationError`
 - `Dij.to_matrad` (and `.mat` export) wrote `bixelNum`, `rayNum` and `beamNum` 0-based instead of matRad's 1-based numbering, and pyRadPlan could not import its own export
+- GUI: a FRED run that failed (e.g. FRED not installed) left the application busy forever, so settings could no longer be changed; the error is now shown and the GUI stays usable
 
 ## [0.6.1] - 2026-10-30
 
