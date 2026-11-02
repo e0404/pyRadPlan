@@ -454,10 +454,10 @@ Carlo engines simulate the CT phase of their single scenario (`_scenario_ct`). 4
 a structure set to a CT on the same 3D grid (`resample_on_new_ct` repeats 3D structures over the
 phases of a 4D CT and resamples 4D structures phase by phase; PR #13 made the overlap priorities
 and tissue columns 4D-aware), the engines take per-phase voxel lists (`_phase_voxel_lists`), the
-optimization indexes the first phase (`voi_linear_mask`), and the stf generators work on
-`_geometry_ct`, the first phase. Still open: matRad export writes `max phase + 1` CT rows (the
-Dij knows no CT), the GUI's Apply replaces an `ExplicitScenarioModel` with the combo box model,
-and all phases are ray-traced even when one is used.
+optimization evaluates each scenario on its phase's contour (`RobustTerm.scenario_masks`,
+operators with `phase_contours`; the others read the first scenario's phase), and the stf
+generators work on `_geometry_ct`, the first phase. Still open: matRad export writes
+`max phase + 1` CT rows (the Dij knows no CT) and all phases are ray-traced even when one is used.
 
 ## 8. Decisions (confirmed 2026-10-22)
 

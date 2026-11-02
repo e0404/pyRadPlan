@@ -208,3 +208,44 @@ def test_prob_alias_warns_and_exports_none(caplog):
         exported = objective.to_matrad()
     assert not any("variance" in r.getMessage() for r in caplog.records)
     assert exported["robustness"] == "none"
+
+
+@pytest.mark.parametrize("weights", [[1.0, 1.0], [0.3, 0.3]])
+def test_expected_quantity_is_a_mean_for_any_weight_sum(make_set, weights):
+    scen_set = make_set([(0.0, 0.0, 0.0), (3.0, 0.0, 0.0)], weights=weights)
+    op = ExpectedQuantity(scen_set)
+    objective = SquaredDeviation(d_ref=2.0)
+    entries = [RobustTermEntry(objective)]
+    values = xp.asarray(np.array([[1.0, 1.0], [3.0, 3.0]]))
+
+    assert float(op.evaluate(entries, [values])) == pytest.approx(0.0)
+    assert np.allclose(np.asarray(op.gradient(entries, [values])[0]), 0.0)
+
+
+@pytest.mark.parametrize(
+    "name", ["none", "expected_value", "objective_worst_case", "composite_worst_case"]
+)
+def test_operators_on_phase_contours_match_equal_contours(make_set, name):
+    """A list per scenario gives the same as the stack, and works for unequal voxel counts."""
+    scen_set = make_set([(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], weights=[0.5, 0.5], ct_phase=[0, 1])
+    op = get_robustness_operator(name, scen_set, RobustnessOptions())
+    assert op.phase_contours
+    entries = [RobustTermEntry(SquaredDeviation(d_ref=1.0, priority=2.0), "TARGET")]
+    first = np.array([2.0, 0.0])
+    second = np.array([1.0, 3.0])
+
+    stacked = xp.asarray(np.stack([first, second]))
+    listed = [xp.asarray(first), xp.asarray(second)]
+    assert float(op.evaluate(entries, [listed])) == pytest.approx(
+        float(op.evaluate(entries, [stacked]))
+    )
+    gradient = op.gradient(entries, [listed])[0]
+    np.testing.assert_allclose(
+        np.stack([np.asarray(g) for g in gradient]),
+        np.asarray(op.gradient(entries, [stacked])[0]),
+    )
+
+    uneven = [xp.asarray(first), xp.asarray(np.array([1.0, 3.0, 5.0]))]
+    gradient = op.gradient(entries, [uneven])[0]
+    assert [g.shape[0] for g in gradient] == [2, 3]
+    assert np.isfinite(float(op.evaluate(entries, [uneven])))
