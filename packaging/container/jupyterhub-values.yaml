@@ -11,22 +11,62 @@
 hub:
   config:
     JupyterHub:
-      # Users log in with a name of their choice and the shared password; whoever knows the
-      # password can log in as any user, so this suits courses and trials, not more.
-      authenticator_class: shared-password
       # Sessions at the same time; more users get "Active user limit exceeded" and can retry.
-      # Keep it within the namespace quota: each session may use 2 CPUs and 16 GiB (below),
-      # the hub and its proxy 1 CPU together. 7 sessions fill a quota of 15 CPUs when nothing
-      # else runs in the namespace.
-      active_server_limit: 7
-    SharedPasswordAuthenticator:
-      user_password: CHANGE-ME-at-least-8-characters
-      # The user "admin" logs in with this password and can watch and stop all sessions
-      # (Admin page of the hub). At least 32 characters.
-      admin_password: CHANGE-ME-at-least-32-characters-long-admin-password
+      # Size it to the namespace quota: each session may use 2 CPUs and 16 GiB (singleuser
+      # below), the hub and its proxy 1 CPU and 1.5 GiB together.
+      active_server_limit: 1
+    # The users and their password hashes, from make_hub_users.py (see PasswordListAuthenticator
+    # in extraConfig below). Only these users can log in.
+    PasswordListAuthenticator:
+      password_hashes:
+        admin: CHANGE-ME
     Authenticator:
+      # Admins can watch and stop all sessions on the hub's Admin page.
       admin_users: [admin]
+      # Whoever passes PasswordListAuthenticator may use the hub.
       allow_all: true
+  extraConfig:
+    passwordList: |
+      import asyncio
+      import hashlib
+      import hmac
+
+      from jupyterhub.auth import Authenticator
+      from traitlets import Dict, Unicode
+
+
+      class PasswordListAuthenticator(Authenticator):
+          """Users with passwords set up in advance, stored as PBKDF2-SHA256 hashes."""
+
+          password_hashes = Dict(
+              key_trait=Unicode(),
+              value_trait=Unicode(),
+              config=True,
+              help="User name -> 'pbkdf2_sha256$<iterations>$<salt hex>$<hash hex>'.",
+          )
+
+          async def authenticate(self, handler, data):
+              name = self.normalize_username(data["username"])
+              try:
+                  scheme, iterations, salt, expected = self.password_hashes[name].split("$")
+                  if scheme != "pbkdf2_sha256":
+                      raise ValueError(scheme)
+                  digest = await asyncio.to_thread(
+                      hashlib.pbkdf2_hmac,
+                      "sha256",
+                      data["password"].encode(),
+                      bytes.fromhex(salt),
+                      int(iterations),
+                  )
+              except KeyError:
+                  return None
+              except ValueError:
+                  self.log.error("Password hash of user %s is not from make_hub_users.py", name)
+                  return None
+              return name if hmac.compare_digest(digest.hex(), expected) else None
+
+
+      c.JupyterHub.authenticator_class = PasswordListAuthenticator
   # The hub keeps its state in a SQLite file on a 1 GiB volume of the default storage class.
   # Without a storage class use "type: sqlite-memory": a restarted hub then forgets the
   # running sessions.

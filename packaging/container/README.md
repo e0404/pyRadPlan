@@ -16,6 +16,7 @@ GPU in the image). It is meant for research and education, like the desktop inst
 | `Dockerfile.hub` | The JupyterHub session image: the image above plus jupyter-server-proxy's standalone proxy. |
 | `hub-session.sh` | Session server of the JupyterHub image; ends the session when the GUI is closed. |
 | `jupyterhub-values.yaml` | Helm values for Zero to JupyterHub, installed into one namespace. |
+| `make_hub_users.py` | Creates the hub's users with a password each. |
 
 ## Build and run
 
@@ -109,11 +110,25 @@ helm upgrade --install pyradplan-hub jupyterhub/jupyterhub --version 4.4.4 \
     --namespace <namespace> --values packaging/container/jupyterhub-values.yaml
 ```
 
-Set the passwords, the host name of the ingress and the image tag in the file first. The
-shared-password login lets anyone with the password log in under any name, which suits
-courses and trials on a trusted network; the chart supports other authenticators (OAuth,
-LDAP) for more. The JupyterHub version in the image matches the chart's hub; update both
-together.
+Work on a copy outside the repository, as it gets the users. Set the host name of the ingress,
+the image tag and `active_server_limit` (1 in the repository; each session may use 2 CPUs and
+16 GiB, the hub and its proxy 1 CPU together). Then create the users, among them `admin`, who
+can watch and stop all sessions on the hub's Admin page:
+
+```bash
+python packaging/container/make_hub_users.py admin anna ben --output users.csv
+python packaging/container/make_hub_users.py @names.txt --output users.csv   # one name per line
+```
+
+The script generates a password for each user, writes the names and passwords to
+`users.csv` for handing them out, and prints the password hashes to replace the
+`password_hashes` entry of the values file. Only the hashes reach the cluster; keep the CSV
+file private. Only the listed users can log in, each with their own password (user names
+are not case-sensitive). To add users later, run the script for the new names, add the
+hashes and run `helm upgrade` again. The chart supports other authenticators (OAuth, LDAP)
+for logins with existing accounts.
+
+The JupyterHub version in the image matches the chart's hub; update both together.
 
 Without a hub, the image can be tried locally:
 
