@@ -15,8 +15,10 @@ hub:
       # password can log in as any user, so this suits courses and trials, not more.
       authenticator_class: shared-password
       # Sessions at the same time; more users get "Active user limit exceeded" and can retry.
-      # Keep it within the namespace quota: each session may use 2 CPUs and 16 GiB (below).
-      active_server_limit: 6
+      # Keep it within the namespace quota: each session may use 2 CPUs and 16 GiB (below),
+      # the hub and its proxy 1 CPU together. 7 sessions fill a quota of 15 CPUs when nothing
+      # else runs in the namespace.
+      active_server_limit: 7
     SharedPasswordAuthenticator:
       user_password: CHANGE-ME-at-least-8-characters
       # The user "admin" logs in with this password and can watch and stop all sessions
