@@ -13,6 +13,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import secrets
 import sys
@@ -39,11 +40,14 @@ def main(argv: list[str] | None = None) -> int:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         parser.error(f"names given more than once: {', '.join(duplicates)}")
-    if args.output.exists():
+    try:
+        # Readable by the owner only, and never over an existing file.
+        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
         parser.error(f"{args.output} exists; choose another file so no password is lost")
 
     passwords = {name: secrets.token_urlsafe(12) for name in names}
-    with args.output.open("w", newline="", encoding="utf-8") as f:
+    with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["user", "password"])
         writer.writerows(passwords.items())

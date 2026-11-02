@@ -2,7 +2,9 @@
 
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
+import stat
 import sys
 import types
 
@@ -33,6 +35,8 @@ def test_make_hub_users_writes_passwords_and_prints_hashes(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert '"admin": pbkdf2_sha256$' in printed
     assert '"anna": pbkdf2_sha256$' in printed
+    if os.name == "posix":
+        assert stat.S_IMODE(output.stat().st_mode) == 0o600
     # An existing file is never overwritten, so no handed-out password is lost.
     with pytest.raises(SystemExit):
         script.main(["ben", "--output", str(output)])
