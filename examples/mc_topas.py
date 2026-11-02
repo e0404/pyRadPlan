@@ -94,9 +94,8 @@ calc_dose_forward(ct, cst, stf, pln, fluence)
 # %% [markdown]
 # ## TOPAS recalculation, pass 2: read the results back
 #
-# This only works once TOPAS has actually run. Note that pass 1 overwrote the beamlet
-# weights in ``stf`` with history counts, so ``fluence`` has to be passed again to get
-# the scaling right.
+# This only works once TOPAS has actually run. ``fluence`` is passed again, since the
+# normalization of the scored cubes uses the weights of this pass.
 # %%
 topas_output_available = any(topas_dir.glob("score_*_physicalDose.bin"))
 

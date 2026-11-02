@@ -13,6 +13,9 @@ Loading and saving
    load_data
    save_data
    load_tg119
+   list_phantoms
+   available_phantoms
+   phantom_path
    load_binary_patient
    list_image_files
    validate_matrad_patient

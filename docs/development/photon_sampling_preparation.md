@@ -1,5 +1,7 @@
 # Photon sampling bounds and shared output selection
 
+The [develop integration](develop_merge_2026_11_02.md) adapts this cache to explicit scenario objects and range-value keys. Measurements below describe the original implementation.
+
 Follow-up to [photon bixel evaluation](photon_bixel_preparation.md), comparing
 against `5d7f6266` on `refactor/dose-calc-performance`.
 

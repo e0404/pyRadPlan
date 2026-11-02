@@ -104,7 +104,7 @@ The model hub is configured through :class:`~pyRadPlan.ai.modelhub.AiSettings`, 
 unified ``ai`` sub-configuration of the global ``pyRadPlan.settings`` singleton (see
 :doc:`/api/settings`), which also carries the AI agent settings.  It reads environment
 variables prefixed with ``PYRADPLAN_AI_`` (or a ``.env`` file in the working
-directory); the model-hub-related fields are:
+directory or the per-user ``~/.pyradplan/.env``); the model-hub-related fields are:
 
 .. list-table::
    :header-rows: 1

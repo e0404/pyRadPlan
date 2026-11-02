@@ -8,7 +8,9 @@ import SimpleITK as sitk
 
 from pyRadPlan import settings
 from pyRadPlan.core import xp_utils
-from pyRadPlan.core.xp_utils import from_numpy
+
+
+from pyRadPlan.core.xp_utils import cupy_available, from_numpy, to_numpy
 from pyRadPlan.geometry import lps
 from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
 from pyRadPlan.stf._beam import Beam
@@ -280,3 +282,38 @@ def test_trace_depth_arrays_stay_on_backend(monkeypatch, backend):
     assert expected.GetSpacing() == cube.GetSpacing()
     assert expected.GetOrigin() == cube.GetOrigin()
     assert expected.GetDirection() == cube.GetDirection()
+
+
+@pytest.mark.skipif(not cupy_available(), reason="CuPy / CUDA is not available.")
+def test_cupy_side_streams_wait_for_the_default_stream(monkeypatch):
+    """A busy default stream must not let the plane-alpha side streams read unfinished inputs."""
+    import cupy as cp
+
+    monkeypatch.setattr(settings.xp, "prefer_gpu", True)
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    rng = np.random.default_rng(3)
+    cube = sitk.GetImageFromArray(rng.random((40, 40, 40)))
+    cube.SetSpacing([2.0, 2.0, 2.0])
+    isocenter = cube.TransformIndexToPhysicalPoint([20, 20, 20])
+    grid = np.linspace(-30.0, 30.0, 40)
+    yy, zz = np.meshgrid(grid, grid, indexing="ij")
+    targets = np.column_stack([np.full(yy.size, 60.0), yy.ravel(), zz.ravel()])
+    source = np.array([[-1000.0, 0.0, 0.0]])
+    tracer = RayTracerSiddon(cube)
+
+    cp.cuda.Stream.null.synchronize()
+    quiet = tracer.trace_rays(isocenter, source, targets)
+    cp.cuda.Stream.null.synchronize()
+
+    busy = cp.random.random((3000, 3000), dtype=cp.float32)
+    for _ in range(40):
+        busy = cp.matmul(busy, busy) * 1e-6
+    loaded = tracer.trace_rays(isocenter, source, targets)
+    cp.cuda.Stream.null.synchronize()
+
+    for name, a, b in zip(("alpha", "lengths", "rho", "d12", "ix"), quiet, loaded):
+        a = [to_numpy(x) for x in a] if isinstance(a, list) else [to_numpy(a)]
+        b = [to_numpy(x) for x in b] if isinstance(b, list) else [to_numpy(b)]
+        for x, y in zip(a, b):
+            assert x.shape == y.shape, name
+            np.testing.assert_array_equal(x, y, err_msg=name)

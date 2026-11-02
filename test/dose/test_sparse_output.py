@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from pyRadPlan.core.xp_utils import cupy_available
+from pyRadPlan.scenarios import ScenarioSet, ScenarioBasis, RangeUncertainty
 from pyRadPlan.dose.engines import PhotonPencilBeamSVDEngine
 from pyRadPlan.dose.engines._base import DoseEngineBase
 from pyRadPlan.dose.engines import _sparse_output
@@ -48,7 +49,12 @@ def test_real_pointer_boundary():
 def make_engine(rows=8, columns=3, direct=False):
     """Create the minimal collector state without unrelated patient setup."""
     engine = object.__new__(PhotonPencilBeamSVDEngine)
-    engine.mult_scen = SimpleNamespace(scen_mask=np.array([[[True]], [[False]], [[True]]]))
+    engine._scenarios = ScenarioSet.from_points(
+        [RangeUncertainty()],
+        {"range": [[0, 0], [0, 0], [1, 0]]},
+        bases=[None, ScenarioBasis(coefficients={0: 0.5, 2: 0.5}), None],
+        probabilities=np.ones(3),
+    )
     engine.dose_grid = SimpleNamespace(num_voxels=rows)
     engine._num_of_columns_dij = columns
     engine._calc_dose_direct = direct

@@ -11,9 +11,10 @@ import array_api_compat
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import to_numpy, from_numpy
 from ...core.datamodel import PyRadPlanBaseModel
-from ...quantities import get_available_quantities
+from ...quantities import get_available_quantities, get_quantity
 from ...core import Grid
 from ...core.resample import resample_array
+from ..robustness import available_robustness, resolve_robustness_name
 
 ParameterType = Union[
     Literal["reference", "numeric", "relative_volume", "image_reference"], list[str]
@@ -76,14 +77,24 @@ class Objective(PyRadPlanBaseModel):
         tagged unions and for round-tripping serialized objectives.
     has_hessian : ClassVar[bool]
         Whether the objective function has a Hessian implementation.
+    scenario_aware : ClassVar[bool]
+        Whether the objective evaluates all scenarios at once: ``compute_objective`` /
+        ``compute_gradient`` then receive the values stacked over the scenarios, shape
+        ``(S, n)``, and the scenario ``weights``, and the gradient has the same shape.
     priority : float
         Weight/Priority assigned to the objective function.
     quantity : str
         The quantity this objective is connected to (e.g. 'physical_dose', 'RBExDose').
+    robustness : str
+        Name of the :mod:`~pyRadPlan.optimization.robustness` operator combining the
+        objective's values over the scenarios of the dose influence data (``"none"``: the
+        nominal scenario only). matRad's names (``STOCH``, ``OWC``, ...) are accepted as
+        aliases and normalized.
     """
 
     name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
+    scenario_aware: ClassVar[bool] = False
     priority: float = Field(
         default=1.0,
         ge=0.0,
@@ -93,6 +104,13 @@ class Objective(PyRadPlanBaseModel):
     quantity: str = Field(
         default="physical_dose",
         description="Quantity the objective is evaluated on (e.g. 'physical_dose').",
+    )
+    robustness: str = Field(
+        default="none",
+        description=(
+            "Robustness operator combining the objective over the scenarios of the dose "
+            "influence data ('none': nominal scenario only)."
+        ),
     )
 
     _resampled_image_reference_cache: dict[str, Array] = PrivateAttr(default_factory=dict)
@@ -115,6 +133,9 @@ class Objective(PyRadPlanBaseModel):
                     Array containing indices for which the objective needs to be cached
         """
 
+        # A fresh dict: shallow model copies share the cache with the objective they were
+        # copied from.
+        cache = dict(self._resampled_image_reference_cache)
         for param_name, param_type in zip(self.parameter_names, self.parameter_types):
             if param_type == "image_reference":
                 # Check cache first
@@ -146,8 +167,8 @@ class Objective(PyRadPlanBaseModel):
                 if index_list is not None:
                     resampled_array = resampled_array[index_list]
 
-                # Cache the resampled value
-                self._resampled_image_reference_cache[cache_key] = xp.asarray(resampled_array)
+                cache[cache_key] = xp.asarray(resampled_array)
+        self._resampled_image_reference_cache = cache
 
     def _image_reference(self, param_name: str, values: Array) -> Array:
         """Get cached image reference aligned to the namespace and device of *values*.
@@ -168,24 +189,60 @@ class Objective(PyRadPlanBaseModel):
 
     def normalize_to_fraction_num(self, num_of_fractions: int):
         """
-        Normalize the objective to the number of fractions.
+        Convert total-course reference parameters to one of ``num_of_fractions`` fractions.
 
-        This is relevant for objectives that are defined in terms of total dose, but the optimization
-        is performed on dose per fraction. In such cases, the objective needs to be normalized to
-        the number of fractions to ensure correct optimization behavior.
+        The optimization runs on per-fraction quantities. Scalar (``"reference"``) and image
+        (``"image_reference"``) parameters given for the total course are divided by the
+        quantity's :meth:`~pyRadPlan.quantities.RTQuantity.total_course_factor`, i.e. by
+        ``num_of_fractions`` for dose-like quantities and not at all for LET. Image references
+        are scaled through their resampled cache only, so
+        :meth:`preprocess_image_reference_parameters` must run first; the image parameter
+        itself is left unchanged.
 
         Parameters
         ----------
         num_of_fractions : int
             The number of fractions to normalize to.
+
+        Returns
+        -------
+        Objective
+            The objective itself.
+
+        Raises
+        ------
+        ValueError
+            If the objective has reference parameters and ``num_of_fractions`` is not
+            positive or the objective's quantity declares no fraction scaling, or if an image
+            reference has not been preprocessed.
         """
-        if num_of_fractions <= 0:
-            raise ValueError("Number of fractions must be greater than zero.")
-        for param_name, param_type in zip(self.parameter_names, self.parameter_types):
+        references = [
+            (param_name, param_type)
+            for param_name, param_type in zip(self.parameter_names, self.parameter_types)
+            if param_type in ("reference", "image_reference")
+        ]
+        if not references:
+            return self
+        factor = get_quantity(self.quantity).total_course_factor(num_of_fractions)
+        if factor == 1.0:
+            return self
+        cache = dict(self._resampled_image_reference_cache)
+        for param_name, param_type in references:
             if param_type == "reference":
-                current_value = getattr(self, param_name)
-                normalized_value = current_value / num_of_fractions
-                setattr(self, param_name, normalized_value)
+                setattr(self, param_name, getattr(self, param_name) / factor)
+                continue
+            if param_name not in cache:
+                raise ValueError(
+                    f"Image reference {param_name!r} has no resampled cache entry; "
+                    "preprocess_image_reference_parameters must run before "
+                    "normalize_to_fraction_num."
+                )
+            ref = cache[param_name]
+            xp = array_api_compat.array_namespace(ref)
+            if not xp.isdtype(ref.dtype, "real floating"):
+                ref = xp.astype(ref, xp.float64)
+            cache[param_name] = ref / factor
+        self._resampled_image_reference_cache = cache
         return self
 
     @abstractmethod
@@ -262,11 +319,62 @@ class Objective(PyRadPlanBaseModel):
             )
             return None
 
+        # Deferred import to avoid a circular import with the factory module.
+        from ..robustness import get_robustness_operator_class  # noqa: PLC0415
+
+        matrad_robustness = get_robustness_operator_class(self.robustness).matrad_name
+        if matrad_robustness is None:
+            logger.warning(
+                "Robustness '%s' of objective '%s' has no matRad equivalent and is exported as "
+                "'none'.",
+                self.robustness,
+                self.name,
+            )
+            matrad_robustness = "none"
+
         return {
             "className": class_name,
             "parameters": list(self.parameters),
             "penalty": self.priority,
+            "robustness": matrad_robustness,
         }
+
+    @classmethod
+    def available_robustness(cls) -> list[str]:
+        """
+        Names of the robustness operators this objective accepts.
+
+        Scenario-aware objectives evaluate the scenario stack themselves and accept only
+        ``"scenario_stack"``; all other objectives accept every registered operator.
+        """
+        if cls.scenario_aware:
+            return ["scenario_stack"]
+        return [name for name in available_robustness() if name != "scenario_stack"]
+
+    @field_validator("robustness")
+    @classmethod
+    def _validate_robustness(cls, v):
+        """Normalize aliases to the canonical operator name and check it is applicable."""
+        if cls.scenario_aware:
+            if v not in ("none", "scenario_stack"):
+                logger.warning(
+                    "Objective '%s' evaluates the scenarios itself; robustness '%s' is replaced "
+                    "by 'scenario_stack'.",
+                    cls.model_fields["name"].default,
+                    v,
+                )
+            return "scenario_stack"
+        name = resolve_robustness_name(v)
+        if name == "scenario_stack":
+            raise ValueError("'scenario_stack' is reserved for scenario-aware objectives")
+        if v.strip().upper() == "PROB":
+            logger.warning(
+                "matRad's 'PROB' robustness of objective '%s' is used as 'expected_quantity' "
+                "without its variance term; add a 'Variance' objective to penalize the "
+                "variance over the scenarios.",
+                cls.model_fields["name"].default,
+            )
+        return name
 
     @field_validator("quantity")
     @classmethod

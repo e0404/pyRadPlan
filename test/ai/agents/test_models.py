@@ -49,10 +49,38 @@ def test_load_ai_env_populates_environment(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=from-dotenv\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     load_ai_env()
     assert os.environ.get("OPENAI_API_KEY") == "from-dotenv"
+
+
+def test_load_ai_env_reads_user_env_file(tmp_path, monkeypatch):
+    """Keys in <data_dir>/.env are loaded; the working directory's .env takes precedence."""
+    from pyRadPlan.ai.agents import load_ai_env
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / ".env").write_text(
+        "OPENAI_API_KEY=from-user\nANTHROPIC_API_KEY=from-user\n", encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=from-cwd\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(data))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    load_ai_env()
+    assert os.environ["OPENAI_API_KEY"] == "from-cwd"
+    assert os.environ["ANTHROPIC_API_KEY"] == "from-user"
+
+    # existing variables win unless override is requested
+    (data / ".env").write_text("ANTHROPIC_API_KEY=changed\n", encoding="utf-8")
+    load_ai_env()
+    assert os.environ["ANTHROPIC_API_KEY"] == "from-user"
+    load_ai_env(override=True)
+    assert os.environ["ANTHROPIC_API_KEY"] == "changed"
 
 
 @pytest.mark.parametrize(

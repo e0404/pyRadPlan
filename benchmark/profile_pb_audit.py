@@ -383,17 +383,25 @@ def main():  # noqa: PLR0912
     def run():
         engine = cls(plan.model_copy(deep=True))
         engine.console_progress = False
+        # Develop restores user settings after a calculation (dose_grid may again
+        # be the plan's dict). Capture effective metadata before that restoration.
+        finalize = engine._finalize_dose
+
+        def capture_effective(dij):
+            effective.update(
+                dose_resolution=engine.dose_grid.resolution,
+                dose_dimensions=engine.dose_grid.dimensions,
+                selected_voxels=int(engine._vdose_grid.size),
+                lateral_model=getattr(engine, "lateral_model", None),
+            )
+            return finalize(dij)
+
+        engine._finalize_dose = capture_effective
         if args.forward:
             result = engine.calc_dose_forward(ct, cst, stf.model_copy(deep=True), None)
         else:
             result = engine.calc_dose_influence(ct, cst, stf.model_copy(deep=True))
         sync(args.backend)
-        effective.update(
-            dose_resolution=engine.dose_grid.resolution,
-            dose_dimensions=engine.dose_grid.dimensions,
-            selected_voxels=int(engine._vdose_grid.size),
-            lateral_model=getattr(engine, "lateral_model", None),
-        )
         effective.pop("collector", None)
         if hasattr(engine, "_collector_metrics"):
             effective["collector"] = dict(engine._collector_metrics)

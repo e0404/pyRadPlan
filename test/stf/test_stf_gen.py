@@ -10,9 +10,16 @@ import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan.io import load_patient
+from pyRadPlan.machines import load_from_name
 from pyRadPlan.plan import create_pln
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet, VOI
+from pyRadPlan.scenarios import (
+    CTPhaseUncertainty,
+    RangeUncertainty,
+    ScenarioSet,
+    SetupUncertainty,
+)
 
 from pyRadPlan.stf import Ray, get_available_generators, get_generator, resolve_iso_centers
 from pyRadPlan.stf.generators import (
@@ -251,6 +258,30 @@ def test_single_ion_spot(sample_ct, sample_cst, sample_proton_pln):
         assert np.isclose(field["rays"][0].ray_pos, expected_ray_pos).all()
 
 
+@pytest.mark.parametrize("default_mode", [False, True], ids=["loaded", "default-mode"])
+@pytest.mark.parametrize("radiation_mode", ["protons", "photons"])
+def test_generate_with_round_tripped_plan_machine(
+    sample_ct, sample_cst, radiation_mode, default_mode
+):
+    """Steering generation works with a loaded machine after a plan dump round trip."""
+    machine = load_from_name(radiation_mode, "Generic")
+    if default_mode:
+        data = machine.model_dump(exclude_unset=True)
+        del data["radiation_mode"]
+        machine = type(machine).model_validate(data)
+    pln = create_pln(radiation_mode=radiation_mode, machine=machine, prop_stf={"bixel_width": 5})
+    pln = create_pln(pln.model_dump())
+
+    stf_gen = get_generator(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+    stf = stf_gen.generate(sample_ct, sample_cst)
+
+    assert type(stf_gen.machine) is type(machine)
+    assert len(stf) == 1
+    assert stf[0]["machine"] == "Generic"
+
+
 def test_impt(sample_ct, sample_cst, sample_proton_pln):
     stf_gen = StfGeneratorIMPT(sample_proton_pln)
 
@@ -455,3 +486,141 @@ def test_resolve_iso_centers_without_number_of_beams():
 def test_resolve_iso_centers_rejects_invalid(iso_center):
     with pytest.raises(ValueError):
         resolve_iso_centers(iso_center, _CenterOfMassCst(), 3)
+
+
+def _imrt_target_mask(ct, cst, pln, scenarios):
+    stf_gen = StfGeneratorPhotonIMRT(pln)
+    stf_gen.mult_scen = scenarios
+    stf_gen._ct = ct
+    stf_gen._cst = cst
+    stf_gen._initialize()
+    stf_gen._initialize_patient_geometry()
+    return stf_gen, sitk.GetArrayFromImage(stf_gen._target_mask).astype(bool)
+
+
+def _num_rays(ct, cst, pln, scenarios):
+    stf_gen = StfGeneratorPhotonIMRT(pln)
+    stf_gen.gantry_angles = [0.0]
+    stf_gen.couch_angles = [0.0]
+    stf_gen.mult_scen = scenarios
+    return sum(len(beam["rays"]) for beam in stf_gen.generate(ct, cst))
+
+
+def _scenario_set(points):
+    return ScenarioSet.from_points(
+        (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()), points
+    )
+
+
+def test_target_margin_uses_setup_extent(sample_ct, sample_cst, sample_photon_pln):
+    """A 5 mm x shift widens the target margin along x only (numpy axis 2)."""
+    _, nominal = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, "nomScen")
+    shift_set = _scenario_set({"setup": [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)]})
+    stf_gen, shifted = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, shift_set)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, [5.0, 0.0, 0.0])
+    assert range_margin == 0.0
+
+    assert not (nominal & ~shifted).any()
+    assert shifted.sum() > nominal.sum()
+    np.testing.assert_array_equal(shifted.any(axis=2), nominal.any(axis=2))
+
+    rays_nominal = _num_rays(sample_ct, sample_cst, sample_photon_pln, "nomScen")
+    rays_shifted = _num_rays(sample_ct, sample_cst, sample_photon_pln, shift_set)
+    assert rays_shifted > rays_nominal
+
+
+def test_range_margin_uses_both_range_components(sample_ct, sample_cst, sample_photon_pln):
+    """The relative component enters with its own magnitude, not the absolute one."""
+    range_set = _scenario_set({"range": [(0.0, 0.0), (-1.0, 0.05), (0.5, -0.02)]})
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, range_set)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, np.zeros(3))
+    assert range_margin == pytest.approx(1.0 + 0.05)
+
+
+def test_margins_without_setup_and_range_dimensions(sample_ct, sample_cst, sample_photon_pln):
+    phase_only = ScenarioSet.from_points((CTPhaseUncertainty(),), {"ct_phase": [0]})
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, phase_only)
+
+    max_iso_shift, range_margin = stf_gen._scenario_margins()
+    np.testing.assert_array_equal(max_iso_shift, np.zeros(3))
+    assert range_margin == 0.0
+
+
+def test_generator_takes_the_plans_scenario_model(sample_photon_pln):
+    """``pln.scenarios`` reaches the generator (``"mult_scen" in pln`` never did)."""
+    from pyRadPlan.stf.generators import get_generator
+
+    sample_photon_pln.scenarios = {"model": "wcScen", "combinations": "none"}
+    generator = get_generator(sample_photon_pln)
+    assert getattr(generator.mult_scen, "short_name", None) == "wcScen"
+
+
+def test_scenario_model_in_prop_stf_takes_precedence(sample_photon_pln):
+    from pyRadPlan.stf.generators import get_generator
+
+    sample_photon_pln.scenarios = {"model": "wcScen", "combinations": "none"}
+    sample_photon_pln.prop_stf["mult_scen"] = "nomScen"
+    assert get_generator(sample_photon_pln).mult_scen == "nomScen"
+
+    sample_photon_pln.prop_stf.pop("mult_scen")
+    sample_photon_pln.prop_stf["scenarios"] = "rndScen"
+    assert get_generator(sample_photon_pln).mult_scen == "rndScen"
+
+
+def test_target_margin_adds_shift_range_and_beamlet_margin(
+    sample_ct, sample_cst, sample_photon_pln
+):
+    """matRad: margin = max(resolution, max |shift| + range margin + beamlet margin) per axis."""
+    shift_set = _scenario_set(
+        {
+            "setup": [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, -4.0, 0.0)],
+            "range": [(0.0, 0.0), (1.0, 0.02), (0.0, 0.0)],
+        }
+    )
+    stf_gen, _ = _imrt_target_mask(sample_ct, sample_cst, sample_photon_pln, shift_set)
+    added = stf_gen._computed_target_margin()
+    range_margin = 1.0 + 0.02
+    res = sample_ct.resolution
+    expected = (
+        max(res["x"], 10.0 + range_margin + added),
+        max(res["y"], 4.0 + range_margin + added),
+        max(res["z"], range_margin + added),
+    )
+    assert stf_gen._target_margins() == pytest.approx(expected)
+    # the sum exceeds the former max(shift, range + beamlet) rule along the shifted axes
+    assert stf_gen._target_margins()[0] > max(res["x"], 10.0, range_margin + added)
+
+
+def test_ray_padding_is_symmetric_for_bixels_below_ct_resolution(tg119):
+    # With 2 mm bixels on the 3 mm TG119 CT, every ray is padded by one bixel on all sides,
+    # so a single target voxel at the isocenter yields the full 3 x 3 grid of ray positions.
+    ct, cst = tg119["ct"], tg119["cst"]
+    pln = create_pln(
+        {
+            "radiation_mode": "photons",
+            "machine": "Generic",
+            "prop_stf": {"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 2.0},
+        }
+    )
+    generator = StfGeneratorPhotonIMRT(pln)
+    generator._ct, generator._cst = ct, cst
+    generator._initialize()
+    generator._initialize_patient_geometry()
+
+    iso_center = np.asarray(cst.target_center_of_mass())
+    generator._target_voxel_coordinates = iso_center.reshape(3, 1)
+    beam = {
+        "gantry_angle": 0.0,
+        "couch_angle": 0.0,
+        "sad": 1000.0,
+        "bixel_width": 2.0,
+        "iso_center": iso_center,
+    }
+    ray_pos = generator._generate_ray_positions_in_isocenter_plane(beam)
+
+    offsets = {(float(x), float(z)) for x, z in ray_pos[[0, 2]].T}
+    assert offsets == {(x, z) for x in (-2.0, 0.0, 2.0) for z in (-2.0, 0.0, 2.0)}

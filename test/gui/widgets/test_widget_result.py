@@ -484,7 +484,7 @@ def test_dragging_a_beam_changes_its_gantry_angle(qapp, test_data_photons):
     assert all(source._on_drag is not None for source in _beam_sources(quantity_widget))
 
     # Gantry 90 has its source at the patient's left, to the right in the axial view.
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     assert quantity_widget._beam_drag is not None  # the orbit is shown
@@ -541,7 +541,7 @@ def test_dragged_beams_go_to_the_beam_editor(qapp, test_data_photons):
     widget.vis_widget.beams_checkbox.setChecked(True)
     quantity_widget.set_plane("Axial")
 
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso), finish=True))
@@ -573,7 +573,7 @@ def test_escape_cancels_a_beam_drag(qapp, test_data_photons):
     widget.vis_widget.beams_checkbox.setChecked(True)
     quantity_widget.set_plane("Axial")
 
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso)))
@@ -687,3 +687,63 @@ def test_viewer_shows_rbe_weighted_dose_of_a_biological_result(qapp, test_data_p
     )
     assert widget.quantity_widget._active_quantity_name == "rbe_x_dose"
     assert widget.vis_widget.quantity_selector.current_key() == "rbe_x_dose"
+
+
+def test_viewer_lists_results_per_scenario_with_dij_labels(qapp, test_data_photons):
+    from types import SimpleNamespace
+
+    ct, cst, _ = test_data_photons
+    dose = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
+    result = {"physical_dose": dose, "physical_dose_scenario": [dose, None, 1.1 * dose]}
+    ws = _make_workspace(ct, cst, result)
+    widget = ViewingWidget(ws)
+
+    # The derived scenario 1 has no image; the others keep their flat index.
+    available = widget.quantity_widget.get_available_quantities()
+    assert "physical_dose_scenario 0" in available and "physical_dose_scenario 2" in available
+    assert "physical_dose_scenario 1" not in available
+
+    selector = widget.vis_widget.quantity_selector
+    combo = selector.component_combo
+
+    def components():
+        return [combo.itemText(i) for i in range(combo.count())]
+
+    assert components() == ["full", "scenario 0", "scenario 2"]
+    ws.dij = SimpleNamespace(scenario_labels=lambda: ["nominal", "derived", "range +1.0 mm"])
+    assert components() == ["full", "scenario 0: nominal", "scenario 2: range +1.0 mm"]
+    ws.dij = None
+    assert components() == ["full", "scenario 0", "scenario 2"]
+
+
+def test_overlay_meta_covers_per_scenario_lists():
+    from pyRadPlan.gui.widgets._result_widget import _build_overlay_meta
+
+    arr = np.zeros((2, 2, 2))
+    units, labels = _build_overlay_meta(
+        {"rbe_x_dose": arr, "rbe_x_dose_scenario": [arr, None], "physical_dose_beam": [arr]}
+    )
+    assert labels["rbe_x_dose_scenario 0"] == "RBE-weighted Dose"
+    assert units["rbe_x_dose_scenario 1"] == "Gy (RBE)"
+    assert labels["physical_dose_beam 0"] == "Dose"
+
+
+def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photons):
+    from types import SimpleNamespace
+
+    ct, cst, _ = test_data_photons
+    dose = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
+    ws = _make_workspace(ct, cst, {"physical_dose": dose, "physical_dose_scenario": [dose, dose]})
+    widget = ViewingWidget(ws)
+    combo = widget.vis_widget.quantity_selector.component_combo
+
+    ws.dij = SimpleNamespace(scenario_labels=lambda: ["from dij 0", "from dij 1"])
+    assert combo.itemText(2) == "scenario 1: from dij 1"
+
+    ws.result = {
+        "physical_dose": dose,
+        "physical_dose_scenario": [dose, dose],
+        "scenario_labels": ("from result 0", "from result 1"),
+    }
+    assert combo.itemText(2) == "scenario 1: from result 1"
+    assert "scenario_labels" not in widget.quantity_widget.get_available_quantities()

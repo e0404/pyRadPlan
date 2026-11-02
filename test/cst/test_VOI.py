@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 import SimpleITK as sitk
 from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi, DEFAULT_VOI_COLORS
+from pyRadPlan.ct import create_ct
 from pyRadPlan.biology.tissues import (
     LEMTissueProperties,
     MKMTissueProperties,
@@ -1365,3 +1366,36 @@ def test_voi_from_an_old_file_with_unset_reference_parameters(generic_input_3d):
 
     only_alpha = OAR(name=name, ct_image=ct, mask=mask, alpha_x=nan)
     assert only_alpha.alpha_x == only_alpha.tissue_properties.alpha_x == 0.1
+
+
+@pytest.mark.parametrize("voi_type", ["target", " Target "])
+def test_create_voi_voi_type_case_insensitive(generic_input_3d, voi_type):
+    name, ct, mask, _, _ = generic_input_3d
+    from_kwargs = create_voi(voi_type=voi_type, name=name, ct_image=ct, mask=mask)
+    from_dict = create_voi({"voi_type": voi_type, "name": name, "ct_image": ct, "mask": mask})
+    assert isinstance(from_kwargs, Target) and isinstance(from_dict, Target)
+    assert from_kwargs.voi_type == from_dict.voi_type == "TARGET"
+
+
+def test_voi_to_matrad_4d_uses_matrad_indexing(generic_input_3d):
+    """Each 4D scenario is exported with the same 1-based matRad indexing as a 3D mask."""
+    name, ct_3d, mask, _, _ = generic_input_3d
+    voi_3d = create_voi(voi_type="TARGET", name=name, ct_image=ct_3d, mask=mask)
+    ct_4d = create_ct(cube_hu=sitk.JoinSeries([ct_3d.cube_hu, ct_3d.cube_hu]))
+    voi_4d = create_voi(voi_type="TARGET", name=name, ct_image=ct_4d, mask=np.stack([mask, mask]))
+
+    expected = np.ravel(voi_3d.to_matrad()[3][0])
+    index_lists = voi_4d.to_matrad()[3]
+    assert len(index_lists) == 2
+    for index_list in index_lists:
+        np.testing.assert_array_equal(np.ravel(index_list), expected)
+
+
+def test_resample_4d_voi_on_4d_ct(generic_input_4d):
+    name, ct, mask, _, _ = generic_input_4d
+    voi = create_voi(voi_type="TARGET", name=name, ct_image=ct, mask=mask)
+
+    resampled = voi._resample_on_new_ct(ct)
+
+    assert resampled.mask.GetSize() == mask.GetSize()
+    np.testing.assert_array_equal(resampled.indices, voi.indices)

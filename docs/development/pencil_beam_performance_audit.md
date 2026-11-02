@@ -1,5 +1,7 @@
 # Pencil-beam dose calculation: performance and architecture audit
 
+Current outstanding work: [performance backlog](dose_performance_backlog.md).
+
 2026-10-26. Reviewed revision `c1ee82ae868b92cadfe72adf09bcc030188533bb` on
 `develop`. Experiments are isolated scripts under `benchmark/`; engine source
 files were not edited. Optimization and Monte Carlo engines are outside scope.

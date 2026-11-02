@@ -66,8 +66,7 @@ def test_single_menu_bar_with_expected_menus(qapp):
     ]
     assert installed == []
     titles = [a.text() for a in win.menuBar().actions()]
-    assert "&File" in titles and "&View" in titles and "&Settings" in titles
-    assert "&Base Data" in titles
+    assert titles == ["&File", "&View", "&Base Data", "&Settings", "&Help"]
 
 
 def test_base_data_menu_add_and_remove_refresh_plan_widget(qapp, tmp_path, monkeypatch):
@@ -156,8 +155,181 @@ def test_view_menu_stubs_disabled(qapp):
     win = MainWindow(WorkspaceManager())
     actions = {a.text(): a for a in win._view_menu.actions() if a.text()}
 
-    for stub in ("Screenshot", "Zoom In", "Pan", "Toggle Dark Mode"):
+    for stub in ("Screenshot", "Zoom In", "Pan"):
         assert not actions[stub].isEnabled()
+
+
+@pytest.fixture
+def ignored_color_scheme_requests(qapp, monkeypatch):
+    """Record scheme requests to a platform ignoring them, reporting none, rendering light."""
+    from PySide6.QtGui import QStyleHints
+
+    from pyRadPlan.gui.menus import _view
+
+    requested = []
+    monkeypatch.setattr(QStyleHints, "setColorScheme", lambda self, s: requested.append(s))
+    monkeypatch.setattr(QStyleHints, "colorScheme", lambda self: Qt.ColorScheme.Unknown)
+    monkeypatch.setattr(_view, "_palette_dark", lambda palette: False)
+    _view._color_scheme_switch()._follow_platform()
+    yield requested
+    _view._color_scheme_switch()._follow_platform()
+
+
+@pytest.fixture
+def dark_native_palette(monkeypatch, ignored_color_scheme_requests):
+    """Like ``ignored_color_scheme_requests``, with a dark native palette."""
+    from pyRadPlan.gui.menus import _view
+
+    monkeypatch.setattr(_view, "_palette_dark", lambda palette: True)
+    _view._color_scheme_switch()._follow_platform()
+    return ignored_color_scheme_requests
+
+
+def _is_dark(qapp):
+    from PySide6.QtGui import QPalette
+
+    return qapp.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def test_view_menu_toggles_dark_mode(qapp, ignored_color_scheme_requests):
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+
+    action.trigger()
+    action.trigger()
+
+    assert ignored_color_scheme_requests == [Qt.ColorScheme.Dark, Qt.ColorScheme.Light]
+
+
+def test_view_menu_follows_os_color_scheme_without_pinning_it(qapp, ignored_color_scheme_requests):
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    hints = qapp.styleHints()
+
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert action.isChecked()
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+    assert not action.isChecked()
+    assert ignored_color_scheme_requests == []
+
+
+def test_dark_mode_falls_back_to_fusion_where_the_platform_ignores_it(
+    qapp, ignored_color_scheme_requests
+):
+    from pyRadPlan.gui.menus import ViewMenu
+
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    other_window_menu = ViewMenu()
+
+    win._view_menu.dark_mode_action.trigger()
+    assert qapp.style().name() == "fusion"
+    assert _is_dark(qapp)
+    assert other_window_menu.dark_mode_action.isChecked()
+
+    win._view_menu.dark_mode_action.trigger()
+    assert qapp.style().name() == native_style
+    assert not other_window_menu.dark_mode_action.isChecked()
+
+
+def test_dark_mode_fallback_ends_when_the_platform_catches_up(qapp, ignored_color_scheme_requests):
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    action.trigger()
+
+    qapp.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Light)
+    assert qapp.style().name() == "fusion"  # the user's choice overrides the platform
+    assert action.isChecked()
+
+    qapp.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert qapp.style().name() == native_style
+    assert action.isChecked()
+
+
+def test_dark_mode_choice_outlasts_the_platform_changing_back(qapp, ignored_color_scheme_requests):
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    action.trigger()
+    hints = qapp.styleHints()
+
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert qapp.style().name() == native_style
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+
+    assert qapp.style().name() == "fusion"
+    assert _is_dark(qapp)
+    assert action.isChecked()
+
+
+def test_palette_darkness(qapp, dark_palette):
+    from PySide6.QtGui import QColor, QPalette
+
+    from pyRadPlan.gui.menus._view import _palette_dark
+
+    light = QPalette()
+    light.setColor(QPalette.ColorRole.Window, QColor("#efefef"))
+    light.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+
+    assert _palette_dark(dark_palette[0])
+    assert not _palette_dark(light)
+
+
+def test_dark_mode_judges_an_unreported_scheme_by_the_native_palette(qapp, dark_native_palette):
+    from pyRadPlan.gui.menus import ViewMenu
+
+    native_style = qapp.style().name()
+    menu = ViewMenu()
+    assert menu.dark_mode_action.isChecked()
+
+    menu.dark_mode_action.trigger()
+    assert qapp.style().name() == "fusion"
+    assert not _is_dark(qapp)
+
+    menu.dark_mode_action.trigger()
+    assert qapp.style().name() == native_style
+    assert menu.dark_mode_action.isChecked()
+
+
+def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):
+    from pyRadPlan._settings import get_settings
+    from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+    from pyRadPlan.io import phantom_path
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(get_settings(), "base_data_path", str(tmp_path / "course"))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        lambda self, fn, *args, on_success=None, **kwargs: on_success(fn(*args)),
+    )
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    menu = win._file_menu._phantom_menu
+
+    def phantoms():
+        menu.aboutToShow.emit()
+        return {a.data(): a for a in menu.actions() if a.data()}
+
+    assert list(phantoms()) == ["TG119"]
+    assert phantoms()["TG119"].toolTip().startswith("Shipped with pyRadPlan")
+
+    # files dropped into the user's and a shared phantom folder show up without a restart
+    (tmp_path / "data" / "phantoms").mkdir(parents=True)
+    (tmp_path / "data" / "phantoms" / "Mine.mat").write_bytes(phantom_path("TG119").read_bytes())
+    (tmp_path / "course" / "phantoms").mkdir(parents=True)
+    (tmp_path / "course" / "phantoms" / "Course.mat").write_bytes(
+        phantom_path("TG119").read_bytes()
+    )
+    listed = phantoms()
+    assert list(listed) == ["TG119", "Mine", "Course"]
+    assert str(tmp_path / "course" / "phantoms") in listed["Course"].toolTip()
+
+    listed["Course"].trigger()
+
+    assert ws.has("ct", "cst")
+    assert {voi.name for voi in ws.cst.vois} >= {"Core", "OuterTarget", "BODY"}
 
 
 # def test_file_menu_save_actions_track_workspace(qapp, test_data_photons):
@@ -195,9 +367,9 @@ def test_settings_dialog_shows_subconfig_tabs(qapp):
 
     dialog = SettingsDialog()
     titles = [dialog._tabs.tabText(i) for i in range(dialog._tabs.count())]
-    # All top-level fields are sub-configurations, so there is no General tab.
-    assert dialog._general_form is None
-    assert "General" not in titles
+    # The top-level fields that are no sub-configuration form the General tab.
+    assert titles[0] == "General"
+    assert list(dialog._general_form._editors) == ["base_data_path"]
     assert "XP (Backend)" in titles
     assert "AI" in titles
     assert "GUI" in titles
@@ -228,6 +400,8 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
     settings = get_settings()
     orig_prefer_gpu = settings.xp.prefer_gpu
     orig_ai_model = settings.ai.agents_model
+    monkeypatch.setattr(settings, "base_data_path", "")
+    monkeypatch.delenv("PYRADPLAN_BASE_DATA_PATH", raising=False)
     monkeypatch.delenv("PYRADPLAN_XP_PREFER_GPU", raising=False)
     monkeypatch.delenv("PYRADPLAN_AI_AGENTS_MODEL", raising=False)
     monkeypatch.setenv("PYRADPLAN_AI_MODEL", "stale-legacy-value")
@@ -236,7 +410,11 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
         dialog = SettingsDialog()
         dialog._sub_forms["xp"]._set_value("prefer_gpu", False)
         dialog._sub_forms["ai"]._set_value("agents_model", "test-model")
+        dialog._general_form._set_value("base_data_path", "course-cases")
         dialog.apply()
+
+        assert settings.base_data_path == "course-cases"
+        assert os.environ["PYRADPLAN_BASE_DATA_PATH"] == "course-cases"
 
         assert settings.xp.prefer_gpu is False
         assert os.environ["PYRADPLAN_XP_PREFER_GPU"] == "False"
@@ -247,6 +425,7 @@ def test_settings_dialog_applies_to_singleton_and_env(qapp, monkeypatch):
     finally:
         os.environ.pop("PYRADPLAN_XP_PREFER_GPU", None)
         os.environ.pop("PYRADPLAN_AI_AGENTS_MODEL", None)
+        os.environ.pop("PYRADPLAN_BASE_DATA_PATH", None)
         settings.xp.prefer_gpu = orig_prefer_gpu
         settings.ai.agents_model = orig_ai_model
 

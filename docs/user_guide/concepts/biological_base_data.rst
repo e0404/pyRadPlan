@@ -126,32 +126,58 @@ keeps only the metadata and can be passed wherever these functions take a machin
 Where base data is found
 ------------------------
 
-Machine files, RBE tables and stopping power tables are selected by file name: a machine by
-``<radiation_mode>_<machine_name>.mat``, a table by its ``quantity_table_name`` or
-``sp_table_name``. Each kind is looked up in two folders, the shipped one first:
+Machine files, RBE tables, stopping power tables and phantoms are selected by file name: a
+machine by ``<radiation_mode>_<machine_name>.mat``, a table by its ``quantity_table_name`` or
+``sp_table_name``, a phantom by its file name without the ending (``TG119``). Each kind is
+looked up in these folders, from left to right:
 
 .. list-table::
    :header-rows: 1
-   :widths: 25 35 40
+   :widths: 19 27 27 27
 
    * - Kind
      - Shipped with pyRadPlan
      - Added by you
+     - Shared
    * - Machine files
      - ``pyRadPlan/data/machines``
      - ``~/.pyradplan/machines``
+     - ``<shared>/machines``
    * - RBE tables
      - ``pyRadPlan/data/rbe``
      - ``~/.pyradplan/rbe``
+     - ``<shared>/rbe``
    * - Stopping power tables
      - ``pyRadPlan/data/physics/stopping``
      - ``~/.pyradplan/physics/stopping``
+     - ``<shared>/physics/stopping``
+   * - Phantoms (``.mat``, ``.npz``)
+     - ``pyRadPlan/data/phantoms``
+     - ``~/.pyradplan/phantoms``
+     - ``<shared>/phantoms``
 
 The user folders lie below the data directory, ``~/.pyradplan`` unless the
 ``PYRADPLAN_DATA_DIR`` environment variable names another one (see
 :func:`pyRadPlan.core.get_data_dir`). A file copied there by hand is found like one added
-through the API or the GUI. A file named like a shipped one is ignored; shipped files cannot be
-replaced.
+through the API or the GUI. A file named like one in a folder further left is ignored;
+shipped files cannot be replaced.
+
+``<shared>`` stands for each folder listed in the ``PYRADPLAN_BASE_DATA_PATH`` setting
+(``pyRadPlan.settings.base_data_path``), separated like ``PATH`` (``;`` on Windows, ``:``
+elsewhere). Shared folders are only read, which suits a folder prepared for a course or a
+department, for example the cases of a teaching session:
+
+.. code-block:: text
+
+    PYRADPLAN_BASE_DATA_PATH=\\server\teaching\pyradplan
+
+    \\server\teaching\pyradplan\phantoms\Prostate.mat
+    \\server\teaching\pyradplan\phantoms\HeadNeck.npz
+    \\server\teaching\pyradplan\machines\protons_Course.mat
+
+Like every setting it can also be given in a ``.env`` file, e.g. ``~/.pyradplan/.env`` for
+the desktop application, or in the GUI's *Settings → Preferences*. The GUI lists the phantoms
+under *File → Open Example Phantom*.
 
 Files are added with a check of their content:
 

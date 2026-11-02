@@ -29,6 +29,7 @@ instance, or -- when the instance is created internally (e.g. by
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -231,11 +232,12 @@ class _ActiveLevel:
 class ProgressHandle:
     """Handle yielded by :meth:`ProgressReporter.progress` to advance a level."""
 
-    __slots__ = ("_reporter", "_level")
+    __slots__ = ("_reporter", "_level", "_bar")
 
-    def __init__(self, reporter: "ProgressReporter", level: _ActiveLevel) -> None:
+    def __init__(self, reporter: "ProgressReporter", level: _ActiveLevel, bar: Any = None) -> None:
         self._reporter = reporter
         self._level = level
+        self._bar = bar
 
     def advance(self, n: int = 1) -> None:
         """Advance the current count by *n* and emit a report.
@@ -251,12 +253,17 @@ class ProgressHandle:
         """
         self._reporter._raise_if_cancelled()
         self._level.current += n
+        if self._bar is not None:
+            self._bar.update(n)
         self._reporter._emit_progress(force=self._is_complete())
 
     def update(self, current: int) -> None:
         """Set the absolute current count and emit a report (see :meth:`advance`)."""
         self._reporter._raise_if_cancelled()
         self._level.current = current
+        if self._bar is not None:
+            self._bar.n = current
+            self._bar.refresh()
         self._reporter._emit_progress(force=self._is_complete())
 
     def _is_complete(self) -> bool:
@@ -340,16 +347,51 @@ class ProgressReporter:
     # -- progress reporting --------------------------------------------------
 
     @contextmanager
-    def progress(self, name: str, total: Optional[int] = None) -> Iterator[ProgressHandle]:
-        """Push a progress level for the duration of the ``with`` block."""
+    def progress(
+        self,
+        name: str,
+        total: Optional[int] = None,
+        *,
+        console: bool = False,
+        **tqdm_kwargs: Any,
+    ) -> Iterator[ProgressHandle]:
+        """Push a progress level for the duration of the ``with`` block.
+
+        The yielded handle advances the level by any step size, e.g. for a loop whose
+        iterations complete several items at once.  With *console* set (and
+        :attr:`console_progress` on) a ``tqdm`` bar follows the handle, as :meth:`track`
+        shows one for the items it iterates.
+        """
         level = _ActiveLevel(name, total)
+        bar = self._console_bar(name, total, **tqdm_kwargs) if console else None
         self._progress_stack.append(level)
         self._emit_progress(force=True)
         try:
-            yield ProgressHandle(self, level)
+            yield ProgressHandle(self, level, bar)
         finally:
+            if bar is not None:
+                bar.close()
             self._progress_stack.pop()
             self._emit_progress(force=True)
+
+    def _console_bar(
+        self,
+        name: str,
+        total: Optional[int],
+        iterable: Optional[Iterable[T]] = None,
+        **tqdm_kwargs: Any,
+    ) -> Any:
+        """Return a console ``tqdm`` bar (wrapping *iterable* if given); ``None`` without a console."""
+        # Without a console (pythonw, a windowed app) sys.stderr is None. tqdm's write
+        # would then raise while holding tqdm's global lock and leave it held, so the next
+        # bar anywhere in the process (or the failed bar's __del__) blocks forever.
+        if not self.console_progress or sys.stderr is None:
+            return None
+        try:
+            from tqdm import tqdm  # noqa: PLC0415
+        except ImportError:
+            return None
+        return tqdm(iterable, desc=name, total=total, leave=False, **tqdm_kwargs)
 
     def track(
         self,
@@ -372,14 +414,8 @@ class ProgressReporter:
                 total = None
 
         with self.progress(name, total) as handle:
-            iterator: Iterable[T] = iterable
-            if self.console_progress:
-                try:
-                    from tqdm import tqdm  # noqa: PLC0415
-
-                    iterator = tqdm(iterable, desc=name, total=total, leave=False, **tqdm_kwargs)
-                except ImportError:
-                    iterator = iterable
+            bar = self._console_bar(name, total, iterable, **tqdm_kwargs)
+            iterator: Iterable[T] = iterable if bar is None else bar
             for item in iterator:
                 yield item
                 handle.advance()

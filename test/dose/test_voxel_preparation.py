@@ -28,7 +28,14 @@ def case(selection, resolution, scenarios=1):
         mask.ravel()[indices] = 2
         img = sitk.GetImageFromArray(mask)
         img.CopyInformation(image)
-        vois.append(SimpleNamespace(mask=img, indices_numpy=np.flatnonzero(mask)))
+        voxel_indices = np.flatnonzero(mask)
+        vois.append(
+            SimpleNamespace(
+                mask=img,
+                indices_numpy=voxel_indices,
+                scenario_indices=lambda order, indices=voxel_indices: [indices],
+            )
+        )
     engine = object.__new__(ParticleHongPencilBeamEngine)
     engine.voxel_sub_ix = selection
     engine._ct_grid = ct.grid
@@ -150,10 +157,6 @@ def test_multiscenario_resampling_retains_membership(monkeypatch):
         values.ravel()[indices] = 1
         arrays.append(values)
     results = iter(arrays)
-    monkeypatch.setattr(
-        "pyRadPlan.dose.engines._base.resample_ct",
-        lambda **kwargs: SimpleNamespace(cube_hu=target),
-    )
     monkeypatch.setattr(
         "pyRadPlan.dose.engines._base.resample_array", lambda *args, **kwargs: next(results)
     )

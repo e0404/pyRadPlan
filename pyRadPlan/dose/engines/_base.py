@@ -3,23 +3,24 @@
 import logging
 import warnings
 import time
-from typing import Any, ClassVar, Optional, Union, Literal
+from contextlib import contextmanager
+from typing import Annotated, Any, ClassVar, Optional, Union, Literal
 from abc import ABC, abstractmethod
 
 import SimpleITK as sitk
 import numpy as np
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from pyRadPlan.core import ConfigurableAlgorithm, Grid, ProgressReporter
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.resample import resample_array
-from pyRadPlan.ct import CT, resample_ct
+from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
-from pyRadPlan.scenarios import create_scenario_model, ScenarioModel
-from pyRadPlan.machines import load_from_name, Machine
+from pyRadPlan.scenarios import validate_scenario_model, ScenarioModel, ScenarioSet
+from pyRadPlan.machines import load_from_name, validate_machine, Machine
 from pyRadPlan.biology.models import (
     BiologicalModel,
     BioModelEvaluator,
@@ -34,6 +35,42 @@ from ...core.xp_utils import choose_array_api_namespace, choose_device
 
 
 logger = logging.getLogger(__name__)
+
+
+def _nominal_only_dimensions(scen_set: ScenarioSet) -> tuple[str, ...]:
+    """
+    Dimensions no computed scenario of ``scen_set`` perturbs.
+
+    A continuous dimension counts when every computed scenario realizes it at zero; its mean
+    (e.g. a systematic setup offset) is a perturbation an engine has to apply. A discrete
+    dimension counts when every computed scenario takes its nominal state.
+    """
+    computed = scen_set.computed_indices()
+    names = []
+    for dim in scen_set.dimensions:
+        identity = np.zeros(dim.num_components) if dim.kind == "continuous" else dim.nominal()
+        if np.all(np.isclose(scen_set.values(dim.name)[computed], identity)):
+            names.append(dim.name)
+    return tuple(names)
+
+
+def ct_phase_images(image: sitk.Image) -> list[sitk.Image]:
+    """
+    Split a CT-like image into one 3D image per CT phase.
+
+    Parameters
+    ----------
+    image : sitk.Image
+        A 3D image (one phase) or a 4D image with the phases along the last axis.
+
+    Returns
+    -------
+    list[sitk.Image]
+        The 3D image of every phase.
+    """
+    if image.GetDimension() == 4:
+        return [image[:, :, :, p] for p in range(image.GetSize()[3])]
+    return [image]
 
 
 def _check_bio_tissues(engine: Any, model: BiologicalModel, voxel_params: dict[str, Any]) -> None:
@@ -91,14 +128,23 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         ``"<quantity>:<variant>"`` (e.g. ``"let:LETd"``), independently of the machine.
     bio_scored_radiation_modes : tuple[str, ...] or None
         Radiation modes ``bio_scored_quantities`` are scored for; None for every mode.
+    supported_uncertainties : tuple[str, ...]
+        Names of the uncertainty dimensions the engine can apply. A scenario set realizing any
+        other dimension away from its nominal value is refused.
     select_voxels_in_scenarios : bool
         Whether to select voxels in scenarios.
-    mult_scen : Union[str, ScenarioModel]
-        The scenario model.
+    mult_scen : str or dict or ScenarioModel or ScenarioSet
+        The scenarios to compute: a scenario model (or its name / definition dictionary),
+        resolved to a set against the CT, or an explicit scenario set.
     bio_model : Union[str, dict]
         The biological model.
     dose_grid : Union[Grid,dict]
         The dose grid to use (struct with at least doseGrid.resolution.x/y/z set).
+    share_scenario_structure : bool
+        Store the influence matrices of several computed scenarios on one shared sparsity
+        pattern (:meth:`Dij.share_scenario_structure`): one row-index array for all scenarios
+        and quantities, explicit zeros where a scenario does not reach a voxel. Off by default;
+        building the union costs about half a second per ten million stored entries.
     """
 
     # Constant, Abstract properties
@@ -106,6 +152,14 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     name: ClassVar[str]
     possible_radiation_modes: ClassVar[list[str]] = NotImplemented
     is_dose_engine: ClassVar[bool] = True  # Helper variable
+    # Settings a calculation resolves for its own ct, cst and machine (defaults, validated or
+    # dropped models). They are restored afterwards, so they do not carry over to the next one.
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        "dose_grid",
+        "voxel_sub_ix",
+        "bio_model",
+        "mult_scen",
+    )
 
     # Whether this engine can evaluate a biological model into additive influence matrices.
     # Engines that only produce physical dose still store the model on the dij (so that a
@@ -116,11 +170,20 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     bio_scored_quantities: ClassVar[tuple[str, ...]] = ()
     bio_scored_radiation_modes: ClassVar[Optional[tuple[str, ...]]] = None
 
-    mult_scen: Union[str, ScenarioModel] = "nomScen"
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("ct_phase",)
+
+    mult_scen: Union[str, dict, ScenarioModel, ScenarioSet] = "nomScen"
     bio_model: Optional[Union[str, dict]] = None
     dose_grid: Optional[Union[Grid, dict]] = None
 
     select_voxels_in_scenarios: Optional[bool] = None
+    share_scenario_structure: Annotated[
+        bool,
+        Field(
+            description="Store several computed scenarios on one shared sparsity pattern "
+            "(one row-index array, explicit zeros where a scenario misses a voxel)"
+        ),
+    ] = False
 
     # selection of where to calculate / store dose, empty by default
     voxel_sub_ix: Optional[Any] = None
@@ -129,6 +192,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
     def __init__(self, pln: Union[Plan, dict] = None):
         # Assign default parameters declared as class-level annotations
         self._init_config_defaults()
+
+        # machine the plan specifies (name or loaded machine), see _resolve_machine
+        self._pln_machine: Optional[Union[str, Machine]] = None
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
@@ -149,6 +215,12 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._vdose_grid_mask = None  # voxel dose grid inside patient as logical mask
         self._robust_voxels_on_grid = None  # voxels to be computed in robustness scenarios
         self._tissue_classes = None  # tissue classes the dij's tissue_class_ix refers to
+        self._scenarios: Optional[ScenarioSet] = None  # scenario set of the current calculation
+        self._scenarios_override = None  # scenarios passed to a calc_* call
+        self._voxel_param_phases: list[int] = []  # CT phase behind each voxel parameter column
+        # CT phase whose SSDs feed the per-beam approximations (particle lateral cutoff,
+        # photon kernel selection): the lowest computed phase, as matRad uses the first one
+        self._reference_ct_phase = 0
 
         # Protected properties with private get access
         self._calc_dose_direct = False
@@ -164,7 +236,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         """
         Assign properties from a Plan object to the Dose Engine.
 
-        This includes the Scenario Model and the Biological Model, and any
+        This includes the Scenario Model, the Biological Model, machine base data the plan
+        carries (``pln.machine`` given as a loaded machine instead of a name), and any
         other properties that
         can be stored in the prop_dose_calc dictionary within the Plan object.
         This function will check if a property exists for the dose engine and,
@@ -180,9 +253,14 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         pln = validate_pln(pln)
 
+        if isinstance(pln.machine, str):
+            self._pln_machine = pln.machine
+        else:
+            self._pln_machine = validate_machine(pln.machine)
+
         # Set Scenario Model
-        if hasattr(pln, "mult_scen"):
-            self.mult_scen = pln.mult_scen
+        if hasattr(pln, "scenarios"):
+            self.mult_scen = pln.scenarios
 
         # Reported forward-dose scaling follows the plan's dose convention
         self._result_dose_factor = getattr(pln, "result_dose_factor", 1)
@@ -303,8 +381,30 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                 f"Biological influence quantities collide with dose-engine fields: {names}."
             )
 
+    @contextmanager
+    def _keep_settings(self):
+        """
+        Restore the settings a calculation fills in from its own ct, cst and machine.
+
+        ``_init_dose_calc`` resolves e.g. ``dose_grid`` (default resolution, dict),
+        ``voxel_sub_ix`` (default: all structures), the scenario model and the biological
+        model (validated, or dropped when the tissues do not fit) for the current patient.
+        Kept on the engine, they would carry over to the next calculation.
+        """
+        settings = {name: getattr(self, name) for name in self._per_calculation_settings}
+        try:
+            yield
+        finally:
+            for name, value in settings.items():
+                setattr(self, name, value)
+
     def calc_dose_forward(
-        self, ct: CT, cst: StructureSet, stf: SteeringInformation, w: np.ndarray
+        self,
+        ct: CT,
+        cst: StructureSet,
+        stf: SteeringInformation,
+        w: np.ndarray,
+        scenarios: Union[str, dict, ScenarioModel, ScenarioSet, None] = None,
     ) -> dict:
         """
         Perform a forward dose calculation.
@@ -322,12 +422,18 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             The steering information containing beam configurations.
         w : np.ndarray
             The weights to apply during dose calculation.
+        scenarios : str or dict or ScenarioModel or ScenarioSet, optional
+            Scenarios to compute instead of :attr:`mult_scen` for this call only.
 
         Returns
         -------
         dict
             Result quantities on the CT grid, keyed by quantity name, with the
-            weights already applied.
+            weights already applied. The unsuffixed results are those of the nominal
+            scenario (:meth:`Dij.nominal_scenario_index`); when the set
+            has several computed scenarios, every quantity also gets a
+            ``"<quantity>_scenario"`` list with one image per scenario slot
+            (see :meth:`Dij.compute_result_ct_grid`).
 
         Notes
         -----
@@ -349,7 +455,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             if w.size != stf.total_number_of_bixels:
                 raise ValueError("Number of weights does not match the number of bixels in stf.")
 
-            # Assign the weights to the stf
+            # Assign the weights to a copy, the caller's stf keeps its own
+            stf = stf.model_copy(deep=True)
             bixel_num = 0
             for beam in stf.beams:
                 for ray in beam.rays:
@@ -358,13 +465,15 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                         bixel_num += 1
 
         # Run dose calculation (direct flag is on)
-        dij = self._calc_dose(ct, cst, stf)
+        with self._keep_settings():
+            dij = self._calc_dose_with_scenarios(ct, cst, stf, scenarios)
 
         # Now do the forward weighting with w
         # This is done because the engine might store the individual fields
         result = dij.compute_result_ct_grid(
             np.ones(dij.total_num_of_bixels, dtype=np.float32),
             num_of_fractions=self._result_dose_factor,
+            scenarios=dij.scenarios is not None and dij.scenarios.num_computed > 1,
         )
 
         time_elapsed = time.time() - time_start
@@ -372,7 +481,13 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         return result
 
-    def calc_dose_influence(self, ct: CT, cst: StructureSet, stf: SteeringInformation) -> Dij:
+    def calc_dose_influence(
+        self,
+        ct: CT,
+        cst: StructureSet,
+        stf: SteeringInformation,
+        scenarios: Union[str, dict, ScenarioModel, ScenarioSet, None] = None,
+    ) -> Dij:
         """
         Calculate the set of dose/quantity influence matrices.
 
@@ -387,6 +502,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             The structure set containing volumes of interest (VOIs).
         stf : SteeringInformation
             The steering information containing beam configurations.
+        scenarios : str or dict or ScenarioModel or ScenarioSet, optional
+            Scenarios to compute instead of :attr:`mult_scen` for this call only.
 
         Returns
         -------
@@ -402,11 +519,78 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         time_start = time.time()
         self._calc_dose_direct = False
-        dij = self._calc_dose(ct, cst, stf)
+        with self._keep_settings():
+            dij = self._calc_dose_with_scenarios(ct, cst, stf, scenarios)
         time_elapsed = time.time() - time_start
         logger.info("Dose influence matrix calculation done in %.2f seconds.", time_elapsed)
 
         return dij
+
+    def _calc_dose_with_scenarios(
+        self, ct: CT, cst: StructureSet, stf: SteeringInformation, scenarios: Any
+    ) -> Dij:
+        """Run :meth:`_calc_dose` with ``scenarios`` overriding :attr:`mult_scen` if given."""
+        self._scenarios_override = scenarios
+        try:
+            return self._calc_dose(ct, cst, stf)
+        finally:
+            self._scenarios_override = None
+
+    def _resolve_scenarios(self, ct: CT) -> ScenarioSet:
+        """
+        Resolve the scenarios of this calculation to a set and check the engine supports it.
+
+        A model, model name or definition dictionary is resolved against ``ct`` (and, unless it
+        was passed to the calc call, stored back as :attr:`mult_scen`); a set is used as given.
+
+        Parameters
+        ----------
+        ct : CT
+            The CT the scenarios refer to.
+
+        Returns
+        -------
+        ScenarioSet
+            The scenario set; its flat indices are the slots of the dij containers.
+
+        Raises
+        ------
+        ValueError
+            The set realizes a dimension not in :attr:`supported_uncertainties` away from its
+            nominal value, or references a CT phase the CT does not have.
+        """
+        override = self._scenarios_override is not None
+        spec = self._scenarios_override if override else self.mult_scen
+
+        if isinstance(spec, ScenarioSet):
+            scen_set = spec
+        else:
+            # the same conversion of matRad's 1-based ctScenProb as Plan and the stf generators
+            model = validate_scenario_model(spec, ct)
+            if not override:
+                self.mult_scen = model
+            scen_set = model.scenarios(ct)
+
+        scen_set.require_supported(
+            tuple(self.supported_uncertainties) + _nominal_only_dimensions(scen_set)
+        )
+        num_phases = ct.num_of_ct_scen
+        phases = scen_set.ct_phases()
+        if phases.size and (phases.min() < 0 or phases.max() >= num_phases):
+            raise ValueError(
+                f"Scenario set references CT phases {sorted(set(phases.tolist()))}, but the CT "
+                f"has {num_phases} phase(s)"
+            )
+        return scen_set
+
+    @staticmethod
+    def _phase_voxel_lists(cst: StructureSet, num_phases: int) -> list[np.ndarray]:
+        """Voxels covered by the structures, one list per CT phase (a 3D structure covers all)."""
+        per_voi = [voi.scenario_indices(order="numpy") for voi in cst.vois]
+        return [
+            np.unique(np.concatenate([ix[p if len(ix) > 1 else 0] for ix in per_voi]))
+            for p in range(num_phases)
+        ]
 
     def set_overlap_priorities(self, cst: StructureSet, resample: bool = True) -> StructureSet:
         """Apply overlap priorities and, if enabled, resample the CST to the dose grid."""
@@ -563,11 +747,15 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         the CT and dose grids, checks machine and radiation mode consistency, creates a scenario
         model, and sets up arrays for bookkeeping. It also adjusts the isocenter internally for
         different dose grids and converts CT subscripts to world coordinates. Additionally, it
-        loads the machine file from the base data folder and performs voxel selection for dose
+        resolves the machine (the plan's loaded machine, or the machine file from the base data
+        folder, see :meth:`_resolve_machine`) and performs voxel selection for dose
         calculation.
         """
+        # Quantities are registered anew by every calculation
+        self._computed_quantities = []
 
-        self._ct_grid = Grid.from_sitk_image(ct.cube_hu)
+        ct_reference_image = ct_phase_images(ct.cube_hu)[0]
+        self._ct_grid = Grid.from_sitk_image(ct_reference_image)
 
         dij = {}
 
@@ -587,26 +775,28 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         machine = machine[0]
         radiation_mode = radiation_mode[0]
 
-        # ScenarioModel
-        if not isinstance(self.mult_scen, ScenarioModel):
-            self.mult_scen = create_scenario_model(self.mult_scen, ct)
+        self._scenarios = self._resolve_scenarios(ct)
+        computed = self._scenarios.computed_indices()
+        self._reference_ct_phase = (
+            int(self._scenarios.ct_phases()[computed].min()) if computed.size else 0
+        )
 
         # TODO: Add BioModel Support
         # if not np.isnan(self.bio_param["RBE"]):
         #     dij['RBE'] = self.bio_param['RBE']
 
         # store CT grid
-        dij["ct_grid"] = ct.grid
+        dij["ct_grid"] = Grid.from_sitk_image(ct_reference_image)
 
         if self.dose_grid is None:
             logger.info("Dose Grid not set. Using default resolution.")
-            self.dose_grid = ct.grid.resample({"x": 5.0, "y": 5.0, "z": 5.0})
+            self.dose_grid = self._ct_grid.resample({"x": 5.0, "y": 5.0, "z": 5.0})
 
         if not isinstance(self.dose_grid, Grid):
             try:
                 self.dose_grid = Grid.model_validate(self.dose_grid)
             except ValidationError:
-                self.dose_grid = ct.grid.resample(self.dose_grid["resolution"])
+                self.dose_grid = self._ct_grid.resample(self.dose_grid["resolution"])
 
         logger.info(
             "Dose Grid has Dimensions (%d,%d,%d) with resolution x=%f, y=%f, z=%f.",
@@ -622,7 +812,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         # Meta information for dij #TODO: Change dij Model in future
         dij["num_of_beams"] = len(stf.beams)
-        dij["num_of_scenarios"] = 1  # TODO: Add support for multiple scenarios
+        dij["num_of_scenarios"] = len(self._scenarios)
+        dij["scenarios"] = self._scenarios
         dij["num_of_rays_per_beam"] = [stf.beams[i].num_of_rays for i in range(len(stf.beams))]
         dij["total_num_of_bixels"] = int(
             sum([stf.beams[i].total_number_of_bixels for i in range(len(stf.beams))])
@@ -647,7 +838,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._init_voxel_selection(ct, cst)
 
         # Load machine file from base data folder
-        self._machine = self.load_machine(radiation_mode, machine)
+        self._machine = self._resolve_machine(radiation_mode, machine)
 
         self._resolve_bio_model(dij, radiation_mode, cst)
         self._calc_bio_dose, self._calc_let, self._use_let_kernel = False, False, False
@@ -656,6 +847,20 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             cst.get_tissue_data(resample_grid=self.dose_grid)
         )
 
+        # A structure set without per-phase structures serves every CT phase
+        if ct.num_of_ct_scen > 1:
+            for key in ("alphax", "betax", "tissue_class_ix"):
+                if dij[key].shape[1] == 1:
+                    dij[key] = np.repeat(dij[key], ct.num_of_ct_scen, axis=1)
+        # One column per voxel parameter set of the scenario set (today: per used CT phase)
+        phase_columns = [
+            int(round(float(values["ct_phase"][0]))) if "ct_phase" in values else 0
+            for values, _ in self._scenarios.voxel_param_sets()
+        ]
+        for key in ("alphax", "betax", "tissue_class_ix"):
+            if dij[key] is not None:
+                dij[key] = np.ascontiguousarray(dij[key][:, phase_columns])
+        self._voxel_param_phases = phase_columns
         # TODO: this function has not yet been implemented
         # structures that are selected here will be included in dose calculation over
         # the robust scenarios
@@ -679,12 +884,11 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
                     )
                 self.voxel_sub_ix = np.flatnonzero(ct_mask)
             else:
-                # Keep the existing multi-CT semantics; 4D indices are not 3D mask offsets.
-                self.voxel_sub_ix = np.unique(
-                    np.concatenate([voi.indices_numpy for voi in cst.vois])
-                )
+                tmp_vct_grid_scen = self._phase_voxel_lists(cst, ct.num_of_ct_scen)
+                self.voxel_sub_ix = np.unique(np.concatenate(tmp_vct_grid_scen))
 
-        tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
+        if single_ct or not automatic_selection:
+            tmp_vct_grid_scen = [np.asarray(self.voxel_sub_ix)] * ct.num_of_ct_scen
 
         if single_ct:
             # Only generated indices are known to be sorted and unique. Leave the user's
@@ -702,15 +906,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         if self._ct_grid == self.dose_grid:
             tmp_vdose_grid_scen = tmp_vct_grid_scen
-            resampled_ct = ct
         else:
-            resampled_ct = resample_ct(
-                ct=ct,
-                interpolator=sitk.sitkNearestNeighbor,
-                target_grid=self.dose_grid,
-            )
-            self.dose_grid = Grid.from_sitk_image(resampled_ct.cube_hu)
-
             for s in range(ct.num_of_ct_scen):
                 # Receive linear indices and grid locations from the dose grid
                 tmp_cube = np.zeros(ct.cube_dim[::-1], dtype=np.float32)
@@ -718,17 +914,12 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
                 interpolated_tmp_cube = resample_array(
                     tmp_cube,
-                    reference_image=ct.cube_hu,
+                    reference_grid=self._ct_grid,
                     interpolator=sitk.sitkNearestNeighbor,
-                    target_image=resampled_ct.cube_hu,
+                    target_grid=self.dose_grid,
                 )
 
-                tmp_vdose_grid_scen[s] = (
-                    # Nearest-neighbor resampling of a binary mask remains binary.
-                    np.flatnonzero(interpolated_tmp_cube)
-                    if single_ct
-                    else np.where(np.abs(np.round(interpolated_tmp_cube)).ravel().astype(bool))
-                )
+                tmp_vdose_grid_scen[s] = np.flatnonzero(interpolated_tmp_cube)
 
         # Get unique dose grid
         if single_ct:
@@ -872,8 +1063,48 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         )
         return list(self.bio_capability().scored)
 
+    def _resolve_machine(self, radiation_mode: str, machine_name: str) -> Machine:
+        """
+        Machine base data for a calculation of the steering information's beams.
+
+        The loaded machine the plan carries (``pln.machine`` given as a machine or its
+        dictionary), otherwise the machine file named by the beams, loaded with
+        :meth:`load_machine`.
+
+        Parameters
+        ----------
+        radiation_mode : str
+            Radiation mode of the beams.
+        machine_name : str
+            Machine name of the beams.
+
+        Raises
+        ------
+        ValueError
+            The plan's loaded machine does not match the radiation mode or machine name of the
+            beams.
+        """
+        machine = self._pln_machine
+        if machine is None or isinstance(machine, str):
+            return self.load_machine(radiation_mode, machine_name)
+
+        if machine.radiation_mode != radiation_mode or machine.name != machine_name:
+            raise ValueError(
+                f"The plan's machine '{machine.name}' ({machine.radiation_mode}) does not match "
+                f"the machine '{machine_name}' ({radiation_mode}) of the steering information."
+            )
+        return machine
+
     def _finalize_dose(self, dij: dict) -> Dij:
-        return validate_dij(dij)
+        result = validate_dij(dij)
+        if (
+            self.share_scenario_structure
+            and not self._calc_dose_direct
+            and result.scenarios is not None
+            and result.scenarios.num_computed > 1
+        ):
+            result = result.share_scenario_structure()
+        return result
 
     def _create_bio_evaluator(
         self, model: BiologicalModel, voxel_params: dict[str, Any]

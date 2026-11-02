@@ -17,6 +17,7 @@ from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, grouped_max
 from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d
 from pyRadPlan.core.xp_utils.helpers import to_namespace, to_numpy
 from pyRadPlan.core.xp_utils.typing import Array
+from pyRadPlan.scenarios import Scenario
 
 
 logger = logging.getLogger(__name__)
@@ -171,20 +172,17 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
         field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
 
-        # TODO: resampling should directly change object, not create new one?
+        # The resampled field shapes go into this beam's dose calculation only; the stf
+        # stays as the caller passed it
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
-            stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
-            )
-            beam_info["beam"]["rays"][j]["beamlets"][k] = (
-                stf.beams[i].rays[j].beamlets[k].model_dump()
-            )
+            field_shape = stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
+            beam_info["beam"]["rays"][j]["beamlets"][k] = field_shape.model_dump()
             # TODO: add mask as computed field?
             # Materialized: np.rot90 returns a negatively strided view, which the torch
             # backend cannot take, and the mask is converted once per ray below.
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
-                np.rot90(stf.beams[i].rays[j].beamlets[k].mask, k=-1)
+                np.rot90(field_shape.mask, k=-1)
             )
 
         field_grid = xp.asarray(field_grid)
@@ -286,7 +284,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
         center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
 
-        center_ssd = beam_info["beam"]["rays"][center]["SSD"]
+        center_ssd = beam_info["beam"]["rays"][center]["SSD"][self._reference_ct_phase]
 
         # get correct kernel for given SSD at central ray
         kernels_at_ssd = xp.asarray(kernel.get_kernels_at_ssd(center_ssd))
@@ -324,7 +322,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return beam_info
 
-    def _prepare_sampling_cluster_counts(self, beam_info: dict) -> list[int]:
+    def _prepare_sampling_cluster_counts(self, beam_info: dict) -> dict[tuple[float, float], int]:
         """Bound sampling groups per range scenario, covering all CT scenarios.
 
         Only finite, beam-valid depth extrema are needed: scalar range shifts,
@@ -352,9 +350,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 ends = xp.where(present, ends, xp.zeros_like(ends))
             extrema.append((ends, present))
         counts = []
-        for relative, absolute in zip(
-            self.mult_scen.rel_range_shift, self.mult_scen.abs_range_shift
-        ):
+        shifts = dict.fromkeys(
+            tuple(self._scenarios[i].values.get("range", (0.0, 0.0)))
+            for i in self._scenarios.computed_indices()
+        )
+        for absolute, relative in shifts:
             per_ct = []
             for ends, present in extrema:
                 shifted = (1 + xp.asarray(relative, device=self.device)) * ends + xp.asarray(
@@ -363,16 +363,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 groups = xp.astype(xp.clip(shifted, 0.0) / width, xp.int64)
                 per_ct.append(xp.where(present, xp.max(groups) + 1, xp.ones_like(groups[0])))
             counts.append(xp.max(xp.stack(per_ct)))
-        return to_numpy(xp.stack(counts)).tolist()
+        return dict(zip(shifts, to_numpy(xp.stack(counts)).tolist()))
 
-    def _extract_single_scenario_ray(self, ray: dict, scen_idx: int):
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
         """Attach the beam's prepared count to the range-adjusted photon ray."""
-        result = super()._extract_single_scenario_ray(ray, scen_idx)
+        result = super()._apply_scenario_to_ray(ray, scenario)
         if self.enable_dij_sampling:
             counts = ray["sampling_cluster_counts"]
-            result["sampling_num_clusters"] = (
-                counts[self.mult_scen.scen_num(scen_idx)] if counts is not None else None
-            )
+            shift = tuple(scenario.values.get("range", (0.0, 0.0)))
+            result["sampling_num_clusters"] = counts[shift] if counts is not None else None
         return result
 
     def _get_kernel_depth_parameters(self, curr_ray: dict, depths: Array) -> tuple:

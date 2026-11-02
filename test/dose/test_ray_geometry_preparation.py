@@ -187,9 +187,9 @@ def test_ssd_metadata_transferred_in_batches(engine, monkeypatch, rays):
     engine._compute_ssd({"beam": beam}, None)
     assert transfers == [(rays,), (rays,)]
     np.testing.assert_array_equal(
-        [ray["SSD"] for ray in beam["rays"]], to_numpy(d12 * xp.asarray(0.3, dtype=xp.float32))
+        [ray["SSD"][0] for ray in beam["rays"]], to_numpy(d12 * xp.asarray(0.3, dtype=xp.float32))
     )
-    assert all(isinstance(ray["SSD"], float) for ray in beam["rays"])
+    assert all(isinstance(ray["SSD"][0], float) for ray in beam["rays"])
 
 
 def test_empty_coordinate_array(engine):

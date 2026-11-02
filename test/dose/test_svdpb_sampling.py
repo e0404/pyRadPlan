@@ -9,6 +9,7 @@ import pytest
 from pyRadPlan.core.xp_utils import cupy_available, to_numpy
 from pyRadPlan.dose.engines._svdpb import PhotonPencilBeamSVDEngine
 from pyRadPlan.dose.engines._base_pencilbeam import PencilBeamEngineAbstract
+from pyRadPlan.scenarios import ScenarioSet, Scenario, RangeUncertainty
 
 
 @pytest.mark.parametrize("backend", ["numpy", "cupy", "array_api_strict"])
@@ -67,9 +68,14 @@ def sampling_engine(request):
         type="radius", delta_rad_depth=5.0, lat_cut_off=10.0, rel_dose_threshold=0.5
     )
     engine._rng = np.random.default_rng(77)
-    engine.mult_scen = SimpleNamespace(
-        rel_range_shift=np.array([0.0, 0.035, -0.03, -1.0, -1.5]),
-        abs_range_shift=np.array([0.0, -2.7, 4.999999, 0.0, 17.3]),
+    engine._scenarios = ScenarioSet.from_points(
+        [RangeUncertainty()],
+        {
+            "range": np.column_stack(
+                ([0.0, -2.7, 4.999999, 0.0, 17.3], [0.0, 0.035, -0.03, -1.0, -1.5])
+            )
+        },
+        probabilities=np.ones(5),
     )
     return engine
 
@@ -96,9 +102,8 @@ def test_sampling_bounds_match_all_ct_scenarios(sampling_engine, monkeypatch, pr
     monkeypatch.setattr("pyRadPlan.dose.engines._svdpb.to_numpy", download)
     counts = engine._prepare_sampling_cluster_counts(dict(rad_depths=depths, valid_coords=valid))
     assert transfers == [(5,)]
-    for scenario, (relative, absolute) in enumerate(
-        zip(engine.mult_scen.rel_range_shift, engine.mult_scen.abs_range_shift)
-    ):
+    for scenario in engine._scenarios:
+        absolute, relative = scenario.values["range"]
         expected = 1
         for depth, mask in zip(depths, valid):
             values = xp.take(depth, xp.nonzero(mask)[0], axis=0)
@@ -107,8 +112,8 @@ def test_sampling_bounds_match_all_ct_scenarios(sampling_engine, monkeypatch, pr
             )
             groups = xp.astype(xp.clip(shifted, 0.0) / width, xp.int64)
             expected = max(expected, int(xp.max(groups)) + 1)
-        assert counts[scenario] == expected
-        assert isinstance(counts[scenario], int)
+        assert counts[(absolute, relative)] == expected
+        assert isinstance(counts[(absolute, relative)], int)
 
 
 @pytest.mark.parametrize("empty", [True, False])
@@ -120,7 +125,7 @@ def test_sampling_empty_beam_bounds(sampling_engine, empty):
     counts = engine._prepare_sampling_cluster_counts(
         dict(rad_depths=[depths], valid_coords=[xp.zeros(depths.shape, dtype=xp.bool)])
     )
-    assert counts == [1] * 5
+    assert list(counts.values()) == [1] * 5
 
 
 @pytest.mark.parametrize("width", [0.0, -1.0, np.inf, np.nan])
@@ -155,21 +160,31 @@ def test_sampling_bound_rng_and_no_count_reduction(sampling_engine, monkeypatch,
     np.testing.assert_array_equal(to_numpy(sampled), np.ones(expected_rows.shape, np.float32))
 
 
-def test_sampling_count_follows_scenario_number(sampling_engine, monkeypatch):
-    """Attach counts using the same scenario-number mapping as range adjustments."""
+def test_sampling_count_follows_range_shift(sampling_engine, monkeypatch):
+    """Scenario IDs and CT phases do not index the per-range bound cache."""
     engine = sampling_engine
-    engine.mult_scen.scen_num = lambda index: {7: 1, 12: 0}[index]
     monkeypatch.setattr(
         PencilBeamEngineAbstract,
-        "_extract_single_scenario_ray",
-        lambda self, ray, index: ray.copy(),
+        "_apply_scenario_to_ray",
+        lambda self, ray, scenario: ray.copy(),
     )
-    ray = dict(sampling_cluster_counts=[11, 42])
-    assert engine._extract_single_scenario_ray(ray, 7)["sampling_num_clusters"] == 42
-    assert engine._extract_single_scenario_ray(ray, 12)["sampling_num_clusters"] == 11
+    ray = dict(sampling_cluster_counts={(0.0, 0.0): 11, (2.0, 0.03): 42})
+    shifted = Scenario(
+        index=7, probability=1, weight=1, values={"range": [2.0, 0.03], "ct_phase": [1]}
+    )
+    assert engine._apply_scenario_to_ray(ray, shifted)["sampling_num_clusters"] == 42
+    assert (
+        engine._apply_scenario_to_ray(ray, Scenario(index=12, probability=1, weight=1, values={}))[
+            "sampling_num_clusters"
+        ]
+        == 11
+    )
     assert "sampling_num_clusters" not in ray
     engine.enable_dij_sampling = False
-    assert engine._extract_single_scenario_ray({}, 7) == {}
+    assert (
+        engine._apply_scenario_to_ray({}, Scenario(index=12, probability=1, weight=1, values={}))
+        == {}
+    )
 
 
 def test_sampling_bounds_cached_after_beam_setup(sampling_engine, monkeypatch):

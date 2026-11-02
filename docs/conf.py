@@ -3,13 +3,12 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-# -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 import os
 import pathlib
 import shutil
 import sys
 
+from numpydantic import NDArray
 from sphinx.util import logging
 
 from pyRadPlan import __version__
@@ -20,11 +19,14 @@ import execute_examples  # noqa: E402 - shared with the standalone example runne
 
 logger = logging.getLogger(__name__)
 
+# -- Path setup ----------------------------------------------------------------
 print(os.path.abspath("../pyRadPlan"))
 sys.path.insert(0, os.path.abspath("../pyRadPlan"))  # Adjust to your source folder
 
+# -- Project information -----------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 project = "pyRadPlan"
-copyright = "2024, e0404"
+copyright = "2026, e0404"
 author = "e0404"
 
 version = __version__
@@ -50,7 +52,7 @@ autosummary_generate = True
 # The scripts in ../examples (jupytext percent format) are the source of the examples. When the
 # build starts (see setup() below) they are converted to notebooks without outputs in
 # tutorials/examples/ (ignored by git), and nothing is executed: neither Read the Docs nor CI run
-# the examples. Release commits instead carry executed notebooks there, written by
+# the examples. The executed notebooks of the last release stay tracked there, written by
 # `python docs/execute_examples.py --release`; they are rendered as is while their script is
 # unchanged (they opt out of execution in their metadata), and replaced by a conversion without
 # outputs, with a warning, once their script changed. PYRADPLAN_DOCS_NB_EXECUTION=cache is a
@@ -80,6 +82,56 @@ add_module_names = False
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 
+html_css_files = ["css/custom.css"]
+favicon_path = "_static/favicon/"
+
+html_context = {
+    "fav": favicon_path,
+}
+
+html_title = "pyRadPlan Documentation"
+
+html_theme_options = {
+    "logo": {
+        "image_light": "_static/logos/pyradplan_logo_full_landscape.svg",
+        "image_dark": "_static/logos/pyradplan_logo_full_landscape.svg",
+        "alt_text": "pyRadPlan",
+    },
+    "icon_links": [
+        {
+            "name": "pyRadPlan - GitHub",
+            "url": "https://github.com/e0404/pyRadPlan",
+            "icon": "fa-brands fa-github",
+        },
+        {
+            "name": "Medical Physics in Radiation Oncology Division - LinkedIn",
+            "url": "https://www.linkedin.com/showcase/medphys/",
+            "icon": "fa-brands fa-square-linkedin",
+        },
+        {
+            "name": "Radiotherapy Optimization Group - Website",
+            "url": "https://www.dkfz.de/en/medical-physics-in-radiation-oncology/radiotherapy-optimization",
+            "icon": "fa-solid fa-globe",
+        },
+    ],
+    "navigation_depth": 5,
+    "collapse_navigation": True,
+    "show_toc_level": 2,
+    "pygments_light_style": "default",
+    "pygments_dark_style": "stata-dark",
+}
+
+
+# -- Autodoc / typing options -------------------------------------------------
+def typehints_formatter(annotation, config):
+    """Render numpydantic arrays without treating them as standard Python generics."""
+    # NDArray's metaclass rejects partial subscripting. The generic-argument inference
+    # in sphinx-autodoc-typehints otherwise raises InvalidArgumentsError during the build.
+    if isinstance(annotation, type(NDArray)):
+        return ":py:class:`~numpydantic.NDArray`"
+    return None
+
+
 autodoc_type_aliases = {
     "npt.ArrayLike": "npt.ArrayLike",
 }
@@ -90,7 +142,7 @@ autodoc_default_options = {
 
 numpydoc_class_members_toctree = False
 
-# disable show json as it otherwises crashes the documentation building at the moment
+# disable show json as it otherwise crashes the documentation building at the moment
 autodoc_pydantic_model_show_json = False
 
 # disable config summaries for inner classes

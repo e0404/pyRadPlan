@@ -3,7 +3,8 @@
 Python translation of matRad's ``matRad_OptimizationWidget``: a per-VOI editor of
 the optimization objectives stored on the structure set (``cst``).  Each row binds
 one objective on one VOI; the user can change the objective type, its penalty
-(priority) and its numeric parameters, and add or remove objectives. A "Change all
+(priority), its quantity, its robustness (how it is combined over uncertainty scenarios) and its
+numeric parameters, and add or remove objectives. A "Change all
 quantities" selector above the table sets one quantity on the objectives of all VOIs at once.
 Constraints are intentionally out of scope because pyRadPlan currently ships objectives only.
 """
@@ -41,8 +42,14 @@ from pyRadPlan.optimization.objectives import (
 )
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
-from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
-from .._display_names import add_identified_item, result_key_labels, show_identifiers_when_open
+from .._base import AdaptiveDoubleSpinBox, CompactComboBox, WorkspaceWidget
+from .._display_names import (
+    add_identified_item,
+    result_key_labels,
+    robustness_display_name,
+    select_identifier,
+    show_identifiers_when_open,
+)
 from ..ai import ai_disabled_reason
 
 
@@ -54,6 +61,11 @@ _DEFAULT_OBJECTIVE_BY_TYPE = {
     "HELPER": "Squared Overdosing",
 }
 _FALLBACK_OBJECTIVE = "Squared Overdosing"
+
+_ROBUSTNESS_TOOLTIP = (
+    "How the objective is combined over the scenarios of the dose influence data; "
+    "'None' uses the nominal scenario only"
+)
 
 
 class OptimizationWidget(WorkspaceWidget):
@@ -82,9 +94,14 @@ class OptimizationWidget(WorkspaceWidget):
     _COL_OBJECTIVE = 1
     _COL_PENALTY = 2
     _COL_QUANTITY = 3
-    _COL_PARAMS = 4
-    _COL_REMOVE = 5
-    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Parameters", "")
+    _COL_ROBUSTNESS = 4
+    _COL_PARAMS = 5
+    _COL_REMOVE = 6
+    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Robustness", "Parameters", "")
+    #: Widths of the closed combo boxes, in characters; longer names are elided.
+    _OBJECTIVE_CHARACTERS = 9
+    _QUANTITY_CHARACTERS = 5
+    _ROBUSTNESS_CHARACTERS = 7
 
     def __init__(
         self,
@@ -264,7 +281,7 @@ class OptimizationWidget(WorkspaceWidget):
             voi_item.setFont(font)
         self._table.setItem(row, self._COL_VOI, voi_item)
 
-        cmb = QComboBox()
+        cmb = CompactComboBox(self._OBJECTIVE_CHARACTERS)
         cmb.addItems(self._available)
         cmb.setCurrentText(obj.name)
         cmb.currentTextChanged.connect(
@@ -280,7 +297,7 @@ class OptimizationWidget(WorkspaceWidget):
         )
         self._table.setCellWidget(row, self._COL_PENALTY, penalty)
 
-        cmb_quantity = QComboBox()
+        cmb_quantity = CompactComboBox(self._QUANTITY_CHARACTERS)
         show_identifiers_when_open(cmb_quantity)
         for identifier, quantity in get_available_quantities().items():
             add_identified_item(cmb_quantity, quantity.name, identifier, identifier)
@@ -293,6 +310,27 @@ class OptimizationWidget(WorkspaceWidget):
             )
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
+
+        cmb_robustness = CompactComboBox(self._ROBUSTNESS_CHARACTERS)
+        cmb_robustness.setToolTip(_ROBUSTNESS_TOOLTIP)
+        show_identifiers_when_open(cmb_robustness)
+        options = type(obj).available_robustness()
+        # A scenario-aware objective has a single option, which applies regardless of the
+        # value stored on it.
+        if len(options) > 1 and obj.robustness not in options:
+            options = [*options, obj.robustness]
+        for option in options:
+            add_identified_item(cmb_robustness, robustness_display_name(option), option, option)
+        if len(options) > 1:
+            select_identifier(cmb_robustness, obj.robustness)
+        else:
+            cmb_robustness.setEnabled(False)
+        cmb_robustness.currentIndexChanged.connect(
+            lambda idx, c=cmb_robustness, v=voi_idx, o=obj_idx: self._on_robustness_changed(
+                v, o, c.itemData(idx)
+            )
+        )
+        self._table.setCellWidget(row, self._COL_ROBUSTNESS, cmb_robustness)
 
         self._table.setCellWidget(
             row, self._COL_PARAMS, self._build_param_editor(voi_idx, obj_idx, obj)
@@ -541,8 +579,11 @@ class OptimizationWidget(WorkspaceWidget):
         if objectives[obj_idx].name == name:
             return
         priority = objectives[obj_idx].priority
+        robustness = objectives[obj_idx].robustness
         new_obj = get_objective(name)
         new_obj.priority = priority
+        if robustness in type(new_obj).available_robustness():
+            new_obj.robustness = robustness
         objectives[obj_idx] = new_obj
         self._write_objectives(cst, voi_idx, objectives)
 
@@ -573,6 +614,22 @@ class OptimizationWidget(WorkspaceWidget):
             objectives[obj_idx].quantity = quantity
         except (ValueError, TypeError) as exc:
             self._set_status(f"Rejected quantity {quantity!r}: {exc}")
+            return
+        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+
+    def _on_robustness_changed(self, voi_idx: int, obj_idx: int, robustness: str) -> None:
+        cst = self._ws.cst
+        if cst is None:
+            return
+        objectives = self._iter_objectives(cst.vois[voi_idx])
+        if not (0 <= obj_idx < len(objectives)):
+            return
+        if objectives[obj_idx].robustness == robustness:
+            return
+        try:
+            objectives[obj_idx].robustness = robustness
+        except (ValueError, TypeError) as exc:
+            self._set_status(f"Rejected robustness {robustness!r}: {exc}")
             return
         self._write_objectives(cst, voi_idx, objectives, rebuild=False)
 

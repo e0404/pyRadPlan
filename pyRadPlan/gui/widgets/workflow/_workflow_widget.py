@@ -40,7 +40,7 @@ from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.quantities import get_available_quantities
 from .._base import WorkspaceWidget, Worker
-from .._display_names import bio_model_display_name, quantity_display_name
+from .._display_names import SCENARIO_LABELS_KEY, bio_model_display_name, quantity_display_name
 from .._tissue_params import (
     load_machine_quietly,
     plan_dose_engine,
@@ -51,6 +51,11 @@ from .._tissue_params import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Suffix of the per-scenario result lists (see ``Dij.compute_result_ct_grid``).
+_SCENARIO_SUFFIX = "_scenario"
+#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
+_RESERVED_TAGS = ("beam", "scenario")
 
 
 def _human_name(fmt: str, importer_cls) -> str:
@@ -69,9 +74,11 @@ def _build_load_filter() -> str:
             importer_cls = get_importer(fmt)
         except ValueError:
             continue  # export-only format
-        patterns = " ".join(f"*{ext}" for ext in importer_cls.extensions)
+        # GTK file dialogs (Linux) match patterns case-sensitively.
+        exts = [e for ext in importer_cls.extensions for e in dict.fromkeys((ext, ext.upper()))]
+        patterns = " ".join(f"*{ext}" for ext in exts)
         per_format.append(f"{_human_name(fmt, importer_cls)} ({patterns})")
-        all_patterns.extend(f"*{ext}" for ext in importer_cls.extensions)
+        all_patterns.extend(f"*{ext}" for ext in exts)
 
     entries = [f"All supported ({' '.join(sorted(set(all_patterns)))})", *per_format]
     entries.append("All files (*)")
@@ -709,6 +716,12 @@ class WorkflowWidget(WorkspaceWidget):
         """Prompt for and load a DICOM (or structured image) folder."""
         self._on_load_folder()
 
+    def load_phantom(self, name: str) -> None:
+        """Load the bundled phantom *name* (see :func:`pyRadPlan.io.available_phantoms`)."""
+        from pyRadPlan.io import phantom_path  # noqa: PLC0415
+
+        self._load_into_workspace(phantom_path(name), busy_text=f"Loading {name}…")
+
     def load_dij(self) -> None:
         """Prompt for and load a precomputed dose-influence matrix (.mat)."""
         self._on_load_dij()
@@ -1266,7 +1279,12 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
+            scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
+            result = dij.compute_result_ct_grid(
+                weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
+            )
+            if scenarios:
+                result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -1354,11 +1372,21 @@ class WorkflowWidget(WorkspaceWidget):
                     beam.iso_center = iso_center
 
             # Already returns the weight-applied result quantities on the CT grid.
-            return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            if any(key.endswith(_SCENARIO_SUFFIX) for key in new_result):
+                new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
+            return recalc_stf, new_result
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
-            result = dict(prev_result)
+            # Per-scenario results of the previous optimization no longer match the new
+            # doses; the forward calculation brings its own when the plan has scenarios.
+            result = {
+                key: val
+                for key, val in prev_result.items()
+                if self._is_tagged(key)
+                or not (key.endswith(_SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
+            }
             result.update(new_result)
             if recalc_stf is stf:
                 self._ws.result = result
@@ -1388,6 +1416,13 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
+        if tag in _RESERVED_TAGS:
+            QMessageBox.warning(
+                self,
+                "Save Result",
+                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
+            )
+            return
 
         result: dict[str, Any] = dict(self._ws.result or {})
         # Snapshot the current active quantities: every key that is not itself

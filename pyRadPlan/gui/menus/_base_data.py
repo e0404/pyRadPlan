@@ -1,7 +1,9 @@
 """Base Data menu for the pyRadPlan main window.
 
 Lists and manages the base data files (machines, RBE tables, stopping power tables)
-shipped with pyRadPlan and added by the user (see :mod:`pyRadPlan.core._base_data`).
+shipped with pyRadPlan, added by the user or in shared folders (see
+:mod:`pyRadPlan.core._base_data`). Phantoms are base data too; they are listed in the
+File menu instead.
 Added files are found by name like the shipped ones, e.g. in the plan editor's machine
 and biological model selections.
 """
@@ -42,10 +44,11 @@ from pyRadPlan.core import (
     get_data_dir,
     list_base_data,
     remove_base_data_file,
+    shared_base_data_dirs,
     user_base_data_dir,
 )
 
-_SOURCE_LABELS = {"bundled": "pyRadPlan", "user": "User"}
+_SOURCE_LABELS = {"bundled": "pyRadPlan", "user": "User", "shared": "Shared"}
 
 
 def _describe_machine(entry: BaseDataFile) -> tuple[list[str], str]:
@@ -108,7 +111,8 @@ _VIEWS = (
 )
 
 
-def _open_folder(folder: Path) -> None:
+def open_folder_in_browser(folder: Path) -> None:
+    """Show ``folder`` in the system's file browser, creating it if needed."""
     folder.mkdir(parents=True, exist_ok=True)
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
@@ -239,10 +243,12 @@ class _KindTab(QWidget):
 
         layout = QVBoxLayout(self)
         user_dir = user_base_data_dir(view.kind)
-        folders = QLabel(
-            f"Shipped with pyRadPlan: {bundled_base_data_dir(view.kind)}<br>"
-            f"Added by you: {user_dir}"
-        )
+        lines = [
+            f"Shipped with pyRadPlan: {bundled_base_data_dir(view.kind)}",
+            f"Added by you: {user_dir}",
+            *(f"Shared: {folder}" for folder in shared_base_data_dirs(view.kind)),
+        ]
+        folders = QLabel("<br>".join(lines))
         folders.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         folders.setWordWrap(True)
         layout.addWidget(folders)
@@ -269,7 +275,9 @@ class _KindTab(QWidget):
         buttons.addStretch()
         self.btn_open = QPushButton("Open Folder")
         self.btn_open.setToolTip(str(user_dir))
-        self.btn_open.clicked.connect(lambda: _open_folder(user_base_data_dir(view.kind)))
+        self.btn_open.clicked.connect(
+            lambda: open_folder_in_browser(user_base_data_dir(view.kind))
+        )
         buttons.addWidget(self.btn_open)
         layout.addLayout(buttons)
 
@@ -408,7 +416,9 @@ class BaseDataMenu(QMenu):
 
         self.addSeparator()
         self._act_open_folder = self.addAction("Open Data Folder")
-        self._act_open_folder.triggered.connect(lambda checked=False: _open_folder(get_data_dir()))
+        self._act_open_folder.triggered.connect(
+            lambda checked=False: open_folder_in_browser(get_data_dir())
+        )
         self.aboutToShow.connect(lambda: self._act_open_folder.setToolTip(str(get_data_dir())))
 
     def add(self, kind: str, filename: Optional[str] = None) -> Optional[Path]:
