@@ -27,6 +27,7 @@ class VoxelWorstCase(RobustnessOperator):
     """
 
     name = "voxel_worst_case"
+    label = "Voxel-wise worst case"
     aliases = ("VWWC",)
     matrad_name = "VWWC"
 
@@ -87,6 +88,7 @@ class VoxelWorstCaseInverted(VoxelWorstCase):
     """
 
     name = "voxel_worst_case_inverted"
+    label = "Voxel-wise worst case (inverted)"
     aliases = ("VWWC_INV",)
     matrad_name = "VWWC_INV"
 

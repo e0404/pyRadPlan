@@ -36,7 +36,7 @@ class RandomScenarioModel(ScenarioModel):
         Seed of the random generator.
     """
 
-    name: ClassVar[str] = "Randomly sampled Scenarios"
+    name: ClassVar[str] = "Random Samples"
     short_name: ClassVar[str] = "rndScen"
     legacy_aliases: ClassVar[dict[str, str]] = {"includeNominalScenario": "include_nominal"}
 
