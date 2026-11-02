@@ -81,7 +81,9 @@ class Worker(QObject):
                 with observe_control(self._control):
                     result = self._fn(*self._args, **self._kwargs)
             self.finished.emit(result)
-        except Exception as exc:  # noqa: BLE001
+        # SystemExit too: uncaught it would only end this run, without a signal, and the GUI
+        # would wait for the computation forever.
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
             self.error.emit(exc)
         finally:
             # Release the callable (and anything captured in its closure, e.g.

@@ -254,8 +254,10 @@ def test_scenario_combo_wired_to_mult_scen(qapp):
     items = [widget._cmb_scenario.itemText(i) for i in range(widget._cmb_scenario.count())]
     assert items[0] == "nomScen"
     assert {"wcScen", "impScen", "rndScen"} <= set(items)
-    # unimplemented scenario models are listed but not selectable
-    assert not widget._cmb_scenario.model().item(items.index("wcScen")).isEnabled()
+    assert len(items) == len(set(items))
+    # implemented scenario models are selectable
+    for name in ("wcScen", "impScen", "rndScen"):
+        assert widget._cmb_scenario.model().item(items.index(name)).isEnabled()
 
     widget._on_apply()
     assert ws.pln.mult_scen.short_name == "nomScen"
@@ -2853,3 +2855,200 @@ def test_optimization_keeps_a_live_solver_instance(qapp):
     widget._txt_gantry.setText("0 90")
     widget._on_apply()
     assert ws.pln.prop_opt["solver"] is solver
+
+
+# ----------------------------------------------------------------------
+# Scenario model configuration ("…" button next to the scenario model)
+# ----------------------------------------------------------------------
+
+
+def test_scenario_config_dialog_round_trip(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    dialog = ConfigFormDialog(
+        WorstCaseScenarioModel, initial={"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    )
+    assert dialog.windowTitle() == "Configure"
+    assert dialog.form._editors["setup.sd"].text() == "1 1 1"
+    assert {"range.rel_sd", "range.abs_sd", "ct_phase.phases", "combinations"} <= set(
+        dialog.form._editors
+    )
+    dialog.form._editors["range.rel_sd"].setValue(0.0)
+    dialog.form._set_value("num_setup_grid_points", 1)
+    assert dialog.values() == {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 1.0, 1.0)},
+        "range": {"rel_sd": 0.0},
+        "num_setup_grid_points": 1,
+    }
+
+
+def test_apply_writes_the_scenario_model_configuration(qapp):
+    widget, ws = _make_widget()
+    widget._cmb_scenario.setCurrentText("wcScen")
+    # simulate values confirmed in the [...] config popup
+    widget._scenario_props["wcScen"] = {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 2.0, 3.0)},
+        "range": {"rel_sd": 0.0},
+    }
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+
+    model = ws.pln.scenarios
+    assert model.short_name == "wcScen"
+    assert model.wc_sigma == 2.0
+    assert model.setup.sd == (1.0, 2.0, 3.0)
+    assert model.range.rel_sd == 0.0
+    assert model.range.abs_sd == 1.0  # untouched parameters keep their defaults
+    assert not widget.has_pending_changes()
+
+    # Re-applying without edits keeps the plan's model (and its generated set)
+    first = ws.pln.scenarios
+    first.scenarios()
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+    assert ws.pln.scenarios == first
+    assert ws.pln.scenarios.scenarios() is not None
+
+
+def test_do_update_restores_the_scenario_configuration_from_pln(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        scenarios={"model": "wcScen", "wc_sigma": 2.0, "shift_sd": (1.0, 1.0, 1.0)}
+    )
+
+    assert widget._cmb_scenario.currentText() == "wcScen"
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    assert not widget.has_pending_changes()
+
+    ws.pln = PhotonPlan(scenarios="wcScen")
+    assert widget._scenario_props["wcScen"] == {}
+    assert not widget.has_pending_changes()
+
+
+def test_discard_restores_the_scenario_configuration(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(scenarios={"model": "wcScen", "wc_sigma": 2.0})
+
+    widget._scenario_props["wcScen"] = {"wc_sigma": 3.0}
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+    assert widget._btn_scenario_config.styleSheet() != ""
+
+    widget._btn_discard.click()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert not widget.has_pending_changes()
+    assert widget._btn_scenario_config.styleSheet() == ""
+
+
+def test_scenario_config_button_is_advanced(qapp):
+    widget, _ = _make_widget()
+    widget.set_ui_mode(UIMode.EDUCATIONAL)
+    assert _locked(widget._btn_scenario_config)
+    widget.set_ui_mode(UIMode.DEFAULT)
+    assert not _locked(widget._btn_scenario_config)
+
+
+def test_scenario_config_button_stores_the_dialog_values(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    widget, _ = _make_widget()
+    widget._cmb_scenario.setCurrentText("wcScen")
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 2.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert widget.has_pending_changes()
+
+    # cancelling keeps the stored values
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 9.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+
+    # a model name without a class has nothing to configure
+    widget._cmb_scenario.addItem("noSuchModel")
+    widget._cmb_scenario.setCurrentText("noSuchModel")
+    widget._on_scenario_config()
+    assert "noSuchModel" not in widget._scenario_props
+
+
+def test_scenario_overrides_drop_dimensions_without_parameters():
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    model = WorstCaseScenarioModel(setup={}, range={"rel_sd": 0.0}, wc_sigma=2.0)
+    assert PlanWidget._scenario_overrides(model) == {"wc_sigma": 2.0, "range": {"rel_sd": 0.0}}
+
+
+def _explicit_scenario_plan():
+    from pyRadPlan.scenarios import ScenarioSet, SetupUncertainty
+
+    scenario_set = ScenarioSet.from_points(
+        dimensions=[SetupUncertainty()], points={"setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]}
+    )
+    return PhotonPlan(scenarios=scenario_set), scenario_set
+
+
+def test_apply_keeps_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    pln, scenario_set = _explicit_scenario_plan()
+    ws.pln = pln
+
+    assert widget._cmb_scenario.currentText() == "explicit"
+    assert not widget._btn_scenario_config.isEnabled()
+    assert not widget.has_pending_changes()
+
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+
+    assert ws.pln.scenarios.short_name == "explicit"
+    assert ws.pln.scenarios.scenario_set == scenario_set
+    assert ws.pln.num_of_fractions == widget._spn_fractions.value()
+    assert widget._cmb_scenario.currentText() == "explicit"
+
+
+def test_selecting_another_model_replaces_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+
+    widget._cmb_scenario.setCurrentText("wcScen")
+    assert widget._btn_scenario_config.isEnabled()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+    assert ws.pln.scenarios.short_name == "wcScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+
+
+def test_discard_returns_to_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, scenario_set = _explicit_scenario_plan()
+
+    widget._cmb_scenario.setCurrentText("wcScen")
+    widget._btn_discard.click()
+
+    assert widget._cmb_scenario.currentText() == "explicit"
+    assert not widget.has_pending_changes()
+    assert ws.pln.scenarios.scenario_set == scenario_set
+
+
+def test_explicit_scenario_entry_leaves_with_its_plan(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = PhotonPlan()
+    assert widget._cmb_scenario.currentText() == "nomScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._btn_scenario_config.isEnabled()
+
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = None
+    assert widget._cmb_scenario.currentText() == "nomScen"
+    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._build_plan().scenarios.short_name == "nomScen"

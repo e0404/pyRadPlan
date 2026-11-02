@@ -637,7 +637,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 dij["ray_num"][b] = b
                 dij["bixel_num"][b] = b
 
-            self._write_patient_file(ct)
+            self._write_patient_file(self._scenario_ct(ct))
         else:
             dij = self._read_external(dij)
             # set dose outside of the patient to 0
@@ -754,15 +754,13 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         for q_name in names:
             container_names = [q_name, q_name + "_var"] if with_variance else [q_name]
             for name in container_names:
-                dij[name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+                dij[name] = np.empty((len(self._scenarios),), dtype=object)
 
                 # Loop over all scenarios and preallocate quantity containers
-                for i in range(self.mult_scen.scen_mask.size):
-                    # Only if there is a scenario we will allocate
-                    if self.mult_scen.scen_mask.flat[i]:
-                        dij[name].flat[i] = np.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                        )
+                for i in self._scenarios.computed_indices():
+                    dij[name].flat[i] = np.zeros(
+                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                    )
 
                 self._computed_quantities.append(name)
 

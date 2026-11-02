@@ -28,6 +28,15 @@ optimization.problems
    optimization_problems
 
 
+optimization.robustness
+-----------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   optimization_robustness
+
+
 optimization.solvers
 ---------------------
 

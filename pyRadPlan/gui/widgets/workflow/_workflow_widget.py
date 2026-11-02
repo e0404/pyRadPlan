@@ -40,7 +40,7 @@ from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.quantities import get_available_quantities
 from .._base import WorkspaceWidget, Worker
-from .._display_names import bio_model_display_name, quantity_display_name
+from .._display_names import SCENARIO_LABELS_KEY, bio_model_display_name, quantity_display_name
 from .._tissue_params import (
     load_machine_quietly,
     plan_dose_engine,
@@ -51,6 +51,11 @@ from .._tissue_params import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Suffix of the per-scenario result lists (see ``Dij.compute_result_ct_grid``).
+_SCENARIO_SUFFIX = "_scenario"
+#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
+_RESERVED_TAGS = ("beam", "scenario")
 
 
 def _human_name(fmt: str, importer_cls) -> str:
@@ -1214,6 +1219,17 @@ class WorkflowWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _scenario_result_keys(cst: Any) -> list[str]:
+        """Results kept per scenario: the physical dose and what the objectives evaluate."""
+        keys = ["physical_dose"]
+        for voi in getattr(cst, "vois", None) or []:
+            for objective in getattr(voi, "objectives", None) or []:
+                identifier = getattr(objective, "quantity", None)
+                if isinstance(identifier, str) and identifier not in keys:
+                    keys.append(identifier)
+        return keys
+
+    @staticmethod
     def _biological_objectives(cst: Any) -> list[str]:
         """``"<structure>: <quantity>"`` of each objective on a biological quantity."""
         quantities = get_available_quantities()
@@ -1274,7 +1290,15 @@ class WorkflowWidget(WorkspaceWidget):
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             weights = fluence_optimization(ct, cst, stf, dij, pln)
-            result = dij.compute_result_ct_grid(weights, num_of_fractions=pln.result_dose_factor)
+            scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
+            result = dij.compute_result_ct_grid(
+                weights,
+                num_of_fractions=pln.result_dose_factor,
+                scenarios=scenarios,
+                scenario_quantities=self._scenario_result_keys(cst),
+            )
+            if scenarios:
+                result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -1362,11 +1386,27 @@ class WorkflowWidget(WorkspaceWidget):
                     beam.iso_center = iso_center
 
             # Already returns the weight-applied result quantities on the CT grid.
-            return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            keep = self._scenario_result_keys(cst)
+            new_result = {
+                key: value
+                for key, value in new_result.items()
+                if not key.endswith(_SCENARIO_SUFFIX) or key.removesuffix(_SCENARIO_SUFFIX) in keep
+            }
+            if any(key.endswith(_SCENARIO_SUFFIX) for key in new_result):
+                new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
+            return recalc_stf, new_result
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
-            result = dict(prev_result)
+            # Per-scenario results of the previous optimization no longer match the new
+            # doses; the forward calculation brings its own when the plan has scenarios.
+            result = {
+                key: val
+                for key, val in prev_result.items()
+                if self._is_tagged(key)
+                or not (key.endswith(_SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
+            }
             result.update(new_result)
             if recalc_stf is stf:
                 self._ws.result = result
@@ -1396,6 +1436,13 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
+        if tag in _RESERVED_TAGS:
+            QMessageBox.warning(
+                self,
+                "Save Result",
+                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
+            )
+            return
 
         result: dict[str, Any] = dict(self._ws.result or {})
         # Snapshot the current active quantities: every key that is not itself
