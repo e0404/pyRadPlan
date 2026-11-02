@@ -1,0 +1,30 @@
+# The pyRadPlan GUI as a JupyterHub session: the image of Dockerfile plus jupyter-server-proxy's
+# standalone proxy, which logs the user in through JupyterHub and forwards the session's
+# Xpra web client. JupyterHub starts hub-session.sh as the session server; see README.md.
+#
+# Build on top of a pyradplan-web image, with this directory as the context:
+#   docker build -f packaging/container/Dockerfile.hub -t pyradplan-hub \
+#       --build-arg BASE_IMAGE=ghcr.io/e0404/pyradplan-web:0.7.0 packaging/container
+ARG BASE_IMAGE=pyradplan-web
+FROM ${BASE_IMAGE}
+
+USER 0
+# The JupyterHub version matches the hub of the Zero to JupyterHub chart (4.4.x: JupyterHub 5.5).
+RUN pip install --no-cache-dir "jupyter-server-proxy[standalone]==4.6.0" "jupyterhub==5.5.4"
+# The entrypoint of this checkout, so that older base images learn XPRA_BIND.
+COPY entrypoint.sh hub-session.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/hub-session.sh
+USER 10001
+
+ARG VERSION=dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="pyRadPlan JupyterHub session" \
+      org.opencontainers.image.description="The pyRadPlan GUI streamed to a web browser with Xpra, as a JupyterHub session. For research and education only, not for clinical use. License notices: /usr/share/doc/pyradplan-web" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+
+# JupyterHub's KubeSpawner passes the session command as the container's arguments, so the
+# entrypoint of the base image must not wrap it.
+ENTRYPOINT []
+CMD ["hub-session.sh"]
+EXPOSE 8888

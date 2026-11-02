@@ -1,0 +1,92 @@
+# Zero to JupyterHub (Helm chart 4.4.x, JupyterHub 5.5) serving pyRadPlan sessions of the
+# pyradplan-hub image (Dockerfile.hub), installed into a single namespace without cluster-wide
+# permissions. Every user gets a pod of their own with the GUI in the browser; see README.md.
+#
+#   helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
+#   helm upgrade --install pyradplan-hub jupyterhub/jupyterhub --version 4.4.4 \
+#       --namespace <namespace> --values jupyterhub-values.yaml
+#
+# Replace the values marked CHANGE-ME first.
+
+hub:
+  config:
+    JupyterHub:
+      # Users log in with a name of their choice and the shared password; whoever knows the
+      # password can log in as any user, so this suits courses and trials, not more.
+      authenticator_class: shared-password
+      # Sessions at the same time; more users get "Active user limit exceeded" and can retry.
+      # Keep it within the namespace quota: each session may use 2 CPUs and 16 GiB (below).
+      active_server_limit: 6
+    SharedPasswordAuthenticator:
+      user_password: CHANGE-ME-at-least-8-characters
+      # The user "admin" logs in with this password and can watch and stop all sessions
+      # (Admin page of the hub). At least 32 characters.
+      admin_password: CHANGE-ME-at-least-32-characters-long-admin-password
+    Authenticator:
+      admin_users: [admin]
+      allow_all: true
+  # The hub keeps its state in a SQLite file on a 1 GiB volume of the default storage class.
+  # Without a storage class use "type: sqlite-memory": a restarted hub then forgets the
+  # running sessions.
+  db:
+    type: sqlite-pvc
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
+
+proxy:
+  # Reached through the ingress below, not a load balancer of its own.
+  service:
+    type: ClusterIP
+  chp:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  hosts:
+    - CHANGE-ME.example.org
+
+singleuser:
+  image:
+    name: ghcr.io/e0404/pyradplan-hub
+    tag: "CHANGE-ME"
+  # The session server of the image in place of jupyterhub-singleuser. The session ends when
+  # the GUI is closed; the hub then offers to start a new one.
+  cmd: hub-session.sh
+  uid: 10001
+  fsGid: 10001
+  # Each session starts with a fresh home directory.
+  storage:
+    type: none
+  cpu:
+    guarantee: 1
+    limit: 2
+  memory:
+    guarantee: 8G
+    limit: 16G
+  # The default blocks the cloud metadata server with a privileged init container; the
+  # network policy of the sessions blocks it as well.
+  cloudMetadata:
+    blockWithIptables: false
+
+# Stops sessions whose browser tab has been closed for 30 minutes.
+cull:
+  enabled: true
+  timeout: 1800
+  every: 300
+
+# Parts that need cluster-wide permissions (the user scheduler's ClusterRole) or run on every
+# node (the image pullers).
+scheduling:
+  userScheduler:
+    enabled: false
+  userPlaceholder:
+    enabled: false
+prePuller:
+  hook:
+    enabled: false
+  continuous:
+    enabled: false
