@@ -726,3 +726,24 @@ def test_overlay_meta_covers_per_scenario_lists():
     assert labels["rbe_x_dose_scenario 0"] == "RBE-weighted Dose"
     assert units["rbe_x_dose_scenario 1"] == "Gy (RBE)"
     assert labels["physical_dose_beam 0"] == "Dose"
+
+
+def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photons):
+    from types import SimpleNamespace
+
+    ct, cst, _ = test_data_photons
+    dose = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
+    ws = _make_workspace(ct, cst, {"physical_dose": dose, "physical_dose_scenario": [dose, dose]})
+    widget = ViewingWidget(ws)
+    combo = widget.vis_widget.quantity_selector.component_combo
+
+    ws.dij = SimpleNamespace(scenario_labels=lambda: ["from dij 0", "from dij 1"])
+    assert combo.itemText(2) == "scenario 1: from dij 1"
+
+    ws.result = {
+        "physical_dose": dose,
+        "physical_dose_scenario": [dose, dose],
+        "scenario_labels": ("from result 0", "from result 1"),
+    }
+    assert combo.itemText(2) == "scenario 1: from result 1"
+    assert "scenario_labels" not in widget.quantity_widget.get_available_quantities()

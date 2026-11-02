@@ -248,3 +248,17 @@ def test_replaced_table_metadata_is_reread(data_dir, tmp_path):
     assert os.stat(target).st_size == stat.st_size
     classes = TabulatedAlphaBetaModel.quantity_table_tissue_classes("RBEtable_x.mat")
     assert classes[0].alpha_x == 0.3
+
+
+@pytest.mark.parametrize("names", [["sp_mine.mat", "SP_Mine.mat"], ["SP_Mine.mat", "sp_mine.mat"]])
+def test_names_differing_in_case_are_listed_in_a_fixed_order(names):
+    from types import SimpleNamespace
+
+    from pyRadPlan.core._base_data import _folder_entries, get_base_data_kind
+
+    folder = SimpleNamespace(
+        is_dir=lambda: True,
+        iterdir=lambda: [SimpleNamespace(name=name, is_file=lambda: True) for name in names],
+    )
+    entries = _folder_entries(get_base_data_kind("stopping_power_tables"), folder)
+    assert [entry.name for entry in entries] == ["SP_Mine.mat", "sp_mine.mat"]

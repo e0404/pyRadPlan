@@ -34,6 +34,8 @@ FULL_COMPONENT = "full"
 _INDEXED_KEY = re.compile(r"^(?P<stem>.+) (?P<index>\d+)$")
 _BEAM_SUFFIX = "_beam"
 _SCENARIO_SUFFIX = "_scenario"
+#: Result entry naming the scenarios of the result's ``"<key>_scenario"`` lists.
+SCENARIO_LABELS_KEY = "scenario_labels"
 
 #: Component kinds of a :class:`ResultGroup` besides :data:`FULL_COMPONENT`.
 BEAM_COMPONENT = "beam"

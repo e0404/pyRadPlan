@@ -62,6 +62,11 @@ class RobustnessOperator(ABC):
     back-project each scenario's cotangent through its own influence matrix. Priorities are
     applied inside the operator.
 
+    An operator with :attr:`phase_contours` evaluates every scenario on the contour of its own
+    CT phase, so the voxel counts can differ between scenarios and an entry's values are then a
+    list with one array per scenario instead of a stack. All others combine the scenarios per
+    voxel and get a stack on the contour of the first scenario's phase.
+
     Parameters
     ----------
     scenarios : ScenarioSet
@@ -79,12 +84,15 @@ class RobustnessOperator(ABC):
         Name written to matRad's ``robustness`` property; ``None`` if matRad has no equivalent.
     scope : ClassVar[{"objective", "composite"}]
         Whether an instance acts on one objective or on all objectives carrying this name.
+    phase_contours : ClassVar[bool]
+        Whether the operator evaluates each scenario on the contour of its CT phase.
     """
 
     name: ClassVar[str]
     aliases: ClassVar[tuple[str, ...]] = ()
     matrad_name: ClassVar[Optional[str]] = None
     scope: ClassVar[Literal["objective", "composite"]] = "objective"
+    phase_contours: ClassVar[bool] = False
 
     def __init__(self, scenarios: ScenarioSet, options: Optional[RobustnessOptions] = None):
         self.scenarios = scenarios
@@ -118,10 +126,11 @@ class RobustnessOperator(ABC):
         if self.scope == "objective" and len(entries) != 1:
             raise ValueError(f"operator {self.name!r} acts on exactly one objective")
         for value in values:
-            if value.shape[0] != self.num_scenarios:
+            count = len(value) if isinstance(value, (list, tuple)) else value.shape[0]
+            if count != self.num_scenarios:
                 raise ValueError(
                     f"values must be stacked over the {self.num_scenarios} scenarios of the "
-                    f"operator, got shape {tuple(value.shape)}"
+                    f"operator, got {count}"
                 )
 
     @abstractmethod

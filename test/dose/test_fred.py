@@ -506,3 +506,27 @@ def test_mc_engine_reduces_a_4d_ct_to_the_scenario_phase(test_data_protons, test
         sitk.GetArrayFromImage(reduced.cube_hu), sitk.GetArrayFromImage(phase1)
     )
     assert engine._scenario_ct(ct) is ct
+
+
+@pytest.mark.parametrize(
+    "error,message",
+    [
+        (FileNotFoundError("fred"), "not found"),
+        (subprocess.CalledProcessError(3, "fred"), "return code 3"),
+        (subprocess.TimeoutExpired("fred", 1.0), "did not finish"),
+    ],
+)
+def test_failing_fred_execution_raises_a_catchable_error(
+    test_data_protons, tmp_path, monkeypatch, error, message
+):
+    engine = ParticleFredMCEngine(test_data_protons[0])
+    engine._fred_root_folder = str(tmp_path)
+    engine._inp_dir = str(tmp_path)
+
+    def run(_cmd):
+        raise error
+
+    monkeypatch.setattr(engine, "_run_fred_process", run)
+
+    with pytest.raises(RuntimeError, match=message):
+        engine._call_fred()

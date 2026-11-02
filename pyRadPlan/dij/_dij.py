@@ -232,12 +232,29 @@ def _matrad_cells_to_flat(value: Any, scenarios: Optional[ScenarioSet]) -> np.nd
             raise ValueError(f"matRad cell of scenario {i} at {tuple(position[i])} is empty")
         flat[i] = entry
         used += 1
-    num_filled = sum(not _is_empty_cell(c) for c in cells.flat)
+    # An alias is exported into its own cell too; its slot shares the referenced matrix.
+    derived = {tuple(position[i]) for i, basis in enumerate(scenarios.bases) if basis is not None}
+    num_filled = sum(
+        not _is_empty_cell(cells[index])
+        for index in np.ndindex(cells.shape)
+        if index not in derived
+    )
     if num_filled != used:
         raise ValueError(
             f"matRad cell array holds {num_filled} matrices, but the scenario set computes {used}"
         )
     return flat
+
+
+def _matrad_cell_layout(value: Any) -> tuple[tuple[int, ...], list[tuple[int, ...]]]:
+    """Shape of a matRad cell array and the cell of every entry of its flat container."""
+    cells = _nested_to_object_array(value)
+    positions = [
+        tuple(int(i) for i in np.unravel_index(k, cells.shape, order="F"))
+        for k, cell in enumerate(cells.flatten(order="F"))
+        if not _is_empty_cell(cell)
+    ]
+    return cells.shape, positions
 
 
 def _flat_to_matrad_cells(container: np.ndarray, scenarios: ScenarioSet) -> np.ndarray:
@@ -276,6 +293,10 @@ class Dij(PyRadPlanBaseModel):
 
     dose_grid: Annotated[Grid, Field(default=None)]
     ct_grid: Annotated[Grid, Field(default=None)]
+
+    #: Cell layout per quantity of an import from matRad without a scenario set, for
+    #: :meth:`attach_scenarios`: the set decides which cell belongs to which slot.
+    _matrad_cells: Optional[dict] = None
 
     scenarios: Optional[ScenarioSet] = Field(
         default=None,
@@ -354,6 +375,8 @@ class Dij(PyRadPlanBaseModel):
     def _check_scenarios(self, info: ValidationInfo) -> Self:
         """Attach a scenario set from the validation context and check the containers."""
         context = info.context or {}
+        if "matrad_cells" in context:
+            self._matrad_cells = context["matrad_cells"]
         if self.scenarios is None and context.get("scenario_model") is not None:
             object.__setattr__(self, "scenarios", _as_scenario_set(context["scenario_model"]))
         if self.scenarios is not None:
@@ -438,9 +461,27 @@ class Dij(PyRadPlanBaseModel):
         """
         scenarios = _as_scenario_set(scenarios)
         if scenarios is not None:
+            self._arrange_matrad_cells(scenarios)
             self._check_scenario_consistency(scenarios)
         self.scenarios = scenarios
         return self
+
+    def _arrange_matrad_cells(self, scenarios: ScenarioSet) -> None:
+        """Move matrices imported from matRad cells without a set to the set's flat slots."""
+        if not self._matrad_cells:
+            return
+        arranged = {}
+        for field, (shape, positions) in self._matrad_cells.items():
+            container = getattr(self, field)
+            cells = np.empty(shape, dtype=object)
+            for index in np.ndindex(shape):
+                cells[index] = np.zeros((0, 0))
+            for entry, position in zip(container.flat, positions):
+                cells[position] = entry
+            arranged[field] = _matrad_cells_to_flat(cells, scenarios)
+        for field, container in arranged.items():
+            object.__setattr__(self, field, container)
+        self._matrad_cells = None
 
     def extend_scenarios(self, other: "Dij") -> "Dij":
         """
@@ -605,9 +646,12 @@ class Dij(PyRadPlanBaseModel):
             isinstance(v, (list, tuple))
             or (isinstance(v, np.ndarray) and v.dtype == np.dtype(object))
         ):
-            v = _matrad_cells_to_flat(
-                v, _as_scenario_set((info.context or {}).get("scenario_model"))
-            )
+            scenarios = _as_scenario_set(info.context.get("scenario_model"))
+            if scenarios is None:
+                info.context.setdefault("matrad_cells", {})[info.field_name] = _matrad_cell_layout(
+                    v
+                )
+            v = _matrad_cells_to_flat(v, scenarios)
 
         if not (isinstance(v, np.ndarray) and v.dtype == np.dtype(object)) and (
             isinstance(v, (sp.spmatrix, sp.sparray, np.ndarray))
@@ -699,6 +743,9 @@ class Dij(PyRadPlanBaseModel):
         """
         if not isinstance(v, np.ndarray) and isinstance(v, int):
             v = np.array([v])
+        from_matrad = bool(info.context and info.context.get("from_matRad"))
+        if from_matrad and isinstance(v, np.ndarray) and v.ndim == 2 and 1 in v.shape:
+            v = v.ravel()
         # Check if the numbering arrays have the correct shape
         if info.data.get("physical_dose") is not None:
             dij_matrices = cast(np.ndarray, info.data["physical_dose"])
@@ -716,8 +763,8 @@ class Dij(PyRadPlanBaseModel):
                             "Numbering arrays shape inconsistent with number of bixels"
                         )
 
-        if info.context and "from_matRad" in info.context and info.context["from_matRad"]:
-            v -= 1
+        if from_matrad:
+            v = v - 1
         return v
 
     @field_validator(
@@ -827,7 +874,7 @@ class Dij(PyRadPlanBaseModel):
     ) -> np.ndarray:
         context = info.context
         if context and context.get("matRad") == "mat-file":
-            return value.reshape(-1, 1)
+            return (np.asarray(value) + 1).reshape(-1, 1)
         return value
 
     def to_matrad(self, context: str = "mat-file") -> Any:
@@ -929,6 +976,7 @@ class Dij(PyRadPlanBaseModel):
         scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
+        scenario_quantities: Optional[Sequence[str]] = None,
     ) -> dict[str, Any]:
         """
         Compute result arrays from an intensity vector.
@@ -945,10 +993,12 @@ class Dij(PyRadPlanBaseModel):
         scenarios : bool or sequence of int
             Additionally compute the results per scenario. ``True`` selects every scenario
             with influence matrices (computed scenarios and aliases), a sequence the given
-            flat indices. When this selects more than one scenario, every full (non-beam)
-            result ``"<key>"`` gets a list ``"<key>_scenario"`` with one entry per scenario
-            slot of the Dij (``None`` for scenarios not selected), so that the list index is
-            the flat scenario index.
+            flat indices. Every full (non-beam) result ``"<key>"`` then gets a list
+            ``"<key>_scenario"`` with one entry per scenario slot of the Dij (``None`` for
+            scenarios not selected), so that the list index is the flat scenario index. ``True``
+            adds no lists if it selects a single scenario, which the unsuffixed results hold.
+        scenario_quantities : sequence of str, optional
+            Result keys that get a ``"<key>_scenario"`` list; all if omitted.
 
         Returns
         -------
@@ -960,8 +1010,13 @@ class Dij(PyRadPlanBaseModel):
             scenario_index = self.nominal_scenario_index()
         out = self._result_arrays(intensity, scenario_index)
         indices = self._result_scenario_indices(scenarios)
-        if len(indices) > 1:
-            full_keys = [k for k, v in out.items() if not isinstance(v, list)]
+        if len(indices) > 1 or (indices and scenarios is not True):
+            full_keys = [
+                k
+                for k, v in out.items()
+                if not isinstance(v, list)
+                and (scenario_quantities is None or k in scenario_quantities)
+            ]
             per_scenario: list[Optional[dict[str, Any]]] = [None] * self.num_of_scenarios
             for i in indices:
                 if i == scenario_index:
@@ -1131,6 +1186,7 @@ class Dij(PyRadPlanBaseModel):
         scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
+        scenario_quantities: Optional[Sequence[str]] = None,
     ) -> dict[str, Any]:
         """
         Compute results on the dose grid from intensity vector.
@@ -1148,6 +1204,8 @@ class Dij(PyRadPlanBaseModel):
         scenarios : bool or sequence of int
             Additionally compute ``"<key>_scenario"`` lists, see
             :meth:`get_result_arrays_from_intensity`.
+        scenario_quantities : sequence of str, optional
+            See :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
@@ -1160,6 +1218,7 @@ class Dij(PyRadPlanBaseModel):
             scenario_index=scenario_index,
             num_of_fractions=num_of_fractions,
             scenarios=scenarios,
+            scenario_quantities=scenario_quantities,
         )
 
         def to_image(value: Any) -> Optional[sitk.Image]:
@@ -1184,6 +1243,7 @@ class Dij(PyRadPlanBaseModel):
         scenario_index: Optional[int] = None,
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
+        scenario_quantities: Optional[Sequence[str]] = None,
     ) -> dict[str, Any]:
         """
         Compute results on the CT grid from intensity vector.
@@ -1201,6 +1261,8 @@ class Dij(PyRadPlanBaseModel):
         scenarios : bool or sequence of int
             Additionally compute ``"<key>_scenario"`` lists, see
             :meth:`get_result_arrays_from_intensity`.
+        scenario_quantities : sequence of str, optional
+            See :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
@@ -1213,6 +1275,7 @@ class Dij(PyRadPlanBaseModel):
             scenario_index=scenario_index,
             num_of_fractions=num_of_fractions,
             scenarios=scenarios,
+            scenario_quantities=scenario_quantities,
         )
         resampler = sitk.ResampleImageFilter()
         resampler.SetInterpolator(sitk.sitkLinear)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from abc import ABC, abstractmethod
+import warnings
 from typing import Any, ClassVar, Optional, Union
 
 import numpy as np
@@ -140,6 +141,16 @@ class ScenarioModel(LegacyScenarioInterface, PyRadPlanBaseModel, ABC):
         if isinstance(output, dict):
             output = {"model": self.short_name, **output}
         return output
+
+    def __init__(self, ct: Any = None, **kwargs: Any):
+        if ct is not None:
+            warnings.warn(
+                "Passing a CT to a scenario model is deprecated and has no effect; select the "
+                "CT phases with ct_phase.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        super().__init__(**kwargs)
 
     def _matrad_dict(self) -> dict[str, Any]:
         """Flat matRad ``multScen`` struct (1-based CT phases)."""

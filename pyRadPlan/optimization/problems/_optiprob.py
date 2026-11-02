@@ -27,6 +27,7 @@ from ..robustness import (
     build_robust_terms,
     get_robustness_operator_class,
     voi_linear_mask,
+    voi_phase_masks,
 )
 from ..solvers import get_available_solvers, get_solver, SolverBase
 from ...core import AlgorithmParameterMetadata, ConfigurableAlgorithm, ProgressReporter, xp_utils
@@ -311,13 +312,18 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
         for voi, objs in voi_objectives:
-            # one 3D grid: a 4D structure contributes its first phase, like voi_linear_mask
             cube_ix = voi.scenario_indices(0, order="numpy")
             linear_mask = voi_linear_mask(voi)
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
+                if obj._resampled_image_reference_cache and voi_phase_masks(voi):
+                    raise NotImplementedError(
+                        f"Objective {obj.name!r} on {voi.name!r} has an image reference, which "
+                        "is cached on one contour, but the structure's contours differ between "
+                        "the CT phases"
+                    )
             if self._dose_convention == "total":
                 for obj in objs:
                     obj.normalize_to_fraction_num(self._num_of_fractions)
@@ -463,7 +469,6 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             voi_objectives,
             self._scenario_set,
             self._robustness_options(),
-            masks=[mask for mask, _ in objectives],
         )
 
         # Every quantity computes the scenarios its terms need (a dependency the union of its

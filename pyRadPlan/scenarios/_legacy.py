@@ -8,6 +8,8 @@ is derived from the model's scenario set tied to matRad's axes (CT phase, setup,
 
 from __future__ import annotations
 
+import functools
+import warnings
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -208,4 +210,31 @@ class LegacyScenarioInterface:
             ),
             wc_sigma=self.wc_sigma,
             distribution=self.distribution,
+        )
+
+
+def _deprecated_accessor(name: str, function: Any) -> Any:
+    @functools.wraps(function)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        warnings.warn(
+            f"ScenarioModel.{name} is deprecated and will be removed after one release; "
+            "configure the setup, range and ct_phase dimensions and query the ScenarioSet.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
+for _name, _member in list(vars(LegacyScenarioInterface).items()):
+    if isinstance(_member, property) and not _name.startswith("_"):
+        setattr(
+            LegacyScenarioInterface,
+            _name,
+            property(
+                _deprecated_accessor(_name, _member.fget),
+                _deprecated_accessor(_name, _member.fset) if _member.fset else None,
+                doc=_member.__doc__,
+            ),
         )

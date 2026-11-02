@@ -86,7 +86,9 @@ grid) uses the first computed scenario of each CT phase instead, as do objective
 simulate the phase of their single scenario, and the stf generators place the beamlets on the
 first phase, as matRad does. A 3D structure set handed to a 4D CT (``validate_cst(cst, ct=ct)``,
 which the top-level functions call) is repeated for every phase; 4D structure sets are used phase
-by phase.
+by phase. As in matRad, objectives evaluate each scenario on the contour of its CT phase. Operators
+that combine the scenarios per voxel read one contour: the voxel-wise worst case refuses scenarios
+of several phases, and the expected quantity and the variance read the first phase.
 
 A set can also be built without a model from explicit points, which is the hook for adaptive
 schemes (e.g. quadrature points of a polynomial chaos expansion) and for single hand-picked

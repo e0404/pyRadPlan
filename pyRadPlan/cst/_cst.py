@@ -613,6 +613,11 @@ class StructureSet(PyRadPlanBaseModel):
         num_phases = cube.GetSize()[3]
         phase_ct = CT(cube_hu=cube[:, :, :, 0])
         if voi.mask.GetDimension() == 4:
+            if voi.mask.GetSize()[3] != num_phases:
+                raise ValueError(
+                    f"CT image mismatch: structure {voi.name!r} has {voi.mask.GetSize()[3]} "
+                    f"phases, the CT {num_phases}"
+                )
             masks = []
             for i in range(num_phases):
                 phase_mask = voi.mask[:, :, :, i]

@@ -170,7 +170,7 @@ def _folder_entries(kind: BaseDataKind, folder: Path) -> list[Path]:
             for entry in folder.iterdir()
             if entry.is_file() and os.path.splitext(entry.name)[1] in kind.endings
         ),
-        key=lambda entry: entry.name.casefold(),
+        key=lambda entry: (entry.name.casefold(), entry.name),
     )
 
 

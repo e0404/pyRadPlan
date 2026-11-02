@@ -259,8 +259,8 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             self._pln_machine = validate_machine(pln.machine)
 
         # Set Scenario Model
-        if hasattr(pln, "mult_scen"):
-            self.mult_scen = pln.mult_scen
+        if hasattr(pln, "scenarios"):
+            self.mult_scen = pln.scenarios
 
         # Reported forward-dose scaling follows the plan's dose convention
         self._result_dose_factor = getattr(pln, "result_dose_factor", 1)
@@ -873,7 +873,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
                 tmp_vdose_grid_scen[s] = np.where(
                     np.abs(np.round(interpolated_tmp_cube)).ravel().astype(bool)
-                )
+                )[0]
 
         # Get unique dose grid
         self._vdose_grid = np.unique(np.concatenate(tmp_vdose_grid_scen, axis=0))

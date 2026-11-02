@@ -952,6 +952,7 @@ def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, ex
             bio_model=None,
             alpha_dose=None,
             scenarios=None if scenarios is None else list(range(scenarios)),
+            scenario_labels=lambda: [],
             compute_result_ct_grid=compute_result_ct_grid,
         ),
     )
@@ -1024,3 +1025,71 @@ def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
         "scenario 0",
         "scenario 1",
     ]
+
+
+def test_optimize_keeps_only_needed_results_per_scenario_with_their_labels(qapp, monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+
+    from pyRadPlan.plan import PhotonPlan
+
+    calls = []
+
+    def compute_result_ct_grid(weights, **kwargs):
+        calls.append(kwargs)
+        return {"physical_dose": object()}
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    voi = SimpleNamespace(name="t", objectives=[SimpleNamespace(quantity="rbe_x_dose")])
+    ws.set_many(
+        pln=PhotonPlan(),
+        cst=SimpleNamespace(vois=[voi]),
+        dij=SimpleNamespace(
+            bio_model=object(),
+            alpha_dose=None,
+            scenarios=[0, 1],
+            scenario_labels=lambda: ["a", "b"],
+            compute_result_ct_grid=compute_result_ct_grid,
+        ),
+    )
+    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: np.ones(2))
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+
+    w._on_optimize()
+
+    assert calls[0]["scenario_quantities"] == ["physical_dose", "rbe_x_dose"]
+    assert ws.result["scenario_labels"] == ("a", "b")
+
+
+def test_recalculate_labels_scenarios_from_the_plan(qapp, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    dose = object()
+    forward = Mock(
+        return_value={
+            "physical_dose": dose,
+            "physical_dose_scenario": [dose, dose],
+            "alpha_dose_scenario": [dose, dose],
+        }
+    )
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    ws.pln = SimpleNamespace(
+        prop_stf=ws.pln.prop_stf,
+        scenarios=SimpleNamespace(
+            scenarios=lambda: SimpleNamespace(labels=lambda: ["from plan 0", "from plan 1"])
+        ),
+    )
+    ws.result = {**ws.result, "scenario_labels": ("stale",)}
+
+    w._on_recalc_dose()
+
+    assert ws.result["scenario_labels"] == ("from plan 0", "from plan 1")
+    assert "physical_dose_scenario" in ws.result
+    assert "alpha_dose_scenario" not in ws.result

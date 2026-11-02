@@ -139,3 +139,19 @@ def test_adaptive_spin_box_size_ignores_a_wide_range(qapp):
     wide.setRange(-1.0e9, 1.0e9)
 
     assert wide.sizeHint().width() <= narrow.sizeHint().width()
+
+
+@pytest.mark.parametrize("exception", [RuntimeError("failed"), SystemExit("Aborting")])
+def test_worker_reports_a_failing_computation(qapp, exception):
+    from pyRadPlan.gui.widgets._base import Worker
+
+    def compute():
+        raise exception
+
+    worker = Worker(compute)
+    errors = []
+    worker.error.connect(errors.append)
+
+    worker.run()
+
+    assert errors == [exception]

@@ -42,6 +42,7 @@ from pyRadPlan.optimization.problems import get_available_problems
 from pyRadPlan.optimization.solvers import SolverBase
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, default_bio_models
 from pyRadPlan.scenarios import (
+    ExplicitScenarioModel,
     ScenarioModel,
     available_scenario_models,
     get_scenario_model_class,
@@ -450,6 +451,7 @@ class PlanWidget(WorkspaceWidget):
             "worst-case extent and sampling"
         )
         self._btn_scenario_config.clicked.connect(self._on_scenario_config)
+        self._cmb_scenario.currentTextChanged.connect(self._on_scenario_model_changed)
         scenario_row = QHBoxLayout()
         scenario_row.setContentsMargins(0, 0, 0, 0)
         scenario_row.setSpacing(4)
@@ -1190,6 +1192,26 @@ class PlanWidget(WorkspaceWidget):
     # Scenario model handling
     # ------------------------------------------------------------------
 
+    def _on_scenario_model_changed(self, name: str) -> None:
+        self._btn_scenario_config.setEnabled(name != ExplicitScenarioModel.short_name)
+
+    def _show_explicit_scenario_entry(self, shown: bool) -> None:
+        """Offer the explicit model only while the plan holds one; it cannot be built here."""
+        name = ExplicitScenarioModel.short_name
+        index = self._cmb_scenario.findText(name)
+        if shown and index < 0:
+            self._cmb_scenario.addItem(name)
+            self._cmb_scenario.setItemData(
+                self._cmb_scenario.count() - 1,
+                "The scenario set the applied plan carries itself. It is kept unless another "
+                "model is selected.",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        elif not shown and index >= 0:
+            if self._cmb_scenario.currentIndex() == index:
+                self._cmb_scenario.setCurrentIndex(0)
+            self._cmb_scenario.removeItem(index)
+
     def _on_scenario_config(self) -> None:
         model_name = self._cmb_scenario.currentText()
         try:
@@ -1210,11 +1232,13 @@ class PlanWidget(WorkspaceWidget):
     def _restore_scenario_from_pln(self, pln: Plan) -> None:
         model = pln.scenarios
         name = getattr(model, "short_name", None)
+        explicit = name == ExplicitScenarioModel.short_name
+        self._show_explicit_scenario_entry(explicit)
         if not name or self._cmb_scenario.findText(name) < 0:
             return
         self._cmb_scenario.setCurrentText(name)
         # An empty override mapping means defaults, not "keep the form's edits".
-        self._scenario_props[name] = self._scenario_overrides(model)
+        self._scenario_props[name] = {} if explicit else self._scenario_overrides(model)
 
     @staticmethod
     def _scenario_overrides(model: ScenarioModel) -> dict:
@@ -1341,6 +1365,7 @@ class PlanWidget(WorkspaceWidget):
     def _sync_from_workspace(self) -> None:
         pln = self._ws.pln
         if pln is None:
+            self._show_explicit_scenario_entry(False)
             self._btn_ct_grid.setEnabled(self._ws.ct is not None)
             self._update_auto_iso_center()
             return
@@ -1552,6 +1577,9 @@ class PlanWidget(WorkspaceWidget):
 
         with self.hold_updates():
             self._ws.pln = pln
+        self._show_explicit_scenario_entry(
+            pln.scenarios.short_name == ExplicitScenarioModel.short_name
+        )
         if self._plan_machine is not None and pln.machine is not self._plan_machine:
             self._plan_machine = self._plan_machine_summary = None
             self._refresh_machines(pln.radiation_mode)
@@ -1767,8 +1795,11 @@ class PlanWidget(WorkspaceWidget):
         if (
             current is not None
             and getattr(current.scenarios, "short_name", None) == scenario_name
-            and self._props_key(self._scenario_overrides(current.scenarios))
-            == self._props_key(scenario_props)
+            and (
+                scenario_name == ExplicitScenarioModel.short_name
+                or self._props_key(self._scenario_overrides(current.scenarios))
+                == self._props_key(scenario_props)
+            )
         ):
             # Unchanged: keep the plan's model instance (and its generated scenario set).
             scenario = deepcopy(current.scenarios)
