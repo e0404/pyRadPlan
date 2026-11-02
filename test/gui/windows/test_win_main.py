@@ -161,18 +161,28 @@ def test_view_menu_stubs_disabled(qapp):
 
 @pytest.fixture
 def ignored_color_scheme_requests(qapp, monkeypatch):
-    """Record color scheme requests to a platform that ignores them and reports none."""
+    """Record scheme requests to a platform ignoring them, reporting none, rendering light."""
     from PySide6.QtGui import QStyleHints
 
-    from pyRadPlan.gui.menus._view import set_dark_mode
+    from pyRadPlan.gui.menus import _view
 
     requested = []
     monkeypatch.setattr(QStyleHints, "setColorScheme", lambda self, s: requested.append(s))
     monkeypatch.setattr(QStyleHints, "colorScheme", lambda self: Qt.ColorScheme.Unknown)
-    set_dark_mode(False)
-    requested.clear()
+    monkeypatch.setattr(_view, "_palette_dark", lambda palette: False)
+    _view._color_scheme_switch()._follow_platform()
     yield requested
-    set_dark_mode(False)
+    _view._color_scheme_switch()._follow_platform()
+
+
+@pytest.fixture
+def dark_native_palette(monkeypatch, ignored_color_scheme_requests):
+    """Like ``ignored_color_scheme_requests``, with a dark native palette."""
+    from pyRadPlan.gui.menus import _view
+
+    monkeypatch.setattr(_view, "_palette_dark", lambda palette: True)
+    _view._color_scheme_switch()._follow_platform()
+    return ignored_color_scheme_requests
 
 
 def _is_dark(qapp):
@@ -235,6 +245,51 @@ def test_dark_mode_fallback_ends_when_the_platform_catches_up(qapp, ignored_colo
     qapp.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
     assert qapp.style().name() == native_style
     assert action.isChecked()
+
+
+def test_dark_mode_choice_outlasts_the_platform_changing_back(qapp, ignored_color_scheme_requests):
+    native_style = qapp.style().name()
+    win = MainWindow(WorkspaceManager())
+    action = win._view_menu.dark_mode_action
+    action.trigger()
+    hints = qapp.styleHints()
+
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert qapp.style().name() == native_style
+    hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+
+    assert qapp.style().name() == "fusion"
+    assert _is_dark(qapp)
+    assert action.isChecked()
+
+
+def test_palette_darkness(qapp, dark_palette):
+    from PySide6.QtGui import QColor, QPalette
+
+    from pyRadPlan.gui.menus._view import _palette_dark
+
+    light = QPalette()
+    light.setColor(QPalette.ColorRole.Window, QColor("#efefef"))
+    light.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+
+    assert _palette_dark(dark_palette[0])
+    assert not _palette_dark(light)
+
+
+def test_dark_mode_judges_an_unreported_scheme_by_the_native_palette(qapp, dark_native_palette):
+    from pyRadPlan.gui.menus import ViewMenu
+
+    native_style = qapp.style().name()
+    menu = ViewMenu()
+    assert menu.dark_mode_action.isChecked()
+
+    menu.dark_mode_action.trigger()
+    assert qapp.style().name() == "fusion"
+    assert not _is_dark(qapp)
+
+    menu.dark_mode_action.trigger()
+    assert qapp.style().name() == native_style
+    assert menu.dark_mode_action.isChecked()
 
 
 def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):

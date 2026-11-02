@@ -119,10 +119,26 @@ def _fallback_palette(dark: bool) -> QPalette:
     return palette
 
 
-def _platform_dark() -> bool:
-    """Whether the platform currently renders the dark scheme (never on Qt < 6.5)."""
-    hints = QGuiApplication.styleHints()
-    return hasattr(hints, "colorScheme") and hints.colorScheme() == Qt.ColorScheme.Dark
+def _reported_dark(scheme: Optional[Qt.ColorScheme] = None) -> Optional[bool]:
+    """Return the platform's scheme as dark (True) or light (False), None for neither.
+
+    Qt < 6.5 reports no scheme, and some theme plugins report ``ColorScheme.Unknown``.
+    """
+    if scheme is None:
+        hints = QGuiApplication.styleHints()
+        if not hasattr(hints, "colorScheme"):
+            return None
+        scheme = hints.colorScheme()
+    if scheme == Qt.ColorScheme.Dark:
+        return True
+    if scheme == Qt.ColorScheme.Light:
+        return False
+    return None
+
+
+def _palette_dark(palette: QPalette) -> bool:
+    window = palette.color(QPalette.ColorRole.Window).lightness()
+    return palette.color(QPalette.ColorRole.WindowText).lightness() > window
 
 
 class _ColorSchemeSwitch(QObject):
@@ -131,7 +147,8 @@ class _ColorSchemeSwitch(QObject):
     The scheme is requested from the platform (Qt >= 6.8).  Platforms without a theme
     plugin that implements the request (bare X11/Wayland sessions, minimal window
     managers, Qt < 6.8) ignore it; then the application switches to the Fusion style
-    with a matching palette until the platform renders the wanted scheme itself.
+    with a matching palette while the platform renders another scheme.  The
+    application follows the platform until the user picks a scheme.
     """
 
     #: The application turned dark (True) or light (False).
@@ -141,7 +158,11 @@ class _ColorSchemeSwitch(QObject):
         super().__init__(app)
         #: Style the fallback replaced; None while the platform renders the scheme.
         self._native_style: Optional[str] = None
-        self._dark = _platform_dark()
+        #: Whether the palette the fallback replaced is dark.
+        self._native_palette_dark = False
+        #: The user's choice; None while following the platform.
+        self._requested: Optional[bool] = None
+        self._dark = self._native_dark()
         hints = app.styleHints()
         if hasattr(hints, "colorSchemeChanged"):
             hints.colorSchemeChanged.connect(self._on_platform_scheme)
@@ -151,27 +172,45 @@ class _ColorSchemeSwitch(QObject):
         return self._dark
 
     def set_dark(self, dark: bool) -> None:
+        self._requested = dark
         hints = QGuiApplication.styleHints()
         if hasattr(hints, "setColorScheme"):
             hints.setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
-        if _platform_dark() == dark:
+        self._render(dark)
+        self._set(dark)
+
+    def _follow_platform(self) -> None:
+        """Drop the user's choice and follow the platform again."""
+        self._requested = None
+        self._restore_native()
+        self._set(self._native_dark())
+
+    def _native_dark(self, scheme: Optional[Qt.ColorScheme] = None) -> bool:
+        """Whether the platform renders dark, judged by its palette if it reports no scheme."""
+        reported = _reported_dark(scheme)
+        if reported is not None:
+            return reported
+        if self._native_style is not None:
+            return self._native_palette_dark
+        return _palette_dark(QApplication.instance().palette())
+
+    def _render(self, dark: bool, scheme: Optional[Qt.ColorScheme] = None) -> None:
+        if self._native_dark(scheme) == dark:
             self._restore_native()
         else:
             self._apply_fallback(dark)
-        self._set(dark)
 
     def _on_platform_scheme(self, scheme: Qt.ColorScheme) -> None:
-        dark = scheme == Qt.ColorScheme.Dark
-        if self._native_style is not None:
-            if dark != self._dark:
-                return  # the user's choice overrides the platform
-            self._restore_native()  # the platform caught up with the request
-        self._set(dark)
+        if self._requested is None:
+            self._set(self._native_dark(scheme))
+        else:
+            self._render(self._requested, scheme)
 
     def _apply_fallback(self, dark: bool) -> None:
         app = QApplication.instance()
         if self._native_style is None:
             self._native_style = app.style().name()
+            self._native_palette_dark = _palette_dark(app.palette())
         app.setStyle("Fusion")
         app.setPalette(_fallback_palette(dark))
 
