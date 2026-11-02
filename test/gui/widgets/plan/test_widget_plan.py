@@ -2439,7 +2439,11 @@ def test_tissue_table_updates_the_highlighting_while_editing(qapp, test_data_pro
     _set_mkm_row(dialog, 0, "mMKM", r_domain=0.3)
     assert dialog._comparison_timer.isActive()  # debounced, nothing blocks
 
-    QTest.qWait(dialog._comparison_timer.interval() + 100)
+    # Until the timer has fired: on a loaded CI runner it may fire well after its interval.
+    for _ in range(100):
+        QTest.qWait(50)
+        if not dialog._comparison_timer.isActive():
+            break
     assert editor_mismatch(dialog._spins[0]["r_domain"])
 
 

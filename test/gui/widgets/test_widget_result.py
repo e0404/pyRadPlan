@@ -484,7 +484,7 @@ def test_dragging_a_beam_changes_its_gantry_angle(qapp, test_data_photons):
     assert all(source._on_drag is not None for source in _beam_sources(quantity_widget))
 
     # Gantry 90 has its source at the patient's left, to the right in the axial view.
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     assert quantity_widget._beam_drag is not None  # the orbit is shown
@@ -541,7 +541,7 @@ def test_dragged_beams_go_to_the_beam_editor(qapp, test_data_photons):
     widget.vis_widget.beams_checkbox.setChecked(True)
     quantity_widget.set_plane("Axial")
 
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso), finish=True))
@@ -573,7 +573,7 @@ def test_escape_cancels_a_beam_drag(qapp, test_data_photons):
     widget.vis_widget.beams_checkbox.setChecked(True)
     quantity_widget.set_plane("Axial")
 
-    h_iso, v_iso = quantity_widget._beams[0]["iso_center"][[1, 2]]
+    h_iso, v_iso = quantity_widget._view_point(quantity_widget._beams[0]["iso_center"])
     tip = quantity_widget._beam_parts[0]["tip"]
     quantity_widget._on_beam_drag(0, _DragEvent(tip, start=True))
     quantity_widget._on_beam_drag(0, _DragEvent((h_iso + 5.0, v_iso)))
