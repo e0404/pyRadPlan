@@ -15,6 +15,7 @@ class ExpectedValue(RobustnessOperator):
     """
 
     name = "expected_value"
+    label = "Expected value"
     aliases = ("STOCH", "stochastic", "probabilistic")
     matrad_name = "STOCH"
     phase_contours = True

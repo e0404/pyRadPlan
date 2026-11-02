@@ -1027,7 +1027,7 @@ def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
     ]
 
 
-def test_optimize_keeps_only_needed_results_per_scenario_with_their_labels(qapp, monkeypatch):
+def test_optimize_keeps_every_result_per_scenario_with_their_labels(qapp, monkeypatch):
     import numpy as np
     from types import SimpleNamespace
 
@@ -1041,7 +1041,7 @@ def test_optimize_keeps_only_needed_results_per_scenario_with_their_labels(qapp,
 
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    voi = SimpleNamespace(name="t", objectives=[SimpleNamespace(quantity="rbe_x_dose")])
+    voi = SimpleNamespace(name="t", objectives=[SimpleNamespace(quantity="physical_dose")])
     ws.set_many(
         pln=PhotonPlan(),
         cst=SimpleNamespace(vois=[voi]),
@@ -1063,11 +1063,12 @@ def test_optimize_keeps_only_needed_results_per_scenario_with_their_labels(qapp,
 
     w._on_optimize()
 
-    assert calls[0]["scenario_quantities"] == ["physical_dose", "rbe_x_dose"]
+    # Also the RBE dose the viewer shows first, though the objectives are on physical dose
+    assert calls[0].get("scenario_quantities") is None
     assert ws.result["scenario_labels"] == ("a", "b")
 
 
-def test_recalculate_labels_scenarios_from_the_plan(qapp, monkeypatch):
+def test_recalculate_keeps_the_scenarios_of_every_quantity(qapp, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -1075,8 +1076,10 @@ def test_recalculate_labels_scenarios_from_the_plan(qapp, monkeypatch):
     forward = Mock(
         return_value={
             "physical_dose": dose,
+            "rbe_x_dose": dose,
             "physical_dose_scenario": [dose, dose],
-            "alpha_dose_scenario": [dose, dose],
+            "rbe_x_dose_scenario": [dose, dose],
+            "let_scenario": [dose, dose],
         }
     )
     ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
@@ -1091,5 +1094,6 @@ def test_recalculate_labels_scenarios_from_the_plan(qapp, monkeypatch):
     w._on_recalc_dose()
 
     assert ws.result["scenario_labels"] == ("from plan 0", "from plan 1")
-    assert "physical_dose_scenario" in ws.result
-    assert "alpha_dose_scenario" not in ws.result
+    # Not only those the objectives evaluate: the viewer shows a proton plan's RBE dose first
+    for key in ("physical_dose_scenario", "rbe_x_dose_scenario", "let_scenario"):
+        assert ws.result[key] == [dose, dose]

@@ -17,6 +17,7 @@ class ObjectiveWorstCase(RobustnessOperator):
     """
 
     name = "objective_worst_case"
+    label = "Objective-wise worst case"
     aliases = ("OWC",)
     matrad_name = "OWC"
     phase_contours = True

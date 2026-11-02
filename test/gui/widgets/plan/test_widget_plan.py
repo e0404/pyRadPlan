@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from pyRadPlan._settings import GuiUiMode, get_settings
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.plan import PlanWidget, UIMode
+from pyRadPlan.gui.widgets._display_names import select_identifier
 from pyRadPlan.machines import get_available_machines
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan
 from pyRadPlan.io import load_tg119
@@ -251,13 +252,17 @@ def test_editing_fields_and_apply_writes_valid_pln(qapp):
 def test_scenario_combo_wired_to_mult_scen(qapp):
     widget, ws = _make_widget()
 
-    items = [widget._cmb_scenario.itemText(i) for i in range(widget._cmb_scenario.count())]
+    items = [widget._cmb_scenario.itemData(i) for i in range(widget._cmb_scenario.count())]
     assert items[0] == "nomScen"
     assert {"wcScen", "impScen", "rndScen"} <= set(items)
     assert len(items) == len(set(items))
     # implemented scenario models are selectable
     for name in ("wcScen", "impScen", "rndScen"):
         assert widget._cmb_scenario.model().item(items.index(name)).isEnabled()
+    # listed by their names, the identifiers are shown faintly in the open popup
+    assert widget._cmb_scenario.itemText(items.index("wcScen")) == "Worst-case Grid"
+    assert widget._cmb_scenario.itemText(items.index("impScen")) == "Importance Grid"
+    assert widget._cmb_scenario.itemText(items.index("rndScen")) == "Random Samples"
 
     widget._on_apply()
     assert ws.pln.mult_scen.short_name == "nomScen"
@@ -379,10 +384,10 @@ def test_mode_switch_from_carbon_kernels_to_photons_selects_none(qapp):
 def test_engine_switch_disables_kernel_formalisms_and_replaces_the_selection(qapp):
     widget, ws = _make_widget()
     widget._cmb_radiation.setCurrentText("carbon")
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert widget._cmb_bio_model.currentText() == "α/β kernels · LEM IV"
 
-    widget._cmb_engine.setCurrentText("FRED")
+    select_identifier(widget._cmb_engine, "FRED")
 
     entries = {label: (enabled, tooltip) for label, enabled, tooltip in _bio_entries(widget)}
     enabled, tooltip = entries["α/β kernels · LEM IV"]
@@ -399,7 +404,7 @@ def test_engine_switch_disables_kernel_formalisms_and_replaces_the_selection(qap
     assert ws.pln.prop_dose_calc["engine"] == "FRED"
 
     # Back on the pencil-beam engine the kernels are offered again; the choice stays
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     entries = {label: enabled for label, enabled, _tooltip in _bio_entries(widget)}
     assert entries["α/β kernels · LEM IV"]
     assert not entries["Linear scaling (LET)"]
@@ -411,13 +416,13 @@ def test_engine_switch_keeps_a_model_the_engine_supports(qapp):
     widget._cmb_radiation.setCurrentText("protons")
     widget._select_bio_model("WED")
     widget._lbl_status.setText("")
-    widget._cmb_engine.setCurrentText("FRED")
+    select_identifier(widget._cmb_engine, "FRED")
     assert widget._bio_model_name() == "WED"
     assert _selected_entry_enabled(widget)
     assert "not available" not in widget._lbl_status.text()
 
     # TOPAS scores the LET of protons itself
-    widget._cmb_engine.setCurrentText("TOPAS")
+    select_identifier(widget._cmb_engine, "TOPAS")
     assert widget._bio_model_name() == "WED"
     assert "not available" not in widget._lbl_status.text()
 
@@ -431,7 +436,7 @@ def test_restoring_a_plan_the_engine_cannot_run_keeps_its_model(qapp):
     )
 
     combo = widget._cmb_bio_model
-    assert widget._cmb_engine.currentText() == "FRED"
+    assert widget._cmb_engine.currentData() == "FRED"
     assert combo.currentText() == "α/β kernels (not supported by the dose engine FRED)"
     assert not _selected_entry_enabled(widget)
     tooltip = combo.itemData(combo.currentIndex(), Qt.ItemDataRole.ToolTipRole)
@@ -442,7 +447,7 @@ def test_restoring_a_plan_the_engine_cannot_run_keeps_its_model(qapp):
     assert ws.pln.bio_model.model == "alpha_beta_kernels"
 
     # Switching to an engine that can run it selects its regular entry
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert combo.currentText() == "α/β kernels · LEM IV"
     assert _selected_entry_enabled(widget)
 
@@ -459,7 +464,7 @@ def test_tissue_indicator_follows_the_engine(qapp, tg119):
     assert not widget._lbl_tissue_warning.isHidden()
     assert "TOPAS does not use the machine's α/β kernels" in widget._lbl_tissue_warning.toolTip()
 
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert widget._lbl_tissue_warning.isHidden()
 
 
@@ -484,7 +489,7 @@ def test_plan_widget_passes_the_engine_to_the_tissue_editor(qapp, monkeypatch, t
     widget, ws = _make_widget()
     ws.set_many(ct=ct, cst=cst)
     widget._cmb_radiation.setCurrentText("oxygen")
-    widget._cmb_engine.setCurrentText("TOPAS")
+    select_identifier(widget._cmb_engine, "TOPAS")
     opened = {}
 
     class _Dialog:
@@ -1220,11 +1225,11 @@ def test_invalid_iso_center_rejected(qapp):
 def test_engine_combo_follows_radiation_mode(qapp):
     widget, ws = _make_widget()
 
-    photon_engines = [widget._cmb_engine.itemText(i) for i in range(widget._cmb_engine.count())]
+    photon_engines = [widget._cmb_engine.itemData(i) for i in range(widget._cmb_engine.count())]
     assert "SVDPB" in photon_engines
 
     widget._cmb_radiation.setCurrentText("protons")
-    proton_engines = [widget._cmb_engine.itemText(i) for i in range(widget._cmb_engine.count())]
+    proton_engines = [widget._cmb_engine.itemData(i) for i in range(widget._cmb_engine.count())]
     assert "SVDPB" not in proton_engines
     assert proton_engines  # Hong PB, FRED, TOPAS register for protons
 
@@ -1232,7 +1237,7 @@ def test_engine_combo_follows_radiation_mode(qapp):
 def test_apply_writes_engine_and_config_to_prop_dose_calc(qapp):
     widget, ws = _make_widget()
 
-    widget._cmb_engine.setCurrentText("SVDPB")
+    select_identifier(widget._cmb_engine, "SVDPB")
     # simulate values confirmed in the [...] config popup
     widget._engine_props["SVDPB"] = {"random_seed": 42, "kernel_cutoff": 60.0}
     widget._on_apply()
@@ -1252,7 +1257,7 @@ def test_do_update_restores_engine_and_config_from_pln(qapp):
         prop_dose_calc={"engine": "SVDPB", "random_seed": 7},
     )
 
-    assert widget._cmb_engine.currentText() == "SVDPB"
+    assert widget._cmb_engine.currentData() == "SVDPB"
     assert widget._engine_props["SVDPB"] == {"random_seed": 7}
 
 
@@ -1260,7 +1265,7 @@ def test_engine_config_dialog_round_trip(qapp):
     from pyRadPlan.gui.widgets import ConfigFormDialog
 
     widget, ws = _make_widget()
-    widget._cmb_engine.setCurrentText("SVDPB")
+    select_identifier(widget._cmb_engine, "SVDPB")
 
     engine_cls = widget._engines["SVDPB"]
     dialog = ConfigFormDialog(engine_cls.config_model(), initial={"random_seed": 3})
@@ -2802,7 +2807,9 @@ def test_tissue_dialog_preset_selects_its_reference_radiation(
 
 def test_optimization_row_restores_and_keeps_prop_opt(qapp):
     widget, ws = _make_widget()
-    assert widget._cmb_problem.currentText() == "nonlin_fluence"
+    assert widget._cmb_problem.currentData() == "nonlin_fluence"
+    assert widget._cmb_problem.currentText() == "Fluence (nonlinear)"
+    assert widget._cmb_engine.currentText() == "SVD Pencil Beam"
     ws.pln = PhotonPlan(prop_opt={"solver": "scipy"})
     assert widget._problem_props["nonlin_fluence"] == {"solver": "scipy"}
     widget._on_apply()
@@ -2890,7 +2897,7 @@ def test_scenario_config_dialog_round_trip(qapp):
 
 def test_apply_writes_the_scenario_model_configuration(qapp):
     widget, ws = _make_widget()
-    widget._cmb_scenario.setCurrentText("wcScen")
+    select_identifier(widget._cmb_scenario, "wcScen")
     # simulate values confirmed in the [...] config popup
     widget._scenario_props["wcScen"] = {
         "wc_sigma": 2.0,
@@ -2925,7 +2932,7 @@ def test_do_update_restores_the_scenario_configuration_from_pln(qapp):
         scenarios={"model": "wcScen", "wc_sigma": 2.0, "shift_sd": (1.0, 1.0, 1.0)}
     )
 
-    assert widget._cmb_scenario.currentText() == "wcScen"
+    assert widget._cmb_scenario.currentData() == "wcScen"
     assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
     assert not widget.has_pending_changes()
 
@@ -2963,7 +2970,7 @@ def test_scenario_config_button_stores_the_dialog_values(qapp, monkeypatch):
     from pyRadPlan.gui.widgets import ConfigFormDialog
 
     widget, _ = _make_widget()
-    widget._cmb_scenario.setCurrentText("wcScen")
+    select_identifier(widget._cmb_scenario, "wcScen")
 
     monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 2.0})
@@ -2978,8 +2985,8 @@ def test_scenario_config_button_stores_the_dialog_values(qapp, monkeypatch):
     assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
 
     # a model name without a class has nothing to configure
-    widget._cmb_scenario.addItem("noSuchModel")
-    widget._cmb_scenario.setCurrentText("noSuchModel")
+    widget._cmb_scenario.addItem("noSuchModel", "noSuchModel")
+    select_identifier(widget._cmb_scenario, "noSuchModel")
     widget._on_scenario_config()
     assert "noSuchModel" not in widget._scenario_props
 
@@ -3005,7 +3012,7 @@ def test_apply_keeps_an_explicit_scenario_set(qapp):
     pln, scenario_set = _explicit_scenario_plan()
     ws.pln = pln
 
-    assert widget._cmb_scenario.currentText() == "explicit"
+    assert widget._cmb_scenario.currentData() == "explicit"
     assert not widget._btn_scenario_config.isEnabled()
     assert not widget.has_pending_changes()
 
@@ -3015,30 +3022,30 @@ def test_apply_keeps_an_explicit_scenario_set(qapp):
     assert ws.pln.scenarios.short_name == "explicit"
     assert ws.pln.scenarios.scenario_set == scenario_set
     assert ws.pln.num_of_fractions == widget._spn_fractions.value()
-    assert widget._cmb_scenario.currentText() == "explicit"
+    assert widget._cmb_scenario.currentData() == "explicit"
 
 
 def test_selecting_another_model_replaces_an_explicit_scenario_set(qapp):
     widget, ws = _make_widget()
     ws.pln, _ = _explicit_scenario_plan()
 
-    widget._cmb_scenario.setCurrentText("wcScen")
+    select_identifier(widget._cmb_scenario, "wcScen")
     assert widget._btn_scenario_config.isEnabled()
     assert widget.has_pending_changes()
 
     widget._on_apply()
     assert ws.pln.scenarios.short_name == "wcScen"
-    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._cmb_scenario.findData("explicit") < 0
 
 
 def test_discard_returns_to_an_explicit_scenario_set(qapp):
     widget, ws = _make_widget()
     ws.pln, scenario_set = _explicit_scenario_plan()
 
-    widget._cmb_scenario.setCurrentText("wcScen")
+    select_identifier(widget._cmb_scenario, "wcScen")
     widget._btn_discard.click()
 
-    assert widget._cmb_scenario.currentText() == "explicit"
+    assert widget._cmb_scenario.currentData() == "explicit"
     assert not widget.has_pending_changes()
     assert ws.pln.scenarios.scenario_set == scenario_set
 
@@ -3047,12 +3054,12 @@ def test_explicit_scenario_entry_leaves_with_its_plan(qapp):
     widget, ws = _make_widget()
     ws.pln, _ = _explicit_scenario_plan()
     ws.pln = PhotonPlan()
-    assert widget._cmb_scenario.currentText() == "nomScen"
-    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._cmb_scenario.currentData() == "nomScen"
+    assert widget._cmb_scenario.findData("explicit") < 0
     assert widget._btn_scenario_config.isEnabled()
 
     ws.pln, _ = _explicit_scenario_plan()
     ws.pln = None
-    assert widget._cmb_scenario.currentText() == "nomScen"
-    assert widget._cmb_scenario.findText("explicit") < 0
+    assert widget._cmb_scenario.currentData() == "nomScen"
+    assert widget._cmb_scenario.findData("explicit") < 0
     assert widget._build_plan().scenarios.short_name == "nomScen"
