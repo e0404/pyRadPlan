@@ -5,11 +5,14 @@
 #
 # Environment (all optional):
 #   XPRA_PORT      port of the web client, 10000 by default
+#   XPRA_BIND      address the web client listens on, 0.0.0.0 by default; 127.0.0.1 when a
+#                  proxy in the same container authenticates the users (hub-session.sh)
 #   XPRA_PASSWORD  password the web client asks for; without it anyone who can reach the
 #                  port can use the session
 set -eu
 
 XPRA_PORT="${XPRA_PORT:-10000}"
+XPRA_BIND="${XPRA_BIND:-0.0.0.0}"
 # Xpra keeps its sockets here. Always a directory of our own: one inherited from the
 # environment may belong to someone else, and then the chmod fails.
 XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
@@ -20,8 +23,10 @@ chmod 700 "$XDG_RUNTIME_DIR"
 if [ -n "${XPRA_PASSWORD:-}" ]; then
     auth="env"
 else
-    echo "WARNING: XPRA_PASSWORD is not set, anyone who can reach port $XPRA_PORT can use this session." >&2
-    auth=allow
+    if [ "$XPRA_BIND" != "127.0.0.1" ]; then
+        echo "WARNING: XPRA_PASSWORD is not set, anyone who can reach port $XPRA_PORT can use this session." >&2
+    fi
+    auth=none
 fi
 
 # Xpra accepts one command string. Quote each argument so paths containing spaces and
@@ -30,7 +35,7 @@ start_child=$(python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "$
 
 exec xpra start :100 \
     --daemon=no \
-    --bind-tcp="0.0.0.0:$XPRA_PORT" --tcp-auth="$auth" \
+    --bind-tcp="$XPRA_BIND:$XPRA_PORT" --tcp-auth="$auth" \
     --html=on \
     --exit-with-children=yes \
     --start-child="$start_child" \
