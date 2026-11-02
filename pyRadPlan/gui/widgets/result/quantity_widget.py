@@ -990,19 +990,28 @@ class QuantityWidget(QWidget):
         """Voxel spacing in mm along the viewer's (z, x, y) axes."""
         return np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
 
+    def _view_point(self, voxel: np.ndarray) -> tuple[float, float]:
+        """In-plane view position of viewer (z, x, y) voxel coordinates.
+
+        The image items draw voxel ``i`` over ``[i, i + 1]``, so its center is at ``i + 0.5``.
+        """
+        h_axis, v_axis = self._plane_axes()
+        return float(voxel[h_axis]) + 0.5, float(voxel[v_axis]) + 0.5
+
     def _beam_radius(self, h_iso: float, v_iso: float) -> Optional[float]:
         """Source distance in mm of the beams around an isocenter, or None outside the slice.
 
-        The radius of the largest circle around the isocenter that fits in the
-        slice, so the beam lines stay inside the image instead of running off into
-        empty space, which would also widen the auto-ranged view.  Every beam gets
-        the same distance, so its source stays on its gantry orbit while dragged.
+        The radius of the largest circle around the isocenter (in view coordinates)
+        that fits within the slice's voxel centers, so the beam lines stay inside the
+        image instead of running off into empty space, which would also widen the
+        auto-ranged view.  Every beam gets the same distance, so its source stays on
+        its gantry orbit while dragged.
         """
         h_axis, v_axis = self._plane_axes()
         spacing = self._viewer_spacing()
         radius = min(
-            min(h_iso, self._ct.shape[h_axis] - 1 - h_iso) * spacing[h_axis],
-            min(v_iso, self._ct.shape[v_axis] - 1 - v_iso) * spacing[v_axis],
+            min(h_iso - 0.5, self._ct.shape[h_axis] - 0.5 - h_iso) * spacing[h_axis],
+            min(v_iso - 0.5, self._ct.shape[v_axis] - 0.5 - v_iso) * spacing[v_axis],
         )
         return float(radius) if radius > 0.0 else None
 
@@ -1116,7 +1125,7 @@ class QuantityWidget(QWidget):
             direction = np.asarray(beam["source_direction"], dtype=float)
             # Per mm along the beam, so the source lands at the radius in mm.
             direction = direction / max(float(np.linalg.norm(direction * spacing)), 1e-12)
-            h_iso, v_iso = float(iso[h_axis]), float(iso[v_axis])
+            h_iso, v_iso = self._view_point(iso)
             toward = self._toward_viewer(direction)
             d_h, d_v = float(direction[h_axis]), float(direction[v_axis])
             norm = float(np.hypot(d_h, d_v))
@@ -1231,7 +1240,7 @@ class QuantityWidget(QWidget):
         h_axis, v_axis = self._plane_axes()
         u, w = (np.asarray(vector, dtype=float) for vector in beam["orbit"])
         matrix = np.array([[u[h_axis], w[h_axis]], [u[v_axis], w[v_axis]]])
-        iso = np.array([beam["iso_center"][h_axis], beam["iso_center"][v_axis]], dtype=float)
+        iso = np.array(self._view_point(beam["iso_center"]))
         tip = self._beam_parts[i]["tip"]
         radius = self._beam_parts[i]["radius"]
 
@@ -1340,8 +1349,7 @@ class QuantityWidget(QWidget):
         else:
             return
 
-        h_axis, v_axis = self._plane_axes()
-        x, y = self._isocenter[h_axis], self._isocenter[v_axis]
+        x, y = self._view_point(self._isocenter)
         self._isocenter_item = pg.ScatterPlotItem(
             [x],
             [y],
