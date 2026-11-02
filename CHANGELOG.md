@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
+- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
 
 ## [0.7.0] - 2026-11-02
 

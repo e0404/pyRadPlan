@@ -70,6 +70,7 @@ deployment.
 | `XPRA_PASSWORD` | Password the browser asks for. **Without it anyone who can reach the port can use the session** (the container warns). |
 | `XPRA_PORT` | Port of the web client inside the container, 10000 by default. |
 | `XPRA_BIND` | Address the web client listens on, `0.0.0.0` by default. |
+| `NUMBA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` | Threads of the computations. By default, the container's CPU limit (`docker run --cpus`, a Kubernetes CPU limit), rounded up, instead of all CPUs of the host: more threads than the limit make the kernel pause the whole container, so the session stops responding during calculations. |
 | `PYRADPLAN_GUI_UI_MODE=educational` | Reduced widgets for teaching. |
 | `PYRADPLAN_BASE_DATA_PATH=/shared` | Shared base data folders: mount a folder with `phantoms/` (`.mat`, `.npz`) and, if wanted, `machines/` there and the cases are listed under File → Open Example Phantom. |
 | `PYRADPLAN_DATA_DIR` | The user's data directory (`~/.pyradplan` of the `pyradplan` user by default); mount a volume there to keep settings and added base data between sessions. |

@@ -9,7 +9,23 @@
 #                  proxy in the same container authenticates the users (hub-session.sh)
 #   XPRA_PASSWORD  password the web client asks for; without it anyone who can reach the
 #                  port can use the session
+#   NUMBA_NUM_THREADS, OMP_NUM_THREADS, OPENBLAS_NUM_THREADS
+#                  threads of the computations, by default the container's CPU limit
 set -eu
+
+# The libraries start a thread per CPU of the host, not of the container's CPU limit. With
+# more threads than the limit allows, the kernel pauses the whole container, the Xpra server
+# included, for the rest of each scheduling period, and the session stops responding.
+cpu_limit=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo max)
+quota=${cpu_limit% *}
+period=${cpu_limit#* }
+if [ "$quota" != max ]; then
+    threads=$(( (quota + period - 1) / period ))
+    cpus=$(nproc)
+    [ "$threads" -le "$cpus" ] || threads=$cpus
+    : "${NUMBA_NUM_THREADS:=$threads}" "${OMP_NUM_THREADS:=$threads}" "${OPENBLAS_NUM_THREADS:=$threads}"
+    export NUMBA_NUM_THREADS OMP_NUM_THREADS OPENBLAS_NUM_THREADS
+fi
 
 XPRA_PORT="${XPRA_PORT:-10000}"
 XPRA_BIND="${XPRA_BIND:-0.0.0.0}"
