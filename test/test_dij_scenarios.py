@@ -205,8 +205,8 @@ def test_results_per_scenario_follow_the_nominal_index(sparse_grid_set):
     np.testing.assert_allclose(out["physical_dose_scenario"][0], dij.physical_dose.flat[0] @ w)
 
 
-@pytest.mark.parametrize("scenarios", [False, [1]])
-def test_results_without_several_scenarios_have_no_scenario_keys(sparse_grid_set, scenarios):
+@pytest.mark.parametrize("scenarios", [False, []])
+def test_results_without_selected_scenarios_have_no_scenario_keys(sparse_grid_set, scenarios):
     dij = _dij(sparse_grid_set)
     out = dij.get_result_arrays_from_intensity(np.ones(N_BIX), scenarios=scenarios)
     assert not any(key.endswith("_scenario") for key in out)
@@ -512,3 +512,131 @@ def test_dij_with_a_derived_first_slot():
     assert dij.nominal_scenario_index() == 1
     quantity = QuantityResolver(dij).get("physical_dose")
     assert quantity is not None
+
+
+def _two_phase_worst_case():
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    return WorstCaseScenarioModel(
+        ct_phase=CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5])
+    ).scenarios()
+
+
+def test_attaching_a_set_after_import_keeps_each_matrix_on_its_scenario(tmp_path):
+    scen_set = _two_phase_worst_case()
+    dij = _dij(scen_set)
+
+    imported = validate_dij(_round_trip(dij, tmp_path))
+    assert imported.scenarios is None
+    imported.attach_scenarios(scen_set)
+
+    for original, restored in zip(dij.physical_dose.flat, imported.physical_dose.flat):
+        assert (sp.csc_matrix(original) != sp.csc_matrix(restored)).nnz == 0
+
+
+def test_attaching_a_mismatched_set_after_import_is_refused(tmp_path):
+    imported = validate_dij(_round_trip(_dij(_two_phase_worst_case()), tmp_path))
+    with pytest.raises(ValueError):
+        imported.attach_scenarios(_set([[0, 0, 0], [2.25, 0, 0]], [[0, 0], [0, 0]]))
+
+
+@pytest.mark.parametrize("set_name", ["two_scenario_set", "sparse_grid_set"])
+def test_own_matrad_export_imports_without_a_file(set_name, request):
+    scen_set = request.getfixturevalue(set_name)
+    dij = _dij(scen_set)
+    exported = dij.to_matrad()
+    np.testing.assert_array_equal(exported["bixelNum"].ravel(), dij.bixel_num + 1)
+    np.testing.assert_array_equal(exported["beamNum"].ravel(), dij.beam_num + 1)
+
+    imported = validate_dij(exported, scenario_model=scen_set)
+
+    np.testing.assert_array_equal(imported.bixel_num, dij.bixel_num)
+    np.testing.assert_array_equal(imported.beam_num, dij.beam_num)
+    for original, restored in zip(dij.physical_dose.flat, imported.physical_dose.flat):
+        assert (sp.csc_matrix(original) != sp.csc_matrix(restored)).nnz == 0
+
+
+def test_own_matrad_export_imports_with_one_scenario():
+    dij = _dij(NominalScenarioModel().scenarios())
+    imported = validate_dij(dij.to_matrad())
+    assert imported.physical_dose.size == 1
+    np.testing.assert_array_equal(imported.bixel_num, dij.bixel_num)
+
+
+def test_alias_scenarios_round_trip(tmp_path):
+    from pyRadPlan.scenarios import ScenarioBasis
+
+    scen_set = ScenarioSet.from_points(
+        [
+            CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5]),
+            SetupUncertainty(),
+            RangeUncertainty(),
+        ],
+        {"ct_phase": [[0], [1]]},
+        bases=[None, ScenarioBasis(coefficients={0: 1.0})],
+    )
+    matrix = sp.csc_matrix(sp.random(N_VOX, N_BIX, density=0.3, random_state=0))
+    dij = _dij(NominalScenarioModel().scenarios())
+    container = np.empty((2,), dtype=object)
+    container[0] = matrix
+    dij = dij.model_copy(update={"physical_dose": container})
+    dij.attach_scenarios(scen_set)
+
+    imported = validate_dij(_round_trip(dij, tmp_path), scenario_model=scen_set)
+
+    assert imported.physical_dose.flat[1] is imported.physical_dose.flat[0]
+    assert (sp.csc_matrix(imported.physical_dose.flat[0]) != matrix).nnz == 0
+
+
+def test_result_for_one_selected_scenario(sparse_grid_set):
+    dij = _dij(sparse_grid_set)
+    weights = np.ones(N_BIX)
+
+    out = dij.get_result_arrays_from_intensity(weights, scenarios=[2])
+
+    assert out["physical_dose_scenario"][0] is None
+    assert out["physical_dose_scenario"][1] is None
+    expected = dij.get_result_arrays_from_intensity(weights, scenario_index=2)["physical_dose"]
+    np.testing.assert_array_equal(out["physical_dose_scenario"][2], expected)
+
+
+def test_results_per_scenario_only_for_the_requested_quantities(sparse_grid_set):
+    dij = _dij(sparse_grid_set)
+    weights = np.ones(N_BIX)
+
+    out = dij.get_result_arrays_from_intensity(
+        weights, scenarios=True, scenario_quantities=["no_such_quantity"]
+    )
+    assert "physical_dose" in out and "physical_dose_scenario" not in out
+
+    out = dij.compute_result_ct_grid(
+        weights, scenarios=True, scenario_quantities=["physical_dose"]
+    )
+    assert "physical_dose_scenario" in out
+
+
+def test_matrad_patient_dij_takes_the_scenario_model_of_the_plan():
+    from pyRadPlan.io.matlab._importer import validate_matrad_patient
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.scenarios import CTPhaseUncertainty, WorstCaseScenarioModel
+
+    scen_set = _two_phase_worst_case()
+    model = WorstCaseScenarioModel(
+        ct_phase=CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5])
+    )
+    patient = validate_matrad_patient(
+        {"pln": PhotonPlan(scenarios=model).to_matrad(), "dij": _dij(scen_set).to_matrad()}
+    )
+    assert patient["dij"].scenarios == scen_set
+
+
+def test_matrad_patient_dij_not_matching_the_plan_imports_without_a_set():
+    from pyRadPlan.io.matlab._importer import validate_matrad_patient
+    from pyRadPlan.plan import PhotonPlan
+
+    pln = PhotonPlan(scenarios={"model": "wcScen", "combinations": "none"})
+    patient = validate_matrad_patient(
+        {"pln": pln.to_matrad(), "dij": _dij(_two_phase_worst_case()).to_matrad()}
+    )
+    assert patient["dij"].scenarios is None
+    assert patient["dij"].physical_dose.size == len(_two_phase_worst_case())
