@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
 ### Added
 
 - Scenario models for uncertainty handling, matching matRad's `nomScen`, `wcScen`, `impScen` and `rndScen` (realizations, probabilities, weights and the `(ct, shift, range)` layout verified against matRad reference tables): `NominalScenarioModel`, `WorstCaseScenarioModel`, `ImportanceScenarioModel` and `RandomScenarioModel` in `pyRadPlan.scenarios`, with matRad's `combinations`, `combineRange`, grid-point counts, `nSamples` and `includeNominalScenario`. A model is a pydantic configuration of *uncertainty dimensions* (`SetupUncertainty`, `RangeUncertainty`, `CTPhaseUncertainty`; each declares whether it affects geometry, range or per-voxel parameters) and a joint distribution (`IndependentGaussian` as in matRad, or a `MultivariateGaussian` with full covariance), and generates a `ScenarioSet` lazily. The set lists the realizations with probability, weight, tags and a flat index, answers `group_by`, `extent`, `voxel_param_set` and `nominal_index`, can be built from explicit points (`ScenarioSet.from_points`) and extended (`extend`), may hold *derived* scenarios defined as linear combinations of computed ones (`ScenarioBasis`; a unit coefficient shares the referenced matrices), and offers a re-tieable grid view (`layout`, `with_axes`, `isel`, `sel`, `grid_view`, optional `to_xarray`). `ExplicitScenarioModel` wraps a hand-built set; new dimensions, distributions and models register with `register_dimension`, `register_distribution` and `register_scenario_model`. User guide: *Uncertainty and Scenarios*
@@ -679,7 +681,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
