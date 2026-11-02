@@ -55,6 +55,7 @@ from .compat import (
 )
 from ._reductions import grouped_max
 from ._interpolation import ArrayBackendGridInterpolator, interpnd
+from ._interpolation1d import ArrayBackend1DInterpolator
 
 logger = logging.getLogger(__name__)
 
@@ -321,5 +322,6 @@ __all__ = [
     "interp1d",
     "interpnd",
     "ArrayBackendGridInterpolator",
+    "ArrayBackend1DInterpolator",
     "record_event",
 ]

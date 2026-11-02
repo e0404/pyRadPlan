@@ -32,7 +32,7 @@ from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
-from ...core.xp_utils import to_namespace, to_numpy
+from ...core.xp_utils import ArrayBackend1DInterpolator, to_namespace, to_numpy
 from ._particle_cutoff import CutoffQuadrature, evaluate_cutoff
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._validated_bio_kernel_energies: set[float] = set()
 
         self._kernel_cache = {}
+        self._depth_interpolator_cache = {}
+        self._focus_interpolator_cache = {}
 
         super().__init__(pln)
 
@@ -275,16 +277,22 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         return bixel
 
     def _interpolate_kernels_in_depth(self, bixel):
-        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
         kernel = bixel["kernel"]
-        depths = kernel["depths"]
+        with_bio = self._calc_bio_dose and "v_alpha_x" in bixel
+        key = (id(kernel), with_bio)
+        entry = self._depth_interpolator_cache.get(key)
+        if entry is None:
+            interpolator = self._prepare_depth_interpolator(bixel)
+            # Keep the source alive: Python must not reuse its id for another kernel.
+            self._depth_interpolator_cache[key] = (kernel, interpolator)
+        else:
+            _, interpolator = entry
+        return interpolator(bixel["rad_depths"], grid_offset=-bixel["rad_depth_offset"])
 
-        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
-
-        # Add potential offset
-        # Ensure depths is on the correct device
-        # depths = xp.asarray(depths, dtype=bixel["rad_depths"].dtype)
-        depths = depths + kernel["offset"] - bixel["rad_depth_offset"]
+    def _prepare_depth_interpolator(self, bixel):
+        """Prepare immutable energy fields; ray-dependent offsets stay in evaluation."""
+        kernel = bixel["kernel"]
+        depths = kernel["depths"] + kernel["offset"]
 
         # Conversion factor from MeV cm^2/g per primary to Gy mm^2 per 1e6 primaries
         conversion_factor = 1.6021766208e-02
@@ -312,7 +320,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels.update(bio_kernels)
 
         # Interpolate all fields in X
-        return array_interp(bixel["rad_depths"], depths, used_kernels)
+        return ArrayBackend1DInterpolator(depths, used_kernels)
 
     def _build_bio_context(
         self, bixel: dict[str, Any], kernels: dict[str, Any]
@@ -498,6 +506,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         pencil beam calculation and not for other engines.
         """
 
+        self._clear_kernel_cache()
+        self._focus_interpolator_cache.clear()
         dij = super()._init_dose_calc(ct, cst, stf)
 
         # Choose the lateral pencil beam model
@@ -744,7 +754,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # The cutoffs below depend on the SSDs of this beam and replace the kernels' previous
         # ones, so namespace copies cached for an earlier beam are stale from here on
-        self._kernel_cache.clear()
+        self._clear_kernel_cache()
 
         # conversion factor from kernel units (MeV cm^2/g per primary) to Gy mm^2 per 1e6 primaries
         # TODO: this factor should probably be in the machine data and translate to MU
@@ -979,9 +989,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         return ray
 
+    def _clear_kernel_cache(self) -> None:
+        """Invalidate converted kernels and their prepared interpolation together."""
+        self._kernel_cache.clear()
+        self._depth_interpolator_cache.clear()
+
     def _init_geometry_group(self) -> None:
         # Cached kernels carry lateral cutoffs computed for an earlier geometry (SSDs)
-        self._kernel_cache.clear()
+        self._clear_kernel_cache()
 
     def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
         scen_ray = super()._apply_scenario_to_ray(ray, scenario)
@@ -1074,8 +1089,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         np.float64
             The initial sigma for the given energy and focus index.
         """
-        focus = self._machine.foci[energy][focus_ix]
-        interpolator = interp1d(focus.dist, focus.sigma, fill_value="extrapolate")
+        key = (energy, focus_ix)
+        interpolator = self._focus_interpolator_cache.get(key)
+        if interpolator is None:
+            focus = self._machine.foci[energy][focus_ix]
+            interpolator = interp1d(focus.dist, focus.sigma, fill_value="extrapolate")
+            self._focus_interpolator_cache[key] = interpolator
         return interpolator(ssd)
 
     def _calc_sigma_rashi(self, bd_entry, range_shifter: dict, ssd: float):

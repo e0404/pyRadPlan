@@ -1,8 +1,8 @@
 # Dose performance backlog
 
-Updated 2026-11-02 while merging develop into refactor/dose-calc-performance.
+Updated 2026-11-03 after CPU particle interpolation preparation.
 This is the durable record of the outstanding work discussed with the user.
-No new performance optimization from this list is part of the update merge.
+The 2026-11-02 update merge itself contained no new performance optimization.
 
 ## Outstanding opportunities
 
@@ -10,6 +10,12 @@ No new performance optimization from this list is part of the update merge.
    energy lookups and scaled IDD tables with correct lifetimes. Investigate shared
    depth searches across IDD, widths, weights, LET and biological channels inside
    the Array API interpolation backend. Benchmark against native NumPy routines.
+   **CPU implementation and measurements completed:** focus reuse, scaled fields
+   and prepared shared searches are described in
+   [particle interpolation preparation](particle_interpolation_preparation.md).
+   GPU validation and energy-lookup preparation remain outstanding. PyTorch CPU
+   CT-grid tracing exposed a pre-existing tensor/scalar minimum incompatibility
+   in image resampling, which is recorded there for follow-up.
 2. **Shared conservative spatial candidates.** Avoid scanning every beam-valid
    voxel for every ray using BEV bins/depth slabs, then retain exact existing
    cutoff decisions. Cover divergence, anisotropy, range/setup changes and all CT
@@ -29,7 +35,8 @@ No new performance optimization from this list is part of the update merge.
    NaN behavior and diagnostics. Dynamic compaction and host-visible decisions
    remain even after the existing mask-compaction and cluster-count changes.
 
-For proton GPU performance, prioritize (3) and (5), supported by (1). The latest
+The agreed next order is (1), then (5), before (3). GPU work waits until the
+user's other GPU task finishes; the full `develop` baseline is deferred. The latest
 small proton profile attributed most GPU work to per-beamlet support selection
 and physics/interpolation, not shared ray geometry or output collection. The
 2026-10-28 recheck had unstable absolute times (NumPy 0.41-1.90 s; CuPy 7.80-8.52 s)

@@ -25,6 +25,7 @@ def xp(request):
 
 def _inputs(model):
     engine = object.__new__(ParticleHongPencilBeamEngine)
+    engine._depth_interpolator_cache = {}
     engine.lateral_model = "multi" if model == "multi_1d" else model
     engine._calc_let = engine._use_let_kernel = engine._calc_bio_dose = False
     engine._machine = SimpleNamespace(get_energy_index=lambda *_: 0)

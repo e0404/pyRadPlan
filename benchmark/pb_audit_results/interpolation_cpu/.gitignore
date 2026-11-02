@@ -1,0 +1,2 @@
+# Keep reproducible timings; console logs remain local.
+*.log

@@ -40,6 +40,7 @@ def _with_reference_params(cst, index=0, **params):
 
 def _bio_engine(kernel_names=()):
     engine = object.__new__(ParticleHongPencilBeamEngine)
+    engine._depth_interpolator_cache = {}
     engine._bio_evaluator = Wedenberg().evaluator(machine=None, voxel_params={})
     engine._bio_kernel_names = tuple(kernel_names)
     engine._bio_influence_names = engine._bio_evaluator.influence_quantity_names

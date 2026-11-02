@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ArrayBackend1DInterpolator` retains shared-axis field preparation and backend dispatch, including shared searches for PyTorch and generic Array API arrays, native NumPy interpolation, mixed field shapes/dtypes, and translated grids.
 - `core.xp_utils.grouped_max` with NumPy/CuPy indexed reduction and an Array API fallback; `ArrayBackendGridInterpolator` supports trailing value dimensions to share coordinate searches across fields.
 - `core.resample.resample_array` accepts Array API arrays and existing SimpleITK interpolator enums, preserves namespace/device/dtype, and provides `prefer_native` dispatch. Full-volume NumPy/CuPy resampling prefers SimpleITK; supported backend execution can be requested explicitly. The prepared `ArrayBackendGridResampler` now lives in the same module and also supports nearest-neighbor interpolation and constant extrapolation.
 - Backend-resident ray-tracer depth arrays and a shared Array API grid resampler with chunked linear image interpolation, nearest boundary extrapolation and NaN-aware exact-sample behavior. The image-returning ray-tracer interface remains available.
@@ -26,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Particle/VHEE depth interpolation caches scaled IDD and selected lateral, LET and biological fields per converted kernel. Focus interpolators are reused per calculation; prepared caches reset with kernel/geometry changes and engine reuse. CPU measurements and validation are documented in `docs/development/particle_interpolation_preparation.md`; GPU validation is pending.
 - Photon pencil-beam sampling prepares conservative depth-cluster counts once per beam/scenario and compacts the output mask once for Array API `take` gathers, preserving seeded sampling decisions and random draw order.
 - Photon pencil-beam evaluation caches depth-kernel constants per beam, depth dtype and device, and replaces component update loops with broadcast multiplication while preserving assignment precision before summation. Redundant query namespace dispatch is removed.
 - Pencil-beam engines prepare ray rotations in a backend-native batch per beam/shift, retaining matrices on the backend and transferring alignment flags once per beam. Existing cutoff geometry, alignment tolerance and voxel ordering are preserved.
