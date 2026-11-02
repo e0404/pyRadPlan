@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import SimpleITK as sitk
 import numpy as np
@@ -17,6 +18,7 @@ from pyRadPlan.dose.engines import (
 )
 from pyRadPlan.dose.engines._fredmc import FRED_PARTICLES
 from pyRadPlan.ct import default_hlut
+from pyRadPlan.machines import load_from_name
 
 # from pyRadPlan import generate_stf, plot_slice
 from pyRadPlan.plan import IonPlan
@@ -183,6 +185,166 @@ class Test_file_handling:
         regions = (tmp_path / "inp/regions/regions.inp").read_text()
         assert "\tscoreij=[Dose,LETd]\n" in regions
 
+    def test_simu_dir_keeps_the_simulation_files(
+        self, test_data_protons, test_plan_fred, tmp_path
+    ):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        simu_dir = tmp_path / "fred_run"
+        (simu_dir / "out").mkdir(parents=True)
+        (simu_dir / "out/stale.txt").write_text("previous run")
+        (simu_dir / "notes.txt").write_text("not FRED's")
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": True, "simu_dir": str(simu_dir)})
+
+        engine = get_engine(pln)
+        temp_root = engine._fred_root_folder
+        engine.calc_dose_influence(ct_mat, cst_mat, stf)
+
+        assert engine.simu_dir == simu_dir.resolve()
+        assert (simu_dir / "inp/fred.inp").exists()
+        assert (simu_dir / "inp/plan/planDelivery.inp").exists()
+        assert (simu_dir / "inp/regions/CTpatient.mhd").exists()
+        assert not (simu_dir / "out/stale.txt").exists()
+        assert (simu_dir / "notes.txt").exists()
+        assert not temp_root.exists()
+
+    def test_use_output_inside_simu_dir_is_read(self, test_data_protons, test_plan_fred, tmp_path):
+        _, ct_mat, cst_mat, stf, dij_mat, _ = test_data_protons
+        shutil.copytree("test/data/mc_fred/out", tmp_path / "out")
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"simu_dir": str(tmp_path), "use_output": str(tmp_path / "out")})
+
+        dij = calc_dose_influence(ct_mat, cst_mat, stf, pln)
+
+        assert (tmp_path / "out/scoreij/Phantom.Dose.bin").exists()
+        np.testing.assert_allclose(
+            dij.physical_dose.flat[0].toarray(),
+            dij_mat.physical_dose.flat[0].toarray(),
+            atol=1e-2,
+        )
+
+    @pytest.mark.parametrize("forward", [False, True])
+    def test_ignore_outside_patient(self, test_data_protons, test_plan_fred, forward):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"use_output": "test/data/mc_fred/out"})
+        weights = np.ones(stf.total_number_of_bixels)
+
+        def calc(zero_outside):
+            engine = get_engine(pln)
+            engine.ignore_outside_patient = zero_outside
+            # The forward result is resampled to the CT grid, so take the dose-grid matrix
+            masked = []
+            mask = engine._mask_outside_patient
+            engine._mask_outside_patient = lambda m: masked.append(mask(m)) or masked[-1]
+            if forward:
+                engine.calc_dose_forward(ct_mat, cst_mat, stf, weights)
+            else:
+                engine.calc_dose_influence(ct_mat, cst_mat, stf)
+            return engine, masked[0].toarray()
+
+        _, full = calc(False)
+        engine, masked = calc(True)
+        inside = engine._vdose_grid_mask
+
+        assert np.any(full[~inside] != 0)
+        assert not np.any(masked[~inside])
+        np.testing.assert_array_equal(masked[inside], full[inside])
+
+    def test_dose_per_beam_reads_one_output_per_beam(
+        self, test_data_protons, test_plan_fred, tmp_path
+    ):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        stored = Path("test/data/mc_fred/out/score/Phantom.Dose.mhd")
+        dose = sitk.ReadImage(str(stored))
+        for b in range(len(stf.beams)):
+            (tmp_path / f"beam_{b}/score").mkdir(parents=True)
+            sitk.WriteImage(dose * (b + 1), str(tmp_path / f"beam_{b}/score/Phantom.Dose.mhd"))
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"use_output": str(tmp_path)})
+
+        result = calc_dose_forward(ct_mat, cst_mat, stf, pln)
+
+        beams = [sitk.GetArrayFromImage(image) for image in result["physical_dose_beam"]]
+        assert len(beams) == len(stf.beams)
+        assert beams[0].max() > 0
+        for b, beam in enumerate(beams):
+            np.testing.assert_allclose(beam, (b + 1) * beams[0], rtol=1e-5)
+        np.testing.assert_allclose(
+            sitk.GetArrayFromImage(result["physical_dose"]), sum(beams), rtol=1e-5
+        )
+
+    @pytest.mark.parametrize("forward", [True, False])
+    def test_external_calculation_only_writes_the_input(
+        self, test_data_protons, test_plan_fred, tmp_path, monkeypatch, caplog, forward
+    ):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(ParticleFredMCEngine, "_call_fred", lambda self: pytest.fail())
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": True})
+        caplog.set_level(logging.INFO)
+
+        if forward:
+            result = calc_dose_forward(ct_mat, cst_mat, stf, pln)
+            beams = result["physical_dose_beam"]
+            assert len(beams) == len(stf.beams)
+            assert not sitk.GetArrayFromImage(result["physical_dose"]).any()
+            runs = [f"beam_{b}/" for b in range(len(stf.beams))]
+        else:
+            dij = calc_dose_influence(ct_mat, cst_mat, stf, pln)
+            dose = dij.physical_dose.flat[0]
+            assert dose.shape == (dij.dose_grid.num_voxels, stf.total_number_of_bixels)
+            assert dose.nnz == 0
+            runs = [""]
+
+        (root,) = (tmp_path / "fred").iterdir()
+        for run in runs:
+            assert (root / f"inp/{run}fred.inp").exists()
+            assert (root / f"inp/{run}plan/planDelivery.inp").exists()
+        assert f"external_calculation='{root / 'out'}'" in caplog.text
+
+    def test_external_calculation_folder_is_read_like_use_output(
+        self, test_data_protons, test_plan_fred
+    ):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+
+        def dose(setting):
+            pln = test_plan_fred.model_copy(deep=True)
+            pln.prop_dose_calc.update({setting: "test/data/mc_fred/out"})
+            return calc_dose_influence(ct_mat, cst_mat, stf, pln).physical_dose.flat[0]
+
+        external = dose("external_calculation")
+        assert external.nnz > 0
+        assert (external != dose("use_output")).nnz == 0
+
+    def test_missing_output_is_an_error(self, test_data_protons, test_plan_fred, tmp_path):
+        _, ct_mat, cst_mat, stf, _, _ = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"external_calculation": str(tmp_path)})
+
+        with pytest.raises(FileNotFoundError, match="No FRED dose output found"):
+            calc_dose_influence(ct_mat, cst_mat, stf, pln)
+
+    def test_layer_energy_is_the_spectrum_mean(self, test_data_protons, test_plan_fred):
+        _, _, _, stf, _, _ = test_data_protons
+        engine = get_engine(test_plan_fred)
+        engine._machine = load_from_name("protons", "Generic")
+        engine._calc_dose_direct = False
+        beam = stf.beams[0]
+
+        layers = engine._generate_layers_fred(beam, 0)
+        for layer, energy in zip(layers, beam.energy_layers.values()):
+            spectrum = engine._machine.spectra[energy["full_energy"]]
+            assert layer["energy"] == spectrum.mean
+            assert layer["ESpread"] == spectrum.fwhm
+
+        engine._machine.spectra = None
+        layers = engine._generate_layers_fred(beam, 0)
+        for layer, energy in zip(layers, beam.energy_layers.values()):
+            assert layer["energy"] == energy["full_energy"]
+            assert layer["ESpread"] == 0.0
+
     def test_missing_let_output_is_an_error(self, test_data_protons, test_plan_fred):
         """Output without the LETd scorer must not give zero LET and bio dose."""
         _, ct_mat, cst_mat, stf, _, _ = test_data_protons
@@ -346,11 +508,8 @@ class Test_file_correctness:
         phantom_dose, _ = test_data_fred_out
         pln = test_plan_fred
 
-        pln.prop_dose_calc.update(
-            {
-                "save_output": str(tmp_path),
-            }
-        )
+        # The reference is the score of one combined run
+        pln.prop_dose_calc.update({"save_output": str(tmp_path), "dose_per_beam": False})
         result_py = calc_dose_forward(ct_mat, cst_mat, stf_mat, pln)
 
         assert (tmp_path / "out/score/Phantom.Dose.mhd").exists()
@@ -448,6 +607,45 @@ class Test_calc_dose_forward:
         result_matRad_rot = np.swapaxes(result_mat["physicalDose"], 0, 1)
         # TODO: 1e-4 should be possible!
         assert np.allclose(result_py, result_matRad_rot, atol=1e-3)
+
+    def test_dose_per_beam(self, test_data_protons, test_plan_fred, tmp_path):
+        pln, ct_mat, cst_mat, stf, _, result_mat = test_data_protons
+        pln = test_plan_fred
+        pln.prop_dose_calc.update({"simu_dir": str(tmp_path)})
+
+        result = calc_dose_forward(ct_mat, cst_mat, stf, pln)
+
+        for b in range(len(stf.beams)):
+            assert (tmp_path / f"inp/beam_{b}/fred.inp").exists()
+            assert (tmp_path / f"out/beam_{b}/score/Phantom.Dose.mhd").exists()
+            beam_dose = sitk.GetArrayFromImage(result["physical_dose_beam"][b])
+            reference = np.swapaxes(result_mat[f"physicalDose_beam{b + 1}"], 0, 1)
+            assert np.allclose(beam_dose, reference, atol=1e-3)
+        total = sitk.GetArrayFromImage(result["physical_dose"])
+        assert np.allclose(total, np.swapaxes(result_mat["physicalDose"], 0, 1), atol=1e-3)
+
+    def test_external_calculation_round_trip(self, test_data_protons, test_plan_fred, tmp_path):
+        """Write the input only, run FRED on it by hand, then read the result back."""
+        _, ct_mat, cst_mat, stf, _, result_mat = test_data_protons
+        write_pln = test_plan_fred.model_copy(deep=True)
+        write_pln.prop_dose_calc.update({"external_calculation": True, "simu_dir": str(tmp_path)})
+        calc_dose_forward(ct_mat, cst_mat, stf, write_pln)
+
+        for b in range(len(stf.beams)):
+            out = tmp_path / f"out/beam_{b}"
+            subprocess.run(
+                f'fred -f fred.inp -o "{out}"',
+                cwd=tmp_path / f"inp/beam_{b}",
+                shell=True,
+                check=True,
+            )
+
+        read_pln = test_plan_fred.model_copy(deep=True)
+        read_pln.prop_dose_calc.update({"external_calculation": str(tmp_path / "out")})
+        result = calc_dose_forward(ct_mat, cst_mat, stf, read_pln)
+
+        total = sitk.GetArrayFromImage(result["physical_dose"])
+        assert np.allclose(total, np.swapaxes(result_mat["physicalDose"], 0, 1), atol=1e-3)
 
     def test_use_output(self, test_data_protons, test_plan_fred, tmp_path):
         pln, ct_mat, cst_mat, stf_mat, _, result_mat = test_data_protons

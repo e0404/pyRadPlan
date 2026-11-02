@@ -40,6 +40,9 @@ num_threads : int
     Number of CPU threads used for simulation execution.
 num_runs : int
     Number of Monte Carlo runs for statistical averaging.
+ignore_outside_patient : bool
+    Zero the dose (and LET / biological quantities) in voxels outside all cst structures.
+    Defaults to False.
 
 external_calculation : bool | str
     Flag or mode indicating whether external TOPAS execution is used.
@@ -146,6 +149,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     scaling_factor: float
     num_threads: int
     num_runs: int
+    ignore_outside_patient: bool
 
     physics_modules: list[str]
     base_topas_folder = resources.files("pyRadPlan.data.topas")
@@ -204,6 +208,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self.rsp_material = "G4_WATER"
 
         self.scaling_factor = 1e6
+        self.ignore_outside_patient = False
 
         self.external_calculation = True
         self.calc_bio_dose = "auto"
@@ -693,11 +698,12 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             self._write_patient_file(ct)
         else:
             dij = self._read_external(dij)
-            # set dose outside of the patient to 0
-            for q_name in self._computed_quantities:
-                dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
+            if self.ignore_outside_patient:
+                for q_name in self._computed_quantities:
+                    dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
             if self._let_dose is not None:
-                self._let_dose[~self._vdose_grid_mask, :] = 0.0
+                if self.ignore_outside_patient:
+                    self._let_dose[~self._vdose_grid_mask, :] = 0.0
                 self._store_let_quantities(dij, self._let_dose)
 
         dij = self._finalize_dose(dij)

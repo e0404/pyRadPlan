@@ -428,6 +428,41 @@ def test_topas_reads_dose_to_water_when_only_that_is_scored(test_data_protons, t
     np.testing.assert_allclose(medium, 10 * water, rtol=1e-5)
 
 
+def test_topas_ignore_outside_patient(test_data_protons, tmp_path):
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    probe = ParticleTOPASMCEngine(_topas_plan(pln, "none", simu_dir=tmp_path / "inp"))
+    probe._init_dose_calc(ct, cst, stf)
+    cube = np.random.default_rng(3).random(tuple(probe.dose_grid.dimensions[::-1])) + 1.0
+    _write_topas_output(tmp_path, "physicalDose", [cube] * len(stf.beams), 2)
+    w = np.ones(stf.total_number_of_bixels)
+
+    def dose_grid_dose(ignore_outside):
+        engine = ParticleTOPASMCEngine(
+            _topas_plan(
+                pln,
+                "none",
+                external_calculation=str(tmp_path),
+                ignore_outside_patient=ignore_outside,
+            )
+        )
+        # The forward result is resampled to the CT grid, so take the dose-grid dij
+        doses = []
+        finalize = engine._finalize_dose
+        engine._finalize_dose = lambda dij: (
+            doses.append(np.asarray(dij["physical_dose"].flat[0])) or finalize(dij)
+        )
+        engine.calc_dose_forward(ct, cst, stf, w)
+        return engine, doses[0]
+
+    _, full = dose_grid_dose(False)
+    engine, masked = dose_grid_dose(True)
+    inside = engine._vdose_grid_mask
+
+    assert np.all(full[~inside] > 0)
+    assert not np.any(masked[~inside])
+    np.testing.assert_array_equal(masked[inside], full[inside])
+
+
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
