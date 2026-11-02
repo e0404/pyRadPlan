@@ -84,7 +84,7 @@ dependencies = [
 matlab = ["matlabengine"]
 octave = ["oct2py"]
 # Only the core Qt modules are used, so the ~450 MB PySide6 add-ons are not pulled in.
-gui    = ["pyside6-essentials>=6.4,<6.12", "pyqtgraph>=0.12.0"]
+gui    = ["pyside6-essentials>=6.4,<6.13", "pyqtgraph>=0.12.0"]
 numba  = ["numba>=0.61.0"]
 
 # Optional compute backends. The core is array-API based (array_api_compat), so
