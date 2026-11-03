@@ -388,8 +388,15 @@ class ArrayBackendGridResampler:
             )
         if self.same_grid:
             return xp.take(xp.reshape(values, (-1,)), self.indices, axis=0)
-        result = xp.empty(self.indices.shape, dtype=values.dtype, device=self.device)
         nx = self.target_dimensions[0]
+        evaluate = (
+            interpolate_image_linear
+            if self.interpolator == sitk.sitkLinear
+            else interpolate_image_nearest
+        )
+        # Concatenate chunks rather than writing into a preallocated result, which
+        # immutable backends such as JAX do not support.
+        chunks = []
         for start in range(0, self.indices.shape[0], self.chunk_size):
             stop = min(start + self.chunk_size, self.indices.shape[0])
             indices = self.indices[start:stop]
@@ -398,10 +405,7 @@ class ArrayBackendGridResampler:
             queries = xp.take(self.start, row, axis=0) + fraction * xp.take(
                 self.vector, row, axis=0
             )
-            evaluate = (
-                interpolate_image_linear
-                if self.interpolator == sitk.sitkLinear
-                else interpolate_image_nearest
-            )
-            result[start:stop] = evaluate(values, queries, extrapolate=self.extrapolate)
-        return result
+            chunks.append(evaluate(values, queries, extrapolate=self.extrapolate))
+        if not chunks:
+            return xp.empty(self.indices.shape, dtype=values.dtype, device=self.device)
+        return chunks[0] if len(chunks) == 1 else xp.concat(chunks)

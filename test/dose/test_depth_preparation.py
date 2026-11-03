@@ -13,14 +13,25 @@ from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
 
 
-@pytest.mark.parametrize("backend", ["numpy", "cupy", "array_api_strict"])
+@pytest.mark.parametrize("backend", ["numpy", "cupy", "array_api_strict", "jax.numpy"])
 @pytest.mark.parametrize("trace_on_dose_grid", [False, True])
 @pytest.mark.parametrize("keep", [False, True])
-def test_depth_selection_and_retained_images(monkeypatch, backend, trace_on_dose_grid, keep):
+def test_depth_selection_and_retained_images(
+    request, monkeypatch, backend, trace_on_dose_grid, keep
+):
     """Keep values on device unless images are requested, preserving selected depths."""
     module = pytest.importorskip(backend)
     if backend == "cupy" and not module.cuda.is_available():
         pytest.skip("CUDA unavailable")
+    if backend == "jax.numpy":
+        # Float32 coordinates move NaN footprints at exact voxel boundaries.
+        jax = pytest.importorskip("jax")
+        request.addfinalizer(
+            lambda previous=jax.config.jax_enable_x64: jax.config.update(
+                "jax_enable_x64", previous
+            )
+        )
+        jax.config.update("jax_enable_x64", True)
     xp = array_api_compat.get_namespace(module.asarray([0.0]))
     values = np.random.default_rng(21).uniform(size=(9, 8, 7)).astype(np.float32)
     values.ravel()[::13] = np.nan

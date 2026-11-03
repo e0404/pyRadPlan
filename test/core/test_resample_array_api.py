@@ -1,5 +1,7 @@
 """Public array resampling preserves enums, geometry, namespace and compatibility."""
 
+import importlib
+
 import array_api_compat
 import numpy as np
 import pytest
@@ -10,13 +12,22 @@ from pyRadPlan.core.resample import resample_image, resample_numpy_array
 from pyRadPlan.core.xp_utils import to_numpy
 
 
-@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy"])
+@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy", "jax.numpy"])
 def xp(request):
-    """Exercise host, device and strict Array API execution."""
+    """Exercise host, device, strict and immutable Array API execution."""
     module = pytest.importorskip(request.param)
     if request.param == "cupy" and not module.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    return array_api_compat.array_namespace(module.asarray([0.0]))
+    if request.param == "jax.numpy":
+        jax = importlib.import_module("jax")
+        previous = jax.config.jax_enable_x64
+        jax.config.update("jax_enable_x64", True)
+        try:
+            yield array_api_compat.array_namespace(module.asarray([0.0]))
+        finally:
+            jax.config.update("jax_enable_x64", previous)
+    else:
+        yield array_api_compat.array_namespace(module.asarray([0.0]))
 
 
 def images(dtype=np.float32):

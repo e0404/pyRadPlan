@@ -1,5 +1,7 @@
 """Backend image resampling agrees with SimpleITK, including invalid depths."""
 
+import importlib
+
 import array_api_compat
 import numpy as np
 import pytest
@@ -12,13 +14,22 @@ from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.core.xp_utils._image_interpolation import interpolate_image_linear
 
 
-@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy"])
+@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy", "jax.numpy"])
 def xp(request):
-    """Provide a real backend or the strict Array API reference."""
+    """Provide a real (also immutable) backend or the strict Array API reference."""
     module = pytest.importorskip(request.param)
     if request.param == "cupy" and not module.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    return array_api_compat.get_namespace(module.asarray([0.0]))
+    if request.param == "jax.numpy":
+        jax = importlib.import_module("jax")
+        previous = jax.config.jax_enable_x64
+        jax.config.update("jax_enable_x64", True)
+        try:
+            yield array_api_compat.get_namespace(module.asarray([0.0]))
+        finally:
+            jax.config.update("jax_enable_x64", previous)
+    else:
+        yield array_api_compat.get_namespace(module.asarray([0.0]))
 
 
 @pytest.mark.parametrize("shape", [(5, 6, 7), (1, 6, 7)])
@@ -86,6 +97,18 @@ def test_matching_grid_and_empty_selection(xp):
     for indices in ([26, 0, 3, 3], []):
         sample = ArrayBackendGridResampler(grid, grid, xp.asarray(indices, dtype=xp.int64))
         np.testing.assert_array_equal(to_numpy(sample(values)), np.array(indices))
+
+
+def test_empty_selection_on_different_grid(xp):
+    """An empty selection yields an empty result of the image dtype without interpolating."""
+    source = Grid(resolution=dict(x=1.0, y=1.0, z=1.0), dimensions=(3, 3, 3))
+    target = source.resample(dict(x=0.7, y=1.3, z=0.9))
+    values = xp.reshape(xp.arange(27, dtype=xp.float32), (3, 3, 3))
+    sample = ArrayBackendGridResampler(source, target, xp.asarray([], dtype=xp.int64))
+    actual = sample(values)
+    assert actual.shape == (0,)
+    assert actual.dtype == values.dtype
+    assert array_api_compat.array_namespace(actual) == xp
 
 
 @pytest.mark.parametrize("indices", [[-1], [27]])
