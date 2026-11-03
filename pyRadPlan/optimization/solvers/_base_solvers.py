@@ -36,9 +36,9 @@ class SolverBase(ConfigurableAlgorithm, ABC):
         Bounds for the variables
     """
 
-    name = ClassVar[str]
-    short_name = ClassVar[str]
-    gpu_compatible = ClassVar[bool]
+    name: ClassVar[str] = None
+    short_name: ClassVar[str] = None
+    gpu_compatible: ClassVar[bool] = False
 
     allow_keyboard_cancel: Annotated[bool, _NOT_CONFIGURABLE] = False
     cancel_key: Annotated[str, _NOT_CONFIGURABLE] = "q"
@@ -57,7 +57,6 @@ class SolverBase(ConfigurableAlgorithm, ABC):
     def __init__(self):
         self.max_time = 3600
         self.bounds = [0.0, np.inf]
-        self.device = None
         self.status_callback = None
         # Keyboard listener utility (manages platform specifics internally)
         self._keyboard_listener = KeyboardListener(

@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
 - `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
 - DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- IPOPT solver ignored `bounds` (always solved on [0, inf)), wrote the solution into the caller's `x0` and returned garbage for a float32 `x0`
+- SciPy solver ignored `max_time`, and cancelling a TNC run raised `StopIteration` instead of returning the last iterate
+- SciPy and IPOPT solvers evaluated a CPU torch `x0` on the GPU (and returned it there) when a GPU is preferred
+- ipax solver reported `num_iter` one too high (ipax also counts the starting point)
+- `register_solver` accepted a solver without `short_name`
 
 ## [0.6.0] - 2026-10-28
 
