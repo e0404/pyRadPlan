@@ -1197,8 +1197,8 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         ct : CT
             The CT object containing the patient data.
         """
-        self._set_up_patient_ct(ct)
         self._set_up_hu_table()
+        self._set_up_patient_ct(self._scenario_ct(ct))
         self._write_run_file()
         self._write_regions_file()
         self._write_plan_delivery_file()
@@ -1292,26 +1292,24 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         # Loop over all requested quantities
         for q_name in names:
             # Create dij list for each quantity
-            dij[q_name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+            dij[q_name] = np.empty((len(self._scenarios),), dtype=object)
 
             # Loop over all scenarios and preallocate quantity containers
             # TODO: write test for this
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    if self._calc_dose_direct:
-                        dij[q_name].flat[i] = np.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                        )
-                    # else:
-                    #     # This could probably be optimized by using direct access to the
-                    #     # lil_matrix's data structures
-                    #     # TODO: we could store a single sparse pattern matrix and then only store
-                    #     # the values for all quantities for better memory management
-                    #     dij[q_name].flat[i] = lil_matrix(
-                    #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
-                    #         dtype=np.float32,
-                    #     )
+            for i in self._scenarios.computed_indices():
+                if self._calc_dose_direct:
+                    dij[q_name].flat[i] = np.zeros(
+                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                    )
+                # else:
+                #     # This could probably be optimized by using direct access to the
+                #     # lil_matrix's data structures
+                #     # TODO: we could store a single sparse pattern matrix and then only store
+                #     # the values for all quantities for better memory management
+                #     dij[q_name].flat[i] = lil_matrix(
+                #         (self._num_of_columns_dij, self.dose_grid.num_voxels),
+                #         dtype=np.float32,
+                #     )
 
             self._computed_quantities.append(q_name)
 
@@ -1323,7 +1321,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         Raises
         ------
-        SystemExit
+        RuntimeError
             If the FRED execution fails.
         """
         output_path = os.path.abspath(self._output_dir)
@@ -1339,12 +1337,14 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             )
             logger.info("FRED command: %s", execute_cmd)
             self._run_fred_process(execute_cmd)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             logger.error(
                 "FRED did not finish within execution_timeout=%s s (GPU busy or hung?).",
                 self.execution_timeout,
             )
-            raise SystemExit("Aborting... FRED execution timed out")
+            raise RuntimeError(
+                f"FRED did not finish within execution_timeout={self.execution_timeout} s"
+            ) from e
         except subprocess.CalledProcessError as e:
             stdout_msg = e.stdout.decode(errors="ignore") if e.stdout else ""
             stderr_msg = e.stderr.decode(errors="ignore") if e.stderr else ""
@@ -1354,13 +1354,13 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 stdout_msg,
                 stderr_msg or "No error details available",
             )
-            raise SystemExit("Aborting...")
+            raise RuntimeError(f"FRED execution failed with return code {e.returncode}") from e
         except FileNotFoundError as e:
             logger.error(
                 "FRED executable not found: %s. Ensure 'fred' is in PATH.",
                 e,
             )
-            raise SystemExit("Aborting... FRED not found")
+            raise RuntimeError(f"FRED executable not found: {e}") from e
         else:
             t_end = time.time()
             logger.info("Done in %f seconds.", t_end - t_start)
@@ -1458,6 +1458,9 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self, ct: CT, cst: StructureSet, stf: SteeringInformation
     ) -> dict[str, Any]:
         if self._fred_root_is_temp and self._fred_root_folder.exists():
+            # Failed simulations can leave partial scorer files as well as inputs. Start every
+            # attempt with a clean tree so a retry cannot read or save an earlier run's output.
+            # Only our temporary tree is removed; `use_output` belongs to the caller.
             shutil.rmtree(self._fred_root_folder)
         self._create_working_dirs()
 
@@ -1500,20 +1503,18 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         """
         if self.external_calculation is not True:
             # Loop over all scenarios and remove dose influence for voxels outside of segmentations
-            for i in range(self.mult_scen.scen_mask.size):
-                # Only if there is a scenario we will allocate
-                if self.mult_scen.scen_mask.flat[i]:
-                    # Loop over all used quantities
-                    for q_name in self._computed_quantities:
-                        if not self._calc_dose_direct:
-                            tmp_matrix = dij[q_name].flat[i]
+            for i in self._scenarios.computed_indices():
+                # Loop over all used quantities
+                for q_name in self._computed_quantities:
+                    if not self._calc_dose_direct:
+                        tmp_matrix = dij[q_name].flat[i]
 
-                            if not isinstance(tmp_matrix, sparse.csc_array):
-                                tmp_matrix = sparse.csc_array(tmp_matrix)
+                        if not isinstance(tmp_matrix, sparse.csc_array):
+                            tmp_matrix = sparse.csc_array(tmp_matrix)
 
-                            tmp_matrix.eliminate_zeros()
-                            dij[q_name].flat[i] = tmp_matrix
-                            # dij[q_name].flat[i].data *= self.scaling_factor
+                        tmp_matrix.eliminate_zeros()
+                        dij[q_name].flat[i] = tmp_matrix
+                        # dij[q_name].flat[i].data *= self.scaling_factor
 
             # if self.keep_rad_depth_cubes and self._rad_depth_cubes:
             #     dij["rad_depth_cubes"] = self._rad_depth_cubes

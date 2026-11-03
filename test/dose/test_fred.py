@@ -392,6 +392,35 @@ class Test_file_handling:
         np.testing.assert_array_equal(hu, default_hlut()[:, 0])
         np.testing.assert_array_equal(rsp, default_hlut()[:, 1])
 
+    def test_retry_does_not_reuse_output_from_failed_calculation(
+        self, test_data_protons, test_plan_fred, monkeypatch
+    ):
+        _, ct, cst, stf, _, _ = test_data_protons
+        engine = get_engine(test_plan_fred)
+        attempts = 0
+
+        def simulate_fred():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                engine._output_dir.mkdir()
+                (engine._output_dir / "partial-score.bin").write_bytes(b"incomplete output")
+                raise subprocess.CalledProcessError(1, "fred")
+            # A failed simulation can leave scorer files that the next simulation does
+            # not overwrite. Neither reading nor saving the retry may pick these up.
+            assert not engine._output_dir.exists()
+            shutil.copytree("test/data/mc_fred/out", engine._output_dir)
+
+        monkeypatch.setattr(engine, "_call_fred", simulate_fred)
+        try:
+            with pytest.raises(subprocess.CalledProcessError):
+                engine.calc_dose_influence(ct, cst, stf)
+            dij = engine.calc_dose_influence(ct, cst, stf)
+            assert attempts == 2
+            assert dij.physical_dose.flat[0].nnz > 0
+        finally:
+            shutil.rmtree(engine._fred_root_folder, ignore_errors=True)
+
     # this test basically tests if fred is properly working.
     @pytest.mark.skipif(
         not is_fred_installed(),
@@ -741,3 +770,58 @@ class TestIonRadiationModes:
         engine._machine = type("Machine", (), {"radiation_mode": "electrons"})()
         with pytest.raises(ValueError, match="FRED cannot simulate radiation mode 'electrons'"):
             engine._write_plan_delivery_file()
+
+
+def test_mc_engine_reduces_a_4d_ct_to_the_scenario_phase(test_data_protons, test_plan_fred):
+    from pyRadPlan.ct import CT, validate_ct
+    from pyRadPlan.scenarios import (
+        CTPhaseUncertainty,
+        RangeUncertainty,
+        ScenarioSet,
+        SetupUncertainty,
+    )
+
+    ct = validate_ct(test_data_protons[1])
+    phase1 = ct.cube_hu + 100.0
+    ct4d = CT(cube_hu=sitk.JoinSeries([ct.cube_hu, phase1]))
+    engine = ParticleFredMCEngine(test_plan_fred)
+    engine._scenarios_override = ScenarioSet.from_points(
+        (
+            CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5]),
+            SetupUncertainty(),
+            RangeUncertainty(),
+        ),
+        {"ct_phase": [[1]]},
+    )
+    engine._scenarios = engine._resolve_scenarios(ct4d)
+
+    reduced = engine._scenario_ct(ct4d)
+    assert reduced.num_of_ct_scen == 1
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(reduced.cube_hu), sitk.GetArrayFromImage(phase1)
+    )
+    assert engine._scenario_ct(ct) is ct
+
+
+@pytest.mark.parametrize(
+    "error,message",
+    [
+        (FileNotFoundError("fred"), "not found"),
+        (subprocess.CalledProcessError(3, "fred"), "return code 3"),
+        (subprocess.TimeoutExpired("fred", 1.0), "did not finish"),
+    ],
+)
+def test_failing_fred_execution_raises_a_catchable_error(
+    test_data_protons, tmp_path, monkeypatch, error, message
+):
+    engine = ParticleFredMCEngine(test_data_protons[0])
+    engine._fred_root_folder = str(tmp_path)
+    engine._inp_dir = str(tmp_path)
+
+    def run(_cmd):
+        raise error
+
+    monkeypatch.setattr(engine, "_run_fred_process", run)
+
+    with pytest.raises(RuntimeError, match=message):
+        engine._call_fred()

@@ -76,10 +76,12 @@ Key fields
      - Biological model (see :ref:`concept_bio_model`). Defaults to ``"constant_rbe"`` for
        protons, ``"HEL"`` for helium, ``"alpha_beta_kernels"`` for carbon and oxygen, and
        ``"none"`` for photons and VHEE.
-   * - ``mult_scen``
+   * - ``scenarios``
      - nominal
-     - Uncertainty / robustness scenario model
-       (:class:`~pyRadPlan.scenarios.ScenarioModel`). Defaults to the nominal scenario.
+     - Uncertainty scenario model (:class:`~pyRadPlan.scenarios.ScenarioModel`, a model name,
+       a parameter dictionary or a :class:`~pyRadPlan.scenarios.ScenarioSet`). Defaults to the
+       nominal scenario; ``mult_scen`` / ``multScen`` are accepted as aliases. See
+       :ref:`concept_uncertainty`.
 
 .. _concept_bio_model:
 

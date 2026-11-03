@@ -20,7 +20,7 @@ from pyRadPlan.core import Grid
 from pyRadPlan.dose.engines import (
     DoseEngineBase,
 )
-from pyRadPlan.scenarios import NominalScenario
+from pyRadPlan.scenarios import NominalScenarioModel
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_DoseEngineBase_init(test_data_protons):
     assert dose_engine.is_dose_engine == True
     assert dose_engine.dose_grid["resolution"] == {"x": 10, "y": 10, "z": 10}
     assert dose_engine._ct_grid == None
-    assert isinstance(dose_engine.mult_scen, NominalScenario)
+    assert isinstance(dose_engine.mult_scen, NominalScenarioModel)
 
 
 def test_assign_properties_from_pln(test_data_protons):
@@ -169,3 +169,25 @@ def test_init_dose_calc_rejects_plan_machine_not_matching_stf(test_data_protons)
     dose_engine = DummyDoseEngine(pln)
     with pytest.raises(ValueError, match="does not match"):
         dose_engine._init_dose_calc(ct, cst, stf)
+
+
+def test_nominal_only_dimensions_treat_a_mean_offset_as_perturbation():
+    from pyRadPlan.dose.engines._base import _nominal_only_dimensions
+    from pyRadPlan.scenarios import RangeUncertainty, ScenarioSet, SetupUncertainty
+
+    offset = SetupUncertainty(shift_mean=(5.0, 0.0, 0.0))
+    shifted = ScenarioSet.from_points([offset, RangeUncertainty()], {"setup": [[5.0, 0, 0]]})
+    assert _nominal_only_dimensions(shifted) == ("range",)
+    plain = ScenarioSet.from_points(
+        [SetupUncertainty(), RangeUncertainty()], {"setup": [[0.0, 0, 0]]}
+    )
+    assert _nominal_only_dimensions(plain) == ("setup", "range")
+
+
+def test_resolve_scenarios_converts_matrad_ct_scen_prob(test_data_photons):
+    from pyRadPlan.dose.engines import get_engine
+
+    pln, ct, _, _, _, _ = test_data_photons
+    engine = get_engine(pln)
+    engine._scenarios_override = {"model": "nomScen", "ctScenProb": [(1, 1.0)]}
+    assert engine._resolve_scenarios(ct).ct_phases().tolist() == [0]

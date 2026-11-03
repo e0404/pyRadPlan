@@ -10,14 +10,18 @@ import pytest
 
 pty = pytest.importorskip("pty", reason="needs a POSIX pseudo terminal")
 
+# The longer gap keeps a loaded machine (macOS CI runners) from delaying the parts of a split
+# escape sequence so much that they read as separate key presses.
 _CHILD = """
 import time
+from pyRadPlan.util import keyboard_listener
 from pyRadPlan.util.keyboard_listener import KeyboardListener
+keyboard_listener._ESCAPE_SEQUENCE_GAP = 1.0
 kb = KeyboardListener(allow_keyboard_cancel=True)
 kb.initialize()
 print("READY", flush=True)
 t0 = time.time()
-while time.time() - t0 < 2 and not kb.stop_event.is_set():
+while time.time() - t0 < 3 and not kb.stop_event.is_set():
     time.sleep(0.05)
 print("CANCELLED" if kb.stop_event.is_set() else "RUNNING", flush=True)
 kb.finalize()
@@ -36,15 +40,17 @@ def _read_until(fd, token, timeout=20.0):
     return out
 
 
-def _press_in_terminal(keys: bytes) -> str:
-    """Run a listener in a child owning a pseudo terminal and type *keys* into it."""
+def _press_in_terminal(*chunks: bytes) -> str:
+    """Run a listener in a child owning a pseudo terminal and send *chunks* into it."""
     pid, fd = pty.fork()
     if pid == 0:
         os.execv(sys.executable, [sys.executable, "-c", _CHILD])
     try:
         assert b"READY" in _read_until(fd, b"READY")
         time.sleep(0.2)
-        os.write(fd, keys)
+        for chunk in chunks:
+            os.write(fd, chunk)
+            time.sleep(0.02)
         out = _read_until(fd, b"CANCELLED", timeout=5)
         return "CANCELLED" if b"CANCELLED" in out else "RUNNING"
     finally:
@@ -64,6 +70,16 @@ def test_escape_sequences_and_other_keys_do_not_stop(keys):
     assert _press_in_terminal(keys) == "RUNNING"
 
 
+@pytest.mark.parametrize(
+    "chunks",
+    [(b"\x1b", b"[A"), (b"\x1b[", b"A"), (b"\x1b", b"[", b"1;5", b"A"), (b"\x1b[", b"q")],
+    ids=["after-esc", "after-bracket", "several", "final-byte-is-cancel-key"],
+)
+def test_escape_sequences_split_across_reads_do_not_stop(chunks):
+    """A slow connection (e.g. SSH) can deliver one escape sequence in several parts."""
+    assert _press_in_terminal(*chunks) == "RUNNING"
+
+
 def test_background_job_is_not_stopped_by_the_terminal():
     """Switching the terminal mode from a background job would stop it with SIGTTOU."""
     pid, fd = pty.fork()
@@ -80,5 +96,7 @@ def test_background_job_is_not_stopped_by_the_terminal():
         assert "DONE" in out and "stopped" not in out.lower(), out
     finally:
         os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
+        # Close the pty first: on macOS the killed shell does not finish exiting while
+        # its unread terminal output is pending, so waitpid would block forever
         os.close(fd)
+        os.waitpid(pid, 0)
