@@ -1,0 +1,145 @@
+{
+  "reference": "530209cc scalar production path",
+  "config": {
+    "backend": "numpy",
+    "mode": "protons",
+    "machine": "Generic",
+    "bio_model": "none",
+    "grid": 5,
+    "beams": 2,
+    "trace_on_ct_grid": false,
+    "forward": true,
+    "scenarios": true,
+    "layouts": [
+      "checks",
+      "packed",
+      "padded"
+    ],
+    "sizes": [
+      16
+    ],
+    "scope": "beam",
+    "max_pairs": 65536,
+    "pairs": 1,
+    "torch_threads": null,
+    "self_check": false,
+    "out": "benchmark/pb_audit_results/batching_cpu/validation"
+  },
+  "numpy": "2.3.5",
+  "torch": null,
+  "torch_threads": null,
+  "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "beamlets": 2173,
+  "rays": 162,
+  "scalar_first_s": 2.2144813000340946,
+  "results": {
+    "checks_16": {
+      "samples_s": {
+        "scalar": [
+          2.100292699993588
+        ],
+        "batch": [
+          2.0813226000173017
+        ]
+      },
+      "metrics": {
+        "interpolation_s": 0.2754817996174097,
+        "schema_splits": 0.0,
+        "physics_packing_validation_s": 0.1593235994805582,
+        "max_accounted_batch_bytes": 141240,
+        "selected_pairs": 6663949.0,
+        "evaluated_pairs": 6663949.0,
+        "max_batch_pairs": 17655,
+        "collection_s": 0.20237569947494194,
+        "batch_count": 409,
+        "mean_bixels_per_batch": 15.938875305623473
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "physical_dose_beam_0": 0.0,
+        "physical_dose_beam_1": 0.0,
+        "let_0": 0.0,
+        "let_beam_0": 0.0,
+        "let_beam_1": 0.0,
+        "physical_dose_scenario_0": 0.0,
+        "physical_dose_scenario_1": 0.0,
+        "physical_dose_scenario_2": 0.0,
+        "let_scenario_0": 0.0,
+        "let_scenario_1": 0.0,
+        "let_scenario_2": 0.0
+      }
+    },
+    "packed_16": {
+      "samples_s": {
+        "scalar": [
+          2.164158599975053
+        ],
+        "batch": [
+          2.1772488999995403
+        ]
+      },
+      "metrics": {
+        "interpolation_s": 0.27237049920950085,
+        "schema_splits": 0.0,
+        "physics_packing_validation_s": 0.2018896999070421,
+        "max_accounted_batch_bytes": 1200540,
+        "selected_pairs": 6663949.0,
+        "evaluated_pairs": 6663949.0,
+        "max_batch_pairs": 17655,
+        "collection_s": 0.20032419986091554,
+        "batch_count": 409,
+        "mean_bixels_per_batch": 15.938875305623473
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "physical_dose_beam_0": 0.0,
+        "physical_dose_beam_1": 0.0,
+        "let_0": 0.0,
+        "let_beam_0": 0.0,
+        "let_beam_1": 0.0,
+        "physical_dose_scenario_0": 0.0,
+        "physical_dose_scenario_1": 0.0,
+        "physical_dose_scenario_2": 0.0,
+        "let_scenario_0": 0.0,
+        "let_scenario_1": 0.0,
+        "let_scenario_2": 0.0
+      }
+    },
+    "padded_16": {
+      "samples_s": {
+        "scalar": [
+          2.1419897999730892
+        ],
+        "batch": [
+          2.2039571999921463
+        ]
+      },
+      "metrics": {
+        "interpolation_s": 0.27429979952285066,
+        "schema_splits": 0.0,
+        "physics_packing_validation_s": 0.21638949995394796,
+        "max_accounted_batch_bytes": 1008528,
+        "selected_pairs": 6663949.0,
+        "evaluated_pairs": 7318535.0,
+        "max_batch_pairs": 19024,
+        "collection_s": 0.20179990003816783,
+        "batch_count": 409,
+        "mean_bixels_per_batch": 15.938875305623473
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "physical_dose_beam_0": 0.0,
+        "physical_dose_beam_1": 0.0,
+        "let_0": 0.0,
+        "let_beam_0": 0.0,
+        "let_beam_1": 0.0,
+        "physical_dose_scenario_0": 0.0,
+        "physical_dose_scenario_1": 0.0,
+        "physical_dose_scenario_2": 0.0,
+        "let_scenario_0": 0.0,
+        "let_scenario_1": 0.0,
+        "let_scenario_2": 0.0
+      }
+    }
+  }
+}

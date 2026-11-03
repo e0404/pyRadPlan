@@ -1,6 +1,6 @@
 # Dose performance backlog
 
-Updated 2026-11-03 after CPU particle interpolation preparation.
+Updated 2026-11-03 during CPU particle batching experiments.
 This is the durable record of the outstanding work discussed with the user.
 The 2026-11-02 update merge itself contained no new performance optimization.
 
@@ -25,6 +25,10 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    Keep engine-specific physics modular, with a single-bixel fallback. Later
    support voxel-owned forward scoring, fine-sample children reduced into parent
    delivery columns, and richer photon transport such as AAA.
+   **Initial CPU exploration completed:** bounded validation/physics prototypes and the
+   proposed shared prepare/evaluate/collect boundary are recorded in
+   [particle batching exploration](particle_batching_exploration.md).
+   Production batching and GPU measurements remain outstanding.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not
@@ -35,8 +39,9 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    NaN behavior and diagnostics. Dynamic compaction and host-visible decisions
    remain even after the existing mask-compaction and cluster-count changes.
 
-The agreed next order is (1), then (5), before (3). GPU work waits until the
-user's other GPU task finishes; the full `develop` baseline is deferred. The latest
+After CPU work on (1), the user requested starting (3). These experiments also
+isolate the validity-check portion of (5). GPU work waits until the user's other
+GPU task finishes; the full `develop` baseline is deferred. The latest
 small proton profile attributed most GPU work to per-beamlet support selection
 and physics/interpolation, not shared ray geometry or output collection. The
 2026-10-28 recheck had unstable absolute times (NumPy 0.41-1.90 s; CuPy 7.80-8.52 s)
