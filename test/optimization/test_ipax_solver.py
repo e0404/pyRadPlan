@@ -208,3 +208,17 @@ def test_cpu_inner_solve_keeps_the_input_cuda_device():
     result, _ = solver.solve(x0)
     assert result.device == x0.device
     assert torch.allclose(result, torch.ones_like(result), atol=1e-3)
+
+
+def test_ipax_num_iter_counts_iterations_not_iterates():
+    """Regression: ipax's `n_iter` includes the starting point, so `num_iter` was one too high."""
+    solver = get_solver("ipax")
+    x0 = build_quadratic_problem(solver)
+    solver.max_iter = 2
+    seen = []
+    solver.status_callback = lambda message="", **data: seen.append(data["iteration"]) or True
+
+    _, info = solver.solve(x0)
+
+    assert info["status"] == "max_iter"
+    assert info["num_iter"] == 2 == seen[-1]

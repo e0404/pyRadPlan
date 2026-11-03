@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
 - GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+- IPOPT solver ignored `bounds` (always solved on [0, inf)), wrote the solution into the caller's `x0` and returned garbage for a float32 `x0`
+- SciPy solver ignored `max_time`, and cancelling a TNC run raised `StopIteration` instead of returning the last iterate
+- SciPy and IPOPT solvers used outside the built-in planning problems (called directly or from a custom planning problem) evaluated a torch `x0` on the default device instead of its own
+- ipax solver reported `num_iter` one too high (ipax also counts the starting point)
+- `register_solver` accepted a solver without `short_name`
 
 ## [0.7.0] - 2026-11-02
 
