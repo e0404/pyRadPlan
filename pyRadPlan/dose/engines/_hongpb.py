@@ -1,9 +1,15 @@
-from typing import ClassVar
+from typing import Annotated, ClassVar
+import logging
 
 import array_api_compat
+from pydantic import Field
 
 from ...core.xp_utils.compat import interp1d as array_interp
 from ._base_pencilbeam_particle import ParticlePencilBeamEngineAbstract
+from ._particle_batch import ParticleBatchProcessor
+from ._batching import _integer
+
+logger = logging.getLogger(__name__)
 
 
 class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
@@ -14,6 +20,81 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
 
     _dij_guarantee_canonical: ClassVar[bool] = True
     _dij_guarantee_nonzero: ClassVar[bool] = True
+
+    batch_size: Annotated[
+        int,
+        Field(
+            ge=0,
+            strict=True,
+            description="Maximum beamlets per packet; 0 or 1 keeps scalar execution",
+        ),
+    ] = 0
+    batch_selection_max_entries: Annotated[
+        int,
+        Field(gt=0, strict=True, description="Candidate voxel/beamlet pairs per selection packet"),
+    ] = 65536
+    batch_evaluation_max_entries: Annotated[
+        int,
+        Field(gt=0, strict=True, description="Selected voxel/beamlet pairs per evaluation packet"),
+    ] = 65536
+    batch_max_bytes: Annotated[
+        int | None,
+        Field(
+            gt=0,
+            strict=True,
+            description="Optional per-stage estimated byte budget; not total device memory",
+        ),
+    ] = None
+
+    def _init_dose_calc(self, *args):
+        # apply_config intentionally permits invalid legacy values with warnings;
+        # reject unsafe packet budgets also when assigned directly on an engine.
+        # Validate only our budgets: a subclass may have unrelated required
+        # configuration fields, so a partial full-config model is inappropriate.
+        _integer(self.batch_size, "batch_size", 0)
+        _integer(self.batch_selection_max_entries, "batch_selection_max_entries", 1)
+        _integer(self.batch_evaluation_max_entries, "batch_evaluation_max_entries", 1)
+        if self.batch_max_bytes is not None:
+            _integer(self.batch_max_bytes, "batch_max_bytes", 1)
+        return super()._init_dose_calc(*args)
+
+    def _init_beam(self, *args):
+        beam = super()._init_beam(*args)
+        self._batch_energies = (
+            sorted({b["energy"] for ray in beam["beam"]["rays"] for b in ray["beamlets"]})
+            if self.batch_size > 1
+            else ()
+        )
+        return beam
+
+    def _create_bixel_batch_processor(self, dij, stf):
+        if self.batch_size <= 1:
+            return None
+        # Custom engines may change support or physical-dose semantics. They can
+        # opt in through their own processor instead of silently bypassing overrides.
+        base = ParticlePencilBeamEngineAbstract
+        methods = {
+            "_compute_bixel": base._compute_bixel,
+            "_init_bixel": base._init_bixel,
+            "_prepare_bixel": base._prepare_bixel,
+            "_get_bixel_indices_on_ray": base._get_bixel_indices_on_ray,
+            "_get_beam_modifiers": base._get_beam_modifiers,
+            "_interpolate_kernels_in_depth": base._interpolate_kernels_in_depth,
+            "_prepare_depth_interpolator": base._prepare_depth_interpolator,
+            "_depth_interpolation_data": base._depth_interpolation_data,
+            "_lateral_kernel_names": base._lateral_kernel_names,
+            "_build_bio_context": base._build_bio_context,
+            "_evaluate_bio_influence": base._evaluate_bio_influence,
+            "_calc_particle_bixel": ParticleHongPencilBeamEngine._calc_particle_bixel,
+            "_lateral_profile": ParticleHongPencilBeamEngine._lateral_profile,
+        }
+        if any(
+            getattr(getattr(self, name), "__func__", None) is not method
+            for name, method in methods.items()
+        ):
+            logger.warning("Particle batching disabled for custom numerical overrides.")
+            return None
+        return ParticleBatchProcessor(self, dij, stf, self._batch_energies)
 
     # private methods
     def _calc_particle_bixel(self, bixel):

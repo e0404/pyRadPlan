@@ -4,6 +4,9 @@
 Starting revision: `582bb77a`, on `refactor/dose-calc-performance`.
 The full develop baseline remains deferred.
 
+Update: the [opt-in production particle processor](production_particle_batching.md)
+is now implemented, including selected-packet reuse. Scalar defaults remain unchanged.
+
 The earlier approximately 50 ms proton difference is **not established as an
 intrinsic scheduling cost**. A host-only replay of the actual work finds about
 3 ms of additional scheduling overhead. A small validation shortcut reduces it

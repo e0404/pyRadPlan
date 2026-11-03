@@ -8,6 +8,8 @@ checks, not a new validation of the underlying dose models.
 Follow-up: [hook overhead investigation](batching_hook_overhead.md) isolates
 about 3 ms of host scheduling cost and reduces it with a small validation shortcut.
 The earlier 50 ms whole-calculation gap is not established as intrinsic hook cost.
+The [production particle adapter](production_particle_batching.md) is now available
+through explicit `batch_size` configuration; scalar execution remains the default.
 
 ## CuPy fusion measurements
 

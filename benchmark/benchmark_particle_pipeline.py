@@ -56,6 +56,11 @@ class PipelinePrototype(BatchPrototype):
         self.ready_pairs = 0
         return super()._init_dose_calc(*args)
 
+    def _create_bixel_batch_processor(self, dij, stf):
+        # Keep the historical output-interception experiment independent of
+        # production opt-in configuration. HookPrototype overrides this method.
+        return None
+
     def _init_geometry_group(self):
         self.flush()
         self.flush_ready()
@@ -565,12 +570,98 @@ class HookPrototype(PipelinePrototype):
         return HookProcessor(self, dij, stf)
 
 
+class ProductionMeasured(Hong):
+    """Instrument the production processor without replacing numerical operations."""
+
+    def _init_dose_calc(self, *args):
+        self.metrics, self.batch_counts = defaultdict(float), []
+        return super()._init_dose_calc(*args)
+
+    def _create_bixel_batch_processor(self, dij, stf):
+        processor = super()._create_bixel_batch_processor(dij, stf)
+        if processor is None:
+            return None
+        original_packet = processor._selected_packet
+        original_evaluate, original_one = processor.evaluate, processor.evaluate_one
+        original_select, original_select_one = processor.select, processor.select_one
+
+        def select(batch):
+            rays = [work.payload["_batch_ray"] for work in batch]
+            size = sum(ray["rad_depths"].shape[0] for ray in rays)
+            assert size <= self.batch_selection_max_entries
+            self.metrics["selection_packets"] += 1
+            self.metrics["max_batch_pairs"] = max(self.metrics["max_batch_pairs"], size)
+            original_select(batch)
+            if self.verify_support:
+                for work, ray in zip(batch, rays):
+                    reference = dict(work.payload)
+                    Hong._get_bixel_indices_on_ray(self, reference, ray)
+                    for field in processor.fields:
+                        if field in reference:
+                            np.testing.assert_array_equal(
+                                to_numpy(work.payload[field]), to_numpy(reference[field])
+                            )
+
+        def select_one(work):
+            self.metrics["selection_packets"] += 1
+            self.metrics["scalar_selection_packets"] += 1
+            return original_select_one(work)
+
+        def packet(bixels):
+            previous = bixels[0].get("_batch_packet")
+            if self.force_repack:
+                for bixel in bixels:
+                    bixel.pop("_batch_packet", None)
+            result = original_packet(bixels)
+            reused = previous is not None and result is previous[0]
+            self.metrics["reused_packets" if reused else "repacked_packets"] += 1
+            return result
+
+        def evaluate(batch):
+            size = sum(work.payload["ix"].shape[0] for work in batch)
+            assert size <= self.batch_evaluation_max_entries
+            self.metrics["max_selected_packet_pairs"] = max(
+                self.metrics["max_selected_packet_pairs"], size
+            )
+            self.batch_counts.append(len(batch))
+            return original_evaluate(batch)
+
+        def one(work):
+            self.batch_counts.append(1)
+            return original_one(work)
+
+        processor._selected_packet, processor.evaluate, processor.evaluate_one = (
+            packet,
+            evaluate,
+            one,
+        )
+        processor.select, processor.select_one = select, select_one
+        return processor
+
+
 def sync(backend):
     """Synchronize only the full calculation timing boundaries."""
     if backend == "cupy":
         import cupy
 
         cupy.cuda.get_current_stream().synchronize()
+
+
+def source_hashes():
+    """Snapshot source files before timed work, rather than after a long run."""
+    paths = (
+        "benchmark/benchmark_particle_pipeline.py",
+        "pyRadPlan/dose/engines/_base_pencilbeam.py",
+        "pyRadPlan/dose/engines/_batching.py",
+        "pyRadPlan/dose/engines/_particle_batch.py",
+        "pyRadPlan/dose/engines/_base_pencilbeam_particle.py",
+        "pyRadPlan/dose/engines/_hongpb.py",
+        "pyRadPlan/core/xp_utils/_interpolation1d.py",
+        "pyRadPlan/core/xp_utils/_interpolation_bank.py",
+        "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py",
+    )
+    root = Path(__file__).resolve().parents[1]
+    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in paths}
 
 
 def main():  # noqa: PLR0912, PLR0915
@@ -591,6 +682,8 @@ def main():  # noqa: PLR0912, PLR0915
             "bank_generic",
             "bank_hooks",
             "bank_generic_hooks",
+            "production",
+            "production_repack",
         ],
     )
     parser.add_argument("--mode", choices=["protons", "VHEE", "carbon"], default="protons")
@@ -612,6 +705,7 @@ def main():  # noqa: PLR0912, PLR0915
     parser.add_argument("--forward", action="store_true")
     parser.add_argument("--out", default="benchmark/pb_audit_results/pipeline_batches")
     args = parser.parse_args()
+    sources = source_hashes()
     if min(args.size, args.max_pairs, args.pairs) < 1:
         raise ValueError("Positive batch size, budget and repeat count required")
     if any(value is not None and value < 1 for value in (args.selection_pairs, args.batch_bytes)):
@@ -703,6 +797,17 @@ def main():  # noqa: PLR0912, PLR0915
     def run(variant=None, verify=False):
         if variant is None:
             engine = Hong(plan.model_copy(deep=True))
+        elif variant in ("production", "production_repack"):
+            current_plan = plan.model_copy(deep=True)
+            current_plan.prop_dose_calc.update(
+                batch_size=args.size,
+                batch_selection_max_entries=args.selection_pairs or args.max_pairs,
+                batch_evaluation_max_entries=args.max_pairs,
+                batch_max_bytes=args.batch_bytes,
+            )
+            engine = ProductionMeasured(current_plan)
+            engine.force_repack = variant == "production_repack"
+            engine.verify_support = verify
         elif variant == "physics":
             engine = BatchPrototype(
                 plan.model_copy(deep=True),
@@ -798,21 +903,7 @@ def main():  # noqa: PLR0912, PLR0915
         json.dumps(
             dict(
                 reference="scalar production path in the current checkout",
-                source_sha256={
-                    name: hashlib.sha256(
-                        (Path(__file__).resolve().parents[1] / name).read_bytes()
-                    ).hexdigest()
-                    for name in (
-                        "benchmark/benchmark_particle_pipeline.py",
-                        "pyRadPlan/dose/engines/_base_pencilbeam.py",
-                        "pyRadPlan/dose/engines/_batching.py",
-                        "pyRadPlan/dose/engines/_base_pencilbeam_particle.py",
-                        "pyRadPlan/dose/engines/_hongpb.py",
-                        "pyRadPlan/core/xp_utils/_interpolation1d.py",
-                        "pyRadPlan/core/xp_utils/_interpolation_bank.py",
-                        "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py",
-                    )
-                },
+                source_sha256=sources,
                 config=vars(args),
                 hardware=hardware,
                 scalar_first_s=first,

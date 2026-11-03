@@ -38,7 +38,7 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    queues, grouped backend interpolation and packet downloads are measured in
    [particle pipeline batching](particle_pipeline_batching.md). The small CuPy
    proton case improves from 7.52 to 1.63 s; generic batching regresses NumPy.
-   Production numerical adapters and execution policies remain outstanding.
+   Automatic execution policies and adapters for other modalities remain outstanding.
    Optional shared hooks and a scalar default are now implemented; see
    [fusion and hook validation](cupy_fusion_and_batching_hooks.md).
    Preserve separate stage budgets: one candidate
@@ -53,9 +53,12 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    still use their scalar defaults. The [overhead investigation](batching_hook_overhead.md)
    finds identical counted GPU operations in the proton comparison and about
    3 ms extra host scheduling work; a validation shortcut reduces that cost.
-   The earlier 50 ms gap is not established as intrinsic hook overhead. Proceed
-   toward an opt-in particle processor and reuse selected packets where possible;
-   VHEE retains eight evaluation packets.
+   The earlier 50 ms gap is not established as intrinsic hook overhead.
+   **Opt-in production particle processor completed:** `batch_size` enables the
+   [production adapter](production_particle_batching.md), with intact selected
+   packet reuse and scalar defaults. Generic VHEE retains eight evaluation
+   packets. Automatic backend/workload policy, photon integration and safe
+   batching of biological evaluator contexts remain open.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not

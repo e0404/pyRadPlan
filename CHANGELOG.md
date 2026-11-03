@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in production Hong particle batching (`batch_size`, default 0), with separate support/evaluation budgets, packet transfers, and reuse of intact selected arrays. Shared interpolation banks remain backend-owned; custom numerical overrides and oversized work retain scalar fallback. The generated GUI configuration exposes the packet settings.
 - Opt-in pencil-beam batching hooks with independent selection/evaluation budgets, immutable delivery identities, scalar fallback hooks and beam-scoped cleanup. Existing engines retain scalar execution. Idle-GPU fusion measurements and a numerical hook adapter are documented in `docs/development/cupy_fusion_and_batching_hooks.md`.
 - `ArrayBackend1DInterpolatorBank` prepares compatible fields on unequal-length grids and evaluates table-indexed, translated queries. It includes portable Array API execution, NumPy prepared-call grouping, validated indices and an opt-in fused CuPy float64 implementation. Existing dose-engine and single-grid interpolation defaults are unchanged.
 - CPU-only bounded particle batching prototypes compare validation-only, packed and padded physics execution, with Array API checks and complete dose-output comparisons. Production dispatch is unchanged; architecture findings are recorded in `docs/development/particle_batching_exploration.md`.
