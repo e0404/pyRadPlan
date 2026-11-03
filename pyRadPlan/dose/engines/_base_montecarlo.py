@@ -1,11 +1,12 @@
 import logging
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, ClassVar, Optional
 
 import numpy as np
 from pydantic import Field
 
 from ...biology.models import BiologicalModel, BioModelUnavailableError
-from ._base import DoseEngineBase
+from ...ct import CT
+from ._base import DoseEngineBase, ct_phase_images
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +14,23 @@ logger = logging.getLogger(__name__)
 class MonteCarloEngineAbstract(DoseEngineBase):
     """Abstract base for Monte Carlo dose calculation engines."""
 
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("ct_phase",)
+
     num_histories_per_beamlet: Annotated[float, Field(gt=0.0)] = 2e2
     num_histories_direct: Annotated[float, Field(gt=0.0)] = 1e6
+
+    def _scenario_ct(self, ct: CT) -> CT:
+        """
+        CT the simulation runs on: the phase of the single computed scenario.
+
+        The Monte Carlo engines simulate one scenario; a 4D CT is reduced to the phase that
+        scenario selects so that the simulated geometry matches the tissue parameter column.
+        """
+        if ct.num_of_ct_scen == 1:
+            return ct
+        computed = self._scenarios.computed_indices()
+        phase = int(self._scenarios.ct_phases()[computed[0]])
+        return CT(cube_hu=ct_phase_images(ct.cube_hu)[phase])
 
 
 class ScoredLETBioMixin:

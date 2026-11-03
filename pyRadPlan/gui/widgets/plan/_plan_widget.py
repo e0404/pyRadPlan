@@ -41,7 +41,12 @@ from pyRadPlan.machines import Machine, get_available_machines
 from pyRadPlan.optimization.problems import get_available_problems
 from pyRadPlan.optimization.solvers import SolverBase
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, default_bio_models
-from pyRadPlan.scenarios import available_scenario_models
+from pyRadPlan.scenarios import (
+    ExplicitScenarioModel,
+    ScenarioModel,
+    available_scenario_models,
+    get_scenario_model_class,
+)
 from pyRadPlan.stf import get_beam_angle_presets
 from pyRadPlan.biology.tissues import provenance_label
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
@@ -49,6 +54,8 @@ from .._config_form import ConfigFormDialog
 from .._display_names import (
     add_identified_item,
     bio_model_display_name,
+    current_identifier,
+    select_identifier,
     show_identifiers_when_open,
 )
 from .._tissue_params import (
@@ -152,6 +159,9 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Scenario model parameters per model short name (nested overrides of the model's
+        #: defaults), edited via the [...] popup and written into ``pln.scenarios`` on Apply.
+        self._scenario_props: dict[str, dict] = {}
         #: ``pln.prop_opt`` entries per planning problem short name (without the
         #: ``"problem"`` key), edited via the [...] popup.
         self._problem_props: dict[str, dict] = {}
@@ -215,6 +225,7 @@ class PlanWidget(WorkspaceWidget):
             "iso_per_beam": self._txt_iso,
             "iso": self._txt_iso,
             "scenario": self._cmb_scenario,
+            "scenario_props": self._btn_scenario_config,
             "res_x": self._spn_res_x,
             "res_y": self._spn_res_y,
             "res_z": self._spn_res_z,
@@ -433,10 +444,24 @@ class PlanWidget(WorkspaceWidget):
         bio_row.addWidget(self._btn_bio_config)
 
         self._cmb_scenario = QComboBox()
-        self._cmb_scenario.addItems(available_scenario_models())
-        for model in ("wcScen", "impScen", "rndScen"):
-            self._add_disabled_item(self._cmb_scenario, model)
+        show_identifiers_when_open(self._cmb_scenario)
+        for name in available_scenario_models():
+            label = get_scenario_model_class(name).name
+            add_identified_item(self._cmb_scenario, label, name, name)
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
+        self._btn_scenario_config = QPushButton("…")
+        self._btn_scenario_config.setFixedWidth(28)
+        self._btn_scenario_config.setToolTip(
+            "Configure the selected scenario model: setup and range uncertainties, CT phases, "
+            "worst-case extent and sampling"
+        )
+        self._btn_scenario_config.clicked.connect(self._on_scenario_config)
+        self._cmb_scenario.currentIndexChanged.connect(self._on_scenario_model_changed)
+        scenario_row = QHBoxLayout()
+        scenario_row.setContentsMargins(0, 0, 0, 0)
+        scenario_row.setSpacing(4)
+        scenario_row.addWidget(self._cmb_scenario, 1)
+        scenario_row.addWidget(self._btn_scenario_config)
 
         # Plan-level target/reporting quantity, as opposed to the quantities the
         # individual objectives are evaluated on.
@@ -473,7 +498,7 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(QLabel("Biological model:"), 4, 0)
         grid.addLayout(bio_row, 4, 1)
         self._add_advanced(grid, QLabel("Scenario model:"), 4, 2)
-        self._add_advanced(grid, self._cmb_scenario, 4, 3)
+        self._add_advanced(grid, scenario_row, 4, 3)
 
         self._add_advanced(grid, QLabel("Optimized quantity:"), 5, 0)
         self._add_advanced(grid, self._cmb_quantity, 5, 1)
@@ -481,6 +506,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _build_optimization_row(self, grid: QGridLayout) -> None:
         self._cmb_problem = QComboBox()
+        show_identifiers_when_open(self._cmb_problem)
         self._cmb_problem.setToolTip("Planning problem formulation used by the optimization")
         self._btn_problem_config = QPushButton("…")
         self._btn_problem_config.setFixedWidth(28)
@@ -580,20 +606,14 @@ class PlanWidget(WorkspaceWidget):
             tooltip += f"\n{hint}"
         widget.setToolTip(tooltip)
 
-    @staticmethod
-    def _add_disabled_item(combo: QComboBox, text: str) -> None:
-        combo.addItem(text)
-        item = combo.model().item(combo.count() - 1)
-        item.setEnabled(False)
-        item.setToolTip("Not yet implemented")
-
     def _build_engine_selector(self) -> QHBoxLayout:
         self._cmb_engine = QComboBox()
+        show_identifiers_when_open(self._cmb_engine)
         self._cmb_engine.setToolTip(
             "Dose engine. Which biological models can be computed depends on it: Monte "
             "Carlo engines do not use the machine's pencil-beam kernels."
         )
-        self._cmb_engine.currentTextChanged.connect(self._on_engine_changed)
+        self._cmb_engine.currentIndexChanged.connect(self._on_engine_changed)
         self._btn_engine_config = QPushButton("…")
         self._btn_engine_config.setFixedWidth(28)
         self._btn_engine_config.setToolTip("Configure the selected dose engine")
@@ -867,7 +887,7 @@ class PlanWidget(WorkspaceWidget):
                 issue.structure is None for issue in tissue_issues_quietly(machine, model, [])
             )
             if engine is not None and on_machine:
-                context = f"with the dose engine {engine.short_name}"
+                context = f"with the dose engine {engine.name}"
             else:
                 context = f"on machine '{self._bio_models_key[1]}'"
         return (
@@ -915,7 +935,7 @@ class PlanWidget(WorkspaceWidget):
             issue.structure is None for issue in tissue_issues_quietly(machine, model, [])
         )
         if engine is not None and issues and on_machine:
-            subject = f"the dose engine {engine.short_name}"
+            subject = f"the dose engine {engine.name}"
             unsupported = f"(not supported by {subject})"
         else:
             subject, unsupported = "the machine", _UNSUPPORTED_SUFFIX
@@ -1084,7 +1104,7 @@ class PlanWidget(WorkspaceWidget):
         for the radiation mode, otherwise the mode's default engine.
         """
         return dose_engine_quietly(
-            self._cmb_radiation.currentText(), self._cmb_engine.currentText() or None
+            self._cmb_radiation.currentText(), current_identifier(self._cmb_engine) or None
         )
 
     def _current_bio_model(self) -> Optional[BiologicalModel]:
@@ -1118,7 +1138,7 @@ class PlanWidget(WorkspaceWidget):
         errors = tissue_errors(issues)
         self.tissue_marker_state = "error" if errors else "warning" if issues else ""
         self._lbl_tissue_warning.setVisible(bool(issues))
-        with_engine = f" with the dose engine {engine.short_name}" if engine else ""
+        with_engine = f" with the dose engine {engine.name}" if engine else ""
         context = (
             f"the structures on machine '{self._bio_models_key[1]}'{with_engine}" if issues else ""
         )
@@ -1150,17 +1170,17 @@ class PlanWidget(WorkspaceWidget):
 
     def _refresh_engines(self, radiation_mode: str) -> None:
         self._engines = get_available_engines(radiation_mode)
-        current = self._cmb_engine.currentText()
+        current = current_identifier(self._cmb_engine)
         self._cmb_engine.blockSignals(True)
         self._cmb_engine.clear()
-        self._cmb_engine.addItems(list(self._engines))
-        if current in self._engines:
-            self._cmb_engine.setCurrentText(current)
+        for name, cls in self._engines.items():
+            add_identified_item(self._cmb_engine, cls.name, name, name)
+        select_identifier(self._cmb_engine, current)
         self._cmb_engine.blockSignals(False)
         self._btn_engine_config.setEnabled(bool(self._engines))
 
     def _on_engine_config(self) -> None:
-        engine_name = self._cmb_engine.currentText()
+        engine_name = current_identifier(self._cmb_engine)
         engine_cls = self._engines.get(engine_name)
         if engine_cls is None:
             return
@@ -1176,6 +1196,76 @@ class PlanWidget(WorkspaceWidget):
             self._update_dirty_state()
 
     # ------------------------------------------------------------------
+    # Scenario model handling
+    # ------------------------------------------------------------------
+
+    def _on_scenario_model_changed(self, *_args) -> None:
+        name = current_identifier(self._cmb_scenario)
+        self._btn_scenario_config.setEnabled(name != ExplicitScenarioModel.short_name)
+
+    def _show_explicit_scenario_entry(self, shown: bool) -> None:
+        """Offer the explicit model only while the plan holds one; it cannot be built here."""
+        name = ExplicitScenarioModel.short_name
+        index = self._cmb_scenario.findData(name)
+        if shown and index < 0:
+            add_identified_item(self._cmb_scenario, ExplicitScenarioModel.name, name, name)
+            self._cmb_scenario.setItemData(
+                self._cmb_scenario.count() - 1,
+                "The scenario set the applied plan carries itself. It is kept unless another "
+                "model is selected.",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        elif not shown and index >= 0:
+            if self._cmb_scenario.currentIndex() == index:
+                self._cmb_scenario.setCurrentIndex(0)
+            self._cmb_scenario.removeItem(index)
+
+    def _on_scenario_config(self) -> None:
+        model_name = current_identifier(self._cmb_scenario)
+        try:
+            model_cls = get_scenario_model_class(model_name)
+        except (ValueError, NotImplementedError):
+            return
+
+        dialog = ConfigFormDialog(
+            model_cls,
+            initial=self._scenario_props.get(model_name, {}),
+            title=f"Configure {model_cls.name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._scenario_props[model_name] = dialog.values()
+            self._update_dirty_state()
+
+    def _restore_scenario_from_pln(self, pln: Plan) -> None:
+        model = pln.scenarios
+        name = getattr(model, "short_name", None)
+        explicit = name == ExplicitScenarioModel.short_name
+        self._show_explicit_scenario_entry(explicit)
+        if not name or not select_identifier(self._cmb_scenario, name):
+            return
+        # An empty override mapping means defaults, not "keep the form's edits".
+        self._scenario_props[name] = {} if explicit else self._scenario_overrides(model)
+
+    @staticmethod
+    def _scenario_overrides(model: ScenarioModel) -> dict:
+        """Parameters set on *model*, nested per uncertainty dimension (the [...] popup's values)."""
+        overrides = model.model_dump(exclude_unset=True)
+        overrides.pop("model", None)
+        for key, value in list(overrides.items()):
+            if isinstance(value, dict):
+                nested = {k: v for k, v in value.items() if k != "dimension"}
+                if nested:
+                    overrides[key] = nested
+                else:
+                    del overrides[key]
+        return overrides
+
+    @staticmethod
+    def _props_key(props: dict) -> str:
+        return json.dumps(props, default=str, sort_keys=True)
+
+    # ------------------------------------------------------------------
     # Optimization (planning problem / solver) handling
     # ------------------------------------------------------------------
 
@@ -1185,21 +1275,17 @@ class PlanWidget(WorkspaceWidget):
             for name, cls in get_available_problems().items()
             if radiation_mode in cls.possible_radiation_modes
         }
-        current = self._cmb_problem.currentText()
+        current = current_identifier(self._cmb_problem)
         self._cmb_problem.blockSignals(True)
         self._cmb_problem.clear()
         for name, cls in self._problems.items():
-            self._cmb_problem.addItem(name)
-            self._cmb_problem.setItemData(
-                self._cmb_problem.count() - 1, cls.name, Qt.ItemDataRole.ToolTipRole
-            )
-        if current in self._problems:
-            self._cmb_problem.setCurrentText(current)
+            add_identified_item(self._cmb_problem, cls.name, name, name)
+        select_identifier(self._cmb_problem, current)
         self._cmb_problem.blockSignals(False)
         self._btn_problem_config.setEnabled(bool(self._problems))
 
     def _on_problem_config(self) -> None:
-        problem_name = self._cmb_problem.currentText()
+        problem_name = current_identifier(self._cmb_problem)
         problem_cls = self._problems.get(problem_name)
         if problem_cls is None:
             return
@@ -1220,7 +1306,7 @@ class PlanWidget(WorkspaceWidget):
         problem_name = requested if requested in self._problems else default
         if problem_name is None:
             return
-        self._cmb_problem.setCurrentText(problem_name)
+        select_identifier(self._cmb_problem, problem_name)
         self._problem_props[problem_name] = self._copy_prop_opt(
             {k: v for k, v in prop_opt.items() if k not in ("problem", "opti_prob")}
         )
@@ -1234,7 +1320,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _form_prop_opt(self) -> dict:
         """``pln.prop_opt`` described by the optimization fields."""
-        problem_name = self._cmb_problem.currentText()
+        problem_name = current_identifier(self._cmb_problem)
         prop_opt = self._copy_prop_opt(self._problem_props.get(problem_name, {}))
         default = next(iter(self._problems), None)
         if problem_name and (self._plan_names_problem or problem_name != default):
@@ -1282,6 +1368,7 @@ class PlanWidget(WorkspaceWidget):
     def _sync_from_workspace(self) -> None:
         pln = self._ws.pln
         if pln is None:
+            self._show_explicit_scenario_entry(False)
             self._btn_ct_grid.setEnabled(self._ws.ct is not None)
             self._update_auto_iso_center()
             return
@@ -1327,9 +1414,7 @@ class PlanWidget(WorkspaceWidget):
 
         self._restore_iso_center(stf.get("iso_center"))
 
-        scenario = getattr(pln.mult_scen, "short_name", None)
-        if scenario and self._cmb_scenario.findText(scenario) >= 0:
-            self._cmb_scenario.setCurrentText(scenario)
+        self._restore_scenario_from_pln(pln)
 
         spacing = stf.get("bixel_width")
         if spacing is not None:
@@ -1354,7 +1439,7 @@ class PlanWidget(WorkspaceWidget):
         engine_name = prop_dose_calc.get("engine") or next(iter(self._engines), None)
         if engine_name not in self._engines:
             return
-        self._cmb_engine.setCurrentText(engine_name)
+        select_identifier(self._cmb_engine, engine_name)
         engine_props = {
             k: v for k, v in prop_dose_calc.items() if k not in ("engine", "dose_grid")
         }
@@ -1495,6 +1580,9 @@ class PlanWidget(WorkspaceWidget):
 
         with self.hold_updates():
             self._ws.pln = pln
+        self._show_explicit_scenario_entry(
+            pln.scenarios.short_name == ExplicitScenarioModel.short_name
+        )
         if self._plan_machine is not None and pln.machine is not self._plan_machine:
             self._plan_machine = self._plan_machine_summary = None
             self._refresh_machines(pln.radiation_mode)
@@ -1680,7 +1768,7 @@ class PlanWidget(WorkspaceWidget):
             prop_stf.pop("iso_center", None)
 
         prop_dose_calc: dict = {}
-        engine_name = self._cmb_engine.currentText()
+        engine_name = current_identifier(self._cmb_engine)
         if engine_name:
             prop_dose_calc["engine"] = engine_name
             prop_dose_calc.update(self._engine_props.get(engine_name, {}))
@@ -1704,9 +1792,20 @@ class PlanWidget(WorkspaceWidget):
             if current is not None
             else {}
         )
-        scenario = self._cmb_scenario.currentText()
-        if current is not None and getattr(current.mult_scen, "short_name", None) == scenario:
-            scenario = deepcopy(current.mult_scen)
+        scenario_name = current_identifier(self._cmb_scenario)
+        scenario_props = deepcopy(self._scenario_props.get(scenario_name, {}))
+        scenario: Any = {"model": scenario_name, **scenario_props}
+        if (
+            current is not None
+            and getattr(current.scenarios, "short_name", None) == scenario_name
+            and (
+                scenario_name == ExplicitScenarioModel.short_name
+                or self._props_key(self._scenario_overrides(current.scenarios))
+                == self._props_key(scenario_props)
+            )
+        ):
+            # Unchanged: keep the plan's model instance (and its generated scenario set).
+            scenario = deepcopy(current.scenarios)
         plan_data.update(
             {
                 "radiation_mode": radiation_mode,
@@ -1714,7 +1813,7 @@ class PlanWidget(WorkspaceWidget):
                 "num_of_fractions": int(self._spn_fractions.value()),
                 "dose_convention": self._cmb_dose_convention.currentData(),
                 "bio_model": self._selected_bio_model(),
-                "mult_scen": scenario,
+                "scenarios": scenario,
                 "prop_stf": prop_stf,
                 "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
                 "prop_dose_calc": prop_dose_calc,
@@ -1744,7 +1843,7 @@ class PlanWidget(WorkspaceWidget):
         # ``_cmb_radiation`` and ``_cmb_engine`` are handled by ``_on_radiation_changed`` and
         # ``_on_engine_changed``.
         self._cmb_machine.editTextChanged.connect(self._on_field_edited)
-        self._cmb_problem.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_problem.currentIndexChanged.connect(self._on_field_edited)
         self._cmb_bio_model.currentIndexChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
         self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
@@ -1755,7 +1854,7 @@ class PlanWidget(WorkspaceWidget):
         self._spn_bixel.valueChanged.connect(self._on_field_edited)
         self._chk_iso_auto.toggled.connect(self._on_field_edited)
         self._txt_iso.textChanged.connect(self._on_field_edited)
-        self._cmb_scenario.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_scenario.currentIndexChanged.connect(self._on_field_edited)
         for spin in (self._spn_res_x, self._spn_res_y, self._spn_res_z):
             spin.valueChanged.connect(self._on_field_edited)
 
@@ -1764,8 +1863,8 @@ class PlanWidget(WorkspaceWidget):
 
     def _capture_state(self) -> dict[str, Any]:
         """Snapshot the tracked field values for modified-state comparison."""
-        engine = self._cmb_engine.currentText()
-        problem = self._cmb_problem.currentText()
+        engine = current_identifier(self._cmb_engine)
+        problem = current_identifier(self._cmb_problem)
         not_auto = not self._chk_iso_auto.isChecked()
         bio_params = self._bio_params.get(self._bio_model_name(), {})
         unsupported = self._option_at(self._cmb_bio_model.currentIndex()) is None
@@ -1796,7 +1895,10 @@ class PlanWidget(WorkspaceWidget):
             "iso_auto": self._chk_iso_auto.isChecked(),
             "iso_per_beam": self._per_beam_iso_center is not None,
             "iso": self._txt_iso.text() if not_auto else None,
-            "scenario": self._cmb_scenario.currentText(),
+            "scenario": current_identifier(self._cmb_scenario),
+            "scenario_props": self._props_key(
+                self._scenario_props.get(current_identifier(self._cmb_scenario), {})
+            ),
             "res_x": self._spn_res_x.value(),
             "res_y": self._spn_res_y.value(),
             "res_z": self._spn_res_z.value(),

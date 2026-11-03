@@ -1,10 +1,11 @@
 name: Container
 
-# Builds the image of packaging/container (the pyRadPlan GUI in a web browser, see its
-# README) and checks that it works with packaging/container/smoke_test.sh, which the GitLab
-# pipeline runs as well. For a v* tag the tested image is published to the GitHub Container
-# Registry as ghcr.io/<owner>/pyradplan-web:<version>, and as :latest unless the version is
-# a pre-release.
+# Builds the images of packaging/container (the pyRadPlan GUI in a web browser, and on top of
+# it the JupyterHub session image, see its README) and checks both with
+# packaging/container/smoke_test.sh, which the GitLab pipeline runs as well. For a v* tag the
+# tested images are published to the GitHub Container Registry as
+# ghcr.io/<owner>/pyradplan-web:<version> and ghcr.io/<owner>/pyradplan-hub:<version>, and
+# as :latest unless the version is a pre-release.
 
 on:
   push:
@@ -39,7 +40,7 @@ jobs:
       packages: write  # for publishing; the token of a pull request from a fork is read-only anyway
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build the image
         env:
@@ -59,17 +60,40 @@ jobs:
         if: always()
         run: docker logs web || true
 
+      - name: Build the JupyterHub image
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+        run: |
+          docker build -f packaging/container/Dockerfile.hub \
+            --build-arg BASE_IMAGE=pyradplan-web \
+            --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" \
+            -t pyradplan-hub packaging/container
+
+      - name: Start a JupyterHub session without a hub
+        run: docker run -d --name hub pyradplan-hub hub-session.sh --no-authentication --port=8888
+
+      - name: Smoke test of the JupyterHub image
+        env:
+          SMOKE_URL: http://localhost:8888/
+        run: sh packaging/container/smoke_test.sh hub
+
+      - name: JupyterHub session log
+        if: always()
+        run: docker logs hub || true
+
       - name: Publish to the GitHub Container Registry
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/pyradplan-web"
+          registry="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           version="${GITHUB_REF_NAME#v}"
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag pyradplan-web "$image:$version"
-          docker push "$image:$version"
-          if echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            docker tag pyradplan-web "$image:latest"
-            docker push "$image:latest"
-          fi
+          for name in pyradplan-web pyradplan-hub; do
+            docker tag "$name" "$registry/$name:$version"
+            docker push "$registry/$name:$version"
+            if echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              docker tag "$name" "$registry/$name:latest"
+              docker push "$registry/$name:latest"
+            fi
+          done

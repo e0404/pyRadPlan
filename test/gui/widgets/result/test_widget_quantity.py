@@ -151,6 +151,51 @@ def test_isocenter_known_later_positions_the_slice_until_the_user_scrolls(qapp):
     assert widget.slice_slider.value() == 15
 
 
+def test_isocenter_cross_and_scroll_hint_on_nearby_slices(qapp):
+    from pyRadPlan.gui.widgets.result.quantity_widget import (
+        _ISO_CROSS,
+        _ISO_HALF_DOWN,
+        _ISO_HALF_UP,
+        _ISO_HINT_SLICES,
+    )
+
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((20, 10, 10)), isocenter=np.array([10.0, 3.0, 7.0]))
+    widget.set_isocenter_visible(True)
+
+    def symbol_at(idx):
+        widget.slice_slider.setValue(idx)
+        item = widget._isocenter_item
+        return None if item is None else item.opts["symbol"]
+
+    assert symbol_at(10) is _ISO_CROSS
+    assert symbol_at(10 - _ISO_HINT_SLICES) is _ISO_HALF_UP  # scroll up to reach it
+    assert symbol_at(10 + _ISO_HINT_SLICES) is _ISO_HALF_DOWN
+    assert symbol_at(10 - _ISO_HINT_SLICES - 1) is None
+    assert symbol_at(10 + _ISO_HINT_SLICES + 1) is None
+
+
+def test_isocenter_and_beams_sit_on_the_isocenter_voxel_center(qapp):
+    from pyRadPlan.gui.widgets.result.quantity_widget import _BeamWedgeItem
+
+    # Viewer (z, x, y) voxel coordinates; the image draws voxel i over [i, i + 1].
+    iso = np.array([10.0, 4.0, 7.0])
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((21, 21, 21)), isocenter=iso)
+    widget.set_ct_geometry((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    widget.set_plane("Axial")
+    widget.set_isocenter_visible(True)
+    widget.set_beams_visible(True)
+    widget.set_beams([{"iso_center": iso, "source_direction": np.array([0.0, 1.0, 0.0])}])
+
+    marker = widget._isocenter_item.points()[0].pos()
+    assert (marker.x(), marker.y()) == pytest.approx((4.5, 7.5))
+    wedge = next(item for item in widget._beam_items if isinstance(item, _BeamWedgeItem))
+    assert (wedge._target.x(), wedge._target.y()) == pytest.approx((4.5, 7.5))
+    # The source lies on the largest circle around the isocenter within the voxel centers.
+    assert wedge._source.x() == pytest.approx(4.5 + 4.0)
+
+
 def _beam_widget(spacing=(1.0, 1.0, 1.0)):
     widget = QuantityWidget()
     widget.set_data(ct_volume=np.zeros((21, 21, 21)))

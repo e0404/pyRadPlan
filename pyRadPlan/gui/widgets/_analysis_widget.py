@@ -192,6 +192,15 @@ class AnalysisWidget(QWidget):
         )
         form.addRow(QLabel("Compare:"), self.secondary_selector)
 
+        self.all_scenarios_checkbox = QCheckBox("All scenarios")
+        self.all_scenarios_checkbox.setToolTip(
+            "Draw the primary quantity's DVH of every uncertainty scenario as a thin curve "
+            "behind the selected one"
+        )
+        self.all_scenarios_checkbox.setVisible(False)
+        self.all_scenarios_checkbox.toggled.connect(self._replot)
+        form.addRow(self.all_scenarios_checkbox)
+
         panel_layout.addWidget(qty_group, 1)
 
         # ---- Middle: Structures ----
@@ -386,6 +395,7 @@ class AnalysisWidget(QWidget):
         initial_quantity: str = "",
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
+        scenario_labels: list[str] | None = None,
     ) -> None:
         """Set all data, populate controls, and trigger the initial plot.
 
@@ -412,6 +422,9 @@ class AnalysisWidget(QWidget):
         voi_types:
             Optional mapping of VOI name → type (``TARGET``, ``OAR``,
             ``EXTERNAL``, ``HELPER``) used to group the list.
+        scenario_labels:
+            Labels of the uncertainty scenarios by flat index, shown for the
+            ``"<quantity>_scenario <i>"`` entries of the quantity dropdowns.
         """
         self._quantities = quantities or {}
         self._masks = masks or {}
@@ -426,6 +439,8 @@ class AnalysisWidget(QWidget):
 
         qty_names = list(self._quantities.keys())
 
+        for selector in (self.quantity_selector, self.secondary_selector):
+            selector.set_scenario_labels(scenario_labels or [])
         self.quantity_selector.set_keys(qty_names, initial_quantity)
         self.secondary_selector.set_keys(qty_names)
 
@@ -770,11 +785,20 @@ class AnalysisWidget(QWidget):
         dvhs = (self._dvh_for(qty_name, voi_name) for voi_name in voi_names)
         return [dvh for dvh in dvhs if dvh is not None]
 
+    def _band_dvhs(self, voi_names: list[str]) -> list[DVH]:
+        """DVHs of every scenario of the primary quantity, if "All scenarios" is on."""
+        scenario_keys = self.quantity_selector.scenario_keys()
+        self.all_scenarios_checkbox.setVisible(bool(scenario_keys))
+        if not scenario_keys or not self.all_scenarios_checkbox.isChecked():
+            return []
+        return [dvh for key in scenario_keys for dvh in self._collect_dvhs(key, voi_names)]
+
     def _replot(self, *_: Any) -> None:
         """Replot the DVH and QI table for the shown quantities and the checked VOIs.
 
         The optional secondary quantity only adds dashed DVH curves; the QI
-        table and its parameters follow the primary quantity.
+        table and its parameters follow the primary quantity.  With "All
+        scenarios", every scenario of the primary quantity adds a thin curve.
         """
         qty_name = self.quantity_selector.current_key()
         if qty_name != self._shown_quantity:
@@ -789,6 +813,7 @@ class AnalysisWidget(QWidget):
             "overlay_unit": self._overlay_units.get(qty_name, ""),
             "overlay_label": self._overlay_labels.get(qty_name, ""),
             "qis": self._qi_collection,
+            "band_dvhs": self._band_dvhs(selected_vois),
         }
         secondary = self._secondary_quantity()
         if secondary:
