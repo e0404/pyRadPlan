@@ -10,7 +10,7 @@ from pyRadPlan.core.resample import resample_image, resample_numpy_array
 from pyRadPlan.core.xp_utils import to_numpy
 
 
-@pytest.fixture(params=["numpy", "array_api_strict", "cupy"])
+@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy"])
 def xp(request):
     """Exercise host, device and strict Array API execution."""
     module = pytest.importorskip(request.param)

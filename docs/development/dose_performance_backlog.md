@@ -16,8 +16,9 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    GPU full-output comparisons now pass in the pipeline experiments below; an
    isolated GPU measurement of interpolation preparation versus its parent
    revision and energy-lookup preparation remain outstanding. PyTorch CPU
-   CT-grid tracing exposed a pre-existing tensor/scalar minimum incompatibility
-   in image resampling, which is recorded there for follow-up.
+   CT-grid tracing exposed a tensor/scalar minimum incompatibility in image
+   resampling. This is now fixed using Array API clipping, with PyTorch added to
+   the image-resampling tests (220 checks passed across four backends).
 2. **Shared conservative spatial candidates.** Avoid scanning every beam-valid
    voxel for every ray using BEV bins/depth slabs, then retain exact existing
    cutoff decisions. Cover divergence, anisotropy, range/setup changes and all CT

@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Backend linear image resampling accepts PyTorch arrays during CT-grid dose tracing; scalar upper-index clipping now uses the Array API-compatible `clip` operation. Resampling coverage includes PyTorch alongside NumPy, strict Array API and CuPy.
 - Core resampling exports load lazily to avoid a circular import between settings initialization and the Array API backend helpers.
 - Integrate pencil-beam performance preparation with explicit scenarios: preserve phase-specific tissue labels and SSDs, range-keyed photon sampling bounds, backend depth arrays, and compact sparse indices for computed scenario slots.
 

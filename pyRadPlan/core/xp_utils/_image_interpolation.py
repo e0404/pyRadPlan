@@ -22,7 +22,7 @@ def interpolate_image_linear(values, coordinates, *, extrapolate="nearest"):
         outside = outside | (q < -0.5) | (q >= size - 0.5)
         q = xp.clip(q, 0.0, float(size - 1))
         lower = xp.astype(xp.floor(q), xp.int64)
-        upper = xp.minimum(lower + 1, size - 1)
+        upper = xp.clip(lower + 1, 0, size - 1)
         lo.append(lower)
         hi.append(upper)
         weight.append(q - xp.astype(lower, q.dtype))

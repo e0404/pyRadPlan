@@ -12,7 +12,7 @@ from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.core.xp_utils._image_interpolation import interpolate_image_linear
 
 
-@pytest.fixture(params=["numpy", "array_api_strict", "cupy"])
+@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy"])
 def xp(request):
     """Provide a real backend or the strict Array API reference."""
     module = pytest.importorskip(request.param)
