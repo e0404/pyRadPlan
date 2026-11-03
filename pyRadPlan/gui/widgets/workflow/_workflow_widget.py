@@ -295,8 +295,8 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_save_result = self._add_button(
             "Snapshot Result",
             self._on_save_result,
-            tooltip="Keep a copy of the current result in the workspace."
-             "Use File > Save Result… to write it to disk.",
+            tooltip="Keep a copy of the current result in the workspace. "
+            "Use File > Save Result… to write it to disk.",
         )
 
         # Each column is a workflow stage, progressing left to right (as in
