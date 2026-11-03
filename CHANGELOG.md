@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
+- GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
+
 ## [0.7.0] - 2026-11-02
 
 ### Added
