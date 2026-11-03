@@ -362,6 +362,8 @@ def test_compact_font_is_smaller(qapp):
     assert qapp.property("compact_font_applied")
     if not applied and default > 0:
         assert qapp.font().pointSizeF() < default
+    # Existing widgets receive the application font change as posted events.
+    qapp.processEvents()
     assert win.font() == qapp.font()
 
 
