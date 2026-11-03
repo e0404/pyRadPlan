@@ -5,6 +5,10 @@
 develop remains deferred. These are computational equivalence and performance
 checks, not a new validation of the underlying dose models.
 
+Follow-up: [hook overhead investigation](batching_hook_overhead.md) isolates
+about 3 ms of host scheduling cost and reduces it with a small validation shortcut.
+The earlier 50 ms whole-calculation gap is not established as intrinsic hook cost.
+
 ## CuPy fusion measurements
 
 The RTX 4070 Laptop GPU was available for this run; `nvidia-smi` reported 0%

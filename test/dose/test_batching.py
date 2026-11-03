@@ -2,6 +2,7 @@
 
 from dataclasses import FrozenInstanceError
 
+import numpy as np
 import pytest
 
 from pyRadPlan.dose.engines import (
@@ -164,3 +165,17 @@ def test_oversized_work_uses_explicit_scalar_hooks():
     with BixelBatchScheduler(processor) as scheduler:
         expected = submit(scheduler, [dict(entries=100, survivors=100)] * 3)
     assert selected_one == evaluated_one == processor.delivered == expected
+
+
+@pytest.mark.parametrize("value", [1, np.int32(1), np.int64(1), np.uint64(1)])
+def test_integer_metadata_accepts_python_and_numpy_integers(value):
+    """The common Python-int shortcut must retain non-native integral support."""
+    assert BixelBatchCost(value).entries == 1
+    assert BixelBatchLimits(max_entries=value).max_entries == 1
+
+
+@pytest.mark.parametrize("value", [True, False, np.bool_(True), 1.0, np.float64(1), -1])
+def test_integer_metadata_still_rejects_invalid_costs(value):
+    """Booleans, floats and negative costs remain invalid after the shortcut."""
+    with pytest.raises(ValueError, match="entries must be an integer >= 0"):
+        BixelBatchCost(value)

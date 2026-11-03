@@ -1,0 +1,146 @@
+{
+  "reference": "scalar production path in the current checkout",
+  "source_sha256": {
+    "benchmark/benchmark_particle_pipeline.py": "d93f745706b108658af58a5df90e2d369bc57b522379cb268c8315e7800c9184",
+    "pyRadPlan/dose/engines/_base_pencilbeam.py": "5d522644b64cbb1a4e202b99529ba2ac525b46f73f941bd743c056c8eb5cebe1",
+    "pyRadPlan/dose/engines/_batching.py": "0a4449e15cd599429d99e07cb433176d70ec9d5407da5bb718349a386eb7a03c",
+    "pyRadPlan/dose/engines/_base_pencilbeam_particle.py": "d7bb2e9d3ee49c78860bf297f840cfd8da692006f380003c1cc511be07847b12",
+    "pyRadPlan/dose/engines/_hongpb.py": "ae1d1edaf93b01968c0baac6de91d7ae5308c8619668d97668def64ee93c1e86",
+    "pyRadPlan/core/xp_utils/_interpolation1d.py": "1d07df3365fca21a1e3e408b7d1af1ca8287d72fa42c91acf989a824839ee765",
+    "pyRadPlan/core/xp_utils/_interpolation_bank.py": "cbfff991bbebe3a2abe4f7921137595ab627f11d567fc32b42e5291013bb6954",
+    "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py": "0194b19020d78cac96d03d24604eaceb249231a65eef24460f9d6dd84aa21e9e"
+  },
+  "config": {
+    "backend": "numpy",
+    "variants": [
+      "bank",
+      "bank_hooks"
+    ],
+    "mode": "protons",
+    "machine": "Generic",
+    "bio_model": "none",
+    "size": 64,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 7,
+    "paired_variants": true,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "hooks": false,
+    "selection_pairs": null,
+    "batch_bytes": null,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/hook_overhead/numpy"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5"
+  },
+  "scalar_first_s": 0.42518249998101965,
+  "beamlets": 908,
+  "results": {
+    "bank": {
+      "samples_s": {
+        "batch": [
+          0.48691440001130104,
+          0.4667773999972269,
+          0.5157317999983206,
+          0.4972167999949306,
+          0.47737519996007904,
+          0.47339539998210967,
+          0.48435759998392314
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0030172999831847847,
+        "prepared_energies": 18.0,
+        "cutoff_binary_calls": 23.0,
+        "candidate_pairs": 1447803.0,
+        "selected_pairs": 933649.0,
+        "max_batch_pairs": 65500,
+        "selection_submit_s": 0.11152879981091246,
+        "selection_packets": 23.0,
+        "max_selected_packet_pairs": 65445,
+        "depth_binary_calls": 15.0,
+        "interpolation_submit_s": 0.05391849984880537,
+        "physics_submit_s": 0.011834000004455447,
+        "collection_submit_s": 0.009825299901422113,
+        "batch_count": 15,
+        "batch_sizes": [
+          61,
+          61,
+          63,
+          63,
+          64,
+          64,
+          64,
+          64,
+          63,
+          64,
+          63,
+          63,
+          61,
+          60,
+          30
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "let_dose_0": 0.0
+      }
+    },
+    "bank_hooks": {
+      "samples_s": {
+        "batch": [
+          0.46577629999956116,
+          0.46435730002122,
+          0.491531900013797,
+          0.46637090004514903,
+          0.48346980003407225,
+          0.5298547000274993,
+          0.48684660001890734
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0030553999822586775,
+        "prepared_energies": 18.0,
+        "cutoff_binary_calls": 23.0,
+        "candidate_pairs": 1447803.0,
+        "selected_pairs": 933649.0,
+        "max_batch_pairs": 65500,
+        "selection_submit_s": 0.11083550000330433,
+        "selection_packets": 23.0,
+        "max_selected_packet_pairs": 65445,
+        "depth_binary_calls": 15.0,
+        "interpolation_submit_s": 0.05339260015171021,
+        "physics_submit_s": 0.011999699810985476,
+        "collection_submit_s": 0.0011232999386265874,
+        "batch_count": 15,
+        "batch_sizes": [
+          61,
+          61,
+          63,
+          63,
+          64,
+          64,
+          64,
+          64,
+          63,
+          64,
+          63,
+          63,
+          61,
+          60,
+          30
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "let_dose_0": 0.0
+      }
+    }
+  }
+}

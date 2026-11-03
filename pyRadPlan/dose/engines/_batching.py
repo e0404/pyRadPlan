@@ -9,6 +9,10 @@ BatchStage = Literal["selection", "evaluation"]
 
 
 def _integer(value, name, minimum):
+    # Array shapes and Python counters normally already contain built-in ints.
+    # Avoid numbers.Integral's ABC dispatch for every queued stage cost.
+    if type(value) is int and value >= minimum:
+        return
     if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}.")
 
