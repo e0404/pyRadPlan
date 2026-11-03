@@ -1,9 +1,4 @@
-"""Compare three scalar queries with a shared trailing value dimension.
-
-Use final production code to reproduce the contiguous layout. Older result files
-label the unpacked and rejected transposed-copy experiments explicitly; those
-intermediate implementations are not production options.
-"""
+"""Compare three scalar queries with a shared trailing value dimension."""
 
 import argparse
 import json

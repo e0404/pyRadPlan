@@ -106,10 +106,8 @@ def test_resampling_exports_support_settings_first_import(first):
         f"import {first}\n"
         "from pyRadPlan import core\n"
         "from pyRadPlan.core import resample\n"
-        "from pyRadPlan.core._array_resample import ArrayBackendGridResampler\n"
         "for name in ('resample_image', 'resample_array', 'resample_numpy_array', "
         "'ArrayBackendGridResampler'):\n"
         "    assert getattr(core, name) is getattr(resample, name)\n"
-        "assert core.ArrayBackendGridResampler is ArrayBackendGridResampler\n"
     )
     subprocess.run([sys.executable, "-c", check], check=True)

@@ -7,23 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- Generated benchmark JSON results from version control. Benchmark JSON output is ignored recursively; scripts and Markdown measurement summaries remain versioned.
-
 ### Added
 
-- `ArrayBackend1DInterpolator` retains shared-axis field preparation and backend dispatch, including shared searches for PyTorch and generic Array API arrays, native NumPy interpolation, mixed field shapes/dtypes, and translated grids.
-- `core.xp_utils.grouped_max` with NumPy/CuPy indexed reduction and an Array API fallback; `ArrayBackendGridInterpolator` supports trailing value dimensions to share coordinate searches across fields.
-- `core.resample.resample_array` accepts Array API arrays and existing SimpleITK interpolator enums, preserves namespace/device/dtype, and provides `prefer_native` dispatch. Full-volume NumPy/CuPy resampling prefers SimpleITK; supported backend execution can be requested explicitly. The prepared `ArrayBackendGridResampler` now lives in the same module and also supports nearest-neighbor interpolation and constant extrapolation.
-- Backend-resident ray-tracer depth arrays and a shared Array API grid resampler with chunked linear image interpolation, nearest boundary extrapolation and NaN-aware exact-sample behavior. The image-returning ray-tracer interface remains available.
-- Cutoff grid-creation and GPU-resident kernel benchmarks in actual dose calculations, with separate grid-creation, evaluation, download, and database-setup measurements.
-- Configurable particle cutoff quadrature: custom radial bin boundaries and angular resolution, with retained sampling metadata and direct Array API backend/device creation. Particle cutoff creation and evaluation follow the dose backend by default; `cutoff_force_numpy=True` provides an explicit CPU override, replacing the earlier unreleased `cutoff_backend` selector.
-- Isolated particle mask-compaction benchmarks across three dose-grid resolutions, including Array API `take` compatibility checks and separate NumPy/CuPy gather measurements.
-- Cached native-versus-generic interpolation benchmark using captured photon grids and queries, with NumPy/CuPy measurements for both bounds policies in the pencil-beam performance audit.
-- `ArrayBackendGridInterpolator` in `core.xp_utils`: reusable rectilinear interpolation with native or generic Array API execution (`prefer_native`), retained grid preparation, and the existing clipping/bounds contract. `compat.interpnd` remains available as a one-shot wrapper.
-- Pencil-beam performance audit covering NumPy/CuPy across modalities, reproducible profiling and isolated acceleration prototypes in `benchmark/`, and a modular execution design in `docs/development/pencil_beam_performance_audit.md`.
-
+- `core.resample.resample_array` resamples NumPy, CuPy, PyTorch and other Array API arrays and returns them on their namespace, device and dtype. Full volumes use SimpleITK by default; `prefer_native=False` resamples on the array's backend. `ArrayBackendGridResampler` prepares repeated sampling of selected voxels
+- `core.xp_utils.ArrayBackendGridInterpolator` and `ArrayBackend1DInterpolator`: interpolation on rectilinear grids that keeps its grid preparation across queries and evaluates several fields with one coordinate search; `interpnd` takes `prefer_native` to choose between the native (SciPy/CuPy/JAX) and the generic Array API implementation
+- `core.xp_utils.grouped_max`: maximum per integer group on the arrays' device
+- Ray tracers: `trace_cubes_array` returns the radiological depth arrays on the tracing backend; `trace_cubes` still returns images
 - GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
 - GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
 - JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
@@ -31,41 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Architectural pencil-beam batching, its multi-table interpolation bank/fusion support, and associated experiments are isolated on `refactor/dose-calc-batching`. The incremental performance branch retains scalar engine execution and the earlier prepared single-grid interpolation and caching improvements; see `docs/development/performance_branch_layout.md`.
-- Particle engines reuse beamlet energy indices within each calculation and fetch source kernels only on converted-cache misses. Machine matching semantics and geometry-dependent kernel invalidation are preserved; the energy cache resets on engine reuse. Profiling, uncertain small full-dose effects and validation are recorded in `docs/development/particle_metadata_followup.md`.
-- Particle/VHEE depth interpolation caches scaled IDD and selected lateral, LET and biological fields per converted kernel. Focus interpolators are reused per calculation; prepared caches reset with kernel/geometry changes and engine reuse. CPU measurements and validation are documented in `docs/development/particle_interpolation_preparation.md`; GPU validation is pending.
-- Photon pencil-beam sampling prepares conservative depth-cluster counts once per beam/scenario and compacts the output mask once for Array API `take` gathers, preserving seeded sampling decisions and random draw order.
-- Photon pencil-beam evaluation caches depth-kernel constants per beam, depth dtype and device, and replaces component update loops with broadcast multiplication while preserving assignment precision before summation. Redundant query namespace dispatch is removed.
-- Pencil-beam engines prepare ray rotations in a backend-native batch per beam/shift, retaining matrices on the backend and transferring alignment flags once per beam. Existing cutoff geometry, alignment tolerance and voxel ordering are preserved.
-- Pencil-beam influence matrices use int32 sparse indices when dimensions and entry counts permit, with Python-integer pointer arithmetic and automatic int64 promotion before overflow. Dose precision and shared indices across quantities are preserved.
-- Photon pencil-beam sampling uses a shared grouped maximum instead of two sorts per ray. Convolved kernel components use one shared-grid interpolator, with backend-owned dispatch and contiguous field preparation for generic multi-value evaluation. Scalar interpolation dispatch is preserved; `prefer_native=True/False` explicitly selects native/generic preference and the default `None` selects the measured policy.
-- Performance documentation now includes GUI-default sampled five-field TG119 photon workloads, isolated historical revision comparisons, and the dominant sampling/interpolation costs.
-- Pencil-beam engines prepare beam-valid coordinates once and carry ordered integer selections through ray geometry using Array API `take`; SSD metadata is downloaded in batches and bixel counts remain on the host. The public `calc_geo_dists` mask interface is preserved.
-- Dose setup prepares reference alpha/beta and tissue-class indices from one overlap-resolved, nearest-neighbor-resampled label volume. Pencil-beam engines retain radiological depths on their compute backend for both CT-grid and dose-grid tracing; host depth images are created only when requested.
-- Shared dose setup unions existing VOI masks directly and reuses sorted voxel indices and scenario membership for single-CT calculations. Nearest-neighbor selection resampling avoids redundant rounding and sorting; custom selections retain their original arrays and internal canonicalization.
-- Particle lateral-cutoff preparation converts each energy kernel once, interpolates physical parameters once per depth, and evaluates bounded depth batches using shared lateral-dose formulas. Sampling order, cutoff selection and scalar compensation semantics are preserved; custom engine overrides retain a fallback path.
-- Particle pencil-beam engines compact each beamlet's voxel mask once and use Array API `take` for all ray fields, including lateral distances and biological tissue data, uniformly across backends.
-- Photon pencil-beam dose calculation reuses `ArrayBackendGridInterpolator` for each convolved kernel, avoiding repeated grid preparation during bixel evaluation while keeping backend dispatch in `xp_utils`.
-
+- Pencil-beam dose calculation is faster with unchanged results. On TG119 with the GUI defaults (3 mm dose grid, 5 mm bixels), five-field photon IMRT is 2.2x faster with NumPy and 3.2x faster with CuPy, three-field protons 1.4x and 1.6x faster. Main contributions: photon dose sampling uses a grouped maximum instead of sorting each ray, the convolved photon kernels share one interpolator, beam geometry and voxel masks are compacted once per beam instead of per ray, dose setup and tissue data preparation are faster, and radiological depths stay on the compute device
+- Influence matrices store row indices and column pointers as int32 when they fit, a third less memory for the sparse buffers; larger matrices keep int64
 - Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
 - Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
 - GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
 - GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
 - Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
 
-### Fixed
+### Deprecated
 
-- Backend linear image resampling accepts PyTorch arrays during CT-grid dose tracing; scalar upper-index clipping now uses the Array API-compatible `clip` operation. Resampling coverage includes PyTorch alongside NumPy, strict Array API and CuPy.
-- Core resampling exports load lazily to avoid a circular import between settings initialization and the Array API backend helpers.
-- Integrate pencil-beam performance preparation with explicit scenarios: preserve phase-specific tissue labels and SSDs, range-keyed photon sampling bounds, backend depth arrays, and compact sparse indices for computed scenario slots.
+- `resample_numpy_array`: use `resample_array`, which takes the same arguments and also accepts arrays of other backends
+
+### Fixed
 
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
 - GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
-
-### Deprecated
-
-- `resample_numpy_array` forwards to `resample_array` with a `DeprecationWarning`; its positional signature and native NumPy behavior remain supported. Internal callers use the replacement.
-
 
 ## [0.7.0] - 2026-11-02
 

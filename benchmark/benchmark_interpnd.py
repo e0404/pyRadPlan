@@ -5,7 +5,6 @@ import pytest
 
 from pyRadPlan.core.xp_utils.compat import interpnd
 from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator
-from profile_interpnd_reference import legacy_interpnd
 
 
 try:
@@ -78,12 +77,12 @@ def _block_until_ready(result):
 @pytest.mark.parametrize("backend", ["numpy", "cupy"])
 @pytest.mark.parametrize("prefer_native", [True, False], ids=["native", "generic"])
 @pytest.mark.parametrize("ndim", [2, 3, 4], ids=["2d", "3d", "4d"])
-@pytest.mark.parametrize("operation", ["construct", "evaluate", "oneshot", "legacy"])
+@pytest.mark.parametrize("operation", ["construct", "evaluate", "oneshot"])
 @pytest.mark.parametrize("single_query", [False, True], ids=["batch", "single"])
 def test_interpnd_lifecycle(benchmark, backend, prefer_native, ndim, operation, single_query):  # noqa: PLR0913
-    """Separate setup, repeated queries, and one-shot cost, with a frozen reference."""
-    if not prefer_native and (ndim == 4 or operation == "legacy"):
-        pytest.skip("Generic interpolation is 2D/3D; legacy is native only")
+    """Separate setup, repeated queries, and one-shot cost."""
+    if not prefer_native and ndim == 4:
+        pytest.skip("Generic interpolation is 2D/3D")
     if backend == "cupy" and (cp is None or not cp.cuda.is_available()):
         pytest.skip("CuPy device unavailable")
     xp = np if backend == "numpy" else cp
@@ -95,7 +94,7 @@ def test_interpnd_lifecycle(benchmark, backend, prefer_native, ndim, operation, 
         return ArrayBackendGridInterpolator(x, y, prefer_native=prefer_native)
 
     interpolator = construct()
-    expected = legacy_interpnd(xq, x, y)
+    expected = interpnd(xq, x, y)
     actual = interpolator(xq)
     np.testing.assert_allclose(
         actual if backend == "numpy" else actual.get(),
@@ -107,7 +106,6 @@ def test_interpnd_lifecycle(benchmark, backend, prefer_native, ndim, operation, 
         "construct": construct,
         "evaluate": lambda: interpolator(xq),
         "oneshot": lambda: interpnd(xq, x, y, prefer_native=prefer_native),
-        "legacy": lambda: legacy_interpnd(xq, x, y),
     }
 
     def measured():

@@ -345,27 +345,6 @@ def test_invalid_cutoff_settings_fail(kwargs):
         evaluate_cutoff(np.array([1.0]), np.array([1.0]), grid, lambda *_: None, **options)
 
 
-def test_cutoff_placement_configuration(xp):
-    """The plan option selects placement without changing the numerical implementation."""
-    from pyRadPlan import IonPlan  # noqa: PLC0415
-
-    engine = ParticleHongPencilBeamEngine(IonPlan())
-    engine.xp = xp
-    engine.device = array_api_compat.device(xp.asarray([1.0]))
-    assert engine._cutoff_execution() == (xp, engine.device)
-    engine.cutoff_force_numpy = True
-    namespace, device = engine._cutoff_execution()
-    assert array_api_compat.is_numpy_namespace(namespace)
-    assert device is None
-    config = engine.config_model()
-    assert config.model_fields["cutoff_force_numpy"].default is False
-    assert "cutoff_backend" not in config.model_fields
-    forced = ParticleHongPencilBeamEngine(IonPlan(prop_dose_calc={"cutoff_force_numpy": True}))
-    assert forced.cutoff_force_numpy is True
-    with pytest.raises(ValueError):
-        config(cutoff_force_numpy="invalid")
-
-
 def test_cutoff_rejects_mismatched_shapes(xp):
     """Do not silently broadcast depth or physical-dose tables with wrong shapes."""
     _, _, grid = _inputs("single")

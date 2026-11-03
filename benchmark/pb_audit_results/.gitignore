@@ -1,5 +1,0 @@
-# Generated dose arrays and binary profiler state stay available locally.
-*.npz
-*.npy
-*.prof
-array_backend_interpolation_micro.raw.json

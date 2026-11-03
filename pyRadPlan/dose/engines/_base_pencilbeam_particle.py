@@ -64,10 +64,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         Method used to determine lateral cut off. 'integral' uses the integral of the lateral
         dose profile to obtain the cut-off distance. 'relative' finds the lateral distance at which
         the dose drops to the requested cutoff
-    cutoff_force_numpy : bool
-        Force cutoff creation and evaluation onto NumPy when True. By default
-        both use the dose calculation's namespace and device. The override can
-        help small isotropic workloads; large anisotropic grids favor GPU execution.
     """
 
     computes_bio_influence: ClassVar[bool] = True
@@ -80,7 +76,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
     cut_off_method: Literal["integral", "relative"] = "integral"
-    cutoff_force_numpy: bool = False
     tissue_classes: list[TissueProperties] = []  # list of tissues used in the cst
 
     _dij_guarantee_canonical: ClassVar[bool]
@@ -707,12 +702,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
         return self._allocate_quantity_matrices(dij, ["let_dose"])
 
-    def _cutoff_execution(self):
-        """Select preparation placement independently of dose-array placement."""
-        if self.cutoff_force_numpy:
-            return array_api_compat.array_namespace(np.empty(0)), None
-        return self.xp, self.device
-
     def _cutoff_dose_profile(self, depths, kernel, sigma_ini_sq, quadrature):
         """Fallback for engines without a batched physical-profile implementation."""
         xp = array_api_compat.array_namespace(depths)
@@ -763,8 +752,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # TODO: this factor should probably be in the machine data and translate to MU
         conversion_factor = 1.6021766208e-02
 
-        # Construct sampling directly on the chosen backend once per beam.
-        cutoff_xp, cutoff_device = self._cutoff_execution()
+        # The small isotropic quadratures evaluate faster on the host than on a GPU.
+        cutoff_xp, cutoff_device = array_api_compat.array_namespace(np.empty(0)), None
         quadrature = (
             CutoffQuadrature.create(self.lateral_model, xp=cutoff_xp, device=cutoff_device)
             if cut_off_level != 1

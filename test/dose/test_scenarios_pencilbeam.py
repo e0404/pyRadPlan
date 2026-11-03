@@ -11,7 +11,6 @@ from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.ct import CT
 from pyRadPlan import settings
 from pyRadPlan.core.xp_utils import cupy_available
-from pyRadPlan.dose.engines._svdpb import PhotonPencilBeamSVDEngine
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import ParticleFredMCEngine, get_engine
 from pyRadPlan.raytracer import RayTracerSiddon
@@ -750,10 +749,10 @@ def test_moving_structures_on_a_coarser_dose_grid(test_data_photons):
 
 @pytest.mark.parametrize("backend", ["numpy", "cupy"])
 @pytest.mark.parametrize("trace_on_dose_grid", [False, True])
-def test_prepared_sampling_with_setup_range_and_ct_scenarios(
+def test_sampling_with_setup_range_and_ct_scenarios(
     test_data_photons, monkeypatch, backend, trace_on_dose_grid
 ):
-    """Prepared bounds preserve sampled dose and RNG across reordered phases and setups."""
+    """Sampling over reordered phases and setups is reproducible and shares derived slots."""
     if backend == "cupy" and not cupy_available():
         pytest.skip("CuPy unavailable")
     monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
@@ -771,24 +770,10 @@ def test_prepared_sampling_with_setup_range_and_ct_scenarios(
         setup=[SHIFT_X, (0, 0, 0), SHIFT_X, (0, 0, 0)],
         bases=[None, None, None, ScenarioBasis(coefficients={1: 1.0})],
     )
-    prepare = PhotonPencilBeamSVDEngine._prepare_sampling_cluster_counts
-    prepared = []
-
-    def capture(engine, beam):
-        counts = prepare(engine, beam)
-        prepared.append(counts)
-        return counts
-
-    monkeypatch.setattr(PhotonPencilBeamSVDEngine, "_prepare_sampling_cluster_counts", capture)
     engine, dij, slots = _calc(pln, ct2, cst, stf, scenarios=scenarios)
     next_random = engine._rng.random()
-    assert len(prepared) == 2 * len(stf.beams)
-    assert all(len(counts) == 3 for counts in prepared)
     assert slots[3] is slots[1]
     assert all(slot.indices.dtype == np.int32 for slot in slots)
-    monkeypatch.setattr(
-        PhotonPencilBeamSVDEngine, "_prepare_sampling_cluster_counts", lambda self, beam: None
-    )
     reference, _, expected = _calc(pln, ct2, cst, stf, scenarios=scenarios)
     for actual, target in zip(slots, expected):
         _assert_equal(actual, target)

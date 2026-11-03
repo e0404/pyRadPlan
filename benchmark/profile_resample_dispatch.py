@@ -18,8 +18,8 @@ def main():
     """Measure complete one-shot and cached work for identical target voxels."""
     import cupy as cp  # noqa: PLC0415
 
-    out = Path("benchmark/pb_audit_results/resample_dispatch")
-    out.mkdir(exist_ok=True)
+    out = Path("benchmark/results/resample_dispatch")
+    out.mkdir(parents=True, exist_ok=True)
     rows = []
     for size in (48, 96, 192):
         source = Grid(

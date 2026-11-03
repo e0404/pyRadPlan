@@ -1,2 +1,4 @@
-# Generated benchmark results stay local, including in nested output directories.
+# Generated benchmark output stays local.
+results/
+pb_audit_results/
 *.json
