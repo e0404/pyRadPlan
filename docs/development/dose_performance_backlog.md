@@ -15,7 +15,10 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    [particle interpolation preparation](particle_interpolation_preparation.md).
    GPU full-output comparisons now pass in the pipeline experiments below; an
    isolated GPU measurement of interpolation preparation versus its parent
-   revision and energy-lookup preparation remain outstanding. PyTorch CPU
+   revision remains outstanding. Repeated beamlet energy lookup is now cached
+   per calculation and source kernels are fetched only on converted-cache misses;
+   see [metadata reuse](particle_metadata_followup.md). Its whole-dose CPU gain
+   is too small to establish with the current measurements. PyTorch CPU
    CT-grid tracing exposed a tensor/scalar minimum incompatibility in image
    resampling. This is now fixed using Array API clipping, with PyTorch added to
    the image-resampling tests (220 checks passed across four backends).

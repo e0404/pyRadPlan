@@ -11,6 +11,7 @@ synchronize at full calculation boundaries, never between timed pipeline stages.
 
 import argparse
 from collections import defaultdict
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -657,7 +658,20 @@ def main():  # noqa: PLR0915
     (out / filename).write_text(
         json.dumps(
             dict(
-                reference="a780b35c scalar production path",
+                reference="scalar production path in the current checkout",
+                source_sha256={
+                    name: hashlib.sha256(
+                        (Path(__file__).resolve().parents[1] / name).read_bytes()
+                    ).hexdigest()
+                    for name in (
+                        "pyRadPlan/dose/engines/_base_pencilbeam.py",
+                        "pyRadPlan/dose/engines/_base_pencilbeam_particle.py",
+                        "pyRadPlan/dose/engines/_hongpb.py",
+                        "pyRadPlan/core/xp_utils/_interpolation1d.py",
+                        "pyRadPlan/core/xp_utils/_interpolation_bank.py",
+                        "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py",
+                    )
+                },
                 config=vars(args),
                 hardware=hardware,
                 scalar_first_s=first,

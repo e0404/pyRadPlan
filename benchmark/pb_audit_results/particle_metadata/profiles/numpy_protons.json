@@ -1,0 +1,56 @@
+{
+  "config": {
+    "mode": "protons",
+    "pairs": 1,
+    "production": true,
+    "out": "benchmark/pb_audit_results/particle_metadata/profiles"
+  },
+  "profile": {
+    "_base.py:get_kernel_by_index": {
+      "calls": 261,
+      "self_s": 0.0002009,
+      "cumulative_s": 0.0003174
+    },
+    "_external_beam.py:get_energy_index": {
+      "calls": 1133,
+      "self_s": 0.005768700000000001,
+      "cumulative_s": 0.020846100000000003
+    },
+    "_base_pencilbeam_particle.py:_init_bixel": {
+      "calls": 908,
+      "self_s": 0.0075187000000000006,
+      "cumulative_s": 0.08843440000000001
+    }
+  },
+  "profile_cached": {
+    "_base.py:get_kernel_by_index": {
+      "calls": 261,
+      "self_s": 0.000183,
+      "cumulative_s": 0.0002815
+    },
+    "_external_beam.py:get_energy_index": {
+      "calls": 243,
+      "self_s": 0.0011322,
+      "cumulative_s": 0.0037877
+    },
+    "_base_pencilbeam_particle.py:_init_bixel": {
+      "calls": 908,
+      "self_s": 0.0059242,
+      "cumulative_s": 0.07298550000000001
+    }
+  },
+  "engine_source_sha256": "d7bb2e9d3ee49c78860bf297f840cfd8da692006f380003c1cc511be07847b12",
+  "samples_s": {
+    "reference": [
+      0.4777297000400722
+    ],
+    "cached": [
+      0.4984818999655545
+    ]
+  },
+  "cache_entries": 18,
+  "max_abs_errors": {
+    "physical_dose_0": 0.0,
+    "let_dose_0": 0.0
+  }
+}

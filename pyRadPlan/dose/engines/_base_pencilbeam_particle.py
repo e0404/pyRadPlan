@@ -103,6 +103,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._validated_bio_kernel_energies: set[float] = set()
 
         self._kernel_cache = {}
+        self._energy_index_cache = {}
         self._depth_interpolator_cache = {}
         self._focus_interpolator_cache = {}
 
@@ -217,13 +218,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Find energy index in base data
         energy = curr_ray["beamlets"][k]["energy"]
-        # TODO: This here has some overhead. Can be done faster!
-        energy_ix = self._machine.get_energy_index(energy, 4)
-
-        if energy_ix.size > 1:
-            raise ValueError("Multiple energies found in base data for one bixel!")
-
-        energy_ix = np.int64(energy_ix)
+        # Machine energies are immutable during a calculation. Keep exact energy
+        # keys and delegate rounding/ambiguity semantics to the machine once.
+        energy_ix = self._energy_index_cache.get(energy)
+        if energy_ix is None:
+            energy_ix = self._machine.get_energy_index(energy, 4)
+            if energy_ix.size > 1:
+                raise ValueError("Multiple energies found in base data for one bixel!")
+            energy_ix = np.int64(energy_ix)
+            self._energy_index_cache[energy] = energy_ix
 
         bixel["energy_ix"] = energy_ix
 
@@ -233,8 +236,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Determine namespace from ray data
         xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
 
-        kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
-
         # NOTE: This here makes dosecalc way faster.
         # TODO: Maybe think of a better way then kernel_obj.to_namespace()
         # Get kernel and convert to namespace
@@ -242,6 +243,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if cache_key in self._kernel_cache:
             bixel["kernel"] = self._kernel_cache[cache_key]
         else:
+            kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
             bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
             # kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
 
@@ -507,6 +509,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
 
         self._clear_kernel_cache()
+        self._energy_index_cache.clear()
         self._focus_interpolator_cache.clear()
         dij = super()._init_dose_calc(ct, cst, stf)
 

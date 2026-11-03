@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Particle engines reuse beamlet energy indices within each calculation and fetch source kernels only on converted-cache misses. Machine matching semantics and geometry-dependent kernel invalidation are preserved; the energy cache resets on engine reuse. Profiling, uncertain small full-dose effects and validation are recorded in `docs/development/particle_metadata_followup.md`.
 - Particle/VHEE depth interpolation caches scaled IDD and selected lateral, LET and biological fields per converted kernel. Focus interpolators are reused per calculation; prepared caches reset with kernel/geometry changes and engine reuse. CPU measurements and validation are documented in `docs/development/particle_interpolation_preparation.md`; GPU validation is pending.
 - Photon pencil-beam sampling prepares conservative depth-cluster counts once per beam/scenario and compacts the output mask once for Array API `take` gathers, preserving seeded sampling decisions and random draw order.
 - Photon pencil-beam evaluation caches depth-kernel constants per beam, depth dtype and device, and replaces component update loops with broadcast multiplication while preserving assignment precision before summation. Redundant query namespace dispatch is removed.

@@ -13,8 +13,10 @@ from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
 
 
 def engine_stub():
+    """Create a minimal engine for interpolation and cache-lifetime checks."""
     engine = object.__new__(ParticleHongPencilBeamEngine)
     engine._kernel_cache = {}
+    engine._energy_index_cache = {}
     engine._depth_interpolator_cache = {}
     engine._focus_interpolator_cache = {}
     engine._calc_bio_dose = False
@@ -26,6 +28,7 @@ def engine_stub():
 @pytest.mark.parametrize("backend", ["numpy", "torch", "array_api_strict"])
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_translated_depths_and_cache(backend, dtype):
+    """Compare translated field values and invalidate preparation with geometry."""
     backend = pytest.importorskip(backend)
     xp = array_api_compat.array_namespace(backend.asarray([0.0]))
     engine = engine_stub()
@@ -64,6 +67,7 @@ def test_translated_depths_and_cache(backend, dtype):
 
 
 def test_biological_fields_are_separate_from_cutoff_cache():
+    """Keep biology preparation separate from physical cutoff calibration."""
     engine = engine_stub()
     engine._calc_bio_dose = True
     engine._validated_bio_kernel_energies = set()
@@ -97,6 +101,7 @@ def test_biological_fields_are_separate_from_cutoff_cache():
 
 
 def test_focus_cache_retains_extrapolation():
+    """Retain SciPy focus extrapolation while reusing the prepared object."""
     engine = engine_stub()
     focus = SimpleNamespace(dist=np.array([100.0, 200.0, 300.0]), sigma=np.array([3.0, 2.0, 4.0]))
     engine._machine = SimpleNamespace(foci={100.0: [focus]})
@@ -110,6 +115,7 @@ def test_focus_cache_retains_extrapolation():
 
 @pytest.mark.parametrize("trace_on_dose_grid", [False, True])
 def test_reused_engine_rebuilds_prepared_state(test_data_protons, trace_on_dose_grid):
+    """Rebuild every per-calculation cache on engine reuse for both tracing grids."""
     pln, ct, cst, stf, _, _ = test_data_protons
     engine = ParticleHongPencilBeamEngine(pln)
     engine.console_progress = False
@@ -117,12 +123,66 @@ def test_reused_engine_rebuilds_prepared_state(test_data_protons, trace_on_dose_
     first = engine.calc_dose_influence(ct, cst, stf)
     assert engine._depth_interpolator_cache
     assert engine._focus_interpolator_cache
+    assert engine._energy_index_cache
+    engine._energy_index_cache["stale"] = -1
     engine._depth_interpolator_cache["stale"] = object()
     for key in engine._focus_interpolator_cache:
         engine._focus_interpolator_cache[key] = lambda _: np.nan
     second = engine.calc_dose_influence(ct, cst, stf)
     assert "stale" not in engine._depth_interpolator_cache
+    assert "stale" not in engine._energy_index_cache
     for quantity in first.quantities:
         a = getattr(first, quantity).flat[0]
         b = getattr(second, quantity).flat[0]
         assert (a != b).nnz == 0
+
+
+def test_bixel_metadata_reuses_energy_and_kernel_lookups():
+    """Retain machine matching semantics while fetching converted kernels lazily."""
+    engine = engine_stub()
+    engine.device = None
+    converted = {"energy": 100.0}
+    kernel = SimpleNamespace(to_namespace=Mock(return_value=converted))
+    machine = SimpleNamespace(
+        get_energy_index=Mock(side_effect=[np.int64(0), np.int64(1), np.int64(0)]),
+        get_kernel_by_index=Mock(return_value=kernel),
+    )
+    engine._machine = machine
+    engine._get_beam_modifiers = Mock()
+    engine._get_bixel_indices_on_ray = Mock()
+    ray = dict(
+        beamlets=[dict(energy=e, range_shifter={}) for e in (100.0, 100.0, 120.0, 100.00001)],
+        beam_index=0,
+        ray_index=0,
+        rad_depths=np.array([1.0]),
+        SSD=800.0,
+        rad_depth_offset=0.0,
+        sigma_ini=np.ones(4),
+    )
+    bixels = [engine._init_bixel(ray, i) for i in range(4)]
+    assert [b["energy_ix"] for b in bixels] == [0, 0, 1, 0]
+    assert all(b["kernel"] is converted for b in bixels)
+    assert machine.get_energy_index.call_count == 3
+    assert machine.get_kernel_by_index.call_count == 2
+    assert kernel.to_namespace.call_count == 2
+    machine.get_energy_index.assert_any_call(100.0, 4)
+    machine.get_energy_index.assert_any_call(120.0, 4)
+    machine.get_energy_index.assert_any_call(100.00001, 4)
+    # New geometry replaces converted cutoffs, but does not change energy IDs.
+    engine._init_geometry_group()
+    engine._init_bixel(ray, 0)
+    assert machine.get_energy_index.call_count == 3
+    assert machine.get_kernel_by_index.call_count == 3
+    assert kernel.to_namespace.call_count == 3
+
+
+def test_invalid_energy_lookup_is_not_cached():
+    """Machine errors are preserved and cannot leave a stale resolved index."""
+    engine = engine_stub()
+    engine._machine = SimpleNamespace(get_energy_index=Mock(side_effect=ValueError("ambiguous")))
+    ray = dict(beamlets=[dict(energy=100.0)], beam_index=0, ray_index=0)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="ambiguous"):
+            engine._init_bixel(ray, 0)
+    assert engine._machine.get_energy_index.call_count == 2
+    assert not engine._energy_index_cache
