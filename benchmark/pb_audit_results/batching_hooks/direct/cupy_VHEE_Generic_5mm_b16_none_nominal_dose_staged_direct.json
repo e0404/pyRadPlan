@@ -1,0 +1,127 @@
+{
+  "reference": "scalar production path in the current checkout",
+  "source_sha256": {
+    "pyRadPlan/dose/engines/_base_pencilbeam.py": "5d522644b64cbb1a4e202b99529ba2ac525b46f73f941bd743c056c8eb5cebe1",
+    "pyRadPlan/dose/engines/_batching.py": "352ea294f462369d109969e2d729c71819e735b2a5018f733a251b6a55b5102a",
+    "pyRadPlan/dose/engines/_base_pencilbeam_particle.py": "d7bb2e9d3ee49c78860bf297f840cfd8da692006f380003c1cc511be07847b12",
+    "pyRadPlan/dose/engines/_hongpb.py": "ae1d1edaf93b01968c0baac6de91d7ae5308c8619668d97668def64ee93c1e86",
+    "pyRadPlan/core/xp_utils/_interpolation1d.py": "1d07df3365fca21a1e3e408b7d1af1ca8287d72fa42c91acf989a824839ee765",
+    "pyRadPlan/core/xp_utils/_interpolation_bank.py": "cbfff991bbebe3a2abe4f7921137595ab627f11d567fc32b42e5291013bb6954",
+    "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py": "0194b19020d78cac96d03d24604eaceb249231a65eef24460f9d6dd84aa21e9e"
+  },
+  "config": {
+    "backend": "cupy",
+    "variants": [
+      "bank",
+      "bank_hooks"
+    ],
+    "mode": "VHEE",
+    "machine": "Generic",
+    "bio_model": "none",
+    "size": 16,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 5,
+    "paired_variants": true,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "hooks": false,
+    "selection_pairs": null,
+    "batch_bytes": null,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/batching_hooks/direct"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5",
+    "cupy": "13.3.0",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU"
+  },
+  "scalar_first_s": 0.8339431000058539,
+  "beamlets": 121,
+  "results": {
+    "bank": {
+      "samples_s": {
+        "batch": [
+          0.34947549999924377,
+          0.4224125000182539,
+          0.42428300000028685,
+          0.44928210001671687,
+          0.4160755999619141
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0016272999928332865,
+        "prepared_energies": 1.0,
+        "scalar_selection_packets": 121.0,
+        "candidate_pairs": 4802750.0,
+        "selected_pairs": 347708.0,
+        "max_batch_pairs": 44500,
+        "selection_submit_s": 0.06428600026993081,
+        "selection_packets": 121.0,
+        "max_selected_packet_pairs": 46087,
+        "depth_binary_calls": 8.0,
+        "interpolation_submit_s": 0.004808900004718453,
+        "physics_submit_s": 0.005516499979421496,
+        "collection_submit_s": 0.002907700079958886,
+        "batch_count": 8,
+        "batch_sizes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          9
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    },
+    "bank_hooks": {
+      "samples_s": {
+        "batch": [
+          0.3939002999686636,
+          0.42077399999834597,
+          0.3713115999707952,
+          0.39351030002580956,
+          0.39014179998775944
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.001647300028707832,
+        "prepared_energies": 1.0,
+        "candidate_pairs": 4802750.0,
+        "selected_pairs": 347708.0,
+        "scalar_selection_packets": 121.0,
+        "selection_packets": 121.0,
+        "max_batch_pairs": 44500,
+        "selection_submit_s": 0.055352899711579084,
+        "max_selected_packet_pairs": 46087,
+        "depth_binary_calls": 8.0,
+        "interpolation_submit_s": 0.004718199954368174,
+        "physics_submit_s": 0.006171199900563806,
+        "collection_submit_s": 0.0016788000939413905,
+        "batch_count": 8,
+        "batch_sizes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          9
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    }
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "reference": "scalar production path in the current checkout",
+  "source_sha256": {
+    "pyRadPlan/dose/engines/_base_pencilbeam.py": "5d522644b64cbb1a4e202b99529ba2ac525b46f73f941bd743c056c8eb5cebe1",
+    "pyRadPlan/dose/engines/_base_pencilbeam_particle.py": "d7bb2e9d3ee49c78860bf297f840cfd8da692006f380003c1cc511be07847b12",
+    "pyRadPlan/dose/engines/_hongpb.py": "ae1d1edaf93b01968c0baac6de91d7ae5308c8619668d97668def64ee93c1e86",
+    "pyRadPlan/core/xp_utils/_interpolation1d.py": "1d07df3365fca21a1e3e408b7d1af1ca8287d72fa42c91acf989a824839ee765",
+    "pyRadPlan/core/xp_utils/_interpolation_bank.py": "cbfff991bbebe3a2abe4f7921137595ab627f11d567fc32b42e5291013bb6954",
+    "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py": "0194b19020d78cac96d03d24604eaceb249231a65eef24460f9d6dd84aa21e9e"
+  },
+  "config": {
+    "backend": "cupy",
+    "variants": [
+      "bank_generic",
+      "bank"
+    ],
+    "mode": "carbon",
+    "machine": "Generic",
+    "bio_model": "none",
+    "size": 64,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 7,
+    "paired_variants": true,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "hooks": false,
+    "selection_pairs": null,
+    "batch_bytes": null,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/fusion_idle/direct"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5",
+    "cupy": "13.3.0",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU"
+  },
+  "scalar_first_s": 2.6267142000142485,
+  "beamlets": 1182,
+  "results": {
+    "bank_generic": {
+      "samples_s": {
+        "batch": [
+          1.0614437999902293,
+          1.0760314000071958,
+          1.1525629000389017,
+          1.2687532999552786,
+          1.1520626000128686,
+          1.2009337000199594,
+          1.057573499972932
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.03057860000990331,
+        "prepared_energies": 23.0,
+        "cutoff_binary_calls": 19.0,
+        "candidate_pairs": 988887.0,
+        "selected_pairs": 818979.0,
+        "max_batch_pairs": 57820,
+        "selection_submit_s": 0.17838249990018085,
+        "selection_packets": 19.0,
+        "max_selected_packet_pairs": 50118,
+        "depth_binary_calls": 19.0,
+        "interpolation_submit_s": 0.1502826000796631,
+        "physics_submit_s": 0.025732600188348442,
+        "collection_submit_s": 0.02617369982181117,
+        "batch_count": 19,
+        "batch_sizes": [
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          30
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    },
+    "bank": {
+      "samples_s": {
+        "batch": [
+          0.8263690000167117,
+          0.953570400015451,
+          0.9797224000212736,
+          0.9392149000195786,
+          0.9353119000443257,
+          0.9702694999868982,
+          0.8719999000313692
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.03821009997045621,
+        "prepared_energies": 23.0,
+        "cutoff_binary_calls": 19.0,
+        "candidate_pairs": 988887.0,
+        "selected_pairs": 818979.0,
+        "max_batch_pairs": 57820,
+        "selection_submit_s": 0.09232579998206347,
+        "selection_packets": 19.0,
+        "max_selected_packet_pairs": 50118,
+        "depth_binary_calls": 19.0,
+        "interpolation_submit_s": 0.013413600041531026,
+        "physics_submit_s": 0.01624689984600991,
+        "collection_submit_s": 0.01438370015239343,
+        "batch_count": 19,
+        "batch_sizes": [
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          30
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    }
+  }
+}

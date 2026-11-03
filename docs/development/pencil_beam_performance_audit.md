@@ -6,6 +6,7 @@ Batching experiments: [bounded particle batches](particle_batching_exploration.m
 CPU/GPU pipeline follow-up: [staged particle batching](particle_pipeline_batching.md).
 Backend implementation: [reusable interpolation bank](interpolator_bank_followup.md).
 Small CPU follow-up: [particle metadata reuse](particle_metadata_followup.md).
+Latest integration: [idle-GPU fusion and shared batching hooks](cupy_fusion_and_batching_hooks.md).
 
 2026-10-26. Reviewed revision `c1ee82ae868b92cadfe72adf09bcc030188533bb` on
 `develop`. Experiments are isolated scripts under `benchmark/`; engine source

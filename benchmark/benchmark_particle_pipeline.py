@@ -27,7 +27,8 @@ from pyRadPlan.core.xp_utils import (
     to_numpy,
 )
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine as Hong
-from benchmark_particle_batches import BatchPrototype, compare_dose, check_dose
+from pyRadPlan.dose.engines import BixelBatchProcessor, BixelBatchLimits, BixelBatchCost
+from benchmark_particle_batches import BatchPrototype, compare_dose, check_dose, array_nbytes
 from benchmark_grouped_interp import TableBank, scalar_bound
 
 
@@ -370,6 +371,10 @@ class PipelinePrototype(BatchPrototype):
             return
         entries, self.ready = self.ready, []
         self.ready_pairs = 0
+        self.evaluate_entries(entries)
+
+    def evaluate_entries(self, entries, *, collect=True):
+        """Pack already selected entries independently of their scheduler."""
         xp = self.xp
         bixels = [b for b, _ in entries]
         selected = {
@@ -392,9 +397,11 @@ class PipelinePrototype(BatchPrototype):
             dtype=xp.int64,
             device=self.device,
         )
-        self.evaluate_selected(entries, selected, owner, cuts, rows, self.banks[group])
+        self.evaluate_selected(
+            entries, selected, owner, cuts, rows, self.banks[group], collect=collect
+        )
 
-    def evaluate_selected(self, entries, selected, owner, cuts, rows, bank):
+    def evaluate_selected(self, entries, selected, owner, cuts, rows, bank, *, collect=True):
         """Interpolate, evaluate and collect one bounded selected-work packet."""
         xp = self.xp
         bixels = [b for b, _ in entries]
@@ -456,9 +463,106 @@ class PipelinePrototype(BatchPrototype):
             part = slice(int(cuts[i]), int(cuts[i + 1]))
             b["ix"] = host_ix[part]
             b.update({key: value[part] for key, value in host.items()})
-            Hong._fill_dij(self, b, *args)
+            if collect:
+                Hong._fill_dij(self, b, *args)
         self.metrics["collection_submit_s"] += time.perf_counter() - start
         self.batch_counts.append(len(bixels))
+
+
+class HookProcessor(BixelBatchProcessor):
+    """Run the numerical prototype through the production scheduling hooks."""
+
+    def __init__(self, engine, dij, stf):
+        super().__init__(
+            BixelBatchLimits(engine.batch_size, engine.selection_pairs, engine.batch_bytes),
+            BixelBatchLimits(engine.batch_size, engine.max_pairs, engine.batch_bytes),
+        )
+        self.engine, self.dij, self.stf = engine, dij, stf
+
+    def prepare(self, ray, bixel_index):
+        """Prepare metadata while leaving support selection to the next stage."""
+        return self.engine._init_bixel(ray, bixel_index)
+
+    def cost(self, work, stage):
+        """Estimate retained voxel-array storage; temporary scratch is not included."""
+        source = work.payload["_source_ray"] if stage == "selection" else work.payload
+        nbytes = 0
+        if self.engine.batch_bytes is not None:
+            nbytes = sum(
+                array_nbytes(self.engine.xp, source[k])
+                for k in self.engine.source_fields
+                if k in source
+            )
+            if stage == "evaluation":
+                nbytes = max(nbytes, source.get("_selected_storage_bytes", 0))
+        return BixelBatchCost(source["rad_depths"].shape[0], nbytes)
+
+    def compatibility_key(self, work, stage):
+        """Keep incompatible field schemas in separate packets."""
+        return self.engine.energy_group[int(work.payload["energy_ix"])][0]
+
+    def select(self, batch):
+        """Reuse exact batched support selection and release source rays."""
+        engine = self.engine
+        start = time.perf_counter()
+        bixels = [work.payload for work in batch]
+        selected, *_ = engine.select(bixels)
+        if engine.batch_bytes is not None:
+            # Each slice may retain its complete source packet; counting it per
+            # item overestimates shared storage rather than hiding retained bases.
+            retained = sum(array_nbytes(engine.xp, value) for value in selected.values())
+            for bixel in bixels:
+                bixel["_selected_storage_bytes"] = retained
+        self._release(bixels)
+        engine.metrics["selection_submit_s"] += time.perf_counter() - start
+        engine.metrics["selection_packets"] += 1
+
+    @staticmethod
+    def _release(bixels):
+        for bixel in bixels:
+            bixel.pop("_source_ray", None)
+            bixel.pop("_reference_ray", None)
+
+    def select_one(self, work):
+        """Use the existing scalar selector when only one beamlet fits."""
+        engine, bixel = self.engine, work.payload
+        start = time.perf_counter()
+        count = bixel["_source_ray"]["rad_depths"].shape[0]
+        if engine.layout != "interpolation":
+            Hong._get_bixel_indices_on_ray(engine, bixel, bixel["_reference_ray"])
+        self._release([bixel])
+        engine.metrics["candidate_pairs"] += count
+        engine.metrics["selected_pairs"] += bixel["ix"].shape[0]
+        engine.metrics["scalar_selection_packets"] += 1
+        engine.metrics["selection_packets"] += 1
+        if count <= self.selection_limits.max_entries:
+            engine.metrics["max_batch_pairs"] = max(engine.metrics["max_batch_pairs"], count)
+        else:
+            engine.metrics["oversized_scalar_selections"] += 1
+        engine.metrics["selection_submit_s"] += time.perf_counter() - start
+
+    def evaluate(self, batch):
+        """Evaluate a packed selected packet without delivering its columns yet."""
+        self.engine.evaluate_entries([(work.payload, ()) for work in batch], collect=False)
+
+    def evaluate_one(self, work):
+        """Evaluate a singleton with the original particle routine."""
+        self.engine._calc_particle_bixel(work.payload)
+        self.engine.batch_counts.append(1)
+
+    def collect(self, batch):
+        """Deliver through the common sparse/forward collector hook."""
+        self.engine._collect_bixel_batch(batch, self.dij, self.stf)
+
+
+class HookPrototype(PipelinePrototype):
+    """Keep experimental physics local; delegate all queue lifetimes to shared hooks."""
+
+    # The inherited prototype's output-interception queue is not used here.
+    _fill_dij = Hong._fill_dij
+
+    def _create_bixel_batch_processor(self, dij, stf):
+        return HookProcessor(self, dij, stf)
 
 
 def sync(backend):
@@ -469,7 +573,7 @@ def sync(backend):
         cupy.cuda.get_current_stream().synchronize()
 
 
-def main():  # noqa: PLR0915
+def main():  # noqa: PLR0912, PLR0915
     """Run paired complete calculations and retain timings and comparison errors."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["numpy", "torch", "cupy"], default="numpy")
@@ -485,6 +589,8 @@ def main():  # noqa: PLR0915
             "binary",
             "bank",
             "bank_generic",
+            "bank_hooks",
+            "bank_generic_hooks",
         ],
     )
     parser.add_argument("--mode", choices=["protons", "VHEE", "carbon"], default="protons")
@@ -494,16 +600,24 @@ def main():  # noqa: PLR0915
     parser.add_argument("--max-pairs", type=int, default=65536)
     parser.add_argument("--grid", type=float, default=5)
     parser.add_argument("--pairs", type=int, default=3)
+    parser.add_argument("--paired-variants", action="store_true")
     parser.add_argument("--beams", type=int, default=1)
     parser.add_argument("--scenarios", action="store_true")
     parser.add_argument("--ct-phases", action="store_true")
     parser.add_argument("--two-stage", action="store_true")
+    parser.add_argument("--hooks", action="store_true")
+    parser.add_argument("--selection-pairs", type=int)
+    parser.add_argument("--batch-bytes", type=int)
     parser.add_argument("--trace-on-ct-grid", action="store_true")
     parser.add_argument("--forward", action="store_true")
     parser.add_argument("--out", default="benchmark/pb_audit_results/pipeline_batches")
     args = parser.parse_args()
     if min(args.size, args.max_pairs, args.pairs) < 1:
         raise ValueError("Positive batch size, budget and repeat count required")
+    if any(value is not None and value < 1 for value in (args.selection_pairs, args.batch_bytes)):
+        raise ValueError("Stage entry and byte budgets must be positive")
+    if args.hooks and "physics" in args.variants:
+        raise ValueError("The physics-only prototype does not implement the shared hooks")
     logging.basicConfig(level=logging.ERROR)
     settings.xp.prefer_gpu = False
     settings.xp.preferred_cpu_array_backend = "numpy"
@@ -598,15 +712,19 @@ def main():  # noqa: PLR0915
                 max_pairs=args.max_pairs,
             )
         else:
-            engine = PipelinePrototype(
+            engine = (
+                HookPrototype if args.hooks or variant.endswith("_hooks") else PipelinePrototype
+            )(
                 plan.model_copy(deep=True),
-                layout=variant,
+                layout=variant.removesuffix("_hooks"),
                 scope="beam",
                 batch_size=args.size,
                 max_pairs=args.max_pairs,
                 verify=verify,
                 two_stage=args.two_stage,
             )
+            engine.selection_pairs = args.selection_pairs or args.max_pairs
+            engine.batch_bytes = args.batch_bytes
         engine.console_progress = False
         sync(args.backend)
         start = time.perf_counter()
@@ -629,30 +747,51 @@ def main():  # noqa: PLR0915
         if variant is not None:
             metrics["batch_count"] = len(engine.batch_counts)
             metrics["batch_sizes"] = engine.batch_counts
-            assert metrics.get("max_batch_pairs", 0) <= args.max_pairs
+            assert metrics.get("max_batch_pairs", 0) <= (args.selection_pairs or args.max_pairs)
         return elapsed, dose, metrics
 
     first, reference, _ = run()
     results = {}
-    for variant in args.variants:
-        _, warm, _ = run(variant, verify=True)
-        compare_dose(reference, warm)
-        samples = {"scalar": [], "batch": []}
+    if args.paired_variants:
+        for variant in args.variants:
+            _, warm, _ = run(variant, verify=True)
+            compare_dose(reference, warm)
+            results[variant] = dict(samples_s={"batch": []})
         for i in range(args.pairs):
-            outputs = {}
-            for name in ("scalar", "batch") if i % 2 == 0 else ("batch", "scalar"):
-                elapsed, outputs[name], info = run(variant if name == "batch" else None)
-                samples[name].append(elapsed)
-                if name == "batch":
-                    metrics = info
-            errors = compare_dose(outputs["scalar"], outputs["batch"])
-        results[variant] = dict(samples_s=samples, metrics=metrics, max_abs_errors=errors)
-        print(variant, {k: round(float(np.median(v)), 4) for k, v in samples.items()}, flush=True)
+            for variant in args.variants[:: 1 if i % 2 == 0 else -1]:
+                elapsed, actual, info = run(variant)
+                results[variant]["samples_s"]["batch"].append(elapsed)
+                results[variant]["metrics"] = info
+                results[variant]["max_abs_errors"] = compare_dose(reference, actual)
+        print(
+            {v: float(np.median(r["samples_s"]["batch"])) for v, r in results.items()}, flush=True
+        )
+    else:
+        for variant in args.variants:
+            _, warm, _ = run(variant, verify=True)
+            compare_dose(reference, warm)
+            samples = {"scalar": [], "batch": []}
+            for i in range(args.pairs):
+                outputs = {}
+                for name in ("scalar", "batch") if i % 2 == 0 else ("batch", "scalar"):
+                    elapsed, outputs[name], info = run(variant if name == "batch" else None)
+                    samples[name].append(elapsed)
+                    if name == "batch":
+                        metrics = info
+                errors = compare_dose(outputs["scalar"], outputs["batch"])
+            results[variant] = dict(samples_s=samples, metrics=metrics, max_abs_errors=errors)
+            print(
+                variant, {k: round(float(np.median(v)), 4) for k, v in samples.items()}, flush=True
+            )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     filename = f"{args.backend}_{args.mode}_{args.machine}_{args.grid:g}mm_b{args.size}_{args.bio_model}_{'scenarios' if args.scenarios else 'nominal'}_{'ct' if args.trace_on_ct_grid else 'dose'}{'_forward' if args.forward else ''}.json"
     if args.two_stage:
         filename = filename.replace(".json", "_staged.json")
+    if args.hooks:
+        filename = filename.replace(".json", "_hooks.json")
+    if args.paired_variants:
+        filename = filename.replace(".json", "_direct.json")
     if args.ct_phases:
         filename = filename.replace(".json", "_phases.json")
     (out / filename).write_text(
@@ -664,7 +803,9 @@ def main():  # noqa: PLR0915
                         (Path(__file__).resolve().parents[1] / name).read_bytes()
                     ).hexdigest()
                     for name in (
+                        "benchmark/benchmark_particle_pipeline.py",
                         "pyRadPlan/dose/engines/_base_pencilbeam.py",
+                        "pyRadPlan/dose/engines/_batching.py",
                         "pyRadPlan/dose/engines/_base_pencilbeam_particle.py",
                         "pyRadPlan/dose/engines/_hongpb.py",
                         "pyRadPlan/core/xp_utils/_interpolation1d.py",

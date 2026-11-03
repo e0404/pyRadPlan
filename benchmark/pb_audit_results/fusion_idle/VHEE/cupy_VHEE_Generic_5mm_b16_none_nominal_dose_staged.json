@@ -1,0 +1,136 @@
+{
+  "reference": "scalar production path in the current checkout",
+  "source_sha256": {
+    "pyRadPlan/dose/engines/_base_pencilbeam.py": "902c2106c12ea83a9023690a59956440c4aa79a96a08070906b9be5d110a034e",
+    "pyRadPlan/dose/engines/_base_pencilbeam_particle.py": "d7bb2e9d3ee49c78860bf297f840cfd8da692006f380003c1cc511be07847b12",
+    "pyRadPlan/dose/engines/_hongpb.py": "ae1d1edaf93b01968c0baac6de91d7ae5308c8619668d97668def64ee93c1e86",
+    "pyRadPlan/core/xp_utils/_interpolation1d.py": "1d07df3365fca21a1e3e408b7d1af1ca8287d72fa42c91acf989a824839ee765",
+    "pyRadPlan/core/xp_utils/_interpolation_bank.py": "cbfff991bbebe3a2abe4f7921137595ab627f11d567fc32b42e5291013bb6954",
+    "pyRadPlan/core/xp_utils/_interpolation_bank_cupy.py": "0194b19020d78cac96d03d24604eaceb249231a65eef24460f9d6dd84aa21e9e"
+  },
+  "config": {
+    "backend": "cupy",
+    "variants": [
+      "bank_generic",
+      "bank"
+    ],
+    "mode": "VHEE",
+    "machine": "Generic",
+    "bio_model": "none",
+    "size": 16,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 5,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/fusion_idle/VHEE"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5",
+    "cupy": "13.3.0",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU"
+  },
+  "scalar_first_s": 0.9631898999796249,
+  "beamlets": 121,
+  "results": {
+    "bank_generic": {
+      "samples_s": {
+        "scalar": [
+          0.5347938999766484,
+          0.49217320000752807,
+          0.5308405999676324,
+          0.488206599955447,
+          0.5026553000207059
+        ],
+        "batch": [
+          0.4545630000066012,
+          0.44036639999831095,
+          0.46897370001534,
+          0.4209483999875374,
+          0.5842966000200249
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0017970000044442713,
+        "prepared_energies": 1.0,
+        "scalar_selection_packets": 121.0,
+        "candidate_pairs": 4802750.0,
+        "selected_pairs": 347708.0,
+        "max_batch_pairs": 44500,
+        "selection_submit_s": 0.09290520020294935,
+        "selection_packets": 121.0,
+        "max_selected_packet_pairs": 46087,
+        "depth_binary_calls": 8.0,
+        "interpolation_submit_s": 0.05827009998029098,
+        "physics_submit_s": 0.00974579993635416,
+        "collection_submit_s": 0.004160100070293993,
+        "batch_count": 8,
+        "batch_sizes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          9
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    },
+    "bank": {
+      "samples_s": {
+        "scalar": [
+          0.4931429999996908,
+          0.5429213999886997,
+          0.5183122999733314,
+          0.5066762000205927,
+          0.503599599993322
+        ],
+        "batch": [
+          0.4039543999824673,
+          0.4157858000253327,
+          0.4224551999941468,
+          0.4222931999829598,
+          0.46399890002794564
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.001707899966277182,
+        "prepared_energies": 1.0,
+        "scalar_selection_packets": 121.0,
+        "candidate_pairs": 4802750.0,
+        "selected_pairs": 347708.0,
+        "max_batch_pairs": 44500,
+        "selection_submit_s": 0.06358099915087223,
+        "selection_packets": 121.0,
+        "max_selected_packet_pairs": 46087,
+        "depth_binary_calls": 8.0,
+        "interpolation_submit_s": 0.0045065999729558825,
+        "physics_submit_s": 0.005809400056023151,
+        "collection_submit_s": 0.003159099956974387,
+        "batch_count": 8,
+        "batch_sizes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          9
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    }
+  }
+}

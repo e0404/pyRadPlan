@@ -5,6 +5,10 @@ Work remains on `refactor/dose-calc-performance`. The full develop baseline is
 still deferred. Existing dose engines do not automatically enable batching or
 use this new bank.
 
+Update: the [idle-GPU measurements and shared batching hooks](cupy_fusion_and_batching_hooks.md)
+now provide alternating fusion comparisons across protons, carbon and VHEE.
+The shared lifecycle is implemented; production numerical adapters remain pending.
+
 ## Completed changes
 
 `ArrayBackend1DInterpolatorBank` now lives in `core.xp_utils`. It prepares

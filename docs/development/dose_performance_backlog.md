@@ -38,16 +38,20 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    queues, grouped backend interpolation and packet downloads are measured in
    [particle pipeline batching](particle_pipeline_batching.md). The small CuPy
    proton case improves from 7.52 to 1.63 s; generic batching regresses NumPy.
-   Production integration remains outstanding. Start with optional packet hooks
-   and a scalar default, then a backend-owned multi-table interpolator and
-   measured execution policies. Preserve separate stage budgets: one candidate
+   Production numerical adapters and execution policies remain outstanding.
+   Optional shared hooks and a scalar default are now implemented; see
+   [fusion and hook validation](cupy_fusion_and_batching_hooks.md).
+   Preserve separate stage budgets: one candidate
    cap serialized VHEE physics and caused a large regression.
    **Reusable backend now available:** `ArrayBackend1DInterpolatorBank` implements
    portable table-bank execution and opt-in fused CuPy float64 kernels. See
    [interpolator bank follow-up](interpolator_bank_followup.md). Later GPU timings
-   encountered unrelated device load and a changing scalar baseline; remeasure
-   on an idle device before choosing automatic GPU specialization. Existing
-   dose engines still use their scalar defaults.
+   encountered unrelated device load and a changing scalar baseline. An idle-GPU
+   alternating comparison now measures about 15% proton, 19% carbon and 8% VHEE
+   full-pipeline time reductions from fusion. Automatic specialization remains
+   unchanged; the particle adapter requests it explicitly. Existing dose engines
+   still use their scalar defaults. The hook adapter's proton overhead needs
+   investigation before production opt-in; VHEE retains eight evaluation packets.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not
