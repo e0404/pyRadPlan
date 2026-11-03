@@ -273,7 +273,7 @@ class _KindTab(QWidget):
         self.btn_remove.clicked.connect(self.remove_selected)
         buttons.addWidget(self.btn_remove)
         buttons.addStretch()
-        self.btn_open = QPushButton("Open Folder")
+        self.btn_open = QPushButton("Open folder")
         self.btn_open.setToolTip(str(user_dir))
         self.btn_open.clicked.connect(
             lambda: open_folder_in_browser(user_base_data_dir(view.kind))
