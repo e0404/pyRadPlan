@@ -1,6 +1,6 @@
 """Solver Base Classes for Planning Problems."""
 
-from typing import Annotated, ClassVar, Callable, Any, Optional
+from typing import Annotated, ClassVar, Callable, Any, Optional, Union
 from abc import ABC, abstractmethod
 
 from ...core import AlgorithmParameterMetadata, ConfigurableAlgorithm
@@ -8,6 +8,7 @@ from ...core.xp_utils.typing import Array
 from ...util.keyboard_listener import KeyboardListener
 from ...util.logging_utils import warnings_to_logger
 
+import array_api_compat
 import numpy as np
 from numpy.typing import ArrayLike
 import logging
@@ -82,20 +83,24 @@ class SolverBase(ConfigurableAlgorithm, ABC):
             return True
         return bool(self.status_callback(message=message, **data))
 
-    def solve(self, x0: Array) -> tuple[Array, dict]:
+    def solve(self, x0: Union[Array, ArrayLike]) -> tuple[Array, dict]:
         """
         Interface method to solve the problem.
 
         Parameters
         ----------
-        x0 : Array
-            Initial guess for the solution
+        x0 : Array or array_like
+            Initial guess for the solution. Anything that is not an Array API array
+            (e.g. a list) is converted to a NumPy array.
 
         Returns
         -------
         tuple[Array, dict]
             Solution vector and additional information as dictionary
         """
+
+        if not array_api_compat.is_array_api_obj(x0):
+            x0 = np.asarray(x0)
 
         # The cancel settings are solver-level configuration, so pick up any change made
         # since construction before the listener decides to start.

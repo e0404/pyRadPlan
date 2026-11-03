@@ -1,6 +1,8 @@
 import pytest
 import logging
 
+import numpy as np
+
 from pyRadPlan.core import field_constraints
 from pyRadPlan.optimization.solvers import (
     get_available_solvers,
@@ -125,3 +127,16 @@ def test_register_solver_requires_short_name():
     with pytest.raises(ValueError, match="short_name"):
         register_solver(Unnamed)
     assert Unnamed not in get_available_solvers().values()
+
+
+@pytest.mark.parametrize("short_name", sorted(get_available_solvers()))
+def test_solvers_accept_a_list_as_x0(short_name):
+    """Regression: the solvers dropped their own list conversion, so a list x0 raised."""
+    solver = get_solver(short_name)
+    solver.max_iter = 50
+    solver.objective = lambda x: ((x - 2.0) ** 2).sum()
+    solver.gradient = lambda x: 2.0 * (x - 2.0)
+
+    x, _ = solver.solve([1.0, 1.0])
+
+    assert np.allclose(np.asarray(x), 2.0, atol=1e-3)
