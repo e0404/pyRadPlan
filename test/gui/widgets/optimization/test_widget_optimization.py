@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
 from pyRadPlan.io import load_tg119
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationWidget
+from pyRadPlan.gui.widgets._display_names import select_identifier
 from pyRadPlan.optimization.objectives import Objective, get_objective
 
 
@@ -253,17 +254,36 @@ def test_robustness_column_writes_through(qapp, tg119):
     voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
     obj = _objectives(ws.cst.vois[voi_idx])[0]
     cmb = _robustness_combo(widget, voi_idx)
-    options = [cmb.itemText(i) for i in range(cmb.count())]
+    options = [cmb.itemData(i) for i in range(cmb.count())]
     assert options == type(obj).available_robustness()
-    assert cmb.currentText() == "none"
+    assert cmb.currentData() == "none"
+    assert cmb.currentText() == "None"
+    assert cmb.itemText(options.index("voxel_worst_case")) == "Voxel-wise worst case"
     assert cmb.isEnabled()
     assert "nominal scenario only" in cmb.toolTip()
 
     new = next(name for name in options if name != "none")
-    cmb.setCurrentText(new)
+    select_identifier(cmb, new)
     assert _objectives(ws.cst.vois[voi_idx])[0].robustness == new
     # the edit does not rebuild the table, so the combo stays in place
     assert _robustness_combo(widget, voi_idx) is cmb
+
+
+def test_long_names_do_not_widen_the_columns(qapp, tg119):
+    """The closed combo boxes elide long labels, their open popups show them in full."""
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    cmb = _robustness_combo(widget, voi_idx)
+    longest = max(cmb.fontMetrics().horizontalAdvance(cmb.itemText(i)) for i in range(cmb.count()))
+    # the closed combo elides the longest label, the open popup shows it in full
+    assert cmb.sizeHint().width() < longest
+    cmb.showPopup()
+    assert cmb.view().width() > longest
+    cmb.hidePopup()
 
 
 def test_objective_type_change_keeps_robustness(qapp, tg119):
@@ -273,7 +293,7 @@ def test_objective_type_change_keeps_robustness(qapp, tg119):
     ws.set_many(ct=ct, cst=cst)
 
     voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
-    _robustness_combo(widget, voi_idx).setCurrentText("expected_value")
+    select_identifier(_robustness_combo(widget, voi_idx), "expected_value")
     current = _objectives(ws.cst.vois[voi_idx])[0].name
     other = next(name for name in widget._available if name != current)
     widget._on_objective_changed(voi_idx, 0, other)
@@ -281,7 +301,7 @@ def test_objective_type_change_keeps_robustness(qapp, tg119):
     obj = _objectives(ws.cst.vois[voi_idx])[0]
     assert obj.name == other
     assert obj.robustness == "expected_value"
-    assert _robustness_combo(widget, voi_idx).currentText() == "expected_value"
+    assert _robustness_combo(widget, voi_idx).currentData() == "expected_value"
 
 
 def test_scenario_aware_objectives_show_their_single_robustness(qapp, tg119, monkeypatch):
@@ -297,7 +317,7 @@ def test_scenario_aware_objectives_show_their_single_robustness(qapp, tg119, mon
     widget._rebuild_table(ws.cst)
 
     cmb = _robustness_combo(widget, voi_idx)
-    assert [cmb.itemText(i) for i in range(cmb.count())] == ["scenario_stack"]
+    assert [cmb.itemData(i) for i in range(cmb.count())] == ["scenario_stack"]
     assert not cmb.isEnabled()
 
 

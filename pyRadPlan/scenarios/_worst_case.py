@@ -17,7 +17,7 @@ class WorstCaseScenarioModel(GriddedScenarioModel):
     uncertainty, as in matRad.
     """
 
-    name: ClassVar[str] = "Worst Case Scenarios"
+    name: ClassVar[str] = "Worst-case Grid"
     short_name: ClassVar[str] = "wcScen"
 
     num_setup_grid_points: int = Field(default=3)

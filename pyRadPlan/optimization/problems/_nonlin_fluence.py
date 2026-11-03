@@ -40,7 +40,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         Exponent of the ``"pnorm"`` maximum approximation.
     """
 
-    name = "Non-Linear Fluence Planning Problem"
+    name = "Fluence (nonlinear)"
     short_name = "nonlin_fluence"
     records_obj_history = True
 

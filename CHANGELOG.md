@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
 - GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
+- GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
+- GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+
+### Added
+
+- GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
+- GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
+- JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
+- Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
+
+### Changed
+
+- Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
+- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
+- GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
+- GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
+- Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
+- GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
 
 ## [0.7.0] - 2026-11-02
 
