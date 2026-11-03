@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ArrayBackend1DInterpolatorBank` prepares compatible fields on unequal-length grids and evaluates table-indexed, translated queries. It includes portable Array API execution, NumPy prepared-call grouping, validated indices and an opt-in fused CuPy float64 implementation. Existing dose-engine and single-grid interpolation defaults are unchanged.
 - CPU-only bounded particle batching prototypes compare validation-only, packed and padded physics execution, with Array API checks and complete dose-output comparisons. Production dispatch is unchanged; architecture findings are recorded in `docs/development/particle_batching_exploration.md`.
 - CPU/CuPy pipeline batching experiments separate candidate selection from selected-work packets and compare grouped prepared interpolation with an Array API multi-table prototype. Synchronized GPU gains, CPU regressions and integration recommendations are recorded in `docs/development/particle_pipeline_batching.md`; production dispatch remains unchanged.
 - `ArrayBackend1DInterpolator` retains shared-axis field preparation and backend dispatch, including shared searches for PyTorch and generic Array API arrays, native NumPy interpolation, mixed field shapes/dtypes, and translated grids.

@@ -5,6 +5,10 @@ Reference: scalar production code at `a780b35c`, which already includes prepared
 particle interpolation and the develop merge. This is **not** the deferred full
 comparison against develop. Production dispatch remains unchanged.
 
+Subsequent implementation and validation:
+[reusable interpolation bank](interpolator_bank_followup.md), including opt-in
+CuPy fusion and the limits of the later GPU measurements.
+
 ## Findings
 
 Bounded pipeline batching substantially reduces CuPy proton runtime. The larger

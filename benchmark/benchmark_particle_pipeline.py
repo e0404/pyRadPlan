@@ -20,7 +20,11 @@ import time
 import numpy as np
 
 from pyRadPlan import IonPlan, generate_stf, load_tg119, settings
-from pyRadPlan.core.xp_utils import ArrayBackend1DInterpolator, to_numpy
+from pyRadPlan.core.xp_utils import (
+    ArrayBackend1DInterpolator,
+    ArrayBackend1DInterpolatorBank,
+    to_numpy,
+)
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine as Hong
 from benchmark_particle_batches import BatchPrototype, compare_dose, check_dose
 from benchmark_grouped_interp import TableBank, scalar_bound
@@ -82,6 +86,18 @@ class PipelinePrototype(BatchPrototype):
             "v_tissue_class_ix",
         )
 
+    def _prepare_bank(self, points, fields):
+        if self.layout == "binary":
+            return TableBank(points, fields)
+        bank = ArrayBackend1DInterpolatorBank(
+            points, fields, prefer_native=self.layout != "bank_generic"
+        )
+        return lambda q, ids, shifts: bank(q, ids, grid_offsets=shifts)
+
+    @property
+    def _uses_bank(self):
+        return self.layout in ("binary", "bank", "bank_generic")
+
     def _init_beam(self, *args):
         self.flush()
         self.flush_ready()
@@ -126,12 +142,12 @@ class PipelinePrototype(BatchPrototype):
             points = [p._x for _, _, p, _ in entries]
             fields = [p._fields for _, _, p, _ in entries]
             self.banks[group_id] = dict(
-                depth=TableBank(points, fields) if self.layout == "binary" else None,
-                cutoff=TableBank(
+                depth=self._prepare_bank(points, fields) if self._uses_bank else None,
+                cutoff=self._prepare_bank(
                     [cx for *_, cx in entries],
                     [{"cutoff": k["lateral_cut_off"]["cutoff_vals_sq"]} for _, k, _, _ in entries],
                 )
-                if self.layout == "binary"
+                if self._uses_bank
                 else None,
                 end=xp.stack([k["depths"][-1] for _, k, _, _ in entries]),
                 lower=xp.stack([cx[0] for *_, cx in entries]),
@@ -258,7 +274,7 @@ class PipelinePrototype(BatchPrototype):
             end = scalar_bound(xp, xp.take(bank["end"], table_ids) + shift, q)
             keep = q <= end
             if self.dosimetric_lateral_cutoff != 1:
-                if self.layout == "binary":
+                if self._uses_bank:
                     radius_sq = bank["cutoff"](q, table_ids, shift)["cutoff"]
                     self.metrics["cutoff_binary_calls"] += 1
                 else:
@@ -392,7 +408,7 @@ class PipelinePrototype(BatchPrototype):
                 key: concatenate(xp, [f[key] for f in per_bixel], axis=-1) for key in per_bixel[0]
             }
             self.metrics["depth_native_groups"] += len(bixels)
-        elif self.layout == "binary":
+        elif self._uses_bank:
             shifts = xp.asarray(
                 [-b["rad_depth_offset"] for b in bixels],
                 dtype=bank["end"].dtype,
@@ -460,7 +476,15 @@ def main():  # noqa: PLR0915
         "--variants",
         nargs="+",
         default=["native", "binary"],
-        choices=["physics", "support", "interpolation", "native", "binary"],
+        choices=[
+            "physics",
+            "support",
+            "interpolation",
+            "native",
+            "binary",
+            "bank",
+            "bank_generic",
+        ],
     )
     parser.add_argument("--mode", choices=["protons", "VHEE", "carbon"], default="protons")
     parser.add_argument("--machine", default="Generic")

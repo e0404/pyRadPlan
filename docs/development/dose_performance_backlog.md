@@ -39,6 +39,12 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    and a scalar default, then a backend-owned multi-table interpolator and
    measured execution policies. Preserve separate stage budgets: one candidate
    cap serialized VHEE physics and caused a large regression.
+   **Reusable backend now available:** `ArrayBackend1DInterpolatorBank` implements
+   portable table-bank execution and opt-in fused CuPy float64 kernels. See
+   [interpolator bank follow-up](interpolator_bank_followup.md). Later GPU timings
+   encountered unrelated device load and a changing scalar baseline; remeasure
+   on an idle device before choosing automatic GPU specialization. Existing
+   dose engines still use their scalar defaults.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not

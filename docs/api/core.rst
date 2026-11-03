@@ -164,6 +164,8 @@ xp_utils
    interp1d
    interpnd
    ArrayBackendGridInterpolator
+   ArrayBackend1DInterpolator
+   ArrayBackend1DInterpolatorBank
    jittable
    JittableKernel
    openblas_has_gemm_race
@@ -200,3 +202,42 @@ new object for a different grid or set of values. State belongs to the object;
 there is no global cache retaining grid arrays. For a single query batch, use
 ``interpnd(query_points, points, values, ...)``; the existing import from
 ``pyRadPlan.core.xp_utils.compat`` remains available.
+
+Reusable one-dimensional table banks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ArrayBackend1DInterpolator`` prepares multiple fields on one depth axis.
+``ArrayBackend1DInterpolatorBank`` prepares compatible fields on several axes,
+which may have different lengths. Each query carries its table index and can
+translate that table's grid independently:
+
+.. code-block:: python
+
+   import numpy as np
+   from pyRadPlan.core.xp_utils import ArrayBackend1DInterpolatorBank
+
+   bank = ArrayBackend1DInterpolatorBank(
+       [np.array([0., 1., 2.]), np.array([0., 2.])],
+       [np.array([0., 10., 20.]), np.array([0., 200.])],
+   )
+   result = bank(
+       np.array([0.5, 1., 2.5]),
+       np.array([0, 1, 1]),
+       grid_offsets=np.array([0., 0., 1.]),
+   )  # [5., 100., 150.]
+
+Fields can also be dictionaries, including arrays with shape
+``(n_rows, n_depths)``. Field names, outer shapes and per-field dtypes must
+agree across tables. The arrays determine the backend and device. Queries
+and table indices remain on that device; index validation requires one scalar
+decision per call. Callers should bound query batches to control temporary memory.
+
+The default groups NumPy queries through prepared interpolation and uses portable
+Array API operations elsewhere. ``prefer_native=False`` forces portable execution.
+``prefer_native=True`` additionally permits a fused CuPy implementation for
+float64 grids and fields; unsupported combinations retain the portable path.
+The fused path follows generic interpolation arithmetic, including singleton and
+NaN behavior, rather than CuPy's scalar ``interp`` dispatch. This is opt-in while
+workload-dependent performance is assessed. Existing single-grid dispatch and
+dose-engine defaults are unchanged. ``bank.implementation`` reports the selected
+execution policy.
