@@ -37,6 +37,13 @@ The build installs pyRadPlan from the working tree, so the image contains exactl
 it was built from; there is no separate version to pass. `--build-arg PYRADPLAN_EXTRAS=gui`
 leaves numba out.
 
+Besides pyRadPlan's TG119, the image has the phantoms of matRad: the patient cases of the
+[CORT dataset](https://doi.org/10.1186/2047-217X-3-37) (`HEAD_AND_NECK`, `LIVER`,
+`PROSTATE`) and `BOXPHANTOM`, listed under File → Open Example Phantom and on the command line
+(`pyradplan-web pyRadPlanGUI LIVER`). The build downloads them from a matRad release
+(`packaging/briefcase/scripts/fetch_matrad_phantoms.py`, which checks them against pinned
+SHA-256 hashes) into `/opt/pyradplan/data`; they are not part of this repository.
+
 ## Published images
 
 The "Container" workflow on GitHub (`.github/workflows/container.yml`) builds the image and,
@@ -55,7 +62,8 @@ docker run --rm -p 10000:10000 -e XPRA_PASSWORD=choose-one ghcr.io/e0404/pyradpl
 ```
 
 The licenses of the Python packages in the image are listed in
-`/usr/share/doc/pyradplan-web/THIRD_PARTY_NOTICES.txt` (also in the GUI's Help menu); the
+`/usr/share/doc/pyradplan-web/THIRD_PARTY_NOTICES.txt` (also in the GUI's Help menu), matRad's
+license and the origin of its phantoms in `/usr/share/doc/pyradplan-web/matRad-phantoms`; the
 Ubuntu and Xpra packages keep their copyright files in `/usr/share/doc`. A package pushed to
 the GitHub registry for the first time may be private until its visibility is changed in the
 package settings. The GitLab job needs a privileged runner for the `docker:dind` service.
@@ -72,7 +80,7 @@ deployment.
 | `XPRA_BIND` | Address the web client listens on, `0.0.0.0` by default. |
 | `NUMBA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` | Threads of the computations. By default, the container's CPU limit (`docker run --cpus`, a Kubernetes CPU limit), rounded up, instead of all CPUs of the host: more threads than the limit make the kernel pause the whole container, so the session stops responding during calculations. |
 | `PYRADPLAN_GUI_UI_MODE=educational` | Reduced widgets for teaching. |
-| `PYRADPLAN_BASE_DATA_PATH=/shared` | Shared base data folders: mount a folder with `phantoms/` (`.mat`, `.npz`) and, if wanted, `machines/` there and the cases are listed under File → Open Example Phantom. |
+| `PYRADPLAN_BASE_DATA_PATH` | Shared base data folders, by default `/shared:/opt/pyradplan/data`: mount a folder with `phantoms/` (`.mat`, `.npz`) and, if wanted, `machines/` at `/shared` and the cases are listed under File → Open Example Phantom, before the phantoms of matRad in `/opt/pyradplan/data`. Setting the variable replaces both; keep `/opt/pyradplan/data` in it for the phantoms of matRad. |
 | `PYRADPLAN_DATA_DIR` | The user's data directory (`~/.pyradplan` of the `pyradplan` user by default); mount a volume there to keep settings and added base data between sessions. |
 | `PYRADPLAN_AI_*`, provider API keys | AI features. A key in a shared image can be used by every session; leave them out if that is not wanted. |
 
