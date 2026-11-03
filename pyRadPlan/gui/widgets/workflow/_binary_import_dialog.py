@@ -91,11 +91,11 @@ class BinaryImportDialog(QDialog):
 
         # --- Structure buttons --------------------------------------------
         btns = QHBoxLayout()
-        add_files = QPushButton("Add File(s)…")
+        add_files = QPushButton("Add file(s)…")
         add_files.clicked.connect(self._add_files)
-        add_folder = QPushButton("Add Folder…")
+        add_folder = QPushButton("Add folder…")
         add_folder.clicked.connect(self._add_folder)
-        remove = QPushButton("Remove Selected")
+        remove = QPushButton("Remove selected")
         remove.clicked.connect(self._remove_selected)
         btns.addWidget(add_files)
         btns.addWidget(add_folder)

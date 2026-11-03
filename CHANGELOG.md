@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
+- GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
 - GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
 - IPOPT solver ignored `bounds` (always solved on [0, inf)), wrote the solution into the caller's `x0` and returned garbage for a float32 `x0`
@@ -42,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SciPy and IPOPT solvers used outside the built-in planning problems (called directly or from a custom planning problem) evaluated a torch `x0` on the default device instead of its own
 - ipax solver reported `num_iter` one too high (ipax also counts the starting point)
 - `register_solver` accepted a solver without `short_name`
+
+### Changed
+
+- Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
+- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
+- GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
+- GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
+- Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
+- GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
 
 ## [0.7.0] - 2026-11-02
 

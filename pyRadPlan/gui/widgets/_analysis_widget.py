@@ -50,7 +50,7 @@ _TYPE_GROUPS: tuple[tuple[str, str], ...] = (
 _OTHER_GROUP = ("OTHER", "Other")
 
 _GROUPBOX_STYLE = (
-    "QGroupBox { font-size: 9pt; font-weight: 600; margin-top: 6px; "
+    "QGroupBox { font-weight: 600; margin-top: 6px; "
     "border: 1px solid palette(mid); border-radius: 4px; padding: 4px 6px 4px 6px; }"
     "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
 )
