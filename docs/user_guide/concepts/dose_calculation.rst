@@ -222,43 +222,6 @@ the host machine model. Depth selection still uses the CPU machine data.
 Backend grid construction and reductions can differ slightly in rounding near
 cutoff thresholds; measure the complete calculation for your workload.
 
-Opt-in particle batching
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-``HongPB`` can calculate multiple particle beamlets together on the selected
-array backend. This can reduce GPU launch and transfer overhead. Scalar execution
-remains the default, and is generally preferable for the NumPy workloads measured
-so far. To enable bounded packets explicitly:
-
-.. code-block:: python
-
-    pln.prop_dose_calc.update(
-        batch_size=64,
-        batch_selection_max_entries=65536,
-        batch_evaluation_max_entries=65536,
-    )
-    dij = calc_dose_influence(ct, cst, stf, pln)
-
-``batch_size`` limits the number of beamlets per packet; 0 (the default) or 1
-keeps scalar execution. The two entry limits independently bound candidate
-voxel/beamlet pairs during support selection and selected pairs during dose
-evaluation. Large candidate supports therefore need not prevent evaluation of
-several small selected supports together. An oversized individual beamlet uses
-the existing scalar calculation for that stage.
-
-An optional ``batch_max_bytes`` also limits estimated retained and scratch bytes
-in each queue. It is not a hard device-memory limit: shared beam geometry,
-interpolation tables, both queues and temporary arrays can coexist. Smaller
-limits may reduce throughput. Leave it at ``None`` unless a byte budget is useful
-for your workload.
-
-Batching preserves beamlet delivery columns and scenario slots, and supports both
-influence-matrix and weighted-forward calculations, LET and biological quantities.
-An intact selected packet is reused directly when its evaluation membership is
-unchanged. Custom engine overrides of support, interpolation or physical-dose
-methods retain scalar execution unless they provide their own batch processor.
-The generic engine configuration dialog exposes the same settings.
-
 .. _jit-compiled-kernels:
 
 Jit-compiled kernels

@@ -2,12 +2,8 @@
 
 Current outstanding work: [performance backlog](dose_performance_backlog.md).
 Latest CPU follow-up: [particle interpolation preparation](particle_interpolation_preparation.md).
-Batching experiments: [bounded particle batches](particle_batching_exploration.md).
-CPU/GPU pipeline follow-up: [staged particle batching](particle_pipeline_batching.md).
-Backend implementation: [reusable interpolation bank](interpolator_bank_followup.md).
 Small CPU follow-up: [particle metadata reuse](particle_metadata_followup.md).
-Latest integration: [idle-GPU fusion and shared batching hooks](cupy_fusion_and_batching_hooks.md).
-Production opt-in: [particle batching and packet reuse](production_particle_batching.md).
+Branch scope: [incremental changes and separate batching work](performance_branch_layout.md).
 
 2026-10-26. Reviewed revision `c1ee82ae868b92cadfe72adf09bcc030188533bb` on
 `develop`. Experiments are isolated scripts under `benchmark/`; engine source

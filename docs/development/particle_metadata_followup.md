@@ -60,8 +60,9 @@ There is no GPU performance claim for this metadata change.
 
 Raw data:
 [`particle_metadata/`](../../benchmark/pb_audit_results/particle_metadata/).
-The pipeline harness now records current source hashes instead of labeling all
-future runs as the old `a780b35c` reference, so later changes remain distinguishable.
+The pipeline harness and its source-hash bookkeeping are retained on
+`refactor/dose-calc-batching`. This branch's metadata harness compares complete
+influence outputs independently of those batching experiments.
 
 ```powershell
 .venv/Scripts/python.exe benchmark/benchmark_particle_metadata.py --production --pairs 31 --out benchmark/pb_audit_results/particle_metadata/recheck

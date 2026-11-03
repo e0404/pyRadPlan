@@ -1,8 +1,11 @@
 # Dose performance backlog
 
-Updated 2026-11-03 during CPU/GPU particle pipeline batching experiments.
+Updated 2026-11-03 after separating architectural batching changes.
 This is the durable record of the outstanding work discussed with the user.
 The 2026-11-02 update merge itself contained no new performance optimization.
+See [branch scope](performance_branch_layout.md): batching implementation,
+supporting interpolation banks, experiments and results are retained on
+`refactor/dose-calc-batching`, separately from this incremental performance branch.
 
 ## Outstanding opportunities
 
@@ -13,7 +16,7 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    **CPU implementation and measurements completed:** focus reuse, scaled fields
    and prepared shared searches are described in
    [particle interpolation preparation](particle_interpolation_preparation.md).
-   GPU full-output comparisons now pass in the pipeline experiments below; an
+   GPU full-output comparisons passed in the separate batching experiments; an
    isolated GPU measurement of interpolation preparation versus its parent
    revision remains outstanding. Repeated beamlet energy lookup is now cached
    per calculation and source kernels are fetched only on converted-cache misses;
@@ -31,34 +34,9 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    Keep engine-specific physics modular, with a single-bixel fallback. Later
    support voxel-owned forward scoring, fine-sample children reduced into parent
    delivery columns, and richer photon transport such as AAA.
-   **Initial CPU exploration completed:** bounded validation/physics prototypes and the
-   proposed shared prepare/evaluate/collect boundary are recorded in
-   [particle batching exploration](particle_batching_exploration.md).
-   **CPU/GPU pipeline investigation completed:** separate candidate/selected-work
-   queues, grouped backend interpolation and packet downloads are measured in
-   [particle pipeline batching](particle_pipeline_batching.md). The small CuPy
-   proton case improves from 7.52 to 1.63 s; generic batching regresses NumPy.
-   Automatic execution policies and adapters for other modalities remain outstanding.
-   Optional shared hooks and a scalar default are now implemented; see
-   [fusion and hook validation](cupy_fusion_and_batching_hooks.md).
-   Preserve separate stage budgets: one candidate
-   cap serialized VHEE physics and caused a large regression.
-   **Reusable backend now available:** `ArrayBackend1DInterpolatorBank` implements
-   portable table-bank execution and opt-in fused CuPy float64 kernels. See
-   [interpolator bank follow-up](interpolator_bank_followup.md). Later GPU timings
-   encountered unrelated device load and a changing scalar baseline. An idle-GPU
-   alternating comparison now measures about 15% proton, 19% carbon and 8% VHEE
-   full-pipeline time reductions from fusion. Automatic specialization remains
-   unchanged; the particle adapter requests it explicitly. Existing dose engines
-   still use their scalar defaults. The [overhead investigation](batching_hook_overhead.md)
-   finds identical counted GPU operations in the proton comparison and about
-   3 ms extra host scheduling work; a validation shortcut reduces that cost.
-   The earlier 50 ms gap is not established as intrinsic hook overhead.
-   **Opt-in production particle processor completed:** `batch_size` enables the
-   [production adapter](production_particle_batching.md), with intact selected
-   packet reuse and scalar defaults. Generic VHEE retains eight evaluation
-   packets. Automatic backend/workload policy, photon integration and safe
-   batching of biological evaluator contexts remain open.
+   The opt-in particle adapter and shared hooks are implemented on
+   `refactor/dose-calc-batching`. Their integration is deferred for independent
+   architectural review; this branch retains scalar engine execution.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not
@@ -69,9 +47,8 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    NaN behavior and diagnostics. Dynamic compaction and host-visible decisions
    remain even after the existing mask-compaction and cluster-count changes.
 
-After CPU work on (1), the user requested starting (3). These experiments also
-isolate the validity-check portion of (5). The GPU became available and was
-measured; the full `develop` baseline is still deferred. The earlier
+The full `develop` baseline remains deferred. Batching and its GPU measurements
+are preserved on the separate branch; the latest
 small proton profile attributed most GPU work to per-beamlet support selection
 and physics/interpolation, not shared ray geometry or output collection. The
 2026-10-28 recheck had unstable absolute times (NumPy 0.41-1.90 s; CuPy 7.80-8.52 s)

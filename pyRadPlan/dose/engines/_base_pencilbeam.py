@@ -34,7 +34,6 @@ from ...core.xp_utils.typing import Array
 from ...core.xp_utils import cupy_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy, free_gpu_memory
 from ._sparse_output import sparse_index_dtype, ensure_index_capacity
-from ._batching import BixelBatchProcessor, BixelBatchScheduler, BixelDelivery
 from .kernels import _calc_geo_dists_cupy_kernel, _calc_geo_dists_torch_kernel
 
 
@@ -166,31 +165,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     def _compute_bixel(self, curr_ray, k):
         raise NotImplementedError("Method _compute_bixel must be implemented in derived class.")
 
-    def _create_bixel_batch_processor(self, dij, stf) -> Optional[BixelBatchProcessor]:
-        """Opt into staged execution for the initialized beam, or retain scalar execution.
-
-        Called after beam preparation and before ray traversal. A fresh processor
-        is used for each beam and geometry group. Its pending work is drained
-        before beam geometry or converted kernels can be released/replaced.
-        Existing/custom engines retain `_compute_bixel` unless they opt in here.
-        """
-        return None
-
-    def _collect_bixel_batch(self, batch, dij, stf):
-        """Deliver packet results through the existing sparse/forward collector."""
-        for work in batch:
-            identity = work.delivery
-            self._fill_dij(
-                work.payload,
-                dij,
-                stf,
-                identity.scenario,
-                identity.beam,
-                identity.ray,
-                identity.bixel,
-                identity.column,
-            )
-
     def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation):
         """
         Calculate the dose using the pencil beam method.
@@ -256,46 +230,37 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         curr_beam = self._init_beam(dij, ct, cst, scen_stf, i)
                         logger.info("Beam %d initialized in %f seconds.", i + 1, time.time() - t)
 
-                        processor = self._create_bixel_batch_processor(dij, scen_stf)
-                        context = (
-                            nullcontext(None)
-                            if processor is None
-                            else BixelBatchScheduler(processor)
-                        )
-                        with context as batcher:
-                            # Empty supports still emit columns and delivery identities.
-                            for j in self.track(
-                                range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
-                            ):
-                                curr_ray = self._init_ray(curr_beam, j)
-                                for s in scen_ix:
-                                    scen_ray = self._apply_scenario_to_ray(
-                                        curr_ray, self._scenarios[s]
-                                    )
-                                    for k in range(curr_ray["num_of_bixels"]):
-                                        if batcher is None:
-                                            curr_bixel = self._compute_bixel(scen_ray, k)
-                                            self._fill_dij(
-                                                curr_bixel,
-                                                dij,
-                                                scen_stf,
-                                                s,
-                                                i,
-                                                j,
-                                                k,
-                                                bixel_counter + k,
-                                            )
-                                        else:
-                                            batcher.submit(
-                                                scen_ray,
-                                                k,
-                                                BixelDelivery(s, i, j, k, bixel_counter + k),
-                                            )
-                                bixel_counter += curr_ray["num_of_bixels"]
+                        # Ray calculation
+                        for j in self.track(
+                            range(curr_beam["beam"]["num_of_rays"]), name="Ray", unit="r"
+                        ):
+                            # Initialize Ray Geometry
+                            curr_ray = self._init_ray(curr_beam, j)
 
-                        # Release the processor's per-beam state before GPU cleanup
-                        # and before the next beam starts allocating geometry.
-                        del batcher, context, processor
+                            # Even if the ray hits nothing, we still emit empty bixel columns
+                            # so that CSC structures and bookkeeping stay consistent.
+
+                            for s in scen_ix:
+                                scen_ray = self._apply_scenario_to_ray(
+                                    curr_ray, self._scenarios[s]
+                                )
+
+                                for k in range(curr_ray["num_of_bixels"]):
+                                    # Bixel Computation
+                                    curr_bixel = self._compute_bixel(scen_ray, k)
+                                    # fill the current bixel in the sparse dose influence matrix
+                                    self._fill_dij(
+                                        curr_bixel,
+                                        dij,
+                                        scen_stf,
+                                        s,
+                                        i,
+                                        j,
+                                        k,
+                                        bixel_counter + k,
+                                    )
+                            # Progress Update & Bookkeeping
+                            bixel_counter += curr_ray["num_of_bixels"]
 
                         # Free GPU memory from curr_beam
                         del curr_beam["bev_coords"]

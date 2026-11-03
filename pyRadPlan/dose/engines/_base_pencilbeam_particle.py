@@ -180,12 +180,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         return bixel
 
     def _init_bixel(self, curr_ray, k):
-        """Prepare one beamlet and select its voxel support for scalar execution."""
-        bixel = self._prepare_bixel(curr_ray, k)
-        self._get_bixel_indices_on_ray(bixel, curr_ray)
-        return bixel
-
-    def _prepare_bixel(self, curr_ray, k):
         """
         Initialize general bixel geometry for particle dose calculation.
 
@@ -265,7 +259,23 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Apply beam modifiers
         self._get_beam_modifiers(bixel)
 
-        # Scalar _init_bixel or the batch processor selects voxel support next.
+        # Gets bixel.ix (voxel indices) and bixel.subIx (logical
+        # indices to be used) after cutoff. Storing these allows us to
+        # use indexing for performance and avoid too many copies
+
+        self._get_bixel_indices_on_ray(bixel, curr_ray)
+
+        # Get quantities 1:1 from ray. Here we trust Python's memory
+        # management to not copy the arrays until they are modified.
+        # This allows us to efficiently access them by indexing in the
+        # bixel computation
+        # NOTE: These are now handled inside _get_bixel_indices_on_ray (deferred compaction)
+        # bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][bixel["sub_ix"]]
+        # bixel["rad_depths"] = curr_ray["rad_depths"][bixel["sub_ix"]]
+        # Propagate lateral distances if available (needed for singleXY focused model)
+        # if "lat_dists" in curr_ray:
+        #    bixel["lat_dists"] = curr_ray["lat_dists"][bixel["sub_ix"]]
+
         return bixel
 
     def _interpolate_kernels_in_depth(self, bixel):
@@ -283,11 +293,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
     def _prepare_depth_interpolator(self, bixel):
         """Prepare immutable energy fields; ray-dependent offsets stay in evaluation."""
-        depths, used_kernels = self._depth_interpolation_data(bixel)
-        return ArrayBackend1DInterpolator(depths, used_kernels)
-
-    def _depth_interpolation_data(self, bixel):
-        """Build shared grid/fields for scalar or bank interpolation preparation."""
         kernel = bixel["kernel"]
         depths = kernel["depths"] + kernel["offset"]
 
@@ -317,7 +322,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels.update(bio_kernels)
 
         # Interpolate all fields in X
-        return depths, used_kernels
+        return ArrayBackend1DInterpolator(depths, used_kernels)
 
     def _build_bio_context(
         self, bixel: dict[str, Any], kernels: dict[str, Any]

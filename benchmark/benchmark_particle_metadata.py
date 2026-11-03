@@ -15,7 +15,24 @@ import numpy as np
 from pyRadPlan import IonPlan, generate_stf, load_tg119, settings
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
 from pyRadPlan.machines.particles import ParticleAccelerator
-from benchmark_particle_batches import compare_dose
+
+
+def compare_dose(a, b):
+    """Compare complete influence outputs without depending on batching experiments."""
+    assert a.quantities == b.quantities
+    for key in ("beam_num", "ray_num", "bixel_num", "num_of_scenarios"):
+        np.testing.assert_array_equal(getattr(a, key), getattr(b, key))
+    errors = {}
+    for key in a.quantities:
+        aa, bb = getattr(a, key), getattr(b, key)
+        assert aa.shape == bb.shape
+        for i, (x, y) in enumerate(zip(aa.flat, bb.flat)):
+            assert x.shape == y.shape
+            np.testing.assert_array_equal(x.indptr, y.indptr)
+            np.testing.assert_array_equal(x.indices, y.indices)
+            np.testing.assert_allclose(x.data, y.data, rtol=2e-6, atol=1e-12)
+            errors[f"{key}_{i}"] = float(np.max(np.abs(x.data - y.data), initial=0))
+    return errors
 
 
 class Uncached(dict):
