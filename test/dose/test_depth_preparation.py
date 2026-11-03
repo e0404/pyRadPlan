@@ -17,7 +17,7 @@ from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
 @pytest.mark.parametrize("trace_on_dose_grid", [False, True])
 @pytest.mark.parametrize("keep", [False, True])
 def test_depth_selection_and_retained_images(
-    request, monkeypatch, backend, trace_on_dose_grid, keep
+    request, monkeypatch, assert_resampled_like_sitk, backend, trace_on_dose_grid, keep
 ):
     """Keep values on device unless images are requested, preserving selected depths."""
     module = pytest.importorskip(backend)
@@ -64,7 +64,9 @@ def test_depth_selection_and_retained_images(
         )
     result = engine._sample_radiological_depths([xp.asarray(values)])[0]
     old = sitk.GetArrayFromImage(expected)
-    np.testing.assert_allclose(to_numpy(result), old.ravel()[indices], rtol=2e-6, atol=2e-6)
+    assert_resampled_like_sitk(
+        to_numpy(result), old.ravel()[indices], grid, target, indices, rtol=2e-6, atol=2e-6
+    )
     assert array_api_compat.device(result) == engine.device
     assert array_api_compat.array_namespace(result) == xp
     if keep:
@@ -72,6 +74,14 @@ def test_depth_selection_and_retained_images(
         assert image.GetSpacing() == expected.GetSpacing()
         assert image.GetOrigin() == expected.GetOrigin()
         assert image.GetDirection() == expected.GetDirection()
-        np.testing.assert_allclose(sitk.GetArrayFromImage(image), old, rtol=2e-6, atol=2e-6)
+        assert_resampled_like_sitk(
+            sitk.GetArrayFromImage(image).ravel(),
+            old.ravel(),
+            grid,
+            target,
+            np.arange(target.num_voxels),
+            rtol=2e-6,
+            atol=2e-6,
+        )
     else:
         assert engine._rad_depth_cubes == []

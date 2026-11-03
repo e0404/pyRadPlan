@@ -120,7 +120,7 @@ def test_resampler_rejects_invalid_indices(xp, indices):
 
 
 @pytest.mark.parametrize("angle", [0.2, 0.7])
-def test_resampled_oblique_grid_preserves_nan_footprint(xp, angle):
+def test_resampled_oblique_grid_preserves_nan_footprint(xp, angle, assert_resampled_like_sitk):
     """Grid-aligned queries must retain the image resampler's NaN boundary behavior."""
     values = np.random.default_rng(11).normal(size=(7, 8, 9)).astype(np.float32)
     values.ravel()[::13] = np.nan
@@ -135,7 +135,7 @@ def test_resampled_oblique_grid_preserves_nan_footprint(xp, angle):
     expected = sitk.GetArrayFromImage(
         resample_image(image, interpolator=sitk.sitkLinear, target_grid=target)
     ).ravel()
-    sample = ArrayBackendGridResampler(source, target, xp.arange(target.num_voxels))
-    np.testing.assert_allclose(
-        to_numpy(sample(xp.asarray(values))), expected, rtol=2e-6, atol=2e-6
-    )
+    indices = np.arange(target.num_voxels)
+    sample = ArrayBackendGridResampler(source, target, xp.asarray(indices))
+    actual = to_numpy(sample(xp.asarray(values)))
+    assert_resampled_like_sitk(actual, expected, source, target, indices, rtol=2e-6, atol=2e-6)
