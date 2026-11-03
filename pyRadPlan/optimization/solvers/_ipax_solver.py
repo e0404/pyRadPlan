@@ -139,7 +139,8 @@ class OptimizerIpax(NonLinearOptimizer):
         """
         if b is None:
             return None
-        # Bounds must share x0's namespace/device (NumPy under force_cpu_inner_solve).
+        # Bounds must share x0's namespace/device. Under force_cpu_inner_solve x0
+        # is round-tripped to NumPy, so deriving the device from x0 keeps them consistent.
         barr = xp.asarray(b, dtype=x0.dtype, device=array_api_compat.device(x0))
         if barr.ndim == 0:
             value = float(barr)
