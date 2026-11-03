@@ -7,19 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
-- GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
-- GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
-- GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
-
 ### Added
 
 - GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
 - GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
 - JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
 - Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
+
+### Fixed
+
+- GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
+- GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
+- GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
+- GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+- IPOPT solver ignored `bounds` (always solved on [0, inf)), wrote the solution into the caller's `x0` and returned garbage for a float32 `x0`
+- SciPy solver ignored `max_time`, and cancelling a TNC run raised `StopIteration` instead of returning the last iterate
+- SciPy and IPOPT solvers used outside the built-in planning problems (called directly or from a custom planning problem) evaluated a torch `x0` on the default device instead of its own
+- ipax solver reported `num_iter` one too high (ipax also counts the starting point)
+- `register_solver` accepted a solver without `short_name`
 
 ### Changed
 
