@@ -1,0 +1,2 @@
+# Generated benchmark results stay local, including in nested output directories.
+*.json

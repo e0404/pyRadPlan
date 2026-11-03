@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Generated benchmark JSON results from version control. Benchmark JSON output is ignored recursively; scripts and Markdown measurement summaries remain versioned.
+
 ### Added
 
 - `ArrayBackend1DInterpolator` retains shared-axis field preparation and backend dispatch, including shared searches for PyTorch and generic Array API arrays, native NumPy interpolation, mixed field shapes/dtypes, and translated grids.

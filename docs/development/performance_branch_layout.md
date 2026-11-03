@@ -16,7 +16,7 @@ there are no batching hooks or batch configuration fields on this branch.
 - `ArrayBackend1DInterpolatorBank` and its optional CuPy fusion, introduced to
   support these packet calculations. Earlier single-grid interpolators remain
   available on both branches.
-- Batching-specific tests, benchmarks, recorded results and development reports.
+- Batching-specific tests, benchmark scripts and development reports.
 
 The bank is reusable independently, but currently its consumers are batching
 code and experiments. Keeping it with that work makes the incremental branch
@@ -43,3 +43,8 @@ biology, scenarios, engine reuse, prepared interpolation, resampling and the
 complete GUI test directory. Runtime/test differences from the pre-hook
 `51353010` revision are limited to removing the interpolation bank and its tests;
 the independent dose and resampling improvements are unchanged.
+
+Generated benchmark JSON results are local artifacts and are not versioned on
+either branch. `benchmark/.gitignore` excludes them recursively. Raw-output paths
+in historical reports refer to local measurements; the Markdown summaries and
+the scripts used to reproduce them remain versioned.
