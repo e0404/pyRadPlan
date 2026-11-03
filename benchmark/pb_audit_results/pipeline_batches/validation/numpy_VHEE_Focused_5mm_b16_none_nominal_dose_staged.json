@@ -1,0 +1,130 @@
+{
+  "reference": "a780b35c scalar production path",
+  "config": {
+    "backend": "numpy",
+    "variants": [
+      "native",
+      "binary"
+    ],
+    "mode": "VHEE",
+    "machine": "Focused",
+    "bio_model": "none",
+    "size": 16,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 1,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/pipeline_batches/validation"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5"
+  },
+  "scalar_first_s": 0.967478700040374,
+  "beamlets": 121,
+  "results": {
+    "native": {
+      "samples_s": {
+        "scalar": [
+          0.710565899964422
+        ],
+        "batch": [
+          0.8039653999730945
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.00024990004021674395,
+        "prepared_energies": 1.0,
+        "cutoff_native_groups": 119.0,
+        "candidate_pairs": 2454108.0,
+        "selected_pairs": 1107151.0,
+        "max_batch_pairs": 65206,
+        "selection_submit_s": 0.11878830008208752,
+        "selection_packets": 45.0,
+        "max_selected_packet_pairs": 65200,
+        "depth_native_groups": 107.0,
+        "interpolation_submit_s": 0.022505799774080515,
+        "physics_submit_s": 0.019620100094471127,
+        "collection_submit_s": 0.004451500077266246,
+        "batch_count": 18,
+        "batch_sizes": [
+          7,
+          7,
+          7,
+          7,
+          7,
+          6,
+          7,
+          6,
+          7,
+          7,
+          6,
+          7,
+          6,
+          7,
+          7,
+          7,
+          7,
+          6
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    },
+    "binary": {
+      "samples_s": {
+        "scalar": [
+          0.6905308999703266
+        ],
+        "batch": [
+          1.1443780999979936
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0002894999925047159,
+        "prepared_energies": 1.0,
+        "cutoff_binary_calls": 45.0,
+        "candidate_pairs": 2454108.0,
+        "selected_pairs": 1107151.0,
+        "max_batch_pairs": 65206,
+        "selection_submit_s": 0.3170913001522422,
+        "selection_packets": 45.0,
+        "max_selected_packet_pairs": 65200,
+        "depth_binary_calls": 18.0,
+        "interpolation_submit_s": 0.1550279000075534,
+        "physics_submit_s": 0.02148779999697581,
+        "collection_submit_s": 0.005165399983525276,
+        "batch_count": 18,
+        "batch_sizes": [
+          7,
+          7,
+          7,
+          7,
+          7,
+          6,
+          7,
+          6,
+          7,
+          7,
+          6,
+          7,
+          6,
+          7,
+          7,
+          7,
+          7,
+          6
+        ]
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0
+      }
+    }
+  }
+}

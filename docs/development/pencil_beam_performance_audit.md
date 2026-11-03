@@ -3,6 +3,7 @@
 Current outstanding work: [performance backlog](dose_performance_backlog.md).
 Latest CPU follow-up: [particle interpolation preparation](particle_interpolation_preparation.md).
 Batching experiments: [bounded particle batches](particle_batching_exploration.md).
+CPU/GPU pipeline follow-up: [staged particle batching](particle_pipeline_batching.md).
 
 2026-10-26. Reviewed revision `c1ee82ae868b92cadfe72adf09bcc030188533bb` on
 `develop`. Experiments are isolated scripts under `benchmark/`; engine source

@@ -1,6 +1,6 @@
 # Dose performance backlog
 
-Updated 2026-11-03 during CPU particle batching experiments.
+Updated 2026-11-03 during CPU/GPU particle pipeline batching experiments.
 This is the durable record of the outstanding work discussed with the user.
 The 2026-11-02 update merge itself contained no new performance optimization.
 
@@ -13,7 +13,9 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    **CPU implementation and measurements completed:** focus reuse, scaled fields
    and prepared shared searches are described in
    [particle interpolation preparation](particle_interpolation_preparation.md).
-   GPU validation and energy-lookup preparation remain outstanding. PyTorch CPU
+   GPU full-output comparisons now pass in the pipeline experiments below; an
+   isolated GPU measurement of interpolation preparation versus its parent
+   revision and energy-lookup preparation remain outstanding. PyTorch CPU
    CT-grid tracing exposed a pre-existing tensor/scalar minimum incompatibility
    in image resampling, which is recorded there for follow-up.
 2. **Shared conservative spatial candidates.** Avoid scanning every beam-valid
@@ -28,7 +30,14 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    **Initial CPU exploration completed:** bounded validation/physics prototypes and the
    proposed shared prepare/evaluate/collect boundary are recorded in
    [particle batching exploration](particle_batching_exploration.md).
-   Production batching and GPU measurements remain outstanding.
+   **CPU/GPU pipeline investigation completed:** separate candidate/selected-work
+   queues, grouped backend interpolation and packet downloads are measured in
+   [particle pipeline batching](particle_pipeline_batching.md). The small CuPy
+   proton case improves from 7.52 to 1.63 s; generic batching regresses NumPy.
+   Production integration remains outstanding. Start with optional packet hooks
+   and a scalar default, then a backend-owned multi-table interpolator and
+   measured execution policies. Preserve separate stage budgets: one candidate
+   cap serialized VHEE physics and caused a large regression.
 4. **Device output collection.** Prototypes exist in benchmark/. Earlier photon
    measurements suggested about 7% for full-device collection and 1% for bounded
    collection, with markedly different memory costs; a small proton case did not
@@ -40,8 +49,8 @@ The 2026-11-02 update merge itself contained no new performance optimization.
    remain even after the existing mask-compaction and cluster-count changes.
 
 After CPU work on (1), the user requested starting (3). These experiments also
-isolate the validity-check portion of (5). GPU work waits until the user's other
-GPU task finishes; the full `develop` baseline is deferred. The latest
+isolate the validity-check portion of (5). The GPU became available and was
+measured; the full `develop` baseline is still deferred. The earlier
 small proton profile attributed most GPU work to per-beamlet support selection
 and physics/interpolation, not shared ray geometry or output collection. The
 2026-10-28 recheck had unstable absolute times (NumPy 0.41-1.90 s; CuPy 7.80-8.52 s)

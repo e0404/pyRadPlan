@@ -233,7 +233,9 @@ transport models still require dedicated tests before any production integration
 .venv/Scripts/python.exe benchmark/benchmark_particle_batches.py --backend numpy --max-pairs 4096 --sizes 16 --pairs 1 --out benchmark/pb_audit_results/batching_cpu/cap4096
 ```
 
-The immediate recommendation is to test these three variants on the GPU once it
-is free, then introduce the explicit packet hooks with a scalar default. Follow
-that with batch support selection and grouped backend interpolation. Avoid
-enabling copy-heavy physics batching globally based on these CPU results.
+The subsequent [CPU/GPU pipeline investigation](particle_pipeline_batching.md)
+measures these ideas after the GPU became available, including support selection,
+grouped interpolation and packet downloads. It also records the VHEE regression
+from a shared candidate/physics packet limit and the separate-stage correction.
+Production packet hooks still need a scalar default; avoid enabling copy-heavy
+batching globally based on these CPU results.

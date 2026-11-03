@@ -7,8 +7,9 @@ Run --self-check for synthetic Array API checks, or run paired TG119 calculation
 
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-os.environ["PYRADPLAN_XP_PREFER_GPU"] = "false"
+if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    os.environ["PYRADPLAN_XP_PREFER_GPU"] = "false"
 
 import argparse
 from collections import defaultdict

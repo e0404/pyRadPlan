@@ -1,0 +1,92 @@
+{
+  "reference": "a780b35c scalar production path",
+  "config": {
+    "backend": "numpy",
+    "variants": [
+      "native",
+      "binary"
+    ],
+    "mode": "protons",
+    "machine": "Generic",
+    "bio_model": "none",
+    "size": 16,
+    "max_pairs": 65536,
+    "grid": 5,
+    "pairs": 1,
+    "beams": 1,
+    "scenarios": false,
+    "ct_phases": false,
+    "two_stage": true,
+    "trace_on_ct_grid": false,
+    "forward": false,
+    "out": "benchmark/pb_audit_results/pipeline_batches"
+  },
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "numpy": "2.3.5"
+  },
+  "scalar_first_s": 0.6059712000424042,
+  "beamlets": 908,
+  "results": {
+    "native": {
+      "samples_s": {
+        "scalar": [
+          0.496032600000035
+        ],
+        "batch": [
+          0.5217394000501372
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.0030817000078968704,
+        "prepared_energies": 18.0,
+        "cutoff_native_groups": 904.0,
+        "candidate_pairs": 1447803.0,
+        "selected_pairs": 933649.0,
+        "max_batch_pairs": 32212,
+        "selection_submit_s": 0.11414100020192564,
+        "selection_packets": 57.0,
+        "max_selected_packet_pairs": 17835,
+        "depth_native_groups": 904.0,
+        "interpolation_submit_s": 0.04234779969556257,
+        "physics_submit_s": 0.01878920034505427,
+        "collection_submit_s": 0.013424599776044488,
+        "batch_count": 57
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "let_dose_0": 0.0
+      }
+    },
+    "binary": {
+      "samples_s": {
+        "scalar": [
+          0.4180684000020847
+        ],
+        "batch": [
+          0.7246018999721855
+        ]
+      },
+      "metrics": {
+        "table_preparation_submit_s": 0.004300899978261441,
+        "prepared_energies": 18.0,
+        "cutoff_binary_calls": 57.0,
+        "candidate_pairs": 1447803.0,
+        "selected_pairs": 933649.0,
+        "max_batch_pairs": 32212,
+        "selection_submit_s": 0.2217195995617658,
+        "selection_packets": 57.0,
+        "max_selected_packet_pairs": 17835,
+        "depth_binary_calls": 57.0,
+        "interpolation_submit_s": 0.14831490023061633,
+        "physics_submit_s": 0.01685419969726354,
+        "collection_submit_s": 0.011340000259224325,
+        "batch_count": 57
+      },
+      "max_abs_errors": {
+        "physical_dose_0": 0.0,
+        "let_dose_0": 0.0
+      }
+    }
+  }
+}
