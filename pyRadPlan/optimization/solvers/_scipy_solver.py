@@ -1,6 +1,7 @@
 """SciPy solver Class."""
 
 import logging
+import time
 from typing import Any, Callable, Literal, Union
 
 import array_api_compat
@@ -8,7 +9,7 @@ import numpy as np
 
 from ...core.xp_utils.typing import Array
 
-from scipy.optimize import minimize, Bounds
+from scipy.optimize import minimize, Bounds, OptimizeResult
 
 from ._base_solvers import NonLinearOptimizer
 from ...core import xp_utils
@@ -81,6 +82,7 @@ class OptimizerSciPy(NonLinearOptimizer):
         # scipy passes either the current iterate (ndarray) or, for solvers that
         # support it, an OptimizeResult carrying the objective value (`.fun`).
         self._iter_count += 1
+        self._last_x = np.array(getattr(intermediate_result, "x", intermediate_result))
         data = {"iteration": self._iter_count}
         fun = getattr(intermediate_result, "fun", None)
         if fun is not None:
@@ -97,6 +99,9 @@ class OptimizerSciPy(NonLinearOptimizer):
         cont = self._emit_status(message=f"iteration {self._iter_count}", **data)
         if not cont or self._keyboard_listener.stop_event.is_set():
             raise StopIteration("Optimization cancelled by user")
+        if time.perf_counter() - self._start_time > self.max_time:
+            logger.warning("SciPy stopped: maximum time of %g s reached", self.max_time)
+            raise StopIteration(f"Maximum time of {self.max_time} s reached")
 
     #: Methods whose iteration cap is not called ``maxiter``. SciPy's TNC takes ``maxfun`` and
     #: reports ``maxiter`` as an unknown option, so it would simply not be capped. Every other
@@ -166,17 +171,15 @@ class OptimizerSciPy(NonLinearOptimizer):
 
         options = self._effective_options()
         self._iter_count = 0
-
-        if isinstance(x0, list):
-            x0 = np.asarray(x0)
+        self._start_time = time.perf_counter()
 
         xp = array_api_compat.array_namespace(x0)
+        device = array_api_compat.device(x0)
 
         x0 = xp_utils.to_numpy(x0)
+        self._last_x = x0
         bounds = [xp_utils.to_numpy(xp.asarray(b)) for b in self.bounds]
         bounds = Bounds(lb=bounds[0], ub=bounds[1])
-
-        device = self.device
 
         def scipy_objective(x: Array):
             return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x, device=device)))
@@ -185,18 +188,24 @@ class OptimizerSciPy(NonLinearOptimizer):
             return xp_utils.to_numpy(self.gradient(xp_utils.from_numpy(xp, x, device=device)))
 
         # Initialize the SciPy solution function and its arguments
-        result = minimize(
-            x0=x0,
-            fun=scipy_objective,
-            method=self.method,
-            jac=scipy_gradient,
-            # constraints=self.constraints,
-            # hess=self.hessian,
-            tol=self.abs_obj_tol,
-            bounds=bounds,
-            callback=self._callback,
-            options=options,
-        )
+        try:
+            result = minimize(
+                x0=x0,
+                fun=scipy_objective,
+                method=self.method,
+                jac=scipy_gradient,
+                # constraints=self.constraints,
+                # hess=self.hessian,
+                tol=self.abs_obj_tol,
+                bounds=bounds,
+                callback=self._callback,
+                options=options,
+            )
+        except StopIteration as stop:
+            # TNC does not handle a StopIteration from its callback and lets it escape.
+            result = OptimizeResult(
+                x=self._last_x, success=False, status=99, message=str(stop), nit=self._iter_count
+            )
 
         if self.display:
             logger.info("SciPy finished: %s", result.get("message", ""))
@@ -205,4 +214,4 @@ class OptimizerSciPy(NonLinearOptimizer):
         # SciPy methods populate "nit", so the callback's own count serves as the fallback.
         result["num_iter"] = int(result.get("nit", self._iter_count))
 
-        return xp_utils.from_numpy(xp, result["x"]), result
+        return xp_utils.from_numpy(xp, result["x"], device=device), result

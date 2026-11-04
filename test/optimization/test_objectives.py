@@ -377,3 +377,38 @@ def test_MaxDVH_compute_gradient():
     grad_expected2 = xp.ones(100) * 0.4
     assert xp.all(max_dvh.compute_gradient(dose) == grad_expected)
     assert xp.all(max_dvh.compute_gradient(dose_2) == grad_expected2)
+
+
+@pytest.mark.skipif(not xp_utils.cupy_available(), reason="CuPy / CUDA is not available.")
+@pytest.mark.parametrize(
+    "objective",
+    [
+        SquaredDeviation(d_ref=1.0),
+        SquaredOverdosing(d_max=0.5),
+        SquaredUnderdosing(d_min=1.5),
+        MeanDose(),
+        EUD(),
+        MinDVH(),
+        MaxDVH(),
+        DoseUniformity(),
+    ],
+    ids=lambda obj: obj.name,
+)
+def test_objectives_keep_float32_on_cupy(objective):
+    """cupy promotes ``float32 / <large int>`` to float64 (NumPy does not); normalize by floats."""
+    import cupy as cp
+
+    values = cp.linspace(0.0, 2.0, 200_000, dtype=cp.float32)
+    assert objective.compute_objective(values).dtype == cp.float32
+    assert objective.compute_gradient(values).dtype == cp.float32
+
+
+@pytest.mark.skipif(not xp_utils.cupy_available(), reason="CuPy / CUDA is not available.")
+def test_variance_keeps_float32_on_cupy():
+    import cupy as cp
+
+    from pyRadPlan.optimization.objectives import Variance
+
+    values = cp.stack([cp.linspace(0.0, 2.0, 200_000, dtype=cp.float32) * s for s in (1, 2, 3)])
+    assert Variance().compute_objective(values).dtype == cp.float32
+    assert Variance().compute_gradient(values).dtype == cp.float32

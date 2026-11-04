@@ -9,7 +9,16 @@ import numpy as np
 import SimpleITK as sitk
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPen, QPolygonF, QShortcut
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -45,6 +54,28 @@ _ORBIT_COLOR = (200, 200, 200, 170)
 _ORIENTATION_MARGIN = 8
 #: Image direction of each viewer axis in (x, y, z); the viewer volume is (z, x, y).
 _VIEWER_AXES_XYZ = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+#: Colour and line width of the isocenter cross on its slice, and of the half cross
+#: on nearby slices.
+_ISO_COLOR = (255, 0, 0)
+_ISO_HINT_COLOR = (255, 0, 0, 90)
+_ISO_WIDTH = 5
+#: Slices on either side of the isocenter that show a half cross towards it.
+_ISO_HINT_SLICES = 5
+
+
+def _iso_symbol(arms: Sequence[tuple[float, float]]) -> QPainterPath:
+    """Scatter symbol of lines from the centre to *arms*, in pixel-like units (y down)."""
+    path = QPainterPath()
+    for x, y in arms:
+        path.moveTo(0.0, 0.0)
+        path.lineTo(x, y)
+    return path
+
+
+_ISO_CROSS = _iso_symbol([(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)])
+#: Half crosses named by where they point: arms down make an upward arrowhead (∧).
+_ISO_HALF_UP = _iso_symbol([(-0.5, 0.5), (0.5, 0.5)])
+_ISO_HALF_DOWN = _iso_symbol([(-0.5, -0.5), (0.5, -0.5)])
 
 
 class _BeamWedgeItem(pg.GraphicsObject):
@@ -479,7 +510,7 @@ class QuantityWidget(QWidget):
         labels = result_key_labels(self._quantities)
         for name, arr in self._quantities.items():
             base = name.split()[0] if " " in name else name
-            if base.endswith("_beam"):
+            if base.endswith(("_beam", "_scenario")):
                 continue
             unit = self._overlay_units.get(name, getattr(self, "_overlay_units_default", ""))
             value = f"{labels[name]}: {arr[iz, ix, iy]:.4g}"
@@ -959,19 +990,28 @@ class QuantityWidget(QWidget):
         """Voxel spacing in mm along the viewer's (z, x, y) axes."""
         return np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
 
+    def _view_point(self, voxel: np.ndarray) -> tuple[float, float]:
+        """In-plane view position of viewer (z, x, y) voxel coordinates.
+
+        The image items draw voxel ``i`` over ``[i, i + 1]``, so its center is at ``i + 0.5``.
+        """
+        h_axis, v_axis = self._plane_axes()
+        return float(voxel[h_axis]) + 0.5, float(voxel[v_axis]) + 0.5
+
     def _beam_radius(self, h_iso: float, v_iso: float) -> Optional[float]:
         """Source distance in mm of the beams around an isocenter, or None outside the slice.
 
-        The radius of the largest circle around the isocenter that fits in the
-        slice, so the beam lines stay inside the image instead of running off into
-        empty space, which would also widen the auto-ranged view.  Every beam gets
-        the same distance, so its source stays on its gantry orbit while dragged.
+        The radius of the largest circle around the isocenter (in view coordinates)
+        that fits within the slice's voxel centers, so the beam lines stay inside the
+        image instead of running off into empty space, which would also widen the
+        auto-ranged view.  Every beam gets the same distance, so its source stays on
+        its gantry orbit while dragged.
         """
         h_axis, v_axis = self._plane_axes()
         spacing = self._viewer_spacing()
         radius = min(
-            min(h_iso, self._ct.shape[h_axis] - 1 - h_iso) * spacing[h_axis],
-            min(v_iso, self._ct.shape[v_axis] - 1 - v_iso) * spacing[v_axis],
+            min(h_iso - 0.5, self._ct.shape[h_axis] - 0.5 - h_iso) * spacing[h_axis],
+            min(v_iso - 0.5, self._ct.shape[v_axis] - 0.5 - v_iso) * spacing[v_axis],
         )
         return float(radius) if radius > 0.0 else None
 
@@ -1085,7 +1125,7 @@ class QuantityWidget(QWidget):
             direction = np.asarray(beam["source_direction"], dtype=float)
             # Per mm along the beam, so the source lands at the radius in mm.
             direction = direction / max(float(np.linalg.norm(direction * spacing)), 1e-12)
-            h_iso, v_iso = float(iso[h_axis]), float(iso[v_axis])
+            h_iso, v_iso = self._view_point(iso)
             toward = self._toward_viewer(direction)
             d_h, d_v = float(direction[h_axis]), float(direction[v_axis])
             norm = float(np.hypot(d_h, d_v))
@@ -1200,7 +1240,7 @@ class QuantityWidget(QWidget):
         h_axis, v_axis = self._plane_axes()
         u, w = (np.asarray(vector, dtype=float) for vector in beam["orbit"])
         matrix = np.array([[u[h_axis], w[h_axis]], [u[v_axis], w[v_axis]]])
-        iso = np.array([beam["iso_center"][h_axis], beam["iso_center"][v_axis]], dtype=float)
+        iso = np.array(self._view_point(beam["iso_center"]))
         tip = self._beam_parts[i]["tip"]
         radius = self._beam_parts[i]["radius"]
 
@@ -1298,22 +1338,28 @@ class QuantityWidget(QWidget):
             return
 
         axis = self._PLANE_MAP.get(self._plane, 2)
-        iso_slice_idx = int(round(self._isocenter[axis]))
+        offset = int(round(self._isocenter[axis])) - idx
 
-        if idx == iso_slice_idx:
-            h_axis, v_axis = self._plane_axes()
-            x, y = self._isocenter[h_axis], self._isocenter[v_axis]
+        if offset == 0:
+            symbol, color = _ISO_CROSS, _ISO_COLOR
+        elif abs(offset) <= _ISO_HINT_SLICES:
+            # The wheel scrolls up towards higher slices, so the half cross points up then.
+            symbol = _ISO_HALF_UP if offset > 0 else _ISO_HALF_DOWN
+            color = _ISO_HINT_COLOR
+        else:
+            return
 
-            self._isocenter_item = pg.ScatterPlotItem(
-                [x],
-                [y],
-                symbol="+",
-                size=20,
-                pen=pg.mkPen("r", width=2),
-                brush=pg.mkBrush("r"),
-            )
-            self._isocenter_item.setZValue(20)
-            self._view_box.addItem(self._isocenter_item)
+        x, y = self._view_point(self._isocenter)
+        self._isocenter_item = pg.ScatterPlotItem(
+            [x],
+            [y],
+            symbol=symbol,
+            size=20,
+            pen=pg.mkPen(color, width=_ISO_WIDTH),
+            brush=pg.mkBrush(None),
+        )
+        self._isocenter_item.setZValue(20)
+        self._view_box.addItem(self._isocenter_item)
 
     @staticmethod
     def _extract_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:

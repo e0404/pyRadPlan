@@ -12,6 +12,7 @@ from ...core.xp_utils.typing import Array
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation
+from pyRadPlan.scenarios import Scenario
 from pyRadPlan.core import Grid, PyRadPlanBaseModel
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import batched_interp3d, array_meshgrid
@@ -815,15 +816,15 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         ray["_precomputed_bixels"] = precomputed
         return ray
 
-    def _extract_single_scenario_ray(self, ray: dict, scen_idx: int) -> dict:
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
         """Return the ray for a specific scenario without modifying depths.
 
         Parameters
         ----------
         ray : dict
             Base ray dictionary.
-        scen_idx : int
-            Scenario index in the multi-scenario handler.
+        scenario : Scenario
+            The scenario; unused, the model predicts from the ray's CT cuboid.
 
         Returns
         -------

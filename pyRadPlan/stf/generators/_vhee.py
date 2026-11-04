@@ -57,7 +57,7 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
             raise ValueError("Machine must be an instance of VHEEAccelerator")
 
         self._available_energies = self.machine.energies
-        if self.use_given_eq_density_cube and getattr(self._ct, "cube", None) is None:
+        if self.use_given_eq_density_cube and getattr(self._geometry_ct, "cube", None) is None:
             warnings.warn(
                 "HU conversion requested to be omitted but no ct.cube exists! "
                 "Will override and do the conversion anyway!"
@@ -65,10 +65,10 @@ class StfGeneratorVHEE(StfGeneratorExternalBeamRayBixel):
             self.use_given_eq_density_cube = False
 
         if self.use_given_eq_density_cube:
-            self._wet_image = self._ct.cube
+            self._wet_image = self._geometry_ct.cube
         else:
             # TODO: load HLUT for given scanner
-            self._wet_image = self._ct.compute_wet(default_hlut(self.radiation_mode))
+            self._wet_image = self._geometry_ct.compute_wet(default_hlut(self.radiation_mode))
 
     def _init_beam_data(self, beam):
         """

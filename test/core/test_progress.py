@@ -212,3 +212,64 @@ def test_track_raises_once_a_stop_is_requested():
     assert seen == [0, 1]
     # without a stop request the loop completes
     assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+
+
+def test_track_without_stderr_skips_the_console_bar(monkeypatch):
+    """Windowed processes (pythonw, the desktop bundle) have no stderr for tqdm to write to."""
+    algo = _Algo()
+    algo.console_progress = True
+    reports = _collect(algo)
+    monkeypatch.setattr("sys.stderr", None)
+
+    assert list(algo.track(range(3), name="Ray")) == [0, 1, 2]
+    assert any(isinstance(r, ProgressReport) and r.levels for r in reports)
+
+
+def test_progress_handle_advances_by_any_step():
+    algo = _Algo()
+    reports = _collect(algo)
+    with algo.progress("Scenarios", total=5) as handle:
+        handle.advance(3)
+        handle.advance(2)
+    currents = [r.levels[0].current for r in reports if isinstance(r, ProgressReport) and r.levels]
+    assert currents == [0, 3, 5]
+
+
+def test_progress_console_bar_follows_the_handle(monkeypatch):
+    bars = []
+
+    class _Bar:
+        def __init__(self, iterable=None, **kwargs):
+            self.n = 0
+            self.kwargs = kwargs
+            self.closed = False
+            bars.append(self)
+
+        def update(self, n):
+            self.n += n
+
+        def refresh(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    import tqdm
+
+    monkeypatch.setattr(tqdm, "tqdm", _Bar)
+    algo = _Algo()
+    algo.console_progress = True
+
+    with algo.progress("Scenarios", total=4, console=True, unit="scen") as handle:
+        handle.advance(3)
+        handle.update(4)
+    assert len(bars) == 1
+    assert bars[0].kwargs["total"] == 4
+    assert bars[0].kwargs["unit"] == "scen"
+    assert bars[0].n == 4
+    assert bars[0].closed
+
+    # a level without `console` shows no bar
+    with algo.progress("Quiet", total=2) as handle:
+        handle.advance()
+    assert len(bars) == 1

@@ -34,9 +34,9 @@ class SquaredUnderdosing(Objective):
         xp = array_api_compat.array_namespace(values)
         undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
 
-        return (undervalues @ undervalues) / array_api_compat.size(values)
+        return (undervalues @ undervalues) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
         undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
-        return 2.0 * undervalues / array_api_compat.size(undervalues)
+        return 2.0 * undervalues / float(array_api_compat.size(undervalues))

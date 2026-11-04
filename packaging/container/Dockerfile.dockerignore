@@ -1,0 +1,11 @@
+# Only what the Dockerfile copies is sent to the Docker daemon; the rest of the repository
+# (docs, tests, examples, the matRad checkout, virtual environments) would be hundreds of MB.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!pyRadPlan
+!packaging/container/entrypoint.sh
+!packaging/briefcase/scripts/collect_licenses.py
+**/__pycache__
+**/*.pyc

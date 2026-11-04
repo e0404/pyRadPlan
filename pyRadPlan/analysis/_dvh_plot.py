@@ -102,6 +102,8 @@ class DVHPlot:
     secondary_x_label: Optional[str]
     legend: tuple[LegendEntry, ...]
     markers: tuple[QIMarker, ...] = ()
+    #: Thin curves drawn behind :attr:`curves`, e.g. one per uncertainty scenario.
+    band_curves: tuple[DVHCurve, ...] = ()
 
     def primary_curve(self, structure: str) -> Optional[DVHCurve]:
         """Return the solid curve of *structure*, or ``None`` if it is not plotted."""
@@ -169,7 +171,7 @@ def _qi_markers(
     return markers
 
 
-def build_dvh_plot(
+def build_dvh_plot(  # noqa: PLR0913
     dvhs: Sequence[DVH],
     voi_colors: Optional[dict[str, tuple[int, int, int]]] = None,
     unit: str = "",
@@ -180,6 +182,8 @@ def build_dvh_plot(
     primary_name: str = "",
     secondary_name: str = "",
     qis: Optional[QICollection] = None,
+    *,
+    band_dvhs: Optional[Sequence[DVH]] = None,
 ) -> DVHPlot:
     """Describe a DVH plot of primary curves and optional dashed secondary curves.
 
@@ -212,6 +216,10 @@ def build_dvh_plot(
     qis : QICollection | None, optional
         Quality indicators of the primary quantity; their D_x / V_x metrics of
         the plotted structures become :attr:`DVHPlot.markers`.
+    band_dvhs : Sequence[DVH] | None, optional
+        Further DVHs of the primary quantity (e.g. one per uncertainty scenario and
+        structure), drawn as thin :attr:`DVHPlot.band_curves` in the structure's color
+        behind the primary curves. They are not part of the legend.
 
     Returns
     -------
@@ -266,5 +274,15 @@ def build_dvh_plot(
             _qi_markers(qis, [dvh.name for dvh in dvhs], {n: _color(n) for n in names}, unit)
             if qis is not None
             else ()
+        ),
+        band_curves=tuple(
+            DVHCurve(
+                dvh.name,
+                np.asarray(dvh.bins),
+                np.asarray(dvh.cum_volume),
+                _color(dvh.name),
+                "solid",
+            )
+            for dvh in band_dvhs or ()
         ),
     )

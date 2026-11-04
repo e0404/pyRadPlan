@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from pyRadPlan.analysis._dvh import DVH
 
 _LINE_WIDTH = 2
+#: Width and opacity (0-255) of the band curves (e.g. one per uncertainty scenario).
+_BAND_WIDTH = 1
+_BAND_ALPHA = 70
 _HIGHLIGHT_WIDTH = 4
 _GUIDE_WIDTH = 2
 #: Stacking above the curves (the highlighted curve is at 1): guide lines with their
@@ -105,6 +108,8 @@ class DVHPlotWidget(QWidget):
         self._legend_samples: list[tuple[LegendEntry, pg.PlotDataItem]] = []
         #: The drawn curves, with the description each was drawn from.
         self.curve_items: list[tuple[DVHCurve, pg.PlotDataItem]] = []
+        #: The drawn band curves (see :attr:`DVHPlot.band_curves`).
+        self.band_items: list[tuple[DVHCurve, pg.PlotDataItem]] = []
 
         #: Marker kinds (``"dx"``, ``"vx"``) shown in the plot.
         self._visible_marker_kinds: set[str] = set()
@@ -133,7 +138,7 @@ class DVHPlotWidget(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def plot(
+    def plot(  # noqa: PLR0913
         self,
         dvhs: list[DVH],
         voi_colors: dict[str, tuple[int, int, int]] | None = None,
@@ -145,12 +150,15 @@ class DVHPlotWidget(QWidget):
         primary_name: str = "",
         secondary_name: str = "",
         qis: QICollection | None = None,
+        *,
+        band_dvhs: list[DVH] | None = None,
     ) -> None:
         """Plot primary DVH curves solid and optional secondary curves dashed.
 
         See :func:`~pyRadPlan.analysis._dvh_plot.build_dvh_plot` for how the
         curves, axes, legend and D_x / V_x markers (from *qis*) are chosen;
-        *overlay_unit* and *overlay_label* are its ``unit`` and ``label``.  A
+        *overlay_unit* and *overlay_label* are its ``unit`` and ``label``.
+        *band_dvhs* are drawn thin and semi-transparent behind the curves.  A
         highlight survives as long as its structure and metric are still shown.
         """
         self._draw(
@@ -165,6 +173,7 @@ class DVHPlotWidget(QWidget):
                 primary_name=primary_name,
                 secondary_name=secondary_name,
                 qis=qis,
+                band_dvhs=band_dvhs,
             )
         )
 
@@ -199,6 +208,13 @@ class DVHPlotWidget(QWidget):
         self._clear()
         self.shown_plot = plot
         item = self.plot_item
+        for curve in plot.band_curves:
+            band = pg.PlotDataItem(
+                curve.x, curve.y, pen=_pen(curve.color, curve.line_style, _BAND_WIDTH, _BAND_ALPHA)
+            )
+            band.setZValue(-1)
+            item.addItem(band)
+            self.band_items.append((curve, band))
         for curve in plot.curves:
             data = pg.PlotDataItem(curve.x, curve.y)
             data.setCurveClickable(True, width=_CURVE_CLICK_WIDTH)
@@ -236,6 +252,7 @@ class DVHPlotWidget(QWidget):
         self.legend.clear()
         self._legend_samples = []
         self.curve_items = []
+        self.band_items = []
         self.value_line = self.parameter_line = None
         self._dragged = None
         if self.secondary_view is not None:

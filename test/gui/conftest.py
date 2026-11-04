@@ -29,6 +29,20 @@ def _collect_widgets():
     gc.collect()
 
 
+# MainWindow shrinks the application font once per process; undo it so later tests do not
+# depend on whether a main window was built before them.
+@pytest.fixture(autouse=True)
+def _restore_app_font():
+    app = QApplication.instance()
+    font = app.font() if app is not None else None
+    yield
+    app = QApplication.instance()
+    if app is not None and app.property("compact_font_applied"):
+        if font is not None:
+            app.setFont(font)
+        app.setProperty("compact_font_applied", None)
+
+
 @pytest.fixture
 def test_data_photons(test_data_photons_raw):
     tmp = test_data_photons_raw

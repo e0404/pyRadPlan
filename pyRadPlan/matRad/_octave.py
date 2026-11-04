@@ -1,5 +1,6 @@
 from ._engine import MatRadEngine
 import os
+import shutil
 
 
 class MatRadEngineOctave(MatRadEngine):
@@ -19,9 +20,16 @@ class MatRadEngineOctave(MatRadEngine):
     def __init__(
         self,
         matRadPath="./matRad",
-        octave_exec="C:/Program Files/GNU Octave/Octave-8.3.0/mingw64/bin/octave-cli.exe",
+        octave_exec=None,
     ):
         import oct2py
+
+        if octave_exec is None:
+            octave_exec = (
+                os.environ.get("OCTAVE_EXECUTABLE")
+                or shutil.which("octave-cli")
+                or "C:/Program Files/GNU Octave/Octave-8.3.0/mingw64/bin/octave-cli.exe"
+            )
 
         self.matRadPath = matRadPath
         self.octave_exec = octave_exec

@@ -59,7 +59,12 @@ def test_photons_field_based():
     pln.prop_dose_calc["lateral_model"] = "single"
 
     stf = generate_stf(ct, cst, pln)
+    masks = [b.mask.copy() for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
     dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+
+    # The field shapes are resampled for the calculation only, not in the caller's stf
+    after = [b.mask for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
+    assert all(np.array_equal(a, b) for a, b in zip(after, masks))
 
     assert np.all(np.isfinite(dose))
     assert np.all(dose >= 0.0)

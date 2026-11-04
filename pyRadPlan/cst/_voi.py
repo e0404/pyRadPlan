@@ -1026,17 +1026,14 @@ class VOI(PyRadPlanBaseModel, ABC):
         voi_list = [0]  # We store an ID which will be changed by cst if exported from there
         voi_list.append(self.name)
         voi_list.append(self.voi_type)
-        if self.num_of_scenarios == 1:
-            index_lists = np.ndarray(shape=(1,), dtype=object)
-            mask_array = sitk.GetArrayFromImage(self.mask)
-            mask_array = np.swapaxes(mask_array, 1, 2)
-            indices = np.argwhere(mask_array.ravel(order="C") > 0) + 1
-            index_lists[0] = np.array(indices, dtype=float)
-
-        else:
-            index_lists = self.scenario_indices(order="numpy")
-            for i, index_list in enumerate(index_lists):
-                index_lists[i] = index_list.astype(float)
+        # matRad indices are 1-based and column-major over MATLAB's (y, x, z) cube
+        mask_array = sitk.GetArrayFromImage(self.mask)
+        scenario_arrays = [mask_array] if mask_array.ndim == 3 else list(mask_array)
+        index_lists = np.ndarray(shape=(len(scenario_arrays),), dtype=object)
+        for i, scenario_array in enumerate(scenario_arrays):
+            matrad_array = np.swapaxes(scenario_array, 1, 2)
+            indices = np.argwhere(matrad_array.ravel(order="C") > 0) + 1
+            index_lists[i] = np.array(indices, dtype=float)
 
         voi_list.append(index_lists)
 
@@ -1082,12 +1079,17 @@ class VOI(PyRadPlanBaseModel, ABC):
                 self.mask, new_ct.cube_hu, sitk.Transform(), sitk.sitkNearestNeighbor, 0
             )
         elif self.mask.GetDimension() == 4:
+            reference = (
+                new_ct.cube_hu[:, :, :, 0]
+                if new_ct.cube_hu.GetDimension() == 4
+                else new_ct.cube_hu
+            )
             new_mask = []
             for i in range(self.mask.GetSize()[-1]):
                 new_mask.append(
                     sitk.Resample(
                         self.mask[:, :, :, i],
-                        new_ct.cube_hu,
+                        reference,
                         sitk.Transform(),
                         sitk.sitkNearestNeighbor,
                         0,
@@ -1304,17 +1306,18 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
             return data
 
         # obtain voi type if we have a dict including camelCase check
-        voi_type = data.get("voi_type", data.get("voiType", None))
+        key = "voi_type" if "voi_type" in data else "voiType"
+        voi_type = str(data.get(key, "")).strip().upper()
 
         if voi_type in __VOITYPES__:
-            return __VOITYPES__[voi_type].model_validate(data)
+            return __VOITYPES__[voi_type].model_validate({**data, key: voi_type})
 
-        raise ValueError(f"Invalid VOI type: {voi_type}")
+        raise ValueError(f"Invalid VOI type: {data.get(key)}")
 
-    voi_type = kwargs.get("voi_type", "")
+    voi_type = str(kwargs.get("voi_type", "")).strip().upper()
 
     if voi_type in __VOITYPES__:
-        return __VOITYPES__[voi_type](**kwargs)
+        return __VOITYPES__[voi_type](**{**kwargs, "voi_type": voi_type})
 
     raise ValueError(f"Invalid VOI type: {voi_type}")
 

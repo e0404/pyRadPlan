@@ -135,12 +135,39 @@ def test_gui_unknown_patient_names_phantoms(captured_main_window):
     assert "ws" not in captured_main_window
 
 
+def test_gui_gives_a_windowed_process_standard_streams(captured_main_window, monkeypatch):
+    """Without a console (pythonw, the desktop bundle) sys.stdout/sys.stderr are None."""
+    import sys
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    gui()
+
+    for stream in (sys.stdout, sys.stderr):
+        assert stream is not None
+        stream.write("discarded\n")
+        stream.close()
+
+
 def test_main_passes_patient_to_gui(monkeypatch):
+    import signal
+
     received = []
     monkeypatch.setattr(apps, "gui", received.append)
+    monkeypatch.setattr(signal, "signal", lambda *args: None)
     main(["TG119"])
     main([])
     assert received == ["TG119", None]
+
+
+def test_main_lets_ctrl_c_stop_the_gui(monkeypatch):
+    import signal
+
+    installed = {}
+    monkeypatch.setattr(apps, "gui", lambda patient: None)
+    monkeypatch.setattr(signal, "signal", installed.__setitem__)
+    main([])
+    assert installed == {signal.SIGINT: signal.SIG_DFL}
 
 
 def test_analysis_viewer_starts_on_rbe_weighted_dose(qapp, no_event_loop, test_data_photons, dose):

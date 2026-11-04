@@ -111,12 +111,14 @@ class OptimizerIpopt(NonLinearOptimizer):
         self._iter_count = 0
 
         xp = array_api_compat.array_namespace(x0)
+        device = array_api_compat.device(x0)
 
-        x0 = xp_utils.to_numpy(x0)
-
-        x0 = np.asarray(x0)
-
-        device = self.device
+        # A float64 copy: IPOPT reads x0 as float64 memory and writes the solution into it.
+        x0 = np.array(xp_utils.to_numpy(x0), dtype=np.float64)
+        x_l, x_u = (
+            np.broadcast_to(xp_utils.to_numpy(xp.asarray(b)), x0.shape).astype(np.float64)
+            for b in self.bounds
+        )
 
         def ipopt_objective(x: NDArray) -> NDArray[np.float64]:
             return xp_utils.to_numpy(self.objective(xp_utils.from_numpy(xp, x, device=device)))
@@ -131,6 +133,8 @@ class OptimizerIpopt(NonLinearOptimizer):
         nlp = self._validate_ipopt_problem(
             {
                 "n": x0.size,
+                "x_l": x_l,
+                "x_u": x_u,
                 "eval_f": ipopt_objective,
                 "eval_grad_f": ipopt_derivative,
                 "intermediate_callback": self._callback,
@@ -150,7 +154,7 @@ class OptimizerIpopt(NonLinearOptimizer):
             "num_iter": self._iter_count,
         }
 
-        return xp_utils.from_numpy(xp, x), result_info
+        return xp_utils.from_numpy(xp, x, device=device), result_info
 
     # IPOPT options that mirror a generic solver attribute; the attribute is the source of truth.
     _ATTRIBUTE_BACKED_OPTIONS = {

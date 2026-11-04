@@ -388,38 +388,47 @@ def field_constraints(info: FieldInfo) -> dict[str, Any]:
 
 def replace_nested(obj: Any, overrides: Mapping[str, Any]) -> Any:
     """
-    Return a copy of a dataclass with overrides applied, recursing into nested dataclasses.
+    Return a copy of a dataclass or pydantic model with overrides applied, recursing into nested ones.
 
-    Lets a (possibly frozen) options tree, such as ``ipax.Options``, be configured from a
-    plain nested dictionary that only names the entries to change.
+    Lets a (possibly frozen) options tree, such as ``ipax.Options`` or a scenario model, be
+    configured from a plain nested dictionary that only names the entries to change. A pydantic
+    model is copied without validation (``model_copy``); validate the result where it matters.
 
     Parameters
     ----------
-    obj : dataclass instance
-        The dataclass to start from; it is not modified.
+    obj : dataclass or pydantic model instance
+        The instance to start from; it is not modified.
     overrides : Mapping[str, Any]
-        Field values to replace. A mapping given for a field holding a dataclass is applied
-        to that dataclass in turn.
+        Field values to replace. A mapping given for a field holding a dataclass or model is
+        applied to that value in turn.
 
     Returns
     -------
-    dataclass instance
+    dataclass or pydantic model instance
         The updated copy.
 
     Raises
     ------
     TypeError
-        If an override names a field the dataclass does not have.
+        If an override names a field the instance does not have.
     """
     changes = {}
     for key, value in overrides.items():
         current = getattr(obj, key, None)
-        if (
-            isinstance(value, Mapping)
-            and dataclasses.is_dataclass(current)
-            and not isinstance(current, type)
-        ):
+        if isinstance(value, Mapping) and is_nested_instance(current):
             changes[key] = replace_nested(current, value)
         else:
             changes[key] = value
+    if isinstance(obj, BaseModel):
+        unknown = set(changes) - set(type(obj).model_fields)
+        if unknown:
+            raise TypeError(f"{type(obj).__name__} has no field(s) {sorted(unknown)}")
+        return obj.model_copy(update=changes)
     return dataclasses.replace(obj, **changes)
+
+
+def is_nested_instance(value: Any) -> bool:
+    """Whether *value* is a dataclass or pydantic model instance, i.e. an editable options tree."""
+    if isinstance(value, type):
+        return False
+    return dataclasses.is_dataclass(value) or isinstance(value, BaseModel)

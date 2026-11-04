@@ -23,8 +23,11 @@ pre-commit install
 | `devops/*` | CI, tooling, docs |
 | `dev/*` | experimental |
 | `rc/X.Y.Z` | release candidate, branched from `develop`, merged into `main` |
+| `internal/*` | confidential work, only on the internal GitLab; never push these to GitHub |
 
 Always branch from `develop` (not `main`) for regular work.
+
+GitHub (remote `github`) is the primary repository: pull requests, CI, releases and issues live there. `main`, `develop` and tags reach the internal GitLab through the workflow `mirror.yml`, so never push them to GitLab directly.
 
 ## Code Style
 
@@ -39,7 +42,7 @@ pytest                        # run all tests
 pytest --cov=pyRadPlan        # with coverage
 ```
 
-CI runs on Python 3.10–3.13. Do not reduce existing coverage.
+GitHub CI runs on Python 3.10–3.14 for pull requests into `main` and `develop` and for pushes to `main`, `develop`, `rc/*` and `devops/*`, plus Windows, macOS and the torch and JAX backends on 3.13. GitLab CI only tests `internal/*` and `devops/*` branches: 3.13 for every push, and 3.10, 3.14 and the backends on `devops/*` and for open merge requests. Do not reduce existing coverage.
 
 Performance work lives in `benchmark/`, never in `test/`. `testpaths` is set to `test`,
 so a bare `pytest` run never collects it — invoke it explicitly:
@@ -56,7 +59,7 @@ Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance 
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
 
-## PR / MR Checklist
+## PR Checklist
 
 - [ ] All existing tests pass; new behaviour has tests
 - [ ] Coverage not reduced
@@ -69,26 +72,30 @@ Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Ch
 Releases are cut from a release candidate branch, never from `develop` directly, so `develop`
 stays open for regular work while the candidate is stabilised:
 
-1. Branch `rc/X.Y.Z` from `develop`.
-2. Stabilise on `rc/X.Y.Z`: review, fixes, version bump, changelog. Last, commit the executed
-   example notebooks: `python docs/execute_examples.py --release` runs the examples and stages
-   them in `docs/tutorials/examples/`.
-3. Open the release MR/PR from `rc/X.Y.Z` into `main`.
-4. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
-   `main` back into `develop` while untracking the executed notebooks (`git merge --no-ff
-   --no-commit main`, `git rm -r --cached --quiet --ignore-unmatch docs/tutorials/examples`,
-   `git commit`), and delete `rc/X.Y.Z`.
+1. Branch `rc/X.Y.Z` from `develop` and open the release PR from `rc/X.Y.Z` into `main`
+   (`gh pr create --base main --template release.md`).
+2. Review `rc/X.Y.Z` and address the remaining concerns on it.
+3. Once the review is addressed and approved and CI is green, update the executed example
+   notebooks, which stay tracked in `docs/tutorials/examples/` from the last release:
+   `python docs/execute_examples.py --release [name ...]` runs the examples and stages them.
+   Rerun an example if its script or its results changed; otherwise its notebook stays valid.
+4. Bump the version only now that the release code is final: `pyproject.toml`, `CHANGELOG.md`
+   (`[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD`), `CITATION.cff`. This is the last commit
+   before merging.
+5. Merge `rc/X.Y.Z` into `main`.
+6. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
+   `main` back into `develop`, and delete `rc/X.Y.Z`.
 
 When proposing or preparing a release, follow
-[.gitlab/merge_request_templates/Release.md](.gitlab/merge_request_templates/Release.md) — it is
-the authoritative checklist for both the pre-merge and post-merge steps, and it applies whichever
-platform hosts the release. Do not tag, publish, or push a release without explicit confirmation.
+[.github/PULL_REQUEST_TEMPLATE/release.md](.github/PULL_REQUEST_TEMPLATE/release.md) — it is
+the authoritative checklist for both the pre-merge and post-merge steps. Do not tag, publish, or
+push a release without explicit confirmation.
 
 ## Documentation
 If the changes are complex, consider adding or suggesting an addition or change to the user guide (in docs/user_guide).
 If you add documentation, you can run multiple builds of the documentation and iterate through the sphinx-build errors to make clean edits.
 
-The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section. On `develop` and feature branches they are the only committed form of the examples: never commit `.ipynb` files there. The docs build converts them into `docs/tutorials/examples/` (git-ignored) without outputs; neither CI nor Read the Docs ever executes them. Only release commits (`rc/X.Y.Z`, hence `main` and the tags) carry executed notebooks there, written and staged by `python docs/execute_examples.py --release`, so the docs show outputs for releases only. The docs build renders an executed notebook as is while its script is unchanged (it records the script hash) and otherwise falls back to a conversion without outputs with a warning. Examples needing external tools (`SKIP` in `docs/execute_examples.py`) are never executed. Check that changed examples run with `python docs/execute_examples.py [name ...]` (writes to `docs/_build/executed_examples`); `PYRADPLAN_DOCS_NB_EXECUTION=cache` is a local opt-in to execute them during a docs build.
+The scripts in `examples/` are jupytext percent notebooks rendered in the docs "Tutorials" section, and the source of the examples. `docs/tutorials/examples/` keeps the executed notebooks of the last release tracked on all branches; they only change on `rc/X.Y.Z`, written and staged by `python docs/execute_examples.py --release`. Never commit other `.ipynb` files or changes to these notebooks on `develop` or feature branches. The docs build renders an executed notebook as is while its script is unchanged (it records the script hash) and otherwise replaces it by a conversion without outputs with a warning; `git restore docs/tutorials/examples` undoes that locally, and the next release updates the notebook. All other examples are converted there without outputs (git-ignored); neither CI nor Read the Docs ever executes them. Examples needing external tools (`SKIP` in `docs/execute_examples.py`) are never executed. Check that changed examples run with `python docs/execute_examples.py [name ...]` (writes to `docs/_build/executed_examples`); `PYRADPLAN_DOCS_NB_EXECUTION=cache` is a local opt-in to execute them during a docs build.
 
 ## Key Architecture Notes
 
