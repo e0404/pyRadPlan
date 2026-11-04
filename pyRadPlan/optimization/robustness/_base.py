@@ -78,6 +78,8 @@ class RobustnessOperator(ABC):
     ----------
     name : ClassVar[str]
         Canonical name used in :attr:`Objective.robustness`.
+    label : ClassVar[Optional[str]]
+        Human-readable name, e.g. listed in the GUI; ``None`` shows :attr:`name`.
     aliases : ClassVar[tuple[str, ...]]
         Alternative names accepted on input (e.g. matRad's).
     matrad_name : ClassVar[Optional[str]]
@@ -89,6 +91,7 @@ class RobustnessOperator(ABC):
     """
 
     name: ClassVar[str]
+    label: ClassVar[Optional[str]] = None
     aliases: ClassVar[tuple[str, ...]] = ()
     matrad_name: ClassVar[Optional[str]] = None
     scope: ClassVar[Literal["objective", "composite"]] = "objective"
@@ -180,6 +183,7 @@ class ScenarioStack(RobustnessOperator):
     """
 
     name = "scenario_stack"
+    label = "Over all scenarios"
 
     def evaluate(self, entries, values):
         self._check(entries, values)

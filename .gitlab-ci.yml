@@ -263,8 +263,16 @@ container:
             -t pyradplan-web .
         - docker run -d --name web -e XPRA_PASSWORD=ci-test pyradplan-web
         - sh packaging/container/smoke_test.sh web
+        - >
+            docker build -f packaging/container/Dockerfile.hub
+            --build-arg BASE_IMAGE=pyradplan-web
+            --build-arg VERSION="$CI_COMMIT_SHORT_SHA" --build-arg REVISION="$CI_COMMIT_SHA"
+            -t pyradplan-hub packaging/container
+        - docker run -d --name hub pyradplan-hub hub-session.sh --no-authentication --port=8888
+        - SMOKE_URL=http://localhost:8888/ sh packaging/container/smoke_test.sh hub
     after_script:
         - docker logs web || true
+        - docker logs hub || true
 
 docs:
     extends: .venv

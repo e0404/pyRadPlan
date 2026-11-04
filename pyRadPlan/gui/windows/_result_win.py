@@ -13,6 +13,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.gui.menus import ViewMenu
 from pyRadPlan.gui.widgets import ViewingWidget
 from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 from pyRadPlan.gui.workspace import WorkspaceManager
@@ -56,7 +57,7 @@ class QuantityWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
 
-        menubar.addMenu("&View")
+        menubar.addMenu(ViewMenu(self))
 
     # Might be nice to have once io utilities are in place :)
     def _open_array(self) -> None:

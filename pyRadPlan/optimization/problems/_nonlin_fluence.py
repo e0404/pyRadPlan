@@ -40,7 +40,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         Exponent of the ``"pnorm"`` maximum approximation.
     """
 
-    name = "Non-Linear Fluence Planning Problem"
+    name = "Fluence (nonlinear)"
     short_name = "nonlin_fluence"
     records_obj_history = True
 
@@ -76,9 +76,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
             )
 
-        # Propagate device from quantities to solver and problem
         self._device = getattr(self._quantities[0], "device", None)
-        self.solver.device = self._device
 
         # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
         # quantities using them; computing them here would cost an extra matrix product.

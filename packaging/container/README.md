@@ -13,6 +13,10 @@ GPU in the image). It is meant for research and education, like the desktop inst
 | `smoke_test.sh` | Checks a started container: web client, main window, clean exit. Run by both CI pipelines. |
 | `Dockerfile.dockerignore` | Sends only the files the Dockerfile copies to the Docker daemon. |
 | `compose.yaml` | A single session with a course folder and resource limits, for trying it out. |
+| `Dockerfile.hub` | The JupyterHub session image: the image above plus jupyter-server-proxy's standalone proxy. |
+| `hub-session.sh` | Session server of the JupyterHub image; ends the session when the GUI is closed. |
+| `jupyterhub-values.yaml` | Helm values for Zero to JupyterHub, installed into one namespace. |
+| `make_hub_users.py` | Creates the hub's users with a password each. |
 
 ## Build and run
 
@@ -35,15 +39,16 @@ leaves numba out.
 
 ## Published images
 
-The "Container" workflow on GitHub (`.github/workflows/container.yml`) builds the image and
-checks it with `smoke_test.sh` (the web client answers, the GUI shows its main window, and the
-container ends with exit code 0 when the GUI is closed). Branches (`main`, `rc/*`, `devops/*`)
-are built and tested only. A release tag `vX.Y.Z` publishes the tested image as
-`ghcr.io/e0404/pyradplan-web:X.Y.Z`, and as `:latest` except for pre-release tags such as
+The "Container" workflow on GitHub (`.github/workflows/container.yml`) builds the image and,
+on top of it, the JupyterHub image, and checks both with `smoke_test.sh` (the web client
+answers, the GUI shows its main window, and the container ends with exit code 0 when the GUI
+is closed). Branches (`main`, `rc/*`, `devops/*`) are built and tested only. A release tag
+`vX.Y.Z` publishes the tested images as `ghcr.io/e0404/pyradplan-web:X.Y.Z` and
+`ghcr.io/e0404/pyradplan-hub:X.Y.Z`, and as `:latest` except for pre-release tags such as
 `v0.6.0rc1`.
 
-The `container` job of the internal GitLab pipeline builds and tests the image the same way, for
-branches that do not reach GitHub. It does not publish anything.
+The `container` job of the internal GitLab pipeline builds and tests the images the same way,
+for branches that do not reach GitHub. It does not publish anything.
 
 ```bash
 docker run --rm -p 10000:10000 -e XPRA_PASSWORD=choose-one ghcr.io/e0404/pyradplan-web:latest
@@ -64,6 +69,8 @@ deployment.
 |---|---|
 | `XPRA_PASSWORD` | Password the browser asks for. **Without it anyone who can reach the port can use the session** (the container warns). |
 | `XPRA_PORT` | Port of the web client inside the container, 10000 by default. |
+| `XPRA_BIND` | Address the web client listens on, `0.0.0.0` by default. |
+| `NUMBA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` | Threads of the computations. By default, the container's CPU limit (`docker run --cpus`, a Kubernetes CPU limit), rounded up, instead of all CPUs of the host: more threads than the limit make the kernel pause the whole container, so the session stops responding during calculations. |
 | `PYRADPLAN_GUI_UI_MODE=educational` | Reduced widgets for teaching. |
 | `PYRADPLAN_BASE_DATA_PATH=/shared` | Shared base data folders: mount a folder with `phantoms/` (`.mat`, `.npz`) and, if wanted, `machines/` there and the cases are listed under File → Open Example Phantom. |
 | `PYRADPLAN_DATA_DIR` | The user's data directory (`~/.pyradplan` of the `pyradplan` user by default); mount a volume there to keep settings and added base data between sessions. |
@@ -76,9 +83,63 @@ pyRadPlanGUI /shared/cases/Prostate.mat` to start with a case loaded.
 
 The image serves one session: each user needs a container of their own, and the
 container is the isolation between them. Something has to start the containers and
-authenticate the users; a JupyterHub with a remote desktop plugin, Apache Guacamole or a
-Kubernetes job per session can do that. Set memory and CPU limits (`--memory`, `--cpus`):
-a dose calculation of a realistic plan needs gigabytes.
+authenticate the users. Set memory and CPU limits (`--memory`, `--cpus`): a dose calculation
+of a realistic plan needs gigabytes.
+
+### JupyterHub on Kubernetes
+
+The JupyterHub image (`Dockerfile.hub`) lets a [Zero to JupyterHub](https://z2jh.jupyter.org)
+installation start a pod with the GUI for every user who logs in. It runs jupyter-server-proxy's
+standalone proxy in place of JupyterLab: the proxy logs the user in through the hub and
+forwards the browser to the Xpra web client, which listens on localhost only. Users open the
+hub, log in and get the GUI under `/user/<name>/`.
+
+- At most `active_server_limit` sessions run at the same time; further users are told that
+  the limit is reached and can try again later. There is no waiting list.
+- Closing the GUI ends the session (`hub-session.sh` stops the server), and the hub offers to
+  start a new one. A session whose browser tab has been closed for 30 minutes is stopped by
+  the hub's culler.
+- Each session starts with a fresh home directory; files are not kept between sessions.
+
+`jupyterhub-values.yaml` installs the chart into one namespace without cluster-wide
+permissions (no user scheduler, no image pullers, no privileged init container) and with
+resource limits on every pod, as a namespace quota requires:
+
+```bash
+helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
+helm upgrade --install pyradplan-hub jupyterhub/jupyterhub --version 4.4.4 \
+    --namespace <namespace> --values packaging/container/jupyterhub-values.yaml
+```
+
+Work on a copy outside the repository, as it gets the users. Set the host name of the ingress,
+the image tag and `active_server_limit` (1 in the repository; each session may use 2 CPUs and
+16 GiB, the hub and its proxy 1 CPU together). Then create the users, among them `admin`, who
+can watch and stop all sessions on the hub's Admin page:
+
+```bash
+python packaging/container/make_hub_users.py admin anna ben --output users.csv
+python packaging/container/make_hub_users.py @names.txt --output users.csv   # one name per line
+```
+
+The script generates a password for each user, writes the names and passwords to
+`users.csv` for handing them out, and prints the password hashes to replace the
+`password_hashes` entry of the values file. Only the hashes reach the cluster; keep the CSV
+file private. Only the listed users can log in, each with their own password (user names
+are not case-sensitive). To add users later, run the script for the new names, add the
+hashes and run `helm upgrade` again. The chart supports other authenticators (OAuth, LDAP)
+for logins with existing accounts.
+
+The JupyterHub version in the image matches the chart's hub; update both together.
+
+Without a hub, the image can be tried locally:
+
+```bash
+docker build -f packaging/container/Dockerfile.hub -t pyradplan-hub \
+    --build-arg BASE_IMAGE=ghcr.io/e0404/pyradplan-web:latest packaging/container
+docker run --rm -p 8888:8888 pyradplan-hub hub-session.sh --no-authentication --port=8888
+```
+
+Then open <http://localhost:8888>.
 
 ## Limits
 
