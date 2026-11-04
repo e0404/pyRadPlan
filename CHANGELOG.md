@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the pyRadPlan logo as a task bar icon for the GUI when executed from the command line for macOS, Windows and Linux
+
 ## [0.7.0] - 2026-11-02
 
 ### Added
