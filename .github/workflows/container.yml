@@ -50,6 +50,11 @@ jobs:
             --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" \
             -t pyradplan-web .
 
+      - name: Phantoms of matRad in the image
+        run: |
+          docker run --rm --entrypoint python3 pyradplan-web -c \
+            "from pyRadPlan.io import available_phantoms; names = available_phantoms(); print(names); assert {'BOXPHANTOM', 'HEAD_AND_NECK', 'LIVER', 'PROSTATE'} <= set(names)"
+
       - name: Start a session
         run: docker run -d --name web -e XPRA_PASSWORD=ci-test pyradplan-web
 
