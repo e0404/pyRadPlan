@@ -53,6 +53,9 @@ from .compat import (
     quantile,
     interp1d,
 )
+from ._reductions import grouped_max
+from ._interpolation import ArrayBackendGridInterpolator, interpnd
+from ._interpolation1d import ArrayBackend1DInterpolator
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +312,7 @@ __all__ = [
     "free_gpu_memory",
     "elapsed_time",
     "scatter",
+    "grouped_max",
     "to_numpy",
     "from_numpy",
     "to_namespace",
@@ -316,5 +320,8 @@ __all__ = [
     "ArrayNamespace",
     "quantile",
     "interp1d",
+    "interpnd",
+    "ArrayBackendGridInterpolator",
+    "ArrayBackend1DInterpolator",
     "record_event",
 ]

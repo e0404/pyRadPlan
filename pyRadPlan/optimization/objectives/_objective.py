@@ -13,7 +13,7 @@ from ...core.xp_utils import to_numpy, from_numpy
 from ...core.datamodel import PyRadPlanBaseModel
 from ...quantities import get_available_quantities, get_quantity
 from ...core import Grid
-from ...core.resample import resample_numpy_array
+from ...core.resample import resample_array
 from ..robustness import available_robustness, resolve_robustness_name
 
 ParameterType = Union[
@@ -154,7 +154,7 @@ class Objective(PyRadPlanBaseModel):
                 xp = array_api_compat.array_namespace(param_value, index_list)
 
                 # Resample the parameter to target grid
-                resampled_array = resample_numpy_array(
+                resampled_array = resample_array(
                     input_array=to_numpy(param_value),
                     reference_grid=ref_grid,
                     target_grid=target_grid,
