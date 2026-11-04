@@ -2,7 +2,7 @@
 """# Example for interactions with the array backends."""
 # %% [markdown]
 # This example demonstrates how to use the pyRadPlan library to use and interact
-# with the underlying array api backends. These are povided by the 'xp_utils' module.
+# with the underlying array api backends. These are provided by the 'xp_utils' module.
 
 # If you find bugs or that your desired backend is not working properly,
 # feel free to open an issue and reach out to us on github.
@@ -14,6 +14,30 @@
 # ```bash
 # pip install jupytext
 # jupytext --to notebook path/to/this/file/utils_backends.py
+# ```
+
+# %% [markdown]
+# ## What is an array backend?
+# pyRadPlan's numerical code follows the [Python Array API standard](https://data-apis.org/array-api/).
+# It calls functions on a namespace `xp` (e.g. `xp.exp`) instead of NumPy directly.
+# The array backend is the library behind `xp`: NumPy, CuPy, PyTorch, JAX, ...
+# The same code thus runs on the CPU or the GPU.
+#
+# The backend is chosen via `pyRadPlan.settings.xp`:
+#
+# | Setting                       | Environment variable                       | Default       |
+# |-------------------------------|--------------------------------------------|---------------|
+# | `prefer_gpu`                  | `PYRADPLAN_XP_PREFER_GPU`                  | `True`        |
+# | `preferred_gpu_array_backend` | `PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND` | `None`        |
+# | `preferred_cpu_array_backend` | `PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND` | `"numpy"`     |
+# | `jit_backends`                | `PYRADPLAN_XP_JIT_BACKENDS`                | `"numpy,jax"` |
+#
+# With `preferred_gpu_array_backend = None`, the first available of CuPy, PyTorch
+# and JAX (GPU) is used. Without a GPU, pyRadPlan falls back to the CPU backend.
+# Environment variables (or a `.env` file) are read once at import, e.g.:
+#
+# ```bash
+# PYRADPLAN_XP_PREFER_GPU=false python examples/utils_backends.py
 # ```
 
 # %%
@@ -36,43 +60,53 @@ from pyRadPlan import (
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
+logging.basicConfig(level=logging.INFO)
+
 # %% [markdown]
 # ## 1. Exploring and Setting Backends
-# The pyRadPlan Array API backend (`xp_utils`) allows using multiple computational
-# backends seamlessly.
 # Natively, every library which complies to the array API standard should be supported.
-# In pyRadPlan however, we recommend using either NumPy (out of the box) or CuPy / PyTorch (GPU) for low grid sizes, especially for electrons.
+# In pyRadPlan however, we recommend using either NumPy (out of the box) or CuPy / PyTorch (GPU),
+# the latter especially for fine dose grids and for electrons.
 
 # On the main webpage for cupy and pytorch you can find instructions on how to install it for your system.
 
 # The following lines of code check your system for available backends.
 # %%
 print("--- Available Computational Backends ---")
-print("NumPy available: True (Default CPU)")
+print(f"NumPy version: {np.__version__} (Default CPU)")
 print(
     f"PyTorch available: {xp_utils.pytorch_available()} (GPU: {xp_utils.pytorch_gpu_available()})"
 )
 print(f"CuPy available: {xp_utils.cupy_available()}")
 print(f"JAX available: {xp_utils.jax_available()} (GPU: {xp_utils.jax_gpu_available()})")
+print(f"Numba CUDA available: {xp_utils.numba_cuda_available()}")
 
-# The preferred backends are the "xp" sub-configuration of the global pyRadPlan
-# settings. They can be configured via environment variables / a `.env` file
-# (PYRADPLAN_XP_PREFER_GPU, PYRADPLAN_XP_PREFERRED_CPU_ARRAY_BACKEND,
-# PYRADPLAN_XP_PREFERRED_GPU_ARRAY_BACKEND) or at runtime as below.
+print(f"\nCurrent settings: {settings.xp}")
 
-# Let's start by calculating the dose influence matrix (dij) on the CPU
-print("\nConfiguring CPU Backend (NumPy) for Dose Calculation...")
+# `choose_device(xp, gpu_index=1)` would select the second GPU on multi-GPU machines.
+xp = xp_utils.choose_array_api_namespace()
+print(f"Auto-selected backend: {xp.__name__}, device: {xp_utils.choose_device(xp)}")
+
+# Settings changed at runtime apply to all computations started afterwards.
 settings.xp.prefer_gpu = False
-settings.xp.preferred_cpu_array_backend = "numpy"
-logging.basicConfig(level=logging.INFO)
+print(f"Backend with prefer_gpu=False: {xp_utils.choose_array_api_namespace().__name__}")
+
+# %% [markdown]
+# ## 2. Changing the Backend before Optimization
+# If you wanted to switch to a GPU backend mid-code you can do so.
+# The optimization converts the dij to the selected backend.
+
+# We demonstrate this by running a proton dose calculation on the CPU ...
 
 # %%
+# Let's start by calculating the dose influence matrix (dij) on the CPU
+print("\n--- Configuring CPU Backend (NumPy) for Dose Calculation ---")
+settings.xp.prefer_gpu = False
+settings.xp.preferred_cpu_array_backend = "numpy"
+
 # Load TG119 (provided within pyRadPlan)
 ct, cst = load_tg119()
 
-# %% [markdown]
-# In this section, we create a proton therapy plan using the ParticleHongPencilBeamEngine.
-# %%
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
 pln.prop_opt = {"solver": "scipy"}
@@ -93,16 +127,17 @@ cst.vois[2].objectives = [
 ]  # BODY
 
 # %% [markdown]
-# ## 2. Changing the Backend before Optimization
-# If you wanted to switch to a GPU backend mid-code you can do so.
-
-# Here we switch the backends before optimization:
+# ... and switching to a GPU backend for the optimization.
 # %%
 print("\n--- Switching to a GPU Backend for Optimization ---")
 settings.xp.prefer_gpu = True
 
 # `preferred_gpu_array_backend = None` selects the best available GPU backend automatically
-print(f"Accelerated GPU backend selected: {xp_utils.choose_array_api_namespace().__name__}")
+xp = xp_utils.choose_array_api_namespace()
+if xp_utils.is_on_gpu(xp.asarray([0.0], device=xp_utils.choose_device(xp))):
+    print(f"Accelerated GPU backend selected: {xp.__name__}")
+else:
+    print(f"No GPU backend available, falling back to the CPU with {xp.__name__}")
 
 # or you can force a specific backend:
 # settings.xp.preferred_gpu_array_backend = "torch"  # or "cupy"
