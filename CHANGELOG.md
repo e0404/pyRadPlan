@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
 - JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
 - Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
+- FRED engine: `simu_dir` keeps FRED's `inp/` and `out/` folders in a folder of your choice (without it, a temporary folder is used and deleted after the calculation as before). The `inp/` and `out/` folders of a previous calculation in `simu_dir` are replaced
+- FRED engine: the HU table is built from `hlut`, the HU to rSP lookup table of the analytical engines (`default_hlut()` unless set). `material_converter="hlut"` (default) lets FRED interpolate the table and warns about CT values outside it; `"RSP"` writes one entry per HU value of the CT, as TOPAS does in its RSP mode
+- FRED engine: `dose_per_beam` (on by default) runs one forward calculation per beam (`inp/beam_<b>`, `out/beam_<b>`), so the forward result holds the dose of every beam; an output folder without `beam_<b>` subfolders is read as one combined dose
+- FRED engine: `external_calculation` works as in TOPAS: `True` writes the input files only (in a new folder below the pyRadPlan data folder unless `save_input` or `simu_dir` is set), logs the FRED commands to run them and returns a zero dose; a folder reads the output of those runs
+- FRED and TOPAS engines: `ignore_outside_patient` sets the dose, LET and biological quantities to zero in voxels outside all structures (off by default)
+- FRED engine: version 3.60.0 is accepted
+- TOPAS engine: the Schneider material converter. `material_converter={"mode": "Schneider"}` uses the OpenTOPAS example converter shipped with pyRadPlan (`HUtoMaterialSchneider.txt`, MIT license), `"converter_file"` a TOPAS Schneider parameter file of your own; the CT is clipped to the HU range the converter covers
+- TOPAS engine: the physical dose is read from the dose-to-water scorer when only that one is switched on
 
 ### Changed
 
@@ -21,11 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
 - GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
 - Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
+- FRED engine: the energy of each layer is the mean energy of the machine's spectrum, as in TOPAS (it was the nominal energy); without a spectrum the beam is monoenergetic. The HU table is `default_hlut()` instead of a fixed table of 8 points. Both change FRED doses
+- FRED engine: forward calculations return one dose column per beam (see `dose_per_beam`); set `dose_per_beam=False` for the single combined column of before
+- FRED engine: missing dose output raises `FileNotFoundError` (an empty dose matrix was returned), and missing LETd output when LET or a biological model needs it raises a `ValueError` (it was only logged)
+- TOPAS engine: the dose outside the patient is no longer set to zero by default; set `ignore_outside_patient=True` for the behavior of before
+- TOPAS engine: `physics_modules` is a list of Geant4 modules (it was a dict with the list under `"default"`), and `material_converter["load_from_file"]` is replaced by `"converter_file"`; the `input_filenames` key `matConv_Schneider_loadFromFile` is now `matConv_Schneider_default`
+- TOPAS engine: missing or incomplete dose output raises a `ValueError`, and `calc_dose_influence` raises `NotImplementedError` (TOPAS computes forward doses only)
+- FRED and TOPAS engines: CTs with a direction matrix other than the identity are refused (the anatomy was placed wrongly)
+- `plot_slice`: overlays with negative values (e.g. a dose difference) get a color window symmetric around zero and the diverging `RdBu_r` colormap by default; the threshold and the global maximum use absolute values
 
 ### Fixed
 
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
 - GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+- TOPAS engine: the physics-modules line of the beam setup ended in a stray `"`, so TOPAS could not read the generated input, and the patient file spelled `Ge/Patient/ImagingToMaterialConverter` with a lower-case "t"; the patient file also swapped the voxel counts in X and Y, which distorted CTs that are not square in the axial plane
+- TOPAS engine: changing `scorer`, `material_converter` or `input_filenames` on one engine changed the class defaults and so every other engine
+- TOPAS engine: a missing run output shifted the remaining runs onto the wrong beams; it is now an error
+- FRED engine: with several scorers (e.g. dose and LETd), the scorers were written twice to the input file
+- FRED engine: `save_input` and `save_output` no longer copy a folder onto itself or fail when there is no output folder
+- `plot_slice`: overlays with negative values were drawn with a window starting at zero, hiding the negative part
 
 ## [0.7.0] - 2026-11-02
 
