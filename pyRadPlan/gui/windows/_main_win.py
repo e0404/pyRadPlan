@@ -13,11 +13,9 @@ without an implementation are present but disabled.
 
 from __future__ import annotations
 
-import sys
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QApplication,
     QGroupBox,
     QHBoxLayout,
     QMainWindow,
@@ -42,6 +40,7 @@ from pyRadPlan.gui.widgets import (
 )
 from pyRadPlan.gui.widgets._logo_widget import LogoWidget
 from pyRadPlan.gui.widgets._info_widget import InfoWidget
+from pyRadPlan.gui.apps import _get_qapp  # noqa: PLC0415
 from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 from pyRadPlan.gui.windows._splash_win import (
     BUILD_WINDOW_WEIGHT,
@@ -273,7 +272,7 @@ def launch_main_window(
         Startup splash to advance while the window is built; it closes once the
         window is shown.
     """
-    app = QApplication.instance() or QApplication(sys.argv)
+    app = _get_qapp()
     if splash is not None:
         splash.step("Building main window…", BUILD_WINDOW_WEIGHT)
     win = MainWindow(workspace)

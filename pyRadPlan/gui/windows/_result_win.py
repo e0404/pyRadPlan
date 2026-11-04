@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
-import sys
 from typing import Optional
 
 import numpy as np
-from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox
 from PySide6.QtGui import QAction
 
 import SimpleITK as sitk
@@ -17,6 +16,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.widgets import ViewingWidget
 from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.gui.apps import _get_qapp  # noqa: PLC0415
 from pyRadPlan import validate_ct, validate_cst
 
 
@@ -107,7 +107,7 @@ def _launch_result_window(ct: CT, cst: StructureSet, result: dict | None = None)
     result : Any | None
         Quantity result mapping or a raw 3D numpy array / image.
     """
-    app = QApplication.instance() or QApplication(sys.argv)
+    app = _get_qapp()
 
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct)
