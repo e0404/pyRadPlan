@@ -53,10 +53,19 @@ jobs:
             python -m pip install pytest pytest-cov pytest-timeout ruff
             python -m pip install -e ".[gui]"
 
+        # The GUI tests run in a process of their own: PySide6 6.11 segfaulted on Python 3.11
+        # garbage-collecting a result widget tree in test/gui, depending on the GC order the
+        # preceding non-GUI tests left behind. Both runs always execute; either failing fails
+        # the step (bash, as PowerShell would only check the last command's exit code).
         - name: Run tests with pytest
+          shell: bash
           env:
             QT_QPA_PLATFORM: offscreen
-          run: pytest test --timeout=300 --junitxml=.testreports/report.xml -o junit_family=legacy --cov=pyRadPlan --cov-report term --cov-report xml:.testreports/coverage.xml --cov-report html:.testreports/html
+          run: |
+            status=0
+            pytest test --ignore=test/gui --timeout=300 --junitxml=.testreports/report.xml -o junit_family=legacy --cov=pyRadPlan --cov-report= || status=$?
+            pytest test/gui --timeout=300 --junitxml=.testreports/report-gui.xml -o junit_family=legacy --cov=pyRadPlan --cov-append --cov-report term --cov-report xml:.testreports/coverage.xml --cov-report html:.testreports/html || status=$?
+            exit $status
 
         - name: Upload test reports to Codecov
           if: runner.os == 'Linux'
@@ -64,7 +73,7 @@ jobs:
           with:
             token: ${{ secrets.CODECOV_TOKEN }}
             flags: 'py${{ matrix.python-version }}'
-            files: .testreports/report.xml
+            files: .testreports/report.xml,.testreports/report-gui.xml
 
         - name: Upload coverage reports to Codecov
           if: matrix.python-version == '3.11'
