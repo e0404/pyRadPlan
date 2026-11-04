@@ -81,6 +81,58 @@ def test_get_objective_matrad_dict_not_mutated():
     assert desc["parameters"] == [30.0]  # caller's input untouched
 
 
+def test_get_objective_matrad_eud_without_f_diff():
+    """The matRad EUD stores only ``EUD^{ref}`` and ``k``; ``f_diff`` keeps its default."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_EUD", "parameters": [0, 5], "penalty": 100}
+    )
+    assert isinstance(obj, EUD)
+    assert obj.eud_ref == 0.0
+    assert obj.k == 5.0
+    assert obj.f_diff == "quadratic"
+    assert obj.priority == 100.0
+
+
+@pytest.mark.parametrize(
+    "f_diff, expected",
+    [(1, "linear"), (2.0, "quadratic"), (np.uint8(2), "quadratic"), ("Linear", "linear")],
+)
+def test_get_objective_matrad_choice_parameter(f_diff, expected):
+    """Choice parameters are stored by matRad as one-based indices into their options."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_MeanDose", "parameters": [0, f_diff], "penalty": 1}
+    )
+    assert obj.f_diff == expected
+
+
+@pytest.mark.parametrize(
+    "params, d_ref, f_diff",
+    [
+        ([-5.0, 1], 0.0, "linear"),
+        ([2.0, 3], 2.0, "quadratic"),
+        ([2.0, 1.5], 2.0, "quadratic"),
+        ([2.0, "cubic"], 2.0, "quadratic"),
+        (["abc", 1], 0.0, "linear"),
+    ],
+)
+def test_get_objective_matrad_invalid_parameter_uses_default(params, d_ref, f_diff, caplog):
+    """An invalid matRad parameter value falls back to the field default with a warning."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_MeanDose", "parameters": params, "penalty": 1}
+    )
+    assert (obj.d_ref, obj.f_diff) == (d_ref, f_diff)
+    assert "invalid value" in caplog.text
+
+
+@pytest.mark.parametrize("f_diff, index", [("linear", 1), ("quadratic", 2)])
+def test_to_matrad_choice_parameter_roundtrip(f_diff, index):
+    """Choice parameters export as matRad indices and import back unchanged."""
+    obj = MeanDose(d_ref=1.0, f_diff=f_diff)
+    exported = obj.to_matrad()
+    assert exported["parameters"] == [1.0, index]
+    assert get_objective(exported).f_diff == f_diff
+
+
 def test_get_objective_numpy_struct_scalar():
     """A scipy-loaded numpy structured scalar validates like a dict."""
     desc = np.array(

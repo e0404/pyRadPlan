@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Loading matRad `.mat` files is more lenient about objectives. Files with an EUD objective no longer fail with "pop from empty list": missing or invalid objective parameters now keep their defaults and log a warning. Mean-dose objectives now read and write matRad's `f_diff` setting (stored as 1 = linear, 2 = quadratic). Objectives without a pyRadPlan equivalent, such as matRad's `DoseConstraints`, are now skipped with a warning instead of stopping the import
 - GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
 - GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
