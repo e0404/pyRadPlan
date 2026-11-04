@@ -48,6 +48,10 @@ _STARTUP_IMPORTS = (
 _BACKEND_WEIGHT = 500.0
 _PATIENT_WEIGHT = 300.0
 
+#: Application identity shown by the OS (menu bar, Dock, taskbar).
+_APP_NAME = "pyRadPlan"
+_WINDOWS_APP_ID = "e0404.pyRadPlan.gui"
+
 
 def main(argv: Optional[list[str]] = None) -> None:
     """Command-line entry point for the ``pyRadPlanGUI`` console script.
@@ -91,7 +95,7 @@ def gui(patient: Optional[str] = None) -> None:
         phantom such as ``"TG119"`` (see :func:`pyRadPlan.io.available_phantoms`).
         When ``None`` (the default), the GUI starts with an empty workspace.
     """
-    from PySide6.QtWidgets import QApplication  # noqa: PLC0415
+    # from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
     from .windows._splash_win import (  # noqa: PLC0415
         BUILD_WINDOW_WEIGHT,
@@ -100,7 +104,7 @@ def gui(patient: Optional[str] = None) -> None:
     )
 
     _ensure_std_streams()
-    _app = QApplication.instance() or QApplication(sys.argv)
+    _app = _get_qapp()
     imports = [entry for entry in _STARTUP_IMPORTS if entry[1] not in sys.modules]
     total = (
         sum(weight for *_, weight in imports)
@@ -145,6 +149,49 @@ def _ensure_std_streams() -> None:
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
+def _get_qapp():
+    """Return the running QApplication, creating it with pyRadPlan's identity."""
+    from PySide6.QtGui import QIcon  # noqa: PLC0415
+    from PySide6.QtWidgets import QApplication  # noqa: PLC0415
+    from importlib.resources import files  # noga PLC0415
+
+    app = QApplication.instance()
+    if app is None:
+        _set_platform_app_identity()
+        app = QApplication(sys.argv)
+        app.setApplicationName(_APP_NAME)
+        app.setDesktopFileName(_APP_NAME)
+
+    if sys.platform == "darwin":
+        icon_name = "pyradplan_logo_skull_square_macOS.svg"
+    else:
+        icon_name = "pyradplan_logo_skull_square.svg"
+    icon_path = files("pyRadPlan.gui") / "assets" / "logos" / icon_name
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    return app
+
+
+def _set_platform_app_identity() -> None:
+    """Make the OS show "pyRadPlan" (call before creating QApplication)."""
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSBundle  # noqa: PLC0415
+        except ImportError:
+            return
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = _APP_NAME
+    elif sys.platform == "win32":
+        import ctypes  # noqa: PLC0415
+
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_WINDOWS_APP_ID)
+        except (AttributeError, OSError):
+            pass
 
 
 def _load_array_backend(splash: StartupSplash) -> None:
