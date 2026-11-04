@@ -174,12 +174,30 @@ class RayTracerBase(ABC):
         return (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
 
     def trace_cubes(
+        self, beam: Union[dict[str, Any], Beam], patient_coords: Optional[Array] = None
+    ) -> list[sitk.Image]:
+        """Trace depth cubes and return host images with their original metadata.
+
+        See :meth:`trace_cubes_array` for a backend-resident result.
+        """
+        return self._depth_arrays_to_images(self.trace_cubes_array(beam, patient_coords))
+
+    def _depth_arrays_to_images(self, arrays: list[Array]) -> list[sitk.Image]:
+        """Materialize host images only for callers that request images."""
+        images = []
+        for array, reference in zip(arrays, self.cubes):
+            image = sitk.GetImageFromArray(xp_utils.to_numpy(array))
+            image.CopyInformation(reference)
+            images.append(image)
+        return images
+
+    def trace_cubes_array(
         self,
         beam: Union[dict[str, Any], Beam],
         patient_coords: Optional[Array] = None,
-    ) -> list[sitk.Image]:
+    ) -> list[Array]:
         """
-        Automatically calculate depth by tracing rays through cubes.
+        Calculate depth arrays on the tracing backend, in (z, y, x) order.
 
         Set up ray matrix with appropriate spacing to trace through
         all cubes, resulting in a cumulative sum of values in every voxel
@@ -195,6 +213,13 @@ class RayTracerBase(ABC):
             calculation. Only their maximum y extent is used, to size the ray matrix
             to the voxels that actually matter. Defaults to the full cube extent,
             which is correct but traces a larger region than necessary.
+
+        Returns
+        -------
+        list[Array]
+            One (z, y, x) array per input cube, in tracing precision on the
+            tracing namespace/device. Untraced voxels contain NaN. Image
+            geometry is unchanged and available from ``self.cubes``.
         """
 
         if not isinstance(beam, Beam):
@@ -284,7 +309,7 @@ class RayTracerBase(ABC):
                 int(xp.count_nonzero(ix_remember_from_tracing)),
                 t_remember_end - t_trace_end,
             )
-        rad_depth_cubes = self._fill_rad_depth_cubes(lengths, rho, ix, ix_remember_from_tracing)
+        rad_depth_cubes = self._fill_rad_depth_arrays(lengths, rho, ix, ix_remember_from_tracing)
 
         t_createcubes_end = time.perf_counter()
 
@@ -343,17 +368,22 @@ class RayTracerBase(ABC):
             nz,
         )
 
-    def _fill_rad_depth_cubes(
+    def _fill_rad_depth_cubes(self, lengths, rho, ix, ix_remember_from_tracing):
+        """Compatibility wrapper returning host images from traced segments."""
+        return self._depth_arrays_to_images(
+            self._fill_rad_depth_arrays(lengths, rho, ix, ix_remember_from_tracing)
+        )
+
+    def _fill_rad_depth_arrays(
         self,
         lengths: Array,
         rho: list[Array],
         ix: Array,
         ix_remember_from_tracing: Array,
-    ) -> list[sitk.Image]:
+    ) -> list[Array]:
         """Accumulate segment depths and scatter them into radiological depth cubes.
 
-        Runs on the backend and device of the inputs; only the finished cubes are
-        transferred back to the host.
+        Runs on the backend and device of the inputs, without downloading cubes.
         """
         xp = array_api_compat.array_namespace(ix)
         device = array_api_compat.device(ix)
@@ -370,7 +400,7 @@ class RayTracerBase(ABC):
         flat_c_ix = (z_ix * ny + tmp % ny) * nx + tmp // ny
 
         rad_depth_cubes = []
-        for cube, rho_cube in zip(self.cubes, rho):
+        for rho_cube in rho:
             segment_depths = lengths * rho_cube
             # Replace NaN with 0 before cumsum to prevent a single invalid voxel
             # np.cumsum([[0.5, 0.33, NaN, 0.18, 0.22]]) -> [0.5, 0.83, NaN, NaN, NaN], which is bad
@@ -381,11 +411,7 @@ class RayTracerBase(ABC):
             flat_cube = xp_utils.scatter(
                 flat_cube, flat_c_ix, rel_depths[ix_remember_from_tracing]
             )
-            cube_np = np.reshape(xp_utils.to_numpy(flat_cube), (nz, ny, nx))
-
-            rad_depth_cube = sitk.GetImageFromArray(cube_np)
-            rad_depth_cube.CopyInformation(cube)
-            rad_depth_cubes.append(rad_depth_cube)
+            rad_depth_cubes.append(xp.reshape(flat_cube, (nz, ny, nx)))
 
         return rad_depth_cubes
 

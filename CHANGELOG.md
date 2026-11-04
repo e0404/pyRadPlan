@@ -9,10 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `core.resample.resample_array` resamples NumPy, CuPy, PyTorch and other Array API arrays and returns them on their namespace, device and dtype. Full volumes use SimpleITK by default; `prefer_native=False` resamples on the array's backend. `ArrayBackendGridResampler` prepares repeated sampling of selected voxels
+- `core.xp_utils.ArrayBackendGridInterpolator` and `ArrayBackend1DInterpolator`: interpolation on rectilinear grids that keeps its grid preparation across queries and evaluates several fields with one coordinate search; `interpnd` takes `prefer_native` to choose between the native (SciPy/CuPy/JAX) and the generic Array API implementation
+- `core.xp_utils.grouped_max`: maximum per integer group on the arrays' device
+- Ray tracers: `trace_cubes_array` returns the radiological depth arrays on the tracing backend; `trace_cubes` still returns images
 - GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
 - GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
 - JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
 - Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
+
+### Changed
+
+- Pencil-beam dose calculation is faster with unchanged results. On TG119 with the GUI defaults (3 mm dose grid, 5 mm bixels), five-field photon IMRT is 2.2x faster with NumPy and 3.2x faster with CuPy, three-field protons 1.4x and 1.6x faster. Main contributions: photon dose sampling uses a grouped maximum instead of sorting each ray, the convolved photon kernels share one interpolator, beam geometry and voxel masks are compacted once per beam instead of per ray, dose setup and tissue data preparation are faster, and radiological depths stay on the compute device
+- Influence matrices store row indices and column pointers as int32 when they fit, a third less memory for the sparse buffers; larger matrices keep int64
+- Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
+- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
+- GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
+- GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
+- Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
+- GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
+
+### Deprecated
+
+- `resample_numpy_array`: use `resample_array`, which takes the same arguments and also accepts arrays of other backends
 
 ### Fixed
 
@@ -25,15 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SciPy and IPOPT solvers used outside the built-in planning problems (called directly or from a custom planning problem) evaluated a torch `x0` on the default device instead of its own
 - ipax solver reported `num_iter` one too high (ipax also counts the starting point)
 - `register_solver` accepted a solver without `short_name`
-
-### Changed
-
-- Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
-- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
-- GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
-- GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
-- Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
-- GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
 
 ## [0.7.0] - 2026-11-02
 

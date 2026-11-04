@@ -1,0 +1,4 @@
+# Generated benchmark output stays local.
+results/
+pb_audit_results/
+*.json

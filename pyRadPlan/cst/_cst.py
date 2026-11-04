@@ -13,7 +13,7 @@ from scipy import ndimage
 import SimpleITK as sitk
 
 from ..core import PyRadPlanBaseModel, Grid
-from ..core.resample import resample_numpy_array
+from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 from ..biology.tissues._base import TissueProperties
@@ -758,6 +758,49 @@ class StructureSet(PyRadPlanBaseModel):
         # Add to existing VOIs
         self.vois = self.vois + [body_voi]
 
+    def get_tissue_data(
+        self, resample_grid: Optional[Grid] = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Prepare reference alpha, beta, tissue indices and classes together.
+
+        Resolve overlaps once and resample one VOI-label volume using nearest
+        neighbors. Label zero denotes unassigned voxels: their alpha/beta are
+        zero and their tissue index is zero, preserving the separate getters'
+        conventions. The structure set is not modified.
+
+        Parameters
+        ----------
+        resample_grid : Grid, optional
+            Target grid for nearest-neighbor label resampling.
+
+        Returns
+        -------
+        alpha, beta : numpy.ndarray
+            Reference LQ parameters, each shaped (num_voxels, num_ct_scenarios).
+        tissue_indices : numpy.ndarray
+            Integer class indices with the same shape as alpha and beta.
+        classes : numpy.ndarray
+            Distinct tissue properties in original first-occurrence order.
+        """
+        cst = self.apply_overlap_priorities()
+        classes = self.get_tissue_classes()
+        class_list = list(classes)
+        labels = np.zeros(
+            (int(np.prod(cst.ct_image.size)), cst.ct_image.num_of_ct_scen), dtype=np.int64
+        )
+        alpha = np.zeros(len(cst.vois) + 1)
+        beta = np.zeros(len(cst.vois) + 1)
+        tissue = np.zeros(len(cst.vois) + 1, dtype=np.int64)
+        for label, voi in enumerate(cst.vois, 1):
+            for phase, indices in enumerate(voi.scenario_indices(order="numpy")):
+                labels[indices, phase] = label
+            alpha[label] = voi.tissue_properties.alpha_x
+            beta[label] = voi.tissue_properties.beta_x
+            tissue[label] = class_list.index(voi.tissue_properties)
+        if resample_grid is not None:
+            labels = cst._resample_scenario_columns(labels, resample_grid)
+        return alpha[labels], beta[labels], tissue[labels], classes
+
     def get_reference_lq_params(
         self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -786,7 +829,7 @@ class StructureSet(PyRadPlanBaseModel):
         original_grid = _phase_grid(self.ct_image)
         return np.stack(
             [
-                resample_numpy_array(
+                resample_array(
                     column.reshape(original_grid.dimensions[::-1]),
                     reference_grid=original_grid,
                     interpolator=sitk.sitkNearestNeighbor,
