@@ -224,6 +224,20 @@ def test_target_center_of_mass():
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
 
 
+def test_center_of_mass_matches_ndimage_on_anisotropic_grid():
+    """The projection-based center of mass equals ndimage.center_of_mass."""
+    from scipy import ndimage  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    mask = (rng.random((7, 11, 13)) > 0.8).astype(np.uint8)  # (z, y, x)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 2.5, 3.0))
+    image.SetOrigin((-10.0, 4.0, 7.5))
+
+    expected = image.TransformContinuousIndexToPhysicalPoint(ndimage.center_of_mass(mask.T))
+    assert np.allclose(StructureSet._center_of_mass(image), expected)
+
+
 # ---------------------------------------------------------------------------
 # 4D StructureSet helpers & tests
 # ---------------------------------------------------------------------------

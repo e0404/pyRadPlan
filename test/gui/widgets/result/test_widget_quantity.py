@@ -1,7 +1,11 @@
 import pytest
 import numpy as np
+import pyqtgraph as pg
 import SimpleITK as sitk
-from pyRadPlan.gui.widgets.result.quantity_widget import QuantityWidget
+from scipy.ndimage import gaussian_filter
+from scipy.spatial import cKDTree
+
+from pyRadPlan.gui.widgets.result.quantity_widget import QuantityWidget, _isocurve_path
 
 
 def test_quantity_widget_init(qapp):
@@ -279,3 +283,108 @@ def test_beam_label_marks_the_out_of_plane_direction(qapp):
     assert label() == "#0 ⊗"
     _show_beam(widget, [0.5, 1.0, 0.0])  # source behind: the beam comes out
     assert label() == "#0 ⊙"
+
+
+# Contours
+
+
+def _path_points(path):
+    return np.array(
+        [(path.elementAt(i).x, path.elementAt(i).y) for i in range(path.elementCount())]
+    )
+
+
+def _pg_isocurve_points(image, level):
+    lines = pg.functions.isocurve(image, level, connected=True, extendToEdge=True)
+    return np.concatenate([np.array(line) for line in lines])
+
+
+@pytest.mark.parametrize("border", [False, True])
+def test_isocurve_path_matches_pyqtgraph(qapp, border):
+    """The contourpy tracer reproduces pg.IsocurveItem's curve, also at the border."""
+    image = gaussian_filter(np.random.default_rng(1).random((40, 30)), 3) * 10
+    if border:
+        image[0, :] += 3
+    level = float(np.quantile(image, 0.6))
+    new = _path_points(_isocurve_path(image, level))
+    old = _pg_isocurve_points(image, level)
+    assert cKDTree(new).query(old)[0].max() < 1e-9
+    assert cKDTree(old).query(new)[0].max() < 1e-9
+
+
+def _mask_widget():
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((12, 30, 20)))
+    mask = np.zeros((12, 30, 20), dtype=np.uint8)
+    mask[3:9, 4:11, 0:6] = 1  # touches the image border along the last axis
+    mask[5, 15:20, 12:16] = 1
+    widget.set_masks({"voi": mask})
+    widget.on_vois_selection_changed(["voi"])
+    return widget, mask
+
+
+@pytest.mark.parametrize("plane", ["Axial", "Sagittal", "Coronal"])
+def test_voi_contour_of_cropped_slice_matches_full_slice(qapp, plane):
+    """Tracing only the VOI's bounding box gives the full slice's contour."""
+    widget, mask = _mask_widget()
+    widget.set_plane(plane)
+    axis = widget._PLANE_MAP[plane]
+    for idx in range(mask.shape[axis]):
+        mask_slice = widget._extract_slice(mask, plane, idx).astype(np.int32)
+        path = widget._voi_contour("voi", idx)
+        if not mask_slice.any():
+            assert path is None
+            continue
+        new, old = _path_points(path), _pg_isocurve_points(mask_slice, 0.5)
+        assert cKDTree(new).query(old)[0].max() < 1e-9
+        assert cKDTree(old).query(new)[0].max() < 1e-9
+
+
+def test_voi_contours_are_cached_until_the_mask_changes(qapp):
+    """A slice is traced once per mask array; a new array is traced again."""
+    widget, mask = _mask_widget()
+    idx = widget.slice_slider.value()
+    first = widget._voi_contour("voi", idx)
+    assert widget._voi_contour("voi", idx) is first
+    assert len(widget._mask_items) == 1
+
+    widget.set_masks({"voi": widget._masks["voi"]})  # same array: cache kept
+    assert widget._voi_contour("voi", idx) is first
+
+    widget.set_masks({"voi": mask.copy()})  # new array: traced again
+    assert widget._voi_contour("voi", idx) is not first
+
+
+def test_wheel_scrolling_renders_the_latest_slice_once(qapp, monkeypatch):
+    """Queued wheel steps render only the last slice; setValue renders at once."""
+    widget = QuantityWidget()
+    widget.set_data(ct_volume=np.zeros((10, 10, 10)))
+    widget.slice_slider.setValue(2)
+    rendered = []
+    original = widget.update_slice
+    monkeypatch.setattr(
+        widget, "update_slice", lambda: (rendered.append(widget.slice_slider.value()), original())
+    )
+    widget._slice_update_timer.timeout.disconnect()
+    widget._slice_update_timer.timeout.connect(widget.update_slice)
+
+    for _ in range(3):
+        widget._on_scroll_slice(1)
+    assert rendered == []
+    qapp.processEvents()
+    assert rendered == [5]
+
+    widget.slice_slider.setValue(1)  # programmatic changes still render at once
+    assert rendered == [5, 1]
+
+
+def test_global_range_is_computed_once_per_volume(qapp):
+    """Global scaling reuses the full-volume range on every slice."""
+    widget = QuantityWidget()
+    ct = np.arange(1000, dtype=float).reshape(10, 10, 10)
+    widget.set_data(ct_volume=ct)
+    widget.on_global_max_toggled(True)
+    assert widget._volume_range(widget._ct) == (0.0, 999.0)
+    cached = widget._range_cache[id(widget._ct)]
+    widget.slice_slider.setValue(3)
+    assert widget._range_cache[id(widget._ct)] is cached

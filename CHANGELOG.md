@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
 - Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
 - GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
+- GUI: the slice viewer responds much faster on large patients, with unchanged display. On a 456 × 456 × 125 head-and-neck CT with 24 structures, a slice step takes about 3 ms instead of about 210 ms, and the main window opens in about 1 s instead of 2.6 s. Structure contours and dose isolines are traced in C (contourpy) instead of Python, only within each structure's bounding box, and cached per slice. Full-volume minima and maxima are computed once instead of on every slice. Dragging the slider or scrolling with the mouse wheel renders only the latest slice
+- `StructureSet.target_center_of_mass` is about 5x faster on large images, with unchanged results
 
 ### Deprecated
 
