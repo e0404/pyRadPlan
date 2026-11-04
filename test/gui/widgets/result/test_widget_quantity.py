@@ -355,18 +355,13 @@ def test_voi_contours_are_cached_until_the_mask_changes(qapp):
     assert widget._voi_contour("voi", idx) is not first
 
 
-def test_wheel_scrolling_renders_the_latest_slice_once(qapp, monkeypatch):
+def test_wheel_scrolling_renders_the_latest_slice_once(qapp):
     """Queued wheel steps render only the last slice; setValue renders at once."""
     widget = QuantityWidget()
     widget.set_data(ct_volume=np.zeros((10, 10, 10)))
     widget.slice_slider.setValue(2)
     rendered = []
-    original = widget.update_slice
-    monkeypatch.setattr(
-        widget, "update_slice", lambda: (rendered.append(widget.slice_slider.value()), original())
-    )
-    widget._slice_update_timer.timeout.disconnect()
-    widget._slice_update_timer.timeout.connect(widget.update_slice)
+    widget.slice_changed.connect(rendered.append)
 
     for _ in range(3):
         widget._on_scroll_slice(1)

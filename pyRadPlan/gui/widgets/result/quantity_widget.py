@@ -301,10 +301,8 @@ class QuantityWidget(QWidget):
         self._mask_items: list[QGraphicsPathItem] = []
         #: (array, min, max) of full volumes by ``id``, for global scaling on every slice.
         self._range_cache: dict[int, tuple[np.ndarray, float, float]] = {}
-        self._slice_update_timer = QTimer(self)
-        self._slice_update_timer.setSingleShot(True)
-        self._slice_update_timer.setInterval(0)
-        self._slice_update_timer.timeout.connect(self.update_slice)
+        #: A slice render is queued for the latest slider value (see _on_slider_changed).
+        self._slice_update_pending = False
         self._scrolling = False
         self._voi_colors: dict[str, tuple[int, int, int]] = {}
         self._show_cst: bool = True
@@ -1516,10 +1514,19 @@ class QuantityWidget(QWidget):
             self._follow_isocenter = False
         if self._scrolling or self.slice_slider.isSliderDown():
             # Dragging and wheel scrolling outpace rendering on large images: render
-            # once the queued input is handled, for the latest slice only.
-            self._slice_update_timer.start()
+            # once the queued input is handled, for the latest slice only. A one-shot
+            # call with this widget as context, as a QTimer child connected to
+            # update_slice made PySide6 crash while garbage-collecting the widget.
+            if not self._slice_update_pending:
+                self._slice_update_pending = True
+                QTimer.singleShot(0, self, self._render_pending_slice)
         else:
-            self._slice_update_timer.stop()
+            self._slice_update_pending = False
+            self.update_slice()
+
+    def _render_pending_slice(self) -> None:
+        if self._slice_update_pending:
+            self._slice_update_pending = False
             self.update_slice()
 
     def _on_scroll_slice(self, delta: int) -> None:
