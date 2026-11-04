@@ -20,6 +20,7 @@ class NoRobustness(RobustnessOperator):
     """
 
     name = "none"
+    label = "None"
     matrad_name = "none"
     phase_contours = True
 

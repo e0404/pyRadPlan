@@ -25,6 +25,7 @@ from pyRadPlan.optimization.solvers import (
     get_available_solvers,
 )
 from .._config_form import ConfigFormWidget
+from .._display_names import add_identified_item, show_identifiers_when_open
 
 logger = logging.getLogger(__name__)
 
@@ -152,16 +153,17 @@ class OptimizationConfigDialog(QDialog):
         solver_layout = QVBoxLayout(solver_box)
         self._cmb_solver = QComboBox()
         self._cmb_solver.setToolTip("Solver used to optimize the planning problem")
+        show_identifiers_when_open(self._cmb_solver)
         for solver_name, solver_cls in self._solvers.items():
-            self._cmb_solver.addItem(solver_name, solver_name)
-            tooltip = solver_cls.name
+            add_identified_item(self._cmb_solver, solver_cls.name, solver_name, solver_name)
             if getattr(solver_cls, "gpu_compatible", False) is True:
-                tooltip += "\nRuns on the GPU backend."
-            self._cmb_solver.setItemData(
-                self._cmb_solver.count() - 1, tooltip, Qt.ItemDataRole.ToolTipRole
-            )
+                self._cmb_solver.setItemData(
+                    self._cmb_solver.count() - 1,
+                    "Runs on the GPU backend.",
+                    Qt.ItemDataRole.ToolTipRole,
+                )
         if name not in self._solvers:
-            self._cmb_solver.addItem(f"{name} (not available)", name)
+            add_identified_item(self._cmb_solver, f"{name} (not available)", name, name)
             index = self._cmb_solver.count() - 1
             self._cmb_solver.model().item(index).setEnabled(False)
             self._cmb_solver.setItemData(

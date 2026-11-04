@@ -356,10 +356,23 @@ def test_file_menu_opens_phantoms_from_all_folders(qapp, tmp_path, monkeypatch):
 
 
 def test_compact_font_is_smaller(qapp):
-    win = MainWindow(WorkspaceManager())
+    applied = qapp.property("compact_font_applied")
     default = qapp.font().pointSizeF()
-    if default > 0:
-        assert win.font().pointSizeF() < default
+    win = MainWindow(WorkspaceManager())
+    assert qapp.property("compact_font_applied")
+    if not applied and default > 0:
+        assert qapp.font().pointSizeF() < default
+    # Existing widgets receive the application font change as posted events.
+    qapp.processEvents()
+    assert win.font() == qapp.font()
+
+
+def test_style_sheet_keeps_compact_font(qapp):
+    win = MainWindow(WorkspaceManager())
+    btn = win.plan_widget._btn_apply
+    btn.setStyleSheet("font-weight: bold;")
+    btn.setStyleSheet("")
+    assert btn.font().pointSizeF() == qapp.font().pointSizeF()
 
 
 def test_settings_dialog_shows_subconfig_tabs(qapp):
