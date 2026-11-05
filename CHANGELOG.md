@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-05
+
 ### Added
 
 - `core.resample.resample_array` resamples NumPy, CuPy, PyTorch and other Array API arrays and returns them on their namespace, device and dtype. Full volumes use SimpleITK by default; `prefer_native=False` resamples on the array's backend. `ArrayBackendGridResampler` prepares repeated sampling of selected voxels
@@ -725,7 +727,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
