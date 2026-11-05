@@ -202,6 +202,10 @@ class StructureSet(PyRadPlanBaseModel):
                 objectives = [objectives]
 
             props = vdata[4] if len(vdata) > 4 and isinstance(vdata[4], dict) else {}
+            # matRad colors are always 0..1, but integer-typed triples like [0 0 1] would
+            # otherwise be read as 0..255.
+            if "visibleColor" in props:
+                props = {**props, "visibleColor": np.asarray(props["visibleColor"], dtype=float)}
 
             voi = validate_voi(
                 name=str(vdata[1]),
