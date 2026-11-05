@@ -1514,9 +1514,7 @@ class QuantityWidget(QWidget):
             self._follow_isocenter = False
         if self._scrolling or self.slice_slider.isSliderDown():
             # Dragging and wheel scrolling outpace rendering on large images: render
-            # once the queued input is handled, for the latest slice only. A one-shot
-            # call with this widget as context, as a QTimer child connected to
-            # update_slice made PySide6 crash while garbage-collecting the widget.
+            # once the queued input is handled, for the latest slice only.
             if not self._slice_update_pending:
                 self._slice_update_pending = True
                 QTimer.singleShot(0, self, self._render_pending_slice)
