@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from functools import partial
 from typing import Callable, Optional, Sequence
 
+import contourpy
 import numpy as np
 import SimpleITK as sitk
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPen, QPolygonF, QShortcut
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
+    QGraphicsPathItem,
     QHBoxLayout,
     QLabel,
     QSlider,
@@ -45,6 +57,62 @@ _ORBIT_COLOR = (200, 200, 200, 170)
 _ORIENTATION_MARGIN = 8
 #: Image direction of each viewer axis in (x, y, z); the viewer volume is (z, x, y).
 _VIEWER_AXES_XYZ = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+#: Colour and line width of the isocenter cross on its slice, and of the half cross
+#: on nearby slices.
+_ISO_COLOR = (255, 0, 0)
+_ISO_HINT_COLOR = (255, 0, 0, 90)
+_ISO_WIDTH = 5
+#: Slices on either side of the isocenter that show a half cross towards it.
+_ISO_HINT_SLICES = 5
+#: VOI contours kept per viewer, keyed by (VOI, plane, slice), so scrolling back is free.
+_CONTOUR_CACHE_SIZE = 4096
+
+
+def _isocurve_path(
+    image: np.ndarray, level: float, offset: tuple[int, int] = (0, 0)
+) -> Optional[QPainterPath]:
+    """Trace the *level* isocurve of a 2-D slice in the image item's pixel coordinates.
+
+    Matches ``pg.IsocurveItem(..., extendToEdge=True)``, which traces in Python: pixel
+    ``(i, j)`` covers ``[i, i + 1] x [j, j + 1]`` and curves run up to the slice border.
+    *offset* is the position of ``image[0, 0]`` when it is cropped from a larger slice.
+    """
+    z = np.pad(np.asarray(image, dtype=np.float64), 1, mode="edge")
+    generator = contourpy.contour_generator(
+        z=z, name="serial", line_type=contourpy.LineType.ChunkCombinedOffset
+    )
+    (points,), (offsets,) = generator.lines(level)
+    if points is None or len(points) == 0:
+        return None
+    # contourpy returns (column, row) of the padded slice; the image item is indexed
+    # [row, column] with pixel centers at +0.5.
+    rows, cols = image.shape
+    x = np.clip(points[:, 1] - 0.5, 0, rows) + offset[0]
+    y = np.clip(points[:, 0] - 0.5, 0, cols) + offset[1]
+    connect = np.ones(len(points), dtype=np.int32)
+    connect[offsets[1:] - 1] = 0
+    return pg.arrayToQPath(x, y, connect=connect, finiteCheck=False)
+
+
+def _occupied_range(occupied: np.ndarray) -> tuple[int, int]:
+    """First and last index where *occupied* is set (it must have one)."""
+    idx = np.flatnonzero(occupied)
+    return int(idx[0]), int(idx[-1])
+
+
+def _iso_symbol(arms: Sequence[tuple[float, float]]) -> QPainterPath:
+    """Scatter symbol of lines from the centre to *arms*, in pixel-like units (y down)."""
+    path = QPainterPath()
+    for x, y in arms:
+        path.moveTo(0.0, 0.0)
+        path.lineTo(x, y)
+    return path
+
+
+_ISO_CROSS = _iso_symbol([(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)])
+#: Half crosses named by where they point: arms down make an upward arrowhead (∧).
+_ISO_HALF_UP = _iso_symbol([(-0.5, 0.5), (0.5, 0.5)])
+_ISO_HALF_DOWN = _iso_symbol([(-0.5, -0.5), (0.5, -0.5)])
 
 
 class _BeamWedgeItem(pg.GraphicsObject):
@@ -224,6 +292,18 @@ class QuantityWidget(QWidget):
         self._show_quantity: bool = True
         self._selected_vois: Sequence[str] = []
         self._masks: dict[str, np.ndarray] = {}
+        #: Per VOI, whether each slice along each viewer axis has a mask voxel, or
+        #: ``None`` for an empty mask; computed on first display.
+        self._mask_extents: dict[str, Optional[list[np.ndarray]]] = {}
+        self._contour_cache: OrderedDict[tuple[str, str, int], Optional[QPainterPath]] = (
+            OrderedDict()
+        )
+        self._mask_items: list[QGraphicsPathItem] = []
+        #: (array, min, max) of full volumes by ``id``, for global scaling on every slice.
+        self._range_cache: dict[int, tuple[np.ndarray, float, float]] = {}
+        #: A slice render is queued for the latest slider value (see _on_slider_changed).
+        self._slice_update_pending = False
+        self._scrolling = False
         self._voi_colors: dict[str, tuple[int, int, int]] = {}
         self._show_cst: bool = True
         self._last_cmap = None
@@ -344,7 +424,10 @@ class QuantityWidget(QWidget):
         """
         new_image = ct_volume is not self._ct_source
         self._ct_source = ct_volume
-        self._ct = ct_volume.astype(float, copy=False)
+        if new_image or self._ct is None:
+            self._ct = ct_volume.astype(float, copy=False)
+        # Keep only the CT's range: the quantities are replaced below.
+        self._range_cache = {k: v for k, v in self._range_cache.items() if v[0] is self._ct}
         self._quantities = {}
         self._active_quantity_name = None
 
@@ -401,10 +484,12 @@ class QuantityWidget(QWidget):
         for iso in self._iso_items:
             self._view_box.removeItem(iso)
         self._iso_items.clear()
-        for item in getattr(self, "_mask_items", []):
+        for item in self._mask_items:
             self._view_box.removeItem(item)
-        if hasattr(self, "_mask_items"):
-            self._mask_items.clear()
+        self._mask_items.clear()
+        self._mask_extents.clear()
+        self._contour_cache.clear()
+        self._range_cache.clear()
         if self._colorbar is not None:
             try:
                 self._plot_widget.removeItem(self._colorbar)
@@ -553,10 +638,16 @@ class QuantityWidget(QWidget):
             try:
                 a = np.asarray(arr)
                 if a.shape == self._ct.shape:  # type: ignore[union-attr]
-                    valid[name] = (a > 0).astype(np.uint8)
+                    # Binary uint8/bool masks are used as given: copying every mask
+                    # of a large patient on each update is slow.
+                    valid[name] = a if a.dtype in (np.bool_, np.uint8) else a > 0
             except Exception:
                 continue
+        unchanged = {name for name, a in valid.items() if self._masks.get(name) is a}
         self._masks = valid
+        self._mask_extents = {n: e for n, e in self._mask_extents.items() if n in unchanged}
+        for key in [k for k in self._contour_cache if k[0] not in unchanged]:
+            del self._contour_cache[key]
         self.update_slice()
 
     def set_voi_colors(self, colors: dict[str, tuple[int, int, int]]) -> None:
@@ -697,7 +788,7 @@ class QuantityWidget(QWidget):
             center, width = self._ct_window
             self._image_item.setLevels((center - width / 2, center + width / 2))
         elif self._global_max:
-            self._image_item.setLevels((float(self._ct.min()), float(self._ct.max())))
+            self._image_item.setLevels(self._volume_range(self._ct))
         else:
             self._image_item.setLevels((float(ct_slice.min()), float(ct_slice.max())))
         self._image_item.setOpacity(1.0 if self._show_ct else 0.0)
@@ -735,7 +826,7 @@ class QuantityWidget(QWidget):
             center, width = self._quantity_window
             self._quantity_item.setLevels((center - width / 2, center + width / 2))
         elif self._global_max:
-            self._quantity_item.setLevels((float(quantity_arr.min()), float(quantity_arr.max())))
+            self._quantity_item.setLevels(self._volume_range(quantity_arr))
 
         return quantity_slice
 
@@ -813,8 +904,7 @@ class QuantityWidget(QWidget):
             return
 
         volume, item, label, cmap = params
-        vmin = float(volume.min())
-        vmax = float(volume.max())
+        vmin, vmax = self._volume_range(volume)
         self._colorbar = pg.ColorBarItem(values=(vmin, vmax), colorMap=cmap, interactive=False)
         self._plot_widget.addItem(self._colorbar, row=0, col=1)
         if item is not None:
@@ -840,7 +930,7 @@ class QuantityWidget(QWidget):
             center, width = window
             return center - width / 2, center + width / 2
         if self._global_max:
-            return float(full_arr.min()), float(full_arr.max())
+            return self._volume_range(full_arr)
         valid = slice_data[np.isfinite(slice_data)]
         if valid.size == 0:
             return 0.0, 1e-6
@@ -877,7 +967,7 @@ class QuantityWidget(QWidget):
             return
         quantity_slice = self._extract_slice(quantity_arr, self._plane, idx).astype(float)
 
-        max_quantity_val = quantity_arr.max()
+        max_quantity_val = self._volume_range(quantity_arr)[1]
         max_quantity = float(max_quantity_val) if max_quantity_val > 0 else 1.0
 
         if self._isoline_levels:
@@ -893,26 +983,61 @@ class QuantityWidget(QWidget):
         except Exception:
             cmap = pg.colormap.getFromMatplotlib("jet")
 
-        if quantity_slice.max() == quantity_slice.min():
+        slice_min, slice_max = float(quantity_slice.min()), float(quantity_slice.max())
+        if slice_max == slice_min:
             return
 
         for val in levels:
-            if val > quantity_slice.max() or val < quantity_slice.min():
+            if val > slice_max or val < slice_min:
                 continue
-            norm_val = val / max_quantity
-            color = cmap.map(norm_val)
-            try:
-                iso = pg.IsocurveItem(quantity_slice, level=val, pen=pg.mkPen(color, width=2))
-                iso.setZValue(10)
-                self._view_box.addItem(iso)
-                self._iso_items.append(iso)
-            except Exception as e:
-                print(f"Error adding isoline/label: {e}")
+            path = _isocurve_path(quantity_slice, val)
+            if path is None:
                 continue
+            color = cmap.map(val / max_quantity)
+            self._iso_items.append(self._add_path_item(path, pg.mkPen(color, width=2), 10))
+
+    def _add_path_item(self, path: QPainterPath, pen: QPen, z_value: float) -> QGraphicsPathItem:
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(z_value)
+        self._view_box.addItem(item, ignoreBounds=True)
+        return item
+
+    def _mask_extent(self, name: str) -> Optional[list[np.ndarray]]:
+        """Slices along each viewer axis that hold voxels of VOI *name* (``None``: empty)."""
+        if name not in self._mask_extents:
+            mask = self._masks[name]
+            along_0 = mask.any(axis=(1, 2))
+            in_plane = mask.any(axis=0)
+            extent = [along_0, in_plane.any(axis=1), in_plane.any(axis=0)]
+            self._mask_extents[name] = extent if along_0.any() else None
+        return self._mask_extents[name]
+
+    def _voi_contour(self, name: str, idx: int) -> Optional[QPainterPath]:
+        """Contour of VOI *name* on slice *idx* of the current plane, cached."""
+        key = (name, self._plane, idx)
+        if key in self._contour_cache:
+            self._contour_cache.move_to_end(key)
+            return self._contour_cache[key]
+
+        path = None
+        extent = self._mask_extent(name)
+        axis = self._PLANE_MAP.get(self._plane, 2)
+        if extent is not None and extent[axis][idx]:
+            rows, cols = (extent[a] for a in range(3) if a != axis)
+            # One background voxel around the VOI keeps the crop's border off the contour.
+            r0, r1 = _occupied_range(rows)
+            c0, c1 = _occupied_range(cols)
+            r0, c0 = max(r0 - 1, 0), max(c0 - 1, 0)
+            mask_slice = self._extract_slice(self._masks[name], self._plane, idx)
+            path = _isocurve_path(mask_slice[r0 : r1 + 2, c0 : c1 + 2], 0.5, offset=(r0, c0))
+
+        self._contour_cache[key] = path
+        if len(self._contour_cache) > _CONTOUR_CACHE_SIZE:
+            self._contour_cache.popitem(last=False)
+        return path
 
     def _update_contours(self, idx: int) -> None:
-        if not hasattr(self, "_mask_items"):
-            self._mask_items = []
         for item in self._mask_items:
             self._view_box.removeItem(item)
         self._mask_items.clear()
@@ -923,9 +1048,8 @@ class QuantityWidget(QWidget):
             return
         n = len(names)
         for i, name in enumerate(names):
-            mask = self._masks[name]
-            mask_slice = self._extract_slice(mask, self._plane, idx).astype(np.int32)
-            if mask_slice.max() == 0:
+            path = self._voi_contour(name, idx)
+            if path is None:
                 continue
             if name in self._voi_colors:
                 r, g, b = self._voi_colors[name]
@@ -934,13 +1058,7 @@ class QuantityWidget(QWidget):
                 g = int(255 * (1 - i / max(1, n - 1)))
                 b = 255
             pen = pg.mkPen(color=(r, g, b), width=1.5)
-            try:
-                curve = pg.IsocurveItem(mask_slice, level=0.5, pen=pen)
-            except Exception:
-                continue
-            curve.setZValue(15)
-            self._view_box.addItem(curve)
-            self._mask_items.append(curve)
+            self._mask_items.append(self._add_path_item(path, pen, 15))
 
     def _plane_axes(self, plane: Optional[str] = None) -> tuple[int, int]:
         """Volume axes shown horizontally and vertically in *plane* (default: the current one)."""
@@ -959,19 +1077,28 @@ class QuantityWidget(QWidget):
         """Voxel spacing in mm along the viewer's (z, x, y) axes."""
         return np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
 
+    def _view_point(self, voxel: np.ndarray) -> tuple[float, float]:
+        """In-plane view position of viewer (z, x, y) voxel coordinates.
+
+        The image items draw voxel ``i`` over ``[i, i + 1]``, so its center is at ``i + 0.5``.
+        """
+        h_axis, v_axis = self._plane_axes()
+        return float(voxel[h_axis]) + 0.5, float(voxel[v_axis]) + 0.5
+
     def _beam_radius(self, h_iso: float, v_iso: float) -> Optional[float]:
         """Source distance in mm of the beams around an isocenter, or None outside the slice.
 
-        The radius of the largest circle around the isocenter that fits in the
-        slice, so the beam lines stay inside the image instead of running off into
-        empty space, which would also widen the auto-ranged view.  Every beam gets
-        the same distance, so its source stays on its gantry orbit while dragged.
+        The radius of the largest circle around the isocenter (in view coordinates)
+        that fits within the slice's voxel centers, so the beam lines stay inside the
+        image instead of running off into empty space, which would also widen the
+        auto-ranged view.  Every beam gets the same distance, so its source stays on
+        its gantry orbit while dragged.
         """
         h_axis, v_axis = self._plane_axes()
         spacing = self._viewer_spacing()
         radius = min(
-            min(h_iso, self._ct.shape[h_axis] - 1 - h_iso) * spacing[h_axis],
-            min(v_iso, self._ct.shape[v_axis] - 1 - v_iso) * spacing[v_axis],
+            min(h_iso - 0.5, self._ct.shape[h_axis] - 0.5 - h_iso) * spacing[h_axis],
+            min(v_iso - 0.5, self._ct.shape[v_axis] - 0.5 - v_iso) * spacing[v_axis],
         )
         return float(radius) if radius > 0.0 else None
 
@@ -1085,7 +1212,7 @@ class QuantityWidget(QWidget):
             direction = np.asarray(beam["source_direction"], dtype=float)
             # Per mm along the beam, so the source lands at the radius in mm.
             direction = direction / max(float(np.linalg.norm(direction * spacing)), 1e-12)
-            h_iso, v_iso = float(iso[h_axis]), float(iso[v_axis])
+            h_iso, v_iso = self._view_point(iso)
             toward = self._toward_viewer(direction)
             d_h, d_v = float(direction[h_axis]), float(direction[v_axis])
             norm = float(np.hypot(d_h, d_v))
@@ -1200,7 +1327,7 @@ class QuantityWidget(QWidget):
         h_axis, v_axis = self._plane_axes()
         u, w = (np.asarray(vector, dtype=float) for vector in beam["orbit"])
         matrix = np.array([[u[h_axis], w[h_axis]], [u[v_axis], w[v_axis]]])
-        iso = np.array([beam["iso_center"][h_axis], beam["iso_center"][v_axis]], dtype=float)
+        iso = np.array(self._view_point(beam["iso_center"]))
         tip = self._beam_parts[i]["tip"]
         radius = self._beam_parts[i]["radius"]
 
@@ -1298,22 +1425,28 @@ class QuantityWidget(QWidget):
             return
 
         axis = self._PLANE_MAP.get(self._plane, 2)
-        iso_slice_idx = int(round(self._isocenter[axis]))
+        offset = int(round(self._isocenter[axis])) - idx
 
-        if idx == iso_slice_idx:
-            h_axis, v_axis = self._plane_axes()
-            x, y = self._isocenter[h_axis], self._isocenter[v_axis]
+        if offset == 0:
+            symbol, color = _ISO_CROSS, _ISO_COLOR
+        elif abs(offset) <= _ISO_HINT_SLICES:
+            # The wheel scrolls up towards higher slices, so the half cross points up then.
+            symbol = _ISO_HALF_UP if offset > 0 else _ISO_HALF_DOWN
+            color = _ISO_HINT_COLOR
+        else:
+            return
 
-            self._isocenter_item = pg.ScatterPlotItem(
-                [x],
-                [y],
-                symbol="+",
-                size=20,
-                pen=pg.mkPen("r", width=2),
-                brush=pg.mkBrush("r"),
-            )
-            self._isocenter_item.setZValue(20)
-            self._view_box.addItem(self._isocenter_item)
+        x, y = self._view_point(self._isocenter)
+        self._isocenter_item = pg.ScatterPlotItem(
+            [x],
+            [y],
+            symbol=symbol,
+            size=20,
+            pen=pg.mkPen(color, width=_ISO_WIDTH),
+            brush=pg.mkBrush(None),
+        )
+        self._isocenter_item.setZValue(20)
+        self._view_box.addItem(self._isocenter_item)
 
     @staticmethod
     def _extract_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -1368,15 +1501,40 @@ class QuantityWidget(QWidget):
     # ------------------------------------------------------------------
     # Internal callbacks
     # ------------------------------------------------------------------
+    def _volume_range(self, arr: np.ndarray) -> tuple[float, float]:
+        """``(min, max)`` of a full volume, computed once per array."""
+        cached = self._range_cache.get(id(arr))
+        if cached is None or cached[0] is not arr:
+            cached = (arr, float(arr.min()), float(arr.max()))
+            self._range_cache[id(arr)] = cached
+        return cached[1], cached[2]
+
     def _on_slider_changed(self, value: int) -> None:  # value provided by Qt
         if not self._setting_slice:
             self._follow_isocenter = False
-        self.update_slice()
+        if self._scrolling or self.slice_slider.isSliderDown():
+            # Dragging and wheel scrolling outpace rendering on large images: render
+            # once the queued input is handled, for the latest slice only.
+            if not self._slice_update_pending:
+                self._slice_update_pending = True
+                QTimer.singleShot(0, self, self._render_pending_slice)
+        else:
+            self._slice_update_pending = False
+            self.update_slice()
+
+    def _render_pending_slice(self) -> None:
+        if self._slice_update_pending:
+            self._slice_update_pending = False
+            self.update_slice()
 
     def _on_scroll_slice(self, delta: int) -> None:
         new_val = self.slice_slider.value() + delta
         new_val = max(self.slice_slider.minimum(), min(self.slice_slider.maximum(), new_val))
-        self.slice_slider.setValue(new_val)
+        self._scrolling = True
+        try:
+            self.slice_slider.setValue(new_val)
+        finally:
+            self._scrolling = False
 
     def eventFilter(self, obj, ev):  # noqa: N802
         """Handle native gestures and keep the cursor-info overlay anchored."""
@@ -1543,9 +1701,9 @@ class QuantityWidget(QWidget):
         if mode == "quantity" and self._active_quantity_name:
             arr = self._quantities.get(self._active_quantity_name)
             if arr is not None:
-                return float(arr.min()), float(arr.max())
+                return self._volume_range(arr)
         elif mode == "ct" and self._ct is not None:
-            return float(self._ct.min()), float(self._ct.max())
+            return self._volume_range(self._ct)
         return 0.0, 1.0
 
     def get_current_slice_range(self, mode: str) -> tuple[float, float]:

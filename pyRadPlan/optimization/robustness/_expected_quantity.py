@@ -21,6 +21,7 @@ class ExpectedQuantity(RobustnessOperator):
     """
 
     name = "expected_quantity"
+    label = "Expected quantity"
     aliases = ("PROB",)
     matrad_name = None
 

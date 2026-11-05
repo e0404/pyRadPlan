@@ -292,7 +292,12 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
-        self._btn_save_result = self._add_button("Save / Keep Result", self._on_save_result)
+        self._btn_save_result = self._add_button(
+            "Snapshot Result",
+            self._on_save_result,
+            tooltip="Keep a copy of the current result in the workspace. "
+            "Use File > Save Result… to write it to disk.",
+        )
 
         # Each column is a workflow stage, progressing left to right (as in
         # matRad): loading -> dose influence -> result computation -> export.
@@ -1219,17 +1224,6 @@ class WorkflowWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _scenario_result_keys(cst: Any) -> list[str]:
-        """Results kept per scenario: the physical dose and what the objectives evaluate."""
-        keys = ["physical_dose"]
-        for voi in getattr(cst, "vois", None) or []:
-            for objective in getattr(voi, "objectives", None) or []:
-                identifier = getattr(objective, "quantity", None)
-                if isinstance(identifier, str) and identifier not in keys:
-                    keys.append(identifier)
-        return keys
-
-    @staticmethod
     def _biological_objectives(cst: Any) -> list[str]:
         """``"<structure>: <quantity>"`` of each objective on a biological quantity."""
         quantities = get_available_quantities()
@@ -1292,10 +1286,7 @@ class WorkflowWidget(WorkspaceWidget):
             weights = fluence_optimization(ct, cst, stf, dij, pln)
             scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
             result = dij.compute_result_ct_grid(
-                weights,
-                num_of_fractions=pln.result_dose_factor,
-                scenarios=scenarios,
-                scenario_quantities=self._scenario_result_keys(cst),
+                weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
             )
             if scenarios:
                 result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
@@ -1387,12 +1378,6 @@ class WorkflowWidget(WorkspaceWidget):
 
             # Already returns the weight-applied result quantities on the CT grid.
             new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
-            keep = self._scenario_result_keys(cst)
-            new_result = {
-                key: value
-                for key, value in new_result.items()
-                if not key.endswith(_SCENARIO_SUFFIX) or key.removesuffix(_SCENARIO_SUFFIX) in keep
-            }
             if any(key.endswith(_SCENARIO_SUFFIX) for key in new_result):
                 new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
             return recalc_stf, new_result
@@ -1430,7 +1415,7 @@ class WorkflowWidget(WorkspaceWidget):
                 pass
 
         tag, ok = QInputDialog.getText(
-            self, "Save Result", "Name for this result snapshot:", text=default
+            self, "Snapshot Result", "Name for this result snapshot:", text=default
         )
         if not ok or not tag.strip():
             return
@@ -1439,7 +1424,7 @@ class WorkflowWidget(WorkspaceWidget):
         if tag in _RESERVED_TAGS:
             QMessageBox.warning(
                 self,
-                "Save Result",
+                "Snapshot Result",
                 f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
             )
             return

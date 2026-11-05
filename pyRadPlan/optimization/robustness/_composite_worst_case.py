@@ -18,6 +18,7 @@ class CompositeWorstCase(RobustnessOperator):
     """
 
     name = "composite_worst_case"
+    label = "Composite worst case"
     aliases = ("COWC",)
     matrad_name = "COWC"
     scope = "composite"

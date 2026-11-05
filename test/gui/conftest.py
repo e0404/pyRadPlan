@@ -1,5 +1,3 @@
-import gc
-
 import pytest
 
 pytest.importorskip("PySide6")
@@ -19,14 +17,18 @@ def qapp():
     yield app
 
 
-# Free each test's widgets while the QApplication is still alive. Left to interpreter
-# shutdown, the PySide6/pyqtgraph wrappers are collected after Qt is torn down, which
-# segfaults on some Python versions. Never force a C++ delete here (deleteLater): pyqtgraph
-# items still referenced from Python would then be freed twice.
+# MainWindow shrinks the application font once per process; undo it so later tests do not
+# depend on whether a main window was built before them.
 @pytest.fixture(autouse=True)
-def _collect_widgets():
+def _restore_app_font():
+    app = QApplication.instance()
+    font = app.font() if app is not None else None
     yield
-    gc.collect()
+    app = QApplication.instance()
+    if app is not None and app.property("compact_font_applied"):
+        if font is not None:
+            app.setFont(font)
+        app.setProperty("compact_font_applied", None)
 
 
 @pytest.fixture

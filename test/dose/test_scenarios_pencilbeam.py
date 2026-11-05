@@ -9,6 +9,8 @@ from scipy import sparse
 
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.ct import CT
+from pyRadPlan import settings
+from pyRadPlan.core.xp_utils import cupy_available
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import ParticleFredMCEngine, get_engine
 from pyRadPlan.raytracer import RayTracerSiddon
@@ -136,12 +138,12 @@ def test_setup_and_range_scenarios(case, monkeypatch):
     _assert_differs(slots[1], nominal[0])
     _assert_equal(slots[1], shifted[0])
 
-    original_trace = RayTracerSiddon.trace_cubes
+    original_trace = RayTracerSiddon.trace_cubes_array
 
     def trace_with_offset(self, *args, **kwargs):
         return [cube + RANGE_ABS[0] for cube in original_trace(self, *args, **kwargs)]
 
-    monkeypatch.setattr(RayTracerSiddon, "trace_cubes", trace_with_offset)
+    monkeypatch.setattr(RayTracerSiddon, "trace_cubes_array", trace_with_offset)
     _, _, deeper = _calc(pln, ct, cst, stf)
 
     _assert_differs(slots[2], nominal[0])
@@ -271,8 +273,16 @@ def test_ct_phase_selection(case):
     _assert_equal(slots[1], nominal[0])
 
 
-def test_ct_phase_selection_bio(test_data_protons):
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+@pytest.mark.parametrize("trace_on_dose_grid", [False, True])
+def test_ct_phase_selection_bio(test_data_protons, monkeypatch, backend, trace_on_dose_grid):
     pln, ct, cst, stf, _, _ = test_data_protons
+    if backend == "cupy" and not cupy_available():
+        pytest.skip("CuPy unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    pln.prop_dose_calc["trace_on_dose_grid"] = trace_on_dose_grid
     pln.bio_model = "MCN"
     ct2, ct_phase1 = _two_phase_ct(ct)
 
@@ -735,3 +745,38 @@ def test_moving_structures_on_a_coarser_dose_grid(test_data_photons):
     dij = calc_dose_influence(ct2, moved, stf, pln, scenarios=scen_set)
     assert dij.physical_dose.size == 2
     assert dij.dose_grid.num_voxels < ct.grid.num_voxels
+
+
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+@pytest.mark.parametrize("trace_on_dose_grid", [False, True])
+def test_sampling_with_setup_range_and_ct_scenarios(
+    test_data_photons, monkeypatch, backend, trace_on_dose_grid
+):
+    """Sampling over reordered phases and setups is reproducible and shares derived slots."""
+    if backend == "cupy" and not cupy_available():
+        pytest.skip("CuPy unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    pln.prop_dose_calc.update(
+        enable_dij_sampling=True, random_seed=57, trace_on_dose_grid=trace_on_dose_grid
+    )
+    scenarios = _scenario_set(
+        ct_phase=[1, 0, 1, 0],
+        phases=(0, 1),
+        range_=[(2.0, 0.035), (0.0, 0.0), (-2.0, -0.03), (0.0, 0.0)],
+        setup=[SHIFT_X, (0, 0, 0), SHIFT_X, (0, 0, 0)],
+        bases=[None, None, None, ScenarioBasis(coefficients={1: 1.0})],
+    )
+    engine, dij, slots = _calc(pln, ct2, cst, stf, scenarios=scenarios)
+    next_random = engine._rng.random()
+    assert slots[3] is slots[1]
+    assert all(slot.indices.dtype == np.int32 for slot in slots)
+    reference, _, expected = _calc(pln, ct2, cst, stf, scenarios=scenarios)
+    for actual, target in zip(slots, expected):
+        _assert_equal(actual, target)
+        np.testing.assert_array_equal(actual.indices, target.indices)
+        np.testing.assert_array_equal(actual.indptr, target.indptr)
+    assert next_random == reference._rng.random()
