@@ -86,6 +86,50 @@ def test_cst_to_matrad(matrad_import, tmpdir):
     assert isinstance(tmp["cst"], list)
 
 
+def test_cst_from_matrad_reads_visibility_and_unit_colors():
+    """matRad's ``Visible`` flag is read and integer color triples stay on the 0..1 scale."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    props_hidden = {"Visible": 0.0, "visibleColor": np.array([0, 0, 1], dtype=np.uint8)}
+    props_shown = {"Visible": 1.0, "visibleColor": np.array([1.0, 0.5, 0.0])}
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), props_shown, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), props_hidden, []],
+        ],
+        ct=ct,
+    )
+
+    assert cst.vois[0].visible is True
+    assert cst.vois[0].color == (255, 128, 0)
+    assert cst.vois[1].visible is False
+    assert cst.vois[1].color == (0, 0, 255)
+
+
+def test_cst_to_matrad_visibility_and_color_roundtrip(tmpdir):
+    """Visibility and color survive a matRad ``.mat`` round-trip."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), {}, []],
+        ],
+        ct=ct,
+    )
+    cst.vois[0].color = (0, 0, 255)
+    cst.vois[1].visible = False
+
+    props = cst.to_matrad()[1][4]
+    assert props["Visible"] is False
+    np.testing.assert_allclose(props["visibleColor"], np.asarray(cst.vois[1].color) / 255.0)
+
+    tmp_mat_path = os.path.join(tmpdir, "test_cst_visible.mat")
+    matfile.save(tmp_mat_path, {"cst": cst.to_matrad()})
+    restored = create_cst(matfile.load(tmp_mat_path)["cst"], ct=ct)
+
+    assert [v.visible for v in restored.vois] == [True, False]
+    assert [v.color for v in restored.vois] == [v.color for v in cst.vois]
+
+
 def test_cst_to_matrad_objectives_roundtrip(tmpdir):
     """Objectives attached to VOIs survive a matRad ``.mat`` round-trip."""
     from pyRadPlan.optimization.objectives import (
@@ -222,6 +266,20 @@ def test_target_center_of_mass():
 
     com = cst.target_center_of_mass()
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
+
+
+def test_center_of_mass_matches_ndimage_on_anisotropic_grid():
+    """The projection-based center of mass equals ndimage.center_of_mass."""
+    from scipy import ndimage  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    mask = (rng.random((7, 11, 13)) > 0.8).astype(np.uint8)  # (z, y, x)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 2.5, 3.0))
+    image.SetOrigin((-10.0, 4.0, 7.5))
+
+    expected = image.TransformContinuousIndexToPhysicalPoint(ndimage.center_of_mass(mask.T))
+    assert np.allclose(StructureSet._center_of_mass(image), expected)
 
 
 # ---------------------------------------------------------------------------

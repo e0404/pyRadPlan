@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 from typing_extensions import Annotated, Self
 import warnings
 from pydantic import (
+    AliasChoices,
     Field,
     SerializeAsAny,
     ValidationInfo,
@@ -143,7 +144,11 @@ class VOI(PyRadPlanBaseModel, ABC):
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
 
-    visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
+    visible: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("visible", "Visible"),
+        description="Flag to set visibility in GUI applications",
+    )
     color: tuple[int, int, int] = Field(
         default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
         alias="visibleColor",
@@ -1052,6 +1057,8 @@ class VOI(PyRadPlanBaseModel, ABC):
             "alphaX": self.tissue_properties.alpha_x,
             "betaX": self.tissue_properties.beta_x,
             "Priority": self.overlap_priority,
+            "Visible": self.visible,
+            "visibleColor": np.asarray(self.color, dtype=float) / 255.0,
             # Not read by matRad, which ignores unknown fields here; keeps the full tissue.
             "tissueProperties": {
                 key: value

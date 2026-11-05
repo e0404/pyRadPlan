@@ -9,7 +9,6 @@ from pydantic import (
 )
 
 import numpy as np
-from scipy import ndimage
 import SimpleITK as sitk
 
 from ..core import PyRadPlanBaseModel, Grid
@@ -203,6 +202,10 @@ class StructureSet(PyRadPlanBaseModel):
                 objectives = [objectives]
 
             props = vdata[4] if len(vdata) > 4 and isinstance(vdata[4], dict) else {}
+            # matRad colors are always 0..1, but integer-typed triples like [0 0 1] would
+            # otherwise be read as 0..255.
+            if "visibleColor" in props:
+                props = {**props, "visibleColor": np.asarray(props["visibleColor"], dtype=float)}
 
             voi = validate_voi(
                 name=str(vdata[1]),
@@ -568,10 +571,17 @@ class StructureSet(PyRadPlanBaseModel):
 
     @staticmethod
     def _center_of_mass(mask_image: sitk.Image) -> np.ndarray:
-        # Transpose so axes go (x, y, z) for sitk-style continuous indexing.
-        mask = sitk.GetArrayViewFromImage(mask_image).T
-
-        cm_index = ndimage.center_of_mass(mask)
+        # The center of mass along an axis only needs the mask projected onto it, which is
+        # much faster on large images than ndimage.center_of_mass.
+        mask = sitk.GetArrayViewFromImage(mask_image)  # (z, y, x)
+        along_z = mask.sum(axis=(1, 2), dtype=np.float64)
+        plane = mask.sum(axis=0, dtype=np.float64)
+        total = along_z.sum()
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cm_index = tuple(
+                float(np.dot(np.arange(p.size), p) / total)
+                for p in (plane.sum(axis=0), plane.sum(axis=1), along_z)
+            )
 
         cm = mask_image.TransformContinuousIndexToPhysicalPoint(cm_index)
 

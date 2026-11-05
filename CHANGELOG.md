@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
 - Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
 - GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
+- GUI: the slice viewer responds much faster on large patients, with unchanged display. On a 456 × 456 × 125 head-and-neck CT with 24 structures, a slice step takes about 3 ms instead of about 210 ms, and the main window opens in about 1 s instead of 2.6 s. Structure contours and dose isolines are traced in C (contourpy) instead of Python, only within each structure's bounding box, and cached per slice. Full-volume minima and maxima are computed once instead of on every slice. Dragging the slider or scrolling with the mouse wheel renders only the latest slice
+- `StructureSet.target_center_of_mass` is about 5x faster on large images, with unchanged results
 
 ### Deprecated
 
@@ -38,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Loading matRad `.mat` files is more lenient about objectives. Files with an EUD objective no longer fail with "pop from empty list": missing or invalid objective parameters now keep their defaults and log a warning. Mean-dose objectives now read and write matRad's `f_diff` setting (stored as 1 = linear, 2 = quadratic). Objectives without a pyRadPlan equivalent, such as matRad's `DoseConstraints`, are now skipped with a warning instead of stopping the import
+- Loading matRad `.mat` files now reads each structure's visibility (`Visible`); before, all structures were shown. Colors stored as whole numbers, such as `[0 0 1]` for blue, are read on matRad's 0–1 scale instead of as almost black. Saving to matRad `.mat` now writes the visibility and color of each structure
 - GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
 - GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
