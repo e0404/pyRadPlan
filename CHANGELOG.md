@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- numpy 2.4 and 2.5 are supported
 - All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
 
 ### Fixed

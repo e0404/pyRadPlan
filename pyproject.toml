@@ -53,7 +53,7 @@ classifiers = [
 # regex (CalVer) and matlabengine (follows the MATLAB release) stay open. See AGENTS.md.
 dependencies = [
     "scipy>=1.13.0,<2",
-    "numpy>=2.0,<2.4",
+    "numpy>=2.0,<2.6",
     "array_api_compat<2",
     "array_api_strict<3",
     "array_api_extra<0.12",
