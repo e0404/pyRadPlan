@@ -242,7 +242,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # use 5 times sigma as the limits for the gaussian convolution
         gauss_limit = np.ceil(5 * sigma_gauss / self.int_conv_resolution)
-        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit)
+        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit + 1)
 
         gauss_filter_x, gauss_filter_z = array_meshgrid(gauss_grid, gauss_grid, indexing="xy")
         # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
@@ -252,27 +252,25 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             * xp.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
-        gauss_conv_size = int(2 * (field_limit + gauss_limit).astype(int))
+        # Full linear convolution of the field with the 2 * gauss_limit + 1 filter points
+        gauss_conv_size = int(field_grid.shape[0] + 2 * int(gauss_limit))
 
         beam_info["gauss_conv_size"] = gauss_conv_size
         beam_info["gauss_filter"] = gauss_filter
 
         # get kernel size and distances
         kernel_limit = np.ceil(kernel_cutoff / self.int_conv_resolution)
-        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit)
+        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit + 1)
 
         kernel_x, kernel_z = array_meshgrid(kernel_grid, kernel_grid, indexing="xy")
 
         # calculate also the total size and distance as we need this during convolution extensively
-        kernel_conv_limit = field_limit + gauss_limit + kernel_limit
-        field_grid_shift = float(field_grid[0]) + float(field_limit) * self.int_conv_resolution
-        kernel_conv_grid = (
-            self.int_conv_resolution * xp.arange(-kernel_conv_limit, kernel_conv_limit)
-            + field_grid_shift
-        )
+        kernel_conv_size = gauss_conv_size + 2 * int(kernel_limit)
+        # The convolution output starts at the first field pixel minus both filter half-widths
+        kernel_conv_grid = self.int_conv_resolution * (
+            xp.arange(kernel_conv_size, dtype=xp.float64) - float(gauss_limit + kernel_limit)
+        ) + float(field_grid[0])
         conv_mx_x, conv_mx_z = array_meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
-
-        kernel_conv_size = int(2 * kernel_conv_limit.astype(int))
 
         # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:

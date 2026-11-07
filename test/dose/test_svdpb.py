@@ -122,17 +122,16 @@ def test_bixel_based_custom_primary_fluence(test_data_photons):
     assert not np.allclose(custom, default)
 
 
-@pytest.fixture(scope="module")
-def water_sphere():
-    """Water cube of 51^3 voxels at 2 mm with a centered spherical target of radius 34 mm."""
-    n = 51
+def _water_cube(n, resolution, target_radius):
+    """Water cube of n^3 voxels with a spherical target (radius in voxels) on the center voxel."""
     img = sitk.Image(n, n, n, sitk.sitkInt16)
-    img.SetSpacing((2.0, 2.0, 2.0))
+    img.SetSpacing((resolution, resolution, resolution))
     ct = create_ct(cube_hu=img)
 
-    g = np.arange(1, n + 1)
+    c = (n - 1) / 2
+    g = np.arange(n)
     yy, xx, zz = np.meshgrid(g, g, g, indexing="ij")
-    target = (xx - 26) ** 2 + (yy - 26) ** 2 + (zz - 26) ** 2 <= 17**2
+    target = (xx - c) ** 2 + (yy - c) ** 2 + (zz - c) ** 2 <= target_radius**2
     cst = create_cst(
         [
             [0, "Body", "OAR", np.arange(1, n**3 + 1, dtype=float), 2, []],
@@ -141,6 +140,12 @@ def water_sphere():
         ct=ct,
     )
     return ct, cst
+
+
+@pytest.fixture(scope="module")
+def water_sphere():
+    """Water cube of 51^3 voxels at 2 mm with a centered spherical target of radius 34 mm."""
+    return _water_cube(51, 2.0, 17)
 
 
 @pytest.fixture(scope="module")
@@ -203,3 +208,67 @@ def test_custom_primary_fluence_gantry_invariance(water_sphere, ramp_fluence_mac
         for g in (0, 90, 180, 270)
     ]
     assert np.allclose(integral, integral[0], rtol=1e-3)
+
+
+def _plan_with_20mm_cutoffs(prop_stf):
+    """Photon plan on a 1 mm dose grid with 20 mm kernel and lateral cutoffs, no dij sampling."""
+    pln = PhotonPlan(machine="Generic")
+    pln.prop_stf = prop_stf
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    pln.prop_dose_calc["geometric_lateral_cutoff"] = 20.0
+    pln.prop_dose_calc["kernel_cutoff"] = 20.0
+    pln.prop_dose_calc["dose_grid"] = {"resolution": {"x": 1.0, "y": 1.0, "z": 1.0}}
+    return pln
+
+
+def _max_mirror_difference(dose):
+    """Largest difference to the mirror image along x or z, relative to the maximum dose."""
+    # Image arrays are (z, y, x)
+    return max(np.abs(dose - dose[:, :, ::-1]).max(), np.abs(dose - dose[::-1]).max()) / dose.max()
+
+
+def test_bixel_dose_mirror_symmetric_with_kernel_cutoff():
+    """A cut-off kernel and the Gaussian penumbra filter are sampled symmetrically."""
+    ct, cst = _water_cube(41, 1.0, 5)
+    pln = _plan_with_20mm_cutoffs(
+        {"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 5.0}
+    )
+
+    stf = generate_stf(ct, cst, pln)
+    beam = stf.beams[0]
+    beam.rays = [r for r in beam.rays if np.allclose(r.ray_pos_bev, 0.0)]
+    assert len(beam.rays) == 1
+
+    dose = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"]
+    assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
+
+
+def test_field_dose_mirror_symmetric_with_kernel_cutoff():
+    """The same holds for a symmetric 20 mm x 20 mm field in field-based dose calculation."""
+    ct, cst = _water_cube(41, 1.0, 5)
+    leaf_width = 5.0
+    mlc = create_bld(
+        {
+            "device_type": "MLC",
+            "device_orientation": "X",
+            "leaf_position_boundaries": np.arange(-2 * leaf_width, 2 * leaf_width, leaf_width),
+            "leaf_positions": [[-10.0, 10.0]] * 4,
+            "leaf_width": leaf_width,
+            "leaf_leakage": 0.0,
+        }
+    )
+    pln = _plan_with_20mm_cutoffs(
+        {
+            "gantry_angles": [0.0],
+            "couch_angles": [0.0],
+            "generator": "photonSingleBixel",
+            "field_based": True,
+            "blds": [mlc],
+            "resolution": 1.0,
+            "energy": 6.0,
+        }
+    )
+
+    stf = generate_stf(ct, cst, pln)
+    dose = calc_dose_forward(ct, cst, stf, pln)["physical_dose"]
+    assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
