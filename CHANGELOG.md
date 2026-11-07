@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
+
 ### Fixed
 
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0

@@ -59,6 +59,16 @@ Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance 
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
 
+## Dependencies
+
+Every dependency in `pyproject.toml` has an upper bound, so a new release reaches users only after Dependabot's pull request raising the bound has passed CI:
+
+- Next major release (`scipy>=1.13.0,<2`) by default.
+- Next minor release for 0.x packages (`numba>=0.61.0,<0.69`), PySide6 (it follows Qt's version numbers, and Qt minor releases change behavior), numpy (removes deprecated API in minor releases; numba and cupy follow it closely) and pydantic.
+- No bound for regex (calendar versions) and matlabengine (its version follows the installed MATLAB release).
+
+Set a new bound above the newest release that CI tests. Do not add bounds to `dev`. Keep the Qt and numba entries of `packaging/briefcase/pyproject.toml` identical to the extras (`test/packaging/test_briefcase.py`). CI does not catch everything: the PySide6 6.12.0 crash at interpreter exit passed CI because `test/conftest.py` ends the run with `os._exit`, so check GUI dependency updates with a normal exit too.
+
 ## PR Checklist
 
 - [ ] All existing tests pass; new behaviour has tests
