@@ -51,7 +51,7 @@ classifiers = [
 ]
 dependencies = [
     "scipy>=1.13.0",
-    "numpy>=2.0,<2.4",
+    "numpy>=2.0,<2.6",
     "array_api_compat",
     "array_api_strict",
     "array_api_extra",
