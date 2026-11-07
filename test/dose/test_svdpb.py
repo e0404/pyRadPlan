@@ -5,7 +5,7 @@ import numpy as np
 from pyRadPlan import PhotonPlan, generate_stf, load_tg119
 from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_cst
-from pyRadPlan.dose import calc_dose_forward
+from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import get_engine
 from pyRadPlan.machines import create_bld, load_from_name
 from pyRadPlan.visualization._plot_slice import plot_slice
@@ -272,3 +272,15 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     stf = generate_stf(ct, cst, pln)
     dose = calc_dose_forward(ct, cst, stf, pln)["physical_dose"]
     assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
+
+
+def test_dij_sampling_keeps_total_dose(test_data_photons):
+    """Sampling drops tail voxels, but is unbiased: every tail voxel can be kept."""
+    pln, ct, cst, stf, _, _ = test_data_photons
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    full = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+    pln.prop_dose_calc["enable_dij_sampling"] = True
+    sampled = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+
+    assert sampled.nnz < full.nnz
+    assert sampled.sum() == pytest.approx(full.sum(), rel=1.5e-3)
