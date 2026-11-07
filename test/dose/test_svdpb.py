@@ -9,8 +9,9 @@ from pyRadPlan.machines import create_bld
 from pyRadPlan.visualization._plot_slice import plot_slice
 
 
-# TODO: PhotonEngine does not yet have sub-sampling.
-# this here only tests if it runs without error.
+# test/data/photons_testData.mat is byte-identical to matRad's test/testData/photons_testData.mat;
+# its reference dose is computed without dij sampling, which matRad's random numbers would
+# make irreproducible here
 def test_photons(test_data_photons):
     pln, ct, cst, stf, dij, result = test_data_photons
     pln.prop_dose_calc["enable_dij_sampling"] = False
