@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+
 ## [0.8.0] - 2026-11-05
 
 ### Added
