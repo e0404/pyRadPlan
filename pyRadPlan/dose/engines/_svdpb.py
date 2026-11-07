@@ -190,7 +190,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             )
 
         field_grid = xp.asarray(field_grid)
-        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="xy")
+        # The kernel interpolators take (lat_x, lat_z) along the fluence axes 0 and 1, which is
+        # why the field shapes are rotated above; f_x and f_z follow the same axes
+        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="ij")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -562,9 +564,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             f_z = to_namespace(xp, beam_info["f_z"], device=self.device)
 
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
+            # f_x and f_z are lateral offsets from the ray in the beam's eye view
             r = xp.sqrt(
-                (f_x - float(ray["ray_pos_bev"][0])) ** 2
-                + (f_z - float(ray["ray_pos_bev"][2])) ** 2
+                (f_x + float(ray["ray_pos_bev"][0])) ** 2
+                + (f_z + float(ray["ray_pos_bev"][2])) ** 2
             )
 
             if not (f.shape == f_x.shape == f_z.shape == r.shape):

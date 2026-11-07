@@ -3,9 +3,11 @@ import SimpleITK as sitk
 import numpy as np
 
 from pyRadPlan import PhotonPlan, generate_stf, load_tg119
+from pyRadPlan.ct import create_ct
+from pyRadPlan.cst import create_cst
 from pyRadPlan.dose import calc_dose_forward
 from pyRadPlan.dose.engines import get_engine
-from pyRadPlan.machines import create_bld
+from pyRadPlan.machines import create_bld, load_from_name
 from pyRadPlan.visualization._plot_slice import plot_slice
 
 
@@ -118,3 +120,86 @@ def test_bixel_based_custom_primary_fluence(test_data_photons):
     custom = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
     assert np.all(np.isfinite(custom))
     assert not np.allclose(custom, default)
+
+
+@pytest.fixture(scope="module")
+def water_sphere():
+    """Water cube of 51^3 voxels at 2 mm with a centered spherical target of radius 34 mm."""
+    n = 51
+    img = sitk.Image(n, n, n, sitk.sitkInt16)
+    img.SetSpacing((2.0, 2.0, 2.0))
+    ct = create_ct(cube_hu=img)
+
+    g = np.arange(1, n + 1)
+    yy, xx, zz = np.meshgrid(g, g, g, indexing="ij")
+    target = (xx - 26) ** 2 + (yy - 26) ** 2 + (zz - 26) ** 2 <= 17**2
+    cst = create_cst(
+        [
+            [0, "Body", "OAR", np.arange(1, n**3 + 1, dtype=float), 2, []],
+            [1, "Target", "TARGET", np.flatnonzero(target.ravel(order="F")) + 1.0, 1, []],
+        ],
+        ct=ct,
+    )
+    return ct, cst
+
+
+@pytest.fixture(scope="module")
+def ramp_fluence_machine():
+    """Load the Generic photon machine with a primary fluence rising linearly off axis."""
+    machine = load_from_name("photons", "Generic")
+    r = np.arange(401.0)
+    for kernel in machine.pb_kernels.values():
+        kernel.primary_fluence = np.column_stack([r, r])
+    return machine
+
+
+def _single_bixel_dose(water_sphere, machine, gantry_angle, ray_pos_bev, custom_fluence):
+    """Dose of the single 5 mm bixel at ray_pos_bev [mm] and the voxel centroid in world x, y, z."""
+    ct, cst = water_sphere
+    pln = PhotonPlan(machine=machine)
+    pln.prop_stf = {
+        "gantry_angles": [float(gantry_angle)],
+        "couch_angles": [0.0],
+        "bixel_width": 5.0,
+    }
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    pln.prop_dose_calc["use_custom_primary_photon_fluence"] = custom_fluence
+    pln.prop_dose_calc["dose_grid"] = {"resolution": {"x": 2.0, "y": 2.0, "z": 2.0}}
+
+    stf = generate_stf(ct, cst, pln)
+    beam = stf.beams[0]
+    beam.rays = [r for r in beam.rays if np.allclose(r.ray_pos_bev, ray_pos_bev, atol=1e-6)]
+    assert len(beam.rays) == 1
+
+    image = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"]
+    dose = sitk.GetArrayFromImage(image)
+    zyx = (np.indices(dose.shape).reshape(3, -1) @ dose.ravel()) / dose.sum()
+    centroid = np.array(image.TransformContinuousIndexToPhysicalPoint(zyx[::-1].tolist()))
+    return dose, centroid
+
+
+@pytest.mark.parametrize(
+    "ray_pos_bev", [[-30.0, 0.0, 0.0], [30.0, 0.0, 0.0], [0.0, 0.0, -30.0], [0.0, 0.0, 30.0]]
+)
+def test_custom_primary_fluence_tilt_direction(water_sphere, ramp_fluence_machine, ray_pos_bev):
+    """A fluence rising off axis pulls an off-axis bixel's dose outward, along its own offset.
+
+    At gantry 0 the beam's eye view x and z are the world x and z.
+    """
+    _, uniform = _single_bixel_dose(water_sphere, ramp_fluence_machine, 0, ray_pos_bev, False)
+    _, custom = _single_bixel_dose(water_sphere, ramp_fluence_machine, 0, ray_pos_bev, True)
+    shift = custom - uniform
+
+    axis = 0 if ray_pos_bev[0] != 0.0 else 2
+    other = 2 - axis
+    assert np.sign(shift[axis]) == np.sign(ray_pos_bev[axis])
+    assert abs(shift[other]) < 1e-3 * abs(shift[axis])
+
+
+def test_custom_primary_fluence_gantry_invariance(water_sphere, ramp_fluence_machine):
+    """In a phantom symmetric under gantry rotation, an off-axis bixel's fluence is the same."""
+    integral = [
+        _single_bixel_dose(water_sphere, ramp_fluence_machine, g, [30.0, 0.0, 0.0], True)[0].sum()
+        for g in (0, 90, 180, 270)
+    ]
+    assert np.allclose(integral, integral[0], rtol=1e-3)
