@@ -4,6 +4,7 @@ import array_api_compat
 
 from ._base import RobustnessOperator
 from ._smooth_max import smooth_max
+from ._utils import scenario_value, stack_like
 
 
 class CompositeWorstCase(RobustnessOperator):
@@ -17,19 +18,24 @@ class CompositeWorstCase(RobustnessOperator):
     """
 
     name = "composite_worst_case"
+    label = "Composite worst case"
     aliases = ("COWC",)
     matrad_name = "COWC"
     scope = "composite"
+    phase_contours = True
 
     def _composite(self, entries, values):
-        xp = array_api_compat.array_namespace(*values)
+        xp = array_api_compat.array_namespace(scenario_value(values[0], 0))
         total = None
         for entry, value in zip(entries, values):
             objective = entry.objective
             per_scenario = xp.stack(
-                [objective.compute_objective(value[s, ...]) for s in range(self.num_scenarios)]
+                [
+                    objective.compute_objective(scenario_value(value, s))
+                    for s in range(self.num_scenarios)
+                ]
             )
-            term = objective.priority * xp.astype(per_scenario, value.dtype)
+            term = objective.priority * xp.astype(per_scenario, scenario_value(value, 0).dtype)
             total = term if total is None else total + term
         method = self.options.max_approximation
         # matRad applies the approximation only when the composite maximum is positive.
@@ -44,14 +50,18 @@ class CompositeWorstCase(RobustnessOperator):
 
     def gradient(self, entries, values):
         self._check(entries, values)
-        xp = array_api_compat.array_namespace(*values)
+        xp = array_api_compat.array_namespace(scenario_value(values[0], 0))
         _, dmax = self._composite(entries, values)
         cotangents = []
         for entry, value in zip(entries, values):
             objective = entry.objective
-            grads = xp.stack(
-                [objective.compute_gradient(value[s, ...]) for s in range(self.num_scenarios)]
-            )
-            grads = xp.astype(grads, value.dtype)
-            cotangents.append(objective.priority * xp.astype(dmax, value.dtype)[:, None] * grads)
+            dtype = scenario_value(value, 0).dtype
+            scale = xp.astype(dmax, dtype)
+            grads = [
+                objective.priority
+                * scale[s]
+                * xp.astype(objective.compute_gradient(scenario_value(value, s)), dtype)
+                for s in range(self.num_scenarios)
+            ]
+            cotangents.append(stack_like(value, grads))
         return cotangents

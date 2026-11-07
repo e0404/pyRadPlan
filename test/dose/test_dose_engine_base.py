@@ -20,7 +20,7 @@ from pyRadPlan.core import Grid
 from pyRadPlan.dose.engines import (
     DoseEngineBase,
 )
-from pyRadPlan.scenarios import NominalScenario
+from pyRadPlan.scenarios import NominalScenarioModel
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_DoseEngineBase_init(test_data_protons):
     assert dose_engine.is_dose_engine == True
     assert dose_engine.dose_grid["resolution"] == {"x": 10, "y": 10, "z": 10}
     assert dose_engine._ct_grid == None
-    assert isinstance(dose_engine.mult_scen, NominalScenario)
+    assert isinstance(dose_engine.mult_scen, NominalScenarioModel)
 
 
 def test_assign_properties_from_pln(test_data_protons):

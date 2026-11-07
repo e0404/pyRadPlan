@@ -287,3 +287,41 @@ def test_validate_scenario_model_keeps_the_instance():
     spec = {"model": "nomScen", "ctScenProb": [(1, 1.0)]}
     assert validate_scenario_model(spec).ct_phase.phases == [0]
     assert spec["ctScenProb"] == [(1, 1.0)]
+
+
+def test_explicit_model_refuses_the_matrad_export():
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.scenarios import ExplicitScenarioModel, NominalScenarioModel
+
+    model = ExplicitScenarioModel.from_set(NominalScenarioModel().scenarios())
+    with pytest.raises(ValueError, match="cannot be exported to matRad"):
+        model.to_matrad()
+    with pytest.raises(ValueError, match="cannot be exported to matRad"):
+        PhotonPlan(scenarios=model).to_matrad()
+
+
+def test_nominal_scenario_alias_takes_a_ct_and_warns():
+    import pyRadPlan.scenarios as scenarios
+    from pyRadPlan.scenarios import NominalScenarioModel
+
+    with pytest.warns(DeprecationWarning, match="NominalScenarioModel"):
+        alias = scenarios.NominalScenario
+    assert alias is NominalScenarioModel
+    with pytest.warns(DeprecationWarning, match="CT"):
+        model = alias(object())
+    assert isinstance(model, NominalScenarioModel)
+    assert len(model.scenarios()) == 1
+
+
+def test_flat_accessors_and_plan_alias_warn():
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.scenarios import NominalScenarioModel
+
+    model = NominalScenarioModel()
+    with pytest.warns(DeprecationWarning, match="shift_sd"):
+        assert model.shift_sd == tuple(model.setup.sd)
+    with pytest.warns(DeprecationWarning, match="scen_mask"):
+        assert model.scen_mask.shape == (1, 1, 1)
+    plan = PhotonPlan()
+    with pytest.warns(DeprecationWarning, match="mult_scen"):
+        assert plan.mult_scen is plan.scenarios

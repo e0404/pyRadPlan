@@ -451,3 +451,16 @@ def test_least_squares_gradient_uses_the_nominal_slot(proton_case):
         step[k] = eps
         fd = (prob._objective_function(w + step) - prob._objective_function(w - step)) / (2 * eps)
         np.testing.assert_allclose(grad[k], fd, rtol=1e-4, atol=1e-8)
+
+
+def test_reinitializing_a_problem_with_other_scenarios_resets_the_gradient_caches(proton_case):
+    pln, ct, cst, stf, dij = proton_case
+    _set_robustness(cst, "none")
+    prob = _problem(proton_case, _dij_with(dij, SCALES, _scenario_set()))
+    x = _fluence(prob)
+    prob._objective_gradient(x)
+
+    _set_robustness(cst, "expected_value")
+    prob._initialize()
+    gradient = prob._objective_gradient(x)
+    assert gradient.shape == (prob._dij.total_num_of_bixels,)

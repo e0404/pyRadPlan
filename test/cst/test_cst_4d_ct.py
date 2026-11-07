@@ -74,3 +74,13 @@ def test_structure_set_rejects_a_ct_on_another_grid(generic_input_3d):
     shrunk = CT(cube_hu=sitk.Shrink(cst.ct_image.cube_hu, [2, 2, 1]))
     with pytest.raises(ValueError, match="mismatch"):
         validate_cst(cst, ct=shrunk)
+
+
+@pytest.mark.parametrize("voi_phases,ct_phases", [(2, 3), (3, 2)])
+def test_4d_structures_with_another_phase_count_are_refused(
+    generic_input_3d, voi_phases, ct_phases
+):
+    cst = _cst_3d(generic_input_3d)
+    cst4d = validate_cst(cst, ct=_ct_4d(cst.ct_image, voi_phases))
+    with pytest.raises(ValueError, match="mismatch"):
+        validate_cst(cst4d, ct=_ct_4d(cst.ct_image, ct_phases))

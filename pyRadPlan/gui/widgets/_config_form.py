@@ -103,7 +103,7 @@ def _merged_mapping(base: Any, overrides: Mapping[str, Any]) -> dict:
     """
     mapping = base.model_dump() if isinstance(base, BaseModel) else dataclasses.asdict(base)
     for key, value in overrides.items():
-        if isinstance(value, Mapping) and isinstance(mapping.get(key), dict):
+        if isinstance(value, Mapping) and is_nested_instance(getattr(base, key, None)):
             mapping[key] = _merged_mapping(getattr(base, key), value)
         else:
             mapping[key] = value

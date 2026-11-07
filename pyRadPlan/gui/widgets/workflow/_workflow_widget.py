@@ -40,7 +40,7 @@ from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.quantities import get_available_quantities
 from .._base import WorkspaceWidget, Worker
-from .._display_names import bio_model_display_name, quantity_display_name
+from .._display_names import SCENARIO_LABELS_KEY, bio_model_display_name, quantity_display_name
 from .._tissue_params import (
     load_machine_quietly,
     plan_dose_engine,
@@ -292,7 +292,12 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
-        self._btn_save_result = self._add_button("Save / Keep Result", self._on_save_result)
+        self._btn_save_result = self._add_button(
+            "Snapshot Result",
+            self._on_save_result,
+            tooltip="Keep a copy of the current result in the workspace. "
+            "Use File > Save Result… to write it to disk.",
+        )
 
         # Each column is a workflow stage, progressing left to right (as in
         # matRad): loading -> dose influence -> result computation -> export.
@@ -1283,6 +1288,8 @@ class WorkflowWidget(WorkspaceWidget):
             result = dij.compute_result_ct_grid(
                 weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
             )
+            if scenarios:
+                result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
             return weights, result
 
         def _on_success(data: tuple) -> None:
@@ -1370,7 +1377,10 @@ class WorkflowWidget(WorkspaceWidget):
                     beam.iso_center = iso_center
 
             # Already returns the weight-applied result quantities on the CT grid.
-            return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            if any(key.endswith(_SCENARIO_SUFFIX) for key in new_result):
+                new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
+            return recalc_stf, new_result
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
@@ -1379,7 +1389,8 @@ class WorkflowWidget(WorkspaceWidget):
             result = {
                 key: val
                 for key, val in prev_result.items()
-                if self._is_tagged(key) or not key.endswith(_SCENARIO_SUFFIX)
+                if self._is_tagged(key)
+                or not (key.endswith(_SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
             }
             result.update(new_result)
             if recalc_stf is stf:
@@ -1404,7 +1415,7 @@ class WorkflowWidget(WorkspaceWidget):
                 pass
 
         tag, ok = QInputDialog.getText(
-            self, "Save Result", "Name for this result snapshot:", text=default
+            self, "Snapshot Result", "Name for this result snapshot:", text=default
         )
         if not ok or not tag.strip():
             return
@@ -1413,7 +1424,7 @@ class WorkflowWidget(WorkspaceWidget):
         if tag in _RESERVED_TAGS:
             QMessageBox.warning(
                 self,
-                "Save Result",
+                "Snapshot Result",
                 f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
             )
             return

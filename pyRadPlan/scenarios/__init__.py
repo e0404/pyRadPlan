@@ -16,6 +16,7 @@ The module separates three concerns:
 from __future__ import annotations
 
 import logging
+import warnings
 from copy import deepcopy
 from typing import Any, Optional, Type, Union
 
@@ -60,13 +61,22 @@ from ._worst_case import WorstCaseScenarioModel
 
 logger = logging.getLogger(__name__)
 
-#: Deprecated alias of :class:`NominalScenarioModel` (removed after one release).
-NominalScenario = NominalScenarioModel
-
 _MODEL_REGISTRY: dict[str, Type[ScenarioModel]] = {}
 
 #: matRad model names known but not (yet) available; reported as not implemented.
 _KNOWN_MATRAD_MODELS: dict[str, str] = {}
+
+
+def __getattr__(name: str) -> Any:
+    if name == "NominalScenario":
+        warnings.warn(
+            "NominalScenario is deprecated and will be removed after one release; use "
+            "NominalScenarioModel.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return NominalScenarioModel
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def register_scenario_model(cls: Type[ScenarioModel]) -> Type[ScenarioModel]:

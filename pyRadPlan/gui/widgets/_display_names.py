@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
 )
 
+from pyRadPlan.optimization.robustness import get_robustness_operator_class
 from pyRadPlan.quantities import get_available_quantities
 
 #: Item data role holding the identifier shown next to an item in an open popup.
@@ -34,6 +35,8 @@ FULL_COMPONENT = "full"
 _INDEXED_KEY = re.compile(r"^(?P<stem>.+) (?P<index>\d+)$")
 _BEAM_SUFFIX = "_beam"
 _SCENARIO_SUFFIX = "_scenario"
+#: Result entry naming the scenarios of the result's ``"<key>_scenario"`` lists.
+SCENARIO_LABELS_KEY = "scenario_labels"
 
 #: Component kinds of a :class:`ResultGroup` besides :data:`FULL_COMPONENT`.
 BEAM_COMPONENT = "beam"
@@ -72,6 +75,15 @@ def quantity_display_name(key: str) -> str:
 def bio_model_display_name(model_cls: Any) -> str:
     """Return the display name of a biological model class (or instance)."""
     return getattr(model_cls, "name", None) or model_cls.model
+
+
+def robustness_display_name(name: str) -> str:
+    """Return the label of a robustness operator name; unknown names are returned unchanged."""
+    try:
+        operator_cls = get_robustness_operator_class(name)
+    except (KeyError, ValueError):
+        return name
+    return operator_cls.label or operator_cls.name
 
 
 # ----------------------------------------------------------------------
@@ -308,3 +320,17 @@ def add_identified_item(combo: QComboBox, text: str, data: Any, identifier: str)
     """Append an item showing *text*, holding *data* and naming *identifier* when open."""
     combo.addItem(text, data)
     combo.setItemData(combo.count() - 1, identifier, IDENTIFIER_ROLE)
+
+
+def current_identifier(combo: QComboBox) -> str:
+    """Return the identifier the selected item holds as data (``""`` for none)."""
+    data = combo.currentData()
+    return data if isinstance(data, str) else ""
+
+
+def select_identifier(combo: QComboBox, identifier: Any) -> bool:
+    """Select the item holding *identifier* as data; return whether there is one."""
+    index = combo.findData(identifier)
+    if index >= 0:
+        combo.setCurrentIndex(index)
+    return index >= 0

@@ -4,6 +4,7 @@ import array_api_compat
 
 from ._base import RobustnessOperator
 from ._smooth_max import smooth_max
+from ._utils import scenario_value, stack_like
 
 
 class ObjectiveWorstCase(RobustnessOperator):
@@ -16,15 +17,21 @@ class ObjectiveWorstCase(RobustnessOperator):
     """
 
     name = "objective_worst_case"
+    label = "Objective-wise worst case"
     aliases = ("OWC",)
     matrad_name = "OWC"
+    phase_contours = True
 
     def _scenario_values(self, objective, values):
-        xp = array_api_compat.array_namespace(values)
+        first = scenario_value(values, 0)
+        xp = array_api_compat.array_namespace(first)
         per_scenario = xp.stack(
-            [objective.compute_objective(values[s, ...]) for s in range(self.num_scenarios)]
+            [
+                objective.compute_objective(scenario_value(values, s))
+                for s in range(self.num_scenarios)
+            ]
         )
-        return objective.priority * xp.astype(per_scenario, values.dtype)
+        return objective.priority * xp.astype(per_scenario, first.dtype)
 
     def _smooth_max(self, values):
         return smooth_max(values, self.options.max_approximation, self.options.p_norm)
@@ -37,10 +44,13 @@ class ObjectiveWorstCase(RobustnessOperator):
     def gradient(self, entries, values):
         self._check(entries, values)
         objective = entries[0].objective
-        xp = array_api_compat.array_namespace(values[0])
+        first = scenario_value(values[0], 0)
+        xp = array_api_compat.array_namespace(first)
         _, dmax = self._smooth_max(self._scenario_values(objective, values[0]))
-        grads = xp.stack(
-            [objective.compute_gradient(values[0][s, ...]) for s in range(self.num_scenarios)]
-        )
-        grads = xp.astype(grads, values[0].dtype)
-        return [objective.priority * dmax[:, None] * grads]
+        grads = [
+            objective.priority
+            * dmax[s]
+            * xp.astype(objective.compute_gradient(scenario_value(values[0], s)), first.dtype)
+            for s in range(self.num_scenarios)
+        ]
+        return [stack_like(values[0], grads)]

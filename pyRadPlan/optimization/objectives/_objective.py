@@ -1,10 +1,19 @@
 """Base Implementation for objective functions."""
 
 from abc import abstractmethod
-from typing import ClassVar, Any, Literal, Union, Optional
+from functools import lru_cache
+from typing import Annotated, ClassVar, Any, Literal, Union, Optional
 import logging
 
-from pydantic import computed_field, Field, field_validator, model_validator, PrivateAttr
+import numpy as np
+from pydantic import (
+    computed_field,
+    Field,
+    field_validator,
+    model_validator,
+    PrivateAttr,
+    TypeAdapter,
+)
 import SimpleITK as sitk
 import array_api_compat
 
@@ -13,7 +22,7 @@ from ...core.xp_utils import to_numpy, from_numpy
 from ...core.datamodel import PyRadPlanBaseModel
 from ...quantities import get_available_quantities, get_quantity
 from ...core import Grid
-from ...core.resample import resample_numpy_array
+from ...core.resample import resample_array
 from ..robustness import available_robustness, resolve_robustness_name
 
 ParameterType = Union[
@@ -21,6 +30,13 @@ ParameterType = Union[
 ]
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _parameter_adapter(cls: type, param: str) -> TypeAdapter:
+    """Build the validator of a single objective parameter field, constraints included."""
+    field = cls.model_fields[param]
+    return TypeAdapter(Annotated[(field.annotation, *field.metadata)])
 
 
 class ParameterMetadata:
@@ -154,7 +170,7 @@ class Objective(PyRadPlanBaseModel):
                 xp = array_api_compat.array_namespace(param_value, index_list)
 
                 # Resample the parameter to target grid
-                resampled_array = resample_numpy_array(
+                resampled_array = resample_array(
                     input_array=to_numpy(param_value),
                     reference_grid=ref_grid,
                     target_grid=target_grid,
@@ -332,9 +348,17 @@ class Objective(PyRadPlanBaseModel):
             )
             matrad_robustness = "none"
 
+        # matRad stores choice parameters as one-based indices into their options.
+        parameters = [
+            options.index(value) + 1
+            if (options := self._parameter_options(name)) is not None and value in options
+            else value
+            for name, value in zip(self.parameter_names, self.parameters)
+        ]
+
         return {
             "className": class_name,
-            "parameters": list(self.parameters),
+            "parameters": parameters,
             "penalty": self.priority,
             "robustness": matrad_robustness,
         }
@@ -410,18 +434,80 @@ class Objective(PyRadPlanBaseModel):
 
             # obtain the parameter names
             param_names = cls._parameter_names()
+            objective_name = cls.model_fields["name"].default
 
             if len(params) != len(param_names):
                 logger.warning(
-                    "Objective '%s' expects %d parameters, but %d were provided.",
-                    cls.model_fields["name"].default,
+                    "Objective '%s' expects %d parameters, but %d were provided; "
+                    "missing parameters keep their defaults, extra ones are ignored.",
+                    objective_name,
                     len(param_names),
                     len(params),
                 )
 
-            for param in param_names:
-                data[param] = params.pop(0)
+            # matRad objectives may carry fewer parameters than their pyRadPlan
+            # counterpart (matRad_EUD has no f_diff), so unmatched names keep defaults.
+            for param, value in zip(param_names, params):
+                try:
+                    data[param] = cls._import_matrad_parameter(param, value)
+                except ValueError as exc:
+                    logger.warning(
+                        "Objective '%s': invalid value %r for parameter '%s' (%s); "
+                        "using the default %r.",
+                        objective_name,
+                        value,
+                        param,
+                        exc,
+                        cls.model_fields[param].get_default(call_default_factory=True),
+                    )
 
             data.pop("parameters", None)
 
         return data
+
+    @classmethod
+    def _parameter_options(cls, param: str) -> Optional[list[str]]:
+        """Return the options of a choice parameter, or ``None`` for other kinds."""
+        kind = cls._parameter_kind(param)
+        return kind if isinstance(kind, list) else None
+
+    @classmethod
+    def _import_matrad_parameter(cls, param: str, value: Any) -> Any:
+        """
+        Convert and validate a single parameter value of a matRad objective struct.
+
+        matRad stores choice parameters (e.g. ``f_diff``) as one-based indices into
+        their option list; these are mapped to the option names, and names are matched
+        case-insensitively.
+
+        Raises
+        ------
+        ValueError
+            If the value is not valid for the parameter.
+        """
+        options = cls._parameter_options(param)
+        if options is not None:
+            if isinstance(value, np.ndarray) and value.size == 1:
+                value = value.item()
+            if isinstance(value, str):
+                matches = [opt for opt in options if opt.lower() == value.strip().lower()]
+                if not matches:
+                    raise ValueError(f"expected one of {options}")
+                value = matches[0]
+            elif isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(
+                value, bool
+            ):
+                if not float(value).is_integer() or not 1 <= int(value) <= len(options):
+                    raise ValueError(f"expected an index from 1 to {len(options)}")
+                value = options[int(value) - 1]
+
+        if cls._parameter_kind(param) == "image_reference":
+            return value
+        return _parameter_adapter(cls, param).validate_python(value)
+
+    @classmethod
+    def _parameter_kind(cls, param: str) -> Optional[ParameterType]:
+        for meta in cls.model_fields[param].metadata:
+            if isinstance(meta, ParameterMetadata):
+                return meta.kind
+        return None

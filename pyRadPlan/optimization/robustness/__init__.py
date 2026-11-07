@@ -21,7 +21,7 @@ from ._factory import (
     register_robustness_operator,
     resolve_robustness_name,
 )
-from ._terms import RobustTerm, TermItem, build_robust_terms, voi_linear_mask
+from ._terms import RobustTerm, TermItem, build_robust_terms, voi_linear_mask, voi_phase_masks
 
 register_robustness_operator(NoRobustness)
 register_robustness_operator(ExpectedValue)
@@ -54,4 +54,5 @@ __all__ = [
     "TermItem",
     "build_robust_terms",
     "voi_linear_mask",
+    "voi_phase_masks",
 ]

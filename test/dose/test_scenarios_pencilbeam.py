@@ -9,6 +9,8 @@ from scipy import sparse
 
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.ct import CT
+from pyRadPlan import settings
+from pyRadPlan.core.xp_utils import cupy_available
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import ParticleFredMCEngine, get_engine
 from pyRadPlan.raytracer import RayTracerSiddon
@@ -136,12 +138,12 @@ def test_setup_and_range_scenarios(case, monkeypatch):
     _assert_differs(slots[1], nominal[0])
     _assert_equal(slots[1], shifted[0])
 
-    original_trace = RayTracerSiddon.trace_cubes
+    original_trace = RayTracerSiddon.trace_cubes_array
 
     def trace_with_offset(self, *args, **kwargs):
         return [cube + RANGE_ABS[0] for cube in original_trace(self, *args, **kwargs)]
 
-    monkeypatch.setattr(RayTracerSiddon, "trace_cubes", trace_with_offset)
+    monkeypatch.setattr(RayTracerSiddon, "trace_cubes_array", trace_with_offset)
     _, _, deeper = _calc(pln, ct, cst, stf)
 
     _assert_differs(slots[2], nominal[0])
@@ -271,8 +273,16 @@ def test_ct_phase_selection(case):
     _assert_equal(slots[1], nominal[0])
 
 
-def test_ct_phase_selection_bio(test_data_protons):
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+@pytest.mark.parametrize("trace_on_dose_grid", [False, True])
+def test_ct_phase_selection_bio(test_data_protons, monkeypatch, backend, trace_on_dose_grid):
     pln, ct, cst, stf, _, _ = test_data_protons
+    if backend == "cupy" and not cupy_available():
+        pytest.skip("CuPy unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    pln.prop_dose_calc["trace_on_dose_grid"] = trace_on_dose_grid
     pln.bio_model = "MCN"
     ct2, ct_phase1 = _two_phase_ct(ct)
 
@@ -599,3 +609,174 @@ def test_optimization_runs_on_a_4d_ct(test_data_photons):
     w, _ = NonLinearFluencePlanningProblem(pln).solve(ct2, cst, stf, dij)
     assert w.shape == (dij.total_num_of_bixels,)
     assert np.all(np.isfinite(w))
+
+
+def _cst_with_moving_structures(cst, ct2):
+    """4D structure set: phase 1 holds a shifted contour with one voxel less, per structure."""
+    from pyRadPlan.cst import validate_cst
+    from pyRadPlan.optimization.objectives import SquaredDeviation
+
+    cst4d = validate_cst(cst, ct=ct2)
+    vois = []
+    for voi in cst4d.vois:
+        masks = sitk.GetArrayFromImage(voi.mask)
+        masks[1] = np.roll(masks[0], 1, axis=2)
+        masks[1].flat[np.flatnonzero(masks[1])[0]] = 0
+        mask = sitk.GetImageFromArray(masks, isVector=False)
+        mask.CopyInformation(voi.mask)
+        vois.append(
+            voi.model_copy(update={"mask": mask, "objectives": [SquaredDeviation(d_ref=1.0)]})
+        )
+    return cst4d.model_copy(update={"vois": vois})
+
+
+def _moving_structure_problem(test_data_photons, robustness):
+    from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
+
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    moved = _cst_with_moving_structures(cst, ct2)
+    for voi in moved.vois:
+        for objective in voi.objectives:
+            objective.robustness = robustness
+    scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
+    dij = calc_dose_influence(ct2, moved, stf, pln, scenarios=scen_set)
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+    problem = NonLinearFluencePlanningProblem(pln)
+    problem.solve(ct2, moved, stf, dij)
+    return problem, dij
+
+
+@pytest.mark.parametrize("robustness", ["none", "STOCH", "OWC", "COWC"])
+def test_scenarios_are_evaluated_on_the_contour_of_their_ct_phase(test_data_photons, robustness):
+    from pyRadPlan.core import xp_utils
+
+    problem, dij = _moving_structure_problem(test_data_photons, robustness)
+
+    term = problem._terms[0]
+    assert term.scenario_indices == [0, 1]
+    first, second = term.scenario_masks[0]
+    assert second.sum() == first.sum() - 1
+
+    x = xp_utils.from_numpy(
+        problem._array_backend,
+        np.random.default_rng(0).uniform(0.2, 1.0, dij.total_num_of_bixels),
+    )
+    gradient = np.asarray(problem._objective_gradient(x), dtype=float)
+    direction = np.random.default_rng(1).normal(size=gradient.shape)
+    step = 1e-3 / np.linalg.norm(direction)
+    delta = xp_utils.from_numpy(problem._array_backend, step * direction)
+    numeric = (
+        float(problem._objective_function(x + delta))
+        - float(problem._objective_function(x - delta))
+    ) / (2 * step)
+    assert numeric == pytest.approx(float(gradient @ direction), rel=0.05, abs=1e-6)
+
+
+def test_none_robustness_sums_each_phase_on_its_own_contour(test_data_photons):
+    from pyRadPlan.core import xp_utils
+
+    problem, dij = _moving_structure_problem(test_data_photons, "none")
+    x = np.random.default_rng(0).uniform(0.2, 1.0, dij.total_num_of_bixels)
+    values = problem._objective_functions(xp_utils.from_numpy(problem._array_backend, x))
+
+    term = problem._terms[0]
+    objective = term.items[0].objective
+    doses = [np.asarray(dij.physical_dose.flat[s] @ x) for s in term.scenario_indices]
+    expected = sum(
+        float(objective.compute_objective(problem._array_backend.asarray(dose[mask])))
+        for dose, mask in zip(doses, term.scenario_masks[0])
+    )
+    assert float(values[0]) == pytest.approx(objective.priority * expected, rel=1e-5)
+
+
+def test_voxel_worst_case_uses_the_contour_of_its_selected_phase(test_data_photons):
+    from pyRadPlan.optimization.robustness import RobustTerm, VoxelWorstCase
+
+    problem, _ = _moving_structure_problem(test_data_photons, "none")
+    item = problem._terms[0].items[0]
+    assert len(item.phase_masks) == 2
+    scen_set = ScenarioSet.from_points(
+        (
+            CTPhaseUncertainty(phases=[1], probabilities=[1.0]),
+            SetupUncertainty(),
+            RangeUncertainty(),
+        ),
+        {"ct_phase": [[1], [1]], "setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]},
+    )
+    term = RobustTerm(operator=VoxelWorstCase(scen_set), items=[item])
+    assert all(mask is item.phase_masks[1] for mask in term.scenario_masks[0])
+
+
+def test_image_reference_refused_on_moving_structures(test_data_photons):
+    from pyRadPlan.optimization.objectives import SquaredMimicking
+    from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
+
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    moved = _cst_with_moving_structures(cst, ct2)
+    reference = sitk.Image(ct.cube_hu.GetSize(), sitk.sitkFloat32)
+    reference.CopyInformation(ct.cube_hu)
+    for voi in moved.vois:
+        voi.objectives = [SquaredMimicking(d_ref=reference)]
+    scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
+    dij = calc_dose_influence(ct2, moved, stf, pln, scenarios=scen_set)
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+    with pytest.raises(NotImplementedError, match="image reference"):
+        NonLinearFluencePlanningProblem(pln).solve(ct2, moved, stf, dij)
+
+
+def test_moving_structures_on_a_coarser_dose_grid(test_data_photons):
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    moved = _cst_with_moving_structures(cst, ct2)
+    # Different voxel counts per phase also on the coarser grid
+    for voi in moved.vois:
+        masks = sitk.GetArrayFromImage(voi.mask)
+        masks[1, : masks.shape[1] // 2] = 0
+        mask = sitk.GetImageFromArray(masks, isVector=False)
+        mask.CopyInformation(voi.mask)
+        voi.mask = mask
+    resolution = ct.grid.resolution
+    pln.prop_dose_calc["dose_grid"] = {
+        "resolution": {axis: 2.0 * resolution[axis] for axis in ("x", "y", "z")}
+    }
+    scen_set = _scenario_set(ct_phase=[0, 1], phases=(0, 1))
+    dij = calc_dose_influence(ct2, moved, stf, pln, scenarios=scen_set)
+    assert dij.physical_dose.size == 2
+    assert dij.dose_grid.num_voxels < ct.grid.num_voxels
+
+
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+@pytest.mark.parametrize("trace_on_dose_grid", [False, True])
+def test_sampling_with_setup_range_and_ct_scenarios(
+    test_data_photons, monkeypatch, backend, trace_on_dose_grid
+):
+    """Sampling over reordered phases and setups is reproducible and shares derived slots."""
+    if backend == "cupy" and not cupy_available():
+        pytest.skip("CuPy unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend == "cupy")
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", "cupy")
+    pln, ct, cst, stf, _, _ = test_data_photons
+    ct2, _ = _two_phase_ct(ct)
+    pln.prop_dose_calc.update(
+        enable_dij_sampling=True, random_seed=57, trace_on_dose_grid=trace_on_dose_grid
+    )
+    scenarios = _scenario_set(
+        ct_phase=[1, 0, 1, 0],
+        phases=(0, 1),
+        range_=[(2.0, 0.035), (0.0, 0.0), (-2.0, -0.03), (0.0, 0.0)],
+        setup=[SHIFT_X, (0, 0, 0), SHIFT_X, (0, 0, 0)],
+        bases=[None, None, None, ScenarioBasis(coefficients={1: 1.0})],
+    )
+    engine, dij, slots = _calc(pln, ct2, cst, stf, scenarios=scenarios)
+    next_random = engine._rng.random()
+    assert slots[3] is slots[1]
+    assert all(slot.indices.dtype == np.int32 for slot in slots)
+    reference, _, expected = _calc(pln, ct2, cst, stf, scenarios=scenarios)
+    for actual, target in zip(slots, expected):
+        _assert_equal(actual, target)
+        np.testing.assert_array_equal(actual.indices, target.indices)
+        np.testing.assert_array_equal(actual.indptr, target.indptr)
+    assert next_random == reference._rng.random()

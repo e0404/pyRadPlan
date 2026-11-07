@@ -1,7 +1,7 @@
 """Importer for matRad-style MATLAB ``.mat`` files."""
 
 import logging
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 import numpy as np
 import SimpleITK as sitk
@@ -16,6 +16,20 @@ from ..base import BaseImporter
 from . import _matfile
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_dij(value: Any, pln: Any) -> Any:
+    """Validate a Dij with the scenario model of the plan in the same file, if it has several."""
+    model = getattr(pln, "scenarios", None)
+    if model is None or len(model.scenarios()) <= 1:
+        return validate_dij(value)
+    try:
+        return validate_dij(value, scenario_model=model)
+    except ValueError as exc:
+        logger.warning(
+            f"dij does not match the scenario model of the plan, imported without: {exc}"
+        )
+        return validate_dij(value)
 
 
 def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = True) -> dict[str]:
@@ -48,11 +62,14 @@ def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = T
     if cst is not None:
         patient_dict["cst"] = validate_cst(cst, patient_dict["ct"])
 
-    for key, validator in [("pln", validate_pln), ("stf", validate_stf), ("dij", validate_dij)]:
+    for key, validator in [("pln", validate_pln), ("stf", validate_stf), ("dij", _validate_dij)]:
         value = mdict.get(key, None)
         if value is not None:
             try:
-                patient_dict[key] = validator(value)
+                if key == "dij":
+                    patient_dict[key] = validator(value, patient_dict.get("pln"))
+                else:
+                    patient_dict[key] = validator(value)
                 if remove_matrad_structures:
                     mdict.pop(key)
             except ValueError:

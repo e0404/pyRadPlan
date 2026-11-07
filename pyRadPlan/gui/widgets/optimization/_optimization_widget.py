@@ -42,8 +42,14 @@ from pyRadPlan.optimization.objectives import (
 )
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
-from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
-from .._display_names import add_identified_item, result_key_labels, show_identifiers_when_open
+from .._base import AdaptiveDoubleSpinBox, CompactComboBox, WorkspaceWidget
+from .._display_names import (
+    add_identified_item,
+    result_key_labels,
+    robustness_display_name,
+    select_identifier,
+    show_identifiers_when_open,
+)
 from ..ai import ai_disabled_reason
 
 
@@ -58,7 +64,7 @@ _FALLBACK_OBJECTIVE = "Squared Overdosing"
 
 _ROBUSTNESS_TOOLTIP = (
     "How the objective is combined over the scenarios of the dose influence data; "
-    "'none' uses the nominal scenario only"
+    "'None' uses the nominal scenario only"
 )
 
 
@@ -92,6 +98,10 @@ class OptimizationWidget(WorkspaceWidget):
     _COL_PARAMS = 5
     _COL_REMOVE = 6
     _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Robustness", "Parameters", "")
+    #: Widths of the closed combo boxes, in characters; longer names are elided.
+    _OBJECTIVE_CHARACTERS = 9
+    _QUANTITY_CHARACTERS = 5
+    _ROBUSTNESS_CHARACTERS = 7
 
     def __init__(
         self,
@@ -271,7 +281,7 @@ class OptimizationWidget(WorkspaceWidget):
             voi_item.setFont(font)
         self._table.setItem(row, self._COL_VOI, voi_item)
 
-        cmb = QComboBox()
+        cmb = CompactComboBox(self._OBJECTIVE_CHARACTERS)
         cmb.addItems(self._available)
         cmb.setCurrentText(obj.name)
         cmb.currentTextChanged.connect(
@@ -287,7 +297,7 @@ class OptimizationWidget(WorkspaceWidget):
         )
         self._table.setCellWidget(row, self._COL_PENALTY, penalty)
 
-        cmb_quantity = QComboBox()
+        cmb_quantity = CompactComboBox(self._QUANTITY_CHARACTERS)
         show_identifiers_when_open(cmb_quantity)
         for identifier, quantity in get_available_quantities().items():
             add_identified_item(cmb_quantity, quantity.name, identifier, identifier)
@@ -301,20 +311,24 @@ class OptimizationWidget(WorkspaceWidget):
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
 
-        cmb_robustness = QComboBox()
+        cmb_robustness = CompactComboBox(self._ROBUSTNESS_CHARACTERS)
         cmb_robustness.setToolTip(_ROBUSTNESS_TOOLTIP)
+        show_identifiers_when_open(cmb_robustness)
         options = type(obj).available_robustness()
-        cmb_robustness.addItems(options)
         # A scenario-aware objective has a single option, which applies regardless of the
         # value stored on it.
+        if len(options) > 1 and obj.robustness not in options:
+            options = [*options, obj.robustness]
+        for option in options:
+            add_identified_item(cmb_robustness, robustness_display_name(option), option, option)
         if len(options) > 1:
-            if obj.robustness not in options:
-                cmb_robustness.addItem(obj.robustness)
-            cmb_robustness.setCurrentText(obj.robustness)
+            select_identifier(cmb_robustness, obj.robustness)
         else:
             cmb_robustness.setEnabled(False)
-        cmb_robustness.currentTextChanged.connect(
-            lambda text, v=voi_idx, o=obj_idx: self._on_robustness_changed(v, o, text)
+        cmb_robustness.currentIndexChanged.connect(
+            lambda idx, c=cmb_robustness, v=voi_idx, o=obj_idx: self._on_robustness_changed(
+                v, o, c.itemData(idx)
+            )
         )
         self._table.setCellWidget(row, self._COL_ROBUSTNESS, cmb_robustness)
 

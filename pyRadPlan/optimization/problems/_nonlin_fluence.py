@@ -12,6 +12,7 @@ from ...plan import Plan
 from ._optiprob import NonLinearPlanningProblem
 from ..solvers import NonLinearOptimizer
 from ..robustness import RobustnessOptions, RobustTerm
+from ..robustness._utils import scenario_value
 from ...core import xp_utils
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         Exponent of the ``"pnorm"`` maximum approximation.
     """
 
-    name = "Non-Linear Fluence Planning Problem"
+    name = "Fluence (nonlinear)"
     short_name = "nonlin_fluence"
     records_obj_history = True
 
@@ -63,6 +64,10 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         """Initialize this problem."""
         super()._initialize()
 
+        # Their shapes follow the terms' scenarios and quantities, which can change between runs
+        self._grad_cache_intermediate = None
+        self._grad_cache = None
+
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
         if not isinstance(self.solver, NonLinearOptimizer):
@@ -71,9 +76,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
             )
 
-        # Propagate device from quantities to solver and problem
         self._device = getattr(self._quantities[0], "device", None)
-        self.solver.device = self._device
 
         # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
         # quantities using them; computing them here would cost an extra matrix product.
@@ -94,12 +97,23 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         return RobustnessOptions(max_approximation=self.max_approximation, p_norm=self.p_norm)
 
     def _term_values(self, xp, q_vectors: dict, term: RobustTerm) -> tuple[list, list]:
-        """Device masks of the term's items and their values stacked over its scenarios."""
-        masks = [xp_utils.from_numpy(xp, item.mask, device=self._device) for item in term.items]
-        values = [
-            xp.stack([q_vectors[item.quantity].flat[s][ix] for s in term.scenario_indices])
-            for item, ix in zip(term.items, masks)
-        ]
+        """
+        Device masks of the term's items per scenario and the items' values.
+
+        The values are stacked over the term's scenarios, or a list per scenario if the
+        contours differ between them.
+        """
+        masks = []
+        values = []
+        for item, item_masks in zip(term.items, term.scenario_masks):
+            device = {id(m): xp_utils.from_numpy(xp, m, device=self._device) for m in item_masks}
+            item_ix = [device[id(m)] for m in item_masks]
+            scenario_values = [
+                q_vectors[item.quantity].flat[s][ix]
+                for s, ix in zip(term.scenario_indices, item_ix)
+            ]
+            masks.append(item_ix)
+            values.append(xp.stack(scenario_values) if len(device) == 1 else scenario_values)
         return masks, values
 
     def _objective_functions(self, x: Array) -> Array:
@@ -221,7 +235,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         for term_ix, term in enumerate(self._terms):
             masks, values = self._term_values(xp, q_vectors, term)
             grads = term.operator.gradient(term.entries, values)
-            for item, ix, item_grad in zip(term.items, masks, grads):
+            for item, item_ix, item_grad in zip(term.items, masks, grads):
                 row = (
                     0
                     if self.bypass_objective_jacobian
@@ -229,13 +243,14 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 )
                 positions = self._scenario_positions[item.quantity]
                 cache = self._grad_cache_intermediate[item.quantity]
-                grad = xp.astype(item_grad, cache.dtype, copy=False)
                 for k, scen_ix in enumerate(term.scenario_indices):
                     pos = positions[scen_ix]
+                    ix = item_ix[k]
+                    grad = xp.astype(scenario_value(item_grad, k), cache.dtype, copy=False)
                     # A view on mutable backends, so the scatter below writes through to cache;
                     # where it cannot (JAX, out-of-place fallback) the block is written back.
                     block = cache[pos, row, ...]
-                    updated = xp_utils.scatter(block, ix, block[ix] + grad[k, ...])
+                    updated = xp_utils.scatter(block, ix, block[ix] + grad)
                     if updated is not block:
                         cache = xp_utils.scatter(cache, (pos, row, ...), updated)
                 self._grad_cache_intermediate[item.quantity] = cache

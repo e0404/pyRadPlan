@@ -180,6 +180,10 @@ def models2recarray(
                 )
                 model_field_types[field] = object
 
+        # numpydantic>=2 NDArray[...] annotations are typing aliases, not classes
+        if not isinstance(model_field_types[field], (type, np.dtype)):
+            model_field_types[field] = object
+
     aliases = {}
     for field in model_fields:
         if by_alias:

@@ -5,6 +5,7 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
+import warnings
 from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
@@ -18,7 +19,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     model_validator,
 )
-from pydantic.alias_generators import to_snake
+from pydantic.alias_generators import to_camel, to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
 from pyRadPlan.biology.models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
@@ -199,10 +200,16 @@ class Plan(PyRadPlanBaseModel, ABC):
     @property
     def mult_scen(self) -> ScenarioModel:
         """Deprecated alias of :attr:`scenarios` (matRad name), kept for one release."""
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
         return self.scenarios
 
     @mult_scen.setter
     def mult_scen(self, value: Any) -> None:
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
         self.scenarios = value
 
     @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="before")
@@ -259,6 +266,8 @@ class Plan(PyRadPlanBaseModel, ABC):
 
         pln_dict = super().to_matrad(context=context)
         pln_dict["numOfFractions"] = float(pln_dict["numOfFractions"])
+        for key in ("propStf", "propOpt", "propDoseCalc", "propSeq"):
+            pln_dict[key] = {to_camel(k): v for k, v in pln_dict[key].items()}
         if isinstance(self.bio_model, BiologicalModel) and self.bio_model.parameters:
             # Keep matRad's established string-valued bioModel field while retaining
             # pyRadPlan's model configuration for a lossless .mat round trip.
@@ -408,7 +417,8 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
                 data["bio_model"] = {"model": bio_model, **bio_model_parameters}
             elif isinstance(bio_model, dict):
                 data["bio_model"] = {**bio_model, **bio_model_parameters}
-        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
+        # None lets the plan pick the default of its (possibly defaulted) radiation mode
+        data["bio_model"] = data.get("bio_model") or None
 
         if radiation_mode == "photons":
             return PhotonPlan.model_validate(data)
@@ -418,7 +428,7 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
     radiation_mode = kwargs.get("radiation_mode", "")
     if radiation_mode == "photons":
         return PhotonPlan(**kwargs)
-    if radiation_mode in ["protons", "helium", "carbon", "oxygen"]:
+    if radiation_mode in IonPlan.available_radiation_modes:
         return IonPlan(**kwargs)
     raise ValueError(f"Unknown radiation mode: {radiation_mode}")
 

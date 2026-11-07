@@ -26,6 +26,16 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends xpra xpra-x11 xpra-html5 xpra-codecs \
  && rm -rf /var/lib/apt/lists/*
 
+# The phantoms of matRad (the patient cases of the CORT dataset and a box phantom), downloaded
+# from its release and listed under File → Open Example Phantom. Before the installation of
+# pyRadPlan, so that a change of the code does not download them again.
+COPY packaging/briefcase/scripts/fetch_matrad_phantoms.py /tmp/fetch_matrad_phantoms.py
+RUN python3 /tmp/fetch_matrad_phantoms.py /opt/pyradplan/data \
+ && mkdir -p /usr/share/doc/pyradplan-web/matRad-phantoms \
+ && cp /opt/pyradplan/data/README.md /opt/pyradplan/data/matRad-LICENSE.md \
+        /usr/share/doc/pyradplan-web/matRad-phantoms/ \
+ && rm /tmp/fetch_matrad_phantoms.py
+
 COPY pyproject.toml README.md LICENSE /src/
 COPY pyRadPlan /src/pyRadPlan
 RUN python3 -m venv /opt/venv \
@@ -49,8 +59,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && mkdir -m 1777 /tmp/.X11-unix
 
 # Qt draws with software OpenGL and without shared memory (there is no GPU, and the X server
-# runs in the same container namespace but not necessarily with a large /dev/shm).
+# runs in the same container namespace but not necessarily with a large /dev/shm). The base
+# data of a course mounted at /shared comes before the phantoms of matRad.
 ENV PATH=/opt/venv/bin:$PATH \
+    PYRADPLAN_BASE_DATA_PATH=/shared:/opt/pyradplan/data \
     QT_QPA_PLATFORM=xcb \
     QT_X11_NO_MITSHM=1 \
     LIBGL_ALWAYS_SOFTWARE=1 \
