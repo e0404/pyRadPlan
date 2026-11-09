@@ -183,15 +183,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             field_shape = stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
             beam_info["beam"]["rays"][j]["beamlets"][k] = field_shape.model_dump()
             # TODO: add mask as computed field?
-            # Materialized: np.rot90 returns a negatively strided view, which the torch
-            # backend cannot take, and the mask is converted once per ray below.
+            # Field shape masks are indexed (z, x), like the BLD transmission masks with IEC Y
+            # along the rows. Materialized because the mask is converted once per ray below.
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
-                np.rot90(field_shape.mask, k=-1)
+                field_shape.mask.T
             )
 
         field_grid = xp.asarray(field_grid)
         # The kernel interpolators take (lat_x, lat_z) along the fluence axes 0 and 1, which is
-        # why the field shapes are rotated above; f_x and f_z follow the same axes
+        # why the field shapes are transposed above; f_x and f_z follow the same axes
         beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="ij")
 
         # Get the kernel

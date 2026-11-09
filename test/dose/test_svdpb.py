@@ -274,6 +274,64 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
 
 
+@pytest.mark.parametrize(
+    ("open_half", "expected_shift"),
+    [
+        # IEC Y points toward the gantry, i.e. superior (LPS +z) for a head-first supine patient
+        ("+Y", (0.0, 0.0, 1.0)),
+        # IEC X points to the patient's right (LPS -x) at gantry and couch angle 0
+        ("+X", (-1.0, 0.0, 0.0)),
+    ],
+)
+def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift):
+    """The dose of a half-open MLC field lies on the side of the opening."""
+    ct, cst = water_sphere
+    leaf_width = 5.0
+    boundaries = np.arange(-20.0, 20.0, leaf_width)
+    if open_half == "+Y":
+        positions = [[-20.0, 20.0] if b >= 0 else [0.0, 0.0] for b in boundaries]
+    else:
+        positions = [[0.0, 20.0]] * len(boundaries)
+    mlc = create_bld(
+        {
+            "device_type": "MLC",
+            "device_orientation": "X",
+            "leaf_position_boundaries": boundaries,
+            "leaf_positions": positions,
+            "leaf_width": leaf_width,
+            "leaf_leakage": 0.0,
+        }
+    )
+    pln = PhotonPlan(machine="Generic")
+    pln.prop_stf = {
+        "gantry_angles": [0.0],
+        "couch_angles": [0.0],
+        "generator": "photonSingleBixel",
+        "field_based": True,
+        "blds": [mlc],
+        "resolution": 1.0,
+        "energy": 6.0,
+    }
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    pln.prop_dose_calc["dose_grid"] = {"resolution": {"x": 2.0, "y": 2.0, "z": 2.0}}
+
+    stf = generate_stf(ct, cst, pln)
+    image = calc_dose_forward(ct, cst, stf, pln)["physical_dose"]
+    dose = sitk.GetArrayFromImage(image)
+    zyx = (np.indices(dose.shape).reshape(3, -1) @ dose.ravel()) / dose.sum()
+    centroid = np.array(image.TransformContinuousIndexToPhysicalPoint(zyx[::-1].tolist()))
+    center = np.array(
+        image.TransformContinuousIndexToPhysicalPoint([(s - 1) / 2 for s in image.GetSize()])
+    )
+    shift = centroid - center
+
+    lateral = [0, 2]
+    expected = np.asarray(expected_shift)[lateral]
+    # The centroid of the 20 mm wide half field lies about 10 mm off the central axis
+    assert shift[lateral] @ expected > 5.0
+    assert np.abs(shift[lateral] - (shift[lateral] @ expected) * expected).max() < 1.0
+
+
 def test_dij_sampling_keeps_total_dose(test_data_photons):
     """Sampling drops tail voxels, but is unbiased: every tail voxel can be kept."""
     pln, ct, cst, stf, _, _ = test_data_photons
