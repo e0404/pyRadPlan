@@ -220,6 +220,12 @@ pln.prop_stf = {
     "energy": 6,
 }
 
+pln.prop_dose_calc = {
+    "dose_grid": {"resolution": [5.0, 5.0, 5.0]},
+    "enable_dij_sampling": False,
+    "force_uniform_fluence": True,
+}
+
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
 

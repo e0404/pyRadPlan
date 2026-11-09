@@ -53,7 +53,11 @@ pln.prop_stf = {
 }
 
 # 3) Specify the settings for dose calculation
-pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+pln.prop_dose_calc = {
+    "dose_grid": {"resolution": [5.0, 5.0, 5.0]},
+    "enable_dij_sampling": False,
+    "force_uniform_fluence": True,
+}
 
 # 4) Configure optimization parameters
 pln.prop_opt = {"solver": "scipy"}

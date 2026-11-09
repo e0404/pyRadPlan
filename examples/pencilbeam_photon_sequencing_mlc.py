@@ -54,7 +54,7 @@ machine.mlc = MLC(device_type="MLCX", leaf_width=10.0, number_of_elements=40)
 # %%
 # 1) Create a plan object, using the MLC-equipped machine
 pln = PhotonPlan()
-pln.machine = machine.model_dump(by_alias=True)
+pln.machine = machine
 
 # 2) Define the parameters for the steering information
 num_of_beams = 5
@@ -64,7 +64,11 @@ pln.prop_stf = {
 }
 
 # 3) Specify the settings for dose calculation
-pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
+pln.prop_dose_calc = {
+    "dose_grid": {"resolution": [5.0, 5.0, 5.0]},
+    "enable_dij_sampling": False,
+    "force_uniform_fluence": True,
+}
 
 # 4) Configure optimization parameters
 pln.prop_opt = {"solver": "scipy"}
@@ -168,7 +172,7 @@ plot_dose_comparison(
 # re-deliver it through forward, field-based dose calculation.
 # %%
 pln_forward = PhotonPlan()
-pln_forward.machine = machine.model_dump(by_alias=True)
+pln_forward.machine = machine
 pln_forward.prop_stf = {
     "gantry_angles": pln.prop_stf["gantry_angles"],
     "couch_angles": pln.prop_stf["couch_angles"],
@@ -180,6 +184,7 @@ pln_forward.prop_stf = {
 }
 pln_forward.prop_dose_calc = {
     "dose_grid": {"resolution": [5.0, 5.0, 5.0]},
+    "enable_dij_sampling": False,
     "force_uniform_fluence": True,
 }
 
