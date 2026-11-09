@@ -48,15 +48,24 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     Attributes
     ----------
     use_custom_primary_photon_fluence : bool
-        Use custom primary photon fluence.
+        Apply the machine's primary fluence profile to each bixel.
+        The kernel interpolators are then recomputed for each ray (slower).
     kernel_cutoff : float
-        Kernel cutoff.
+        Lateral cutoff of the kernel [mm]. Limited to the tabulated kernel range.
+        The default (``inf``) uses the full range.
     random_seed : int
-        Random seed.
+        Random seed used for dij sampling.
     int_conv_resolution : float
-        Intensity convolution resolution.
+        Intensity convolution resolution [mm]. Grid spacing for the fluence,
+        penumbra and kernel convolution (default: 0.5 mm).
+    force_penumbra : float, optional
+        Forced penumbra used instead of kernel's penumbra [mm].
+    force_uniform_fluence : bool
+        Uniform fluence used instead of the primary fluence. Fluence is only
+        given by the field shape or the bixel mask.
     enable_dij_sampling : bool
-        Enable Dij sampling.
+        Enable Dij sampling. Resamples the low-dose tail of the bixel dose to
+        sparsify the dose influence matrix.
     dij_sampling : DijSamplingConfig
         Dij sampling configuration.
     """
@@ -238,7 +247,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit)
 
         gauss_filter_x, gauss_filter_z = array_meshgrid(gauss_grid, gauss_grid, indexing="xy")
-        # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
+        # The Gaussian density [1/mm^2] is scaled with int_conv_resolution^2 [mm^2] for correct
+        # normalization of the convolution (dx and dz in convolution integral), so the gauss
+        # filter is dimensionless.
         gauss_filter = (
             self.int_conv_resolution**2
             / (2 * np.pi * sigma_gauss**2)
@@ -268,7 +279,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:
             n = np.floor(field_width / self.int_conv_resolution).astype(int)
-            f_pre = xp.ones((n, n), dtype=xp.float32)
+            f_pre = xp.ones((n, n), dtype=xp.float32)  # relative fluence
 
             if not self.use_custom_primary_photon_fluence:
                 f_pre = _ifft2(
@@ -277,15 +288,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 )
                 f_pre = xp.real(f_pre)
 
-        # get index of central ray or closest to the central ray
+        # Ray positions in BEV [mm] to find the ray closest to the central axis (center)
+        # whose SSD (center_ssd) selects the kernel
         ray_pos_bev = xp.stack(
             [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
         center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
-
         center_ssd = beam_info["beam"]["rays"][center]["SSD"][self._reference_ct_phase]
 
-        # get correct kernel for given SSD at central ray
+        # Get correct kernel for given SSD at central ray [1/mm^2]
         kernels_at_ssd = xp.asarray(kernel.get_kernels_at_ssd(center_ssd))
 
         # Display console message
@@ -294,7 +305,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
 
         # Get Interpolators
-        # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
+        # The kernel [1/mm^2] is scaled with int_conv_resolution^2 [mm^2] for correct normalization
+        # of the convolution (dx and dz in convolution integral), so the kernel_mxs is dimensionless.
         kernel_pos = xp.asarray(kernel.kernel_pos, dtype=kernels_at_ssd.dtype)
         kernel_mxs = self.int_conv_resolution**2 * interp1d(
             xp.sqrt(kernel_x**2 + kernel_z**2),
@@ -343,8 +355,41 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         """
         PyRadPlan photon dose calculation for a single bixel.
 
-        call
-            bixel = self.computeBixel(currRay,k)
+        The dose of a bixel is computed by summing the contributions of all kernel components
+        (see ``PhotonSVDKernel``), which are the product of an analytical depth dose term and a
+        lateral profile. The lateral profiles are the beamlet fluence convolved with a Gaussian
+        penumbra and the kernel lateral profile (see ``_get_kernel_interpolators``), interpolated
+        based on the voxel's position relative to the ray. The dose is scaled by the inverse
+        square law to account for the distance from the source to the voxel. When
+        ``enable_dij_sampling`` is True, the low-dose tail is resampled (see ``_sample_dij``)
+        to sparsify the dose influence matrix.
+
+        Parameters
+        ----------
+        curr_ray : dict
+            Current ray information struct as prepared by ``_init_ray``. Keys used here:
+            - ``rad_depths``: radiological depths (source to voxel) [mm].
+            - ``kernel_interpolators``: the kernel lateral profiles in the isocenter
+              plane (see ``_get_kernel_interpolators``)
+            - ``iso_lat_dists``: (x,z) offsets from the ray to each voxel in the
+              isocenter plane [mm]
+            - ``geo_depths``: euclidean distances from source to voxel [mm]
+            - ``sad``: source-axis distance [mm]
+            - ``ix``: dose grid indices of the voxels
+            - ``beamlets``: list of beamlet dicts, of which ``weight`` is used here
+            - ``radial_dist_sq``: squared radial distances of the voxels to the current ray [mm^2]
+            - ``bixel_width``: the width of the bixel [mm]
+        k : int
+            Index of the beamlet on the ray.
+
+        Returns
+        -------
+        dict
+            The computed bixel dose. Keys:
+            - ``physical_dose``: the physical dose values at voxels with indices ``ix``
+            - ``weight``: the weight of the beamlet corresponding to the bixel
+            - ``ix``: the dose grid indices of the voxels (with ``enable_dij_sampling``,
+              only the kept voxels)
         """
 
         xp = self.xp
@@ -359,24 +404,33 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
         rd = xp.reshape(rd, (1, -1))
+
+        # Depth dose component at radiological depths rd for each kernel component
         dose_component = coefficient * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
-        # Geometry already supplies queries on the interpolator's namespace/device.
+        # Lateral profiles of each kernel component at the lateral distances of each
+        # voxel in the isocenter plane. Geometry already supplies queries on the
+        # interpolator's namespace/device.
         interpolated_kernels = interpolators(iso_lat_dists)
-        # The former indexed assignments cast each product to the depth dtype
-        # before summation, even when interpolation returns higher precision.
+
+        # Compute dose per kernel component from depth dose and lateral profile.
+        # (Keep the depth dtype (e.g. float32) even if the interpolation returns higher
+        # precision, so the dose and dij do not get promoted to float64)
         dose_component = xp.astype(
             dose_component * xp.permute_dims(interpolated_kernels, (1, 0)),
             dose_component.dtype,
             copy=False,
         )
 
+        # Compute the total bixel dose at each voxel by summing the contributions from all kernel components.
         bixel_dose = xp.sum(dose_component, axis=0)
-
+        # Scale dose by inverse square law
         bixel_dose = bixel_dose * ((sad / geo_depths) ** 2)
 
         bixel["physical_dose"] = bixel_dose
-        bixel["weight"] = curr_ray["beamlets"][k]["weight"]
+        bixel["weight"] = curr_ray["beamlets"][k][
+            "weight"
+        ]  # weight of the beamlet corresponding to the bixel
         bixel["ix"] = curr_ray["ix"]
 
         if self.enable_dij_sampling:
@@ -393,7 +447,25 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     def _get_kernel_interpolators(
         self, beam_info: dict[str], f: Array
     ) -> ArrayBackendGridInterpolator:
-        """Prepare one shared-grid interpolator for the convolved photon kernels."""
+        """Prepare one shared-grid interpolator for the convolved photon kernels.
+
+        Parameters
+        ----------
+        beam_info : dict
+            Beam information struct. Keys used here:
+            - ``kernel``: the photon SVD kernel (see ``PhotonSVDKernel``)
+            - ``kernel_mxs``: the kernel lateral profile matrices
+            - ``kernel_conv_size``: the size of the convolution grid
+            - ``kernel_conv_grid``: the convolution grid
+        f : Array
+            The fluence map (after convolution with Gaussian penumbra) for the beam.
+
+        Returns
+        -------
+        ArrayBackendGridInterpolator
+            One interpolator over the stacked convolved profiles (fluence convolved
+            with kernel component) in the isocenter plane.
+        """
 
         xp = self.xp
 
@@ -404,6 +476,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         kernel_mxs = to_namespace(xp, beam_info["kernel_mxs"], device=self.device)
         conv_grid = to_namespace(xp, beam_info["kernel_conv_grid"], device=self.device)
 
+        # Convolve the fluence with each kernel component's lateral profile via FFT,
+        # where both inputs are zero-padded to the size of the kernel convolution grid.
         convolved_kernels = []
         for c in range(num_kernels):
             conv_mx = xp.real(
@@ -530,7 +604,28 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         return xp.take(ix, selected, axis=0), xp.take(values, selected, axis=0)
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
-        """Initialize the current ray."""
+        """Initialize the current ray.
+
+        If ``use_custom_primary_photon_fluence`` is True or the beam is field-based, the
+        kernel interpolators are computed for the ray. Otherwise, the pre-computed kernel
+        interpolators from the beam are used.
+
+        Parameters
+        ----------
+        beam_info : dict
+            Beam information struct. Keys used here:
+            - ``kernel``: the kernel (see ``PhotonSVDKernel``)
+            - ``kernel_depth_parameters``: the kernel depth parameters (see ``_get_kernel_depth_parameters``)
+            - ``kernel_interpolators``: the kernel interpolators (see ``_get_kernel_interpolators``)
+            - ``field_based_dose_calc``: whether the dose calculation is field-based
+              or bixel-based
+            - ``f_pre``: the pre-convolution fluence
+            - ``f_x``/``f_z``: the x-coordinates and z-coordinates of the fluence grid
+            - ``gauss_conv_size``: the size of the Gaussian convolution grid
+            - ``gauss_filter``: the Gaussian convolution filter (representing the penumbra)
+        j : int
+            The index of the current ray.
+        """
 
         ray = super()._init_ray(beam_info, j)
 
@@ -541,6 +636,10 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             logger.debug("Calculating custom kernel interpolators for ray %d.", j)
             xp = self.xp
 
+            # Get the fluence f for the ray. For field-based dose calculation, the
+            # fluence is the product of the masks of all beamlets on the ray. For
+            # bixel-based dose calculation, the fluence is the pre-convolution fluence
+            # f_pre.
             if beam_info["field_based_dose_calc"]:
                 # multiply masks of beamlets on a ray to get field mask for ray
                 # TODO: ensure matching grids? should be handled in ersampling above
@@ -552,10 +651,14 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 # TODO: Not saved yet
                 f = to_namespace(xp, beam_info["f_pre"], device=self.device)
 
+            # Get the fluence grid coordinates for the ray (same for all rays in the beam).
             f_x = to_namespace(xp, beam_info["f_x"], device=self.device)
             f_z = to_namespace(xp, beam_info["f_z"], device=self.device)
 
+            # Get the primary fluence from the kernel
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
+
+            # Compute the radial distances of the fluence grid to the ray position in the BEV plane.
             r = xp.sqrt(
                 (f_x - float(ray["ray_pos_bev"][0])) ** 2
                 + (f_z - float(ray["ray_pos_bev"][2])) ** 2
@@ -564,6 +667,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             if not (f.shape == f_x.shape == f_z.shape == r.shape):
                 raise ValueError("Shape mismatch in kernel interpolation!")
 
+            # The fluence is either forced to be uniform (f) or modulated by multiplying
+            # the primary fluence interpolated at the radial distances of the fluence grid.
             if self.force_uniform_fluence:
                 fx = f
             else:
@@ -573,6 +678,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     to_namespace(xp, primary_fluence[:, 1], device=self.device),
                 )
 
+            # Convolve the fluence with the Gaussian penumbra filter via FFT, where
+            # both inputs are zero-padded to the size of the gaussian convolution grid.
             n = beam_info["gauss_conv_size"]
             gauss_filter = to_namespace(xp, beam_info["gauss_filter"], device=self.device)
 
