@@ -169,7 +169,12 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        if field_based_dose_calc:
+            field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        else:
+            # Keeps the bixel centered on its ray for any number of pixels
+            n = np.floor(field_width / self.int_conv_resolution).astype(int)
+            field_grid = self.int_conv_resolution * (np.arange(n) - (n - 1) / 2)
 
         # The resampled field shapes go into this beam's dose calculation only; the stf
         # stays as the caller passed it
@@ -178,14 +183,16 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             field_shape = stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
             beam_info["beam"]["rays"][j]["beamlets"][k] = field_shape.model_dump()
             # TODO: add mask as computed field?
-            # Materialized: np.rot90 returns a negatively strided view, which the torch
-            # backend cannot take, and the mask is converted once per ray below.
+            # Field shape masks are indexed (z, x), like the BLD transmission masks with IEC Y
+            # along the rows. Materialized because the mask is converted once per ray below.
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
-                np.rot90(field_shape.mask, k=-1)
+                field_shape.mask.T
             )
 
         field_grid = xp.asarray(field_grid)
-        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="xy")
+        # The kernel interpolators take (lat_x, lat_z) along the fluence axes 0 and 1, which is
+        # why the field shapes are transposed above; f_x and f_z follow the same axes
+        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="ij")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -235,7 +242,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # use 5 times sigma as the limits for the gaussian convolution
         gauss_limit = np.ceil(5 * sigma_gauss / self.int_conv_resolution)
-        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit)
+        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit + 1)
 
         gauss_filter_x, gauss_filter_z = array_meshgrid(gauss_grid, gauss_grid, indexing="xy")
         # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
@@ -245,30 +252,29 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
             * xp.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
-        gauss_conv_size = int(2 * (field_limit + gauss_limit).astype(int))
+        # Full linear convolution of the field with the 2 * gauss_limit + 1 filter points
+        gauss_conv_size = int(field_grid.shape[0] + 2 * int(gauss_limit))
 
         beam_info["gauss_conv_size"] = gauss_conv_size
         beam_info["gauss_filter"] = gauss_filter
 
         # get kernel size and distances
         kernel_limit = np.ceil(kernel_cutoff / self.int_conv_resolution)
-        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit)
+        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit + 1)
 
         kernel_x, kernel_z = array_meshgrid(kernel_grid, kernel_grid, indexing="xy")
 
         # calculate also the total size and distance as we need this during convolution extensively
-        kernel_conv_limit = field_limit + gauss_limit + kernel_limit
-        kernel_conv_grid = self.int_conv_resolution * xp.arange(
-            -kernel_conv_limit, kernel_conv_limit
-        )
+        kernel_conv_size = gauss_conv_size + 2 * int(kernel_limit)
+        # The convolution output starts at the first field pixel minus both filter half-widths
+        kernel_conv_grid = self.int_conv_resolution * (
+            xp.arange(kernel_conv_size, dtype=xp.float64) - float(gauss_limit + kernel_limit)
+        ) + float(field_grid[0])
         conv_mx_x, conv_mx_z = array_meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
-
-        kernel_conv_size = int(2 * kernel_conv_limit.astype(int))
 
         # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:
-            n = np.floor(field_width / self.int_conv_resolution).astype(int)
-            f_pre = xp.ones((n, n), dtype=xp.float32)
+            f_pre = xp.ones_like(beam_info["f_x"], dtype=xp.float32)
 
             if not self.use_custom_primary_photon_fluence:
                 f_pre = _ifft2(
@@ -314,10 +320,11 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         beam_info["kernel_conv_grid"] = kernel_conv_grid
         beam_info["kernel_conv_size"] = kernel_conv_size
 
-        if not field_based_dose_calc and not self.use_custom_primary_photon_fluence:
+        if not field_based_dose_calc:
             beam_info["f_pre"] = f_pre
-            kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
-            beam_info["kernel_interpolators"] = kernel_interpolators
+            if not self.use_custom_primary_photon_fluence:
+                kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
+                beam_info["kernel_interpolators"] = kernel_interpolators
 
         return beam_info
 
@@ -549,16 +556,16 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     # Not in-place: f may alias the beamlet's stored mask
                     f = f * to_namespace(xp, beamlet["mask"], device=self.device)
             else:
-                # TODO: Not saved yet
                 f = to_namespace(xp, beam_info["f_pre"], device=self.device)
 
             f_x = to_namespace(xp, beam_info["f_x"], device=self.device)
             f_z = to_namespace(xp, beam_info["f_z"], device=self.device)
 
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
+            # f_x and f_z are lateral offsets from the ray in the beam's eye view
             r = xp.sqrt(
-                (f_x - float(ray["ray_pos_bev"][0])) ** 2
-                + (f_z - float(ray["ray_pos_bev"][2])) ** 2
+                (f_x + float(ray["ray_pos_bev"][0])) ** 2
+                + (f_z + float(ray["ray_pos_bev"][2])) ** 2
             )
 
             if not (f.shape == f_x.shape == f_z.shape == r.shape):

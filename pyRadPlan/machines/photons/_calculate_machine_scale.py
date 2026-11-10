@@ -32,7 +32,7 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
         "couch_angles": np.zeros(num_of_beams),
         "generator": "photonSingleBixel",
         "field_based": True,
-        "field_shape": np.rot90(mask, k=-1),
+        "field_shape": mask.T,
         "resolution": 0.5,
     }
 
