@@ -119,7 +119,7 @@ class VisualizationWidget(QWidget):
         quantity_row = QHBoxLayout()
         quantity_row.setContentsMargins(0, 0, 0, 0)
         quantity_row.setSpacing(4)
-        quantity_row.addWidget(QLabel("Overlay Quantity:"))
+        quantity_row.addWidget(QLabel("Overlay quantity:"))
         self.quantity_selector = QuantitySelector()
         self.quantity_selector.key_changed.connect(self.quantity_changed)
         quantity_row.addWidget(self.quantity_selector, 1)
@@ -127,7 +127,7 @@ class VisualizationWidget(QWidget):
 
     def _build_buttons(self, parent_layout: QVBoxLayout) -> None:
         """Create the isolines/recenter button row and the DVH button."""
-        self.set_isolines_btn = QPushButton("Set Isolines")
+        self.set_isolines_btn = QPushButton("Set isolines")
         self.set_isolines_btn.setToolTip("Set custom isoline levels (e.g. 30 50 95)")
         self.set_isolines_btn.clicked.connect(self._on_set_isolines)
 
@@ -166,7 +166,7 @@ class VisualizationWidget(QWidget):
 
     def _on_set_isolines(self) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Set Isolines")
+        dialog.setWindowTitle("Set isolines")
         layout = QVBoxLayout(dialog)
 
         layout.addWidget(QLabel("Enter isoline levels (Gy) separated by space:"))

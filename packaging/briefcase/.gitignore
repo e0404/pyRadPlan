@@ -2,3 +2,5 @@ build/
 dist/
 logs/
 .briefcase/
+# Downloaded by scripts/fetch_matrad_phantoms.py
+src/pyradplan_app/data/

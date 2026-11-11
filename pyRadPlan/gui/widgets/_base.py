@@ -142,13 +142,14 @@ class AdaptiveDoubleSpinBox(QDoubleSpinBox):
         field as wide as its longest possible text.
         """
         metrics = self.fontMetrics()
+        # Measure the strings QAbstractSpinBox::sizeHint measures: with fractional glyph
+        # advances, dropping its trailing space changes the rounded width by a pixel.
+        fixed = self.prefix() + self.suffix() + " "
         range_width = max(
-            metrics.horizontalAdvance(self.prefix() + self.textFromValue(limit) + self.suffix())
+            metrics.horizontalAdvance(self.textFromValue(limit)[:18] + fixed)
             for limit in (self.minimum(), self.maximum())
         )
-        typical_width = metrics.horizontalAdvance(
-            self.prefix() + self.textFromValue(-999.9) + self.suffix()
-        )
+        typical_width = metrics.horizontalAdvance(self.textFromValue(-999.9) + fixed)
         if range_width > typical_width:
             hint.setWidth(hint.width() - (range_width - typical_width))
         return hint

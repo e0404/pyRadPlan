@@ -292,7 +292,12 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
-        self._btn_save_result = self._add_button("Save / Keep Result", self._on_save_result)
+        self._btn_save_result = self._add_button(
+            "Snapshot Result",
+            self._on_save_result,
+            tooltip="Keep a copy of the current result in the workspace. "
+            "Use File > Save Result… to write it to disk.",
+        )
 
         # Each column is a workflow stage, progressing left to right (as in
         # matRad): loading -> dose influence -> result computation -> export.
@@ -1410,7 +1415,7 @@ class WorkflowWidget(WorkspaceWidget):
                 pass
 
         tag, ok = QInputDialog.getText(
-            self, "Save Result", "Name for this result snapshot:", text=default
+            self, "Snapshot Result", "Name for this result snapshot:", text=default
         )
         if not ok or not tag.strip():
             return
@@ -1419,7 +1424,7 @@ class WorkflowWidget(WorkspaceWidget):
         if tag in _RESERVED_TAGS:
             QMessageBox.warning(
                 self,
-                "Save Result",
+                "Snapshot Result",
                 f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
             )
             return

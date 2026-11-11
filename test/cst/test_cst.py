@@ -6,6 +6,7 @@ import numpy as np
 
 from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.ct import create_ct
+from pyRadPlan.core import Grid
 
 
 from pyRadPlan.ct import CT
@@ -83,6 +84,50 @@ def test_cst_to_matrad(matrad_import, tmpdir):
 
     assert isinstance(tmp, dict)
     assert isinstance(tmp["cst"], list)
+
+
+def test_cst_from_matrad_reads_visibility_and_unit_colors():
+    """matRad's ``Visible`` flag is read and integer color triples stay on the 0..1 scale."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    props_hidden = {"Visible": 0.0, "visibleColor": np.array([0, 0, 1], dtype=np.uint8)}
+    props_shown = {"Visible": 1.0, "visibleColor": np.array([1.0, 0.5, 0.0])}
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), props_shown, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), props_hidden, []],
+        ],
+        ct=ct,
+    )
+
+    assert cst.vois[0].visible is True
+    assert cst.vois[0].color == (255, 128, 0)
+    assert cst.vois[1].visible is False
+    assert cst.vois[1].color == (0, 0, 255)
+
+
+def test_cst_to_matrad_visibility_and_color_roundtrip(tmpdir):
+    """Visibility and color survive a matRad ``.mat`` round-trip."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), {}, []],
+        ],
+        ct=ct,
+    )
+    cst.vois[0].color = (0, 0, 255)
+    cst.vois[1].visible = False
+
+    props = cst.to_matrad()[1][4]
+    assert props["Visible"] is False
+    np.testing.assert_allclose(props["visibleColor"], np.asarray(cst.vois[1].color) / 255.0)
+
+    tmp_mat_path = os.path.join(tmpdir, "test_cst_visible.mat")
+    matfile.save(tmp_mat_path, {"cst": cst.to_matrad()})
+    restored = create_cst(matfile.load(tmp_mat_path)["cst"], ct=ct)
+
+    assert [v.visible for v in restored.vois] == [True, False]
+    assert [v.color for v in restored.vois] == [v.color for v in cst.vois]
 
 
 def test_cst_to_matrad_objectives_roundtrip(tmpdir):
@@ -221,6 +266,20 @@ def test_target_center_of_mass():
 
     com = cst.target_center_of_mass()
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
+
+
+def test_center_of_mass_matches_ndimage_on_anisotropic_grid():
+    """The projection-based center of mass equals ndimage.center_of_mass."""
+    from scipy import ndimage  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    mask = (rng.random((7, 11, 13)) > 0.8).astype(np.uint8)  # (z, y, x)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 2.5, 3.0))
+    image.SetOrigin((-10.0, 4.0, 7.5))
+
+    expected = image.TransformContinuousIndexToPhysicalPoint(ndimage.center_of_mass(mask.T))
+    assert np.allclose(StructureSet._center_of_mass(image), expected)
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1063,55 @@ def test_optimization_target_union(cst_mixed_targets):
     assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1
 
 
+@pytest.mark.parametrize("resampled", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("same_priority", [False, True])
+def test_combined_tissue_data_matches_separate_getters(
+    generic_ct, resampled, reverse, same_priority
+):
+    """Preserve overlap ordering, duplicate tissue classes and outside values."""
+    tissues = [
+        TissueProperties(alpha_x=0.1, beta_x=0.05),
+        TissueProperties(alpha_x=0.2, beta_x=0.07),
+    ]
+    vois = [
+        Target(
+            name="T",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[2:6]),
+            tissue_properties=tissues[0],
+        ),
+        OAR(
+            name="O",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[4:8]),
+            tissue_properties=tissues[1],
+        ),
+        OAR(
+            name="duplicate",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[8:9]),
+            tissue_properties=tissues[0],
+        ),
+    ]
+    if same_priority:
+        for voi in vois:
+            voi.overlap_priority = 2
+    cst = StructureSet(ct_image=generic_ct, vois=vois[::-1] if reverse else vois)
+    grid = generic_ct.grid.resample(dict(x=1.7, y=2.1, z=2.3)) if resampled else None
+    expected = (
+        *cst.get_reference_lq_params(resample_grid=grid),
+        cst.get_tissue_class_indices(resample_grid=grid),
+    )
+    masks = [sitk.GetArrayFromImage(v.mask) for v in cst.vois]
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=grid)
+    for actual, old in zip((alpha, beta, indices), expected):
+        np.testing.assert_array_equal(actual, old)
+    assert list(classes) == list(cst.get_tissue_classes())
+    for voi, before in zip(cst.vois, masks):
+        np.testing.assert_array_equal(sitk.GetArrayFromImage(voi.mask), before)
+
+
 def test_matrad_numpy_cell_array_multi_voxel_roundtrip():
     """Regression: cst{i,4} as an object array holding a multi-voxel index list."""
     ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
@@ -1105,3 +1213,21 @@ def test_reference_lq_params_and_tissue_indices_4d_per_scenario():
         # the OAR moved away from this voxel in the other scenario
         assert alpha[ix, other] == 0.0
         assert tissue_ix[ix, other] == 0
+
+
+@pytest.mark.parametrize("resample", [False, True])
+def test_combined_tissue_data_preserves_moving_phase_masks(resample):
+    """One label resampling per phase matches the independent tissue getters."""
+    cst, _ = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    grid = Grid.from_sitk_image(cst.ct_image.cube_hu[:, :, :, 0])
+    target = grid.resample({"x": 1.5, "y": 1.5, "z": 1.5}) if resample else None
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=target)
+    expected_alpha, expected_beta = cst.get_reference_lq_params(resample_grid=target)
+    expected_indices = cst.get_tissue_class_indices(resample_grid=target)
+    np.testing.assert_array_equal(alpha, expected_alpha)
+    np.testing.assert_array_equal(beta, expected_beta)
+    np.testing.assert_array_equal(indices, expected_indices)
+    assert list(classes) == list(cst.get_tissue_classes())
+    assert alpha.shape[1] == 2
+    assert np.any(alpha[:, 0] != alpha[:, 1])

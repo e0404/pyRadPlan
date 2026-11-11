@@ -14,7 +14,13 @@ from pydantic import Field
 from scipy import sparse
 import array_api_compat
 
-from pyRadPlan.core import AlgorithmParameterMetadata, resample_image, np2sitk
+from pyRadPlan.core import (
+    AlgorithmParameterMetadata,
+    ArrayBackendGridResampler,
+    Grid,
+    resample_image,
+    np2sitk,
+)
 from pyRadPlan.ct import CT, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation
@@ -27,6 +33,7 @@ from ._base import DoseEngineBase, ct_phase_images
 from ...core.xp_utils.typing import Array
 from ...core.xp_utils import cupy_available, pytorch_gpu_available
 from ...core.xp_utils import to_namespace, to_numpy, free_gpu_memory
+from ._sparse_output import sparse_index_dtype, ensure_index_capacity
 from .kernels import _calc_geo_dists_cupy_kernel, _calc_geo_dists_torch_kernel
 
 
@@ -292,6 +299,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._rad_depth_cubes = []
 
         dij = super()._init_dose_calc(ct, cst, stf)
+        self._depth_resampler = None
 
         # calculate rED or rSP from HU or take provided wedCube
         if self.use_given_eq_density_cube and getattr(ct, "cube", None) is None:
@@ -430,10 +438,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                             * self.dose_grid.num_voxels
                             * self._num_of_columns_dij
                         ).astype(np.int64)
+                        index_dtype = sparse_index_dtype(
+                            self.dose_grid.num_voxels, self._num_of_columns_dij, int(est_nnz)
+                        )
                         dij["shared_structure"].flat[i] = {
-                            "indices": xp.empty((est_nnz,), dtype=xp.int64, device=device),
+                            "indices": xp.empty((est_nnz,), dtype=index_dtype, device=device),
                             "indptr": xp.zeros(
-                                (self._num_of_columns_dij + 1,), dtype=xp.int64, device=device
+                                (self._num_of_columns_dij + 1,), dtype=index_dtype, device=device
                             ),
                             "nnz": 0,
                         }
@@ -450,6 +461,45 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         self._effective_lateral_cutoff = self.geometric_lateral_cutoff
 
         return dij
+
+    def _sample_radiological_depths(self, rad_depth_cubes):
+        """Select dose-grid depths on the backend; export images only when requested."""
+        selected = []
+        xp = self.xp
+        for rad_depth_cube in rad_depth_cubes:
+            if self.trace_on_dose_grid:
+                rad_depth_arr = rad_depth_cube
+                rad_depth_vdose_grid = xp.take(
+                    xp.reshape(rad_depth_arr, (-1,)), self._vdose_grid, axis=0
+                )
+            else:
+                if self._depth_resampler is None:
+                    indices = (
+                        xp.arange(self.dose_grid.num_voxels, dtype=xp.int64, device=self.device)
+                        if self.keep_rad_depth_cubes
+                        else self._vdose_grid
+                    )
+                    self._depth_resampler = ArrayBackendGridResampler(
+                        Grid.from_sitk_image(self._raytracer.cubes[0]), self.dose_grid, indices
+                    )
+                sampled = self._depth_resampler(rad_depth_cube)
+                if self.keep_rad_depth_cubes:
+                    rad_depth_arr = xp.reshape(sampled, tuple(reversed(self.dose_grid.dimensions)))
+                    rad_depth_vdose_grid = xp.take(sampled, self._vdose_grid, axis=0)
+                else:
+                    rad_depth_vdose_grid = sampled
+            if self.keep_rad_depth_cubes:
+                image = sitk.GetImageFromArray(to_numpy(rad_depth_arr))
+                image.SetSpacing(tuple(self.dose_grid.resolution_vector))
+                image.SetOrigin(tuple(self.dose_grid.origin))
+                image.SetDirection(tuple(self.dose_grid.direction.ravel()))
+                self._rad_depth_cubes.append(image)
+            rad_depth_vdose_grid = xp.astype(
+                rad_depth_vdose_grid, self._vox_world_coords.dtype, copy=False
+            )
+
+            selected.append(rad_depth_vdose_grid)
+        return selected
 
     def _init_beam(
         self, _dij: dict, ct: CT, _cst: StructureSet, stf: SteeringInformation, i
@@ -485,7 +535,6 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "iso_center",
             "source_point_bev",
             "source_point",
-            "num_of_bixels_per_ray",
             "gantry_angle",
             "couch_angle",
         ]:
@@ -545,7 +594,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             "effective_lateral_cut_off", self._effective_lateral_cutoff
         )
         patient_coords = rot_coords_vdose_grid if self.trace_on_dose_grid else rot_coords_v
-        rad_depth_cubes = self._raytracer.trace_cubes(
+        rad_depth_cubes = self._raytracer.trace_cubes_array(
             beam_info["beam"], patient_coords=patient_coords
         )
         self._raytracer.debug_core_performance = False
@@ -558,26 +607,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         beam_info["valid_coords"] = [None] * len(rad_depth_cubes)
         beam_info["rad_depths"] = [None] * len(rad_depth_cubes)
 
-        for c, rad_depth_cube in enumerate(rad_depth_cubes):
-            if self.trace_on_dose_grid:
-                rad_depth_cube_dose_grid = rad_depth_cube
-            else:
-                rad_depth_cube_dose_grid = resample_image(
-                    input_image=rad_depth_cube,
-                    interpolator=sitk.sitkLinear,
-                    target_grid=self.dose_grid,
-                )
-            if self.keep_rad_depth_cubes:
-                self._rad_depth_cubes.append(rad_depth_cube_dose_grid)
-
-            rad_depth_cube_dosegrid = sitk.GetArrayViewFromImage(rad_depth_cube_dose_grid)
-            rad_depth_arr = xp.asarray(
-                rad_depth_cube_dosegrid, dtype=self._vox_world_coords.dtype, device=self.device
-            )
-            rad_depth_vdose_grid = xp.take(
-                xp.reshape(rad_depth_arr, (-1,)), self._vdose_grid, axis=0
-            )
-
+        for c, rad_depth_vdose_grid in enumerate(
+            self._sample_radiological_depths(rad_depth_cubes)
+        ):
             # Find valid coordinates
             coord_is_valid = xp.isfinite(rad_depth_vdose_grid)
 
@@ -684,7 +716,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         alpha = to_namespace(xp, alpha, device=self.device)
         rho = [to_namespace(xp, r, device=self.device) for r in rho]
-        d12 = to_namespace(xp, d12.squeeze(), device=self.device)
+        d12 = xp.reshape(to_namespace(xp, d12, device=self.device), (-1,))
         # prevent d12 from being 0d array which causes issues with indexing later on
         if d12.ndim == 0:
             d12 = xp.reshape(d12, (1,))
@@ -726,13 +758,16 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             ssd_vals = xp.astype(d12, xp.float32) * xp.astype(alpha_sel, xp.float32)
             ssd = xp.where(hit, ssd_vals, sad)
 
+            # Transfer Python metadata once per CT phase, rather than once per ray.
+            missing_ssd = to_numpy(ix_nan)
+            host_ssd = to_numpy(ssd)
             for j, ray in enumerate(beam["rays"]):
-                if ix_nan[j]:  # take the SSD of the closest ray that hits the patient
+                if missing_ssd[j]:  # take the SSD of the closest ray that hits the patient
                     ray["SSD"].append(
                         self._closest_neighbor_ssd(ray_pos_bev, ssd, hit, ray["ray_pos_bev"])
                     )
                 else:
-                    ray["SSD"].append(float(ssd[j]))
+                    ray["SSD"].append(float(host_ssd[j]))
 
         beam_info["beam"] = beam
 
@@ -871,44 +906,141 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         return scen_ray
 
-    def _get_ray_geometry_from_beam(self, ray: dict, beam_info: dict):
-        raise NotImplementedError(
-            "Method _get_ray_geometry_from_beam must be implemented in derived class."
+    def _prepare_ray_transforms(self, source: Array, targets: Array) -> dict:
+        """Prepare backend rotations together and download only alignment flags.
+
+        Inputs have shapes (3,) and (N, 3), already in the coordinate dtype/device.
+        The caller owns this state for one beam/shift. Aligned rays keep the exact
+        identity path, including the existing 1e-7 directional tolerance.
+        """
+        xp = array_api_compat.array_namespace(source, targets)
+        device = array_api_compat.device(source)
+        if hasattr(xp, "linalg"):
+            norm = xp.linalg.vector_norm
+            cross = xp.linalg.cross
+        else:
+
+            def norm(arr, *, axis=-1, keepdims=False):
+                return xp.sqrt(xp.sum(arr**2, axis=axis, keepdims=keepdims))
+
+            def cross(x, y):
+                return xp.stack(
+                    [
+                        x[..., 1] * y[..., 2] - x[..., 2] * y[..., 1],
+                        x[..., 2] * y[..., 0] - x[..., 0] * y[..., 2],
+                        x[..., 0] * y[..., 1] - x[..., 1] * y[..., 0],
+                    ],
+                    axis=-1,
+                )
+
+        a = -source
+        a = a / norm(a)
+        b = targets - source
+        b = b / norm(b, axis=-1, keepdims=True)
+        aligned = xp.all(xp.abs(a - b) < 1e-7, axis=-1)
+        cross_ab = cross(xp.broadcast_to(a, b.shape), b)
+        eps = xp.asarray(
+            [
+                [[0, 0, 0], [0, 0, -1], [0, 1, 0]],
+                [[0, 0, 1], [0, 0, 0], [-1, 0, 0]],
+                [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
+            ],
+            dtype=source.dtype,
+            device=device,
         )
+        skew = xp.tensordot(cross_ab, eps, axes=1)
+        denominator = norm(cross_ab, axis=-1) ** 2
+        # The aligned case never evaluated this division in the per-ray path.
+        denominator = xp.where(aligned, xp.ones_like(denominator), denominator)
+        identity = xp.eye(3, dtype=source.dtype, device=device)
+        rotations = (
+            identity
+            + skew
+            + (skew @ skew) * (1 - xp.vecdot(a, b))[:, None, None] / denominator[:, None, None]
+        )
+        rotations = xp.where(aligned[:, None, None], identity, rotations)
+        return {"source": source, "rotations": rotations, "aligned": to_numpy(aligned)}
+
+    def _prepare_beam_geometry(self, beam_info: dict) -> dict:
+        """Compact the final beam-valid coordinates once, after modality depth limits.
+
+        Indices are ordered positions in the engine's selected dose voxels, not
+        flattened dose-grid rows. The original beam arrays remain available to
+        modality-specific initialization. Cache lifetime is one beam/shift.
+        """
+        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
+        indices = xp.nonzero(beam_info["valid_coords_all"])[0]
+        coords = beam_info["bev_coords"]
+        beam = beam_info["beam"]
+        source = xp.astype(xp.reshape(beam["source_point_bev"], (3,)), coords.dtype)
+        targets = (
+            xp.astype(
+                xp.stack([xp.reshape(r["target_point_bev"], (3,)) for r in beam["rays"]]),
+                coords.dtype,
+            )
+            if beam["rays"]
+            else xp.empty((0, 3), dtype=coords.dtype, device=array_api_compat.device(coords))
+        )
+        return {
+            "transforms": self._prepare_ray_transforms(source, targets),
+            "indices": indices,
+            "coords": xp.take(beam_info["bev_coords"], indices, axis=0),
+            "scenario_valid": [
+                xp.take(mask, indices, axis=0) for mask in beam_info["valid_coords"]
+            ]
+            if len(beam_info["valid_coords"]) > 1
+            else None,
+        }
 
     def _get_ray_geometry_from_beam(self, ray: dict[str], beam_info: dict[str]):
+        # Lazy preparation runs after the complete subclass _init_beam, including
+        # particle depth limits. It is shared by all subsequent rays in this beam.
+        if "_ray_geometry" not in beam_info:
+            beam_info["_ray_geometry"] = self._prepare_beam_geometry(beam_info)
+        prepared = beam_info["_ray_geometry"]
+        xp = array_api_compat.array_namespace(prepared["coords"])
         lateral_ray_cutoff = self._get_lateral_distance_from_dose_cutoff_on_ray(ray)
-
-        xp = array_api_compat.array_namespace(beam_info["bev_coords"])
-
-        # Ray tracing for beam i and ray j
-        ix, radial_dist_sq, lat_dists, iso_lat_dists = self.calc_geo_dists(
-            beam_info["bev_coords"],
+        transforms = prepared["transforms"]
+        ray_index = ray["ray_index"]
+        transform = (
+            transforms["source"],
+            transforms["rotations"][ray_index, ...],
+            transforms["aligned"][ray_index],
+        )
+        selected, radial_dist_sq, lat_dists, iso_lat_dists = self._calc_geo_dists_on_valid_coords(
+            prepared["coords"],
             ray["source_point_bev"],
             ray["target_point_bev"],
             ray["sad"],
-            beam_info["valid_coords_all"],
             float(lateral_ray_cutoff),
+            prepared_transform=transform,
         )
-        # Subindex given the relevant indices from the geometric distance calculation
-        ray["valid_coords"] = [beam_ix & ix for beam_ix in beam_info["valid_coords"]]
-        ray["ix"] = [self._vdose_grid[ix_in_grid] for ix_in_grid in ray["valid_coords"]]
-
-        ray["radial_dist_sq"] = [radial_dist_sq[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-
-        if lat_dists is not None:
-            ray["lat_dists"] = [lat_dists[beam_ix[ix]] for beam_ix in beam_info["valid_coords"]]
-
-        ray["iso_lat_dists"] = [iso_lat_dists[beam_ix[ix]] for beam_ix in ray["valid_coords"]]
-
-        ray["valid_coords_all"] = xp.any(xp.stack(ray["valid_coords"], axis=0), axis=1)
-
-        ray["geo_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["geo_depths"], ray["valid_coords"])
-        ]  # usually not needed for particle beams
-        ray["rad_depths"] = [
-            rD[ix] for rD, ix in zip(beam_info["rad_depths"], ray["valid_coords"])
-        ]
+        positions = xp.take(prepared["indices"], selected, axis=0)
+        for key in (
+            "ix",
+            "radial_dist_sq",
+            "lat_dists",
+            "iso_lat_dists",
+            "geo_depths",
+            "rad_depths",
+        ):
+            ray[key] = []
+        for scenario in range(len(beam_info["rad_depths"])):
+            scenario_positions = positions
+            radial, lateral, projected = radial_dist_sq, lat_dists, iso_lat_dists
+            if prepared["scenario_valid"] is not None:
+                valid = xp.take(prepared["scenario_valid"][scenario], selected, axis=0)
+                within_ray = xp.nonzero(valid)[0]
+                scenario_positions = xp.take(positions, within_ray, axis=0)
+                radial = xp.take(radial_dist_sq, within_ray, axis=0)
+                lateral = xp.take(lat_dists, within_ray, axis=0)
+                projected = xp.take(iso_lat_dists, within_ray, axis=0)
+            ray["ix"].append(xp.take(self._vdose_grid, scenario_positions, axis=0))
+            ray["radial_dist_sq"].append(radial)
+            ray["lat_dists"].append(lateral)
+            ray["iso_lat_dists"].append(projected)
+            for key in ("geo_depths", "rad_depths"):
+                ray[key].append(xp.take(beam_info[key][scenario], scenario_positions, axis=0))
 
     def _get_lateral_distance_from_dose_cutoff_on_ray(self, ray: dict) -> float:
         """
@@ -952,8 +1084,10 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         if not self._calc_dose_direct:
             shared_struct = dij["shared_structure"][scen_idx]
             # Advance column pointer even when ix_size == 0 to keep CSC valid
-            start = shared_struct["indptr"][bixel_counter]
+            # Add in Python precision, then promote BEFORE storing the next pointer.
+            start = int(shared_struct["indptr"][bixel_counter])
             end = start + ix_size
+            ensure_index_capacity(shared_struct, end)
             shared_struct["indptr"][bixel_counter + 1] = end
 
             if ix_size > 0:
@@ -1084,13 +1218,9 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         """
         Calculate geometric distances for dose calculation.
 
-        This function relies on FOUR different ways to compute distances:
-        1) GPU with cupy kernel
-        2) GPU with torch kernel
-        3) Base path (CPU/GPU) - backend supports fancy indexing regarding __setitem__
-            -> numpy/cupy/torch
-        4) Fallback path - backend does not support fancy indexing regarding __setitem__
-            -> jax/strict
+        This compatibility interface returns a full boolean selection mask.
+        Dose engines use compact beam coordinates and integer selections internally.
+        Both paths share the existing CuPy/PyTorch kernels or Array API arithmetic.
 
         Parameters
         ----------
@@ -1111,7 +1241,7 @@ class PencilBeamEngineAbstract(DoseEngineBase):
         Returns
         -------
         ix : Array
-            Indices of voxels where dose influence is computed.
+            Boolean mask of voxels where dose influence is computed.
         rad_distances_sq : Array
             Squared radial distances to the central ray.
         lat_dists : Array
@@ -1120,160 +1250,78 @@ class PencilBeamEngineAbstract(DoseEngineBase):
             Lateral distances to the central ray projected onto the isocenter plane.
         """
 
-        # xp = array_api_compat.array_namespace(
-        #     rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
-        # )
-        xp = array_api_compat.array_namespace(
-            rot_coords_bev, source_point_bev, target_point_bev, rad_depth_mask
+        xp = array_api_compat.array_namespace(rot_coords_bev, rad_depth_mask)
+        valid = xp.nonzero(rad_depth_mask)[0]
+        selected, radial, lateral, projected = self._calc_geo_dists_on_valid_coords(
+            xp.take(rot_coords_bev, valid, axis=0),
+            source_point_bev,
+            target_point_bev,
+            sad,
+            lateral_cutoff,
         )
-        if hasattr(xp, "linalg"):
-            norm = xp.linalg.vector_norm
-            cross = xp.linalg.cross
-        else:
-
-            def norm(arr: Array) -> Array:
-                return xp.sqrt(xp.sum(arr**2, axis=-1))
-
-            def cross(x: Array, y: Array) -> Array:
-                return xp.stack(
-                    [
-                        x[..., 1] * y[..., 2] - x[..., 2] * y[..., 1],
-                        x[..., 2] * y[..., 0] - x[..., 0] * y[..., 2],
-                        x[..., 0] * y[..., 1] - x[..., 1] * y[..., 0],
-                    ],
-                    axis=-1,
-                )
-
-        # We later need a copy of the index, and we do it here to do some
-        # compatibility management with the array API standard
-        ix = xp.asarray(rad_depth_mask, copy=True)
-        rad_depth_ix = xp.nonzero(rad_depth_mask)[0]
-
-        # Make sure that the source-point is a 1D array with matching dtype
-        source_point_bev = xp.astype(xp.reshape(source_point_bev, (3,)), rot_coords_bev.dtype)
-        target_point_bev = xp.astype(xp.reshape(target_point_bev, (3,)), rot_coords_bev.dtype)
-
-        # Put [0 0 0] position in the source point for beamlet who passes through isocenter
-        a = -source_point_bev
-
-        # Normalize the vector
-        a /= norm(a)
-
-        # Put [0 0 0] position in the source point for a single beamlet
-        b = target_point_bev - source_point_bev
-
-        # Normalize the vector
-        b /= norm(b)
-
-        # Calculate Rotation Matrix
-        derived_rot_mat = None
-        # Check for alignment with tolerance (avoid numerical instability/noise)
-        if not xp.all(xp.abs(a - b) < 1e-7):
-            # Cross product
-            cross_ab = cross(a, b)
-
-            if self._eps_ijk is None:
-                self._eps_ijk = xp.asarray(
-                    [
-                        [[0, 0, 0], [0, 0, -1], [0, 1, 0]],
-                        [[0, 0, 1], [0, 0, 0], [-1, 0, 0]],
-                        [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
-                    ],
-                    dtype=cross_ab.dtype,
-                    device=array_api_compat.device(cross_ab),
-                )
-
-            ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
-
-            derived_rot_mat = (
-                xp.eye(3, dtype=a.dtype, device=array_api_compat.device(a))
-                + ssc_matrix
-                + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
+        selected = xp.take(valid, selected, axis=0)
+        # Rebuild the historical full boolean mask only for callers of this API.
+        # A sentinel permits empty selections without mutable/fancy scatter indexing.
+        rows = xp.arange(
+            rad_depth_mask.shape[0], dtype=valid.dtype, device=array_api_compat.device(valid)
+        )
+        padded = xp.concat(
+            (
+                selected,
+                xp.asarray(
+                    [rad_depth_mask.shape[0]],
+                    dtype=valid.dtype,
+                    device=array_api_compat.device(valid),
+                ),
             )
+        )
+        mask = xp.take(padded, xp.searchsorted(padded, rows), axis=0) == rows
+        return mask, radial, lateral, projected
 
-        # GPU Path (CuPy)
-        if (
-            cupy_available()
-            and hasattr(xp, "cuda")
-            and xp.cuda.is_available()
-            and "cupy" in xp.__name__
-        ):
+    def _calc_geo_dists_on_valid_coords(
+        self,
+        rot_coords_subset: Array,
+        source_point_bev: Array,
+        target_point_bev: Array,
+        sad: float,
+        lateral_cutoff: float,
+        *,
+        prepared_transform: tuple | None = None,
+    ):
+        """Return ordered local indices and distances for compact beam coordinates."""
+        xp = array_api_compat.array_namespace(
+            rot_coords_subset, source_point_bev, target_point_bev
+        )
+        if prepared_transform is None:
+            source = xp.astype(xp.reshape(source_point_bev, (3,)), rot_coords_subset.dtype)
+            targets = xp.astype(xp.reshape(target_point_bev, (1, 3)), rot_coords_subset.dtype)
+            prepared = self._prepare_ray_transforms(source, targets)
+            prepared_transform = (source, prepared["rotations"][0, ...], prepared["aligned"][0])
+        source_point_bev, rotation, aligned = prepared_transform
+        derived_rot_mat = None if aligned else rotation
+
+        lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
+        use_cupy = "cupy" in xp.__name__ and cupy_available() and xp.cuda.is_available()
+        use_torch = "torch" in xp.__name__ and pytorch_gpu_available()
+        if (use_cupy or use_torch) and rot_coords_subset.shape[0] > 0:
             if not self._cuda_kernel_used:
-                # necessary to avoid multiple logging
-                logger.info("Using Cupy kernel for geometric distance calculation.")
+                logger.info("Using %s kernel for geometric distance calculation.", xp.__name__)
                 self._cuda_kernel_used = True
-
-            rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
-            num_elements = rot_coords_subset.shape[0]
-
-            if num_elements > 0:
-                if derived_rot_mat is None:
-                    derived_rot_mat = xp.eye(3, dtype=a.dtype, device=self.device)
-
-                # Ensure derived_rot_mat is correct type
-                derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
-
-                lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
-
-                # NOTE!: I tried using the RawKernel. However saw no increase in performance.
-                # Thus, we stick to ElementwiseKernel for now (easier to maintain)
-
-                # CuPy ElementwiseKernel: call as function, returns values
-                # Inputs must be flattened for raw indexing
-                # size= is required since all inputs are 'raw'
-                (
-                    out_coords_x,
-                    out_coords_y,
-                    out_coords_z,
-                    out_lat_x,
-                    out_lat_z,
-                    out_rad_dist_sq,
-                    out_mask,
-                ) = _calc_geo_dists_cupy_kernel(
-                    rot_coords_subset.ravel(),
-                    derived_rot_mat.ravel(),
-                    source_point_bev,
-                    lateral_cutoff_sq_over_sad_sq,
-                    size=num_elements,
+            if derived_rot_mat is None:
+                derived_rot_mat = rotation
+            if use_cupy:
+                # Retain the existing fused kernel and its arithmetic order.
+                _, out_y, _, out_lat_x, out_lat_z, out_rad_dist_sq, out_mask = (
+                    _calc_geo_dists_cupy_kernel(
+                        rot_coords_subset.ravel(),
+                        derived_rot_mat.ravel(),
+                        source_point_bev,
+                        lateral_cutoff_sq_over_sad_sq,
+                        size=rot_coords_subset.shape[0],
+                    )
                 )
-
-                # Stack outputs to match expected format
-                out_coords_temp = xp.stack((out_coords_x, out_coords_y, out_coords_z), axis=1)
                 out_lat_dists = xp.stack((out_lat_x, out_lat_z), axis=1)
-
-                ix[rad_depth_ix] = out_mask
-
-                # Filter results
-                # Optimization: sync once for sub_ix
-                sub_ix = xp.nonzero(out_mask)[0]
-                rad_distances_sq = xp.take(out_rad_dist_sq, sub_ix, axis=0)
-                lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
-
-                if array_api_compat.size(sub_ix) > 0:
-                    iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
-                else:
-                    iso_lat_dists = xp.empty_like(lat_dists)
-
-                return ix, rad_distances_sq, lat_dists, iso_lat_dists
-
-        # GPU Path (PyTorch)
-        if pytorch_gpu_available() and "torch" in xp.__name__:
-            if not self._cuda_kernel_used:
-                logger.info("Using PyTorch kernel for geometric distance calculation.")
-                self._cuda_kernel_used = True
-
-            rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
-            num_elements = rot_coords_subset.shape[0]
-
-            if num_elements > 0:
-                if derived_rot_mat is None:
-                    derived_rot_mat = xp.eye(3, dtype=a.dtype, device=self.device)
-
-                # Ensure derived_rot_mat is correct type
-                derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
-
-                lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
-
+            else:
                 out_coords_temp, out_lat_dists, out_rad_dist_sq, out_mask = (
                     _calc_geo_dists_torch_kernel(
                         rot_coords_subset,
@@ -1282,82 +1330,22 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                         float(lateral_cutoff_sq_over_sad_sq),
                     )
                 )
-                # TODO: GPU synch happens here. Maybe this can be avoided?
-                ix[rad_depth_ix] = out_mask
-
-                # Filter results
-                # Optimization: sync once for sub_ix
-                sub_ix = xp.nonzero(out_mask)[0]
-                rad_distances_sq = xp.take(out_rad_dist_sq, sub_ix, axis=0)
-                lat_dists = xp.take(out_lat_dists, sub_ix, axis=0)
-
-                if array_api_compat.size(sub_ix) > 0:
-                    iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
-                else:
-                    iso_lat_dists = xp.empty_like(lat_dists)
-
-                return ix, rad_distances_sq, lat_dists, iso_lat_dists
-
-        # Vectorized CPU/NumPy path (Fallback)
-        if not self._cuda_kernel_used:
+                out_y = out_coords_temp[:, 1]
+        else:
             if not getattr(self, "_fallback_logged", False):
                 logger.info("Using vectorized path for geometric distance calculation.")
                 self._fallback_logged = True
-
-        rot_coords_subset = xp.take(rot_coords_bev, rad_depth_ix, axis=0)
-
-        # 1. Matrix Multiplication (N,3) @ (3,3) -> (N,3)
-        if derived_rot_mat is None:
-            out_coords_temp = rot_coords_subset
-        else:
-            derived_rot_mat = xp.astype(derived_rot_mat, rot_coords_subset.dtype)
-            if hasattr(xp, "matmul"):
-                out_coords_temp = xp.matmul(rot_coords_subset, derived_rot_mat)
-            else:
-                out_coords_temp = rot_coords_subset @ derived_rot_mat
-
-        # 2. Calculate Lateral Distances
-        lx = out_coords_temp[:, 0] + source_point_bev[0]
-        lz = out_coords_temp[:, 2] + source_point_bev[2]
-
-        out_lat_dists = xp.stack((lx, lz), axis=1)
-
-        # 3. Radial Distance Squared
-        out_rad_dist_sq = lx * lx + lz * lz
-
-        # 4. Mask
-        lateral_cutoff_sq_over_sad_sq = (lateral_cutoff / sad) ** 2
-        ry = out_coords_temp[:, 1]
-        limit = lateral_cutoff_sq_over_sad_sq * ry * ry
-        out_mask = out_rad_dist_sq <= limit
-
-        # Check if backend supports fancy indexing (JAX and array_api_strict don't)
-        xp_name = getattr(xp, "__name__", "")
-        supports_fancy_setitem = "jax" not in xp_name and "strict" not in xp_name
-
-        # Fancy indexing is supported for cupy/numpy/torch!
-        # in some cases the kernels above are not compiled
-        # So cupy and torch might rely on this path too.
-        if supports_fancy_setitem:
-            # Fast path: use fancy indexing scatter
-            ix[rad_depth_ix] = out_mask
-        else:
-            # NOTE! This fallback is necessary for jax/strict. Above can be called for numpy/torch/cupy.
-            # -> Above is approx 20~30% faster (proton dose calc)
-            # Slow path for immutable arrays: compute mask on full array
             if derived_rot_mat is None:
-                out_coords_full = rot_coords_bev
-            elif hasattr(xp, "matmul"):
-                out_coords_full = xp.matmul(rot_coords_bev, derived_rot_mat)
+                out_coords_temp = rot_coords_subset
             else:
-                out_coords_full = rot_coords_bev @ derived_rot_mat
-            lx_full = out_coords_full[:, 0] + source_point_bev[0]
-            lz_full = out_coords_full[:, 2] + source_point_bev[2]
-            rad_dist_sq_full = lx_full * lx_full + lz_full * lz_full
-            ry_full = out_coords_full[:, 1]
-            limit_full = lateral_cutoff_sq_over_sad_sq * ry_full * ry_full
-            cutoff_mask_full = rad_dist_sq_full <= limit_full
-            ix = rad_depth_mask & cutoff_mask_full
+                out_coords_temp = xp.matmul(rot_coords_subset, derived_rot_mat)
+            lx = out_coords_temp[:, 0] + source_point_bev[0]
+            lz = out_coords_temp[:, 2] + source_point_bev[2]
+            out_lat_dists = xp.stack((lx, lz), axis=1)
+            out_rad_dist_sq = lx * lx + lz * lz
+            out_y = out_coords_temp[:, 1]
+            limit = lateral_cutoff_sq_over_sad_sq * out_y * out_y
+            out_mask = out_rad_dist_sq <= limit
 
         # for array API compatible indexing
         sub_ix = xp.nonzero(out_mask)[0]
@@ -1370,8 +1358,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
         if array_api_compat.size(sub_ix) > 0:
             # Lateral distances projected onto isocenter
-            iso_lat_dists = lat_dists / out_coords_temp[sub_ix, 1][:, None] * sad
+            iso_lat_dists = lat_dists / xp.take(out_y, sub_ix, axis=0)[:, None] * sad
         else:
             iso_lat_dists = xp.empty_like(lat_dists)
 
-        return ix, rad_distances_sq, lat_dists, iso_lat_dists
+        return sub_ix, rad_distances_sq, lat_dists, iso_lat_dists
