@@ -245,12 +245,15 @@ class RayTracerBase(ABC):
             [ray.ray_pos_bev for ray in beam.rays]
         )
 
+        # lateral_cut_off is defined at the isocenter plane, so it diverges like the rays
+        ray_matrix_cut_off = ray_matrix_scale * self.lateral_cut_off
+
         if self.fixed_ray_spacing_length is not None:
             ray_extent = self.fixed_ray_spacing_length
         else:
             # look at max ray_positions in bev and add lateral cutoff
             ray_extent = 2.0 * (
-                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + self.lateral_cut_off
+                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + ray_matrix_cut_off
             )
 
         spacing_range = ray_spacing * np.arange(
@@ -259,7 +262,9 @@ class RayTracerBase(ABC):
             dtype=self.precision,
         )
 
-        candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
+        candidate_ray_mx = self._get_candidate_ray_matrix(
+            spacing_range, reference_positions_bev, cut_off=ray_matrix_cut_off
+        )
 
         ray_idx_z, ray_idx_x = np.nonzero(candidate_ray_mx)
 
@@ -415,10 +420,18 @@ class RayTracerBase(ABC):
 
         return rad_depth_cubes
 
-    def _get_candidate_ray_matrix(self, spacing_range: Array, ref_pos_bev: Array) -> Array:
-        """Get candidate ray matrix for given ray spacing and reference positions."""
+    def _get_candidate_ray_matrix(
+        self, spacing_range: Array, ref_pos_bev: Array, cut_off: Optional[float] = None
+    ) -> Array:
+        """Get candidate ray matrix for given ray spacing and reference positions.
+
+        ``cut_off`` is the disc radius on the plane of ``ref_pos_bev``; it defaults to
+        ``lateral_cut_off``, which is only correct if that plane is the isocenter plane.
+        """
 
         xp = array_api_compat.array_namespace(spacing_range, ref_pos_bev)
+        if cut_off is None:
+            cut_off = self.lateral_cut_off
 
         # The candidate matrix is a union of discs, and per grid
         # row z each disc covers one contiguous x-interval, so membership reduces to
@@ -432,7 +445,7 @@ class RayTracerBase(ABC):
         ref_x = xp.astype(ref_pos_bev[:, 0], xp.float64)[:, None]
         ref_z = xp.astype(ref_pos_bev[:, 2], xp.float64)[:, None]
 
-        half_width_sq = float(self.lateral_cut_off) ** 2 - (grid[None, :] - ref_z) ** 2  # (M, N)
+        half_width_sq = float(cut_off) ** 2 - (grid[None, :] - ref_z) ** 2  # (M, N)
         # keep only the (disc, row) pairs the disc actually reaches
         inside = xp.reshape(half_width_sq >= 0, (-1,))
         half_width = xp.sqrt(xp.reshape(half_width_sq, (-1,))[inside])
