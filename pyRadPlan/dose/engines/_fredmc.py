@@ -1197,8 +1197,8 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         ct : CT
             The CT object containing the patient data.
         """
-        self._set_up_hu_table()
         self._set_up_patient_ct(self._scenario_ct(ct))
+        self._set_up_hu_table()
         self._write_run_file()
         self._write_regions_file()
         self._write_plan_delivery_file()
