@@ -135,17 +135,44 @@ def test_extra_blds_jaw_pair_matches_field_window(test_data_xia):
 
 
 def test_leaf_grid_centers_are_evenly_spaced_and_cover_the_range():
-    """The MLC grid is a fixed, isocenter-centered lattice covering [min_stack, max_stack]."""
+    """The MLC grid is a fixed lattice covering every part of (field_min, field_max)."""
     sequencer = XiaLeafSequencer()
     leaf_width = 10.0
 
-    # -22 is nearest to leaf center -20, 23 is nearest to leaf center 20.
-    leaf_row_pos = sequencer._leaf_grid_centers(
-        min_stack=-22.0, max_stack=23.0, leaf_width=leaf_width
-    )
-
+    # Odd leaf count: a leaf center on isocenter.
+    leaf_row_pos = sequencer._leaf_grid_centers(-22.0, 23.0, leaf_width, num_of_leaf_pairs=41)
     np.testing.assert_allclose(leaf_row_pos, [-20.0, -10.0, 0.0, 10.0, 20.0])
+
+    # Even leaf count: a leaf boundary on isocenter.
+    leaf_row_pos = sequencer._leaf_grid_centers(-22.0, 23.0, leaf_width, num_of_leaf_pairs=40)
+    np.testing.assert_allclose(leaf_row_pos, [-25.0, -15.0, -5.0, 5.0, 15.0, 25.0])
     np.testing.assert_allclose(np.diff(leaf_row_pos), leaf_width)
+
+    # A field edge exactly on a leaf boundary does not pull in the next row.
+    leaf_row_pos = sequencer._leaf_grid_centers(-20.0, 20.0, leaf_width, num_of_leaf_pairs=40)
+    np.testing.assert_allclose(leaf_row_pos, [-15.0, -5.0, 5.0, 15.0])
+
+
+def test_symmetric_field_gets_symmetric_leaf_rows(test_data_xia):
+    """A field symmetric about isocenter must stay symmetric on the leaf grid."""
+    pln_mat, *_ = test_data_xia
+    sequencer = XiaLeafSequencer(_pln_with_mlc(pln_mat, leaf_width=10.0, number_of_elements=40))
+
+    leaf_row_pos = sequencer._leaf_grid_centers(-37.5, 37.5, 10.0, num_of_leaf_pairs=40)
+    # leaf rows mirrored around 0 and span full field [-40, 40]
+    np.testing.assert_allclose(leaf_row_pos, -leaf_row_pos[::-1])
+    np.testing.assert_allclose([leaf_row_pos[0] - 5.0, leaf_row_pos[-1] + 5.0], [-40.0, 40.0])
+
+    assert sequencer._central_leaf_pair(bixel_width=5.0) == 20.5
+    mlc = MLC(
+        device_type="MLCX",
+        number_of_elements=40,
+        leaf_width=10.0,
+        leaf_position_boundaries=leaf_row_pos - 5.0,
+        leaf_positions=np.tile([-5.0, 5.0], (len(leaf_row_pos), 1)),
+    )
+    # Rows straddle the boundary between pairs 20 and 21 (1-based), i.e. 0-based 16..23.
+    np.testing.assert_array_equal(np.flatnonzero(mlc.is_active_leaf_pair(20.5)), np.arange(16, 24))
 
 
 def test_interp_rows_reproduces_a_linear_ramp_exactly():
@@ -176,7 +203,7 @@ def test_interp_rows_round_trip_recovers_source_points():
     sequencer = XiaLeafSequencer()
     native_row_z = np.arange(-40.0, 41.0, 5.0)
     leaf_row_pos = sequencer._leaf_grid_centers(
-        min_stack=native_row_z.min(), max_stack=native_row_z.max(), leaf_width=12.0
+        native_row_z.min(), native_row_z.max(), leaf_width=12.0, num_of_leaf_pairs=40
     )
     matrix = native_row_z[:, None] * 2.0  # linear in z, one column
 
@@ -184,7 +211,8 @@ def test_interp_rows_round_trip_recovers_source_points():
     upsampled = sequencer._interp_rows(downsampled, leaf_row_pos, native_row_z)
 
     # Interior points (away from the edges, where clamping can bite) round-trip exactly.
-    interior = (native_row_z > leaf_row_pos.min()) & (native_row_z < leaf_row_pos.max())
+    # The outermost leaf rows may reach past the native rows, so they are clamped too.
+    interior = (native_row_z > leaf_row_pos[1]) & (native_row_z < leaf_row_pos[-2])
     np.testing.assert_allclose(upsampled[interior, 0], matrix[interior, 0])
 
 

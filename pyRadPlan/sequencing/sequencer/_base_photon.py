@@ -95,31 +95,53 @@ class PhotonSequencer(Sequencer):
             return None
         return self.leaf_width
 
-    @staticmethod
-    def _leaf_grid_centers(min_stack: float, max_stack: float, leaf_width: float) -> np.ndarray:
-        """
-        Physical MLC leaf row centers (the "MLC grid") covering ``[min_stack, max_stack]``.
+    def _central_leaf_pair(self, bixel_width: float) -> float:
+        """1-based index of the leaf pair on isocenter (see ``MLC.is_active_leaf_pair``).
 
-        Leaf centers sit at integer multiples of ``leaf_width`` from
-        isocenter (leaf ``j`` at ``z = j * leaf_width``); this returns every
-        leaf row whose center is nearest to some part of the beam's native
-        ray extent.
+        On a physical leaf grid (defined in machine MLC) the device is symmetric about
+        isocenter, so an even leaf count puts a leaf boundary, an odd count puts a leaf
+        center on isocenter.
+        Sequencing directly on the ray grid (no machine MLC or leaf width equal to bixel
+        width) keeps matRad's ``ceil(N/2)``, with a leaf centre on isocenter.
+        """
+        if self._leaf_pitch(bixel_width) is None:
+            return int(math.ceil(self.num_of_mlc_leaf_pairs / 2.0))
+        return (self.num_of_mlc_leaf_pairs + 1) / 2.0
+
+    @staticmethod
+    def _leaf_grid_centers(
+        field_min: float, field_max: float, leaf_width: float, num_of_leaf_pairs: int
+    ) -> np.ndarray:
+        """
+        Physical MLC leaf row centers (the "MLC grid") covering ``(field_min, field_max)``.
+
+        The device is symmetric about isocenter: with an even number of leaf pairs
+        a leaf boundary sits on isocenter (centers at ``(j + 0.5) * leaf_width``),
+        with an odd number a leaf center does (centers at ``j * leaf_width``).
+        Every leaf row overlapping the open interval is returned, so no part of
+        the field is left uncovered.
 
         Parameters
         ----------
-        min_stack, max_stack : float
-            Physical extent (mm) of the beam's native ray grid along the
-            leaf-stack direction.
+        field_min, field_max : float
+            Physical extent (mm) of the beam's native bixel field (outer bixel
+            edges) along the leaf-stack direction.
         leaf_width : float
             Physical leaf pitch (mm).
+        num_of_leaf_pairs : int
+            Number of leaf pairs of the device, which fixes the lattice offset.
 
         Returns
         -------
         np.ndarray
             Ascending physical leaf-row centers (mm), length dim_stack_leaf.
         """
-        j_start, j_end = np.floor(np.array([min_stack, max_stack]) / leaf_width + 0.5).astype(int)
-        return np.arange(j_start, j_end + 1, dtype=float) * leaf_width
+        offset = 0.5 if num_of_leaf_pairs % 2 == 0 else 0.0
+        # Row j spans [(j + offset - 0.5) w, (j + offset + 0.5) w]; the tolerance
+        # drops rows that only touch the field at an edge.
+        j_start = math.floor(field_min / leaf_width - offset - 0.5 + 1e-9) + 1
+        j_end = math.ceil(field_max / leaf_width - offset + 0.5 - 1e-9) - 1
+        return (np.arange(j_start, j_end + 1, dtype=float) + offset) * leaf_width
 
     @staticmethod
     def _interp_rows(
@@ -247,18 +269,22 @@ class PhotonSequencer(Sequencer):
         row_pos = native_row_z
         leaf_row_pos = None
         if leaf_width is not None:
-            leaf_row_pos = self._leaf_grid_centers(min_stack, max_stack, leaf_width)
-            central_leaf_pair = int(math.ceil(self.num_of_mlc_leaf_pairs / 2.0))
-            j_field = np.round(leaf_row_pos / leaf_width).astype(int)
-            j_min_valid = central_leaf_pair - self.num_of_mlc_leaf_pairs
-            j_max_valid = central_leaf_pair - 1
-            if j_field.min() < j_min_valid or j_field.max() > j_max_valid:
+            leaf_row_pos = self._leaf_grid_centers(
+                min_stack - bixel_width / 2.0,
+                max_stack + bixel_width / 2.0,
+                leaf_width,
+                self.num_of_mlc_leaf_pairs,
+            )
+            device_half = self.num_of_mlc_leaf_pairs * leaf_width / 2.0
+            rows_min = leaf_row_pos.min() - leaf_width / 2.0
+            rows_max = leaf_row_pos.max() + leaf_width / 2.0
+            if rows_min < -device_half - 1e-9 or rows_max > device_half + 1e-9:
                 raise ValueError(
-                    f"Beam field (leaf rows z={leaf_row_pos.min():.1f}..{leaf_row_pos.max():.1f} mm) "
+                    f"Beam field (leaf rows z={rows_min:.1f}..{rows_max:.1f} mm) "
                     "does not fit within the machine's MLC coverage "
-                    f"(z={j_min_valid * leaf_width:.1f}..{j_max_valid * leaf_width:.1f} mm for "
+                    f"(z={-device_half:.1f}..{device_half:.1f} mm for "
                     f"{self.num_of_mlc_leaf_pairs} leaf pairs at {leaf_width:.1f} mm leaf width, "
-                    f"centered so leaf pair {central_leaf_pair} sits at isocenter). "
+                    "centered on isocenter). "
                     "The field does not fit within the physical collimator."
                 )
             ray_map = self._interp_rows(ray_map, native_row_z, leaf_row_pos)
@@ -686,7 +712,7 @@ class PhotonSequencer(Sequencer):
 
         # MLC parameters
         bixel_width = stf.beams[0].bixel_width  # [mm]
-        central_leaf_pair = int(math.ceil(self.num_of_mlc_leaf_pairs / 2.0))
+        central_leaf_pair = self._central_leaf_pair(bixel_width)
 
         bixel_ind_offset = 0
         total_num_of_bixels = sum(beam.total_number_of_bixels for beam in stf.beams)

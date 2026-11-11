@@ -65,7 +65,10 @@ class BeamSequence(PyRadPlanBaseModel):
     lim_r : Optional[list[float]]
         Right leaf travel limit (DAO bound, not a position) for each leaf pair.
     central_leaf_pair : Optional[float]
-        The index of the central leaf pair in the beam (on isocenter).
+        1-based index of the leaf pair on isocenter. On a physical leaf grid with an
+        even leaf count a leaf boundary sits on the isocenter (``N/2 + 0.5``), for an
+        odd leaf count a leaf center (``(N + 1) / 2``). Sequencing directly on the ray
+        grid keeps matRad's ``ceil(N/2)``, with a leaf centre on isocenter.
     left_leaf_pos : Optional[list[NDArray]]
         A list of 1D arrays containing the left leaf positions of the active leaf pairs
         for each shape in the beam. Mirrors ``mlc_sequence[m].leaf_positions[:, 0]``.

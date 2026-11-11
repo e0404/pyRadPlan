@@ -27,6 +27,16 @@ def _smooth_step(coord: NDArray, edge: float, dx: float) -> NDArray:
     return np.clip((coord - edge) / dx + 0.5, 0.0, 1.0)
 
 
+def _centered_grid(half_size: float, spacing: float) -> NDArray:
+    """Odd-length grid with exactly *spacing* pitch, centered on 0 and covering ±*half_size*.
+
+    Must match the ``resolution * arange(-n // 2, n // 2 + 1)`` grid that
+    ``FieldShapeAsBLD`` assigns to the mask, so the pitch has to be exact.
+    """
+    half_n = int(np.ceil(half_size / spacing - 1e-9))
+    return spacing * np.arange(-half_n, half_n + 1)
+
+
 class BeamLimitingDevice(PyRadPlanBaseModel):
     """Base class for beam limiting device objects.
 
@@ -123,20 +133,16 @@ class MLC(BeamLimitingDevice):
         Parameters
         ----------
         central_leaf_pair : float
-            Index of the central leaf pair in the full MLC.
+            1-based index of the leaf pair centred on isocenter, with indices
+            increasing towards negative stack coordinates. Fractional (``k + 0.5``)
+            when isocenter falls on the boundary between pairs ``k`` and ``k + 1``.
         """
         # Leaf pairs are indexed by their centre, while leaf_position_boundaries
         # are the rows' lower edges
-        half_row = self.leaf_width / 2.0
-        top_leaf_pair_pos = self.leaf_position_boundaries[-1] + half_row
-        bottom_leaf_pair_pos = self.leaf_position_boundaries[0] + half_row
-        top_leaf_pair = central_leaf_pair - top_leaf_pair_pos / self.leaf_width
-        bottom_leaf_pair = central_leaf_pair - bottom_leaf_pair_pos / self.leaf_width
+        centers = self.leaf_position_boundaries + self.leaf_width / 2.0
+        idx = np.rint(central_leaf_pair - 1 - centers / self.leaf_width).astype(int)
         is_active_leaf_pair = np.zeros(self.number_of_elements)
-        # Activate indices between top and bottom leaf pairs (casting to int)
-        start_ix = max(int(math.floor(top_leaf_pair)) - 1, 0)
-        end_ix = int(math.ceil(bottom_leaf_pair))
-        is_active_leaf_pair[start_ix:end_ix] = 1
+        is_active_leaf_pair[idx[(idx >= 0) & (idx < self.number_of_elements)]] = 1
         return is_active_leaf_pair
 
     def full_leaf_positions(self, central_leaf_pair: float) -> np.ndarray:
@@ -276,10 +282,7 @@ class MLC(BeamLimitingDevice):
         half_size = max(boundaries_max, positions_max)
 
         if isinstance(spacing, float):
-            n = int(np.ceil(2 * half_size / spacing))
-            if n % 2 == 0:
-                n += 1
-            spacing_vector = np.linspace(-half_size, half_size, n)
+            spacing_vector = _centered_grid(half_size, spacing)
             grid_x, grid_y = np.meshgrid(spacing_vector, spacing_vector, indexing="xy")
             dx_x = spacing
             dx_y = spacing
@@ -477,10 +480,7 @@ class Jaw(BeamLimitingDevice):
         linear ramp over +/- 1/2 cell on either side.
         """
         if isinstance(spacing, float):
-            n = int(np.ceil(self.field_width / spacing))
-            if n % 2 == 0:
-                n += 1
-            spacing_vector = np.linspace(-self.field_width / 2, self.field_width / 2, n)
+            spacing_vector = _centered_grid(self.field_width / 2, spacing)
             grid_x, grid_y = np.meshgrid(spacing_vector, spacing_vector, indexing="xy")
             dx_x = spacing
             dx_y = spacing

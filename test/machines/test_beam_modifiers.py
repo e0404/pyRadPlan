@@ -336,7 +336,9 @@ def test_full_leaf_positions():
     # (silent, wrong) instead of an error.
     mlc_3 = _mlc_with_rows(1, 20)
 
-    central_leaf_pair = 20  # ceil(40 / 2)
+    # Boundaries at multiples of the leaf width: a leaf boundary on isocenter,
+    # between pairs 20 and 21 (1-based).
+    central_leaf_pair = 20.5
 
     full = mlc_1.full_leaf_positions(central_leaf_pair)
     assert full.shape == (40, 2)
@@ -347,6 +349,25 @@ def test_full_leaf_positions():
 
     with pytest.raises(ValueError, match="does not fit within the physical collimator"):
         mlc_3.full_leaf_positions(central_leaf_pair)
+
+
+@pytest.mark.parametrize("spacing", [0.5, 0.7, 1.0])
+def test_transmission_mask_grid_has_exact_spacing(spacing):
+    """FieldShapeAsBLD labels the mask with ``spacing * arange(-n//2, n//2 + 1)``, so
+    the mask must be sampled at exactly that pitch, or it is silently rescaled.
+    """
+    mlc = MLC(
+        device_type="MLCX",
+        leaf_width=10.0,
+        leaf_position_boundaries=np.array([-20.0, -10.0, 0.0, 10.0]),
+        leaf_positions=np.tile([-13.3, 8.1], (4, 1)),
+    )
+    mask = mlc.calculate_transmission_mask(spacing)
+
+    # A one-cell-wide edge ramp sampled at the cell pitch sums to the exact open
+    # length, so any mismatch between sampling and labelled pitch shows up here.
+    row = mask[mask.shape[0] // 2]
+    np.testing.assert_allclose(row.sum() * spacing, 8.1 + 13.3, atol=1e-5)
 
 
 @pytest.mark.parametrize("orientation", ["X", "Y"])
