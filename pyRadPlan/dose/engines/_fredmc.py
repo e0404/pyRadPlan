@@ -20,6 +20,7 @@ For installation instructions and more information, please visit: https://www.fr
 Developed by the matRad development team.
 """
 
+import itertools
 import logging
 import os
 import shutil
@@ -1432,8 +1433,19 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         if self.simu_dir is not None:
             self._fred_root_folder = self.simu_dir
         elif self.external_calculation is True and self._save_input is None:
+            parent = get_data_dir() / "fred"
+            parent.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            self._fred_root_folder = get_data_dir() / "fred" / stamp
+            # mkdir without exist_ok claims the name atomically, so jobs started in the
+            # same second never share (and clean up) each other's tree
+            for n in itertools.count():
+                folder = parent / (stamp if n == 0 else f"{stamp}_{n}")
+                try:
+                    folder.mkdir()
+                    break
+                except FileExistsError:
+                    continue
+            self._fred_root_folder = folder
         else:
             self._fred_root_is_temp = True
             self._fred_root_folder = Path(tempfile.mkdtemp())
