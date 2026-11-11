@@ -27,7 +27,7 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
     Attributes
     ----------
     energy : float
-        The maximum energy of the photon beam [MeV] (corresponds to the LINAC voltage [MV]).
+        The nominal energy of the photon beam [MeV] (corresponds to the stated LINAC voltage [MV]).
     m : float
         The effective attenuation coefficient [1/mm] for the photon beam.
     penumbra : float
