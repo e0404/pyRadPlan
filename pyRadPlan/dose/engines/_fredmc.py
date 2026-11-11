@@ -814,7 +814,11 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self.let_cube = None
 
     def _log_external_run_instructions(self, stf: SteeringInformation) -> None:
-        root = self._fred_root_folder
+        # A temporary root is deleted after its inputs are copied to save_input
+        if self._fred_root_is_temp and self._save_input is not None:
+            root = Path(self._save_input)
+        else:
+            root = self._fred_root_folder
         if self._calc_dose_direct and self.dose_per_beam:
             runs = [f"beam_{b}" for b in range(len(stf.beams))]
         else:
