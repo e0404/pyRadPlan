@@ -1,7 +1,9 @@
 """Interface for voxel geometry ray tracers."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Union, Any, Optional
+from typing import TYPE_CHECKING, Union, Any, Optional
 import logging
 import time
 
@@ -14,7 +16,9 @@ from ..core.xp_utils.typing import Array
 from . import _kernels
 from ..core.np2sitk import linear_indices_to_image_coordinates
 from ..geometry import lps
-from ..stf._beam import Beam
+
+if TYPE_CHECKING:
+    from ..stf._beam import Beam
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +233,9 @@ class RayTracerBase(ABC):
             tracing namespace/device. Untraced voxels contain NaN. Image
             geometry is unchanged and available from ``self.cubes``.
         """
+
+        # stf.generators imports the ray tracer, so Beam can only be imported lazily.
+        from ..stf._beam import Beam
 
         if not isinstance(beam, Beam):
             beam = Beam.model_validate(beam)
