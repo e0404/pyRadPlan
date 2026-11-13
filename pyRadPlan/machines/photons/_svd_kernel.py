@@ -20,8 +20,8 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
 
     The kernel is separated into a depth-dependent dose component and a radius-dependent
     lateral profile component. The depth-dependent dose component is represented by a set of
-    exponential functions with different weighting factors (betas) and an effective attenuation
-    coefficient. For each dose component, the radial lateral profile is represented by a set of
+    exponential functions with different build-up coefficients (betas) and an effective
+    attenuation coefficient. For each dose component, the radial lateral profile is represented by a set of
     kernel data at different source-to-surface distances (SSDs).
 
     Attributes
@@ -33,7 +33,8 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
     penumbra : float
         The penumbra of an open field as FWHM at isocenter [mm].
     kernel_betas : np.ndarray, shape (n_components,)
-        The weighting factors of the kernel depth dose components [1/mm].
+        The build-up coefficients of the kernel depth dose components [1/mm], i.e. the
+        exponents in ``exp(-beta * depth)``.
     kernel_ssds : np.ndarray, shape (n_ssds,)
         The source-to-surface distances (SSDs) at which the kernel data is defined [mm].
     kernel_pos : np.ndarray, shape (n_positions,)
@@ -56,7 +57,7 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
 
     # Tabulated kernel data
     kernel_betas: NDArray[Shape["1-*"], np.float64] = Field(
-        description="weighting factors for kernel components", alias="betas"
+        description="build-up coefficients (exponents) of the kernel components", alias="betas"
     )
     kernel_ssds: NDArray[Shape["1-*"], np.float64] = Field(description="Kernel SSD points")
     kernel_pos: NDArray[Shape["1-*"], np.float64] = Field(description="Kernel position")

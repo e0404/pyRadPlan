@@ -51,8 +51,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         Apply the machine's primary fluence profile to each bixel.
         The kernel interpolators are then recomputed for each ray (slower).
     kernel_cutoff : float
-        Lateral cutoff of the kernel [mm]. Limited to the tabulated kernel range.
-        The default (``inf``) uses the full range.
+        Lateral cutoff of the kernel [mm]. Clipped to the tabulated range of each beam's
+        kernel, so the default (``inf``) uses the full range. A warning is issued if it is
+        smaller than ``geometric_lateral_cutoff``.
     random_seed : int
         Random seed used for dij sampling.
     int_conv_resolution : float
@@ -376,6 +377,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         curr_ray : dict
             Current ray information struct as prepared by ``_init_ray``. Keys used here:
             - ``rad_depths``: radiological depths (source to voxel) [mm].
+            - ``kernel``: the photon SVD kernel (see ``PhotonSVDKernel``)
+            - ``kernel_depth_parameters``: cached depth dose constants of the kernel (see
+              ``_get_kernel_depth_parameters``)
             - ``kernel_interpolators``: the kernel lateral profiles in the isocenter
               plane (see ``_get_kernel_interpolators``)
             - ``iso_lat_dists``: (x,z) offsets from the ray to each voxel in the
@@ -435,9 +439,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         bixel_dose = bixel_dose * ((sad / geo_depths) ** 2)
 
         bixel["physical_dose"] = bixel_dose
-        bixel["weight"] = curr_ray["beamlets"][k][
-            "weight"
-        ]  # weight of the beamlet corresponding to the bixel
+        # Weight of the beamlet corresponding to the bixel
+        bixel["weight"] = curr_ray["beamlets"][k]["weight"]
         bixel["ix"] = curr_ray["ix"]
 
         if self.enable_dij_sampling:
