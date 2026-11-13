@@ -61,7 +61,7 @@ dv:Tf/Beam/Spot/Times = {{ num_times }} {{ range(timeline_start+10, timeline_end
 # INPUT PHYSICS SETTINGS
 s:Ph/ListName = "PhysicsList"
 s:Ph/PhysicsList/Type = "Geant4_Modular"
-sv:Ph/PhysicsList/Modules = {{ physics_modules | length }}{% for m in physics_modules %} "{{ m }}"{% endfor %}"
+sv:Ph/PhysicsList/Modules = {{ physics_modules | length }}{% for m in physics_modules %} "{{ m }}"{% endfor %}
 d:Ph/PhysicsList/CutForElectron = 0.050000 mm
 d:Ph/PhysicsList/CutForAllParticles = 0.050000 mm
 d:Ph/PhysicsList/CutForGamma = 0.050000 mm

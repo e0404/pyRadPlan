@@ -40,23 +40,30 @@ num_threads : int
     Number of CPU threads used for simulation execution.
 num_runs : int
     Number of Monte Carlo runs for statistical averaging.
+ignore_outside_patient : bool
+    Zero the dose (and LET / biological quantities) in voxels outside all cst structures.
+    Defaults to False.
 
 external_calculation : bool | str
     Flag or mode indicating whether external TOPAS execution is used.
 
-physics_modules : dict
-    Dictionary defining Geant4 physics lists used in the simulation.
+physics_modules : list[str]
+    Geant4 physics modules used in the simulation. Defaults to a preset for ion therapy
+    (``g4em-standard_opt4``, ``g4h-phy_QGSP_BIC_HP``, ``g4ion-QMD``, ...).
 
 scorer : dict
     Configuration of scoring options (dose to medium, water, LET, output type). The LET
-    scorer is switched on when LET is computed or a biological model needs it.
+    scorer is switched on when LET is computed or a biological model needs it. The
+    physical dose is the dose to medium, or the dose to water when only that is scored.
 calc_bio_dose : "auto" or bool
     Compute the biological influence matrices of an LET-based model from the scored LET.
 calc_let : "auto" or bool
     Store the LET-weighted dose (``let_dose``); ``"auto"`` when the model needs LET.
 
 material_converter : dict
-    Configuration for material conversion strategy (RSP or Schneider method).
+    Material conversion: ``"mode"`` is ``"RSP"`` (water at the RSP of each HU) or
+    ``"Schneider"`` (tissue compositions by HU). In Schneider mode ``"converter_file"`` is a
+    TOPAS Schneider parameter file; ``None`` uses the TOPAS example converter.
 
 input_filenames : dict
     Paths to TOPAS input template files for beam setup, scorers, and converters.
@@ -142,6 +149,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     scaling_factor: float
     num_threads: int
     num_runs: int
+    ignore_outside_patient: bool
 
     physics_modules: list[str]
     base_topas_folder = resources.files("pyRadPlan.data.topas")
@@ -150,10 +158,10 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         / "input"
         / "beam_setup"
         / "TOPAS_beam_setup_biGaussian.txt.in",
-        "matConv_Schneider_loadFromFile": base_topas_folder
+        "matConv_Schneider_default": base_topas_folder
         / "input"
         / "material_converter"
-        / "TOPAS_SchneiderConverter.txt.in",
+        / "TOPAS_schneider_converter.txt.in",
         "scorer_doseToMedium": base_topas_folder
         / "input"
         / "scorer"
@@ -175,7 +183,8 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
     material_converter = {
         "mode": "RSP",  # "Schneider", "RSP"
-        "load_from_file": False,  # set true if you want to use your own SchneiderConverter written in "TOPAS_SchneiderConverter"
+        # Schneider parameter file; None uses the TOPAS example converter shipped with pyRadPlan
+        "converter_file": None,
     }
 
     _template_filenames = {
@@ -199,24 +208,25 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self.rsp_material = "G4_WATER"
 
         self.scaling_factor = 1e6
+        self.ignore_outside_patient = False
 
         self.external_calculation = True
         self.calc_bio_dose = "auto"
         self.calc_let = "auto"
-        # an instance copy, so switching on the LET scorer leaves the class default alone
+        # instance copies, so changing an entry leaves the class defaults alone
         self.scorer = dict(type(self).scorer)
+        self.material_converter = dict(type(self).material_converter)
+        self.input_filenames = dict(type(self).input_filenames)
 
-        self.physics_modules = {
-            "default": [
-                "g4em-standard_opt4",
-                "g4h-phy_QGSP_BIC_HP",
-                "g4decay",
-                "g4h-elastic_HP",
-                "g4stopping",
-                "g4ion-QMD",
-                "g4radioactivedecay",
-            ]
-        }
+        self.physics_modules = [
+            "g4em-standard_opt4",
+            "g4h-phy_QGSP_BIC_HP",
+            "g4decay",
+            "g4h-elastic_HP",
+            "g4stopping",
+            "g4ion-QMD",
+            "g4radioactivedecay",
+        ]
 
         self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
@@ -257,9 +267,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             "trans_y": np.round(beams_topas[beam_ix]["iso_center"][1], 6),
             "trans_z": np.round(beams_topas[beam_ix]["iso_center"][2], 6),
             "input_beam_definition": "".join(input_beam_definition),
-            "physics_modules": self.physics_modules.get(
-                self.radiation_mode, self.physics_modules["default"]
-            ),
+            "physics_modules": self.physics_modules,
         }
 
         try:
@@ -379,6 +387,20 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         file_path = os.path.join(self.simu_dir, self._patient_filename)
 
         image_cube = sitk.GetArrayFromImage(sitk.Cast(ct.cube_hu, sitk.sitkInt16))
+
+        # Material conversion
+        input_material_definition = []
+        mode = self.material_converter.get("mode")
+        if mode == "Schneider":
+            material_converter = "Schneider"
+            input_material_definition, (hu_min, hu_max) = self._read_schneider_converter()
+            # The Schneider tables cover a fixed HU range (e.g. air at -1024 HU -> -1000)
+            image_cube = np.clip(image_cube, hu_min, hu_max).astype(np.int16)
+        elif mode != "RSP":
+            raise ValueError(
+                f"Unknown TOPAS material converter mode '{mode}' (use 'RSP' or 'Schneider')."
+            )
+
         # write ct cube
         try:
             image_cube.tofile(file_path + ".dat")
@@ -390,9 +412,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         except Exception as e:
             logger.warning(f"An unexpected error occurred: {e}")
 
-        # Material conversion
-        input_material_definition = []
-        if self.material_converter["mode"] == "RSP":
+        if mode == "RSP":
             material_converter = "MaterialTagNumber"
             hlut = default_hlut()
             unique_materials = np.unique(image_cube)
@@ -422,22 +442,6 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 )
             )
             input_material_definition.append("\n")
-        elif self.material_converter["mode"] == "Schneider":
-            material_converter = "SchneiderConverter"
-            if self.material_converter["load_from_file"]:
-                mat_conv_path = self.input_filenames["matConv_Schneider_loadFromFile"]
-                if not os.path.exists(mat_conv_path):
-                    logger.warning(f"Material converter file does not exist: {mat_conv_path}")
-                else:
-                    with open(mat_conv_path, "r") as mat_conv_file:
-                        for line in mat_conv_file:
-                            input_material_definition.append(line)
-            else:
-                logger.warning(
-                    "Schneider converter without load_from_file is not implemented yet."
-                )
-        else:
-            logger.error(f"Unknown material converter mode: {self.material_converter['mode']}")
         template_variables = {
             "world_material": self.room_material,
             "material_converter": material_converter,
@@ -461,6 +465,46 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             logger.warning(f"An error occurred while writing to {file_path}. Error: {e}")
         except Exception as e:
             logger.warning(f"An unexpected error occurred: {e}")
+
+    def _read_schneider_converter(self) -> tuple[list[str], tuple[int, int]]:
+        """
+        Read the Schneider converter parameters and the HU range their tables cover.
+
+        Returns the parameter lines without ``Ge/Patient/ImagingToMaterialConverter``, which
+        the patient file sets itself, and the lowest and highest HU of
+        ``Ge/Patient/SchneiderHounsfieldUnitSections``.
+        """
+        path = self.material_converter.get("converter_file")
+        if path is None:
+            path = self.input_filenames["matConv_Schneider_default"]
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"TOPAS Schneider converter file not found: {path}")
+        with open(path, "r") as converter_file:
+            lines = converter_file.readlines()
+
+        def parameter_name(line: str) -> str:
+            if line.lstrip().startswith("#") or "=" not in line:
+                return ""
+            return line.split("=", 1)[0].strip().lower()
+
+        lines = [
+            line
+            for line in lines
+            if not parameter_name(line).endswith("ge/patient/imagingtomaterialconverter")
+        ]
+        sections = [
+            line
+            for line in lines
+            if parameter_name(line).endswith("ge/patient/schneiderhounsfieldunitsections")
+        ]
+        if not sections:
+            raise ValueError(
+                f"TOPAS Schneider converter file {path} defines no "
+                "Ge/Patient/SchneiderHounsfieldUnitSections."
+            )
+        bounds = sections[-1].split("=", 1)[1].split()[1:]
+        # The last section bound is exclusive
+        return lines, (int(float(bounds[0])), int(float(bounds[-1])) - 1)
 
     def _write_run_file(self, beam_ix: int) -> None:
         """Write  TOPAS files for external simulation."""
@@ -520,7 +564,21 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         Dij
             The dose influence matrix containing the calculated dose.
         """
+        if not self._calc_dose_direct:
+            raise NotImplementedError(
+                "TOPAS computes forward doses only (one dose cube per beam), not a dose "
+                "influence matrix. Use calc_dose_forward with the TOPAS engine, or another "
+                "engine (e.g. a pencil-beam engine or FRED) for calc_dose_influence."
+            )
         dij = self._init_dose_calc(ct, cst, stf)
+        # The CT is written in array order and the isocenter placed assuming axis-aligned
+        # voxels, so a rotated or mirrored grid would put the anatomy in the wrong place
+        if not np.allclose(self.dose_grid.direction, np.eye(3)):
+            raise NotImplementedError(
+                "TOPAS only supports CTs with an identity direction matrix, got "
+                f"{self.dose_grid.direction.tolist()}. Resample the CT to an identity "
+                "direction first."
+            )
 
         w = [beamlet.weight for beam in stf.beams for ray in beam.rays for beamlet in ray.beamlets]
         self.scaling_factor = self.scaling_factor * sum(w)
@@ -640,11 +698,12 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             self._write_patient_file(self._scenario_ct(ct))
         else:
             dij = self._read_external(dij)
-            # set dose outside of the patient to 0
-            for q_name in self._computed_quantities:
-                dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
+            if self.ignore_outside_patient:
+                for q_name in self._computed_quantities:
+                    dij[q_name].flat[0][~self._vdose_grid_mask, :] = 0.0
             if self._let_dose is not None:
-                self._let_dose[~self._vdose_grid_mask, :] = 0.0
+                if self.ignore_outside_patient:
+                    self._let_dose[~self._vdose_grid_mask, :] = 0.0
                 self._store_let_quantities(dij, self._let_dose)
 
         dij = self._finalize_dose(dij)
@@ -674,7 +733,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         num_beams : int
             Number of beams.
         quantity : str
-            Scorer output to read: ``"physicalDose"`` or ``"LET"``.
+            Scorer output to read: ``"physicalDose"``, ``"doseToWater"`` or ``"LET"``.
 
         Returns
         -------
@@ -725,8 +784,30 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             let_dose[:, beam_ix] = np.sum(let_cubes[runs] * dose_cubes[runs], axis=0).ravel()
         return let_dose
 
+    def _dose_quantity(self) -> str:
+        """Scorer output read as physical dose: dose to medium, else dose to water."""
+        if self.scorer.get("dose_to_medium"):
+            if self.scorer.get("dose_to_water"):
+                logger.warning(
+                    "TOPAS scores dose to medium and dose to water; physical_dose holds the "
+                    "dose to medium, the '_doseToWater' files are not read."
+                )
+            return "physicalDose"
+        if self.scorer.get("dose_to_water"):
+            return "doseToWater"
+        raise ValueError("TOPAS scorer needs 'dose_to_medium' or 'dose_to_water' switched on.")
+
     def _read_external(self, dij: dict) -> dict:
-        all_dose_cubes = self._read_output_files(dij["num_of_beams"])
+        quantity = self._dose_quantity()
+        all_dose_cubes = self._read_output_files(dij["num_of_beams"], quantity)
+        # The runs are assigned to beams by position, so a missing file would shift them
+        expected = dij["num_of_beams"] * self.num_runs
+        if len(all_dose_cubes) != expected:
+            raise ValueError(
+                f"TOPAS dose output is missing: found {len(all_dose_cubes)} of the {expected} "
+                f"'_{quantity}' .bin files ({self.num_runs} runs for each of "
+                f"{dij['num_of_beams']} beams) in '{self.external_calculation}'."
+            )
         all_dose_cubes = np.array(all_dose_cubes) * self.scaling_factor / self.num_histories_direct
         if self._use_let_kernel:
             self._let_dose = self._read_let_dose(all_dose_cubes, dij["num_of_beams"])

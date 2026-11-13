@@ -45,6 +45,8 @@ class _OverlayStyle(NamedTuple):
     cmap: str
     vmin: Optional[float]
     vmax: Optional[float]
+    # Overlay has negative values: color scale symmetric around zero
+    symmetric: bool
 
 
 class _SliceConfig(NamedTuple):
@@ -179,16 +181,17 @@ def _draw_contours(
 def _draw_overlay(
     ctx: _PlotCtx, overlay_2d: np.ndarray, style: _OverlayStyle, current_max: float
 ) -> None:
+    """Draw the overlay; ``current_max`` is the largest absolute overlay value."""
     if ctx.transpose:
         overlay_2d = overlay_2d.T
-    vmin = style.vmin if style.vmin is not None else 0
+    vmin = style.vmin if style.vmin is not None else (-current_max if style.symmetric else 0)
     vmax = style.vmax if style.vmax is not None else current_max
     im = ctx.ax.pcolormesh(
         ctx.x_plot,
         ctx.y_plot,
         overlay_2d,
         cmap=style.cmap,
-        alpha=style.alpha * (overlay_2d > style.rel_threshold * current_max),
+        alpha=style.alpha * (np.abs(overlay_2d) > style.rel_threshold * current_max),
         vmin=vmin,
         vmax=vmax,
         shading="nearest",
@@ -278,7 +281,9 @@ def _render_slice(ctx: _PlotCtx, slice_idx: int, cfg: _SliceConfig) -> None:
     if cfg.overlay is not None:
         overlay_2d = cfg.overlay[slice_indexing]
         current_max = (
-            cfg.global_overlay_max if cfg.global_overlay_max is not None else np.max(overlay_2d)
+            cfg.global_overlay_max
+            if cfg.global_overlay_max is not None
+            else np.max(np.abs(overlay_2d))
         )
         _draw_overlay(ctx, overlay_2d, cfg.overlay_style, current_max)
 
@@ -320,7 +325,8 @@ def plot_slice(
     overlay_unit : str, pint.Unit, or pint.Quantity
         The unit of the overlay. Default is "".
     overlay_rel_threshold : float
-        The relative threshold for the overlay. Default is 0.01.
+        Voxels whose absolute overlay value is below this fraction of the largest absolute
+        value are not drawn. Default is 0.01.
     contour_line_width : float
         The line width for the contour lines. Default is 1.0.
     save_filename : str
@@ -328,7 +334,8 @@ def plot_slice(
     show_plot : bool
         If True, show the plot. Default is True.
     use_global_max : bool
-        If True, use the overlay's global maximum for scaling. Default is False.
+        If True, scale every slice by the overlay's largest absolute value instead of the
+        slice's. Default is False.
     image_window: Optional[tuple[float, float]]
         Minimum and maximum image value for image_volume visualization
     image_cmap : str
@@ -338,9 +345,12 @@ def plot_slice(
         Default is "minmax". In "minmax" mode, image_window is interpreted as (min, max).
         In "centerwidth" mode, image_window is interpreted as (center, width).
     overlay_window : Optional[tuple[float, float]]
-        Value window (vmin, vmax) for the overlay colormap. Defaults to (0, max) when None.
+        Value window (vmin, vmax) for the overlay colormap. Defaults to (0, max) when None,
+        or to (-max, max) of the absolute values when the overlay has negative values
+        (e.g. a dose difference).
     overlay_cmap : str
-        Colormap for the overlay. Default is "jet".
+        Colormap for the overlay. Default is "jet", or the diverging "RdBu_r" when the
+        overlay has negative values.
     ax : plt.Axes, optional
         Existing axes to plot on. If provided, only single slice plotting is supported.
     """
@@ -368,11 +378,13 @@ def plot_slice(
         )
 
     global_overlay_max = None
+    symmetric = False
     if overlay is not None:
         if isinstance(overlay, sitk.Image):
             overlay = sitk.GetArrayViewFromImage(overlay)
+        symmetric = bool(np.nanmin(overlay) < 0)
         if use_global_max:
-            global_overlay_max = float(np.max(overlay))
+            global_overlay_max = float(np.max(np.abs(overlay)))
 
     overlay_window = kwargs.get("overlay_window", None)
     overlay_vmin = overlay_window[0] if overlay_window is not None else None
@@ -391,9 +403,10 @@ def plot_slice(
             unit=overlay_unit,
             alpha=kwargs.get("overlay_alpha", 0.5),
             rel_threshold=kwargs.get("overlay_rel_threshold", 0.01),
-            cmap=kwargs.get("overlay_cmap", "jet"),
+            cmap=kwargs.get("overlay_cmap", "RdBu_r" if symmetric else "jet"),
             vmin=overlay_vmin,
             vmax=overlay_vmax,
+            symmetric=symmetric,
         ),
         global_overlay_max=global_overlay_max,
         z_plot=z_plot,

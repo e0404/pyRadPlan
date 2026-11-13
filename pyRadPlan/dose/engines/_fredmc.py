@@ -20,14 +20,16 @@ For installation instructions and more information, please visit: https://www.fr
 Developed by the matRad development team.
 """
 
+import itertools
 import logging
 import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, ClassVar, Optional, Union, cast, Literal
+from typing import Annotated, Any, ClassVar, Optional, Union, cast, Literal
 import time
 import textwrap
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +37,8 @@ import SimpleITK as sitk
 from scipy import sparse
 
 from ...biology.models import bio_influence_from_let
-from ...core import Grid
-from ...ct import CT, resample_ct
+from ...core import AlgorithmParameterMetadata, Grid, get_data_dir
+from ...ct import CT, resample_ct, default_hlut
 from ...cst import StructureSet
 from ...dij import Dij
 from ...plan import Plan
@@ -62,6 +64,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     _per_calculation_settings: ClassVar[tuple[str, ...]] = (
         *MonteCarloEngineAbstract._per_calculation_settings,
         "scorers",
+        "hlut",
     )
 
     computes_bio_influence = True
@@ -71,8 +74,10 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
     available_source_models = ["gaussian", "emittance", "sigmaSqrModel"]
 
-    available_versions = ["3.70.0", "3.76.0"]
+    available_versions = ["3.70.0", "3.76.0", "3.60.0"]
 
+    # As in TOPAS: True only writes FRED's input files (the dose is zero); a folder reads the
+    # output of FRED runs made from them
     external_calculation: Union[str, bool]
     calc_bio_dose: Union[Literal["auto"], bool]
     calc_let: Union[Literal["auto"], bool]
@@ -82,6 +87,9 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     fred_dir: Path
     use_gpu: bool
 
+    # Folder FRED's inp/ and out/ are written to and kept in; None uses a temporary folder
+    # that is deleted after each calculation
+    simu_dir: Optional[Path]
     save_input: Union[os.PathLike, bool]
     save_output: Union[os.PathLike, bool]
     use_output: Union[os.PathLike, bool]
@@ -92,11 +100,23 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     source_model: str
     room_material: str
     HU_table_file: str
+    material_converter: Literal["hlut", "RSP"]
+    # HU to rSP lookup table shared with the analytical engines (default_hlut() if None)
+    hlut: Annotated[
+        Optional[np.ndarray], AlgorithmParameterMetadata(configurable=False, kind="data")
+    ] = None
     scaling_factor: int
+    # Zero the dose (and LET / biological quantities) in voxels outside all cst structures
+    ignore_outside_patient: bool
+    # Forward calculation: one FRED run per beam (inp/beam_<b>, out/beam_<b>), so the result
+    # holds the dose of every beam. Influence matrices are per beamlet anyway. A `use_output`
+    # folder without beam_<b> subfolders is read as one combined dose.
+    dose_per_beam: bool
 
     def __init__(self, pln: Union[Plan, dict] = None):
         ### Public attributes ###
         # properties with setters and getters
+        self.simu_dir = None
         self.save_input = False
         self.save_output = False
         self.use_output = False
@@ -110,7 +130,12 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self.source_model = "gaussian"
         self.room_material = "Air"
         self.HU_table_file = "hLut.inp"
+        # "hlut": FRED interpolates the hlut itself.
+        # "RSP": one water entry per HU value in the CT, interpolated like TOPAS's RSP mode.
+        self.material_converter = "hlut"
         self.scaling_factor = 1e6
+        self.ignore_outside_patient = False
+        self.dose_per_beam = True
         self.fred_version = "3.70.0"
         self.print_output = False
         # Seconds before the FRED subprocess is aborted; None waits indefinitely.
@@ -138,11 +163,25 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self._output_score = "/score/Phantom.Dose.mhd"
         self._conversion_factor = 1e6
         self._HU_clamping: bool = False
-        self._max_hu_table_value: int = 3000  # TODO: set up max hu value using custom hu table
+        self._ct_hu_values: Optional[np.ndarray] = None
         self._simulated_particles_per_bixel = 1e2
         self._create_working_dirs()
 
         super().__init__(pln)
+
+    @property
+    def simu_dir(self) -> Optional[Path]:
+        return self._simu_dir
+
+    @simu_dir.setter
+    def simu_dir(self, value: Optional[os.PathLike]):
+        if value is None or value == "":
+            self._simu_dir = None
+        elif isinstance(value, (str, os.PathLike)):
+            # FRED runs inside the input folder, so a relative path must not depend on it
+            self._simu_dir = Path(value).resolve()
+        else:
+            raise ValueError("simu_dir must be a path or None.")
 
     @property
     def save_output(self) -> Union[os.PathLike, bool]:
@@ -291,10 +330,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 else:
                     f.write("\tscoreij=[")
 
-                if len(self.scorers) > 1:
-                    for scorer in self.scorers:
-                        f.write("{},".format(scorer))
-                f.write("{}]\n".format(self.scorers[-1]))
+                f.write("{}]\n".format(",".join(self.scorers)))
 
                 # Write Room parameters
                 f.write("region>\n")
@@ -342,25 +378,46 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         sitk.WriteImage(resampled_ct.cube_hu, file_path)
 
-        max_ct_hu_value = sitk.GetArrayFromImage(resampled_ct.cube_hu).max()
-
-        if max_ct_hu_value > self._max_hu_table_value:
-            self._HU_clamping = True
-            logger.warning(("HU outside of boundaries"))
+        self._ct_hu_values = np.unique(sitk.GetArrayFromImage(resampled_ct.cube_hu))
 
     def _set_up_hu_table(self) -> None:
-        """Write the HU table file for the FRED engine, defining the mapping of HU values to material properties."""
-        file_content = textwrap.dedent("""
-        matColumns: HU rho RSP Ipot Lrad C Ca H N O P Ti S
-        mat: -1024  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:  -999  0.001 0.001  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   -90   0.95 0.95   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   -45   0.99 0.99   78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:     0      1 1      78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   100  1.095 1.095  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:   350  1.199 1.199  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        mat:  3000  2.505 2.505  78.0 36.1 0 0 11.189400 0 88.810600 0 0 0
-        """)
+        """
+        Write the HU table file for the FRED engine, defining the mapping of HU values to material properties.
+
+        The table is ``hlut``, the HU to rSP lookup table the analytical engines use
+        (:func:`~pyRadPlan.ct.default_hlut` unless set). Every entry is water with density
+        and RSP set to the table value. With ``material_converter="hlut"`` FRED interpolates
+        the table itself. With ``"RSP"`` every HU value of the CT gets its own entry with
+        the value interpolated from the table, as TOPAS does in its RSP mode.
+        """
+        if self.hlut is None:
+            self.hlut = default_hlut()
+        hlut = np.asarray(self.hlut, dtype=float)
+        hlut = hlut[np.argsort(hlut[:, 0])]
+
+        if self.material_converter == "RSP":
+            hus = self._ct_hu_values
+            values = np.interp(hus, hlut[:, 0], hlut[:, 1])
+            # Every HU of the CT has its own table entry, so nothing needs clamping
+            self._HU_clamping = False
+        elif self.material_converter == "hlut":
+            hus, values = hlut[:, 0], hlut[:, 1]
+            self._HU_clamping = bool(
+                self._ct_hu_values.min() < hus[0] or self._ct_hu_values.max() > hus[-1]
+            )
+            if self._HU_clamping:
+                logger.warning(("HU outside of boundaries"))
+        else:
+            raise ValueError(
+                f"Unknown material_converter '{self.material_converter}' (use 'hlut' or 'RSP')."
+            )
+
+        lines = ["", "matColumns: HU rho RSP Ipot Lrad C Ca H N O P Ti S"]
+        lines += [
+            f"mat: {hu:5g} {value:.8g} {value:.8g} 78.0 36.1 0 0 11.189400 0 88.810600 0 0 0"
+            for hu, value in zip(hus, values)
+        ]
+        file_content = "\n".join(lines) + "\n"
         try:
             file_path = self._get_path(self._regions_foldername, self.HU_table_file)
             with open(file_path, "w") as f:
@@ -674,8 +731,17 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             The dose influence matrix containing the calculated dose.
         """
         dij = self._init_dose_calc(ct, cst, stf)
+        # The CT goes to FRED with an identity direction and the isocenter is placed in the
+        # same frame, so a rotated or mirrored grid would put the anatomy in the wrong place
+        if not np.allclose(self.dose_grid.direction, np.eye(3)):
+            raise NotImplementedError(
+                "FRED only supports CTs with an identity direction matrix, got "
+                f"{self.dose_grid.direction.tolist()}. Resample the CT to an identity "
+                "direction first."
+            )
         counter = 0
         self.dose_cube = None
+        self.let_cube = None
         self.fred_order = None
         if not self._calc_dose_direct:
             counter = 0
@@ -686,21 +752,33 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                         dij["ray_num"][counter] = j
                         dij["bixel_num"][counter] = k
                         counter += 1
-        if self._use_output is not None:
+        # Computed from the whole plan, so a run per beam keeps the histories per beamlet
+        self._total_number_of_bixels = stf.total_number_of_bixels
+        self._simulated_particles_per_bixel = (
+            np.floor(max([1, self.num_histories_direct / self._total_number_of_bixels]))
+            if self._calc_dose_direct
+            else self.num_histories_per_beamlet
+        )
+        read_dir = self._read_output_dir
+        # Output of a single combined run (no beam_0 folder) is read as one dose
+        per_beam_output = read_dir is None or (read_dir / "beam_0").is_dir()
+        if self._calc_dose_direct and self.dose_per_beam and per_beam_output:
+            self._calc_dose_per_beam(dij, ct, stf)
+        elif read_dir is not None:
             self._process_existing_output(dij, stf)
         else:
             self._prepare_new_calculation(dij, ct, stf)
 
-        if self._use_output is not None:
+        if read_dir is not None:
             self.fred_order = self._generate_fred_order(dij, stf)
         if self.dose_cube is None:
-            dij["physical_dose"] = sparse.csc_array(
-                (dij["dose_grid"].num_voxels, stf.total_number_of_bixels), dtype=np.int8
-            )
-
-        else:
-            # Fill dij
-            dij = self._process_dose_cube(dij)
+            if self.external_calculation is not True or read_dir is not None:
+                raise FileNotFoundError(
+                    f"No FRED dose output found in '{self._output_dir}' (see the log above)."
+                )
+            self._set_zero_dose(stf)
+            self._log_external_run_instructions(stf)
+        dij = self._process_dose_cube(dij)
 
         self._check_saving_options()
 
@@ -712,9 +790,56 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
 
         return dij
 
+    @property
+    def _read_output_dir(self) -> Optional[Path]:
+        """Folder FRED's output is read from instead of running FRED, None to run it.
+
+        This is `use_output`, or the folder given as `external_calculation` (as in TOPAS).
+        """
+        if self._use_output is not None:
+            return Path(self._use_output)
+        if isinstance(self.external_calculation, (str, os.PathLike)):
+            return Path(self.external_calculation)
+        return None
+
+    def _set_zero_dose(self, stf: SteeringInformation) -> None:
+        """Zero dose of the shape FRED's output would have, for a write-only calculation."""
+        num_voxels = self.dose_grid.num_voxels
+        if self._calc_dose_direct:
+            zero = np.zeros(num_voxels)
+            self.dose_cube = [zero] * len(stf.beams) if self.dose_per_beam else zero
+        else:
+            self.dose_cube = sparse.csc_array((num_voxels, stf.total_number_of_bixels))
+            self.fred_order = np.arange(stf.total_number_of_bixels)
+        self.let_cube = None
+
+    def _log_external_run_instructions(self, stf: SteeringInformation) -> None:
+        # A temporary root is deleted after its inputs are copied to save_input
+        if self._fred_root_is_temp and self._save_input is not None:
+            root = Path(self._save_input)
+        else:
+            root = self._fred_root_folder
+        if self._calc_dose_direct and self.dose_per_beam:
+            runs = [f"beam_{b}" for b in range(len(stf.beams))]
+        else:
+            runs = [None]
+        commands = []
+        for run in runs:
+            inp, out = root / self._input_foldername, root / self._output_folder
+            if run is not None:
+                inp, out = inp / run, out / run
+            commands.append(f'  cd "{inp}" && {self.fred_cmd} -f fred.inp -o "{out}"')
+        logger.info(
+            "FRED input files written to '%s', FRED was not run and the dose is zero. Run:\n"
+            "%s\nthen read the dose with external_calculation='%s'.",
+            root / self._input_foldername,
+            "\n".join(commands),
+            root / self._output_folder,
+        )
+
     def _process_existing_output(self, dij: dict, stf: SteeringInformation) -> None:
         """
-        Process existing output files if `self._use_output` is set.
+        Process existing output files from `use_output` or an `external_calculation` folder.
 
         Parameters
         ----------
@@ -723,7 +848,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         stf : SteeringInformation
             The steering information for the beams.
         """
-        self._output_dir = self._use_output
+        self._output_dir = self._read_output_dir
         self._read_output_files()
 
     def _prepare_new_calculation(self, dij: dict, ct: CT, stf: SteeringInformation) -> None:
@@ -739,25 +864,56 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         stf : SteeringInformation
             The steering information for the beams.
         """
-        self._total_number_of_bixels = stf.total_number_of_bixels
-        self._simulated_particles_per_bixel = (
-            np.floor(max([1, self.num_histories_direct / self._total_number_of_bixels]))
-            if self._calc_dose_direct
-            else self.num_histories_per_beamlet
-        )
-
         beams_fred = self._generate_beams_fred(dij, stf)
         self._write_plan_file(beams_fred)
         self._set_up_files(ct)
 
-        if self.external_calculation:
+        if self.external_calculation is True:
             self.dose_cube = None
-            logger.info((f"Files created for external calculation in dir: {self._inp_dir}"))
         else:
             self._call_fred()
             if not self._calc_dose_direct:
                 self.fred_order = self._generate_fred_order(dij, stf)
             self._read_output_files()
+
+    def _calc_dose_per_beam(self, dij: dict, ct: CT, stf: SteeringInformation) -> None:
+        """
+        Run (or read with `use_output`) one forward FRED calculation per beam.
+
+        The inputs and output of beam b are in inp/beam_b and out/beam_b. `dose_cube` and
+        `let_cube` become lists with one cube per beam, or `dose_cube` None when the
+        calculation is external.
+        """
+        dose_cubes, let_cubes = [], []
+        for b, beam in enumerate(stf.beams):
+            run_name = f"beam_{b}"
+            if self._read_output_dir is not None:
+                self._output_dir = self._read_output_dir / run_name
+                self._read_output_files()
+            else:
+                self._use_run_folder(run_name)
+                beam_stf = stf.model_copy(update={"beams": [beam]})
+                self._prepare_new_calculation(dij, ct, beam_stf)
+            dose_cubes.append(self.dose_cube)
+            let_cubes.append(self.let_cube)
+
+        if any(cube is None for cube in dose_cubes):
+            self.dose_cube = None
+            self.let_cube = None
+        else:
+            self.dose_cube = dose_cubes
+            self.let_cube = None if any(cube is None for cube in let_cubes) else let_cubes
+
+    def _use_run_folder(self, name: str) -> None:
+        """Write the inputs of the next FRED run to inp/<name> and its output to out/<name>."""
+        self._inp_dir = self._fred_root_folder / self._input_foldername / name
+        self._plan_dir = self._inp_dir / self._plan_foldername
+        self._regions_dir = self._inp_dir / self._regions_foldername
+        self._output_dir = self._fred_root_folder / self._output_folder / name
+        os.makedirs(self._plan_dir, exist_ok=True)
+        os.makedirs(self._regions_dir, exist_ok=True)
+        # FRED creates only the last level of its output folder
+        os.makedirs(self._output_dir.parent, exist_ok=True)
 
     def _generate_fred_order(self, dij: dict, stf: SteeringInformation) -> np.ndarray:
         """
@@ -904,9 +1060,12 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                     f"{machine.radiation_mode} machine '{machine.name}' does not provide "
                     f"(energy {value['full_energy']} MeV/u)."
                 )
+            # The spectrum's mean energy is the one Monte Carlo reproduces the measured depth
+            # dose with, as in TOPAS; without a spectrum the beam is monoenergetic
+            spectrum = (machine.spectra or {}).get(value["full_energy"])
             layer_dict = {
-                "energy": value["full_energy"],
-                "ESpread": machine.spectra[value["full_energy"]].fwhm,
+                "energy": value["full_energy"] if spectrum is None else spectrum.mean,
+                "ESpread": 0.0 if spectrum is None else spectrum.fwhm,
                 "FWHM": (
                     2.355
                     * (2 * emittance.sigma_x * emittance.sigma_y)
@@ -930,38 +1089,47 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         """
 
         if self._calc_dose_direct:
-            # Direct dose calculation
-            dij["physical_dose"].flat[0] = sparse.csc_array(self.dose_cube.reshape(-1, 1))
+            # Direct dose calculation: one column per beam with dose_per_beam, else one column
+            per_beam = isinstance(self.dose_cube, list)
+            dose_cubes = self.dose_cube if per_beam else [self.dose_cube]
+            dose = np.column_stack([cube.ravel() for cube in dose_cubes])
+            dij["physical_dose"].flat[0] = self._mask_outside_patient(sparse.csc_array(dose))
 
             if self._use_let_kernel and self.let_cube is not None:
+                let_cubes = self.let_cube if per_beam else [self.let_cube]
+                let = np.column_stack([cube.ravel() for cube in let_cubes])
                 # LETd * dose; FRED scores LETd in MeV * cm^2 / g, hence the division by 10
-                let_dose = sparse.csc_array(
-                    (
-                        (self.let_cube.ravel()[self._vdose_grid] / 10)
-                        * self.dose_cube.ravel()[self._vdose_grid],
-                        (self._vdose_grid, np.zeros(len(self._vdose_grid), dtype=int)),
-                    ),
-                    shape=(self.dose_grid.num_voxels, 1),
-                )
-                self._store_let_quantities(dij, let_dose)
-            dij_fields_to_override = [
-                "num_of_beams",
-                "total_number_of_bixels",
-                "total_number_of_rays",
-                "num_of_rays_per_beam",
-            ]
-            for field_name in dij_fields_to_override:
-                dij[field_name] = 1
+                let_dose = np.zeros_like(dose)
+                let_dose[self._vdose_grid] = let[self._vdose_grid] / 10 * dose[self._vdose_grid]
+                self._store_let_quantities(dij, sparse.csc_array(let_dose))
 
-            dij["beam_num"] = 0
-            dij["bixel_num"] = 0
-            dij["ray_num"] = 0
+            if per_beam:
+                num_beams = len(dose_cubes)
+                dij["num_of_beams"] = num_beams
+                dij["beam_num"] = np.arange(num_beams)
+                dij["ray_num"] = np.arange(num_beams)
+                dij["bixel_num"] = np.arange(num_beams)
+            else:
+                dij_fields_to_override = [
+                    "num_of_beams",
+                    "total_number_of_bixels",
+                    "total_number_of_rays",
+                    "num_of_rays_per_beam",
+                ]
+                for field_name in dij_fields_to_override:
+                    dij[field_name] = 1
+
+                dij["beam_num"] = 0
+                dij["bixel_num"] = 0
+                dij["ray_num"] = 0
         else:
             # Scorer-ij mode
             self.dose_cube = sparse.csc_array(self.dose_cube)
             self.dose_cube = self.dose_cube[:, self.fred_order]
 
-            dij["physical_dose"].flat[0] = self._conversion_factor * self.dose_cube
+            dij["physical_dose"].flat[0] = self._mask_outside_patient(
+                self._conversion_factor * self.dose_cube
+            )
 
             if self._use_let_kernel and self.let_cube is not None:
                 self.let_cube = sparse.csc_array(self.let_cube)
@@ -972,6 +1140,14 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 self._store_let_quantities(dij, let_dose)
 
         return dij
+
+    def _mask_outside_patient(self, matrix: sparse.csc_array) -> sparse.csc_array:
+        """Zero the rows of voxels outside all cst structures if requested."""
+        if not self.ignore_outside_patient:
+            return matrix
+        masked = sparse.csc_array(matrix.multiply(self._vdose_grid_mask[:, np.newaxis]))
+        masked.eliminate_zeros()
+        return masked
 
     def _store_let_quantities(self, dij: dict[str, Any], let_dose: sparse.csc_array) -> None:
         """Store the LET matrix and any biological matrices derived from it."""
@@ -994,7 +1170,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 raise ValueError(
                     f"The provided path '{self._save_input}' for 'save_input' is not a valid directory."
                 )
-            else:
+            elif Path(self._save_input).resolve() != self._fred_root_folder.resolve():
                 shutil.copytree(
                     self._fred_root_folder / "inp", self._save_input / "inp", dirs_exist_ok=True
                 )
@@ -1003,14 +1179,19 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 raise ValueError(
                     f"The provided path '{self._save_output}' for 'save_output' is not a valid directory."
                 )
-            else:
+            elif (
+                Path(self._save_output).resolve() != self._fred_root_folder.resolve()
+                and (self._fred_root_folder / "out").is_dir()
+            ):
                 shutil.copytree(
                     self._fred_root_folder / "out", self._save_output / "out", dirs_exist_ok=True
                 )
 
-        # TODO: Might implement a method to keep tmp files in the future:
-        shutil.rmtree(self._fred_root_folder)
-        logger.info((f"Temp tree directory deleted: {self._fred_root_folder}"))
+        if self._fred_root_is_temp:
+            shutil.rmtree(self._fred_root_folder)
+            logger.info((f"Temp tree directory deleted: {self._fred_root_folder}"))
+        else:
+            logger.info(f"FRED simulation files kept in: {self._fred_root_folder}")
 
     def _set_up_files(self, ct: CT) -> None:
         """
@@ -1021,8 +1202,8 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         ct : CT
             The CT object containing the patient data.
         """
-        self._set_up_hu_table()
         self._set_up_patient_ct(self._scenario_ct(ct))
+        self._set_up_hu_table()
         self._write_run_file()
         self._write_regions_file()
         self._write_plan_delivery_file()
@@ -1052,7 +1233,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 try:
                     let_cube = self.read_sparse_dij_bin(letd_file_name)
                 except Exception as e:
-                    logger.error(f"Unable to load file: {letd_file_name}. Error: {e}")
+                    raise ValueError(self._missing_let_message(letd_file_name)) from e
 
         else:
             # Handle direct dose calculation mode
@@ -1068,22 +1249,24 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 logger.error(f"Unable to find file: {load_file_name}")
 
             if self._use_let_kernel:
-                letd_dij_folder = dose_cube_folder
-                letd_cube_file_name = "Phantom.LETd.mhd"
+                letd_file_name = os.path.join(dose_cube_folder, "Phantom.LETd.mhd")
 
                 try:
-                    let_cube = sitk.GetArrayFromImage(
-                        sitk.ReadImage(os.path.join(letd_dij_folder, letd_cube_file_name))
-                    )
+                    let_cube = sitk.GetArrayFromImage(sitk.ReadImage(letd_file_name))
                 except Exception as e:
-                    logger.error(
-                        f"Unable to load file: {os.path.join(letd_dij_folder, letd_cube_file_name)}. Error: {e}"
-                    )
+                    raise ValueError(self._missing_let_message(letd_file_name)) from e
 
         # Store the results for further processing
 
         self.dose_cube = dose_cube
         self.let_cube = let_cube
+
+    @staticmethod
+    def _missing_let_message(file_name: str) -> str:
+        return (
+            f"FRED LETd output could not be read from '{file_name}': the biological model or "
+            "calc_let needs the LETd scorer. Rerun FRED with the LETd scorer enabled."
+        )
 
     def read_sparse_dij_bin(self, f_name: str) -> sparse.csc_array:
         """
@@ -1146,7 +1329,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         RuntimeError
             If the FRED execution fails.
         """
-        output_path = os.path.abspath(os.path.join(self._fred_root_folder, self._output_folder))
+        output_path = os.path.abspath(self._output_dir)
         no_gpu = ""
 
         if not self.use_gpu:
@@ -1243,22 +1426,57 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             self.scorers = [*self.scorers, "LETd"]
 
     def _create_working_dirs(self) -> None:
-        """Create the temporary folder tree of one calculation (it is deleted at its end)."""
-        self._fred_root_folder = Path(tempfile.mkdtemp())
+        """Create the folder tree of one calculation.
+
+        Without `simu_dir` it is a temporary folder deleted at the end of the calculation,
+        or for a write-only `external_calculation` (without `save_input`) a new folder below
+        the pyRadPlan data folder, as in TOPAS. In `simu_dir` only the inp/ and out/ folders of a previous
+        calculation are replaced.
+        """
+        self._fred_root_is_temp = False
+        if self.simu_dir is not None:
+            self._fred_root_folder = self.simu_dir
+        elif self.external_calculation is True and self._save_input is None:
+            parent = get_data_dir() / "fred"
+            parent.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            # mkdir without exist_ok claims the name atomically, so jobs started in the
+            # same second never share (and clean up) each other's tree
+            for n in itertools.count():
+                folder = parent / (stamp if n == 0 else f"{stamp}_{n}")
+                try:
+                    folder.mkdir()
+                    break
+                except FileExistsError:
+                    continue
+            self._fred_root_folder = folder
+        else:
+            self._fred_root_is_temp = True
+            self._fred_root_folder = Path(tempfile.mkdtemp())
         self._inp_dir = self._fred_root_folder / self._input_foldername
         self._plan_dir = self._inp_dir / self._plan_foldername
         self._output_dir = self._fred_root_folder / self._output_folder
         self._regions_dir = self._inp_dir / self._regions_foldername
+        # Stale files of a previous calculation would be read as this one's output
+        for folder in (self._inp_dir, self._output_dir):
+            if folder.exists() and not self._holds_use_output(folder):
+                shutil.rmtree(folder)
         os.makedirs(self._plan_dir)
         os.makedirs(self._regions_dir)
+
+    def _holds_use_output(self, folder: Path) -> bool:
+        if self._read_output_dir is None:
+            return False
+        use_output = self._read_output_dir.resolve()
+        return use_output == folder.resolve() or folder.resolve() in use_output.parents
 
     def _init_dose_calc(
         self, ct: CT, cst: StructureSet, stf: SteeringInformation
     ) -> dict[str, Any]:
-        # Failed simulations can leave partial scorer files as well as inputs. Start every
-        # attempt with a clean tree so a retry cannot read or save an earlier run's output.
-        # Only our temporary tree is removed; `use_output` belongs to the caller.
-        if self._fred_root_folder.exists():
+        if self._fred_root_is_temp and self._fred_root_folder.exists():
+            # Failed simulations can leave partial scorer files as well as inputs. Start every
+            # attempt with a clean tree so a retry cannot read or save an earlier run's output.
+            # Only our temporary tree is removed; `use_output` belongs to the caller.
             shutil.rmtree(self._fred_root_folder)
         self._create_working_dirs()
 
@@ -1299,7 +1517,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         Dij
             The finalized dose influence matrix.
         """
-        if not self.external_calculation:
+        if self.external_calculation is not True:
             # Loop over all scenarios and remove dose influence for voxels outside of segmentations
             for i in self._scenarios.computed_indices():
                 # Loop over all used quantities
