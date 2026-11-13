@@ -18,15 +18,37 @@ from pyRadPlan.core import PyRadPlanBaseModel
 class PhotonSVDKernel(PyRadPlanBaseModel):
     """Class representing a single photon beam kernel.
 
+    The kernel is separated into a depth-dependent dose component and a radius-dependent
+    lateral profile component. The depth-dependent dose component is represented by a set of
+    exponential functions with different build-up coefficients (betas) and an effective
+    attenuation coefficient. For each dose component, the radial lateral profile is represented by a set of
+    kernel data at different source-to-surface distances (SSDs).
+
     Attributes
     ----------
     energy : float
-        The maximum energy of the photon beam in MeV (corresponds to the LINAC voltage in MV).
+        The nominal energy of the photon beam [MeV] (corresponds to the stated LINAC voltage [MV]).
+    m : float
+        The effective attenuation coefficient [1/mm] for the photon beam.
+    penumbra : float
+        The penumbra of an open field as FWHM at isocenter [mm].
+    kernel_betas : np.ndarray, shape (n_components,)
+        The build-up coefficients of the kernel depth dose components [1/mm], i.e. the
+        exponents in ``exp(-beta * depth)``.
+    kernel_ssds : np.ndarray, shape (n_ssds,)
+        The source-to-surface distances (SSDs) at which the kernel data is defined [mm].
+    kernel_pos : np.ndarray, shape (n_positions,)
+        The radial positions at which the kernel data is defined [mm].
+    kernel_data : np.ndarray, shape (n_ssds, n_components, n_positions)
+        The radial lateral profile of the kernel components at different SSDs [1/mm^2].
+    primary_fluence : np.ndarray, shape (n_fluence_points, 2)
+        The relative photon fluence in the isocenter plane: radial distances from the
+        central axis [mm], fluence relative to central axis.
     """
 
     # some basic kernel information
     energy: float = Field(ge=0.0, description="The energy of the photon beam in MeV.")
-    m: float = Field(description="attuneation factor")
+    m: float = Field(description="attenuation factor")
     penumbra: float = Field(
         default=5.0,
         description="The penumbra of an open field as FWHM at Isocenter",
@@ -35,7 +57,7 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
 
     # Tabulated kernel data
     kernel_betas: NDArray[Shape["1-*"], np.float64] = Field(
-        description="weighting factors for kernel components", alias="betas"
+        description="build-up coefficients (exponents) of the kernel components", alias="betas"
     )
     kernel_ssds: NDArray[Shape["1-*"], np.float64] = Field(description="Kernel SSD points")
     kernel_pos: NDArray[Shape["1-*"], np.float64] = Field(description="Kernel position")
