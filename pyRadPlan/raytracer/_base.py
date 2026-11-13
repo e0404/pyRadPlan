@@ -234,8 +234,7 @@ class RayTracerBase(ABC):
             geometry is unchanged and available from ``self.cubes``.
         """
 
-        # stf.generators imports the ray tracer, so Beam can only be imported lazily.
-        from ..stf._beam import Beam
+        from ..stf._beam import Beam  # noqa: PLC0415 - stf.generators imports the ray tracer
 
         if not isinstance(beam, Beam):
             beam = Beam.model_validate(beam)
