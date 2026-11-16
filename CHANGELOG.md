@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
 - Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
 - Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
+- GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
 
 ## [0.8.0] - 2026-11-05
 
