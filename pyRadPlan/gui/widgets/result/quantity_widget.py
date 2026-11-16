@@ -473,6 +473,7 @@ class QuantityWidget(QWidget):
         self._ct_origin = None
         self._ct_spacing = None
         self._ct_direction = np.eye(3)
+        self._update_aspect()
         self._beams = []
         self._clear_beam_items()
         self._info_label.hide()
@@ -517,6 +518,7 @@ class QuantityWidget(QWidget):
         self._ct_direction = (
             np.eye(3) if direction is None else np.asarray(direction, dtype=float).reshape(3, 3)
         )
+        self._update_aspect()
         self._update_orientation_marker()
 
     # ------------------------------------------------------------------
@@ -674,6 +676,7 @@ class QuantityWidget(QWidget):
             One of Axial, Sagittal, Coronal (case-insensitive).
         """
         self._plane = plane
+        self._update_aspect()
         self._configure_slider(reset=True)
         self.update_slice()
         self._update_orientation_marker()
@@ -1076,6 +1079,16 @@ class QuantityWidget(QWidget):
     def _viewer_spacing(self) -> np.ndarray:
         """Voxel spacing in mm along the viewer's (z, x, y) axes."""
         return np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
+
+    def _update_aspect(self) -> None:
+        """Lock the view to the in-plane voxel spacing, so voxels are drawn to physical scale.
+
+        All items stay in voxel coordinates; pyqtgraph's ratio is screen pixels per
+        horizontal unit over pixels per vertical unit.
+        """
+        h_axis, v_axis = self._plane_axes()
+        spacing = self._viewer_spacing()
+        self._view_box.setAspectLocked(True, ratio=float(spacing[h_axis] / spacing[v_axis]))
 
     def _view_point(self, voxel: np.ndarray) -> tuple[float, float]:
         """In-plane view position of viewer (z, x, y) voxel coordinates.
