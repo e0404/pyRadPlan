@@ -142,6 +142,11 @@ by appending them in brackets, e.g. ``pip install pyRadPlan[dev,gui]``.
    * - ``[octave]``
      - oct2py
      - Calling GNU Octave from Python (see :ref:`matlab-octave`)
+   * - ``[mc]``
+     - pyRadMC[warp] ≥ 0.2.1
+     - Monte Carlo dose engines installable with pip (currently pyRadMC; more may be
+       added to this extra).  The TOPAS and FRED engines call external executables
+       that are installed separately
 
 Example — full developer install from source:
 

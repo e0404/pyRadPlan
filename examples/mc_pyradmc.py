@@ -8,7 +8,7 @@
 # pyRadMC is an optional dependency:
 #
 # ```bash
-# pip install pyRadPlan[pyradmc]
+# pip install "pyRadPlan[mc]"
 # ```
 #
 # Notes:

@@ -37,7 +37,7 @@ Further optional extras (`[numba]`, `[matlab]`, `[octave]`, `[dev]`) are describ
 
 ⚡ **Compute backends** ([docs](https://pyradplan.readthedocs.io/en/latest/installation/#gpu-alternate-compute-backends))**:** beyond [`numpy`](https://numpy.org/), pyRadPlan can use [`cupy`](https://cupy.dev/) (GPU), [`pytorch`](https://pytorch.org/) (CPU/GPU) and [`jax`](https://docs.jax.dev/) (CPU by default), available as the extras `[cupy]`, `[torch]` and `[jax]`. For GPU builds we recommend following the respective project's install instructions for your platform / CUDA version instead.
 
-🎲 **Monte Carlo** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/dose_calculation.html#dose-engines))**:** the [TOPAS](https://www.topasmc.org/) and [FRED](https://fred-mc.org/) dose engines call external executables. Install those following their own instructions and make sure they are on your `PATH`.
+🎲 **Monte Carlo** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/dose_calculation.html#dose-engines))**:** the [TOPAS](https://www.topasmc.org/) and [FRED](https://fred-mc.org/) dose engines call external executables. Install those following their own instructions and make sure they are on your `PATH`. Monte Carlo engines available as Python packages, currently the photon engine [pyRadMC](https://github.com/e0404/pyRadMC), are installed with the `mc` extra: `pip install "pyRadPlan[mc]"`.
 
 📉 **Solvers** ([docs](https://pyradplan.readthedocs.io/en/latest/user_guide/concepts/optimization.html#solvers))**:** pyRadPlan ships an IPOPT interface [`ipyopt`](https://pypi.org/project/ipyopt/), which has to be installed separately via `pip install ipyopt` (Linux only). Default ships with [`scipy`](https://scipy.org/)
 

@@ -176,6 +176,9 @@ one line:
      - `FRED <https://www.fred-mc.org>`_ Monte Carlo engine (requires FRED installation).
        Validated for protons only; ion calculations warn that their doses do not yet
        reproduce the reference.
+   * - ``"pyRadMC"``
+     - `pyRadMC <https://github.com/e0404/pyRadMC>`_ photon Monte Carlo engine, GPU-accelerated
+       via NVIDIA warp (requires the ``mc`` extra: ``pip install "pyRadPlan[mc]"``).
 
 .. code-block:: python
 

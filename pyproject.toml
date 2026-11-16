@@ -89,7 +89,8 @@ octave = ["oct2py<7"]
 # Only the core Qt modules are used, so the ~450 MB PySide6 add-ons are not pulled in.
 gui    = ["pyside6-essentials>=6.4,<6.12", "pyqtgraph>=0.12.0,<0.15", "contourpy>=1.0.1,<2"]
 numba  = ["numba>=0.61.0,<0.69"]
-pyradmc = ["pyRadMC[warp]>=0.2.1,<0.3"]
+# Python-installable Monte Carlo dose engines (FRED and TOPAS are external executables).
+mc     = ["pyRadMC[warp]>=0.2.1,<0.3"]
 
 # Optional compute backends. The core is array-API based (array_api_compat), so
 # these only need installing for the backend you actually intend to run on.
