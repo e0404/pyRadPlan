@@ -118,12 +118,12 @@ class _ModifiedFrame(QWidget):
         target.installEventFilter(self)
         self.hide()
 
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt override)
         if watched is self.parent() and event.type() == QEvent.Type.Resize:
             self.setGeometry(watched.rect())
         return False
 
-    def paintEvent(self, _event) -> None:
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
         painter = QPainter(self)
         painter.setPen(QPen(_MODIFIED_COLOR, 1))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
