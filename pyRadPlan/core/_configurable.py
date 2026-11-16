@@ -8,20 +8,23 @@ Python classes; the generated model is a companion used for validation,
 and dynamic GUI generation.
 """
 
+import dataclasses
 import inspect
 import logging
 import warnings
 from copy import deepcopy
 from typing import (
+    Annotated,
     Any,
     ClassVar,
     Optional,
     Type,
     Union,
+    get_args,
     get_origin,
     get_type_hints,
 )
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 import annotated_types
 import numpy as np
@@ -57,6 +60,10 @@ class AlgorithmParameterMetadata:
         Whether the parameter is an advanced setting (GUIs may fold it away).
     label : str, optional
         Human-readable label. If None, interfaces derive one from the name.
+    hidden_entries : Collection[str], optional
+        For a parameter holding a nested structure (e.g. an options dataclass), the
+        dot-separated paths of entries interfaces should not offer, e.g. because the
+        algorithm sets them itself.
     """
 
     def __init__(
@@ -65,11 +72,13 @@ class AlgorithmParameterMetadata:
         kind: str = "numeric",
         advanced: bool = False,
         label: Optional[str] = None,
+        hidden_entries: Collection[str] = (),
     ):
         self.configurable = configurable
         self.kind = kind
         self.advanced = advanced
         self.label = label
+        self.hidden_entries = frozenset(hidden_entries)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.__dict__})"
@@ -189,7 +198,11 @@ class ConfigurableAlgorithm:
             default = PydanticUndefined
         if default is PydanticUndefined or default is NotImplemented:
             # Parameters without class-level default (e.g. still set in
-            # __init__) become optional with default None
+            # __init__) become optional with default None. Annotated metadata stays
+            # outermost, where pydantic exposes it as the field's metadata.
+            if get_origin(annotation) is Annotated:
+                inner, *metadata = get_args(annotation)
+                return (Annotated[(Optional[inner], *metadata)], None)
             return (Optional[annotation], None)
         return (annotation, _wrap_mutable_default(default))
 
@@ -371,3 +384,51 @@ def field_constraints(info: FieldInfo) -> dict[str, Any]:
         elif isinstance(meta, AlgorithmParameterMetadata):
             out["param_meta"] = meta
     return out
+
+
+def replace_nested(obj: Any, overrides: Mapping[str, Any]) -> Any:
+    """
+    Return a copy of a dataclass or pydantic model with overrides applied, recursing into nested ones.
+
+    Lets a (possibly frozen) options tree, such as ``ipax.Options`` or a scenario model, be
+    configured from a plain nested dictionary that only names the entries to change. A pydantic
+    model is copied without validation (``model_copy``); validate the result where it matters.
+
+    Parameters
+    ----------
+    obj : dataclass or pydantic model instance
+        The instance to start from; it is not modified.
+    overrides : Mapping[str, Any]
+        Field values to replace. A mapping given for a field holding a dataclass or model is
+        applied to that value in turn.
+
+    Returns
+    -------
+    dataclass or pydantic model instance
+        The updated copy.
+
+    Raises
+    ------
+    TypeError
+        If an override names a field the instance does not have.
+    """
+    changes = {}
+    for key, value in overrides.items():
+        current = getattr(obj, key, None)
+        if isinstance(value, Mapping) and is_nested_instance(current):
+            changes[key] = replace_nested(current, value)
+        else:
+            changes[key] = value
+    if isinstance(obj, BaseModel):
+        unknown = set(changes) - set(type(obj).model_fields)
+        if unknown:
+            raise TypeError(f"{type(obj).__name__} has no field(s) {sorted(unknown)}")
+        return obj.model_copy(update=changes)
+    return dataclasses.replace(obj, **changes)
+
+
+def is_nested_instance(value: Any) -> bool:
+    """Whether *value* is a dataclass or pydantic model instance, i.e. an editable options tree."""
+    if isinstance(value, type):
+        return False
+    return dataclasses.is_dataclass(value) or isinstance(value, BaseModel)

@@ -1,18 +1,13 @@
 """Top-level import/export API: ``load_patient``, ``load_data`` and ``save_data``."""
 
 import os
-import sys
 import warnings
 import logging
-from typing import Optional, Union
-
-if sys.version_info < (3, 10):
-    import importlib_resources as resources  # Backport for older versions
-else:
-    from importlib import resources
+from typing import Any, Optional, Union
 
 import SimpleITK as sitk
 
+from pyRadPlan.core import BaseDataFile, get_base_data_kind, list_base_data
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
@@ -42,6 +37,62 @@ def _normalize_format(fmt: str) -> str:
     return key
 
 
+def list_phantoms() -> list[BaseDataFile]:
+    """Return the phantom files, shipped ones first, then the user's and the shared ones.
+
+    Phantoms are the ``.mat`` (matRad) and ``.npz`` files in the ``phantoms`` folders of
+    the base data (see :mod:`pyRadPlan.core._base_data`): ``pyRadPlan/data/phantoms``,
+    ``<data_dir>/phantoms`` and ``<root>/phantoms`` for each root in
+    ``pyRadPlan.settings.base_data_path``. A phantom is named by its file name without
+    the ending; a file named like one listed before it is skipped, whatever its ending.
+    """
+    phantoms: list[BaseDataFile] = []
+    seen: set[str] = set()
+    for entry in list_base_data("phantoms"):
+        stem = os.path.splitext(entry.name)[0].casefold()
+        if stem not in seen:
+            seen.add(stem)
+            phantoms.append(entry)
+    return phantoms
+
+
+def available_phantoms() -> list[str]:
+    """Names of the available phantoms (see :func:`list_phantoms`), e.g. ``["TG119"]``."""
+    return [os.path.splitext(entry.name)[0] for entry in list_phantoms()]
+
+
+def phantom_path(name: str) -> Any:
+    """
+    Resolve a phantom by name (see :func:`list_phantoms`).
+
+    Parameters
+    ----------
+    name : str
+        Phantom name, case-insensitive, with or without its file ending
+        (``"TG119"``, ``"tg119.mat"``).
+
+    Returns
+    -------
+    Traversable
+        Path-like object of the phantom file, accepted by :func:`load_patient` and
+        :func:`load_data`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no phantom has that name.
+    """
+    stem, ending = os.path.splitext(name)
+    if ending.lower() not in get_base_data_kind("phantoms").endings:
+        stem = name
+    phantoms = list_phantoms()
+    for entry in phantoms:
+        if os.path.splitext(entry.name)[0].casefold() == stem.casefold():
+            return entry.path
+    names = ", ".join(os.path.splitext(entry.name)[0] for entry in phantoms)
+    raise FileNotFoundError(f"No phantom named {name!r}; available: {names}")
+
+
 def load_tg119() -> tuple[CT, StructureSet]:
     """
     Load the included TG119 phantom.
@@ -51,8 +102,7 @@ def load_tg119() -> tuple[CT, StructureSet]:
     tuple[CT, StructureSet]
         The CT and StructureSet objects.
     """
-    phantom = resources.files("pyRadPlan.data.phantoms").joinpath("TG119.mat")
-    return load_patient(phantom)
+    return load_patient(phantom_path("TG119"))
 
 
 def load_patient(

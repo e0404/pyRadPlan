@@ -17,8 +17,16 @@ import math
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtWidgets import QAbstractSpinBox, QDoubleSpinBox, QWidget
+from PySide6.QtCore import QObject, QSize, Qt, Signal, Slot
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QWidget,
+)
 
 from pyRadPlan.core import ComputeControl, observe_control, observe_reports
 from pyRadPlan.gui.workspace import WorkspaceManager
@@ -81,7 +89,9 @@ class Worker(QObject):
                 with observe_control(self._control):
                     result = self._fn(*self._args, **self._kwargs)
             self.finished.emit(result)
-        except Exception as exc:  # noqa: BLE001
+        # SystemExit too: uncaught it would only end this run, without a signal, and the GUI
+        # would wait for the computation forever.
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
             self.error.emit(exc)
         finally:
             # Release the callable (and anything captured in its closure, e.g.
@@ -119,8 +129,85 @@ class AdaptiveDoubleSpinBox(QDoubleSpinBox):
         # 3 decimals for [0.1, 1), one more for each further power of ten below.
         return min(2 - math.floor(math.log10(magnitude)), cls._INTERNAL_DECIMALS)
 
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        return self._compact(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        return self._compact(super().minimumSizeHint())
+
+    def _compact(self, hint: QSize) -> QSize:
+        """Size *hint* for a typical value instead of the range limits Qt measures.
+
+        Wide ranges (e.g. +-1e9 for unbounded parameters) would otherwise make every
+        field as wide as its longest possible text.
+        """
+        metrics = self.fontMetrics()
+        # Measure the strings QAbstractSpinBox::sizeHint measures: with fractional glyph
+        # advances, dropping its trailing space changes the rounded width by a pixel.
+        fixed = self.prefix() + self.suffix() + " "
+        range_width = max(
+            metrics.horizontalAdvance(self.textFromValue(limit)[:18] + fixed)
+            for limit in (self.minimum(), self.maximum())
+        )
+        typical_width = metrics.horizontalAdvance(self.textFromValue(-999.9) + fixed)
+        if range_width > typical_width:
+            hint.setWidth(hint.width() - (range_width - typical_width))
+        return hint
+
     def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt override name
-        return f"{value:.{self._display_decimals(value)}f}"
+        # Qt parses the text back in the widget's locale, so it needs the locale's decimal
+        # point and sign: a "." under a "," decimal locale turns an edit of "60.0" into
+        # "45.0" into 450. The digits stay ASCII, which Qt accepts in every locale, unlike
+        # its own native digits outside the BMP (e.g. Chakma) with several decimals.
+        locale = self.locale()
+        text = f"{value:.{self._display_decimals(value)}f}"
+        return text.replace("-", locale.negativeSign()).replace(".", locale.decimalPoint())
+
+
+class CompactComboBox(QComboBox):
+    """A combo box sized for a few characters, eliding longer item texts.
+
+    The open popup still shows the items in full.
+
+    Parameters
+    ----------
+    characters:
+        Width of the closed combo box, in characters.
+    parent:
+        Optional Qt parent widget.
+    """
+
+    #: Indent of the text in the edit field: the Windows 11 style's, the widest of the styles.
+    _LABEL_INSET = 8
+
+    def __init__(self, characters: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(characters)
+
+    def showPopup(self) -> None:  # noqa: N802 - Qt override name
+        view = self.view()
+        width = view.sizeHintForColumn(0) + 2 * view.frameWidth()
+        width += view.verticalScrollBar().sizeHint().width()
+        view.setMinimumWidth(max(view.minimumWidth(), width))
+        super().showPopup()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override name
+        # As QComboBox paints itself, but with the text elided instead of clipped
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        field = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            self,
+        )
+        option.currentText = painter.fontMetrics().elidedText(
+            option.currentText, Qt.TextElideMode.ElideRight, field.width() - self._LABEL_INSET
+        )
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
 
 
 class WorkspaceWidget(QWidget):

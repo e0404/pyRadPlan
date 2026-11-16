@@ -1,3 +1,6 @@
+from collections.abc import Callable
+from typing import Optional
+
 from ....core.xp_utils import cupy_available, pytorch_gpu_available
 
 
@@ -11,10 +14,26 @@ class _NotAvailableKernel:
         raise ImportError(f"{self._name}-kernel for calc_geo_dists is not available.")
 
 
-if cupy_available():
-    import cupy as cp
+class _LazyKernel:
+    """Kernel built on its first call, so importing this module loads no GPU backend."""
 
-    _calc_geo_dists_cupy_kernel = cp.ElementwiseKernel(
+    def __init__(self, build: Callable[[], Optional[Callable]], name: str):
+        self._build = build
+        self._name = name
+        self._kernel = None
+
+    def __call__(self, *args, **kwargs):
+        if self._kernel is None:
+            self._kernel = self._build() or _NotAvailableKernel(self._name)
+        return self._kernel(*args, **kwargs)
+
+
+def _build_cupy_kernel():
+    if not cupy_available():
+        return None
+    import cupy as cp  # noqa: PLC0415
+
+    return cp.ElementwiseKernel(
         # Input params
         in_params=(
             "raw T coords, raw T rot_mat, raw T source_point, "
@@ -55,8 +74,14 @@ if cupy_available():
         name="calc_geo_dists_kernel",
     )
 
+
+def _build_cupy_raw_kernel():
+    if not cupy_available():
+        return None
+    import cupy as cp  # noqa: PLC0415
+
     # RawKernel version - Numba-like calling convention with pre-allocated outputs
-    _calc_geo_dists_cupy_raw_kernel = cp.RawKernel(
+    return cp.RawKernel(
         r"""
     extern "C" __global__
     void calc_geo_dists_raw_kernel(
@@ -104,13 +129,12 @@ if cupy_available():
     """,
         "calc_geo_dists_raw_kernel",
     )
-else:
-    _calc_geo_dists_cupy_kernel = _NotAvailableKernel("CuPy")
-    _calc_geo_dists_cupy_raw_kernel = _NotAvailableKernel("CuPy")
 
 
-if pytorch_gpu_available():
-    import torch
+def _build_torch_kernel():
+    if not pytorch_gpu_available():
+        return None
+    import torch  # noqa: PLC0415
 
     @torch.jit.script
     def _calc_geo_dists_torch_kernel(
@@ -138,5 +162,10 @@ if pytorch_gpu_available():
         out_mask = r_sq <= limit
 
         return out_coords_temp, out_lat_dists, r_sq, out_mask
-else:
-    _calc_geo_dists_torch_kernel = _NotAvailableKernel("PyTorch with GPU support")
+
+    return _calc_geo_dists_torch_kernel
+
+
+_calc_geo_dists_cupy_kernel = _LazyKernel(_build_cupy_kernel, "CuPy")
+_calc_geo_dists_cupy_raw_kernel = _LazyKernel(_build_cupy_raw_kernel, "CuPy")
+_calc_geo_dists_torch_kernel = _LazyKernel(_build_torch_kernel, "PyTorch with GPU support")

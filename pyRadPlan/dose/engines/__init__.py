@@ -8,7 +8,7 @@ from ._hongpb import ParticleHongPencilBeamEngine
 from ._fredmc import ParticleFredMCEngine
 from ._topasmc import ParticleTOPASMCEngine
 from ._pyradmc import PhotonPyRadMCEngine
-from ._factory import get_engine, get_available_engines, register_engine
+from ._factory import get_engine, get_engine_class, get_available_engines, register_engine
 
 register_engine(PhotonPencilBeamSVDEngine)
 register_engine(ParticleHongPencilBeamEngine)
@@ -27,6 +27,7 @@ __all__ = [
     "ParticleTOPASMCEngine",
     "PhotonPyRadMCEngine",
     "get_engine",
+    "get_engine_class",
     "get_available_engines",
     "register_engine",
 ]

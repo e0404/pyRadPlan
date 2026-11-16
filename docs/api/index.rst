@@ -13,7 +13,7 @@ Api documentation
    pln
    dij
    dose
-   bio_models
+   biology
    optimization
    machines
    raytracer

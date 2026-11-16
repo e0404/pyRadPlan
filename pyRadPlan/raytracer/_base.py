@@ -1,7 +1,9 @@
 """Interface for voxel geometry ray tracers."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Union, Any, Optional
+from typing import TYPE_CHECKING, Union, Any, Optional
 import logging
 import time
 
@@ -14,13 +16,23 @@ from ..core.xp_utils.typing import Array
 from . import _kernels
 from ..core.np2sitk import linear_indices_to_image_coordinates
 from ..geometry import lps
-from ..stf._beam import Beam
+
+if TYPE_CHECKING:
+    from ..stf._beam import Beam
 
 logger = logging.getLogger(__name__)
 
 
 class RayTracerBase(ABC):
-    """Base class for all ray tracers."""
+    """Base class for all ray tracers.
+
+    Attributes
+    ----------
+    lateral_cut_off : float
+        Lateral cut-off in mm: the radius around each ray at the isocenter plane within which
+        voxels get a radiological depth. The traced region diverges with the rays, so it is
+        narrower in front of the isocenter and wider behind it.
+    """
 
     lateral_cut_off: float
     precision: np.dtype
@@ -156,64 +168,113 @@ class RayTracerBase(ABC):
         Abstract Method to be implemented in subclasses.
         """
 
-    def trace_cubes(self, beam: Union[dict[str, Any], Beam]) -> list[sitk.Image]:
+    def _bev_box_corners(self, beam: Beam, rot_mat: np.ndarray) -> np.ndarray:
+        """Return the eight cube-corner voxel centers in BEV coordinates.
+
+        The BEV y extent is the maximum of an affine map over the voxel-center box,
+        which is attained at one of the 8 corner voxels -- no need to rotate all voxels.
         """
-        Automatically calculate depth by tracing rays through cubes.
-
-        Set up ray matrix with appropriate spacing to trace through
-        all cubes, resulting in a cumulative sum of values in every voxel
-        relative to the source. Will calculate cumulative sum on all of
-        the supplied images.
-        """
-
-        if not isinstance(beam, Beam):
-            beam = Beam.model_validate(beam)
-
-        t_trace_start = time.perf_counter()
-        logger.debug("Computing coordinates...")
-
-        # obtain rotation matrix
-        rot_mat = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle)
-
-        def rotate_to_bev(voxel_linear_ix):
-            coords = linear_indices_to_image_coordinates(
-                voxel_linear_ix, self.cubes[0], index_type="sitk", dtype=self.precision
-            )
-            return (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
-
-        # The BEV y extent is the maximum of an affine map over the voxel-center box,
-        # which is attained at one of the 8 corner voxels — no need to rotate all voxels
         nx, ny, nz = self.cubes[0].GetSize()
         # "sitk" linear index layout is z-fastest: z + nz * (y + ny * x)
         corner_lin_ix = np.array(
             [k + nz * (j + ny * i) for i in (0, nx - 1) for j in (0, ny - 1) for k in (0, nz - 1)],
             dtype=np.int64,
         )
-        corners_bev = rotate_to_bev(corner_lin_ix)
-        t_trace_end = time.perf_counter()
-        logger.debug("took %s seconds!", t_trace_end - t_trace_start)
+        coords = linear_indices_to_image_coordinates(
+            corner_lin_ix, self.cubes[0], index_type="sitk", dtype=self.precision
+        )
+        return (coords - beam.iso_center) @ rot_mat - beam.source_point_bev
+
+    def trace_cubes(
+        self, beam: Union[dict[str, Any], Beam], patient_coords: Optional[Array] = None
+    ) -> list[sitk.Image]:
+        """Trace depth cubes and return host images with their original metadata.
+
+        See :meth:`trace_cubes_array` for a backend-resident result.
+        """
+        return self._depth_arrays_to_images(self.trace_cubes_array(beam, patient_coords))
+
+    def _depth_arrays_to_images(self, arrays: list[Array]) -> list[sitk.Image]:
+        """Materialize host images only for callers that request images."""
+        images = []
+        for array, reference in zip(arrays, self.cubes):
+            image = sitk.GetImageFromArray(xp_utils.to_numpy(array))
+            image.CopyInformation(reference)
+            images.append(image)
+        return images
+
+    def trace_cubes_array(
+        self,
+        beam: Union[dict[str, Any], Beam],
+        patient_coords: Optional[Array] = None,
+    ) -> list[Array]:
+        """
+        Calculate depth arrays on the tracing backend, in (z, y, x) order.
+
+        Set up ray matrix with appropriate spacing to trace through
+        all cubes, resulting in a cumulative sum of values in every voxel
+        relative to the source. Will calculate cumulative sum on all of
+        the supplied images.
+
+        Parameters
+        ----------
+        beam : dict or Beam
+            The beam geometry to trace.
+        patient_coords : Array, optional
+            Voxel coordinates in BEV, shape (N, 3), as used by the caller's dose
+            calculation. Only their maximum y extent is used, to size the ray matrix
+            to the voxels that actually matter. Defaults to the full cube extent,
+            which is correct but traces a larger region than necessary.
+
+        Returns
+        -------
+        list[Array]
+            One (z, y, x) array per input cube, in tracing precision on the
+            tracing namespace/device. Untraced voxels contain NaN. Image
+            geometry is unchanged and available from ``self.cubes``.
+        """
+
+        from ..stf._beam import Beam  # noqa: PLC0415 - stf.generators imports the ray tracer
+
+        if not isinstance(beam, Beam):
+            beam = Beam.model_validate(beam)
+
+        rot_mat = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle)
+
+        if patient_coords is None:
+            patient_coords = self._bev_box_corners(beam, rot_mat)
 
         # central_ray_vector = np.array(iso_center) - np.array(source_point).reshape
         logger.debug("Setting up Ray matrix...")
         t_trace_start = time.perf_counter()
 
         ray_spacing = np.min(self._resolution) / np.sqrt(2.0, dtype=self.precision)
-        ray_matrix_bev_y = (
-            np.max(corners_bev[:, 1]) + np.max(self._resolution) + beam.source_point_bev[1]
-        )
+        coords_xp = array_api_compat.array_namespace(patient_coords)
+        max_patient_bev_y = float(coords_xp.max(patient_coords[:, 1]))
+        ray_matrix_bev_y = max_patient_bev_y + np.max(self._resolution) + beam.source_point_bev[1]
         ray_matrix_scale = 1 + ray_matrix_bev_y / beam.sad
 
         # If we have reference positions, we use them to restrict the raytracing region
-        reference_positions_bev = ray_matrix_scale * np.array(
-            [ray.ray_pos_bev for ray in beam.rays]
-        )
+        ray_pos_bev = np.array([ray.ray_pos_bev for ray in beam.rays])
+        reference_positions_bev = ray_matrix_scale * ray_pos_bev
+
+        # The dose engines select a cone around each ray axis with lateral_cut_off as radius
+        # at the isocenter plane. On the ray-matrix plane, the cone of a ray with tilt
+        # t = offset / SAD is an ellipse reaching up to (1 + t^2) / (1 - t * a) times the
+        # scaled cut-off from the ray position, with a = cut-off / SAD. A voxel takes its
+        # depth from the ray of its grid cell, up to half a cell diagonal away
+        tilt = np.hypot(ray_pos_bev[:, 0], ray_pos_bev[:, 2]) / beam.sad
+        aperture = self.lateral_cut_off / beam.sad
+        ray_matrix_cut_off = ray_matrix_scale * self.lateral_cut_off * (1.0 + tilt**2) / (
+            1.0 - tilt * aperture
+        ) + ray_spacing / np.sqrt(2.0)
 
         if self.fixed_ray_spacing_length is not None:
             ray_extent = self.fixed_ray_spacing_length
         else:
-            # look at max ray_positions in bev and add lateral cutoff
-            ray_extent = 2.0 * (
-                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + self.lateral_cut_off
+            # half-width of the ray matrix covering all candidate discs
+            ray_extent = np.max(
+                np.max(np.abs(reference_positions_bev[:, [0, 2]]), axis=1) + ray_matrix_cut_off
             )
 
         spacing_range = ray_spacing * np.arange(
@@ -222,7 +283,9 @@ class RayTracerBase(ABC):
             dtype=self.precision,
         )
 
-        candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
+        candidate_ray_mx = self._get_candidate_ray_matrix(
+            spacing_range, reference_positions_bev, ray_matrix_cut_off
+        )
 
         ray_idx_z, ray_idx_x = np.nonzero(candidate_ray_mx)
 
@@ -272,7 +335,7 @@ class RayTracerBase(ABC):
                 int(xp.count_nonzero(ix_remember_from_tracing)),
                 t_remember_end - t_trace_end,
             )
-        rad_depth_cubes = self._fill_rad_depth_cubes(lengths, rho, ix, ix_remember_from_tracing)
+        rad_depth_cubes = self._fill_rad_depth_arrays(lengths, rho, ix, ix_remember_from_tracing)
 
         t_createcubes_end = time.perf_counter()
 
@@ -331,17 +394,22 @@ class RayTracerBase(ABC):
             nz,
         )
 
-    def _fill_rad_depth_cubes(
+    def _fill_rad_depth_cubes(self, lengths, rho, ix, ix_remember_from_tracing):
+        """Compatibility wrapper returning host images from traced segments."""
+        return self._depth_arrays_to_images(
+            self._fill_rad_depth_arrays(lengths, rho, ix, ix_remember_from_tracing)
+        )
+
+    def _fill_rad_depth_arrays(
         self,
         lengths: Array,
         rho: list[Array],
         ix: Array,
         ix_remember_from_tracing: Array,
-    ) -> list[sitk.Image]:
+    ) -> list[Array]:
         """Accumulate segment depths and scatter them into radiological depth cubes.
 
-        Runs on the backend and device of the inputs; only the finished cubes are
-        transferred back to the host.
+        Runs on the backend and device of the inputs, without downloading cubes.
         """
         xp = array_api_compat.array_namespace(ix)
         device = array_api_compat.device(ix)
@@ -358,7 +426,7 @@ class RayTracerBase(ABC):
         flat_c_ix = (z_ix * ny + tmp % ny) * nx + tmp // ny
 
         rad_depth_cubes = []
-        for cube, rho_cube in zip(self.cubes, rho):
+        for rho_cube in rho:
             segment_depths = lengths * rho_cube
             # Replace NaN with 0 before cumsum to prevent a single invalid voxel
             # np.cumsum([[0.5, 0.33, NaN, 0.18, 0.22]]) -> [0.5, 0.83, NaN, NaN, NaN], which is bad
@@ -369,16 +437,29 @@ class RayTracerBase(ABC):
             flat_cube = xp_utils.scatter(
                 flat_cube, flat_c_ix, rel_depths[ix_remember_from_tracing]
             )
-            cube_np = np.reshape(xp_utils.to_numpy(flat_cube), (nz, ny, nx))
-
-            rad_depth_cube = sitk.GetImageFromArray(cube_np)
-            rad_depth_cube.CopyInformation(cube)
-            rad_depth_cubes.append(rad_depth_cube)
+            rad_depth_cubes.append(xp.reshape(flat_cube, (nz, ny, nx)))
 
         return rad_depth_cubes
 
-    def _get_candidate_ray_matrix(self, spacing_range: Array, ref_pos_bev: Array) -> Array:
-        """Get candidate ray matrix for given ray spacing and reference positions."""
+    def _get_candidate_ray_matrix(
+        self, spacing_range: Array, ref_pos_bev: Array, cut_off: Union[float, Array]
+    ) -> Array:
+        """Get the candidate ray matrix, the union of discs around the reference positions.
+
+        Parameters
+        ----------
+        spacing_range : Array
+            Grid coordinates (N,) of the ray matrix along BEV x and z.
+        ref_pos_bev : Array
+            Reference positions (M, 3) in BEV on the ray-matrix plane.
+        cut_off : float or Array
+            Disc radius on the ray-matrix plane, scalar or one per reference position (M,).
+
+        Returns
+        -------
+        Array
+            Boolean (N, N) matrix indexed (z, x), True where a grid ray lies in a disc.
+        """
 
         xp = array_api_compat.array_namespace(spacing_range, ref_pos_bev)
 
@@ -393,8 +474,9 @@ class RayTracerBase(ABC):
         grid = xp.astype(spacing_range, xp.float64)
         ref_x = xp.astype(ref_pos_bev[:, 0], xp.float64)[:, None]
         ref_z = xp.astype(ref_pos_bev[:, 2], xp.float64)[:, None]
+        radius = xp.reshape(xp.astype(xp.asarray(cut_off, device=device), xp.float64), (-1, 1))
 
-        half_width_sq = float(self.lateral_cut_off) ** 2 - (grid[None, :] - ref_z) ** 2  # (M, N)
+        half_width_sq = radius**2 - (grid[None, :] - ref_z) ** 2  # (M, N)
         # keep only the (disc, row) pairs the disc actually reaches
         inside = xp.reshape(half_width_sq >= 0, (-1,))
         half_width = xp.sqrt(xp.reshape(half_width_sq, (-1,))[inside])

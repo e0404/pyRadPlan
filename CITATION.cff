@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 title: pyRadPlan
-version: 0.5.0
-date-released: '2026-09-07'
+version: 0.8.0
+date-released: '2026-11-05'
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -44,6 +44,10 @@ authors:
     email: florian.leininger@dkfz-heidelberg.de
     affiliation: German Cancer Research Center (DKFZ)
     orcid: 'https://orcid.org/0009-0001-6852-5933'
+  - given-names: Cheyenne
+    family-names: Leize
+    email: cheyenne.leize@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Moritz
     family-names: Müller
     email: moritz.mueller@dkfz-heidelberg.de
@@ -52,6 +56,10 @@ authors:
     family-names: Ortkamp
     email: tim.ortkamp@kit.edu
     affiliation: Karlsruhe Institute of Technology (KIT)
+  - given-names: Leopold
+    family-names: Reiche
+    email: leopold.reiche@dkfz-heidelberg.de
+    affiliation: German Cancer Research Center (DKFZ)
   - given-names: Victoria
     family-names: Santiago Aguilar
     email: victoria.santiagoaguilar@dkfz-heidelberg.de

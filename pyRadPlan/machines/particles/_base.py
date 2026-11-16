@@ -12,7 +12,7 @@ from pyRadPlan.util.helpers import dl2ld
 from pyRadPlan.machines.base import ExternalBeamMachine
 from ._beam_focus import ChargedBeamFocus
 from .kernel._base import ParticlePencilBeamKernel
-from ._beam_energy import ChargedEnergySpectrum, ChargedEnergySpectrumGaussian
+from ._beam_energy import ChargedEnergySpectrum, energy_spectrum_from_dict
 
 
 class ParticleAccelerator(ExternalBeamMachine):
@@ -42,9 +42,9 @@ class ParticleAccelerator(ExternalBeamMachine):
     )
     lut_spot_size: NDArray[Shape["2,*"], np.float64] = Field(
         description="2D array of look up table latteral spotspacing to foxus index",
-        alias=AliasChoices(
-            "LUTspotSize", "LUT_bxWidthminFWHM"
-        ),  # We have two aliases here to capture version changes in matRad base data files
+        # Two matRad names to capture version changes in matRad base data files
+        validation_alias=AliasChoices("LUTspotSize", "LUT_bxWidthminFWHM", "lut_spot_size"),
+        serialization_alias="LUTspotSize",
     )
     # kernel_data: Annotated[np.recarray, Field(description="Pencil beam kernel data")]
 
@@ -98,7 +98,7 @@ class ParticleAccelerator(ExternalBeamMachine):
         spectra_list = tabulated_energy_data.get("energySpectrum", None)
         if spectra_list is not None:
             returned_data["spectra"] = {
-                returned_data["energies"][i]: ChargedEnergySpectrumGaussian(**spectrum)
+                returned_data["energies"][i]: energy_spectrum_from_dict(spectrum)
                 for i, spectrum in enumerate(spectra_list)
             }
 
@@ -346,3 +346,18 @@ class ParticleAccelerator(ExternalBeamMachine):
             return False
 
         return all(kernel.fluence_spectrum is not None for kernel in self.pb_kernels.values())
+
+    @property
+    def has_zstar_kernel(self) -> bool:
+        """
+        Check if it has zstar kernels.
+
+        Returns
+        -------
+        bool
+            True if all kernels have zstar values
+        """
+        if self.pb_kernels is None:
+            return False
+
+        return all(kernel.zs is not None for kernel in self.pb_kernels.values())

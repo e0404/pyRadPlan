@@ -1,11 +1,8 @@
-from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Callable, Optional
+from typing import TypedDict, Annotated, ClassVar, Literal, Any, cast, Optional
 import logging
-import random
-from functools import partial
 
 import numpy as np
 import array_api_compat
-import array_api_extra as xpx
 from pydantic import Field
 
 
@@ -16,7 +13,8 @@ from pyRadPlan.stf import FieldShape
 from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
-from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d, interpnd
+from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, grouped_max
+from pyRadPlan.core.xp_utils.compat import array_meshgrid, _fft2, _ifft2, interp1d
 from pyRadPlan.core.xp_utils.helpers import to_namespace
 from pyRadPlan.core.xp_utils.typing import Array
 
@@ -29,7 +27,7 @@ class DijSamplingConfig(TypedDict, total=False):
 
     rel_dose_threshold: float
     lat_cut_off: float
-    type: Literal["radius", "depth"]
+    type: Literal["radius", "dose"]
     delta_rad_depth: float
     force_penumbra: Optional[float]
     force_uniform_fluence: bool
@@ -50,15 +48,25 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
     Attributes
     ----------
     use_custom_primary_photon_fluence : bool
-        Use custom primary photon fluence.
+        Apply the machine's primary fluence profile to each bixel.
+        The kernel interpolators are then recomputed for each ray (slower).
     kernel_cutoff : float
-        Kernel cutoff.
+        Lateral cutoff of the kernel [mm]. Clipped to the tabulated range of each beam's
+        kernel, so the default (``inf``) uses the full range. A warning is issued if it is
+        smaller than ``geometric_lateral_cutoff``.
     random_seed : int
-        Random seed.
+        Random seed used for dij sampling.
     int_conv_resolution : float
-        Intensity convolution resolution.
+        Intensity convolution resolution [mm]. Grid spacing for the fluence,
+        penumbra and kernel convolution (default: 0.5 mm).
+    force_penumbra : float, optional
+        Forced penumbra used instead of kernel's penumbra [mm].
+    force_uniform_fluence : bool
+        Uniform fluence used instead of the primary fluence. Fluence is only
+        given by the field shape or the bixel mask.
     enable_dij_sampling : bool
-        Enable Dij sampling.
+        Enable Dij sampling. Resamples the low-dose tail of the bixel dose to
+        sparsify the dose influence matrix.
     dij_sampling : DijSamplingConfig
         Dij sampling configuration.
     """
@@ -87,6 +95,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
     def __init__(self, pln: PhotonPlan = None):
         super().__init__(pln)
+        self._rng = np.random.default_rng(self.random_seed)
 
     def _init_dose_calc(self, ct, cst, stf) -> dict[str, Any]:
         dij = super()._init_dose_calc(ct, cst, stf)
@@ -106,12 +115,12 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         # We should be as flexible as to allow beams with different energies / penumbras / kernels
         # moved the kernel filtering to beam initialization
 
-        # Initialize random number generator
-        random.seed(self.random_seed)
+        # Initialize random number generator for the dij sampling
+        self._rng = np.random.default_rng(self.random_seed)
 
         return dij
 
-    def _init_beam(self, beam_info, ct, cst, stf, i):
+    def _init_beam(self, beam_info, ct, cst, stf, i):  # noqa: PLR0915
         """
         Initialize a beam for pencil beam dose calculation.
 
@@ -153,44 +162,47 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         if field_based_dose_calc:
             logger.debug("Enabling field-based dose calculation for beam %d!", i)
-            self._effective_lateral_cutoff = self.geometric_lateral_cutoff + field_width / np.sqrt(
-                2
-            )
         else:
             logger.debug("Enabling bixel-based dose calculation for beam %d!", i)
+            field_width = stf.beams[i].bixel_width
+
+        # The half-diagonal of the field is added to the cutoff in both cases, since the
+        # cutoff is measured from the central ray but dose is deposited across the field.
+        self._effective_lateral_cutoff = self.geometric_lateral_cutoff + field_width / np.sqrt(2)
 
         beam_info = super()._init_beam(beam_info, ct, cst, stf, i)
 
         # Get current backend namespace
         xp = array_api_compat.array_namespace(beam_info["valid_coords_all"])
 
-        if not field_based_dose_calc:
-            field_width = beam_info["beam"]["bixel_width"]
-
         beam_info["field_based_dose_calc"] = field_based_dose_calc
         beam_info["effective_lateral_cut_off"] = self._effective_lateral_cutoff
 
         field_limit = np.ceil(field_width / (2 * self.int_conv_resolution))
-        field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        if field_based_dose_calc:
+            field_grid = self.int_conv_resolution * np.arange(-field_limit, field_limit + 1)
+        else:
+            # Keeps the bixel centered on its ray for any number of pixels
+            n = np.floor(field_width / self.int_conv_resolution).astype(int)
+            field_grid = self.int_conv_resolution * (np.arange(n) - (n - 1) / 2)
 
-        # TODO: resampling should directly change object, not create new one?
+        # The resampled field shapes go into this beam's dose calculation only; the stf
+        # stays as the caller passed it
         # TODO: the model_dump here is unfortunate?
         for j, k in field_shape_idx:
-            stf.beams[i].rays[j].beamlets[k] = (
-                stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
-            )
-            beam_info["beam"]["rays"][j]["beamlets"][k] = (
-                stf.beams[i].rays[j].beamlets[k].model_dump()
-            )
+            field_shape = stf.beams[i].rays[j].beamlets[k].resample(new_grid=field_grid)
+            beam_info["beam"]["rays"][j]["beamlets"][k] = field_shape.model_dump()
             # TODO: add mask as computed field?
-            # Materialized: np.rot90 returns a negatively strided view, which the torch
-            # backend cannot take, and the mask is converted once per ray below.
+            # Field shape masks are indexed (z, x), like the BLD transmission masks with IEC Y
+            # along the rows. Materialized because the mask is converted once per ray below.
             beam_info["beam"]["rays"][j]["beamlets"][k]["mask"] = np.ascontiguousarray(
-                np.rot90(stf.beams[i].rays[j].beamlets[k].mask, k=-1)
+                field_shape.mask.T
             )
 
         field_grid = xp.asarray(field_grid)
-        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="xy")
+        # The kernel interpolators take (lat_x, lat_z) along the fluence axes 0 and 1, which is
+        # why the field shapes are transposed above; f_x and f_z follow the same axes
+        beam_info["f_x"], beam_info["f_z"] = array_meshgrid(field_grid, field_grid, indexing="ij")
 
         # Get the kernel
         beamlets = [beamlet for ray in beam_info["beam"]["rays"] for beamlet in ray["beamlets"]]
@@ -240,40 +252,41 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         # use 5 times sigma as the limits for the gaussian convolution
         gauss_limit = np.ceil(5 * sigma_gauss / self.int_conv_resolution)
-        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit)
+        gauss_grid = self.int_conv_resolution * xp.arange(-gauss_limit, gauss_limit + 1)
 
         gauss_filter_x, gauss_filter_z = array_meshgrid(gauss_grid, gauss_grid, indexing="xy")
-        # Scaling with int_conv_resolution^2 for correct convolution integral in mm units
+        # The Gaussian density [1/mm^2] is scaled with int_conv_resolution^2 [mm^2] for correct
+        # normalization of the convolution (dx and dz in convolution integral), so the gauss
+        # filter is dimensionless.
         gauss_filter = (
             self.int_conv_resolution**2
             / (2 * np.pi * sigma_gauss**2)
             * xp.exp(-(gauss_filter_x**2 + gauss_filter_z**2) / (2 * sigma_gauss**2))
         )
 
-        gauss_conv_size = int(2 * (field_limit + gauss_limit).astype(int))
+        # Full linear convolution of the field with the 2 * gauss_limit + 1 filter points
+        gauss_conv_size = int(field_grid.shape[0] + 2 * int(gauss_limit))
 
         beam_info["gauss_conv_size"] = gauss_conv_size
         beam_info["gauss_filter"] = gauss_filter
 
         # get kernel size and distances
         kernel_limit = np.ceil(kernel_cutoff / self.int_conv_resolution)
-        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit)
+        kernel_grid = self.int_conv_resolution * xp.arange(-kernel_limit, kernel_limit + 1)
 
         kernel_x, kernel_z = array_meshgrid(kernel_grid, kernel_grid, indexing="xy")
 
         # calculate also the total size and distance as we need this during convolution extensively
-        kernel_conv_limit = field_limit + gauss_limit + kernel_limit
-        kernel_conv_grid = self.int_conv_resolution * xp.arange(
-            -kernel_conv_limit, kernel_conv_limit
-        )
+        kernel_conv_size = gauss_conv_size + 2 * int(kernel_limit)
+        # The convolution output starts at the first field pixel minus both filter half-widths
+        kernel_conv_grid = self.int_conv_resolution * (
+            xp.arange(kernel_conv_size, dtype=xp.float64) - float(gauss_limit + kernel_limit)
+        ) + float(field_grid[0])
         conv_mx_x, conv_mx_z = array_meshgrid(kernel_conv_grid, kernel_conv_grid, indexing="xy")
-
-        kernel_conv_size = int(2 * kernel_conv_limit.astype(int))
 
         # Gaussian penumbra convolution via FFT
         if not field_based_dose_calc:
-            n = np.floor(field_width / self.int_conv_resolution).astype(int)
-            f_pre = xp.ones((n, n), dtype=xp.float32)
+            f_pre = xp.ones_like(beam_info["f_x"], dtype=xp.float32)  # relative fluence
 
             if not self.use_custom_primary_photon_fluence:
                 f_pre = _ifft2(
@@ -282,15 +295,15 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 )
                 f_pre = xp.real(f_pre)
 
-        # get index of central ray or closest to the central ray
+        # Ray positions in BEV [mm] to find the ray closest to the central axis (center)
+        # whose SSD (center_ssd) selects the kernel
         ray_pos_bev = xp.stack(
             [xp.asarray(ray["ray_pos_bev"]) for ray in beam_info["beam"]["rays"]]
         )
         center = int(xp.argmin(xp.sum(ray_pos_bev**2, axis=1)))
+        center_ssd = beam_info["beam"]["rays"][center]["SSD"][self._reference_ct_phase]
 
-        center_ssd = beam_info["beam"]["rays"][center]["SSD"]
-
-        # get correct kernel for given SSD at central ray
+        # Get correct kernel for given SSD at central ray [1/mm^2]
         kernels_at_ssd = xp.asarray(kernel.get_kernels_at_ssd(center_ssd))
 
         # Display console message
@@ -299,7 +312,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
 
         # Get Interpolators
-        # Kernel has units 1/mm^2, scaled with convolution resolution for correct normalization
+        # The kernel [1/mm^2] is scaled with int_conv_resolution^2 [mm^2] for correct normalization
+        # of the convolution (dx and dz in convolution integral), so the kernel_mxs is dimensionless.
         kernel_pos = xp.asarray(kernel.kernel_pos, dtype=kernels_at_ssd.dtype)
         kernel_mxs = self.int_conv_resolution**2 * interp1d(
             xp.sqrt(kernel_x**2 + kernel_z**2),
@@ -310,68 +324,158 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         )
 
         beam_info["kernel"] = kernel
+        # Shared by all rays/scenarios, discarded with this beam. Preparation is
+        # lazy because scenario range adjustments can change the depth dtype.
+        beam_info["kernel_depth_parameters"] = {}
         beam_info["kernel_mxs"] = kernel_mxs
         # beam_info["kernel_xz"] = (kernel_x.ravel(), kernel_z.ravel())
         # beam_info["conv_mx_xz"] = (conv_mx_x, conv_mx_z)
         beam_info["kernel_conv_grid"] = kernel_conv_grid
         beam_info["kernel_conv_size"] = kernel_conv_size
 
-        if not field_based_dose_calc and not self.use_custom_primary_photon_fluence:
+        if not field_based_dose_calc:
             beam_info["f_pre"] = f_pre
-            kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
-            beam_info["kernel_interpolators"] = kernel_interpolators
+            if not self.use_custom_primary_photon_fluence:
+                kernel_interpolators = self._get_kernel_interpolators(beam_info, f_pre)
+                beam_info["kernel_interpolators"] = kernel_interpolators
 
         return beam_info
+
+    def _get_kernel_depth_parameters(self, curr_ray: dict, depths: Array) -> tuple:
+        """Reuse depth constants for this beam's kernel, depth dtype and device."""
+        xp = self.xp
+        device = array_api_compat.device(depths)
+        cache = curr_ray["kernel_depth_parameters"]
+        # Array API devices need not be hashable (notably CuPy Device objects).
+        for cached_device, parameters in cache.get(depths.dtype, ()):
+            if cached_device == device:
+                return parameters
+        kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
+        betas = xp.reshape(
+            xp.asarray(kernel.kernel_betas, dtype=depths.dtype, device=device), (-1, 1)
+        )
+        m = xp.asarray(kernel.m, dtype=depths.dtype, device=device)
+        parameters = (betas, m, betas / (betas - m))
+        cache.setdefault(depths.dtype, []).append((device, parameters))
+        return parameters
 
     def _compute_bixel(self, curr_ray: dict[str], k: int) -> dict[str, Any]:
         """
         PyRadPlan photon dose calculation for a single bixel.
 
-        call
-            bixel = self.computeBixel(currRay,k)
+        The dose of a bixel is computed by summing the contributions of all kernel components
+        (see ``PhotonSVDKernel``), which are the product of an analytical depth dose term and a
+        lateral profile. The lateral profiles are the beamlet fluence convolved with a Gaussian
+        penumbra and the kernel lateral profile (see ``_get_kernel_interpolators``), interpolated
+        based on the voxel's position relative to the ray. The dose is scaled by the inverse
+        square law to account for the distance from the source to the voxel. When
+        ``enable_dij_sampling`` is True, the low-dose tail is resampled (see ``_sample_dij``)
+        to sparsify the dose influence matrix.
+
+        Parameters
+        ----------
+        curr_ray : dict
+            Current ray information struct as prepared by ``_init_ray``. Keys used here:
+            - ``rad_depths``: radiological depths (source to voxel) [mm].
+            - ``kernel``: the photon SVD kernel (see ``PhotonSVDKernel``)
+            - ``kernel_depth_parameters``: cached depth dose constants of the kernel (see
+              ``_get_kernel_depth_parameters``)
+            - ``kernel_interpolators``: the kernel lateral profiles in the isocenter
+              plane (see ``_get_kernel_interpolators``)
+            - ``iso_lat_dists``: (x,z) offsets from the ray to each voxel in the
+              isocenter plane [mm]
+            - ``geo_depths``: euclidean distances from source to voxel [mm]
+            - ``sad``: source-axis distance [mm]
+            - ``ix``: dose grid indices of the voxels
+            - ``beamlets``: list of beamlet dicts, of which ``weight`` is used here
+            - ``radial_dist_sq``: squared radial distances of the voxels to the current ray [mm^2]
+            - ``bixel_width``: the width of the bixel [mm]
+        k : int
+            Index of the beamlet on the ray.
+
+        Returns
+        -------
+        dict
+            The computed bixel dose. Keys:
+            - ``physical_dose``: the physical dose values at voxels with indices ``ix``
+            - ``weight``: the weight of the beamlet corresponding to the bixel
+            - ``ix``: the dose grid indices of the voxels (with ``enable_dij_sampling``,
+              only the kept voxels)
         """
 
         xp = self.xp
         bixel = {}
 
-        kernel = cast(PhotonSVDKernel, curr_ray["kernel"])
-
-        m = kernel.m
-        betas = kernel.kernel_betas
         rd = curr_ray["rad_depths"]
-        interpolators = cast(list[Callable], curr_ray["kernel_interpolators"])
+        betas, m_arr, coefficient = self._get_kernel_depth_parameters(curr_ray, rd)
+        interpolators = cast(ArrayBackendGridInterpolator, curr_ray["kernel_interpolators"])
         iso_lat_dists = curr_ray["iso_lat_dists"]
         geo_depths = curr_ray["geo_depths"]
         sad = curr_ray["sad"]
 
         # Reshape for broadcasting: betas (n_components, 1), rd (1, n_voxels)
-        device = array_api_compat.device(rd)
-        betas = xp.reshape(xp.asarray(betas, dtype=rd.dtype, device=device), (-1, 1))
         rd = xp.reshape(rd, (1, -1))
-        m_arr = xp.asarray(m, dtype=rd.dtype, device=device)
 
-        dose_component = betas / (betas - m_arr) * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
+        # Depth dose component at radiological depths rd for each kernel component
+        dose_component = coefficient * (xp.exp(-m_arr * rd) - xp.exp(-betas * rd))
 
-        iso_lat_dists = to_namespace(xp, iso_lat_dists, device=self.device)
-        interpolated_kernels = [interp(iso_lat_dists) for interp in interpolators]
+        # Lateral profiles of each kernel component at the lateral distances of each
+        # voxel in the isocenter plane. Geometry already supplies queries on the
+        # interpolator's namespace/device.
+        interpolated_kernels = interpolators(iso_lat_dists)
 
-        for c, interp in enumerate(interpolated_kernels):
-            dose_component = xpx.at(dose_component, (c, slice(None))).set(
-                dose_component[c, :] * xp.asarray(interp)
-            )
+        # Compute dose per kernel component from depth dose and lateral profile.
+        # (Keep the depth dtype (e.g. float32) even if the interpolation returns higher
+        # precision, so the dose and dij do not get promoted to float64)
+        dose_component = xp.astype(
+            dose_component * xp.permute_dims(interpolated_kernels, (1, 0)),
+            dose_component.dtype,
+            copy=False,
+        )
 
+        # Compute the total bixel dose at each voxel by summing the contributions from all kernel components.
         bixel_dose = xp.sum(dose_component, axis=0)
-
+        # Scale dose by inverse square law
         bixel_dose = bixel_dose * ((sad / geo_depths) ** 2)
 
         bixel["physical_dose"] = bixel_dose
+        # Weight of the beamlet corresponding to the bixel
         bixel["weight"] = curr_ray["beamlets"][k]["weight"]
         bixel["ix"] = curr_ray["ix"]
 
+        if self.enable_dij_sampling:
+            bixel["ix"], bixel["physical_dose"] = self._sample_dij(
+                curr_ray["ix"],
+                bixel_dose,
+                curr_ray["rad_depths"],
+                curr_ray["radial_dist_sq"],
+                bixel_width=curr_ray["bixel_width"],
+            )
+
         return bixel
 
-    def _get_kernel_interpolators(self, beam_info: dict[str], f: Array) -> list[Callable]:
-        """Get kernel interpolator for photon dose calculation."""
+    def _get_kernel_interpolators(
+        self, beam_info: dict[str], f: Array
+    ) -> ArrayBackendGridInterpolator:
+        """Prepare one shared-grid interpolator for the convolved photon kernels.
+
+        Parameters
+        ----------
+        beam_info : dict
+            Beam information struct. Keys used here:
+            - ``kernel``: the photon SVD kernel (see ``PhotonSVDKernel``)
+            - ``kernel_mxs``: the kernel lateral profile matrices
+            - ``kernel_conv_size``: the size of the convolution grid
+            - ``kernel_conv_grid``: the convolution grid
+        f : Array
+            The fluence map (after convolution with Gaussian penumbra) for the beam.
+
+        Returns
+        -------
+        ArrayBackendGridInterpolator
+            One interpolator over the stacked convolved profiles (fluence convolved
+            with kernel component) in the isocenter plane.
+        """
 
         xp = self.xp
 
@@ -382,7 +486,9 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
         kernel_mxs = to_namespace(xp, beam_info["kernel_mxs"], device=self.device)
         conv_grid = to_namespace(xp, beam_info["kernel_conv_grid"], device=self.device)
 
-        interpolators = [None] * num_kernels
+        # Convolve the fluence with each kernel component's lateral profile via FFT,
+        # where both inputs are zero-padded to the size of the kernel convolution grid.
+        convolved_kernels = []
         for c in range(num_kernels):
             conv_mx = xp.real(
                 _ifft2(
@@ -391,30 +497,159 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                 )
             )
 
-            # bounds_error mirrors RegularGridInterpolator's default on develop: a query
-            # outside the convolution grid means the grid was sized wrong, not extrapolation
-            interpolators[c] = partial(
-                interpnd, x=(conv_grid, conv_grid), y=conv_mx, bounds_error=True
-            )
+            convolved_kernels.append(conv_mx)
 
-        return interpolators
+        # The trailing dimension shares query preparation across all components.
+        # An out-of-grid query indicates incorrect convolution grid sizing.
+        return ArrayBackendGridInterpolator(
+            (conv_grid, conv_grid), xp.stack(convolved_kernels, axis=-1), bounds_error=True
+        )
 
-    def _sample_dij(self, ix, bixel_dose, rad_depth_v, rad_distances_sq, bixel_width):
-        """Perform lateral sampling of the beam."""
+    def _sample_dij(
+        self,
+        ix: Array,
+        bixel_dose: Array,
+        rad_depth_v: Array,
+        rad_distances_sq: Array,
+        bixel_width: Optional[float] = None,
+    ) -> tuple[Array, Array]:
+        """
+        Sample the lateral dose tail of a bixel to sparsify the dose influence matrix.
 
-        raise NotImplementedError("This method is not implemented yet.")
+        Voxels inside the sampling core (either within a radius around the central ray or
+        above a relative dose threshold) are kept untouched. The remaining voxels are
+        clustered in radiological depth, and within each cluster a voxel is accepted with
+        a probability proportional to its dose. An accepted voxel then carries the maximum
+        dose of its cluster, which keeps the sampled tail dose unbiased in expectation
+        while reducing the number of non-zeros [1]_.
+
+        Parameters
+        ----------
+        ix : Array
+            Linear indices (or a boolean mask) of the voxels the dose was computed on.
+        bixel_dose : Array
+            Dose at these voxels.
+        rad_depth_v : Array
+            Radiological depth at these voxels.
+        rad_distances_sq : Array
+            Squared radial distance of these voxels to the central ray.
+        bixel_width : float, optional
+            Bixel width [mm]. If given, half of the bixel diagonal is added to the
+            sampling radius, since dose is deposited over the whole bixel and not only
+            around its central ray.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            The reduced voxel indices and their sampled dose values, in the order of the
+            passed indices.
+
+        References
+        ----------
+        .. [1] https://doi.org/10.1118/1.1469633
+        """
+
+        # Infer the array namespace and device from the dose vector
+        xp = array_api_compat.array_namespace(bixel_dose)
+        device = array_api_compat.device(bixel_dose)
+
+        rel_dose_threshold = self.dij_sampling["rel_dose_threshold"]
+        lat_cut_off = self.dij_sampling["lat_cut_off"]
+        sample_type = self.dij_sampling["type"]
+        delta_rad_depth = self.dij_sampling["delta_rad_depth"]
+
+        # If the input index vector is boolean, convert it to linear indices
+        if ix.dtype == xp.bool:
+            ix = xp.nonzero(ix)[0]
+
+        if bixel_dose.shape[0] == 0:
+            return ix, bixel_dose
+
+        # Increase sample cut-off by bixel width if given. Half of the bixel width diagonal
+        # is the max. field size radius for sampling. Kept a Python float, since mixing a
+        # backend scalar into the comparison below is not allowed for all namespaces.
+        if bixel_width is not None:
+            lat_cut_off = float(lat_cut_off + bixel_width / np.sqrt(2.0))
+
+        # Identify core voxels
+        if sample_type == "radius":
+            ix_core = rad_distances_sq < lat_cut_off**2
+        elif sample_type == "dose":
+            ix_core = bixel_dose > rel_dose_threshold * xp.max(bixel_dose)
+        else:
+            raise ValueError(f"Dij Sampling mode '{sample_type}' not known!")
+
+        # All voxels are in the core - exit with the unsampled dose
+        if bool(xp.all(ix_core)):
+            return ix, bixel_dose
+
+        ix_tail = ~ix_core
+        dose_tail = xp.where(ix_tail, bixel_dose, xp.zeros_like(bixel_dose))
+
+        # Cluster the radiological depths to reduce computations. Clipping guards against
+        # the negative depths range shift scenarios can produce, which would otherwise
+        # give negative cluster indices.
+        cluster = xp.astype(xp.clip(rad_depth_v, 0.0) / delta_rad_depth, xp.int64)
+        num_clusters = int(xp.max(cluster)) + 1
+
+        cluster_dose = grouped_max(dose_tail, cluster, num_clusters, initial=0.0)
+
+        threshold_dose = xp.take(cluster_dose, cluster)
+
+        # Get random samples. The Array API has no random number generation, so they are
+        # drawn on the host and moved to the namespace of the dose.
+        r = xp.asarray(
+            self._rng.random(int(bixel_dose.shape[0])), dtype=bixel_dose.dtype, device=device
+        )
+
+        # r <= dose/threshold, as a product to not divide by a cluster without tail dose
+        ix_samp = (r * threshold_dose <= dose_tail) & (threshold_dose > 0.0)
+
+        # Masking the input instead of concatenating core and sampled tail keeps the
+        # indices ascending, as promised by _dij_guarantee_canonical
+        keep = ix_core | ix_samp
+
+        selected = xp.nonzero(keep)[0]
+        values = xp.where(ix_tail, threshold_dose, bixel_dose)
+        return xp.take(ix, selected, axis=0), xp.take(values, selected, axis=0)
 
     def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
-        """Initialize the current ray."""
+        """Initialize the current ray.
+
+        If ``use_custom_primary_photon_fluence`` is True or the beam is field-based, the
+        kernel interpolators are computed for the ray. Otherwise, the pre-computed kernel
+        interpolators from the beam are used.
+
+        Parameters
+        ----------
+        beam_info : dict
+            Beam information struct. Keys used here:
+            - ``kernel``: the kernel (see ``PhotonSVDKernel``)
+            - ``kernel_depth_parameters``: the kernel depth parameters (see ``_get_kernel_depth_parameters``)
+            - ``kernel_interpolators``: the kernel interpolators (see ``_get_kernel_interpolators``)
+            - ``field_based_dose_calc``: whether the dose calculation is field-based
+              or bixel-based
+            - ``f_pre``: the pre-convolution fluence
+            - ``f_x``/``f_z``: the x-coordinates and z-coordinates of the fluence grid
+            - ``gauss_conv_size``: the size of the Gaussian convolution grid
+            - ``gauss_filter``: the Gaussian convolution filter (representing the penumbra)
+        j : int
+            The index of the current ray.
+        """
 
         ray = super()._init_ray(beam_info, j)
 
         ray["kernel"] = beam_info["kernel"]
+        ray["kernel_depth_parameters"] = beam_info["kernel_depth_parameters"]
 
         if self.use_custom_primary_photon_fluence or beam_info["field_based_dose_calc"]:
             logger.debug("Calculating custom kernel interpolators for ray %d.", j)
             xp = self.xp
 
+            # Get the fluence f for the ray. For field-based dose calculation, the
+            # fluence is the product of the masks of all beamlets on the ray. For
+            # bixel-based dose calculation, the fluence is the pre-convolution fluence
+            # f_pre.
             if beam_info["field_based_dose_calc"]:
                 # multiply masks of beamlets on a ray to get field mask for ray
                 # TODO: ensure matching grids? should be handled in ersampling above
@@ -423,21 +658,27 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     # Not in-place: f may alias the beamlet's stored mask
                     f = f * to_namespace(xp, beamlet["mask"], device=self.device)
             else:
-                # TODO: Not saved yet
                 f = to_namespace(xp, beam_info["f_pre"], device=self.device)
 
+            # Get the fluence grid coordinates for the ray (same for all rays in the beam).
             f_x = to_namespace(xp, beam_info["f_x"], device=self.device)
             f_z = to_namespace(xp, beam_info["f_z"], device=self.device)
 
+            # Get the primary fluence from the kernel
             primary_fluence = cast(PhotonSVDKernel, beam_info["kernel"]).primary_fluence
+
+            # f_x and f_z are lateral offsets from the ray in the beam's eye view; compute the
+            # radial distances of the fluence grid to the ray position in the BEV plane.
             r = xp.sqrt(
-                (f_x - float(ray["ray_pos_bev"][0])) ** 2
-                + (f_z - float(ray["ray_pos_bev"][2])) ** 2
+                (f_x + float(ray["ray_pos_bev"][0])) ** 2
+                + (f_z + float(ray["ray_pos_bev"][2])) ** 2
             )
 
             if not (f.shape == f_x.shape == f_z.shape == r.shape):
                 raise ValueError("Shape mismatch in kernel interpolation!")
 
+            # The fluence is either forced to be uniform (f) or modulated by multiplying
+            # the primary fluence interpolated at the radial distances of the fluence grid.
             if self.force_uniform_fluence:
                 fx = f
             else:
@@ -447,6 +688,8 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     to_namespace(xp, primary_fluence[:, 1], device=self.device),
                 )
 
+            # Convolve the fluence with the Gaussian penumbra filter via FFT, where
+            # both inputs are zero-padded to the size of the gaussian convolution grid.
             n = beam_info["gauss_conv_size"]
             gauss_filter = to_namespace(xp, beam_info["gauss_filter"], device=self.device)
 

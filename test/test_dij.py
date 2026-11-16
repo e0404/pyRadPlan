@@ -336,3 +336,21 @@ def test_to_namespace_shared_indices_values_correct(sample_dij_shared_indices):
     np.testing.assert_array_equal(let_out.indices, shared_indices)
     # check for shared memory
     assert phys_out.indices.ctypes.data == let_out.indices.ctypes.data
+
+
+def test_to_namespace_shared_indices_jax(sample_dij_shared_indices):
+    """Shared-index CSC matrices are rebuilt as JAX sparse arrays."""
+    jnp = pytest.importorskip("jax.numpy")
+    jsparse = pytest.importorskip("jax.experimental.sparse")
+
+    dij, data_phys, data_let, _ = sample_dij_shared_indices
+
+    dij_out = dij.to_namespace(jnp)
+
+    for out, ref, data in (
+        (dij_out.physical_dose.flat[0], dij.physical_dose.flat[0], data_phys),
+        (dij_out.let_dose.flat[0], dij.let_dose.flat[0], data_let),
+    ):
+        assert isinstance(out, jsparse.CSC)
+        np.testing.assert_array_equal(np.asarray(out.data), data)
+        np.testing.assert_array_equal(np.asarray(out.todense()), ref.toarray())

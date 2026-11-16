@@ -5,8 +5,8 @@ This module provides a light-weight, GUI-agnostic observability layer that any
 can mix in to report what it is doing, without taking a dependency on a console
 (``tqdm``) or a GUI (``Qt``).
 
-Two kinds of reports are emitted, kept deliberately separate so that consumers
-can react to one without being confused by the other:
+Three kinds of reports are emitted, kept deliberately separate so that consumers
+can react to one without being confused by the others:
 
 * :class:`ProgressReport` -- a *stack* of :class:`ProgressLevel` entries
   describing nested, (optionally) determinate progress (e.g. ``Beam 1/2`` ->
@@ -15,6 +15,8 @@ can react to one without being confused by the other:
   (e.g. ``{"iteration": 5, "objective": 12.3}``).  Suitable for live metric
   plots.  Algorithms without iterative progress (optimization) can push these
   *without* implying any bar progress.
+* :class:`WarningReport` -- a message the user should see, e.g. about an
+  automatic change of the input; a GUI can show it in a dialog.
 
 Algorithms mix in :class:`ProgressReporter` and call :meth:`ProgressReporter.track`
 (a drop-in replacement for ``tqdm``) and/or :meth:`ProgressReporter.report_status`.
@@ -27,6 +29,7 @@ instance, or -- when the instance is created internally (e.g. by
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -111,6 +114,13 @@ class StatusReport(ComputeReport):
 
     message: str = ""
     data: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WarningReport(ComputeReport):
+    """A warning addressed to the user, emitted in addition to logging it."""
+
+    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -222,24 +232,38 @@ class _ActiveLevel:
 class ProgressHandle:
     """Handle yielded by :meth:`ProgressReporter.progress` to advance a level."""
 
-    __slots__ = ("_reporter", "_level")
+    __slots__ = ("_reporter", "_level", "_bar")
 
-    def __init__(self, reporter: "ProgressReporter", level: _ActiveLevel) -> None:
+    def __init__(self, reporter: "ProgressReporter", level: _ActiveLevel, bar: Any = None) -> None:
         self._reporter = reporter
         self._level = level
+        self._bar = bar
 
     def advance(self, n: int = 1) -> None:
         """Advance the current count by *n* and emit a report.
 
         Throttled, except the completing update (``current >= total``) is always
-        emitted so consumers see the level reach 100%.
+        emitted so consumers see the level reach 100%.  Every step is also a
+        cooperative pause/stop point (see :meth:`ProgressReporter.checkpoint`).
+
+        Raises
+        ------
+        ComputeCancelledError
+            If a stop has been requested.
         """
+        self._reporter._raise_if_cancelled()
         self._level.current += n
+        if self._bar is not None:
+            self._bar.update(n)
         self._reporter._emit_progress(force=self._is_complete())
 
     def update(self, current: int) -> None:
         """Set the absolute current count and emit a report (see :meth:`advance`)."""
+        self._reporter._raise_if_cancelled()
         self._level.current = current
+        if self._bar is not None:
+            self._bar.n = current
+            self._bar.refresh()
         self._reporter._emit_progress(force=self._is_complete())
 
     def _is_complete(self) -> bool:
@@ -315,19 +339,59 @@ class ProgressReporter:
             control.wait_if_paused()
         return not self.should_cancel()
 
+    def _raise_if_cancelled(self) -> None:
+        """Stop an all-or-nothing computation at a progress step when requested."""
+        if not self.checkpoint():
+            raise ComputeCancelledError(f"{type(self).__name__} was stopped on request.")
+
     # -- progress reporting --------------------------------------------------
 
     @contextmanager
-    def progress(self, name: str, total: Optional[int] = None) -> Iterator[ProgressHandle]:
-        """Push a progress level for the duration of the ``with`` block."""
+    def progress(
+        self,
+        name: str,
+        total: Optional[int] = None,
+        *,
+        console: bool = False,
+        **tqdm_kwargs: Any,
+    ) -> Iterator[ProgressHandle]:
+        """Push a progress level for the duration of the ``with`` block.
+
+        The yielded handle advances the level by any step size, e.g. for a loop whose
+        iterations complete several items at once.  With *console* set (and
+        :attr:`console_progress` on) a ``tqdm`` bar follows the handle, as :meth:`track`
+        shows one for the items it iterates.
+        """
         level = _ActiveLevel(name, total)
+        bar = self._console_bar(name, total, **tqdm_kwargs) if console else None
         self._progress_stack.append(level)
         self._emit_progress(force=True)
         try:
-            yield ProgressHandle(self, level)
+            yield ProgressHandle(self, level, bar)
         finally:
+            if bar is not None:
+                bar.close()
             self._progress_stack.pop()
             self._emit_progress(force=True)
+
+    def _console_bar(
+        self,
+        name: str,
+        total: Optional[int],
+        iterable: Optional[Iterable[T]] = None,
+        **tqdm_kwargs: Any,
+    ) -> Any:
+        """Return a console ``tqdm`` bar (wrapping *iterable* if given); ``None`` without a console."""
+        # Without a console (pythonw, a windowed app) sys.stderr is None. tqdm's write
+        # would then raise while holding tqdm's global lock and leave it held, so the next
+        # bar anywhere in the process (or the failed bar's __del__) blocks forever.
+        if not self.console_progress or sys.stderr is None:
+            return None
+        try:
+            from tqdm import tqdm  # noqa: PLC0415
+        except ImportError:
+            return None
+        return tqdm(iterable, desc=name, total=total, leave=False, **tqdm_kwargs)
 
     def track(
         self,
@@ -339,7 +403,8 @@ class ProgressReporter:
         """Iterate *iterable* as a progress level (a ``tqdm`` drop-in).
 
         Pushes a level named *name*, yields each item, and advances the level
-        after each.  When :attr:`console_progress` is ``True`` a nested ``tqdm``
+        after each, raising :class:`ComputeCancelledError` there once a stop is
+        requested.  When :attr:`console_progress` is ``True`` a nested ``tqdm``
         bar is also shown (extra ``tqdm_kwargs`` such as ``unit`` are forwarded).
         """
         if total is None:
@@ -349,14 +414,8 @@ class ProgressReporter:
                 total = None
 
         with self.progress(name, total) as handle:
-            iterator: Iterable[T] = iterable
-            if self.console_progress:
-                try:
-                    from tqdm import tqdm  # noqa: PLC0415
-
-                    iterator = tqdm(iterable, desc=name, total=total, leave=False, **tqdm_kwargs)
-                except ImportError:
-                    iterator = iterable
+            bar = self._console_bar(name, total, iterable, **tqdm_kwargs)
+            iterator: Iterable[T] = iterable if bar is None else bar
             for item in iterator:
                 yield item
                 handle.advance()
@@ -364,6 +423,10 @@ class ProgressReporter:
     def report_status(self, message: str = "", **data: Any) -> None:
         """Emit a :class:`StatusReport` with arbitrary metric *data*."""
         self._dispatch(StatusReport(message=message, data=dict(data)))
+
+    def report_warning(self, message: str) -> None:
+        """Emit a :class:`WarningReport`; the caller still logs the warning itself."""
+        self._dispatch(WarningReport(message=message))
 
     # -- internals -----------------------------------------------------------
 

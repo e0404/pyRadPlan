@@ -1240,8 +1240,9 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         return dose_blocks, var_blocks
 
     def _calc_dose(self, ct: CT, cst: StructureSet, stf: SteeringInformation, dij: dict) -> dict:
-        if self.mult_scen.tot_num_scen != 1:
-            raise ValueError("pyRadMC engine currently only supports the nominal scenario.")
+        if self._scenarios.num_computed != 1:
+            raise ValueError("pyRadMC engine currently only supports a single scenario.")
+        scen_ix = int(self._scenarios.computed_indices()[0])
 
         # apply_config assigns raw values that failed validation; refuse them
         # here, before any grid or cross-section work
@@ -1270,7 +1271,7 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
                         counter += 1
 
         water_only = self.cross_section_model == "analytic"
-        transport_grid = transport_grid_from_ct(ct, water_only=water_only)
+        transport_grid = transport_grid_from_ct(self._scenario_ct(ct), water_only=water_only)
         scoring_grid = scoring_grid_from_dose_grid(self.dose_grid, transport_grid)
 
         # This scan also fills _spectrum_cache for every beam, which the
@@ -1319,9 +1320,9 @@ class PhotonPyRadMCEngine(MonteCarloEngineAbstract):
         physical_dose = sparse.hstack(dose_blocks, format="csc").astype(np.float32)
         physical_dose_var = sparse.hstack(var_blocks, format="csc").astype(np.float32)
 
-        dij["physical_dose"] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
-        dij["physical_dose"].flat[0] = physical_dose
-        dij["physical_dose_var"] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
-        dij["physical_dose_var"].flat[0] = physical_dose_var
+        dij["physical_dose"] = np.empty((len(self._scenarios),), dtype=object)
+        dij["physical_dose"][scen_ix] = physical_dose
+        dij["physical_dose_var"] = np.empty((len(self._scenarios),), dtype=object)
+        dij["physical_dose_var"][scen_ix] = physical_dose_var
 
         return dij

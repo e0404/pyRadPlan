@@ -13,9 +13,11 @@ in :ref:`quickstart`.
 
     plan
     biological_models
+    biological_base_data
     patient_data
     steering
     dose_calculation
+    uncertainty
     optimization
     quantities
     visualization

@@ -17,6 +17,20 @@ def qapp():
     yield app
 
 
+# MainWindow shrinks the application font once per process; undo it so later tests do not
+# depend on whether a main window was built before them.
+@pytest.fixture(autouse=True)
+def _restore_app_font():
+    app = QApplication.instance()
+    font = app.font() if app is not None else None
+    yield
+    app = QApplication.instance()
+    if app is not None and app.property("compact_font_applied"):
+        if font is not None:
+            app.setFont(font)
+        app.setProperty("compact_font_applied", None)
+
+
 @pytest.fixture
 def test_data_photons(test_data_photons_raw):
     tmp = test_data_photons_raw
@@ -70,3 +84,16 @@ def test_data_oxygen(test_data_oxygen_raw):
     result = tmp["resultGUI"]
 
     return ct, cst, result
+
+
+@pytest.fixture
+def dark_palette():
+    """A dark palette with distinct Window/Base/WindowText colors, returned with them."""
+    from PySide6.QtGui import QColor, QPalette
+
+    colors = {"window": "#202020", "base": "#101010", "text": "#f0f0f0"}
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(colors["window"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(colors["base"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(colors["text"]))
+    return palette, colors

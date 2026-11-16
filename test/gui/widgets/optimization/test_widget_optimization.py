@@ -4,11 +4,14 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
 
 from pyRadPlan.io import load_tg119
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationWidget
+from pyRadPlan.gui.widgets._display_names import select_identifier
 from pyRadPlan.optimization.objectives import Objective, get_objective
 
 
@@ -220,10 +223,180 @@ def test_change_quantity_writes_through(qapp, tg119):
         if widget._table.cellWidget(r, OptimizationWidget._COL_QUANTITY) is not None
     )
     cmb = widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY)
-    assert cmb.currentText() == obj.quantity
+    # the display name is shown, the identifier is kept as item data
+    assert cmb.currentData() == obj.quantity
+    assert cmb.currentText() == get_available_quantities()[obj.quantity].name
 
-    widget._on_quantity_changed(voi_idx, 0, new_quantity)
+    cmb.setCurrentIndex(cmb.findData(new_quantity))
     assert _objectives(ws.cst.vois[voi_idx])[0].quantity == new_quantity
+
+
+def _robustness_combo(widget, voi_idx, obj_idx=0):
+    """Robustness combo box of the *obj_idx*-th objective row of VOI *voi_idx*."""
+    rows = [
+        (v, o)
+        for v, voi in enumerate(widget._ws.cst.vois)
+        for o in range(len(widget._iter_objectives(voi)))
+    ]
+    return widget._table.cellWidget(rows.index((voi_idx, obj_idx)), widget._COL_ROBUSTNESS)
+
+
+def test_robustness_column_writes_through(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    header = widget._table.horizontalHeaderItem(OptimizationWidget._COL_ROBUSTNESS).text()
+    assert header == "Robustness"
+    assert OptimizationWidget._COL_ROBUSTNESS == OptimizationWidget._COL_QUANTITY + 1
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    cmb = _robustness_combo(widget, voi_idx)
+    options = [cmb.itemData(i) for i in range(cmb.count())]
+    assert options == type(obj).available_robustness()
+    assert cmb.currentData() == "none"
+    assert cmb.currentText() == "None"
+    assert cmb.itemText(options.index("voxel_worst_case")) == "Voxel-wise worst case"
+    assert cmb.isEnabled()
+    assert "nominal scenario only" in cmb.toolTip()
+
+    new = next(name for name in options if name != "none")
+    select_identifier(cmb, new)
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == new
+    # the edit does not rebuild the table, so the combo stays in place
+    assert _robustness_combo(widget, voi_idx) is cmb
+
+
+def test_long_names_do_not_widen_the_columns(qapp, tg119):
+    """The closed combo boxes elide long labels, their open popups show them in full."""
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    cmb = _robustness_combo(widget, voi_idx)
+    longest = max(cmb.fontMetrics().horizontalAdvance(cmb.itemText(i)) for i in range(cmb.count()))
+    # the closed combo elides the longest label, the open popup shows it in full
+    assert cmb.sizeHint().width() < longest
+    cmb.showPopup()
+    assert cmb.view().width() > longest
+    cmb.hidePopup()
+
+
+def test_objective_type_change_keeps_robustness(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    select_identifier(_robustness_combo(widget, voi_idx), "expected_value")
+    current = _objectives(ws.cst.vois[voi_idx])[0].name
+    other = next(name for name in widget._available if name != current)
+    widget._on_objective_changed(voi_idx, 0, other)
+
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    assert obj.name == other
+    assert obj.robustness == "expected_value"
+    assert _robustness_combo(widget, voi_idx).currentData() == "expected_value"
+
+
+def test_scenario_aware_objectives_show_their_single_robustness(qapp, tg119, monkeypatch):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    monkeypatch.setattr(
+        type(_objectives(ws.cst.vois[voi_idx])[0]), "scenario_aware", True, raising=False
+    )
+    widget._rebuild_table(ws.cst)
+
+    cmb = _robustness_combo(widget, voi_idx)
+    assert [cmb.itemData(i) for i in range(cmb.count())] == ["scenario_stack"]
+    assert not cmb.isEnabled()
+
+
+def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
+    from pyRadPlan.quantities import get_available_quantities
+
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    button = widget._btn_all_quantity
+    assert button.text() == "Change all quantities…"
+
+    current = _objectives(next(v for v in ws.cst.vois if _objectives(v)))[0].quantity
+    action = next(a for a in button.menu().actions() if a.data() != current)
+    new_quantity = action.data()
+    assert action.text() == get_available_quantities()[new_quantity].name
+    action.trigger()
+
+    assert _total_objectives(ws.cst) > 0
+    assert all(o.quantity == new_quantity for v in ws.cst.vois for o in _objectives(v))
+    # the per-objective column reflects the choice
+    for row in range(widget._table.rowCount()):
+        assert widget._table.cellWidget(row, OptimizationWidget._COL_QUANTITY).currentData() == (
+            new_quantity
+        )
+    assert button.text() == "Change all quantities…"
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_bulk_quantity_keyboard_navigation_waits_for_confirmation(qapp, tg119, confirm):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    button = widget._btn_all_quantity
+    menu = button.menu()
+    before = [o.quantity for v in ws.cst.vois for o in _objectives(v)]
+
+    menu.popup(button.mapToGlobal(QPoint(0, button.height())))
+    try:
+        # Navigate beyond the first quantity without applying intermediate choices.
+        QTest.keyClick(menu, Qt.Key_Down)
+        QTest.keyClick(menu, Qt.Key_Down)
+        assert menu.activeAction() == menu.actions()[1]
+        assert [o.quantity for v in ws.cst.vois for o in _objectives(v)] == before
+
+        quantity = menu.activeAction().data()
+        QTest.keyClick(menu, Qt.Key_Return if confirm else Qt.Key_Escape)
+        assert not menu.isVisible()
+        expected = [quantity] * len(before) if confirm else before
+        assert [o.quantity for v in ws.cst.vois for o in _objectives(v)] == expected
+    finally:
+        menu.close()
+
+
+def test_new_objectives_follow_the_shared_quantity(qapp, tg119):
+    from pyRadPlan.quantities import get_available_quantities
+
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    widget._cmb_voi.setCurrentIndex(widget._cmb_voi.findData(voi_idx))
+    shared = _objectives(ws.cst.vois[voi_idx])[0].quantity
+    other = next(q for q in get_available_quantities() if q != shared)
+
+    # after "Change all quantities" a new objective does not reintroduce a mix
+    next(a for a in widget._btn_all_quantity.menu().actions() if a.data() == other).trigger()
+    widget._on_add_objective()
+    assert _objectives(ws.cst.vois[voi_idx])[-1].quantity == other
+
+    # while the objectives disagree, a new one keeps its default quantity
+    widget._on_quantity_changed(voi_idx, 0, shared)
+    widget._on_add_objective()
+    assert _objectives(ws.cst.vois[voi_idx])[-1].quantity == "physical_dose"
 
 
 def _image_reference_combos(widget):
@@ -263,21 +436,21 @@ def test_image_reference_param_shows_dropdown(mimicking_workspace):
     labels = [combos[0].itemText(i) for i in range(combos[0].count())]
     # default d_ref is not a workspace entry, so it is kept as a "Custom" line
     assert labels[0].startswith("Custom image (1×1×1")
-    assert "physical_dose" in labels
+    assert "dose" in labels  # display name of physical_dose
 
 
 def test_image_reference_selection_writes_through(mimicking_workspace):
     ws, widget, voi_idx, ref = mimicking_workspace
 
     cmb = _image_reference_combos(widget)[0]
-    cmb.setCurrentIndex(cmb.findText("physical_dose"))
+    cmb.setCurrentIndex(cmb.findText("dose"))
 
     assert _objectives(ws.cst.vois[voi_idx])[-1].d_ref is ref
 
     # after a rebuild the selection is re-identified from the workspace
     widget._rebuild_table(ws.cst)
     cmb = _image_reference_combos(widget)[0]
-    assert cmb.currentText() == "physical_dose"
+    assert cmb.currentText() == "dose"
     labels = [cmb.itemText(i) for i in range(cmb.count())]
     assert not any(label.startswith("Custom") for label in labels)
 
@@ -335,7 +508,7 @@ def test_prompt_qi_adaptation_computes_collection(qapp, tg119, monkeypatch):
     monkeypatch.setattr(
         mod.QInputDialog,
         "getItem",
-        staticmethod(lambda *a, **k: ("Adapt using QIs from 'physical_dose'", True)),
+        staticmethod(lambda *a, **k: ("Adapt using QIs from 'dose'", True)),
     )
 
     qis, accepted = widget._prompt_qi_adaptation(ws.cst)
@@ -378,3 +551,21 @@ def test_objectives_normalized_to_instances(qapp, tg119):
 
     for obj in ws.cst.vois[voi_idx].objectives:
         assert isinstance(obj, Objective)
+
+
+def test_robustness_change_guards_and_rejections(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    widget._on_robustness_changed(0, 0, "expected_value")  # no structures loaded yet
+
+    ws.set_many(ct=ct, cst=cst)
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    before = _objectives(ws.cst.vois[voi_idx])[0].robustness
+
+    widget._on_robustness_changed(voi_idx, 99, "expected_value")
+    widget._on_robustness_changed(voi_idx, 0, before)
+    widget._on_robustness_changed(voi_idx, 0, "not_a_robustness")
+
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == before
+    assert "Rejected robustness" in widget._lbl_status.text()

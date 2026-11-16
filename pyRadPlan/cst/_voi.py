@@ -1,9 +1,14 @@
 from abc import ABC
+from collections.abc import Mapping
+import math
 from typing import Any, Optional, Union
 from typing_extensions import Annotated, Self
 import warnings
 from pydantic import (
+    AliasChoices,
     Field,
+    SerializeAsAny,
+    ValidationInfo,
     field_validator,
     model_validator,
     computed_field,
@@ -17,6 +22,55 @@ import matplotlib.colors as mcolors
 from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
 from pyRadPlan.core import Grid
+from pyRadPlan.biology.tissues._base import (
+    DEFAULT_ALPHA_X,
+    DEFAULT_BETA_X,
+    TissueProperties,
+)
+
+# Reference LQ parameters mirrored between a VOI and its tissue properties.
+_LQ_FIELDS = ("alpha_x", "beta_x")
+
+
+def _as_tissue_properties(value: Any) -> Any:
+    """Build the model-specific tissue class from a mapping, passing anything else through."""
+    if isinstance(value, np.void) and value.dtype.names:
+        value = {name: value[name] for name in value.dtype.names}
+    if isinstance(value, Mapping):
+        return TissueProperties.from_dict(dict(value))
+    return value
+
+
+def _with_lq_parameters(tissue: TissueProperties, changes: dict[str, Any]) -> TissueProperties:
+    """
+    Return a validated copy of `tissue` with reference LQ parameters replaced.
+
+    An edited reference parameter becomes ``"explicit"`` in the tissue's
+    `reference_sources`, the other keeps its source; one replaced by NaN is resolved again,
+    see :class:`TissueProperties`.
+    """
+    sources = {**tissue.reference_sources, **dict.fromkeys(changes, "explicit")}
+    return type(tissue).model_validate(
+        {**tissue.model_dump(), **changes, "reference_sources": sources}
+    )
+
+
+def _unset(value: Any) -> bool:
+    """Whether a VOI-level reference parameter is unset (None or NaN), as in old files."""
+    try:
+        return value is None or math.isnan(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _same_float(a: Any, b: Any) -> bool:
+    """Whether two values are the same number, NaN matching NaN."""
+    try:
+        a, b = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    return a == b or (math.isnan(a) and math.isnan(b))
+
 
 # Default overlap priorities
 DEFAULT_OVERLAPS = {"TARGET": 0, "OAR": 5, "HELPER": 10, "EXTERNAL": 15}
@@ -63,10 +117,14 @@ class VOI(PyRadPlanBaseModel, ABC):
     mask : np.ndarray or sitk.Image
         Boolean mask (using 0,1) for referencing of voxels
         (Multiple allocations possible for robust scenarios)
-    alpha_x : float, optional
-        The alpha_x value. Defaults to 0.1.
-    beta_x : float, optional
-        The beta_x value. Defaults to 0.05.
+    alpha_x, beta_x : float
+        Reference LQ parameters, mirroring those of `tissue_properties`.
+    tissue_properties : TissueProperties
+        The tissue properties associated with the VOI. Serialized with all fields of
+        its model-specific class (including `model`), and validated from a mapping
+        through :meth:`TissueProperties.from_dict`. See
+        :meth:`sync_alpha_beta_with_tissue` for how it is kept consistent with
+        `alpha_x` / `beta_x`.
     overlap_priority : int
         The overlap priority of the VOI. Lowest number is overlapping higher numbers.
     """
@@ -74,26 +132,169 @@ class VOI(PyRadPlanBaseModel, ABC):
     name: str
     grid: Grid
     mask: sitk.Image
-    alpha_x: float = Field(default=0.1)
-    beta_x: float = Field(default=0.05)
+    alpha_x: float = Field(default=DEFAULT_ALPHA_X)
+    beta_x: float = Field(default=DEFAULT_BETA_X)
+    tissue_properties: SerializeAsAny[TissueProperties] = Field(
+        default_factory=TissueProperties,
+        description="Radiobiological tissue properties, the source of alpha_x / beta_x",
+    )
     voi_type: Annotated[str, StringConstraints(strip_whitespace=True, to_upper=True)]
 
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
 
-    visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
-    visible_color: Union[tuple[int, int, int], None] = Field(
-        default=None, description="RGB color for visualization in GUI applications"
+    visible: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("visible", "Visible"),
+        description="Flag to set visibility in GUI applications",
     )
-    default_color: tuple[int, int, int] = Field(
+    color: tuple[int, int, int] = Field(
         default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
-        description="Default RGB color bound to the VOI type",
+        alias="visibleColor",
+        description="RGB color for visualization in GUI applications",
     )
 
     # Annotating list[Objective] would create a circular import, so entries are converted to
     # Objective instances lazily in the validator below.
     objectives: list[Any] = Field(default=[], description="List of objective function definitions")
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_alpha_beta_with_tissue(cls, data: Any, info: ValidationInfo) -> Any:
+        """
+        Keep `alpha_x` / `beta_x` consistent with `tissue_properties`.
+
+        `tissue_properties` is the source of truth; `alpha_x` and `beta_x` mirror its
+        reference LQ parameters. On construction, a VOI given only `alpha_x` / `beta_x`
+        gets a reference-only :class:`TissueProperties` built from them, one given only
+        `tissue_properties` takes its parameters over, and one given both raises a
+        ValueError if they disagree. On assignment the assigned field wins and the
+        other follows: setting `tissue_properties` updates `alpha_x` / `beta_x`, and
+        setting `alpha_x` or `beta_x` updates that parameter of `tissue_properties`
+        (keeping its model and other parameters). :meth:`model_copy` with an `update`
+        follows the same rule. The caller's input mapping is never modified.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+
+        if info.field_name == "tissue_properties":
+            tissue = _as_tissue_properties(data["tissue_properties"])
+            if isinstance(tissue, TissueProperties):
+                data.update(alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+            return data
+        if info.field_name in _LQ_FIELDS:
+            tissue = data.get("tissue_properties")
+            if isinstance(tissue, TissueProperties):
+                try:
+                    tissue = _with_lq_parameters(tissue, {info.field_name: data[info.field_name]})
+                except ValueError:
+                    return data  # the field's own validation reports the invalid value
+                data["tissue_properties"] = tissue
+                data[info.field_name] = getattr(tissue, info.field_name)
+            return data
+
+        for alias, name in (
+            ("alphaX", "alpha_x"),
+            ("betaX", "beta_x"),
+            ("tissueProperties", "tissue_properties"),
+        ):
+            if alias in data:
+                value = data.pop(alias)
+                if name in data and data[name] is not value and data[name] != value:
+                    raise ValueError(f"{name} ({data[name]}) does not match {alias} ({value})")
+                data[name] = value
+
+        tissue = data.pop("tissue_properties", None)
+        if tissue is None:
+            if any(name in data for name in _LQ_FIELDS):
+                try:
+                    tissue = TissueProperties(**{n: data[n] for n in _LQ_FIELDS if n in data})
+                except ValueError:
+                    return data  # the fields' own validation reports the invalid value
+                data["tissue_properties"] = tissue
+                data.update(alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+            return data
+
+        tissue = _as_tissue_properties(tissue)
+        data["tissue_properties"] = tissue
+        if not isinstance(tissue, TissueProperties):
+            return data  # the field's own validation reports the invalid value
+
+        for name in _LQ_FIELDS:
+            tissue_value = getattr(tissue, name)
+            if name not in data or _unset(data[name]):
+                data[name] = tissue_value
+            elif not _same_float(data[name], tissue_value):
+                raise ValueError(
+                    f"{name} ({data[name]}) does not match tissue_properties.{name} "
+                    f"({tissue_value})"
+                )
+        return data
+
+    @model_validator(mode="after")
+    def _mirror_resolved_reference_parameters(self) -> Self:
+        """Mirror a reference parameter assigned NaN, which the tissue resolved."""
+        tissue = self.tissue_properties
+        if isinstance(tissue, TissueProperties):
+            for name in _LQ_FIELDS:
+                if _unset(getattr(self, name)):
+                    self.__dict__[name] = getattr(tissue, name)
+        return self
+
+    @field_validator("tissue_properties", mode="before")
+    @classmethod
+    def validate_tissue_properties(cls, v: Any) -> Any:
+        """
+        Build the model-specific tissue class from a mapping.
+
+        A mapping, such as a dump of any tissue class, is dispatched on its `model` entry
+        through :meth:`TissueProperties.from_dict`, so e.g. ``{"model": "LEM_II", ...}``
+        yields an :class:`LEMTissueProperties` of version II. Instances pass unchanged.
+        """
+        return _as_tissue_properties(v)
+
+    def model_copy(
+        self, *, update: Optional[Mapping[str, Any]] = None, deep: bool = False
+    ) -> Self:
+        """
+        Copy the VOI, keeping an `update` of the tissue parameters consistent.
+
+        Updating `tissue_properties` also updates `alpha_x` / `beta_x` (a conflicting
+        explicit value raises a ValueError), while updating only `alpha_x` / `beta_x`
+        updates them in a copy of `tissue_properties`, see
+        :meth:`sync_alpha_beta_with_tissue`.
+        """
+        if update:
+            update = dict(update)
+            if "tissue_properties" in update:
+                tissue = _as_tissue_properties(update["tissue_properties"])
+                if not isinstance(tissue, TissueProperties):
+                    raise TypeError(
+                        f"tissue_properties must be TissueProperties, got {type(tissue).__name__}"
+                    )
+                update["tissue_properties"] = tissue
+                for name in _LQ_FIELDS:
+                    if (
+                        name in update
+                        and not _unset(update[name])
+                        and not _same_float(update[name], getattr(tissue, name))
+                    ):
+                        raise ValueError(
+                            f"{name} ({update[name]}) does not match "
+                            f"tissue_properties.{name} ({getattr(tissue, name)})"
+                        )
+                    update[name] = getattr(tissue, name)
+            elif any(name in update for name in _LQ_FIELDS):
+                tissue = _with_lq_parameters(
+                    self.tissue_properties,
+                    {name: update[name] for name in _LQ_FIELDS if name in update},
+                )
+                update.update(
+                    tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x
+                )
+        return super().model_copy(update=update, deep=deep)
 
     @field_validator("objectives", mode="before")
     @classmethod
@@ -134,12 +335,23 @@ class VOI(PyRadPlanBaseModel, ABC):
                 return {name: entry[name] for name in entry.dtype.names}
             return entry
 
-        return [
-            get_objective(entry)
-            if isinstance(entry, dict) and ("name" in entry or "className" in entry)
-            else entry
-            for entry in (_coerce(e) for e in _flatten(v))
-        ]
+        objectives = []
+        for entry in (_coerce(e) for e in _flatten(v)):
+            if isinstance(entry, dict) and "className" in entry and "name" not in entry:
+                # A matRad objective pyRadPlan cannot represent (e.g. DoseConstraints)
+                # should not abort the whole patient import.
+                try:
+                    objectives.append(get_objective(entry))
+                except ValueError as exc:
+                    warnings.warn(
+                        f"Skipping matRad objective '{entry.get('className')}': {exc}",
+                        stacklevel=2,
+                    )
+            elif isinstance(entry, dict) and "name" in entry:
+                objectives.append(get_objective(entry))
+            else:
+                objectives.append(entry)
+        return objectives
 
     @model_validator(mode="before")
     @classmethod
@@ -181,6 +393,51 @@ class VOI(PyRadPlanBaseModel, ABC):
             return v_copy
 
         # Only Grid / no modification needed:
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_deprecated_color_fields(cls, v: Any) -> Any:
+        """
+        Map the removed ``visible_color`` / ``default_color`` inputs onto ``color``.
+
+        Without this, pydantic would silently ignore them as unknown fields.
+
+        Parameters
+        ----------
+        v : Any
+            The input data dictionary to be validated.
+
+        Returns
+        -------
+        Any
+            The input data with the deprecated color fields replaced.
+        """
+        if not isinstance(v, dict) or not {"visible_color", "default_color"} & v.keys():
+            return v
+
+        v = dict(v)
+        if "default_color" in v:
+            del v["default_color"]
+            warnings.warn(
+                "'default_color' was removed; the VOI type's default is now the default "
+                "of 'color'. The value is ignored.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if "visible_color" in v:
+            visible_color = v.pop("visible_color")
+            warnings.warn(
+                "'visible_color' is deprecated; use 'color' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if "color" in v or "visibleColor" in v:
+                raise ValueError(
+                    "Specify either 'color' or 'visible_color' (deprecated), not both."
+                )
+            if visible_color is not None:
+                v["color"] = visible_color
         return v
 
     @classmethod
@@ -345,21 +602,23 @@ class VOI(PyRadPlanBaseModel, ABC):
 
         raise ValueError("mask must be either passed as numpy array or SimpleITK image")
 
-    @field_validator("visible_color", mode="before")
+    @field_validator("color", mode="before")
     @classmethod
-    def validate_visible_color(cls, v: Any) -> Any:
+    def validate_color(cls, v: Any) -> Any:
         """
-        Validate the visible color.
+        Convert a color to an RGB tuple of 0-255 integers.
 
         Parameters
         ----------
         v : Any
-            The visible color value to be validated.
+            The color: a matplotlib color name or hex string, an RGB triple of
+            0-255 integers, or an RGB triple of 0-1 floats.
 
         Returns
         -------
-        tuple[int, int, int]
-            The validated visible color.
+        Any
+            The color as ``tuple[int, int, int]``; other inputs are passed through
+            unchanged for the field's type validation to reject.
         """
 
         if isinstance(v, str):
@@ -783,24 +1042,29 @@ class VOI(PyRadPlanBaseModel, ABC):
         voi_list = [0]  # We store an ID which will be changed by cst if exported from there
         voi_list.append(self.name)
         voi_list.append(self.voi_type)
-        if self.num_of_scenarios == 1:
-            index_lists = np.ndarray(shape=(1,), dtype=object)
-            mask_array = sitk.GetArrayFromImage(self.mask)
-            mask_array = np.swapaxes(mask_array, 1, 2)
-            indices = np.argwhere(mask_array.ravel(order="C") > 0) + 1
-            index_lists[0] = np.array(indices, dtype=float)
-
-        else:
-            index_lists = self.scenario_indices(order="numpy")
-            for i, index_list in enumerate(index_lists):
-                index_lists[i] = index_list.astype(float)
+        # matRad indices are 1-based and column-major over MATLAB's (y, x, z) cube
+        mask_array = sitk.GetArrayFromImage(self.mask)
+        scenario_arrays = [mask_array] if mask_array.ndim == 3 else list(mask_array)
+        index_lists = np.ndarray(shape=(len(scenario_arrays),), dtype=object)
+        for i, scenario_array in enumerate(scenario_arrays):
+            matrad_array = np.swapaxes(scenario_array, 1, 2)
+            indices = np.argwhere(matrad_array.ravel(order="C") > 0) + 1
+            index_lists[i] = np.array(indices, dtype=float)
 
         voi_list.append(index_lists)
 
         property_dict = {
-            "alphaX": self.alpha_x,
-            "betaX": self.beta_x,
+            "alphaX": self.tissue_properties.alpha_x,
+            "betaX": self.tissue_properties.beta_x,
             "Priority": self.overlap_priority,
+            "Visible": self.visible,
+            "visibleColor": np.asarray(self.color, dtype=float) / 255.0,
+            # Not read by matRad, which ignores unknown fields here; keeps the full tissue.
+            "tissueProperties": {
+                key: value
+                for key, value in self.tissue_properties.model_dump(by_alias=True).items()
+                if value is not None
+            },
         }
         voi_list.append(property_dict)
 
@@ -833,12 +1097,17 @@ class VOI(PyRadPlanBaseModel, ABC):
                 self.mask, new_ct.cube_hu, sitk.Transform(), sitk.sitkNearestNeighbor, 0
             )
         elif self.mask.GetDimension() == 4:
+            reference = (
+                new_ct.cube_hu[:, :, :, 0]
+                if new_ct.cube_hu.GetDimension() == 4
+                else new_ct.cube_hu
+            )
             new_mask = []
             for i in range(self.mask.GetSize()[-1]):
                 new_mask.append(
                     sitk.Resample(
                         self.mask[:, :, :, i],
-                        new_ct.cube_hu,
+                        reference,
                         sitk.Transform(),
                         sitk.sitkNearestNeighbor,
                         0,
@@ -1055,17 +1324,18 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
             return data
 
         # obtain voi type if we have a dict including camelCase check
-        voi_type = data.get("voi_type", data.get("voiType", None))
+        key = "voi_type" if "voi_type" in data else "voiType"
+        voi_type = str(data.get(key, "")).strip().upper()
 
         if voi_type in __VOITYPES__:
-            return __VOITYPES__[voi_type].model_validate(data)
+            return __VOITYPES__[voi_type].model_validate({**data, key: voi_type})
 
-        raise ValueError(f"Invalid VOI type: {voi_type}")
+        raise ValueError(f"Invalid VOI type: {data.get(key)}")
 
-    voi_type = kwargs.get("voi_type", "")
+    voi_type = str(kwargs.get("voi_type", "")).strip().upper()
 
     if voi_type in __VOITYPES__:
-        return __VOITYPES__[voi_type](**kwargs)
+        return __VOITYPES__[voi_type](**{**kwargs, "voi_type": voi_type})
 
     raise ValueError(f"Invalid VOI type: {voi_type}")
 

@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections import OrderedDict
+from functools import partial
+from typing import Callable, Optional, Sequence
 
+import contourpy
 import numpy as np
 import SimpleITK as sitk
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
+    QGraphicsPathItem,
     QHBoxLayout,
     QLabel,
     QSlider,
@@ -17,6 +31,189 @@ from PySide6.QtWidgets import (
     QWidget,
     QComboBox,
 )
+
+from .._display_names import result_key_labels
+from ._orientation_marker import OrientationMarker
+
+#: Colour of the beam axis overlay; distinct from the red isocenter marker.
+_BEAM_COLOR = (255, 210, 0)
+#: Screen width of a beam wedge at the isocenter, in pixels.
+_BEAM_WIDTH_PX = 3.0
+#: Source-to-isocenter width ratio of a beam pointing straight at the viewer; a
+#: beam tilted by an angle to the plane gets this ratio to the power of its sine.
+_BEAM_PERSPECTIVE = 6.0
+#: Beams whose in-plane fraction is below this (about 2 deg from the normal) are
+#: drawn as a marker at the isocenter instead of a projected line.
+_BEAM_MIN_IN_PLANE = 0.035
+#: Beams tilted out of the plane by more than about 5 deg get a ⊙ / ⊗ after their
+#: label, since a slight taper alone is easy to miss.
+_BEAM_MIN_OUT_OF_PLANE = 0.087
+#: A beam can be dragged in a view only while its gantry orbit is tilted from
+#: the screen by less than about 72 deg, i.e. not seen (almost) edge-on.
+_BEAM_MIN_ORBIT_TILT = 0.3
+#: Colour of the dashed gantry orbit shown while dragging a beam.
+_ORBIT_COLOR = (200, 200, 200, 170)
+#: Margin of the orientation marker from the corner of the plot area, in pixels.
+_ORIENTATION_MARGIN = 8
+#: Image direction of each viewer axis in (x, y, z); the viewer volume is (z, x, y).
+_VIEWER_AXES_XYZ = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+#: Colour and line width of the isocenter cross on its slice, and of the half cross
+#: on nearby slices.
+_ISO_COLOR = (255, 0, 0)
+_ISO_HINT_COLOR = (255, 0, 0, 90)
+_ISO_WIDTH = 5
+#: Slices on either side of the isocenter that show a half cross towards it.
+_ISO_HINT_SLICES = 5
+#: VOI contours kept per viewer, keyed by (VOI, plane, slice), so scrolling back is free.
+_CONTOUR_CACHE_SIZE = 4096
+
+
+def _isocurve_path(
+    image: np.ndarray, level: float, offset: tuple[int, int] = (0, 0)
+) -> Optional[QPainterPath]:
+    """Trace the *level* isocurve of a 2-D slice in the image item's pixel coordinates.
+
+    Matches ``pg.IsocurveItem(..., extendToEdge=True)``, which traces in Python: pixel
+    ``(i, j)`` covers ``[i, i + 1] x [j, j + 1]`` and curves run up to the slice border.
+    *offset* is the position of ``image[0, 0]`` when it is cropped from a larger slice.
+    """
+    z = np.pad(np.asarray(image, dtype=np.float64), 1, mode="edge")
+    generator = contourpy.contour_generator(
+        z=z, name="serial", line_type=contourpy.LineType.ChunkCombinedOffset
+    )
+    (points,), (offsets,) = generator.lines(level)
+    if points is None or len(points) == 0:
+        return None
+    # contourpy returns (column, row) of the padded slice; the image item is indexed
+    # [row, column] with pixel centers at +0.5.
+    rows, cols = image.shape
+    x = np.clip(points[:, 1] - 0.5, 0, rows) + offset[0]
+    y = np.clip(points[:, 0] - 0.5, 0, cols) + offset[1]
+    connect = np.ones(len(points), dtype=np.int32)
+    connect[offsets[1:] - 1] = 0
+    return pg.arrayToQPath(x, y, connect=connect, finiteCheck=False)
+
+
+def _occupied_range(occupied: np.ndarray) -> tuple[int, int]:
+    """First and last index where *occupied* is set (it must have one)."""
+    idx = np.flatnonzero(occupied)
+    return int(idx[0]), int(idx[-1])
+
+
+def _iso_symbol(arms: Sequence[tuple[float, float]]) -> QPainterPath:
+    """Scatter symbol of lines from the centre to *arms*, in pixel-like units (y down)."""
+    path = QPainterPath()
+    for x, y in arms:
+        path.moveTo(0.0, 0.0)
+        path.lineTo(x, y)
+    return path
+
+
+_ISO_CROSS = _iso_symbol([(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)])
+#: Half crosses named by where they point: arms down make an upward arrowhead (∧).
+_ISO_HALF_UP = _iso_symbol([(-0.5, 0.5), (0.5, 0.5)])
+_ISO_HALF_DOWN = _iso_symbol([(-0.5, -0.5), (0.5, -0.5)])
+
+
+class _BeamWedgeItem(pg.GraphicsObject):
+    """Beam axis drawn as a wedge whose width changes from source to isocenter.
+
+    The end points live in data coordinates, the widths are screen pixels so the
+    wedge keeps its shape while zooming.  Like perspective, a wider source end
+    reads as a beam coming from in front of the displayed plane.  A *pending*
+    beam, edited but not applied yet, gets a dashed outline and a fainter fill.
+    """
+
+    def __init__(
+        self,
+        source: tuple[float, float],
+        target: tuple[float, float],
+        source_width: float,
+        target_width: float,
+        color: tuple[int, int, int],
+        pending: bool = False,
+    ) -> None:
+        super().__init__()
+        self._source = QPointF(*source)
+        self._target = QPointF(*target)
+        self.widths = (float(source_width), float(target_width))
+        self.pending = pending
+        self._pen = QPen(QColor(*color))
+        self._pen.setCosmetic(True)
+        if pending:
+            self._pen.setStyle(Qt.PenStyle.DashLine)
+        fill = QColor(*color)
+        fill.setAlpha(40 if pending else 110)
+        self._brush = QBrush(fill)
+
+    def set_source(self, source: tuple[float, float], width: float) -> None:
+        """Move the source end, e.g. while the beam is dragged."""
+        self.prepareGeometryChange()
+        self._source = QPointF(*source)
+        self.widths = (float(width), self.widths[1])
+        self.update()
+
+    def viewTransformChanged(self) -> None:  # noqa: N802
+        super().viewTransformChanged()
+        # The pixel widths map to a different data extent after zooming.
+        self.prepareGeometryChange()
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        rect = QRectF(self._source, self._target).normalized()
+        pad = max(self.widths) / 2.0 + 1.0
+        px_x = self.pixelLength(QPointF(1.0, 0.0))
+        px_y = self.pixelLength(QPointF(0.0, 1.0))
+        if px_x is None or px_y is None:
+            return rect
+        return rect.adjusted(-pad * px_x, -pad * px_y, pad * px_x, pad * px_y)
+
+    def paint(self, painter: QPainter, *_args) -> None:
+        transform = painter.transform()
+        a = transform.map(self._source)
+        b = transform.map(self._target)
+        dx, dy = b.x() - a.x(), b.y() - a.y()
+        length = float(np.hypot(dx, dy))
+        if length < 1e-9:
+            return
+        nx, ny = -dy / length, dx / length
+        half_a, half_b = self.widths[0] / 2.0, self.widths[1] / 2.0
+        polygon = QPolygonF(
+            [
+                QPointF(a.x() + nx * half_a, a.y() + ny * half_a),
+                QPointF(b.x() + nx * half_b, b.y() + ny * half_b),
+                QPointF(b.x() - nx * half_b, b.y() - ny * half_b),
+                QPointF(a.x() - nx * half_a, a.y() - ny * half_a),
+            ]
+        )
+        painter.save()
+        # Draw in device pixels so the widths do not scale with the zoom.
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(self._pen)
+        painter.setBrush(self._brush)
+        painter.drawPolygon(polygon)
+        painter.restore()
+
+
+class _BeamSourceItem(pg.ScatterPlotItem):
+    """Source marker of a beam; dragging it calls *on_drag* with the drag event."""
+
+    def __init__(self, *args, on_drag: Optional[Callable] = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._on_drag = on_drag
+        if on_drag is not None:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mouseDragEvent(self, ev) -> None:  # noqa: N802
+        if self._on_drag is None or ev.button() != Qt.MouseButton.LeftButton:
+            ev.ignore()
+            return
+        # Only a drag starting on the marker itself; elsewhere the view pans.
+        if ev.isStart() and not len(self.pointsAt(ev.buttonDownPos())):
+            ev.ignore()
+            return
+        ev.accept()
+        self._on_drag(ev)
 
 
 class _SliceViewBox(pg.ViewBox):
@@ -54,6 +251,8 @@ class QuantityWidget(QWidget):
     """
 
     slice_changed = Signal(int)  # emitted when user moves the slider
+    #: A beam was dragged to a new gantry angle: (index in the plan, angle in degrees).
+    beam_angle_changed = Signal(int, float)
     range_changed = Signal(float, float)  # emitted when slice changes, sending min/max
 
     _PLANE_MAP = {
@@ -73,6 +272,13 @@ class QuantityWidget(QWidget):
     def _init_state(self) -> None:
         """Initialize all instance-level state attributes."""
         self._ct: Optional[np.ndarray] = None
+        #: The array last passed to :meth:`set_data`, to tell a new image from a new result.
+        self._ct_source: Optional[np.ndarray] = None
+        #: Whether the slice still follows the isocenter: true from a new image on until the
+        #: user picks a slice, so an isocenter known only later (e.g. once the structures
+        #: are loaded) still positions the view.
+        self._follow_isocenter: bool = True
+        self._setting_slice: bool = False
         self._quantities: dict[str, np.ndarray] = {}
         self._active_quantity_name: Optional[str] = None
         self._overlay_unit: str | dict[str, str] = ""
@@ -86,6 +292,18 @@ class QuantityWidget(QWidget):
         self._show_quantity: bool = True
         self._selected_vois: Sequence[str] = []
         self._masks: dict[str, np.ndarray] = {}
+        #: Per VOI, whether each slice along each viewer axis has a mask voxel, or
+        #: ``None`` for an empty mask; computed on first display.
+        self._mask_extents: dict[str, Optional[list[np.ndarray]]] = {}
+        self._contour_cache: OrderedDict[tuple[str, str, int], Optional[QPainterPath]] = (
+            OrderedDict()
+        )
+        self._mask_items: list[QGraphicsPathItem] = []
+        #: (array, min, max) of full volumes by ``id``, for global scaling on every slice.
+        self._range_cache: dict[int, tuple[np.ndarray, float, float]] = {}
+        #: A slice render is queued for the latest slider value (see _on_slider_changed).
+        self._slice_update_pending = False
+        self._scrolling = False
         self._voi_colors: dict[str, tuple[int, int, int]] = {}
         self._show_cst: bool = True
         self._last_cmap = None
@@ -94,7 +312,15 @@ class QuantityWidget(QWidget):
         self._isocenter: Optional[np.ndarray] = None
         self._ct_origin: Optional[np.ndarray] = None
         self._ct_spacing: Optional[np.ndarray] = None
+        self._ct_direction = np.eye(3)
         self._show_isocenter: bool = False
+        #: One entry per beam, in viewer voxel space (see :meth:`set_beams`).
+        self._beams: list[dict] = []
+        self._show_beams: bool = False
+        #: Items of each drawn beam by its position in ``_beams``, for dragging.
+        self._beam_parts: dict[int, dict] = {}
+        self._beam_drag: Optional[dict] = None
+        self._show_orientation: bool = True
         self._isoline_levels: list[float] = []
         self._quantity_opacity: float = 0.4
         self._ct_window: Optional[tuple[float, float]] = None
@@ -107,6 +333,7 @@ class QuantityWidget(QWidget):
         self._quantity_item = None
         self._iso_items: list = []
         self._isocenter_item = None
+        self._beam_items: list = []
 
     def _setup_ui(self) -> None:
         """Build and wire all UI widgets."""
@@ -133,6 +360,16 @@ class QuantityWidget(QWidget):
         self._info_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._info_label.hide()
         self._plot_widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
+
+        self._cancel_drag_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Escape), self, context=Qt.ShortcutContext.WindowShortcut
+        )
+        self._cancel_drag_shortcut.setEnabled(False)
+        self._cancel_drag_shortcut.activated.connect(self._abort_beam_drag)
+
+        self._orientation_marker = OrientationMarker(self._plot_widget)
+        self._orientation_marker.move(_ORIENTATION_MARGIN, _ORIENTATION_MARGIN)
+        self._orientation_marker.hide()
 
         slider_row = QHBoxLayout()
 
@@ -180,8 +417,17 @@ class QuantityWidget(QWidget):
             Unit label for quantity overlay.
         isocenter : ndarray, optional
             Isocenter coordinates in voxel space (z, x, y) matching the viewer's slice orientation.
+
+        A new image shows the isocenter slice (the middle one without an isocenter), and
+        follows the isocenter until the user picks a slice; from then on the same
+        ``ct_volume`` object again, e.g. with a new result, keeps the current slice.
         """
-        self._ct = ct_volume.astype(float, copy=False)
+        new_image = ct_volume is not self._ct_source
+        self._ct_source = ct_volume
+        if new_image or self._ct is None:
+            self._ct = ct_volume.astype(float, copy=False)
+        # Keep only the CT's range: the quantities are replaced below.
+        self._range_cache = {k: v for k, v in self._range_cache.items() if v[0] is self._ct}
         self._quantities = {}
         self._active_quantity_name = None
 
@@ -210,18 +456,25 @@ class QuantityWidget(QWidget):
 
         self._quantity_window = None
 
-        self._configure_slider()
+        if new_image:
+            self._follow_isocenter = True
+        self._configure_slider(reset=self._follow_isocenter)
         self.update_slice()
+        self._update_orientation_marker()
 
     def clear_data(self) -> None:
         """Remove all imaging data and rendered items (e.g. workspace cleared)."""
         self._ct = None
+        self._ct_source = None
         self._quantities = {}
         self._active_quantity_name = None
         self._masks = {}
         self._isocenter = None
         self._ct_origin = None
         self._ct_spacing = None
+        self._ct_direction = np.eye(3)
+        self._beams = []
+        self._clear_beam_items()
         self._info_label.hide()
         for attr in ("_image_item", "_quantity_item", "_isocenter_item"):
             item = getattr(self, attr)
@@ -231,10 +484,12 @@ class QuantityWidget(QWidget):
         for iso in self._iso_items:
             self._view_box.removeItem(iso)
         self._iso_items.clear()
-        for item in getattr(self, "_mask_items", []):
+        for item in self._mask_items:
             self._view_box.removeItem(item)
-        if hasattr(self, "_mask_items"):
-            self._mask_items.clear()
+        self._mask_items.clear()
+        self._mask_extents.clear()
+        self._contour_cache.clear()
+        self._range_cache.clear()
         if self._colorbar is not None:
             try:
                 self._plot_widget.removeItem(self._colorbar)
@@ -244,15 +499,25 @@ class QuantityWidget(QWidget):
             self._colorbar_mode = None
         self._configure_slider()
         self._slice_label.setText("Slice: -")
+        self._update_orientation_marker()
 
     def set_ct_geometry(
         self,
         origin: Optional[Sequence[float]],
         spacing: Optional[Sequence[float]],
+        direction: Optional[Sequence[float]] = None,
     ) -> None:
-        """Set CT origin/spacing in (x, y, z) order for physical-coordinate display."""
+        """Set CT geometry, with a row-major image-to-LPS direction matrix.
+
+        Origin and spacing use (x, y, z) order. Omitting direction assumes an
+        identity matrix, as for a volume already aligned with the LPS axes.
+        """
         self._ct_origin = None if origin is None else np.asarray(origin, dtype=float)
         self._ct_spacing = None if spacing is None else np.asarray(spacing, dtype=float)
+        self._ct_direction = (
+            np.eye(3) if direction is None else np.asarray(direction, dtype=float).reshape(3, 3)
+        )
+        self._update_orientation_marker()
 
     # ------------------------------------------------------------------
     # Cursor info overlay
@@ -296,12 +561,13 @@ class QuantityWidget(QWidget):
             lines.append(f"Pos: ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}) mm")
         lines.append(f"Index: [{ix}, {iy}, {iz}] (sitk) / [{iz}, {iy}, {ix}] (numpy)")
         lines.append(f"CT: {self._ct[iz, ix, iy]:.0f} HU")
+        labels = result_key_labels(self._quantities)
         for name, arr in self._quantities.items():
             base = name.split()[0] if " " in name else name
-            if base.endswith("_beam"):
+            if base.endswith(("_beam", "_scenario")):
                 continue
             unit = self._overlay_units.get(name, getattr(self, "_overlay_units_default", ""))
-            value = f"{name}: {arr[iz, ix, iy]:.4g}"
+            value = f"{labels[name]}: {arr[iz, ix, iy]:.4g}"
             lines.append(f"{value} {unit}" if unit else value)
         return "\n".join(lines)
 
@@ -372,10 +638,16 @@ class QuantityWidget(QWidget):
             try:
                 a = np.asarray(arr)
                 if a.shape == self._ct.shape:  # type: ignore[union-attr]
-                    valid[name] = (a > 0).astype(np.uint8)
+                    # Binary uint8/bool masks are used as given: copying every mask
+                    # of a large patient on each update is slow.
+                    valid[name] = a if a.dtype in (np.bool_, np.uint8) else a > 0
             except Exception:
                 continue
+        unchanged = {name for name, a in valid.items() if self._masks.get(name) is a}
         self._masks = valid
+        self._mask_extents = {n: e for n, e in self._mask_extents.items() if n in unchanged}
+        for key in [k for k in self._contour_cache if k[0] not in unchanged]:
+            del self._contour_cache[key]
         self.update_slice()
 
     def set_voi_colors(self, colors: dict[str, tuple[int, int, int]]) -> None:
@@ -402,30 +674,53 @@ class QuantityWidget(QWidget):
             One of Axial, Sagittal, Coronal (case-insensitive).
         """
         self._plane = plane
-        self._configure_slider()
+        self._configure_slider(reset=True)
         self.update_slice()
+        self._update_orientation_marker()
 
-    def _configure_slider(self) -> None:
+    def _configure_slider(self, reset: bool = True) -> None:
+        """Set the slider range for the current plane; *reset* moves to :meth:`_home_slice`."""
         if self._ct is None:
             self.slice_slider.setEnabled(False)
             self.slice_spin.setEnabled(False)
             return
         axis = self._PLANE_MAP.get(self._plane, 2)
         size = self._ct.shape[axis]
-        self.slice_slider.setEnabled(True)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(size - 1)
-        self.slice_spin.setEnabled(True)
-        self.slice_spin.setMinimum(0)
-        self.slice_spin.setMaximum(size - 1)
-        mid = size // 2
-        if self.slice_slider.value() != mid:
-            self.slice_slider.setValue(mid)
+        # A kept slice outside the new range is clamped by setMaximum, which is not a
+        # slice the user picked either.
+        self._setting_slice = True
+        try:
+            self.slice_slider.setEnabled(True)
+            self.slice_slider.setMinimum(0)
+            self.slice_slider.setMaximum(size - 1)
+            self.slice_spin.setEnabled(True)
+            self.slice_spin.setMinimum(0)
+            self.slice_spin.setMaximum(size - 1)
+            if reset:
+                self.slice_slider.setValue(self._home_slice())
+        finally:
+            self._setting_slice = False
         if self.slice_spin.value() != self.slice_slider.value():
             self.slice_spin.blockSignals(True)
             self.slice_spin.setValue(self.slice_slider.value())
             self.slice_spin.blockSignals(False)
         self._slice_label.setText(f"/ {size - 1}")
+
+    def _home_slice(self) -> int:
+        """Slice through the isocenter, or the middle slice without one."""
+        axis = self._PLANE_MAP.get(self._plane, 2)
+        if self._isocenter is not None and 0 <= axis < len(self._isocenter):
+            idx = int(round(float(self._isocenter[axis])))
+            return max(self.slice_slider.minimum(), min(self.slice_slider.maximum(), idx))
+        return self._ct.shape[axis] // 2
+
+    def _set_slice(self, idx: int) -> None:
+        """Move the slider without counting it as the user's choice of slice."""
+        self._setting_slice = True
+        try:
+            self.slice_slider.setValue(idx)
+        finally:
+            self._setting_slice = False
 
     # ------------------------------------------------------------------
     # Rendering
@@ -451,6 +746,7 @@ class QuantityWidget(QWidget):
 
         self._update_isolines(idx, quantity_arr)
         self._update_contours(idx)
+        self._update_beams(idx)
         self._update_isocenter(idx)
 
         self._slice_label.setText(f"/ {self.slice_slider.maximum()} ({self._plane})")
@@ -492,7 +788,7 @@ class QuantityWidget(QWidget):
             center, width = self._ct_window
             self._image_item.setLevels((center - width / 2, center + width / 2))
         elif self._global_max:
-            self._image_item.setLevels((float(self._ct.min()), float(self._ct.max())))
+            self._image_item.setLevels(self._volume_range(self._ct))
         else:
             self._image_item.setLevels((float(ct_slice.min()), float(ct_slice.max())))
         self._image_item.setOpacity(1.0 if self._show_ct else 0.0)
@@ -530,7 +826,7 @@ class QuantityWidget(QWidget):
             center, width = self._quantity_window
             self._quantity_item.setLevels((center - width / 2, center + width / 2))
         elif self._global_max:
-            self._quantity_item.setLevels((float(quantity_arr.min()), float(quantity_arr.max())))
+            self._quantity_item.setLevels(self._volume_range(quantity_arr))
 
         return quantity_slice
 
@@ -608,8 +904,7 @@ class QuantityWidget(QWidget):
             return
 
         volume, item, label, cmap = params
-        vmin = float(volume.min())
-        vmax = float(volume.max())
+        vmin, vmax = self._volume_range(volume)
         self._colorbar = pg.ColorBarItem(values=(vmin, vmax), colorMap=cmap, interactive=False)
         self._plot_widget.addItem(self._colorbar, row=0, col=1)
         if item is not None:
@@ -635,7 +930,7 @@ class QuantityWidget(QWidget):
             center, width = window
             return center - width / 2, center + width / 2
         if self._global_max:
-            return float(full_arr.min()), float(full_arr.max())
+            return self._volume_range(full_arr)
         valid = slice_data[np.isfinite(slice_data)]
         if valid.size == 0:
             return 0.0, 1e-6
@@ -672,7 +967,7 @@ class QuantityWidget(QWidget):
             return
         quantity_slice = self._extract_slice(quantity_arr, self._plane, idx).astype(float)
 
-        max_quantity_val = quantity_arr.max()
+        max_quantity_val = self._volume_range(quantity_arr)[1]
         max_quantity = float(max_quantity_val) if max_quantity_val > 0 else 1.0
 
         if self._isoline_levels:
@@ -688,26 +983,61 @@ class QuantityWidget(QWidget):
         except Exception:
             cmap = pg.colormap.getFromMatplotlib("jet")
 
-        if quantity_slice.max() == quantity_slice.min():
+        slice_min, slice_max = float(quantity_slice.min()), float(quantity_slice.max())
+        if slice_max == slice_min:
             return
 
         for val in levels:
-            if val > quantity_slice.max() or val < quantity_slice.min():
+            if val > slice_max or val < slice_min:
                 continue
-            norm_val = val / max_quantity
-            color = cmap.map(norm_val)
-            try:
-                iso = pg.IsocurveItem(quantity_slice, level=val, pen=pg.mkPen(color, width=2))
-                iso.setZValue(10)
-                self._view_box.addItem(iso)
-                self._iso_items.append(iso)
-            except Exception as e:
-                print(f"Error adding isoline/label: {e}")
+            path = _isocurve_path(quantity_slice, val)
+            if path is None:
                 continue
+            color = cmap.map(val / max_quantity)
+            self._iso_items.append(self._add_path_item(path, pg.mkPen(color, width=2), 10))
+
+    def _add_path_item(self, path: QPainterPath, pen: QPen, z_value: float) -> QGraphicsPathItem:
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(z_value)
+        self._view_box.addItem(item, ignoreBounds=True)
+        return item
+
+    def _mask_extent(self, name: str) -> Optional[list[np.ndarray]]:
+        """Slices along each viewer axis that hold voxels of VOI *name* (``None``: empty)."""
+        if name not in self._mask_extents:
+            mask = self._masks[name]
+            along_0 = mask.any(axis=(1, 2))
+            in_plane = mask.any(axis=0)
+            extent = [along_0, in_plane.any(axis=1), in_plane.any(axis=0)]
+            self._mask_extents[name] = extent if along_0.any() else None
+        return self._mask_extents[name]
+
+    def _voi_contour(self, name: str, idx: int) -> Optional[QPainterPath]:
+        """Contour of VOI *name* on slice *idx* of the current plane, cached."""
+        key = (name, self._plane, idx)
+        if key in self._contour_cache:
+            self._contour_cache.move_to_end(key)
+            return self._contour_cache[key]
+
+        path = None
+        extent = self._mask_extent(name)
+        axis = self._PLANE_MAP.get(self._plane, 2)
+        if extent is not None and extent[axis][idx]:
+            rows, cols = (extent[a] for a in range(3) if a != axis)
+            # One background voxel around the VOI keeps the crop's border off the contour.
+            r0, r1 = _occupied_range(rows)
+            c0, c1 = _occupied_range(cols)
+            r0, c0 = max(r0 - 1, 0), max(c0 - 1, 0)
+            mask_slice = self._extract_slice(self._masks[name], self._plane, idx)
+            path = _isocurve_path(mask_slice[r0 : r1 + 2, c0 : c1 + 2], 0.5, offset=(r0, c0))
+
+        self._contour_cache[key] = path
+        if len(self._contour_cache) > _CONTOUR_CACHE_SIZE:
+            self._contour_cache.popitem(last=False)
+        return path
 
     def _update_contours(self, idx: int) -> None:
-        if not hasattr(self, "_mask_items"):
-            self._mask_items = []
         for item in self._mask_items:
             self._view_box.removeItem(item)
         self._mask_items.clear()
@@ -718,9 +1048,8 @@ class QuantityWidget(QWidget):
             return
         n = len(names)
         for i, name in enumerate(names):
-            mask = self._masks[name]
-            mask_slice = self._extract_slice(mask, self._plane, idx).astype(np.int32)
-            if mask_slice.max() == 0:
+            path = self._voi_contour(name, idx)
+            if path is None:
                 continue
             if name in self._voi_colors:
                 r, g, b = self._voi_colors[name]
@@ -729,13 +1058,363 @@ class QuantityWidget(QWidget):
                 g = int(255 * (1 - i / max(1, n - 1)))
                 b = 255
             pen = pg.mkPen(color=(r, g, b), width=1.5)
-            try:
-                curve = pg.IsocurveItem(mask_slice, level=0.5, pen=pen)
-            except Exception:
+            self._mask_items.append(self._add_path_item(path, pen, 15))
+
+    def _plane_axes(self, plane: Optional[str] = None) -> tuple[int, int]:
+        """Volume axes shown horizontally and vertically in *plane* (default: the current one)."""
+        axis = self._PLANE_MAP.get(plane or self._plane, 2)
+        return tuple(i for i in (0, 1, 2) if i != axis)
+
+    def _update_orientation_marker(self) -> None:
+        """Point the orientation marker at the current plane; shown only with an image."""
+        h_axis, v_axis = self._plane_axes()
+        axes_lps = _VIEWER_AXES_XYZ @ self._ct_direction.T
+        # The vertical axis is inverted, so the second viewer axis runs downwards.
+        self._orientation_marker.set_view(axes_lps[h_axis], axes_lps[v_axis])
+        self._orientation_marker.setVisible(self._show_orientation and self._ct is not None)
+
+    def _viewer_spacing(self) -> np.ndarray:
+        """Voxel spacing in mm along the viewer's (z, x, y) axes."""
+        return np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
+
+    def _view_point(self, voxel: np.ndarray) -> tuple[float, float]:
+        """In-plane view position of viewer (z, x, y) voxel coordinates.
+
+        The image items draw voxel ``i`` over ``[i, i + 1]``, so its center is at ``i + 0.5``.
+        """
+        h_axis, v_axis = self._plane_axes()
+        return float(voxel[h_axis]) + 0.5, float(voxel[v_axis]) + 0.5
+
+    def _beam_radius(self, h_iso: float, v_iso: float) -> Optional[float]:
+        """Source distance in mm of the beams around an isocenter, or None outside the slice.
+
+        The radius of the largest circle around the isocenter (in view coordinates)
+        that fits within the slice's voxel centers, so the beam lines stay inside the
+        image instead of running off into empty space, which would also widen the
+        auto-ranged view.  Every beam gets the same distance, so its source stays on
+        its gantry orbit while dragged.
+        """
+        h_axis, v_axis = self._plane_axes()
+        spacing = self._viewer_spacing()
+        radius = min(
+            min(h_iso - 0.5, self._ct.shape[h_axis] - 0.5 - h_iso) * spacing[h_axis],
+            min(v_iso - 0.5, self._ct.shape[v_axis] - 0.5 - v_iso) * spacing[v_axis],
+        )
+        return float(radius) if radius > 0.0 else None
+
+    @staticmethod
+    def _label_anchor(component: float) -> float:
+        """Text anchor along one screen axis for a tip label pointing *component*.
+
+        ``0`` puts the text's leading edge on the point so it extends towards
+        larger coordinates, ``1`` does the opposite and ``0.5`` centres it.  The
+        vertical axis is inverted in the view, which flips "larger" to "further
+        down" for both the beam component and the anchor, so one rule serves both
+        axes.
+        """
+        if component > 0.3:
+            return 0.0
+        if component < -0.3:
+            return 1.0
+        return 0.5
+
+    def _toward_viewer(self, direction: np.ndarray, plane: Optional[str] = None) -> float:
+        """Signed sine of the angle between *direction* and the displayed plane.
+
+        Positive when *direction* points out of the screen towards the viewer.
+        *direction* is in viewer voxel space and is scaled to mm first, so the
+        value reflects the physical angle.  The slice is shown column-major with
+        an inverted vertical axis, making (horizontal, vertical, into-screen) a
+        right-handed frame in which ``e_h x e_v`` points into the screen.
+        """
+        h_axis, v_axis = self._plane_axes(plane)
+        n_axis = self._PLANE_MAP.get(plane or self._plane, 2)
+        spacing = np.ones(3) if self._ct_spacing is None else self._ct_spacing[[2, 0, 1]]
+        physical = np.asarray(direction, dtype=float) * spacing
+        norm = float(np.linalg.norm(physical))
+        if norm == 0.0:
+            return 0.0
+        into_screen = np.cross(np.eye(3)[h_axis], np.eye(3)[v_axis])[n_axis]
+        return float(-into_screen * physical[n_axis] / norm)
+
+    @staticmethod
+    def _out_of_plane_note(toward: float) -> str:
+        angle = float(np.degrees(np.arcsin(min(abs(toward), 1.0))))
+        if angle < 1.0:
+            return "in the displayed plane"
+        side = "towards" if toward > 0 else "away from"
+        return f"{angle:.0f}° out of plane, source {side} the viewer"
+
+    @staticmethod
+    def _direction_symbol(toward: float) -> str:
+        """⊗ (the arrow's tail) for a beam going into the screen, ⊙ (its tip) coming out.
+
+        A source in front of the plane (*toward* > 0) means the beam travels into it.
+        """
+        return "⊗" if toward > 0 else "⊙"
+
+    def _add_beam_item(self, item, z_value: float = 18) -> None:
+        item.setZValue(z_value)
+        self._view_box.addItem(item)
+        self._beam_items.append(item)
+
+    def _add_perpendicular_beam(
+        self, i: int, beam: dict, h_iso: float, v_iso: float, toward: float
+    ) -> None:
+        """Mark a beam running along the view direction with the usual ⊙ / ⊗ symbol.
+
+        ⊙ (a dot, the arrow tip) is a beam coming out of the screen, i.e. a
+        source behind the plane; ⊗ (a cross, the tail) one going into it.
+        """
+        inner = "x" if self._direction_symbol(toward) == "⊗" else "o"
+        marker = pg.ScatterPlotItem(
+            spots=[
+                {"pos": (h_iso, v_iso), "symbol": "o", "size": 16, "brush": None},
+                {
+                    "pos": (h_iso, v_iso),
+                    "symbol": inner,
+                    "size": 9 if inner == "x" else 5,
+                    "brush": pg.mkBrush(color=_BEAM_COLOR),
+                },
+            ],
+            pen=pg.mkPen(color=_BEAM_COLOR, width=1.5),
+        )
+        marker.setToolTip(self._beam_tooltip(beam, toward))
+        self._add_beam_item(marker)
+
+        label = pg.TextItem(beam.get("name", f"#{i}"), color=_BEAM_COLOR, anchor=(-0.4, 1.1))
+        label.setPos(h_iso, v_iso)
+        self._add_beam_item(label, 19)
+
+    def _update_beams(self, _idx: int) -> None:
+        """Draw one wedge per beam, from the source towards the isocenter.
+
+        The beam axis is a line in space, so it is projected onto the displayed
+        plane and shown on every slice rather than only where it intersects the
+        current one.  All sources lie at the same distance from the isocenter
+        (see :meth:`_beam_radius`), so out-of-plane beams appear shorter.  The
+        wedge's source end is wider when the source lies in
+        front of the plane and narrower when it lies behind it, so beams that
+        are not coplanar with the view stand out, and their label carries ⊙ / ⊗
+        for the direction; a beam running (almost) along the view direction
+        gets a ⊙ / ⊗ marker at the isocenter instead.
+        """
+        self._clear_beam_items()
+
+        if not self._show_beams or not self._beams or self._ct is None:
+            return
+
+        h_axis, v_axis = self._plane_axes()
+        spacing = self._viewer_spacing()
+
+        for i, beam in enumerate(self._beams):
+            iso = np.asarray(beam["iso_center"], dtype=float)
+            direction = np.asarray(beam["source_direction"], dtype=float)
+            # Per mm along the beam, so the source lands at the radius in mm.
+            direction = direction / max(float(np.linalg.norm(direction * spacing)), 1e-12)
+            h_iso, v_iso = self._view_point(iso)
+            toward = self._toward_viewer(direction)
+            d_h, d_v = float(direction[h_axis]), float(direction[v_axis])
+            norm = float(np.hypot(d_h, d_v))
+            if norm < 1e-6 or np.sqrt(max(0.0, 1.0 - toward**2)) < _BEAM_MIN_IN_PLANE:
+                self._add_perpendicular_beam(i, beam, h_iso, v_iso, toward)
                 continue
-            curve.setZValue(15)
-            self._view_box.addItem(curve)
-            self._mask_items.append(curve)
+            radius = self._beam_radius(h_iso, v_iso)
+            if radius is None:
+                continue
+            h_src = h_iso + direction[h_axis] * radius
+            v_src = v_iso + direction[v_axis] * radius
+            d_h, d_v = d_h / norm, d_v / norm
+
+            source_width = max(1.0, _BEAM_WIDTH_PX * _BEAM_PERSPECTIVE**toward)
+            wedge = _BeamWedgeItem(
+                (h_src, v_src),
+                (h_iso, v_iso),
+                source_width=source_width,
+                target_width=_BEAM_WIDTH_PX,
+                color=_BEAM_COLOR,
+                pending=bool(beam.get("pending")),
+            )
+            self._add_beam_item(wedge)
+
+            # Marks the source end, so the direction is readable without the
+            # isocenter marker being switched on; dragging it rotates the gantry.
+            draggable = self._beam_orbit_tilt(beam) >= _BEAM_MIN_ORBIT_TILT
+            source = _BeamSourceItem(
+                [h_src],
+                [v_src],
+                symbol="o",
+                size=max(7.0, source_width),
+                pen=pg.mkPen(color=_BEAM_COLOR),
+                brush=pg.mkBrush(color=_BEAM_COLOR),
+                on_drag=partial(self._on_beam_drag, i) if draggable else None,
+            )
+            source.setToolTip(self._beam_tooltip(beam, toward))
+            self._add_beam_item(source)
+
+            # Anchored away from the isocenter, so the text sits outside the
+            # line instead of on top of it.
+            text = beam.get("name", f"#{i}") + ("*" if beam.get("pending") else "")
+            if abs(toward) >= _BEAM_MIN_OUT_OF_PLANE:
+                text = f"{text} {self._direction_symbol(toward)}"
+            label = pg.TextItem(
+                text,
+                color=_BEAM_COLOR,
+                anchor=(self._label_anchor(d_h), self._label_anchor(d_v)),
+            )
+            label.setPos(h_src, v_src)
+            self._add_beam_item(label, 19)
+            self._beam_parts[i] = {
+                "wedge": wedge,
+                "source": source,
+                "label": label,
+                "tip": (h_src, v_src),
+                "radius": radius,
+            }
+
+    def _clear_beam_items(self) -> None:
+        self._cancel_beam_drag()
+        for item in self._beam_items:
+            self._view_box.removeItem(item)
+        self._beam_items.clear()
+        self._beam_parts.clear()
+
+    def _beam_orbit_tilt(self, beam: dict, plane: Optional[str] = None) -> float:
+        """How face-on the beam's gantry orbit is seen in *plane*: 1 face-on, 0 edge-on.
+
+        0 also for beams without a plan angle to change.
+        """
+        if "orbit_axis" not in beam:
+            return 0.0
+        return abs(self._toward_viewer(beam["orbit_axis"], plane))
+
+    def _beam_tooltip(self, beam: dict, toward: float) -> str:
+        lines = [beam.get("label", ""), self._out_of_plane_note(toward)]
+        if beam.get("pending"):
+            lines.append("Not applied yet: apply or discard it in the plan panel")
+        if "orbit_axis" in beam:
+            if self._beam_orbit_tilt(beam) >= _BEAM_MIN_ORBIT_TILT:
+                lines.append("Drag the source marker to change the gantry angle")
+            else:
+                best = max(
+                    ("Axial", "Sagittal", "Coronal"),
+                    key=lambda plane: self._beam_orbit_tilt(beam, plane),
+                )
+                lines.append(f"Drag it in the {best} view to change the gantry angle")
+        return "\n".join(line for line in lines if line)
+
+    def _on_beam_drag(self, i: int, ev) -> None:
+        """Move beam *i* along its gantry orbit; release writes the angle back."""
+        if ev.isStart():
+            self._start_beam_drag(i)
+        drag = self._beam_drag
+        if drag is None or drag["index"] != i:
+            return
+        pos = ev.pos()
+        offset = np.array([pos.x(), pos.y()]) - drag["iso"]
+        if np.any(offset):
+            # The orbit point is ``iso + radius * matrix @ (cos g, sin g)``, so the
+            # angle whose point lies in the direction of the mouse solves this.
+            c = np.linalg.solve(drag["matrix"], offset)
+            self._show_dragged_beam(round(float(np.degrees(np.arctan2(c[1], c[0])))) % 360.0)
+        if ev.isFinish():
+            self._finish_beam_drag()
+
+    def _start_beam_drag(self, i: int) -> None:
+        """Show beam *i*'s gantry orbit, as a dashed ellipse through its source marker."""
+        self._cancel_beam_drag()
+        beam = self._beams[i]
+        h_axis, v_axis = self._plane_axes()
+        u, w = (np.asarray(vector, dtype=float) for vector in beam["orbit"])
+        matrix = np.array([[u[h_axis], w[h_axis]], [u[v_axis], w[v_axis]]])
+        iso = np.array(self._view_point(beam["iso_center"]))
+        tip = self._beam_parts[i]["tip"]
+        radius = self._beam_parts[i]["radius"]
+
+        t = np.linspace(0.0, 2.0 * np.pi, 241)
+        ring = iso[:, None] + radius * matrix @ np.stack([np.cos(t), np.sin(t)])
+        orbit = pg.PlotCurveItem(
+            ring[0],
+            ring[1],
+            pen=pg.mkPen(color=_ORBIT_COLOR, width=1.5, style=Qt.PenStyle.DashLine),
+        )
+        orbit.setZValue(17)
+        self._view_box.addItem(orbit, ignoreBounds=True)
+        label = self._beam_parts[i]["label"]
+        self._beam_drag = {
+            "index": i,
+            "matrix": matrix,
+            "iso": iso,
+            "radius": radius,
+            "orbit": orbit,
+            "gantry": beam["gantry"],
+            "restore": (
+                (float(tip[0]), float(tip[1])),
+                self._beam_parts[i]["wedge"].widths[0],
+                label.toPlainText(),
+                (float(label.anchor[0]), float(label.anchor[1])),
+            ),
+        }
+        self._cancel_drag_shortcut.setEnabled(True)
+
+    def _show_dragged_beam(self, gantry: float) -> None:
+        """Draw the dragged beam at *gantry* degrees, its source on the orbit."""
+        drag = self._beam_drag
+        i = drag["index"]
+        beam, parts = self._beams[i], self._beam_parts[i]
+        drag["gantry"] = gantry
+        angle = np.radians(gantry)
+        u, w = (np.asarray(vector, dtype=float) for vector in beam["orbit"])
+        on_orbit = drag["matrix"] @ np.array([np.cos(angle), np.sin(angle)])
+        tip = drag["iso"] + drag["radius"] * on_orbit
+        toward = self._toward_viewer(np.cos(angle) * u + np.sin(angle) * w)
+        width = max(1.0, _BEAM_WIDTH_PX * _BEAM_PERSPECTIVE**toward)
+
+        parts["wedge"].set_source((float(tip[0]), float(tip[1])), width)
+        parts["source"].setData([float(tip[0])], [float(tip[1])])
+        parts["source"].setSize(max(7.0, width))
+        direction = on_orbit / max(float(np.linalg.norm(on_orbit)), 1e-12)
+        label = parts["label"]
+        label.setText(f"{beam.get('name', f'#{i}')}  {gantry:g}°")
+        label.setAnchor((self._label_anchor(direction[0]), self._label_anchor(direction[1])))
+        label.setPos(float(tip[0]), float(tip[1]))
+
+    def _finish_beam_drag(self) -> None:
+        drag = self._beam_drag
+        self._cancel_beam_drag()
+        beam = self._beams[drag["index"]]
+        # Deferred: the plan update redraws the beams, removing the item whose
+        # drag event is still being handled.
+        QTimer.singleShot(0, partial(self._commit_beam_angle, beam, drag["gantry"]))
+
+    def _commit_beam_angle(self, beam: dict, gantry: float) -> None:
+        if abs((gantry - beam["gantry"] + 180.0) % 360.0 - 180.0) > 1e-9:
+            self.beam_angle_changed.emit(int(beam["index"]), float(gantry))
+        # Redraws from the beams as they now are: the updated plan, or the old
+        # angle if nothing took the change.
+        self._update_beams(self.slice_slider.value())
+
+    def _cancel_beam_drag(self) -> None:
+        self._cancel_drag_shortcut.setEnabled(False)
+        if self._beam_drag is not None:
+            self._view_box.removeItem(self._beam_drag["orbit"])
+            self._beam_drag = None
+
+    def _abort_beam_drag(self) -> None:
+        """Escape: put the dragged beam back and ignore the rest of the drag."""
+        drag = self._beam_drag
+        if drag is None:
+            return
+        # Restored in place: the dragged item still receives the drag's events.
+        tip, width, text, anchor = drag["restore"]
+        parts = self._beam_parts[drag["index"]]
+        parts["wedge"].set_source(tip, width)
+        parts["source"].setData([tip[0]], [tip[1]])
+        parts["source"].setSize(max(7.0, width))
+        parts["label"].setText(text)
+        parts["label"].setAnchor(anchor)
+        parts["label"].setPos(*tip)
+        self._cancel_beam_drag()
 
     def _update_isocenter(self, idx: int) -> None:
         if self._isocenter_item is not None:
@@ -746,28 +1425,28 @@ class QuantityWidget(QWidget):
             return
 
         axis = self._PLANE_MAP.get(self._plane, 2)
-        iso_slice_idx = int(round(self._isocenter[axis]))
+        offset = int(round(self._isocenter[axis])) - idx
 
-        if idx == iso_slice_idx:
-            if axis == 2:  # Axial (Z) -> X, Y
-                x, y = self._isocenter[0], self._isocenter[1]
-            elif axis == 0:  # Sagittal (X) -> Y, Z
-                x, y = self._isocenter[1], self._isocenter[2]
-            elif axis == 1:  # Coronal (Y) -> X, Z
-                x, y = self._isocenter[0], self._isocenter[2]
-            else:
-                return
+        if offset == 0:
+            symbol, color = _ISO_CROSS, _ISO_COLOR
+        elif abs(offset) <= _ISO_HINT_SLICES:
+            # The wheel scrolls up towards higher slices, so the half cross points up then.
+            symbol = _ISO_HALF_UP if offset > 0 else _ISO_HALF_DOWN
+            color = _ISO_HINT_COLOR
+        else:
+            return
 
-            self._isocenter_item = pg.ScatterPlotItem(
-                [x],
-                [y],
-                symbol="+",
-                size=20,
-                pen=pg.mkPen("r", width=2),
-                brush=pg.mkBrush("r"),
-            )
-            self._isocenter_item.setZValue(20)
-            self._view_box.addItem(self._isocenter_item)
+        x, y = self._view_point(self._isocenter)
+        self._isocenter_item = pg.ScatterPlotItem(
+            [x],
+            [y],
+            symbol=symbol,
+            size=20,
+            pen=pg.mkPen(color, width=_ISO_WIDTH),
+            brush=pg.mkBrush(None),
+        )
+        self._isocenter_item.setZValue(20)
+        self._view_box.addItem(self._isocenter_item)
 
     @staticmethod
     def _extract_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -822,13 +1501,40 @@ class QuantityWidget(QWidget):
     # ------------------------------------------------------------------
     # Internal callbacks
     # ------------------------------------------------------------------
+    def _volume_range(self, arr: np.ndarray) -> tuple[float, float]:
+        """``(min, max)`` of a full volume, computed once per array."""
+        cached = self._range_cache.get(id(arr))
+        if cached is None or cached[0] is not arr:
+            cached = (arr, float(arr.min()), float(arr.max()))
+            self._range_cache[id(arr)] = cached
+        return cached[1], cached[2]
+
     def _on_slider_changed(self, value: int) -> None:  # value provided by Qt
-        self.update_slice()
+        if not self._setting_slice:
+            self._follow_isocenter = False
+        if self._scrolling or self.slice_slider.isSliderDown():
+            # Dragging and wheel scrolling outpace rendering on large images: render
+            # once the queued input is handled, for the latest slice only.
+            if not self._slice_update_pending:
+                self._slice_update_pending = True
+                QTimer.singleShot(0, self, self._render_pending_slice)
+        else:
+            self._slice_update_pending = False
+            self.update_slice()
+
+    def _render_pending_slice(self) -> None:
+        if self._slice_update_pending:
+            self._slice_update_pending = False
+            self.update_slice()
 
     def _on_scroll_slice(self, delta: int) -> None:
         new_val = self.slice_slider.value() + delta
         new_val = max(self.slice_slider.minimum(), min(self.slice_slider.maximum(), new_val))
-        self.slice_slider.setValue(new_val)
+        self._scrolling = True
+        try:
+            self.slice_slider.setValue(new_val)
+        finally:
+            self._scrolling = False
 
     def eventFilter(self, obj, ev):  # noqa: N802
         """Handle native gestures and keep the cursor-info overlay anchored."""
@@ -881,6 +1587,51 @@ class QuantityWidget(QWidget):
         """Toggle isocenter visibility."""
         self._show_isocenter = visible
         self.update_slice()
+
+    def set_isocenter(self, isocenter: Optional[np.ndarray]) -> None:
+        """Move the isocenter marker, in voxel space (z, x, y) like :meth:`set_data`."""
+        unchanged = (isocenter is None and self._isocenter is None) or (
+            isocenter is not None
+            and self._isocenter is not None
+            and np.array_equal(isocenter, self._isocenter)
+        )
+        self._isocenter = isocenter
+        if unchanged:
+            return
+        if self._follow_isocenter and self._ct is not None and isocenter is not None:
+            home = self._home_slice()
+            if home != self.slice_slider.value():
+                self._set_slice(home)  # renders the slice through _on_slider_changed
+                return
+        if self._show_isocenter:
+            self.update_slice()
+
+    def set_beams(self, beams: Sequence[dict]) -> None:
+        """Assign the beam axes to draw.
+
+        Parameters
+        ----------
+        beams : sequence of dict
+            One entry per beam with ``iso_center`` (the beam's target point) and
+            ``source_direction`` (pointing from the isocenter towards the
+            source), both in the viewer's voxel space, plus an optional
+            ``label`` used as the tooltip of the source marker.
+        """
+        self._beams = list(beams)
+        # Nothing is on screen while the overlay is off, so skip the re-render;
+        # the workspace pushes beams on every update, not only on plan changes.
+        if self._show_beams:
+            self.update_slice()
+
+    def set_beams_visible(self, visible: bool) -> None:
+        """Toggle the beam axis overlay."""
+        self._show_beams = visible
+        self.update_slice()
+
+    def set_orientation_visible(self, visible: bool) -> None:
+        """Toggle the patient orientation marker in the corner of the plot."""
+        self._show_orientation = visible
+        self._update_orientation_marker()
 
     def set_opacity(self, opacity: float) -> None:
         """Set opacity for the quantity overlay (0.0 to 1.0)."""
@@ -950,9 +1701,9 @@ class QuantityWidget(QWidget):
         if mode == "quantity" and self._active_quantity_name:
             arr = self._quantities.get(self._active_quantity_name)
             if arr is not None:
-                return float(arr.min()), float(arr.max())
+                return self._volume_range(arr)
         elif mode == "ct" and self._ct is not None:
-            return float(self._ct.min()), float(self._ct.max())
+            return self._volume_range(self._ct)
         return 0.0, 1.0
 
     def get_current_slice_range(self, mode: str) -> tuple[float, float]:
@@ -987,7 +1738,8 @@ class QuantityWidget(QWidget):
             slice_idx = max(
                 self.slice_slider.minimum(), min(self.slice_slider.maximum(), slice_idx)
             )
-            self.slice_slider.setValue(slice_idx)
+            self._set_slice(slice_idx)
+            self._follow_isocenter = True
         self._view_box.autoRange()
 
     def reset_options(self) -> None:

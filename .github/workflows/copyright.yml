@@ -1,0 +1,54 @@
+name: Copyright year
+
+# Opens a pull request into develop that moves the copyright year to the current one, once a
+# year or when started by hand. Needs "Allow GitHub Actions to create and approve pull requests"
+# in the repository settings. Events caused by the workflow's GITHUB_TOKEN do not start other
+# workflows, so the checks of the pull request only start once it is closed and reopened.
+
+on:
+  schedule:
+    - cron: '0 6 2 1 *'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    if: github.repository == 'e0404/pyRadPlan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: develop
+
+      - name: Update the year
+        id: bump
+        run: |
+          year=$(date +%Y)
+          sed -E -i "s/(Copyright \(c\) [0-9]{4}-)[0-9]{4}/\1$year/" LICENSE pyRadPlan/gui/menus/_help.py
+          sed -E -i "s/^(copyright = \")[0-9]{4}/\1$year/" docs/conf.py
+          echo "year=$year" >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then
+            echo "The copyright year is already $year."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          YEAR: ${{ steps.bump.outputs.year }}
+        run: |
+          branch="devops/copyright-$YEAR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -a -m "Update the copyright year to $YEAR"
+          git push origin "$branch"
+          gh pr create --base develop --head "$branch" \
+            --title "Update the copyright year to $YEAR" \
+            --body "Close and reopen this pull request to start its checks: pull requests opened by a workflow do not start them."

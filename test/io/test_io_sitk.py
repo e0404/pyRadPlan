@@ -8,6 +8,7 @@ from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_voi, validate_cst
 from pyRadPlan.io import load_data, load_patient, save_data, NiftiHandler
 from pyRadPlan.io._factory import detect_format, is_container_format
+from pyRadPlan.biology.tissues import MKMTissueProperties, TissueProperties
 
 FORMATS = ["nifti", "nrrd", "meta"]
 
@@ -261,3 +262,93 @@ def test_label_import_warns_on_resampling_and_empty_labels(caplog, outside_ct):
     else:
         assert np.any(sitk.GetArrayViewFromImage(vois[0].mask))
         assert messages == []
+
+
+def test_label_import_reads_legacy_visible_color_key():
+    """Sidecars written before the rename store the color under ``visible_color``."""
+    from pyRadPlan.io.sitk_based.base._serialize import label_image_to_vois
+
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    label = sitk.Image([5, 4, 3], sitk.sitkUInt8)
+    label[1, 1, 1] = 5
+    sidecar = {"vois": {"5": {"name": "target", "voi_type": "TARGET", "visible_color": [7, 8, 9]}}}
+
+    vois = label_image_to_vois(label, ct, sidecar)
+
+    assert tuple(vois[0].color) == (7, 8, 9)
+    assert "color" in vois[0].model_fields_set
+
+
+def _make_cst_with_tissues(ct: CT) -> StructureSet:
+    cst = _make_cst(ct)
+    tissues = {
+        "Target": TissueProperties.from_preset("HSG", "LEM_II"),
+        "Core": MKMTissueProperties(
+            cell_line="CHO", r_nucleus=4.1, r_domain=0.2, alpha_0=0.228, beta_0=0.02, alpha_x=0.3
+        ),
+    }
+    vois = [voi.model_copy(update={"tissue_properties": tissues[voi.name]}) for voi in cst.vois]
+    return validate_cst(vois, ct)
+
+
+def _assert_same_tissues(cst: StructureSet, cst2: StructureSet) -> None:
+    by_name = {v.name: v for v in cst2.vois}
+    for voi in cst.vois:
+        restored = by_name[voi.name]
+        assert type(restored.tissue_properties) is type(voi.tissue_properties)
+        assert restored.tissue_properties == voi.tissue_properties
+        assert (
+            restored.tissue_properties.reference_sources == voi.tissue_properties.reference_sources
+        )
+        assert (restored.alpha_x, restored.beta_x) == (voi.alpha_x, voi.beta_x)
+    assert by_name["Core"].tissue_properties.reference_sources == {
+        "alpha_x": "explicit",
+        "beta_x": "estimated",
+    }
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_roundtrip_cst_tissue_properties(fmt, tmp_path):
+    ct = _make_ct()
+    cst = _make_cst_with_tissues(ct)
+    out = tmp_path / f"tissues_{fmt}"
+    save_data(ct=ct, cst=cst, format=fmt, file_name=str(out))
+
+    _assert_same_tissues(cst, load_data(out)["cst"])
+
+
+def test_label_import_reads_tissue_properties_from_header():
+    """Without a sidecar, the tissue properties come from the ``pyradplan_*`` header."""
+    from pyRadPlan.io.sitk_based.base._serialize import (
+        apply_interop_metadata,
+        cst_to_label_image,
+        label_image_to_vois,
+    )
+
+    ct = _make_ct()
+    cst = _make_cst_with_tissues(ct)
+    label, extents = cst_to_label_image(cst)
+    apply_interop_metadata(label, cst, extents)
+
+    _assert_same_tissues(cst, validate_cst(label_image_to_vois(label, ct, None), ct))
+
+
+def test_label_import_without_tissue_properties_keeps_alpha_beta():
+    """Sidecars written before tissue properties were stored only carry alpha/beta."""
+    from pyRadPlan.io.sitk_based.base._serialize import (
+        build_sidecar,
+        cst_to_label_image,
+        label_image_to_vois,
+    )
+
+    ct = _make_ct()
+    cst = _make_cst(ct)
+    label, _ = cst_to_label_image(cst)
+    sidecar = build_sidecar(cst)
+    for meta in sidecar["vois"].values():
+        del meta["tissue_properties"]
+
+    by_name = {v.name: v for v in label_image_to_vois(label, ct, sidecar)}
+    assert type(by_name["Target"].tissue_properties) is TissueProperties
+    assert by_name["Target"].tissue_properties.alpha_x == pytest.approx(0.2)
+    assert by_name["Target"].beta_x == pytest.approx(0.03)

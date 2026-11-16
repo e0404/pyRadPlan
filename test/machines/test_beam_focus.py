@@ -55,3 +55,30 @@ def test_from_dict_multiple_foci():
         assert focus.sigma[0] == i + 1
         assert focus.fwhm_iso == 5.0 + i
         assert focus.emittance.sigma_x == 3.0 * (i + 1)
+
+
+def test_from_dict_more_fwhm_settings_than_foci():
+    # HIT base data lists 7 focus sizes but provides beam optics for the first 4 only
+    n = 4
+    foci = ChargedBeamFocus.from_dict(
+        {
+            "dist": np.tile(np.linspace(0, 100, 5), (n, 1)),
+            "sigma": np.ones((n, 5)),
+            "SisFWHMAtIso": [9.8, 10.7, 12.1, 13.4, 15.0, 20.0, 30.0],
+            "emittance": _emittance(n),
+        }
+    )
+    assert [focus.fwhm_iso for focus in foci] == [9.8, 10.7, 12.1, 13.4]
+
+
+def test_from_dict_multiple_foci_shared_fwhm():
+    n = 2
+    foci = ChargedBeamFocus.from_dict(
+        {
+            "dist": np.tile(np.linspace(0, 100, 5), (n, 1)),
+            "sigma": np.ones((n, 5)),
+            "SisFWHMAtIso": 8.0,
+            "emittance": _emittance(n),
+        }
+    )
+    assert [focus.fwhm_iso for focus in foci] == [8.0, 8.0]

@@ -6,6 +6,7 @@ import numpy as np
 
 from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.ct import create_ct
+from pyRadPlan.core import Grid
 
 
 from pyRadPlan.ct import CT
@@ -20,6 +21,7 @@ from pyRadPlan.cst import (
     OAR,
     DEFAULT_VOI_COLORS,
 )
+from pyRadPlan.biology.tissues import LEMTissueProperties, TissueProperties
 # @pytest.fixture
 # def sample_ct():
 #     image = sitk.GetImageFromArray(np.random.rand(5, 15, 25) * 1000)  # Random HU values
@@ -82,6 +84,50 @@ def test_cst_to_matrad(matrad_import, tmpdir):
 
     assert isinstance(tmp, dict)
     assert isinstance(tmp["cst"], list)
+
+
+def test_cst_from_matrad_reads_visibility_and_unit_colors():
+    """matRad's ``Visible`` flag is read and integer color triples stay on the 0..1 scale."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    props_hidden = {"Visible": 0.0, "visibleColor": np.array([0, 0, 1], dtype=np.uint8)}
+    props_shown = {"Visible": 1.0, "visibleColor": np.array([1.0, 0.5, 0.0])}
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), props_shown, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), props_hidden, []],
+        ],
+        ct=ct,
+    )
+
+    assert cst.vois[0].visible is True
+    assert cst.vois[0].color == (255, 128, 0)
+    assert cst.vois[1].visible is False
+    assert cst.vois[1].color == (0, 0, 255)
+
+
+def test_cst_to_matrad_visibility_and_color_roundtrip(tmpdir):
+    """Visibility and color survive a matRad ``.mat`` round-trip."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), {}, []],
+        ],
+        ct=ct,
+    )
+    cst.vois[0].color = (0, 0, 255)
+    cst.vois[1].visible = False
+
+    props = cst.to_matrad()[1][4]
+    assert props["Visible"] is False
+    np.testing.assert_allclose(props["visibleColor"], np.asarray(cst.vois[1].color) / 255.0)
+
+    tmp_mat_path = os.path.join(tmpdir, "test_cst_visible.mat")
+    matfile.save(tmp_mat_path, {"cst": cst.to_matrad()})
+    restored = create_cst(matfile.load(tmp_mat_path)["cst"], ct=ct)
+
+    assert [v.visible for v in restored.vois] == [True, False]
+    assert [v.color for v in restored.vois] == [v.color for v in cst.vois]
 
 
 def test_cst_to_matrad_objectives_roundtrip(tmpdir):
@@ -220,6 +266,20 @@ def test_target_center_of_mass():
 
     com = cst.target_center_of_mass()
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
+
+
+def test_center_of_mass_matches_ndimage_on_anisotropic_grid():
+    """The projection-based center of mass equals ndimage.center_of_mass."""
+    from scipy import ndimage  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    mask = (rng.random((7, 11, 13)) > 0.8).astype(np.uint8)  # (z, y, x)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 2.5, 3.0))
+    image.SetOrigin((-10.0, 4.0, 7.5))
+
+    expected = image.TransformContinuousIndexToPhysicalPoint(ndimage.center_of_mass(mask.T))
+    assert np.allclose(StructureSet._center_of_mass(image), expected)
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +725,16 @@ def test_create_cst_with_float_and_empty_indices():
     assert empty_mask.sum() == 0
 
 
+def test_create_cst_single_structure_row():
+    """Regression: a single-structure matRad cst is read as a flat row, not a list of rows."""
+    ct = create_ct(cube_hu=sitk.Image(3, 3, 3, sitk.sitkInt16))
+
+    cst = create_cst([0, "Target", "TARGET", np.array([1.0, 2.0, 3.0]), {}, []], ct=ct)
+    assert len(cst.vois) == 1
+    assert cst.vois[0].name == "Target"
+    assert sitk.GetArrayViewFromImage(cst.vois[0].mask).sum() == 3
+
+
 def test_create_body_seg_default():
     ct = _make_test_ct()
     structure_set = StructureSet(ct_image=ct, vois=[])
@@ -709,9 +779,9 @@ def test_set_colors_all_missing(generic_ct):
     mask_image.CopyInformation(generic_ct.cube_hu)
 
     # Case 1: All missing colors
-    voi1 = Target(name="V1", mask=mask_image, ct_image=generic_ct, visible_color=None)
-    voi2 = OAR(name="V2", mask=mask_image, ct_image=generic_ct, visible_color=None)
-    voi3 = ExternalVOI(name="V3", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi1 = Target(name="V1", mask=mask_image, ct_image=generic_ct)
+    voi2 = OAR(name="V2", mask=mask_image, ct_image=generic_ct)
+    voi3 = ExternalVOI(name="V3", mask=mask_image, ct_image=generic_ct)
 
     cst = StructureSet(ct_image=generic_ct, vois=[voi1, voi2, voi3])
 
@@ -720,13 +790,13 @@ def test_set_colors_all_missing(generic_ct):
 
     # Verify assigned
     for v in cst.vois:
-        assert v.visible_color is not None
-        assert len(v.visible_color) == 3
-        assert all(isinstance(c, int) for c in v.visible_color)
-        assert all(0 <= c <= 255 for c in v.visible_color)
+        assert v.color is not None
+        assert len(v.color) == 3
+        assert all(isinstance(c, int) for c in v.color)
+        assert all(0 <= c <= 255 for c in v.color)
 
     # Verify distinctness (simple check for small number)
-    colors = [tuple(v.visible_color) for v in cst.vois]
+    colors = [tuple(v.color) for v in cst.vois]
     assert len(set(colors)) == 3
 
 
@@ -738,15 +808,15 @@ def test_set_colors_preserve_existing(generic_ct):
 
     # Case 2: Preserve existing
     existing_color = (255, 0, 0)
-    voi4 = Target(name="V4", mask=mask_image, ct_image=generic_ct, visible_color=existing_color)
-    voi5 = OAR(name="V5", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi4 = Target(name="V4", mask=mask_image, ct_image=generic_ct, color=existing_color)
+    voi5 = OAR(name="V5", mask=mask_image, ct_image=generic_ct)
 
     cst2 = StructureSet(ct_image=generic_ct, vois=[voi4, voi5])
     cst2.set_colors()
 
-    assert tuple(cst2.vois[0].visible_color) == existing_color
-    assert cst2.vois[1].visible_color is not None
-    assert tuple(cst2.vois[1].visible_color) != existing_color
+    assert tuple(cst2.vois[0].color) == existing_color
+    assert cst2.vois[1].color is not None
+    assert tuple(cst2.vois[1].color) != existing_color
 
 
 def test_set_colors_predefined_order(generic_ct):
@@ -754,12 +824,60 @@ def test_set_colors_predefined_order(generic_ct):
     mask_image = sitk.GetImageFromArray(mask)
     mask_image.CopyInformation(generic_ct.cube_hu)
 
-    voi1 = Target(name="T1", mask=mask_image, ct_image=generic_ct, visible_color=None)
-    voi2 = Target(name="T2", mask=mask_image, ct_image=generic_ct, visible_color=None)
+    voi1 = Target(name="T1", mask=mask_image, ct_image=generic_ct)
+    voi2 = Target(name="T2", mask=mask_image, ct_image=generic_ct)
     cst = StructureSet(ct_image=generic_ct, vois=[voi1, voi2])
 
-    assert tuple(cst.vois[0].visible_color) == DEFAULT_VOI_COLORS["TARGET"][0]
-    assert tuple(cst.vois[1].visible_color) == DEFAULT_VOI_COLORS["TARGET"][1]
+    assert tuple(cst.vois[0].color) == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert tuple(cst.vois[1].color) == DEFAULT_VOI_COLORS["TARGET"][1]
+
+
+def test_set_colors_keeps_explicit_marker(generic_ct):
+    """An auto-assigned color stays "unset" so it can be told apart from a picked one."""
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(generic_ct.cube_hu)
+
+    auto = Target(name="T1", mask=mask_image, ct_image=generic_ct)
+    picked = OAR(name="O1", mask=mask_image, ct_image=generic_ct, color=(1, 2, 3))
+    cst = StructureSet(ct_image=generic_ct, vois=[auto, picked])
+
+    assert "color" not in cst.vois[0].model_fields_set
+    assert tuple(cst.vois[0].color) == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert "color" in cst.vois[1].model_fields_set
+    assert tuple(cst.vois[1].color) == (1, 2, 3)
+
+    # Dropping an unset color rebinds it to the new type's default (GUI type switch).
+    data = dict(cst.vois[0])
+    data.update(voi_type="OAR")
+    data.pop("color")
+    assert tuple(create_voi(data).color) == DEFAULT_VOI_COLORS["OAR"][0]
+
+
+def test_set_colors_stable_on_revalidation(generic_ct):
+    """Revalidating keeps auto-assigned colors that are still free instead of recoloring."""
+    mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(generic_ct.cube_hu)
+
+    t1 = Target(name="T1", mask=mask_image, ct_image=generic_ct)
+    t2 = Target(name="T2", mask=mask_image, ct_image=generic_ct)
+    cst = StructureSet(ct_image=generic_ct, vois=[t1, t2])
+    t2_color = tuple(cst.vois[1].color)
+    assert t2_color == DEFAULT_VOI_COLORS["TARGET"][1]
+
+    # A subset sharing the VOI instance must not recolor it in the original set.
+    StructureSet(ct_image=generic_ct, vois=[cst.vois[1]])
+    assert tuple(cst.vois[1].color) == t2_color
+
+    # Retyping a sibling (as the GUI does) must not recolor the untouched VOI.
+    data = dict(cst.vois[0])
+    data.update(voi_type="OAR")
+    data.pop("color")
+    cst.vois = [create_voi(data), cst.vois[1]]
+    assert tuple(cst.vois[0].color) == DEFAULT_VOI_COLORS["OAR"][0]
+    assert tuple(cst.vois[1].color) == t2_color
+    assert "color" not in cst.vois[1].model_fields_set
 
 
 def test_matrad_numpy_cell_array_validation():
@@ -781,3 +899,335 @@ def test_matrad_numpy_cell_array_validation():
     assert restored.vois[0].name == "target"
     assert restored.vois[0].objectives[0].d_ref == 60.0
     assert raw.shape == (1, 6)
+
+
+def _mask(ct: CT, region) -> sitk.Image:
+    mask = np.zeros(sitk.GetArrayViewFromImage(ct.cube_hu).shape, dtype=np.uint8)
+    mask[region] = 1
+    image = sitk.GetImageFromArray(mask)
+    image.CopyInformation(ct.cube_hu)
+    return image
+
+
+def test_tissue_classes_merge_equal_tissues_with_unset_parameters(generic_ct):
+    first = LEMTissueProperties(alpha_x=0.1, beta_x=0.05, d_t=float("nan"))
+    second = LEMTissueProperties(alpha_x=0.1, beta_x=0.05, d_t=float("nan"))
+    other = LEMTissueProperties(alpha_x=0.2, beta_x=0.05, d_t=float("nan"))
+    vois = [
+        OAR(
+            name="A",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[0:3]),
+            tissue_properties=first,
+        ),
+        OAR(
+            name="B",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[3:6]),
+            tissue_properties=second,
+        ),
+        OAR(
+            name="C",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[6:9]),
+            tissue_properties=other,
+        ),
+    ]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+
+    classes = cst.get_tissue_classes()
+    assert classes.dtype == object
+    assert list(classes) == [first, other]
+
+    ix = cst.get_tissue_class_indices()
+    assert ix.shape == (generic_ct.grid.num_voxels, 1)
+    z_profile = ix[:, 0].reshape(10, 10, 10)[:, 0, 0]
+    assert z_profile.tolist() == [0, 0, 0, 0, 0, 0, 1, 1, 1, 0]
+
+
+@pytest.mark.parametrize("target_first", [True, False])
+def test_tissue_class_indices_follow_overlap_priority(generic_ct, target_first):
+    target_tissue = TissueProperties.from_preset("HSG", "LEM_II")
+    oar_tissue = TissueProperties.from_preset("CHO", "LEM_II")
+    target = Target(
+        name="PTV",
+        ct_image=generic_ct,
+        mask=_mask(generic_ct, np.s_[2:6]),
+        tissue_properties=target_tissue,
+    )
+    oar = OAR(
+        name="OAR",
+        ct_image=generic_ct,
+        mask=_mask(generic_ct, np.s_[4:8]),
+        tissue_properties=oar_tissue,
+    )
+    vois = [target, oar] if target_first else [oar, target]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+
+    classes = list(cst.get_tissue_classes())
+    ix = cst.get_tissue_class_indices()[:, 0].reshape(10, 10, 10)
+    target_ix, oar_ix = classes.index(target_tissue), classes.index(oar_tissue)
+    assert (ix[2:6] == target_ix).all()
+    assert (ix[6:8] == oar_ix).all()
+
+
+def test_tissue_class_indices_resampled_onto_a_dose_grid(generic_ct):
+    upper = TissueProperties.from_preset("HSG", "MKM")
+    lower = TissueProperties.from_preset("CHO", "MKM")
+    vois = [
+        OAR(
+            name="A",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[0:5]),
+            tissue_properties=upper,
+        ),
+        OAR(
+            name="B",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[5:10]),
+            tissue_properties=lower,
+        ),
+    ]
+    cst = StructureSet(ct_image=generic_ct, vois=vois)
+    dose_grid = generic_ct.grid.resample({"x": 2.0, "y": 2.0, "z": 2.0})
+
+    ix = cst.get_tissue_class_indices(resample_grid=dose_grid)
+
+    assert ix.shape == (dose_grid.num_voxels, 1)
+    ix = ix[:, 0].reshape(dose_grid.dimensions[::-1])
+    assert set(np.unique(ix)) == {0, 1}
+    assert (ix[0] == 0).all()
+    assert (ix[-1] == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# matRad-compatible target selection (targets carrying objectives)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cst_mixed_targets():
+    """Two targets, only one of which carries an objective, plus an OAR."""
+    from pyRadPlan.optimization.objectives import SquaredDeviation
+
+    ct = create_ct(cube_hu=sitk.Image(10, 10, 10, sitk.sitkInt16))
+
+    with_obj = np.zeros((10, 10, 10), dtype=np.uint8)
+    with_obj[1, 1, 1] = 1
+    without_obj = np.zeros((10, 10, 10), dtype=np.uint8)
+    without_obj[5, 5, 5] = 1
+    oar_mask = np.zeros((10, 10, 10), dtype=np.uint8)
+    oar_mask[8, 8, 8] = 1
+
+    target_a = create_voi(voi_type="TARGET", name="with_obj", ct_image=ct, mask=with_obj)
+    target_a.objectives = [SquaredDeviation(priority=100.0, d_ref=2.0)]
+    target_b = create_voi(voi_type="TARGET", name="without_obj", ct_image=ct, mask=without_obj)
+    oar = create_voi(voi_type="OAR", name="oar", ct_image=ct, mask=oar_mask)
+
+    return ct, StructureSet(vois=[target_a, target_b, oar], ct_image=ct)
+
+
+def test_optimization_targets_are_those_with_objectives(cst_mixed_targets):
+    _, cst = cst_mixed_targets
+
+    assert [v.name for v in cst._target_vois()] == ["with_obj", "without_obj"]
+    assert [v.name for v in cst.optimization_target_vois()] == ["with_obj"]
+
+
+def test_optimization_targets_fall_back_to_all_targets(cst_mixed_targets):
+    """matRad uses every target when none of them carries an objective."""
+    _, cst = cst_mixed_targets
+    cst.vois[0].objectives = []
+
+    assert [v.name for v in cst.optimization_target_vois()] == ["with_obj", "without_obj"]
+    assert np.allclose(
+        cst.target_center_of_mass(), cst.target_center_of_mass(optimization_targets_only=False)
+    )
+
+
+def test_isocenter_uses_optimization_targets(cst_mixed_targets):
+    """matRad_getIsoCenter only averages targets that carry objectives."""
+    _, cst = cst_mixed_targets
+
+    assert np.allclose(cst.target_center_of_mass(), [1.0, 1.0, 1.0])
+    assert np.allclose(cst.target_center_of_mass(optimization_targets_only=False), [3.0, 3.0, 3.0])
+
+
+def test_optimization_target_union(cst_mixed_targets):
+    _, cst = cst_mixed_targets
+
+    assert cst.target_union_voxels().size == 2
+    assert cst.optimization_target_voxels().size == 1
+
+    assert sitk.GetArrayFromImage(cst.target_union_mask()).sum() == 2
+    assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1
+
+
+@pytest.mark.parametrize("resampled", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("same_priority", [False, True])
+def test_combined_tissue_data_matches_separate_getters(
+    generic_ct, resampled, reverse, same_priority
+):
+    """Preserve overlap ordering, duplicate tissue classes and outside values."""
+    tissues = [
+        TissueProperties(alpha_x=0.1, beta_x=0.05),
+        TissueProperties(alpha_x=0.2, beta_x=0.07),
+    ]
+    vois = [
+        Target(
+            name="T",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[2:6]),
+            tissue_properties=tissues[0],
+        ),
+        OAR(
+            name="O",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[4:8]),
+            tissue_properties=tissues[1],
+        ),
+        OAR(
+            name="duplicate",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[8:9]),
+            tissue_properties=tissues[0],
+        ),
+    ]
+    if same_priority:
+        for voi in vois:
+            voi.overlap_priority = 2
+    cst = StructureSet(ct_image=generic_ct, vois=vois[::-1] if reverse else vois)
+    grid = generic_ct.grid.resample(dict(x=1.7, y=2.1, z=2.3)) if resampled else None
+    expected = (
+        *cst.get_reference_lq_params(resample_grid=grid),
+        cst.get_tissue_class_indices(resample_grid=grid),
+    )
+    masks = [sitk.GetArrayFromImage(v.mask) for v in cst.vois]
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=grid)
+    for actual, old in zip((alpha, beta, indices), expected):
+        np.testing.assert_array_equal(actual, old)
+    assert list(classes) == list(cst.get_tissue_classes())
+    for voi, before in zip(cst.vois, masks):
+        np.testing.assert_array_equal(sitk.GetArrayFromImage(voi.mask), before)
+
+
+def test_matrad_numpy_cell_array_multi_voxel_roundtrip():
+    """Regression: cst{i,4} as an object array holding a multi-voxel index list."""
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    mask = np.zeros((3, 4, 5), dtype=np.uint8)
+    mask[1, 2, 0:3] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(restored.vois[0].indices_numpy, voi.indices_numpy)
+
+
+def _ct_4d(num_scenarios=3):
+    cube_3d = sitk.Image([5, 4, 3], sitk.sitkFloat32)
+    return create_ct(cube_hu=sitk.JoinSeries([cube_3d] * num_scenarios))
+
+
+def test_cst_from_matrad_on_4d_ct_single_index_list():
+    """A single index list is used for every scenario of a 4D CT."""
+    ct = _ct_4d(num_scenarios=3)
+
+    cst = create_cst([[0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []]], ct=ct)
+
+    mask = sitk.GetArrayViewFromImage(cst.vois[0].mask)
+    assert mask.shape == (3, 3, 4, 5)
+    assert all(mask[s].sum() == 2 for s in range(3))
+    assert np.array_equal(mask[0], mask[2])
+
+
+def test_cst_from_matrad_on_4d_ct_rejects_wrong_number_of_index_lists():
+    ct = _ct_4d(num_scenarios=3)
+    idx = [np.array([1.0]), np.array([2.0])]
+
+    with pytest.raises(ValueError):
+        create_cst([[0, "Target", "TARGET", idx, {}, []]], ct=ct)
+
+
+def test_cst_to_matrad_roundtrip_4d():
+    ct = _ct_4d(num_scenarios=2)
+    mask = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    mask[0, 1, 2, 3] = 1
+    mask[1, 2, 0, 1] = 1
+    mask[1, 0, 3, 4] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(restored.vois[0].mask), mask)
+
+
+def test_empty_cst_overlap_and_lq_params(generic_ct):
+    cst = StructureSet(vois=[], ct_image=generic_ct)
+
+    assert cst.apply_overlap_priorities().vois == []
+    alpha, beta = cst.get_reference_lq_params()
+    assert alpha.shape == beta.shape == (np.prod(generic_ct.size), 1)
+    assert not alpha.any() and not beta.any()
+
+
+def test_apply_overlap_priorities_4d():
+    ct = _ct_4d(num_scenarios=2)
+    target = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    target[0, 1, 1, 1] = 1
+    oar = np.zeros_like(target)
+    oar[:, 1, 1, 1] = 1
+    cst = StructureSet(
+        vois=[
+            create_voi(name="T", voi_type="TARGET", mask=target, ct_image=ct),
+            create_voi(name="O", voi_type="OAR", mask=oar, ct_image=ct),
+        ],
+        ct_image=ct,
+    )
+
+    overlapped = cst.apply_overlap_priorities()
+
+    oar_mask = sitk.GetArrayViewFromImage(overlapped.vois[1].mask)
+    assert overlapped.vois[1].mask.GetDimension() == 4
+    assert oar_mask[0].sum() == 0  # covered by the target in scenario 0
+    assert oar_mask[1, 1, 1, 1] == 1  # free in scenario 1
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(overlapped.vois[0].mask), target)
+
+
+def test_reference_lq_params_and_tissue_indices_4d_per_scenario():
+    cst, exp = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    dims = exp["dims_zyx"]
+
+    alpha, beta = cst.get_reference_lq_params()
+    tissue_ix = cst.get_tissue_class_indices()
+
+    assert alpha.shape == beta.shape == tissue_ix.shape == (int(np.prod(dims)), 2)
+    oar_class = list(cst.get_tissue_classes()).index(cst.vois[1].tissue_properties)
+    assert oar_class != 0
+    for s in range(2):
+        ix = _flat_idx(exp["oar"][s], dims, "numpy")
+        other = 1 - s
+        assert alpha[ix, s] == 0.5 and beta[ix, s] == 0.05
+        assert tissue_ix[ix, s] == oar_class
+        # the OAR moved away from this voxel in the other scenario
+        assert alpha[ix, other] == 0.0
+        assert tissue_ix[ix, other] == 0
+
+
+@pytest.mark.parametrize("resample", [False, True])
+def test_combined_tissue_data_preserves_moving_phase_masks(resample):
+    """One label resampling per phase matches the independent tissue getters."""
+    cst, _ = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    grid = Grid.from_sitk_image(cst.ct_image.cube_hu[:, :, :, 0])
+    target = grid.resample({"x": 1.5, "y": 1.5, "z": 1.5}) if resample else None
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=target)
+    expected_alpha, expected_beta = cst.get_reference_lq_params(resample_grid=target)
+    expected_indices = cst.get_tissue_class_indices(resample_grid=target)
+    np.testing.assert_array_equal(alpha, expected_alpha)
+    np.testing.assert_array_equal(beta, expected_beta)
+    np.testing.assert_array_equal(indices, expected_indices)
+    assert list(classes) == list(cst.get_tissue_classes())
+    assert alpha.shape[1] == 2
+    assert np.any(alpha[:, 0] != alpha[:, 1])

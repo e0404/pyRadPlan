@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import numpy as np
 from pydantic import (
     Field,
@@ -53,6 +53,12 @@ class Beam(PyRadPlanBaseModel):
         The number of bixels per ray in an array (1 x num_of_rays).
     longitudinal_spot_spacing :
         The longitudinal spot spacing in (mm).
+    use_given_eq_density_cube :
+        Whether the generator took the equivalent density cube from the ct instead of
+        converting cube_hu. ``None`` if the generator did not record it.
+    ignore_outside_densities :
+        Whether the generator zeroed densities outside the cst contours before
+        determining the beam geometry. ``None`` if the generator did not record it.
     total_number_of_bixels :
         The total number of bixels in the beam.
 
@@ -83,6 +89,12 @@ class Beam(PyRadPlanBaseModel):
     )
     longitudinal_spot_spacing: float = Field(default=2.0)
 
+    # Density assumptions the generator used to place the beam's beamlets / energy layers.
+    # ``None`` means they were not recorded (e.g. an stf imported from matRad), so the dose
+    # engine cannot verify them and warns for ion beams.
+    use_given_eq_density_cube: Optional[bool] = Field(default=None)
+    ignore_outside_densities: Optional[bool] = Field(default=None)
+
     @model_validator(mode="before")
     @classmethod
     def validate_model_input(cls, data: Any) -> Any:
@@ -99,16 +111,13 @@ class Beam(PyRadPlanBaseModel):
                 if "numOfRays" in ray_dict:
                     ray_dict.pop("numOfRays")
 
-                length_lists = []
+                length_lists = [len(v) for v in ray_dict.values() if isinstance(v, list)]
 
-                for v in ray_dict.values():
-                    if isinstance(v, list):
-                        length_lists.append(len(v))
-
-                    # this exception is necessary if imported stf from matlab is only one beam
-                    # TODO: Test if this is necessary
-                    if isinstance(v, int or float):
-                        length_lists.append(1)
+                # a beam with a single ray comes from matRad as a plain struct, not as lists
+                if not length_lists:
+                    data.pop("ray")
+                    data["rays"] = [ray_dict]
+                    return data
 
                 # TODO: This error message might be confusing in some cases
                 if len(set(length_lists)) != 1:

@@ -14,7 +14,9 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.gui.menus import ViewMenu
 from pyRadPlan.gui.widgets import ViewingWidget
+from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan import validate_ct, validate_cst
 
@@ -36,6 +38,11 @@ class QuantityWindow(QMainWindow):
 
         self._create_menu()
 
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Close the analysis windows opened from this viewer along with it."""
+        close_analysis_windows(self.viewer)
+        super().closeEvent(event)
+
     # --- Menu and actions ---------------------------------------------
     def _create_menu(self) -> None:
         menubar = self.menuBar()
@@ -50,7 +57,7 @@ class QuantityWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
 
-        menubar.addMenu("&View")
+        menubar.addMenu(ViewMenu(self))
 
     # Might be nice to have once io utilities are in place :)
     def _open_array(self) -> None:

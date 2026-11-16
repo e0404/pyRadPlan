@@ -35,9 +35,9 @@ class SquaredOverdosing(Objective):
         xp = array_api_compat.array_namespace(values)
         overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
 
-        return (overvalues @ overvalues) / array_api_compat.size(values)
+        return (overvalues @ overvalues) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
         overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
-        return 2.0 * overvalues / array_api_compat.size(overvalues)
+        return 2.0 * overvalues / float(array_api_compat.size(overvalues))
