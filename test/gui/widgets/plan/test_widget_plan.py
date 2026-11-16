@@ -2099,8 +2099,8 @@ def test_selecting_an_option_sets_its_base_data_parameters(qapp, monkeypatch):
 
     widget._cmb_bio_model.setCurrentIndex(labels.index("α/β kernels · mMKM"))
     assert widget.has_pending_changes()
-    assert widget._cmb_bio_model.styleSheet()  # marked modified
-    assert not widget._btn_bio_config.styleSheet()  # its parameters are unchanged
+    assert widget._is_field_modified(widget._cmb_bio_model)
+    assert not widget._is_field_modified(widget._btn_bio_config)
     widget._on_apply()
     assert ws.pln.bio_model.model == "alpha_beta_kernels"
     assert ws.pln.bio_model.data_model == "mMKM"
@@ -2948,12 +2948,12 @@ def test_discard_restores_the_scenario_configuration(qapp):
     widget._scenario_props["wcScen"] = {"wc_sigma": 3.0}
     widget._update_dirty_state()
     assert widget.has_pending_changes()
-    assert widget._btn_scenario_config.styleSheet() != ""
+    assert widget._is_field_modified(widget._btn_scenario_config)
 
     widget._btn_discard.click()
     assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
     assert not widget.has_pending_changes()
-    assert widget._btn_scenario_config.styleSheet() == ""
+    assert not widget._is_field_modified(widget._btn_scenario_config)
 
 
 def test_scenario_config_button_is_advanced(qapp):

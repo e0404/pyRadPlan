@@ -8,7 +8,8 @@ from copy import deepcopy
 from typing import Any, Optional
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -81,7 +82,7 @@ _ION_MODES = list(IonPlan.available_radiation_modes)
 _RADIATION_MODES = ["photons", *_ION_MODES]
 
 #: Orange border marking a field whose value differs from the applied plan.
-_MODIFIED_STYLE = "border: 1px solid #e67e22;"
+_MODIFIED_COLOR = QColor("#e67e22")
 #: Persistent status note shown while the form has unapplied edits.
 _MODIFIED_NOTE = "Modified — not applied"
 #: Suffix of the machine dropdown entry for the base data a plan carries itself.
@@ -100,6 +101,32 @@ _NUM_BEAMS_TOOLTIP = (
     "Setting it replaces the gantry angles by that many equally spaced\n"
     "angles starting at 0 deg."
 )
+
+
+class _ModifiedFrame(QWidget):
+    """Orange frame painted over a field marked as modified.
+
+    A style sheet border would switch the field to style-sheet rendering, which
+    redraws sub-controls such as the spin box arrows in a different look and place.
+    """
+
+    def __init__(self, target: QWidget):
+        super().__init__(target)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setGeometry(target.rect())
+        target.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.parent() and event.type() == QEvent.Type.Resize:
+            self.setGeometry(watched.rect())
+        return False
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setPen(QPen(_MODIFIED_COLOR, 1))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 
 def _plan_class(radiation_mode: str) -> type[Plan]:
@@ -1939,7 +1966,19 @@ class PlanWidget(WorkspaceWidget):
 
     @staticmethod
     def _set_field_modified(widget: QWidget, modified: bool) -> None:
-        widget.setStyleSheet(_MODIFIED_STYLE if modified else "")
+        frame = widget.findChild(_ModifiedFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        if frame is None:
+            if not modified:
+                return
+            frame = _ModifiedFrame(widget)
+        frame.setVisible(modified)
+        if modified:
+            frame.raise_()
+
+    @staticmethod
+    def _is_field_modified(widget: QWidget) -> bool:
+        frame = widget.findChild(_ModifiedFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        return frame is not None and not frame.isHidden()
 
     def _set_global_modified(self, modified: bool) -> None:
         self._modified = modified
