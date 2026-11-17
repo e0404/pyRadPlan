@@ -254,7 +254,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         write into a directory that already contains DICOM files unless
         ``{"overwrite": True}`` is given.
     **extra
-        Further named objects passed through to the exporter.
+        Further named objects passed through to the exporter. The DICOM exporter
+        consumes ``result`` (a result dictionary, exported as RTDOSE files) and ``pln``
+        (selects the Dose Summation Type from its ``dose_convention``).
 
     Returns
     -------

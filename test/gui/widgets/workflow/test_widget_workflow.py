@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from PySide6.QtWidgets import QDialog
+
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
@@ -1135,3 +1137,62 @@ def test_save_cst_dicom_asks_before_replacing_dicom_files(qapp, tmp_path, monkey
     w._on_save_cst()
     assert not questions
     assert (tmp_path / "RTSTRUCT.dcm").exists()
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No"])
+def test_save_result_dicom_rtdose(qapp, tmp_path, monkeypatch, answer):
+    import numpy as np
+    import pydicom
+    import SimpleITK as sitk
+    from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+    from pyRadPlan.gui.widgets.result import _save_result_dialog
+    from pyRadPlan.io import load_patient
+    from pyRadPlan.plan import validate_pln
+
+    ct, cst = load_patient(Path(__file__).parents[3] / "data" / "dicom")
+    dose = sitk.Cast(ct.cube_hu * 0 + 2.0, sitk.sitkFloat64)
+    pln = validate_pln({"radiation_mode": "photons", "dose_convention": "per_fraction"})
+    ws = WorkspaceManager()
+    ws.set_many(ct=ct, cst=cst, pln=pln, result={"physical_dose": dose, "let": dose})
+    w = WorkflowWidget(ws)
+    (tmp_path / "old.dcm").write_bytes(b"stale")
+    questions = []
+
+    def question(*args):
+        questions.append(args[2])
+        return getattr(QMessageBox.StandardButton, answer)
+
+    class _Dialog:
+        def __init__(self, keys, parent=None):
+            self.keys = keys
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selected_quantities(self):
+            return ["physical_dose"]
+
+    monkeypatch.setattr(_save_result_dialog, "SaveResultDialog", _Dialog)
+    monkeypatch.setattr(
+        QInputDialog, "getItem", lambda *a, **k: ("DICOM CT + RTDOSE (folder)", True)
+    )
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
+
+    w._on_save_result_to_disk()
+
+    assert len(questions) == 1 and "1 DICOM file" in questions[0]
+    written = tmp_path / "RTDOSE_physical_dose.dcm"
+    assert written.exists() == (answer == "Yes")
+    assert (tmp_path / "old.dcm").exists() == (answer == "No")
+    if answer == "Yes":
+        ds = pydicom.dcmread(written)
+        assert ds.DoseSummationType == "FRACTION" and ds.DoseType == "PHYSICAL"
+        assert ds.FrameOfReferenceUID == ct.dicom_info.frame_of_reference_uid
+        assert list(tmp_path.glob("CT_*.dcm"))
+        assert not (tmp_path / "RTDOSE_let.dcm").exists()
+        np.testing.assert_allclose(
+            float(ds.DoseGridScaling) * np.max(ds.pixel_array), 2.0, rtol=1e-6
+        )

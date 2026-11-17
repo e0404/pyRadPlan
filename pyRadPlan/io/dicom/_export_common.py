@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 CT_IMAGE_STORAGE = "1.2.840.10008.5.1.4.1.1.2"
 RT_DOSE_STORAGE = "1.2.840.10008.5.1.4.1.1.481.2"
 RT_STRUCT_STORAGE = "1.2.840.10008.5.1.4.1.1.481.3"
+RT_PLAN_STORAGE = "1.2.840.10008.5.1.4.1.1.481.5"
+RT_ION_PLAN_STORAGE = "1.2.840.10008.5.1.4.1.1.481.8"
 SEG_STORAGE = "1.2.840.10008.5.1.4.1.1.66.4"
 #: Referenced from an RTSTRUCT's RTReferencedStudySequence to point back at the study.
 DETACHED_STUDY_MANAGEMENT = "1.2.840.10008.3.1.2.3.1"
@@ -54,6 +56,35 @@ class ExportContext:
             now = datetime.now()
             self.export_date = now.strftime("%Y%m%d")
             self.export_time = now.strftime("%H%M%S")
+
+
+@dataclass
+class PlanReference:
+    """Reference to an exported RT (Ion) Plan, for the RTDOSE Referenced RT Plan Sequence.
+
+    Parameters
+    ----------
+    sop_instance_uid : str
+        SOP Instance UID of the referenced plan.
+    fraction_group_number : int, default 1
+        Fraction group of the plan the dose refers to (FRACTION and BEAM doses).
+    beam_numbers : list of int, optional
+        DICOM Beam Number of each beam, in STF beam order. Defaults to ``1..N``.
+    sop_class_uid : str
+        SOP Class UID of the plan; RT Ion Plan Storage by default, use
+        :data:`RT_PLAN_STORAGE` for photon plans.
+    """
+
+    sop_instance_uid: str
+    fraction_group_number: int = 1
+    beam_numbers: Optional[list[int]] = None
+    sop_class_uid: str = RT_ION_PLAN_STORAGE
+
+    def beam_number(self, beam_index: int) -> int:
+        """DICOM Beam Number of the beam with the given 0-based STF index."""
+        if self.beam_numbers is None:
+            return beam_index + 1
+        return int(self.beam_numbers[beam_index])
 
 
 #: ExportContext attribute -> DicomInfo field.

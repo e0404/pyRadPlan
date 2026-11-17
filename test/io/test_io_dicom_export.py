@@ -15,6 +15,7 @@ from pyRadPlan.io import load_patient, save_data
 from pyRadPlan.io._helpers import roi_interpreted_type
 from pyRadPlan.io.dicom import DicomExporter, DicomImporter, find_dicom_files
 from pyRadPlan.io.dicom._export_common import resolve_export_context
+from pyRadPlan.io.dicom._import_dose import import_dose
 
 
 @pytest.fixture(scope="module")
@@ -584,7 +585,7 @@ def dicom_standard():
         pytest.skip(f"DICOM standard not available: {exc}")
 
 
-def _validation_errors(info, path):
+def _validation_errors(info, path, plan_reference_expected=True):
     from dicom_validator.validator.dicom_file_validator import (  # noqa: PLC0415
         DicomFileValidator,
     )
@@ -600,8 +601,8 @@ def _validation_errors(info, path):
             for tag, err in tag_errors.items():
                 if not err.is_error():
                     continue
-                # RTDOSE of summation type PLAN needs an RTPLAN, which is not exported yet.
-                if tag.tag == 0x300C0002:
+                # RTDOSE needs a referenced RTPLAN, which is not exported yet.
+                if plan_reference_expected and tag.tag == 0x300C0002:
                     continue
                 # The functional group macros of the SEG IOD are missing from the validator's
                 # parsed specification, so valid groups are reported as unexpected.
@@ -624,3 +625,340 @@ def _validation_errors(info, path):
 )
 def test_exports_validate(dicom_standard, exports, fmt, name):
     assert _validation_errors(dicom_standard, exports[fmt] / name) == []
+
+
+# --------------------------------------------------------------------------
+# RTDOSE from results
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def photon_data():
+    import pymatreader
+
+    from pyRadPlan.cst import validate_cst
+    from pyRadPlan.plan import validate_pln
+    from pyRadPlan.stf import validate_stf
+
+    raw = pymatreader.read_mat(str(Path(__file__).parent.parent / "data" / "photons_testData.mat"))
+    pln = validate_pln(raw["pln"])
+    pln.prop_dose_calc["dosimetric_lateral_cutoff"] = 0.995
+    pln.prop_dose_calc["lateral_model"] = "single"
+    ct = validate_ct(raw["ct"])
+    cst = validate_cst(raw["cst"], ct=ct)
+    stf = validate_stf(raw["stf"])
+    return pln, ct, cst, stf
+
+
+@pytest.fixture(scope="module")
+def photon_result(photon_data):
+    from pyRadPlan.dose import calc_dose_forward
+
+    pln, ct, cst, stf = photon_data
+    w = np.ones(stf.total_number_of_bixels)
+    return calc_dose_forward(ct, cst, stf, pln, w)
+
+
+def _fake_result():
+    rng = np.random.default_rng(0)
+
+    def img(scale=1.0):
+        image = sitk.GetImageFromArray((rng.random((3, 4, 5)) * scale).astype(np.float32))
+        image.SetSpacing((2.0, 2.0, 3.0))
+        image.SetOrigin((-10.0, -8.0, 4.0))
+        return image
+
+    return {
+        "physical_dose": img(),
+        "physical_dose_beam": [img(), img()],
+        "rbe_x_dose": img(1.1),
+        "rbe_x_dose_beam": [img(1.1), img(1.1)],
+        "let": img(5),
+        "effect": img(),
+        "alpha_dose": img(),
+        "w": np.ones(3),
+    }
+
+
+class _Pln:
+    def __init__(self, dose_convention):
+        self.dose_convention = dose_convention
+
+
+def test_result_export_dose_types_and_skips(plain_ct, tmp_path):
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning, match="alpha_dose, effect, let") as rec:
+        DicomExporter(out).save(ct=plain_ct, result=_fake_result())
+    assert len([w for w in rec if "skips non-dose" in str(w.message)]) == 1
+    names = sorted(p.name for p in out.glob("RTDOSE*.dcm"))
+    assert names == ["RTDOSE_physical_dose.dcm", "RTDOSE_rbe_x_dose.dcm"]
+    phys, rbe = (_read(out / n) for n in names)
+    assert (phys.DoseType, rbe.DoseType) == ("PHYSICAL", "EFFECTIVE")
+    assert phys.DoseSummationType == rbe.DoseSummationType == "PLAN"
+    assert "physical_dose" in phys.DoseComment and "rbe_x_dose" in rbe.DoseComment
+    assert phys.SeriesDescription == phys.DoseComment
+    assert phys.SeriesInstanceUID != rbe.SeriesInstanceUID
+    assert "ReferencedRTPlanSequence" not in phys
+
+
+def test_result_export_descriptors_are_not_let(plain_ct, tmp_path):
+    from pyRadPlan.io.dicom._import_dose import _is_let_descriptor
+
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning):
+        DicomExporter(out, per_beam_doses=True).save(ct=plain_ct, result=_fake_result())
+    for path in out.glob("RTDOSE*.dcm"):
+        assert not _is_let_descriptor(_read(path).DoseComment)
+
+
+def test_result_export_values_round_trip(tmp_path):
+    result = {"physical_dose": _fake_result()["physical_dose"]}
+    out = tmp_path / "out"
+    DicomExporter(out).save(result=result)
+    back = import_dose(out / "RTDOSE_physical_dose.dcm")
+    ref = sitk.GetArrayFromImage(result["physical_dose"])
+    np.testing.assert_allclose(sitk.GetArrayFromImage(back), ref, rtol=1e-6, atol=1e-6)
+
+
+def test_result_without_dose_raises(tmp_path):
+    with pytest.warns(UserWarning, match="skips non-dose"):
+        with pytest.raises(ValueError, match="no dose quantity"):
+            DicomExporter(tmp_path / "out").save(result={"let": _fake_result()["let"]})
+
+
+def test_result_scenarios_warn_and_export_nominal(plain_ct, tmp_path):
+    result = _fake_result()
+    result["physical_dose_scenario"] = [result["physical_dose"], result["physical_dose"]]
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning, match="nominal scenario only"):
+        DicomExporter(out).save(ct=plain_ct, result=result)
+    assert sorted(p.name for p in out.glob("RTDOSE*.dcm")) == [
+        "RTDOSE_physical_dose.dcm",
+        "RTDOSE_rbe_x_dose.dcm",
+    ]
+
+
+def test_single_entry_scenario_list_does_not_warn(plain_ct, tmp_path, recwarn):
+    result = {"physical_dose": _fake_result()["physical_dose"]}
+    result["physical_dose_scenario"] = [result["physical_dose"]]
+    DicomExporter(tmp_path / "out").save(ct=plain_ct, result=result)
+    assert not [w for w in recwarn if "scenario" in str(w.message)]
+
+
+def test_per_beam_doses(plain_ct, tmp_path):
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning):
+        DicomExporter(out, per_beam_doses=True).save(ct=plain_ct, result=_fake_result())
+    for q, dose_type in (("physical_dose", "PHYSICAL"), ("rbe_x_dose", "EFFECTIVE")):
+        for n in (1, 2):
+            ds = _read(out / f"RTDOSE_{q}_beam{n}.dcm")
+            assert ds.DoseSummationType == "BEAM" and ds.DoseType == dose_type
+            assert f"beam {n}" in ds.DoseComment
+    assert not (out / "RTDOSE_physical_dose_beam3.dcm").exists()
+
+    off = tmp_path / "off"
+    with pytest.warns(UserWarning):
+        DicomExporter(off).save(ct=plain_ct, result=_fake_result())
+    assert not list(off.glob("*beam*"))
+
+
+def test_per_beam_without_beam_doses_warns(tmp_path):
+    with pytest.warns(UserWarning, match="no per-beam doses"):
+        DicomExporter(tmp_path / "out", per_beam_doses=True).save(
+            result={"physical_dose": _fake_result()["physical_dose"]}
+        )
+
+
+@pytest.mark.parametrize(
+    "convention,expected", [("per_fraction", "FRACTION"), ("total", "PLAN"), (None, "PLAN")]
+)
+def test_summation_follows_dose_convention(tmp_path, convention, expected):
+    dose = _fake_result()["physical_dose"]
+    pln = None if convention is None else _Pln(convention)
+    out = tmp_path / "out"
+    DicomExporter(out).save(result={"physical_dose": dose}, pln=pln)
+    assert _read(out / "RTDOSE_physical_dose.dcm").DoseSummationType == expected
+    DicomExporter(tmp_path / "out2").save(dose=dose, pln=pln)
+    assert _read(tmp_path / "out2" / "RTDOSE.dcm").DoseSummationType == expected
+
+
+def test_dose_image_path_unchanged(plain_ct, tmp_path):
+    out = _export(tmp_path, ct=plain_ct, dose=_dose_like(plain_ct))
+    ds = _read(out / "RTDOSE.dcm")
+    assert ds.DoseType == "PHYSICAL" and ds.DoseSummationType == "PLAN"
+    assert "DoseComment" not in ds and "ReferencedRTPlanSequence" not in ds
+    assert [float(o) for o in ds.GridFrameOffsetVector] == [0.0, 3.0, 6.0, 9.0]
+
+
+def test_save_data_result_and_pln(photon_data, photon_result, tmp_path, caplog):
+    pln, ct, _cst, _stf = photon_data
+    out = tmp_path / "dcm"
+    with caplog.at_level(logging.WARNING):
+        save_data(
+            file_name=out,
+            format="dcm",
+            ct=ct,
+            result=photon_result,
+            pln=pln,
+            exporter_options={"per_beam_doses": True},
+        )
+    assert "ignores unsupported" not in caplog.text
+    expected = "FRACTION" if pln.dose_convention == "per_fraction" else "PLAN"
+    ds = _read(out / "RTDOSE_physical_dose.dcm")
+    assert ds.DoseSummationType == expected
+    assert ds.FrameOfReferenceUID == _read(next(out.glob("CT_*.dcm"))).FrameOfReferenceUID
+    n_beams = len(photon_result["physical_dose_beam"])
+    assert len(list(out.glob("RTDOSE_physical_dose_beam*.dcm"))) == n_beams
+    back = DicomImporter(out).load_dose()
+    ref = sitk.GetArrayFromImage(photon_result["physical_dose"])
+    np.testing.assert_allclose(sitk.GetArrayFromImage(back), ref, atol=ref.max() * 1e-6)
+
+
+def test_other_exporters_unaffected_by_result_and_pln(photon_data, tmp_path):
+    pln, _ct, _cst, _stf = photon_data
+    path = save_data(file_name=tmp_path / "res.mat", result={"physical_dose": 1.0}, pln=pln)
+    assert Path(path).exists()
+
+
+# -- plan reference ---------------------------------------------------------
+
+
+def _plan_ref(**kwargs):
+    from pyRadPlan.io.dicom._export_common import PlanReference
+
+    return PlanReference(sop_instance_uid=pydicom.uid.generate_uid(), **kwargs)
+
+
+def _export_with_plan_ref(tmp_path, plan_ref, pln=None):
+    out = tmp_path / "out"
+    exporter = DicomExporter(out, per_beam_doses=True)
+    exporter._plan_ref = plan_ref
+    with pytest.warns(UserWarning):
+        exporter.save(result=_fake_result(), pln=pln)
+    return out
+
+
+@pytest.mark.parametrize(
+    "convention,name,summation",
+    [
+        ("total", "RTDOSE_physical_dose.dcm", "PLAN"),
+        ("per_fraction", "RTDOSE_rbe_x_dose.dcm", "FRACTION"),
+        ("total", "RTDOSE_physical_dose_beam2.dcm", "BEAM"),
+    ],
+)
+def test_plan_reference_validates(dicom_standard, tmp_path, convention, name, summation):
+    ref = _plan_ref(fraction_group_number=1, beam_numbers=[10, 20])
+    out = _export_with_plan_ref(tmp_path, ref, _Pln(convention))
+    ds = _read(out / name)
+    assert ds.DoseSummationType == summation
+    item = ds.ReferencedRTPlanSequence[0]
+    assert item.ReferencedSOPClassUID == "1.2.840.10008.5.1.4.1.1.481.8"
+    assert item.ReferencedSOPInstanceUID == ref.sop_instance_uid
+    if summation == "PLAN":
+        assert "ReferencedFractionGroupSequence" not in item
+    else:
+        group = item.ReferencedFractionGroupSequence[0]
+        assert group.ReferencedFractionGroupNumber == 1
+        if summation == "BEAM":
+            assert group.ReferencedBeamSequence[0].ReferencedBeamNumber == 20
+    assert _validation_errors(dicom_standard, out / name, plan_reference_expected=False) == []
+
+
+def test_missing_plan_reference_is_the_only_error(dicom_standard, plain_ct, tmp_path):
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning):
+        DicomExporter(out, per_beam_doses=True).save(
+            ct=plain_ct, result=_fake_result(), pln=_Pln("per_fraction")
+        )
+    for path in sorted(out.glob("RTDOSE*.dcm")):
+        assert _validation_errors(dicom_standard, path) == []
+        errors = _validation_errors(dicom_standard, path, plan_reference_expected=False)
+        assert errors and {e[2] for e in errors} == {"(300C,0002)"}
+
+
+def test_plan_reference_photon_class(tmp_path):
+    from pyRadPlan.io.dicom._export_common import RT_PLAN_STORAGE
+
+    out = _export_with_plan_ref(tmp_path, _plan_ref(sop_class_uid=RT_PLAN_STORAGE))
+    ds = _read(out / "RTDOSE_physical_dose.dcm")
+    assert ds.ReferencedRTPlanSequence[0].ReferencedSOPClassUID == RT_PLAN_STORAGE
+    beam = _read(out / "RTDOSE_physical_dose_beam1.dcm")
+    group = beam.ReferencedRTPlanSequence[0].ReferencedFractionGroupSequence[0]
+    assert group.ReferencedBeamSequence[0].ReferencedBeamNumber == 1
+
+
+# -- non-axial grids --------------------------------------------------------
+
+
+def _oriented_dose(direction, origin=(5.0, -3.0, 12.0)):
+    rng = np.random.default_rng(1)
+    image = sitk.GetImageFromArray(rng.random((4, 5, 6)) + 0.1)
+    image.SetSpacing((1.5, 2.0, 2.5))
+    image.SetDirection(direction)
+    image.SetOrigin(origin)
+    return image
+
+
+def _rotation_z(deg):
+    c, s = np.cos(np.deg2rad(deg)), np.sin(np.deg2rad(deg))
+    return (c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0)
+
+
+def _rotation_x(deg):
+    c, s = np.cos(np.deg2rad(deg)), np.sin(np.deg2rad(deg))
+    return (1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
+
+
+_FLIP_Z = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0)
+_DIRECTIONS = {"flip_z": _FLIP_Z, "oblique_z": _rotation_z(20), "oblique_x": _rotation_x(15)}
+
+
+def _voxel_position(ds, i, j, k):
+    ipp = np.array(ds.ImagePositionPatient, dtype=float)
+    iop = np.array(ds.ImageOrientationPatient, dtype=float)
+    row_dir, col_dir = iop[:3], iop[3:]  # along columns (x) and along rows (y)
+    normal = np.cross(row_dir, col_dir)
+    dy, dx = (float(v) for v in ds.PixelSpacing)
+    offset = float(ds.GridFrameOffsetVector[k])
+    return ipp + row_dir * dx * i + col_dir * dy * j + normal * offset
+
+
+@pytest.mark.parametrize("direction", _DIRECTIONS.values(), ids=_DIRECTIONS.keys())
+def test_non_axial_dose_geometry(tmp_path, direction):
+    dose = _oriented_dose(direction)
+    out = tmp_path / "out"
+    DicomExporter(out).save(dose=dose)
+    ds = _read(out / "RTDOSE.dcm")
+    nx, ny, nz = dose.GetSize()
+    assert len(ds.GridFrameOffsetVector) == nz
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                np.testing.assert_allclose(
+                    _voxel_position(ds, i, j, k),
+                    dose.TransformIndexToPhysicalPoint((i, j, k)),
+                    atol=1e-6,
+                )
+
+
+def test_flipped_dose_reimport(tmp_path):
+    dose = _oriented_dose(_FLIP_Z)
+    out = tmp_path / "out"
+    DicomExporter(out).save(dose=dose)
+    back = import_dose(out / "RTDOSE.dcm")
+    assert back.GetSize() == dose.GetSize()
+    np.testing.assert_allclose(
+        back.TransformIndexToPhysicalPoint((2, 1, 3)),
+        dose.TransformIndexToPhysicalPoint((2, 1, 3)),
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        sitk.GetArrayFromImage(back), sitk.GetArrayFromImage(dose), rtol=1e-6
+    )
+
+
+@pytest.mark.parametrize("name", ["flip_z", "oblique_x"])
+def test_non_axial_dose_validates(dicom_standard, tmp_path, name):
+    out = tmp_path / "out"
+    DicomExporter(out).save(dose=_oriented_dose(_DIRECTIONS[name]))
+    assert _validation_errors(dicom_standard, out / "RTDOSE.dcm") == []

@@ -135,6 +135,12 @@ def _image_formats() -> list[tuple[str, str]]:
     return formats
 
 
+def _available_formats() -> set:
+    from pyRadPlan.io import get_available_formats  # noqa: PLC0415
+
+    return set(get_available_formats())
+
+
 def _build_image_save_filter() -> str:
     """Build a QFileDialog filter string for the single-image (SimpleITK) formats."""
     from pyRadPlan.io import get_exporter  # noqa: PLC0415
@@ -1627,6 +1633,48 @@ class WorkflowWidget(WorkspaceWidget):
 
         self._run_save(_save, "Saving CST…", "Save CST")
 
+    def _save_result_dicom(self, keys: list, result: dict) -> None:
+        """Export the selected result quantities as DICOM RTDOSE files into a folder."""
+        target = QFileDialog.getExistingDirectory(self, "Save Result — DICOM RTDOSE")
+        if not target:
+            return
+
+        options: dict[str, Any] = {}
+        from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
+
+        existing = find_dicom_files(target)
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                "Save Result",
+                f"The folder already contains {len(existing)} DICOM file(s):\n{target}\n\n"
+                "Replace the existing DICOM files?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            options["overwrite"] = True
+
+        selected = {key: self._quantity_to_image(result[key], self._ws.ct) for key in keys}
+        selected = {key: image for key, image in selected.items() if image is not None}
+        ct, pln, stf = self._ws.ct, self._ws.pln, self._ws.stf
+
+        def _save() -> Any:
+            from pyRadPlan.io import save_data  # noqa: PLC0415
+
+            return save_data(
+                file_name=target,
+                format="dcm",
+                ct=ct,
+                result=selected,
+                pln=pln,
+                stf=stf,
+                exporter_options=options,
+            )
+
+        self._run_save(_save, "Saving result…", "Save Result")
+
     def _on_save_result_to_disk(self) -> None:  # noqa: PLR0911 - guard-heavy dialog flow
         import numpy as np  # noqa: PLC0415
         import SimpleITK as sitk  # noqa: PLC0415
@@ -1666,6 +1714,15 @@ class WorkflowWidget(WorkspaceWidget):
                 self, "Save Result", "Selected quantities could not be converted to images."
             )
             return
+
+        if "dcm" in _available_formats():
+            kinds = ["Image files", "DICOM CT + RTDOSE (folder)"]
+            kind, ok = QInputDialog.getItem(self, "Save Result", "Export as:", kinds, 0, False)
+            if not ok:
+                return
+            if kind == kinds[1]:
+                self._save_result_dicom(list(images), result)
+                return
 
         if len(images) == 1:
             ((key, image),) = images.items()

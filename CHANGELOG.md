@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `dicom-validator` in the `dev` extra; the export tests validate exported CT, RTSTRUCT, RTDOSE and SEG files against the DICOM standard (skipped when the standard cannot be downloaded)
 - DICOM export: `DicomExporter(path, overwrite=False, roi_interpreted_types=None)`. Exporting into a directory that already contains DICOM files raises `FileExistsError` unless `overwrite=True`, which deletes exactly those DICOM files (top level only) before writing, so no stale slices remain. `roi_interpreted_types` maps ROI names to a Defined Term of RT ROI Interpreted Type. `pyRadPlan.io.dicom.find_dicom_files` lists the DICOM files of a directory
 - GUI: saving a structure set as DICOM asks before replacing DICOM files that already exist in the chosen folder
+- DICOM export of results: `save_data(..., format="dcm", result=result, pln=pln)` writes the dose quantities of a result as RTDOSE files (`physical_dose` as Dose Type `PHYSICAL`, `rbe_x_dose` as `EFFECTIVE`); other quantities and non-nominal scenarios are skipped with a warning. `per_beam_doses=True` adds one `BEAM` RTDOSE per beam. The Dose Summation Type follows `pln.dose_convention` (`FRACTION` for per-fraction, `PLAN` for total doses)
+- GUI: "Save Result…" can export the selected quantities as DICOM (CT + RTDOSE) into a folder
 
 ### Changed
 
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- DICOM RTDOSE export of flipped and oblique dose grids: the Grid Frame Offset Vector is projected on the slice normal, and positions, orientation and spacing are written as valid Decimal Strings
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
 - Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
 - Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small

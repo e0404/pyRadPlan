@@ -22,6 +22,7 @@ class DicomHandler(DicomImporter, DicomExporter):
         anonymize: bool = False,
         overwrite: bool = False,
         roi_interpreted_types=None,
+        per_beam_doses: bool = False,
     ):
         DicomImporter.__init__(self, path)
         DicomExporter.__init__(
@@ -32,4 +33,5 @@ class DicomHandler(DicomImporter, DicomExporter):
             anonymize=anonymize,
             overwrite=overwrite,
             roi_interpreted_types=roi_interpreted_types,
+            per_beam_doses=per_beam_doses,
         )
