@@ -2989,6 +2989,45 @@ def test_modified_border_leaves_the_field_rendering_untouched(qapp):
     assert spin.grab().toImage().pixelColor(0, marked.height() // 2) != orange
 
 
+@pytest.mark.parametrize("dpr", [1.0, 1.25, 1.5, 1.75, 2.0])
+def test_modified_border_shows_every_edge_off_the_pixel_grid(qapp, dpr):
+    # With fractional display scaling a field can start in the middle of a device
+    # pixel; a border drawn as a logical 1 px line on its edge then lost its left side.
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    spin = QDoubleSpinBox()
+    spin.resize(94, 26)
+    PlanWidget._set_field_modified(spin, True)
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+
+    image = QImage(int(140 * dpr), int(50 * dpr), QImage.Format.Format_ARGB32)
+    image.setDevicePixelRatio(dpr)
+    image.fill(QColor("black"))
+    origin = 10 + 0.5 / dpr
+    painter = QPainter(image)
+    painter.translate(origin, origin)
+    frame.render(painter, QPoint(0, 0))
+    painter.end()
+
+    orange = QColor("#e67e22")
+    x0, y0 = origin * dpr, origin * dpr
+    x1, y1 = x0 + 94 * dpr, y0 + 26 * dpr
+    mid_x, mid_y = int((x0 + x1) / 2), int((y0 + y1) / 2)
+
+    def hits(coords, pixel):
+        return [c for c in coords if pixel(c) == orange]
+
+    edges = {
+        "left": hits(range(int(x0) - 1, int(x0) + 3), lambda x: image.pixelColor(x, mid_y)),
+        "right": hits(range(int(x1) - 3, int(x1) + 2), lambda x: image.pixelColor(x, mid_y)),
+        "top": hits(range(int(y0) - 1, int(y0) + 3), lambda y: image.pixelColor(mid_x, y)),
+        "bottom": hits(range(int(y1) - 3, int(y1) + 2), lambda y: image.pixelColor(mid_x, y)),
+    }
+    assert all(edges.values()), edges
+    assert len({len(px) for px in edges.values()}) == 1, edges
+
+
 def test_scenario_config_button_is_advanced(qapp):
     widget, _ = _make_widget()
     widget.set_ui_mode(UIMode.EDUCATIONAL)

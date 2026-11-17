@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from copy import deepcopy
 from typing import Any, Optional
 
 import numpy as np
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -124,9 +125,21 @@ class _ModifiedFrame(QWidget):
         return False
 
     def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        # Paint in device pixels: with fractional scaling (e.g. 150 %) a field can
+        # start mid-pixel, and a logical 1 px line on its edge is clipped away.
         painter = QPainter(self)
-        painter.setPen(QPen(_MODIFIED_COLOR, 1))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        to_device = painter.deviceTransform()
+        bounds = to_device.mapRect(QRectF(self.rect()))
+        eps = 1e-6
+        left, top = math.ceil(bounds.left() - eps), math.ceil(bounds.top() - eps)
+        right, bottom = math.floor(bounds.right() + eps), math.floor(bounds.bottom() + eps)
+        width = max(1, math.floor(self.devicePixelRatioF() + eps))
+        painter.setWorldTransform(to_device.inverted()[0])
+        rect = QRect(left, top, right - left, bottom - top)
+        painter.fillRect(rect.x(), rect.y(), rect.width(), width, _MODIFIED_COLOR)
+        painter.fillRect(rect.x(), rect.bottom() + 1 - width, rect.width(), width, _MODIFIED_COLOR)
+        painter.fillRect(rect.x(), rect.y(), width, rect.height(), _MODIFIED_COLOR)
+        painter.fillRect(rect.right() + 1 - width, rect.y(), width, rect.height(), _MODIFIED_COLOR)
 
 
 def _plan_class(radiation_mode: str) -> type[Plan]:
