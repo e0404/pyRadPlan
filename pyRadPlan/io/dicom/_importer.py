@@ -17,10 +17,11 @@ from ..base import BaseImporter
 from ._import_ct import import_ct
 from ._import_cst import import_rtstruct, import_seg
 from ._import_dose import import_dose, _dose_descriptor
+from ._import_plan import import_ion_plan, plan_summary
 
 logger = logging.getLogger(__name__)
 
-_MODALITIES = ("CT", "RTSTRUCT", "SEG", "RTDOSE")
+_MODALITIES = ("CT", "RTSTRUCT", "SEG", "RTDOSE", "RTPLAN")
 
 
 def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
@@ -124,7 +125,7 @@ class DicomImporter(BaseImporter):
         logger.info(
             "Found %s.",
             ", ".join(f"{len(paths)}x {modality}" for modality, paths in groups.items() if paths)
-            or "no CT, RTSTRUCT, SEG or RTDOSE data",
+            or "no CT, RTSTRUCT, SEG, RTDOSE or RTPLAN data",
         )
 
         self._classified = (directory, groups)
@@ -193,6 +194,16 @@ class DicomImporter(BaseImporter):
                 }
             )
         return result
+
+    def list_plans(self) -> list[dict]:
+        """List the RT plans, one entry per file.
+
+        Each entry has ``path``, ``label``, ``name``, ``sop_class``, ``kind`` (``"ion"`` or
+        ``"photon"``), ``radiation_type``, ``num_beams`` and ``num_fractions``. Only ion
+        plans can be loaded with :meth:`load_plan`.
+        """
+        _, groups = self._classify()
+        return [plan_summary(self._headers[f], f) for f in groups["RTPLAN"]]
 
     def load_ct(self, series_uid: Optional[str] = None) -> CT:
         directory, groups = self._classify()
@@ -292,3 +303,92 @@ class DicomImporter(BaseImporter):
         if ct is None:
             ct = self._ct if self._ct is not None else self.load_ct()
         return _resample_dose_to_ct(dose, ct)
+
+    def load_plan(
+        self,
+        plan_file: Optional[str] = None,
+        ct: Optional[CT] = None,
+        machine=None,
+        particles_per_mu=None,
+        energy_tolerance: float = 0.1,
+    ) -> Optional[dict]:
+        """Load an RT Ion Plan as steering information, spot weights and plan.
+
+        Parameters
+        ----------
+        plan_file : str, optional
+            An explicit RTPLAN path. By default the first ion plan found is used.
+        ct : CT, optional
+            Used to check the isocenters against the CT. Defaults to the CT loaded most
+            recently by this importer, if any.
+        machine : str or Machine, optional
+            Machine providing energies and foci; ``"Generic"`` by default. Each nominal beam
+            energy is mapped to the closest machine energy within ``energy_tolerance``.
+        particles_per_mu : float or callable, optional
+            Particles per MU (or a function of the machine energy). Required for plans whose
+            Primary Dosimeter Unit is MU; plans in NP (particles) need none.
+        energy_tolerance : float
+            Largest accepted difference to a machine energy in MeV(/u).
+
+        Returns
+        -------
+        dict or None
+            ``stf``, ``pln``, ``weights`` and ``result`` (``{"w": weights}``, as in a matRad
+            result), or ``None`` if the source has no RTPLAN. The weights are matRad-style
+            MU per spot: particles divided by ``num_particles_per_mu`` (default 1e6).
+
+        Raises
+        ------
+        NotImplementedError
+            For photon RT Plans.
+        """
+        _, groups = self._classify()
+        if not groups["RTPLAN"]:
+            return None
+        if plan_file is not None:
+            if plan_file not in groups["RTPLAN"]:
+                raise ValueError(f"RTPLAN {plan_file!r} not found in {self.path}.")
+        else:
+            plans = self.list_plans()
+            ion = [p["path"] for p in plans if p["kind"] == "ion"]
+            if not ion:
+                plan_file = plans[0]["path"]  # raises the NotImplementedError below
+            else:
+                if len(ion) > 1:
+                    warnings.warn(
+                        f"Multiple RT ion plans found in {self.path}; using the first "
+                        f"({os.path.basename(ion[0])}).",
+                        stacklevel=2,
+                    )
+                plan_file = ion[0]
+
+        logger.info("Importing RT plan %s.", os.path.basename(plan_file))
+        if ct is None:
+            ct = self._ct
+        return import_ion_plan(
+            pydicom.dcmread(plan_file),
+            ct=ct,
+            machine=machine,
+            particles_per_mu=particles_per_mu,
+            energy_tolerance=energy_tolerance,
+        )
+
+    def load_data(self) -> dict:
+        """Load CT, structures, dose and, if present, an ion plan (``stf``, ``pln``, ``result``).
+
+        A plan that cannot be imported (photon plan, missing machine energies, MU without
+        calibration, unsupported geometry) is skipped with a warning.
+        """
+        data = super().load_data()
+        _, groups = self._classify()
+        if any(p["kind"] == "ion" for p in self.list_plans()):
+            try:
+                plan = self.load_plan(ct=data.get("ct"))
+            except Exception as exc:  # noqa: BLE001 - the plan must not break the rest
+                warnings.warn(f"Could not import the RT plan: {exc}", stacklevel=2)
+            else:
+                if plan is not None:
+                    data["stf"] = plan["stf"]
+                    data["pln"] = plan["pln"]
+                    data["result"] = plan["result"]
+        return data
