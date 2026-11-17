@@ -227,8 +227,6 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
 
     prob.bypass_objective_jacobian = False
     prob._grad_cache = prob._grad_cache_intermediate = None
-    for q in prob._quantities:
-        q._w_grad_cache = None
     num_objectives = sum(len(obj_info[1]) for obj_info in prob._objective_list)
     jacobian = xp_utils.to_numpy(prob._objective_jacobian(x))
 

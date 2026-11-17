@@ -464,3 +464,31 @@ def test_variance_keeps_float32_on_cupy():
     values = cp.stack([cp.linspace(0.0, 2.0, 200_000, dtype=cp.float32) * s for s in (1, 2, 3)])
     assert Variance().compute_objective(values).dtype == cp.float32
     assert Variance().compute_gradient(values).dtype == cp.float32
+
+
+@pytest.mark.parametrize("dtype", [xp.float32, xp.float64])
+def test_SquaredOverdosing_value_gradient_and_dtype(dtype):
+    dose = xp.asarray([10.0, 30.0, 35.0, 50.0], dtype=dtype)
+    obj = SquaredOverdosing(d_max=30.0)
+
+    value = obj.compute_objective(dose)
+    gradient = obj.compute_gradient(dose)
+
+    assert value.dtype == dtype
+    assert gradient.dtype == dtype
+    assert float(value) == pytest.approx((25.0 + 400.0) / 4)
+    np.testing.assert_allclose(np.asarray(gradient), [0.0, 0.0, 2.5, 10.0])
+
+
+@pytest.mark.parametrize("dtype", [xp.float32, xp.float64])
+def test_SquaredUnderdosing_value_gradient_and_dtype(dtype):
+    dose = xp.asarray([10.0, 55.0, 60.0, 80.0], dtype=dtype)
+    obj = SquaredUnderdosing(d_min=60.0)
+
+    value = obj.compute_objective(dose)
+    gradient = obj.compute_gradient(dose)
+
+    assert value.dtype == dtype
+    assert gradient.dtype == dtype
+    assert float(value) == pytest.approx((2500.0 + 25.0) / 4)
+    np.testing.assert_allclose(np.asarray(gradient), [-25.0, -2.5, 0.0, 0.0])
