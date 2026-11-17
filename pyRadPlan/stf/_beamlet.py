@@ -131,8 +131,10 @@ class FieldShape(Beamlet):
     Notes
     -----
     Coordinates in FieldShapes are defined in BEV in LPS.
-    Note that Beam Limiting Devices from DICOM are typically defined in IEC with the
-    X axis flipped compared to BEV convention (when gantry and couch angle are 0).
+    ``FieldShapeAsBLD`` mirrors the x axis of its devices: an opening at device position ``x``
+    lies at BEV ``-x``. This is a pyRadPlan convention, not the DICOM one: at collimator angle 0
+    the IEC BEAM LIMITING DEVICE x axis of DICOM coincides with the IEC GANTRY x axis, which is
+    the BEV x axis, so a DICOM export has to undo the mirroring.
     """
 
     # TODO:

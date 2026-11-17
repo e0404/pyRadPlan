@@ -16,6 +16,7 @@ from ._export_common import RT_STRUCT_STORAGE, PlanReference, resolve_export_con
 from ._export_ct import export_ct
 from ._export_cst import export_cst, validate_roi_interpreted_types
 from ._export_dose import export_dose, export_result
+from ._export_photon_plan import export_photon_plan, is_photon_stf
 from ._export_plan import export_ion_plan, is_ion_stf
 from ._export_seg import export_seg
 from ._helpers import find_dicom_files
@@ -52,8 +53,8 @@ class DicomExporter(BaseExporter):
         write one RTDOSE per beam as ``RTDOSE_<quantity>_beam<N>.dcm`` (Dose Summation
         Type ``BEAM``, 1-based beam numbers in STF beam order).
     export_plan : bool, default True
-        With an ion ``stf`` and spot weights, also write the RT Ion Plan (``RTPLAN.dcm``)
-        before the doses, which then reference it.
+        With an ``stf`` (and spot weights for ions), also write the RT (Ion) Plan
+        (``RTPLAN.dcm``) before the doses, which then reference it.
 
     Notes
     -----
@@ -65,6 +66,12 @@ class DicomExporter(BaseExporter):
     gives ``FRACTION``, ``"total"`` gives ``PLAN``); without it, ``PLAN`` is written. The
     ``dose=`` image is written as ``RTDOSE.dcm`` (Dose Type ``PHYSICAL``).
 
+    With photon steering information, ``save`` writes an RT Plan ``RTPLAN.dcm`` (beams as
+    above, weights optional) with jaws and multileaf collimators of field-based beams, or an
+    open field around the bixels of bixel-based beams, which only holds the beam geometry and
+    warns that it is not deliverable. There is no meterset, as photon weights have no
+    calibration to monitor units. See :mod:`pyRadPlan.io.dicom._export_photon_plan`.
+
     With an ion ``stf`` and spot weights (``weights=`` or ``result["w"]``), ``save`` writes
     an RT Ion Plan ``RTPLAN.dcm`` (plan intent RESEARCH, unapproved) with one beam per STF
     beam (Beam Number = STF index + 1), using the isocenter of each beam and
@@ -72,8 +79,8 @@ class DicomExporter(BaseExporter):
     are per fraction and written as numbers of particles (Primary Dosimeter Unit ``NP``). The
     RTDOSE files of the same export reference the plan, and the plan references the RTSTRUCT
     written in the same call. Only Head First Supine is supported
-    (:class:`NotImplementedError` otherwise); photon steering information is skipped with a
-    warning. See :mod:`pyRadPlan.io.dicom._export_plan` for the geometry conventions.
+    (:class:`NotImplementedError` otherwise). See :mod:`pyRadPlan.io.dicom._export_plan` for
+    the geometry conventions.
     """
 
     format: ClassVar[str] = "dcm"
@@ -208,16 +215,22 @@ class DicomExporter(BaseExporter):
         stf = validate_stf(stf)
         if weights is None and result is not None:
             weights = result.get("w")
-        if weights is None:
-            warnings.warn(
-                "No spot weights (weights= or result['w']) for the steering information; "
-                "skipping the plan export.",
-                stacklevel=4,
+        if is_photon_stf(stf):
+            # photon weights are optional: they only select beams and bixels
+            self._plan_ref = export_photon_plan(
+                stf, pln, weights, directory, ctx, structure_set_ref=struct_ref
             )
             return
         if not is_ion_stf(stf):
             warnings.warn(
-                "The DICOM RT plan export supports ion steering information only; "
+                "The DICOM RT plan export supports ion and photon steering information only; "
+                "skipping the plan export.",
+                stacklevel=4,
+            )
+            return
+        if weights is None:
+            warnings.warn(
+                "No spot weights (weights= or result['w']) for the steering information; "
                 "skipping the plan export.",
                 stacklevel=4,
             )

@@ -558,7 +558,7 @@ def test_beam_without_weight_is_skipped(tmp_path, generated):
     assert group.ReferencedBeamSequence[0].ReferencedBeamNumber == 2
 
 
-def test_photon_stf_skips_plan_but_exports_dose(tmp_path):
+def test_photon_stf_exports_plan_and_dose_references_it(tmp_path):
     raw = pymatreader.read_mat(str(DATA / "photons_testData.mat"))
     pln = validate_pln(raw["pln"])
     ct = validate_ct(raw["ct"])
@@ -566,7 +566,7 @@ def test_photon_stf_skips_plan_but_exports_dose(tmp_path):
     import SimpleITK as sitk  # noqa: PLC0415
 
     dose = sitk.Cast(ct.cube_hu * 0 + 1.0, sitk.sitkFloat64)
-    with pytest.warns(UserWarning, match="ion steering information only"):
+    with pytest.warns(UserWarning, match="not deliverable"):
         out = _export(
             tmp_path,
             ct=ct,
@@ -574,6 +574,7 @@ def test_photon_stf_skips_plan_but_exports_dose(tmp_path):
             pln=pln,
             result={"physical_dose": dose, "w": np.ones(stf.total_number_of_bixels)},
         )
-    assert not (out / "RTPLAN.dcm").exists()
+    plan = pydicom.dcmread(out / "RTPLAN.dcm")
+    assert plan.SOPClassUID == "1.2.840.10008.5.1.4.1.1.481.5"
     ds = pydicom.dcmread(out / "RTDOSE_physical_dose.dcm")
-    assert "ReferencedRTPlanSequence" not in ds
+    assert ds.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID == plan.SOPInstanceUID

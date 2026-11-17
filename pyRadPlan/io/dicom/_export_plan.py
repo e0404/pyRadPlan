@@ -270,6 +270,62 @@ def _beam_item(  # noqa: PLR0913 - DICOM beam attributes
     return item, final
 
 
+def planned_fractions(pln, plan_kind: str) -> int:
+    """Return the planned fractions of the plan; one, with a warning, without a plan."""
+    if pln is None or getattr(pln, "num_of_fractions", None) is None:
+        warnings.warn(f"No plan given; exporting the {plan_kind} with one planned fraction.")
+        return 1
+    return int(pln.num_of_fractions)
+
+
+def start_plan(
+    ctx: ExportContext,
+    sop_class_uid: str,
+    plan_name: str,
+    series_number: int,
+    structure_set_ref: Optional[tuple[str, str]],
+) -> Dataset:
+    """Dataset with the identifiers, RT General Plan and RT Patient Setup of an RT (Ion) Plan."""
+    ds = Dataset()
+    populate_common(
+        ds,
+        ctx,
+        sop_class_uid,
+        generate_uid(),
+        "RTPLAN",
+        series_number,
+        f"{plan_name} - research use only",
+    )
+    ds.OperatorsName = ""
+    ds.InstanceNumber = 1
+
+    ds.RTPlanLabel = "pyRadPlan"
+    ds.RTPlanName = plan_name
+    ds.RTPlanDate = ctx.export_date
+    ds.RTPlanTime = ctx.export_time
+    ds.PlanIntent = "RESEARCH"
+    # Referenced Structure Set Sequence is required for geometry PATIENT, so a plan exported
+    # without an RTSTRUCT is declared as TREATMENT_DEVICE (isocenters stay patient-based).
+    ds.RTPlanGeometry = "PATIENT" if structure_set_ref is not None else "TREATMENT_DEVICE"
+    if structure_set_ref is not None:
+        ref = Dataset()
+        ref.ReferencedSOPClassUID, ref.ReferencedSOPInstanceUID = structure_set_ref
+        ds.ReferencedStructureSetSequence = [ref]
+
+    setup = Dataset()
+    setup.PatientSetupNumber = 1
+    setup.PatientPosition = "HFS"
+    ds.PatientSetupSequence = [setup]
+    return ds
+
+
+def require_head_first_supine(ctx: ExportContext, plan_kind: str) -> None:
+    if (ctx.patient_position or "HFS").upper() != "HFS":
+        raise NotImplementedError(
+            f"{plan_kind} export supports Head First Supine only, not {ctx.patient_position!r}."
+        )
+
+
 def export_ion_plan(  # noqa: PLR0913 - export options
     stf,
     pln,
@@ -320,10 +376,7 @@ def export_ion_plan(  # noqa: PLR0913 - export options
     """
     if not is_ion_stf(stf):
         raise ValueError("The RT Ion Plan export supports ion beams only.")
-    if (ctx.patient_position or "HFS").upper() != "HFS":
-        raise NotImplementedError(
-            f"RT Ion Plan export supports Head First Supine only, not {ctx.patient_position!r}."
-        )
+    require_head_first_supine(ctx, "RT Ion Plan")
     weights = np.asarray(weights, dtype=float).reshape(-1)
     if weights.size != stf.total_number_of_bixels:
         raise ValueError(
@@ -333,47 +386,20 @@ def export_ion_plan(  # noqa: PLR0913 - export options
     if not np.all(np.isfinite(weights)) or np.any(weights < 0):
         raise ValueError("Spot weights must be finite and non-negative.")
 
-    if pln is None or getattr(pln, "num_of_fractions", None) is None:
-        warnings.warn("No plan given; exporting the RT Ion Plan with one planned fraction.")
-        fractions = 1
-    else:
-        fractions = int(pln.num_of_fractions)
+    fractions = planned_fractions(pln, "RT Ion Plan")
 
     first_beam = stf.beams[0]
     machine_obj = _resolve_machine(pln, first_beam.radiation_mode, machine)
     machine_name = str(first_beam.machine or getattr(machine_obj, "name", "") or "")
     snout = float(getattr(machine_obj, "bams_to_iso_dist", 0.0) or 0.0)
 
-    ds = Dataset()
-    populate_common(
-        ds,
+    ds = start_plan(
         ctx,
         RT_ION_PLAN_STORAGE,
-        generate_uid(),
-        "RTPLAN",
+        "pyRadPlan ion plan",
         series_number,
-        "pyRadPlan ion plan - research use only",
+        structure_set_ref,
     )
-    ds.OperatorsName = ""
-    ds.InstanceNumber = 1
-
-    ds.RTPlanLabel = "pyRadPlan"
-    ds.RTPlanName = "pyRadPlan ion plan"
-    ds.RTPlanDate = ctx.export_date
-    ds.RTPlanTime = ctx.export_time
-    ds.PlanIntent = "RESEARCH"
-    # Referenced Structure Set Sequence is required for geometry PATIENT, so a plan exported
-    # without an RTSTRUCT is declared as TREATMENT_DEVICE (isocenters stay patient-based).
-    ds.RTPlanGeometry = "PATIENT" if structure_set_ref is not None else "TREATMENT_DEVICE"
-    if structure_set_ref is not None:
-        ref = Dataset()
-        ref.ReferencedSOPClassUID, ref.ReferencedSOPInstanceUID = structure_set_ref
-        ds.ReferencedStructureSetSequence = [ref]
-
-    setup = Dataset()
-    setup.PatientSetupNumber = 1
-    setup.PatientPosition = "HFS"
-    ds.PatientSetupSequence = [setup]
 
     beam_items = Sequence()
     referenced_beams = Sequence()
