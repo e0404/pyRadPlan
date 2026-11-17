@@ -240,8 +240,8 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         A dictionary of named objects to save (e.g. ``{"ct": ct, "cst": cst}``).
     file_name : str or os.PathLike, optional
         Target file name. If it has no extension, the format's default extension
-        is appended. For DICOM, this is treated as the output directory. If
-        omitted, each object is written to ``<name>.<ext>`` (e.g. ``ct.mat``).
+        is appended. For DICOM, this is treated as the output directory and is
+        required. If omitted, each object is written to ``<name>.<ext>`` (e.g. ``ct.mat``).
     format : str, optional
         Explicit format (e.g. ``"mat"``, ``"dcm"``).
     ct, cst : optional
@@ -250,7 +250,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         A dose distribution to save.
     exporter_options : dict, optional
         Keyword arguments forwarded to the exporter's constructor, e.g.
-        ``{"structure_format": "seg", "anonymize": True}`` for DICOM.
+        ``{"structure_format": "seg", "anonymize": True}`` for DICOM. DICOM refuses to
+        write into a directory that already contains DICOM files unless
+        ``{"overwrite": True}`` is given.
     **extra
         Further named objects passed through to the exporter.
 
@@ -268,6 +270,8 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
 
     # DICOM is directory-based and always writes the full multi-file set together.
     if not is_container_format(fmt):
+        if file_name is None and fmt == "dcm":
+            raise ValueError("DICOM export needs 'file_name' to name the output directory.")
         target = os.fspath(file_name) if file_name is not None else os.getcwd()
         exporter_cls(target, **options).save(**objects)
         return target

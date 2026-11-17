@@ -12,9 +12,10 @@ from pyRadPlan.cst import StructureSet
 from ..base import BaseExporter
 from ._export_common import resolve_export_context
 from ._export_ct import export_ct
-from ._export_cst import export_cst
+from ._export_cst import export_cst, validate_roi_interpreted_types
 from ._export_dose import export_dose
 from ._export_seg import export_seg
+from ._helpers import find_dicom_files
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,15 @@ class DicomExporter(BaseExporter):
     anonymize : bool, default False
         Replace patient identifiers and generate new study and frame of
         reference UIDs, consistently over all exported objects.
+    overwrite : bool, default False
+        If the output directory already contains DICOM files (top level only; ``.dcm``
+        files and files recognized by :func:`pydicom.misc.is_dicom`), saving raises
+        :class:`FileExistsError`. With ``overwrite=True`` exactly these files are
+        deleted before writing; other files and subdirectories are left alone.
+    roi_interpreted_types : dict, optional
+        Maps ROI names to a Defined Term of RT ROI Interpreted Type (3006,00A4) for
+        RTSTRUCT export, overriding the type derived from the VOI type and name.
+        Unknown terms raise :class:`ValueError`.
     """
 
     format: ClassVar[str] = "dcm"
@@ -46,11 +56,21 @@ class DicomExporter(BaseExporter):
     structure_format: str = "rtstruct"
     metadata: Any = None
     anonymize: bool = False
+    overwrite: bool = False
+    roi_interpreted_types: Optional[dict[str, str]] = None
 
-    def __init__(
-        self, path, structure_format: str = "rtstruct", metadata: Any = None, anonymize=False
+    def __init__(  # noqa: PLR0913 - exporter options
+        self,
+        path,
+        structure_format: str = "rtstruct",
+        metadata: Any = None,
+        anonymize=False,
+        overwrite: bool = False,
+        roi_interpreted_types: Optional[dict[str, str]] = None,
     ):
         super().__init__(path)
+        self.overwrite = bool(overwrite)
+        self.roi_interpreted_types = validate_roi_interpreted_types(roi_interpreted_types)
         self.metadata = metadata
         self.anonymize = bool(anonymize)
         if structure_format not in ("rtstruct", "seg"):
@@ -72,9 +92,17 @@ class DicomExporter(BaseExporter):
             logger.warning("DICOM exporter ignores unsupported objects: %s", list(extra))
 
         directory = self.path
-        os.makedirs(directory, exist_ok=True)
-
         ctx = resolve_export_context(ct, cst, self.metadata, self.anonymize)
+
+        existing = find_dicom_files(directory)
+        if existing and not self.overwrite:
+            raise FileExistsError(
+                f"Directory {str(directory)!r} already contains {len(existing)} DICOM file(s); "
+                "pass overwrite=True to replace them."
+            )
+        os.makedirs(directory, exist_ok=True)
+        for path in existing:
+            os.remove(path)
 
         # A CT (or the cst's reference CT) anchors the frame of reference.
         if ct is None and cst is not None:
@@ -88,7 +116,7 @@ class DicomExporter(BaseExporter):
             if self.structure_format == "seg":
                 export_seg(cst, directory, ctx, ct_info)
             else:
-                export_cst(cst, directory, ctx, ct_info)
+                export_cst(cst, directory, ctx, ct_info, self.roi_interpreted_types)
 
         if dose is not None:
             export_dose(dose, directory, ctx)

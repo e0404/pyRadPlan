@@ -16,20 +16,25 @@ from pyRadPlan.core import ProgressReporter
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import VOI, validate_voi
 
-from ._helpers import determine_structure_type
+from ._helpers import determine_structure_type, voi_type_from_interpreted_type
 
 logger = logging.getLogger(__name__)
 
 
-def _mask_cube_to_voi(cube_xyz, name, ct, color):
+def _mask_cube_to_voi(cube_xyz, name, ct, color, voi_type=None):
     """Build a VOI from an (x, y, z) numpy mask cube aligned to the CT."""
     # SimpleITK arrays are ordered (z, y, x).
     sitk_arr = np.ascontiguousarray(np.transpose(cube_xyz, (2, 1, 0)).astype(np.uint8))
     mask = sitk.GetImageFromArray(sitk_arr)
     mask.CopyInformation(ct.cube_hu)
+    name_type = determine_structure_type(name)
+    # matRad and early pyRadPlan exports mark the body as ORGAN/AVOIDANCE, so a body
+    # name overrides the generic organ types.
+    if voi_type is None or (voi_type == "OAR" and name_type == "EXTERNAL"):
+        voi_type = name_type
     kwargs = {
         "name": str(name),
-        "voi_type": determine_structure_type(name),
+        "voi_type": voi_type,
         "mask": mask,
         "ct_image": ct,
     }
@@ -67,6 +72,13 @@ def import_rtstruct(
         return []
 
     structure_lookup = {seq.ROINumber: seq for seq in structure_dataset.StructureSetROISequence}
+    interpreted_types = {
+        obs.ReferencedROINumber: voi_type_from_interpreted_type(
+            getattr(obs, "RTROIInterpretedType", None)
+        )
+        for obs in getattr(structure_dataset, "RTROIObservationsSequence", None) or []
+        if "ReferencedROINumber" in obs
+    }
 
     reporter = reporter if reporter is not None else ProgressReporter()
     contours = structure_dataset.ROIContourSequence
@@ -92,7 +104,8 @@ def import_rtstruct(
             if hasattr(roi_contour, "ROIDisplayColor"):
                 color = tuple(int(c) for c in roi_contour.ROIDisplayColor)
 
-            vois.append(_mask_cube_to_voi(cube_xyz, name, ct, color))
+            voi_type = interpreted_types.get(roi_contour.ReferencedROINumber)
+            vois.append(_mask_cube_to_voi(cube_xyz, name, ct, color, voi_type))
         except Exception as exc:  # noqa: BLE001 - one bad ROI must not abort the import
             logger.warning("Failed to process ROI '%s': %s", name, exc)
             continue

@@ -1602,10 +1602,27 @@ class WorkflowWidget(WorkspaceWidget):
         if not target:
             return
 
+        options = {"structure_format": structure_format} if structure_format else None
+        if fmt == "dcm":
+            from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
+
+            existing = find_dicom_files(target)
+            if existing:
+                answer = QMessageBox.question(
+                    self,
+                    "Save CST",
+                    f"The folder already contains {len(existing)} DICOM file(s):\n{target}\n\n"
+                    "Replace the existing DICOM files?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                options = {**(options or {}), "overwrite": True}
+
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            options = {"structure_format": structure_format} if structure_format else None
             return save_data(file_name=target, format=fmt, cst=cst, exporter_options=options)
 
         self._run_save(_save, "Saving CST…", "Save CST")

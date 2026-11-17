@@ -12,7 +12,8 @@ import SimpleITK as sitk
 from pyRadPlan.core import Grid
 from pyRadPlan.ct import CT, DicomInfo, resample_ct, validate_ct
 from pyRadPlan.io import load_patient, save_data
-from pyRadPlan.io.dicom import DicomExporter, DicomImporter
+from pyRadPlan.io._helpers import roi_interpreted_type
+from pyRadPlan.io.dicom import DicomExporter, DicomImporter, find_dicom_files
 from pyRadPlan.io.dicom._export_common import resolve_export_context
 
 
@@ -277,6 +278,175 @@ def test_save_data_exporter_options(dicom_patient, tmp_path):
     assert (target / "SEG.dcm").exists()
     assert not (target / "RTSTRUCT.dcm").exists()
     assert _read(target / "CT_0001.dcm").PatientID == "ANON"
+
+
+# --------------------------------------------------------------------------
+# Overwrite policy
+# --------------------------------------------------------------------------
+
+
+def _dicom_clutter(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    ds = pydicom.dcmread(Path(__file__).parent.parent / "data" / "dicom" / "RTDose_1_LET.dcm")
+    ds.save_as(directory / "named_without_extension")
+    (directory / "upper.DCM").write_bytes(b"not really dicom")
+    (directory / "note.txt").write_text("keep")
+    (directory / "sub").mkdir()
+    (directory / "sub" / "nested.dcm").write_bytes(b"keep")
+
+
+def test_find_dicom_files(tmp_path):
+    assert find_dicom_files(tmp_path / "missing") == []
+    _dicom_clutter(tmp_path)
+    found = sorted(Path(p).name for p in find_dicom_files(tmp_path))
+    assert found == ["named_without_extension", "upper.DCM"]
+
+
+def test_export_into_non_empty_directory_raises_without_writing(plain_ct, tmp_path):
+    _dicom_clutter(tmp_path)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(FileExistsError, match="2 DICOM file.*overwrite=True"):
+        DicomExporter(tmp_path).save(ct=plain_ct)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_overwrite_deletes_only_dicom_files(plain_ct, tmp_path):
+    _dicom_clutter(tmp_path)
+    DicomExporter(tmp_path, overwrite=True).save(ct=plain_ct)
+    names = {p.name for p in tmp_path.iterdir()}
+    assert names == {"CT_0001.dcm", "CT_0002.dcm", "CT_0003.dcm", "CT_0004.dcm", "note.txt", "sub"}
+    assert (tmp_path / "sub" / "nested.dcm").exists()
+
+
+def test_invalid_input_does_not_delete_with_overwrite(plain_ct, tmp_path):
+    _dicom_clutter(tmp_path)
+    with pytest.raises(ValueError):
+        DicomExporter(tmp_path, overwrite=True).save()
+    assert (tmp_path / "upper.DCM").exists()
+
+
+def test_overwrite_reachable_via_save_data(plain_ct, tmp_path):
+    save_data(file_name=tmp_path, format="dcm", ct=plain_ct)
+    with pytest.raises(FileExistsError):
+        save_data(file_name=tmp_path, format="dcm", ct=plain_ct)
+    save_data(file_name=tmp_path, format="dcm", ct=plain_ct, exporter_options={"overwrite": True})
+
+
+def test_save_data_dicom_requires_file_name(plain_ct, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="file_name"):
+        save_data(format="dcm", ct=plain_ct)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_overwrite_leaves_no_stale_slices(dicom_patient, tmp_path):
+    ct, _ = dicom_patient
+    out = tmp_path / "out"
+    DicomExporter(out).save(ct=ct)
+    n = len(list(out.glob("CT_*.dcm")))
+    assert n == ct.size[2]
+    fewer = validate_ct(cube_hu=ct.cube_hu[:, :, : n - 3])
+    DicomExporter(out, overwrite=True).save(ct=fewer)
+    assert len(list(out.glob("CT_*.dcm"))) == n - 3
+
+
+# --------------------------------------------------------------------------
+# RT ROI Interpreted Type
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "voi_type", "expected"),
+    [
+        ("Body", "EXTERNAL", "EXTERNAL"),
+        ("GTV", "TARGET", "GTV"),
+        ("gtv_tumor", "TARGET", "GTV"),
+        ("CTV1", "TARGET", "CTV"),
+        ("ITV_lung", "TARGET", "CTV"),
+        ("PTV_70", "TARGET", "PTV"),
+        ("ptv-boost", "TARGET", "PTV"),
+        ("Boost", "TARGET", "PTV"),
+        ("Target", "TARGET", "PTV"),
+        ("Pitvitary", "TARGET", "PTV"),
+        ("Lung", "OAR", "ORGAN"),
+        ("Avoid_Heart", "OAR", "AVOIDANCE"),
+        ("PTV_ring", "HELPER", "CONTROL"),
+    ],
+)
+def test_roi_interpreted_type_mapping(name, voi_type, expected):
+    assert roi_interpreted_type(name, voi_type) == expected
+
+
+def _two_voi_cst(dicom_patient):
+    _, cst = dicom_patient
+    return cst
+
+
+def test_roi_interpreted_types_override(dicom_patient, tmp_path):
+    ct, cst = dicom_patient
+    first = cst.vois[0].name
+    out = _export(tmp_path, ct, cst, roi_interpreted_types={first: "avoidance"})
+    obs = _read(out / "RTSTRUCT.dcm").RTROIObservationsSequence
+    assert obs[0].RTROIInterpretedType == "AVOIDANCE"
+    assert {o.RTROIInterpretedType for o in obs[1:]} != {"AVOIDANCE"}
+
+
+def test_roi_interpreted_types_invalid_override(tmp_path):
+    with pytest.raises(ValueError, match="BOGUS"):
+        DicomExporter(tmp_path / "x", roi_interpreted_types={"Lung": "BOGUS"})
+
+
+def test_round_trip_keeps_voi_type(dicom_patient, tmp_path):
+    from pyRadPlan.cst import StructureSet, create_voi
+
+    ct, _ = dicom_patient
+    vois = []
+    for i, (name, voi_type) in enumerate(
+        [("Body", "EXTERNAL"), ("Odd", "TARGET"), ("Target_x", "OAR"), ("Ring", "HELPER")]
+    ):
+        arr = np.zeros(ct.cube_hu.GetSize()[::-1], dtype=np.uint8)
+        arr[2:8, 2 + 4 * i : 6 + 4 * i, 2:12] = 1
+        mask = sitk.GetImageFromArray(arr)
+        mask.CopyInformation(ct.cube_hu)
+        vois.append(create_voi(name=name, voi_type=voi_type, mask=mask, ct_image=ct))
+    cst = StructureSet(vois=vois, ct_image=ct)
+    out = _export(tmp_path, ct, cst)
+    imported = DicomImporter(out).load_cst(ct)
+    assert {v.name: v.voi_type for v in imported.vois} == {
+        "Body": "EXTERNAL",
+        "Odd": "TARGET",
+        "Target_x": "OAR",
+        "Ring": "HELPER",
+    }
+
+
+@pytest.mark.parametrize("legacy_type", ["ORGAN", "AVOIDANCE", "OAR"])
+def test_body_marked_as_organ_imports_as_external(dicom_patient, tmp_path, legacy_type):
+    from pyRadPlan.cst import StructureSet, create_voi
+
+    ct, _ = dicom_patient
+    vois = []
+    for i, name in enumerate(["Body", "Lung"]):
+        arr = np.zeros(ct.cube_hu.GetSize()[::-1], dtype=np.uint8)
+        arr[2:8, 2 + 4 * i : 6 + 4 * i, 2:12] = 1
+        mask = sitk.GetImageFromArray(arr)
+        mask.CopyInformation(ct.cube_hu)
+        vois.append(create_voi(name=name, voi_type="OAR", mask=mask, ct_image=ct))
+    cst = StructureSet(vois=vois, ct_image=ct)
+    out = _export(
+        tmp_path, ct, cst, roi_interpreted_types={"Body": legacy_type, "Lung": legacy_type}
+    )
+    imported = DicomImporter(out).load_cst(ct)
+    assert {v.name: v.voi_type for v in imported.vois} == {"Body": "EXTERNAL", "Lung": "OAR"}
+
+
+def test_bundled_rtstruct_voi_types(dicom_dir):
+    cst = DicomImporter(dicom_dir).load_cst()
+    assert {v.name: v.voi_type for v in cst.vois} == {
+        "Body": "EXTERNAL",
+        "Core": "OAR",
+        "Target": "TARGET",
+    }
 
 
 # --------------------------------------------------------------------------

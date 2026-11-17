@@ -1,6 +1,7 @@
 """Export a pyRadPlan StructureSet as a DICOM RTSTRUCT file."""
 
 import os
+from typing import Optional
 
 import numpy as np
 import contourpy
@@ -10,6 +11,7 @@ from pydicom.sequence import Sequence
 from pydicom.uid import generate_uid
 
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.io._helpers import RT_ROI_INTERPRETED_TYPES, roi_interpreted_type
 
 from ._export_common import (
     CT_IMAGE_STORAGE,
@@ -18,6 +20,26 @@ from ._export_common import (
     ExportContext,
     populate_common,
 )
+
+
+def validate_roi_interpreted_types(mapping: Optional[dict[str, str]]) -> dict[str, str]:
+    """Check an ROI name to RT ROI Interpreted Type mapping against the Defined Terms.
+
+    Raises
+    ------
+    ValueError
+        If a value is not a Defined Term of RT ROI Interpreted Type (3006,00A4).
+    """
+    result = {}
+    for roi_name, value in (mapping or {}).items():
+        term = str(value).strip().upper()
+        if term not in RT_ROI_INTERPRETED_TYPES:
+            raise ValueError(
+                f"Unknown RT ROI Interpreted Type {value!r} for ROI {roi_name!r}; "
+                f"expected one of {sorted(RT_ROI_INTERPRETED_TYPES)}."
+            )
+        result[str(roi_name)] = term
+    return result
 
 
 def _slice_contours(mask_slice: np.ndarray) -> list:
@@ -88,7 +110,13 @@ def _referenced_frame_of_reference(ctx: ExportContext, ct_info: dict) -> Sequenc
     return Sequence([ref_for])
 
 
-def export_cst(cst: StructureSet, directory: str, ctx: ExportContext, ct_info: dict) -> str:
+def export_cst(
+    cst: StructureSet,
+    directory: str,
+    ctx: ExportContext,
+    ct_info: dict,
+    roi_interpreted_types: Optional[dict[str, str]] = None,
+) -> str:
     """
     Write a StructureSet as a DICOM RTSTRUCT file.
 
@@ -102,12 +130,16 @@ def export_cst(cst: StructureSet, directory: str, ctx: ExportContext, ct_info: d
         Shared identifiers.
     ct_info : dict
         The return value of :func:`export_ct`, used for series referencing.
+    roi_interpreted_types : dict, optional
+        Maps ROI names to a Defined Term of RT ROI Interpreted Type, overriding the
+        type derived from the VOI type and name.
 
     Returns
     -------
     str
         The path of the written RTSTRUCT file.
     """
+    overrides = validate_roi_interpreted_types(roi_interpreted_types)
     ct_image = cst.ct_image.cube_hu
 
     ds = Dataset()
@@ -150,7 +182,9 @@ def export_cst(cst: StructureSet, directory: str, ctx: ExportContext, ct_info: d
         obs = Dataset()
         obs.ObservationNumber = i
         obs.ReferencedROINumber = i
-        obs.RTROIInterpretedType = "PTV" if voi.voi_type == "TARGET" else "ORGAN"
+        obs.RTROIInterpretedType = overrides.get(voi.name) or roi_interpreted_type(
+            voi.name, voi.voi_type
+        )
         obs.ROIInterpreter = ""
         obs_seq.append(obs)
 

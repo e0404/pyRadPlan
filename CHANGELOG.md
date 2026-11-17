@@ -12,10 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CT.dicom_info`: a new `DicomInfo` model (`pyRadPlan.ct`) holding patient, study, frame of reference and source series metadata. It replaces matRad's `dicomInfo` and `dicomMeta` structs, which were dropped on import, is filled by the DICOM and matRad importers and written back to `.mat` files as `dicomInfo`
 - DICOM export keeps the patient, `StudyInstanceUID` and `FrameOfReferenceUID` of the source CT (series and SOP instance UIDs are always new) and accepts `DicomExporter(path, metadata=..., anonymize=True)` to override metadata or anonymize consistently. `save_data` forwards such options via `exporter_options`
 - `dicom-validator` in the `dev` extra; the export tests validate exported CT, RTSTRUCT, RTDOSE and SEG files against the DICOM standard (skipped when the standard cannot be downloaded)
+- DICOM export: `DicomExporter(path, overwrite=False, roi_interpreted_types=None)`. Exporting into a directory that already contains DICOM files raises `FileExistsError` unless `overwrite=True`, which deletes exactly those DICOM files (top level only) before writing, so no stale slices remain. `roi_interpreted_types` maps ROI names to a Defined Term of RT ROI Interpreted Type. `pyRadPlan.io.dicom.find_dicom_files` lists the DICOM files of a directory
+- GUI: saving a structure set as DICOM asks before replacing DICOM files that already exist in the chosen folder
 
 ### Changed
 
 - DICOM export writes the required Type 1 and Type 2 attributes of the CT, RTSTRUCT, RTDOSE and SEG IODs (character set, equipment, series and instance dates, patient position, structure set date, dimension organization of SEG) and warns that only the first phase of a 4D CT is exported
+- DICOM RTSTRUCT export writes RT ROI Interpreted Type from the VOI type and name (`EXTERNAL`, `GTV`/`CTV`/`PTV`, `ORGAN`/`AVOIDANCE`, `CONTROL`) instead of only `PTV` and `ORGAN`. DICOM import maps it back to the VOI type and falls back to the name heuristic when it is missing or has no counterpart. A ROI with a body-like name (e.g. `Body`, `Skin`) typed `ORGAN`, `AVOIDANCE` or `OAR`, as matRad and earlier pyRadPlan versions export it, stays `EXTERNAL`
+- `save_data(format="dcm")` without `file_name` raises a `ValueError` instead of writing into the current working directory
 - numpy 2.4 and 2.5 are supported
 - All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
 - Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors

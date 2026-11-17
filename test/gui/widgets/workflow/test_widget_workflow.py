@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
@@ -1097,3 +1099,39 @@ def test_recalculate_keeps_the_scenarios_of_every_quantity(qapp, monkeypatch):
     # Not only those the objectives evaluate: the viewer shows a proton plan's RBE dose first
     for key in ("physical_dose_scenario", "rbe_x_dose_scenario", "let_scenario"):
         assert ws.result[key] == [dose, dose]
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No"])
+def test_save_cst_dicom_asks_before_replacing_dicom_files(qapp, tmp_path, monkeypatch, answer):
+    from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+    from pyRadPlan.io import load_patient
+
+    ct, cst = load_patient(Path(__file__).parents[3] / "data" / "dicom")
+    ws = WorkspaceManager()
+    ws.set_many(ct=ct, cst=cst)
+    w = WorkflowWidget(ws)
+    (tmp_path / "old.dcm").write_bytes(b"stale")
+    questions = []
+
+    def question(*args):
+        questions.append(args[2])
+        return getattr(QMessageBox.StandardButton, answer)
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("DICOM RTSTRUCT (folder)", True))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
+
+    w._on_save_cst()
+
+    assert len(questions) == 1 and "1 DICOM file" in questions[0]
+    assert (tmp_path / "RTSTRUCT.dcm").exists() == (answer == "Yes")
+    assert (tmp_path / "old.dcm").exists() == (answer == "No")
+
+    questions.clear()
+    for f in tmp_path.glob("*.dcm"):
+        f.unlink()
+    w._on_save_cst()
+    assert not questions
+    assert (tmp_path / "RTSTRUCT.dcm").exists()
