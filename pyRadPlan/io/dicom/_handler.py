@@ -14,6 +14,10 @@ class DicomHandler(DicomImporter, DicomExporter):
 
     name = "DICOM Handler"
 
-    def __init__(self, path, structure_format: str = "rtstruct"):
+    def __init__(
+        self, path, structure_format: str = "rtstruct", metadata=None, anonymize: bool = False
+    ):
         DicomImporter.__init__(self, path)
-        DicomExporter.__init__(self, path, structure_format=structure_format)
+        DicomExporter.__init__(
+            self, path, structure_format=structure_format, metadata=metadata, anonymize=anonymize
+        )

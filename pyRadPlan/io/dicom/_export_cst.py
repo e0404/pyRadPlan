@@ -15,7 +15,7 @@ from ._export_common import (
     CT_IMAGE_STORAGE,
     DETACHED_STUDY_MANAGEMENT,
     RT_STRUCT_STORAGE,
-    UIDContext,
+    ExportContext,
     populate_common,
 )
 
@@ -53,7 +53,7 @@ def _voi_contour_sequence(voi, ct_image) -> Sequence:
     return contours
 
 
-def _referenced_frame_of_reference(ctx: UIDContext, ct_info: dict) -> Sequence:
+def _referenced_frame_of_reference(ctx: ExportContext, ct_info: dict) -> Sequence:
     """Build the ReferencedFrameOfReferenceSequence linking the RTSTRUCT to the CT.
 
     When ``ct_info`` carries the CT series and per-slice SOP instance UIDs (from
@@ -88,7 +88,7 @@ def _referenced_frame_of_reference(ctx: UIDContext, ct_info: dict) -> Sequence:
     return Sequence([ref_for])
 
 
-def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict) -> str:
+def export_cst(cst: StructureSet, directory: str, ctx: ExportContext, ct_info: dict) -> str:
     """
     Write a StructureSet as a DICOM RTSTRUCT file.
 
@@ -98,7 +98,7 @@ def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict
         The StructureSet to export.
     directory : str
         Output directory.
-    ctx : UIDContext
+    ctx : ExportContext
         Shared identifiers.
     ct_info : dict
         The return value of :func:`export_ct`, used for series referencing.
@@ -111,7 +111,19 @@ def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict
     ct_image = cst.ct_image.cube_hu
 
     ds = Dataset()
-    populate_common(ds, ctx, RT_STRUCT_STORAGE, generate_uid(), "RTSTRUCT", 3)
+    populate_common(
+        ds,
+        ctx,
+        RT_STRUCT_STORAGE,
+        generate_uid(),
+        "RTSTRUCT",
+        3,
+        "pyRadPlan structure set - research use only",
+    )
+    ds.OperatorsName = ""
+    ds.InstanceNumber = 1
+    ds.StructureSetDate = ctx.export_date
+    ds.StructureSetTime = ctx.export_time
     ds.StructureSetLabel = "pyRadPlan"
     ds.StructureSetName = "pyRadPlan"
 

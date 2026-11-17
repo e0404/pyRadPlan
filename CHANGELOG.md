@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CT.dicom_info`: a new `DicomInfo` model (`pyRadPlan.ct`) holding patient, study, frame of reference and source series metadata. It replaces matRad's `dicomInfo` and `dicomMeta` structs, which were dropped on import, is filled by the DICOM and matRad importers and written back to `.mat` files as `dicomInfo`
+- DICOM export keeps the patient, `StudyInstanceUID` and `FrameOfReferenceUID` of the source CT (series and SOP instance UIDs are always new) and accepts `DicomExporter(path, metadata=..., anonymize=True)` to override metadata or anonymize consistently. `save_data` forwards such options via `exporter_options`
+- `dicom-validator` in the `dev` extra; the export tests validate exported CT, RTSTRUCT, RTDOSE and SEG files against the DICOM standard (skipped when the standard cannot be downloaded)
+
 ### Changed
 
+- DICOM export writes the required Type 1 and Type 2 attributes of the CT, RTSTRUCT, RTDOSE and SEG IODs (character set, equipment, series and instance dates, patient position, structure set date, dimension organization of SEG) and warns that only the first phase of a 4D CT is exported
 - numpy 2.4 and 2.5 are supported
 - All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
 - Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors

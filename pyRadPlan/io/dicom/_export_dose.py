@@ -7,10 +7,11 @@ import SimpleITK as sitk
 from pydicom.dataset import Dataset
 from pydicom.tag import Tag
 from pydicom.uid import generate_uid
+from pydicom.valuerep import format_number_as_ds
 
 from ._export_common import (
     RT_DOSE_STORAGE,
-    UIDContext,
+    ExportContext,
     populate_common,
     direction_to_orientation,
 )
@@ -18,7 +19,7 @@ from ._export_common import (
 _UINT32_MAX = 2**32 - 1
 
 
-def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
+def export_dose(dose: sitk.Image, directory: str, ctx: ExportContext) -> str:
     """
     Write a dose distribution as a multi-frame DICOM RTDOSE file.
 
@@ -28,7 +29,7 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
         The dose distribution (in Gy).
     directory : str
         Output directory.
-    ctx : UIDContext
+    ctx : ExportContext
         Shared identifiers.
 
     Returns
@@ -44,7 +45,8 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
 
     max_value = float(arr.max()) if arr.size else 0.0
     if max_value > 0:
-        scaling = max_value / _UINT32_MAX
+        # DoseGridScaling is a DS (16 characters at most), so quantize it before use.
+        scaling = float(format_number_as_ds(max_value / _UINT32_MAX))
         # Divide in float64; clip guards against float rounding overflowing uint32.
         pixels = np.clip(np.round(arr / scaling), 0, _UINT32_MAX).astype("<u4")
     else:
@@ -52,7 +54,10 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
         pixels = np.zeros_like(arr, dtype="<u4")
 
     ds = Dataset()
-    populate_common(ds, ctx, RT_DOSE_STORAGE, generate_uid(), "RTDOSE", 2)
+    populate_common(
+        ds, ctx, RT_DOSE_STORAGE, generate_uid(), "RTDOSE", 2, "pyRadPlan dose - research use only"
+    )
+    ds.OperatorsName = ""
 
     ds.InstanceNumber = 1
     ds.ImagePositionPatient = [float(p) for p in position]

@@ -1605,13 +1605,8 @@ class WorkflowWidget(WorkspaceWidget):
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            if structure_format == "seg":
-                # save_data has no structure_format hook; use the exporter directly.
-                from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
-
-                DicomExporter(target, structure_format="seg").save(cst=cst)
-                return target
-            return save_data(file_name=target, format=fmt, cst=cst)
+            options = {"structure_format": structure_format} if structure_format else None
+            return save_data(file_name=target, format=fmt, cst=cst, exporter_options=options)
 
         self._run_save(_save, "Saving CST…", "Save CST")
 

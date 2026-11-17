@@ -1,6 +1,7 @@
 """Export a pyRadPlan CT as a DICOM CT image series."""
 
 import os
+import warnings
 
 import numpy as np
 import SimpleITK as sitk
@@ -11,13 +12,13 @@ from pyRadPlan.ct import CT
 
 from ._export_common import (
     CT_IMAGE_STORAGE,
-    UIDContext,
+    ExportContext,
     populate_common,
     direction_to_orientation,
 )
 
 
-def export_ct(ct: CT, directory: str, ctx: UIDContext) -> dict:
+def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
     """
     Write a CT as a DICOM series into ``directory``.
 
@@ -27,8 +28,8 @@ def export_ct(ct: CT, directory: str, ctx: UIDContext) -> dict:
         The CT to export.
     directory : str
         Output directory.
-    ctx : UIDContext
-        Shared identifiers (study, frame of reference, patient).
+    ctx : ExportContext
+        Resolved export context (study, frame of reference, patient).
 
     Returns
     -------
@@ -38,6 +39,9 @@ def export_ct(ct: CT, directory: str, ctx: UIDContext) -> dict:
     """
     image = ct.cube_hu
     if image.GetDimension() == 4:
+        warnings.warn(
+            "DICOM export of a 4D CT writes only the first phase.", UserWarning, stacklevel=2
+        )
         image = image[:, :, :, 0]
 
     arr = sitk.GetArrayFromImage(image)  # (z, y, x)
@@ -54,10 +58,25 @@ def export_ct(ct: CT, directory: str, ctx: UIDContext) -> dict:
         position = image.TransformIndexToPhysicalPoint((0, 0, int(z)))
 
         ds = Dataset()
-        sop_uid = populate_common(ds, ctx, CT_IMAGE_STORAGE, series_uid, "CT", 1)
+        sop_uid = populate_common(
+            ds,
+            ctx,
+            CT_IMAGE_STORAGE,
+            series_uid,
+            "CT",
+            1,
+            "pyRadPlan CT export - research use only",
+        )
         sop_instance_uids.append(sop_uid)
 
+        ds.ContentDate = ctx.export_date
+        ds.ContentTime = ctx.export_time
+        ds.PatientPosition = ctx.patient_position
+        ds.KVP = ctx.kvp
+        ds.ImageType = ["DERIVED", "SECONDARY", "AXIAL"]
+        ds.AcquisitionNumber = 1
         ds.InstanceNumber = z + 1
+        ds.SliceLocation = float(position[2])
         ds.ImagePositionPatient = [float(p) for p in position]
         ds.ImageOrientationPatient = [float(o) for o in orientation]
         ds.PixelSpacing = [float(spacing[1]), float(spacing[0])]  # row (y), column (x)

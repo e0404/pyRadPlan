@@ -2,7 +2,7 @@
 
 import os
 import logging
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 import SimpleITK as sitk
 
@@ -10,7 +10,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
 from ..base import BaseExporter
-from ._export_common import UIDContext
+from ._export_common import resolve_export_context
 from ._export_ct import export_ct
 from ._export_cst import export_cst
 from ._export_dose import export_dose
@@ -28,6 +28,12 @@ class DicomExporter(BaseExporter):
         Output directory.
     structure_format : str, optional
         How to export a StructureSet: ``"rtstruct"`` (default) or ``"seg"``.
+    metadata : DicomInfo or dict or pydicom.Dataset, optional
+        Explicit DICOM metadata. Attributes set here override those of the
+        CT's ``dicom_info``, which in turn override generated defaults.
+    anonymize : bool, default False
+        Replace patient identifiers and generate new study and frame of
+        reference UIDs, consistently over all exported objects.
     """
 
     format: ClassVar[str] = "dcm"
@@ -38,9 +44,15 @@ class DicomExporter(BaseExporter):
     #: Default used when the exporter is reached via the combined handler (whose
     #: cooperative __init__ chain does not pass through DicomExporter.__init__).
     structure_format: str = "rtstruct"
+    metadata: Any = None
+    anonymize: bool = False
 
-    def __init__(self, path, structure_format: str = "rtstruct"):
+    def __init__(
+        self, path, structure_format: str = "rtstruct", metadata: Any = None, anonymize=False
+    ):
         super().__init__(path)
+        self.metadata = metadata
+        self.anonymize = bool(anonymize)
         if structure_format not in ("rtstruct", "seg"):
             raise ValueError("structure_format must be 'rtstruct' or 'seg'.")
         self.structure_format = structure_format
@@ -62,7 +74,7 @@ class DicomExporter(BaseExporter):
         directory = self.path
         os.makedirs(directory, exist_ok=True)
 
-        ctx = UIDContext()
+        ctx = resolve_export_context(ct, cst, self.metadata, self.anonymize)
 
         # A CT (or the cst's reference CT) anchors the frame of reference.
         if ct is None and cst is not None:
@@ -74,7 +86,7 @@ class DicomExporter(BaseExporter):
 
         if cst is not None:
             if self.structure_format == "seg":
-                export_seg(cst, directory, ctx)
+                export_seg(cst, directory, ctx, ct_info)
             else:
                 export_cst(cst, directory, ctx, ct_info)
 

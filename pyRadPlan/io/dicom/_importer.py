@@ -215,7 +215,7 @@ class DicomImporter(BaseImporter):
             files = match["files"]
         else:
             files = groups["CT"]
-        self._ct = import_ct(directory, files, reporter=self)
+        self._ct = import_ct(directory, files, reporter=self, headers=self._headers)
         return self._ct
 
     def load_cst(

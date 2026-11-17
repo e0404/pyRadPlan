@@ -225,6 +225,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     ct: Optional[CT] = None,
     cst: Optional[StructureSet] = None,
     dose: Optional[sitk.Image] = None,
+    exporter_options: Optional[dict] = None,
     **extra,
 ) -> Union[str, list[str]]:
     """
@@ -247,6 +248,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         Convenience keyword arguments for the most common objects.
     dose : sitk.Image, optional
         A dose distribution to save.
+    exporter_options : dict, optional
+        Keyword arguments forwarded to the exporter's constructor, e.g.
+        ``{"structure_format": "seg", "anonymize": True}`` for DICOM.
     **extra
         Further named objects passed through to the exporter.
 
@@ -260,11 +264,12 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
 
     ext = default_extension(fmt)
     exporter_cls = get_exporter(fmt)
+    options = dict(exporter_options or {})
 
     # DICOM is directory-based and always writes the full multi-file set together.
     if not is_container_format(fmt):
         target = os.fspath(file_name) if file_name is not None else os.getcwd()
-        exporter_cls(target).save(**objects)
+        exporter_cls(target, **options).save(**objects)
         return target
 
     # Container formats (e.g. .mat): one combined file when a name is given,
@@ -273,12 +278,12 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         target = os.fspath(file_name)
         if not os.path.splitext(target)[1]:
             target += ext
-        exporter_cls(target).save(**objects)
+        exporter_cls(target, **options).save(**objects)
         return target
 
     written = []
     for key, value in objects.items():
         target = f"{key}{ext}"
-        exporter_cls(target).save(**{key: value})
+        exporter_cls(target, **options).save(**{key: value})
         written.append(target)
     return written
