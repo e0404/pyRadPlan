@@ -2956,6 +2956,39 @@ def test_discard_restores_the_scenario_configuration(qapp):
     assert not widget._is_field_modified(widget._btn_scenario_config)
 
 
+def test_modified_border_leaves_the_field_rendering_untouched(qapp):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QSpinBox
+
+    spin = QSpinBox()
+    spin.resize(80, 24)
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert all(type(c).__name__ != "_ModifiedFrame" for c in spin.children())
+
+    PlanWidget._set_field_modified(spin, True)
+    assert PlanWidget._is_field_modified(spin)
+    assert spin.styleSheet() == ""
+
+    # The frame follows the field when it is resized.
+    spin.resize(120, 30)
+    marked = spin.grab().toImage()
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+    assert frame.geometry() == spin.rect()
+    orange = QColor("#e67e22")
+    assert marked.pixelColor(0, marked.height() // 2) == orange
+    assert marked.pixelColor(marked.width() // 2, 0) == orange
+
+    # Inside the outline the field, including its arrows, is drawn as without the mark.
+    inner = QRect(3, 3, 114, 24)
+    marked_inner = spin.grab(inner).toImage()
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert spin.grab(inner).toImage() == marked_inner
+    assert spin.grab().toImage().pixelColor(0, marked.height() // 2) != orange
+
+
 def test_scenario_config_button_is_advanced(qapp):
     widget, _ = _make_widget()
     widget.set_ui_mode(UIMode.EDUCATIONAL)
