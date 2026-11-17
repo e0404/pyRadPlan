@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Field-based photon dose calculation mirrored jaw and MLC openings left-right: `FieldShapeAsBLD` flipped the device x axis on the assumption that IEC X points to the patient's right. Per IEC 61217 (and DICOM PS3.3) the beam limiting device x axis at collimator angle 0 is the beam's eye view x axis, the patient's left at gantry and couch angle 0 for a head-first supine patient. Doses of fields with x-asymmetric apertures change accordingly
 - DICOM RTDOSE export of flipped and oblique dose grids: the Grid Frame Offset Vector is projected on the slice normal, and positions, orientation and spacing are written as valid Decimal Strings
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
 - Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode

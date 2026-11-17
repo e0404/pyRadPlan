@@ -17,12 +17,9 @@ devices: jaws as ``ASYMX``/``ASYMY`` and multileaf collimators as ``MLCX``/``MLC
 Position Boundaries and the Leaf/Jaw Positions in the Beam Limiting Device Position Sequence.
 Leakage is not represented.
 
-``FieldShapeAsBLD.mask`` mirrors the x axis of the device (``np.fliplr``), so the dose engine
-places an opening at device position ``x`` at beam's eye view ``-x``, whereas the DICOM
-standard has the x axis of the beam limiting device system equal to the beam's eye view x axis
-(see ``_BLD_X_MIRRORED``). The positions are written such that the DICOM aperture is where the
-dose engine puts the dose: x positions of jaws and leaves are negated (leaf banks swapped), and
-for ``MLCY`` the leaf boundaries (along x) are negated and the leaves put in ascending order.
+Device positions of ``FieldShapeAsBLD`` are in the IEC BEAM LIMITING DEVICE system, which at
+collimator angle 0 is the beam's eye view (device x = BEV x, device y = BEV z), so they are
+written unchanged; the tests check the exported aperture against the calculated dose.
 A :class:`~pyRadPlan.stf.FieldShapeAsMask` is exported as the jaws of its bounding box (its
 mask is given in the beam's eye view directly) and is not deliverable.
 
@@ -65,11 +62,6 @@ from ._export_plan import (
     start_plan,
 )
 
-#: ``FieldShapeAsBLD.mask`` applies ``np.fliplr`` to the transmission mask of the device, i.e.
-#: pyRadPlan's dose calculation maps device x to beam's eye view -x, while the DICOM IEC BEAM
-#: LIMITING DEVICE x axis is the beam's eye view x axis (checked in the tests against the dose).
-_BLD_X_MIRRORED = True
-
 
 def is_photon_stf(stf) -> bool:
     """Whether all beams of the steering information use photons."""
@@ -80,25 +72,12 @@ def _is_field_beam(beam) -> bool:
     return any(isinstance(b, FieldShape) for ray in beam.rays for b in ray.beamlets)
 
 
-def _x(value):
-    """Device x coordinate (or array) to beam's eye view x."""
-    return -value if _BLD_X_MIRRORED else value
-
-
-def _x_interval(low: float, high: float) -> tuple[float, float]:
-    """Interval ``[low, high]`` along the device x axis as an interval in beam's eye view x."""
-    return (_x(high), _x(low)) if _BLD_X_MIRRORED else (low, high)
-
-
-def _leaf_pairs(positions, mirrored: bool) -> np.ndarray:
+def _leaf_pairs(positions) -> np.ndarray:
     """Return the opening ``(start, end)`` of every leaf as ``(bank 1, bank 2)`` positions."""
     positions = np.asarray(positions, dtype=float).reshape(-1, 2)
     start, end = positions[:, 0], positions[:, 1]
     closed = end <= start
     middle = 0.5 * (start + end)
-    if mirrored:
-        start, end = -end, -start
-        middle = -middle
     first = np.where(closed, middle, start)
     second = np.where(closed, middle, end)
     return np.stack([first, second], axis=1)
@@ -185,7 +164,6 @@ def _field_devices(beam, scd: Optional[float]) -> tuple[list[tuple[Dataset, Data
         if isinstance(bld, Jaw):
             low, high = (float(p) for p in bld.positions)
             if bld.device_orientation == "X":
-                low, high = _x_interval(low, high)
                 add_jaw("ASYMX", low + dx, high + dx, distance)
             else:
                 add_jaw("ASYMY", low + dz, high + dz, distance)
@@ -216,16 +194,12 @@ def _mlc_items(mlc: MLC, distance: Optional[float], dx: float, dz: float):
     positions = np.asarray(mlc.leaf_positions, dtype=float)
     if mlc.device_orientation == "X":
         # leaves move along x, the boundaries lie along y
-        pairs = _leaf_pairs(positions, _BLD_X_MIRRORED)
-        pairs = pairs + dx
+        pairs = _leaf_pairs(positions) + dx
         boundaries = edges + dz
     else:
-        # leaves move along y, the boundaries lie along x: ascending in the mirrored axis
-        pairs = _leaf_pairs(positions, False) + dz
-        boundaries = _x(edges) + dx
-        if _BLD_X_MIRRORED:
-            boundaries = boundaries[::-1]
-            pairs = pairs[::-1]
+        # leaves move along y, the boundaries lie along x
+        pairs = _leaf_pairs(positions) + dz
+        boundaries = edges + dx
     return _device_item(mlc.device_type, distance, boundaries, pairs)
 
 

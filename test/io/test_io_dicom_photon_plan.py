@@ -186,9 +186,9 @@ def test_jaw_and_leaf_values(tmp_path):
         for p in beam.ControlPointSequence[0].BeamLimitingDevicePositionSequence
     }
 
-    # y is the beam's eye view z axis, x the (mirrored by pyRadPlan, see module) device axis
+    # device x is the beam's eye view x axis, device y the beam's eye view z axis
     np.testing.assert_allclose(positions["ASYMY"], [-20, 12])
-    np.testing.assert_allclose(positions["ASYMX"], [-30, 5])
+    np.testing.assert_allclose(positions["ASYMX"], [-5, 30])
     assert devices["ASYMX"].NumberOfLeafJawPairs == 1
 
     n = len(LEAF_POSITIONS)
@@ -199,11 +199,11 @@ def test_jaw_and_leaf_values(tmp_path):
         np.append(mlc.leaf_position_boundaries, mlc.leaf_position_boundaries[-1] + LEAF_WIDTH),
     )
     leaf = np.asarray(LEAF_POSITIONS, dtype=float)
-    np.testing.assert_allclose(positions["MLCX"][:n], -leaf[:, 1])
-    np.testing.assert_allclose(positions["MLCX"][n:], -leaf[:, 0])
+    np.testing.assert_allclose(positions["MLCX"][:n], leaf[:, 0])
+    np.testing.assert_allclose(positions["MLCX"][n:], leaf[:, 1])
 
 
-def test_mlcy_boundaries_ascending_and_reordered(tmp_path):
+def test_mlcy_boundaries_and_positions(tmp_path):
     mlc = _mlc("Y")
     pln, ct, cst, stf = _field_plan([0], [0], [mlc, _jaw("X", [-30, 30])])
     out = _export(tmp_path, ct=ct, cst=cst, stf=stf, pln=pln)
@@ -222,9 +222,8 @@ def test_mlcy_boundaries_ascending_and_reordered(tmp_path):
     )
     n = len(LEAF_POSITIONS)
     leaf = np.asarray(LEAF_POSITIONS, dtype=float)
-    # leaf order reversed, y positions not mirrored
-    np.testing.assert_allclose(positions[:n], leaf[::-1, 0])
-    np.testing.assert_allclose(positions[n:], leaf[::-1, 1])
+    np.testing.assert_allclose(positions[:n], leaf[:, 0])
+    np.testing.assert_allclose(positions[n:], leaf[:, 1])
 
 
 def test_closed_leaf_pair_is_degenerate(tmp_path):
