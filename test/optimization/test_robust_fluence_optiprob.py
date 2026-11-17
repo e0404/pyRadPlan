@@ -464,3 +464,60 @@ def test_reinitializing_a_problem_with_other_scenarios_resets_the_gradient_cache
     prob._initialize()
     gradient = prob._objective_gradient(x)
     assert gradient.shape == (prob._dij.total_num_of_bixels,)
+
+
+def _distinct_masks(prob):
+    masks = {}
+    for term in prob._terms:
+        for item_masks in term.scenario_masks:
+            for mask in item_masks:
+                masks[id(mask)] = mask
+    return list(masks.values())
+
+
+def test_voxel_indices_are_converted_once_per_solve(proton_case, monkeypatch):
+    pln, ct, cst, stf, dij = proton_case
+    prob = _problem(proton_case, _dij_with(dij, (1.0,)))
+    x = _fluence(prob)
+    assert prob._voxel_indices == {}
+
+    calls = []
+    original = xp_utils.from_numpy
+    monkeypatch.setattr(
+        xp_utils,
+        "from_numpy",
+        lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs),
+    )
+    for _ in range(3):
+        prob._objective_function(x)
+        prob._objective_gradient(x)
+
+    masks = _distinct_masks(prob)
+    assert len(masks) > 0
+    assert len(calls) == len(masks)
+    for mask in masks:
+        kept, indices = prob._voxel_indices[id(mask)]
+        assert kept is mask
+        np.testing.assert_array_equal(xp_utils.to_numpy(indices), np.flatnonzero(mask))
+
+    prob._initialize()
+    assert prob._voxel_indices == {}
+
+
+def test_term_values_keep_the_voxel_order_of_the_mask(proton_case):
+    pln, ct, cst, stf, dij = proton_case
+    prob = _problem(proton_case, _dij_with(dij, (1.0,)))
+    xp = prob._array_backend
+    term = prob._terms[0]
+    item = term.items[0]
+    num_voxels = prob._dij.dose_grid.num_voxels
+    ramp = xp_utils.from_numpy(xp, np.arange(num_voxels, dtype=np.float64))
+    container = np.empty((1,), dtype=object)
+    container[0] = ramp
+    q_vectors = {item.quantity: container}
+
+    indices, values = prob._term_values(xp, q_vectors, term)
+
+    expected = np.flatnonzero(term.scenario_masks[0][0])
+    np.testing.assert_array_equal(xp_utils.to_numpy(indices[0][0]), expected)
+    np.testing.assert_array_equal(xp_utils.to_numpy(values[0])[0], expected)

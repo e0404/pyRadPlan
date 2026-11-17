@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - numpy 2.4 and 2.5 are supported
 - All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
 - Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
+- Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
 
 ### Fixed
 
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
 - GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
 - Ray tracers: the lateral cut-off was applied on the ray-matrix plane behind the patient instead of at the isocenter plane, and did not account for the tilt of off-axis rays, so the traced region was narrower than the geometric cut-off of the dose engines (about 11 % for photons in a 240 mm phantom, ~1 % for ions). Voxels in between got no radiological depth and no dose. Every voxel inside the geometric cut-off now gets a depth. Photon dose influence matrices gain entries at the edge of the cut-off, existing entries are unchanged (TG119, two beams, 50 mm cut-off, dij sampling off: +0.7 % non-zeros, dose up to +0.26 % of the maximum). With dij sampling on (the default), the additional voxels shift the random sampling, so photon results with a fixed `random_seed` differ from 0.8.0 within the sampling noise (up to ±1.6 % of the maximum dose in the same case). Photon ray tracing traces about 30 % more rays and takes correspondingly longer. Proton dose influence matrices on TG119 are bit-identical. matRad applies the cut-off unscaled on the ray-matrix plane, so photon dose influence matrices now have slightly more entries than matRad's
+- Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
 - `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
 
 ## [0.8.0] - 2026-11-05

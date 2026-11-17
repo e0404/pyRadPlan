@@ -295,7 +295,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         Returns
         -------
         NDArray
-            Derivative of the quantity w.r.t. the fluence per scenario slot.
+            Derivative of the quantity w.r.t. the fluence per scenario slot. The container is
+            reused and overwritten by the next call.
         """
 
         per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
@@ -307,9 +308,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         if not xp.isdtype(fluence.dtype, self._dtype):
             fluence = xp.asarray(fluence, dtype=self._dtype)
 
-        if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
-            self._w_grad_cache = xp.asarray(fluence, copy=True)
-            self._compute_chain_derivative_cache(d_quantity)
+        self._w_grad_cache = fluence
+        self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache
 
