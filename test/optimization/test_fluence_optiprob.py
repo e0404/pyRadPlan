@@ -172,9 +172,7 @@ def test_supported_properties_still_reach_the_solver():
 def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, monkeypatch):
     """The photon LQ effect a dij with alphax / betax allows is not evaluated for a constant RBE."""
     pln, ct, cst, stf, dij = small_proton_case
-    num_voxels = dij.dose_grid.num_voxels
-    dij.alphax = np.full((num_voxels, 1), 0.1)
-    dij.betax = np.full((num_voxels, 1), 0.05)
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
     dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
 
@@ -198,6 +196,24 @@ def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, m
     assert len(calls) == len(dose.scenarios)
 
 
+@pytest.mark.parametrize("changed", [None, "alphax", "betax"])
+def test_dij_lq_params_must_match_the_structure_set(small_proton_case, changed):
+    pln, ct, cst, stf, dij = small_proton_case
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
+    prob = NonLinearFluencePlanningProblem(pln)
+
+    if changed is None:
+        prob.solve(ct, cst, stf, dij)
+        return
+
+    values = np.array(getattr(dij, changed))
+    values[0, 0] += 1
+    setattr(dij, changed, values)
+    with pytest.raises(ValueError, match=rf"{changed} \(1 voxels\)"):
+        prob.solve(ct, cst, stf, dij)
+
+
 @pytest.mark.parametrize("rbe_path", ["constant", "effect"])
 def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_path):
     """Without the bypass, each objective gets its own gradient row, also across quantities."""
@@ -205,9 +221,7 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     if rbe_path == "constant":
         dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     else:
-        num_voxels = dij.dose_grid.num_voxels
-        dij.alphax = np.full((num_voxels, 1), 0.1)
-        dij.betax = np.full((num_voxels, 1), 0.05)
+        dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
         alpha_dose = np.empty_like(dij.physical_dose)
         sqrt_beta_dose = np.empty_like(dij.physical_dose)
         for i, mat in enumerate(dij.physical_dose.flat):
