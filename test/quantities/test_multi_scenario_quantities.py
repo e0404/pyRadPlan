@@ -426,7 +426,6 @@ def test_per_slot_cotangents_fold_derived_slots_onto_their_basis(derived_dij, mo
 
     # a slot without a cotangent is skipped, its basis slot still carries the derived one
     cotangents.flat[0] = None
-    dose._w_grad_cache = None
     deriv = dose.compute_chain_derivative(cotangents, fluence)
     assert np.allclose(
         np.asarray(deriv.flat[0]), (0.25 * g[2]) @ matrices[0], rtol=1e-4, atol=1e-5

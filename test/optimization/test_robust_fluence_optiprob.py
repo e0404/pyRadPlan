@@ -285,8 +285,6 @@ def test_jacobian_has_one_row_per_term(mixed_problem):
 
     prob.bypass_objective_jacobian = False
     prob._grad_cache = prob._grad_cache_intermediate = None
-    for q in prob._quantities:
-        q._w_grad_cache = None
     jacobian = xp_utils.to_numpy(prob._objective_jacobian(x))
     values = xp_utils.to_numpy(prob._objective_functions(x))
 
