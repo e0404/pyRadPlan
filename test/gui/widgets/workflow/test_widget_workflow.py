@@ -1175,7 +1175,9 @@ def test_save_result_dicom_rtdose(qapp, tmp_path, monkeypatch, answer):
 
     monkeypatch.setattr(_save_result_dialog, "SaveResultDialog", _Dialog)
     monkeypatch.setattr(
-        QInputDialog, "getItem", lambda *a, **k: ("DICOM CT + RTDOSE (folder)", True)
+        QInputDialog,
+        "getItem",
+        lambda *a, **k: ("DICOM CT + RTDOSE (+ ion RTPLAN) (folder)", True),
     )
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
     monkeypatch.setattr(QMessageBox, "question", question)

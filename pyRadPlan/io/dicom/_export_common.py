@@ -73,12 +73,16 @@ class PlanReference:
     sop_class_uid : str
         SOP Class UID of the plan; RT Ion Plan Storage by default, use
         :data:`RT_PLAN_STORAGE` for photon plans.
+    skipped_beams : list of int, optional
+        0-based STF indices of beams that are not part of the exported plan (no spot with
+        positive weight); their per-beam doses are not exported.
     """
 
     sop_instance_uid: str
     fraction_group_number: int = 1
     beam_numbers: Optional[list[int]] = None
     sop_class_uid: str = RT_ION_PLAN_STORAGE
+    skipped_beams: list[int] = field(default_factory=list)
 
     def beam_number(self, beam_index: int) -> int:
         """DICOM Beam Number of the beam with the given 0-based STF index."""

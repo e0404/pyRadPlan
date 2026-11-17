@@ -1659,6 +1659,7 @@ class WorkflowWidget(WorkspaceWidget):
         selected = {key: self._quantity_to_image(result[key], self._ws.ct) for key in keys}
         selected = {key: image for key, image in selected.items() if image is not None}
         ct, pln, stf = self._ws.ct, self._ws.pln, self._ws.stf
+        weights = result.get("w")
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
@@ -1670,6 +1671,7 @@ class WorkflowWidget(WorkspaceWidget):
                 result=selected,
                 pln=pln,
                 stf=stf,
+                weights=weights,
                 exporter_options=options,
             )
 
@@ -1716,7 +1718,7 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         if "dcm" in _available_formats():
-            kinds = ["Image files", "DICOM CT + RTDOSE (folder)"]
+            kinds = ["Image files", "DICOM CT + RTDOSE (+ ion RTPLAN) (folder)"]
             kind, ok = QInputDialog.getItem(self, "Save Result", "Export as:", kinds, 0, False)
             if not ok:
                 return

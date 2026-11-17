@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: saving a structure set as DICOM asks before replacing DICOM files that already exist in the chosen folder
 - DICOM export of results: `save_data(..., format="dcm", result=result, pln=pln)` writes the dose quantities of a result as RTDOSE files (`physical_dose` as Dose Type `PHYSICAL`, `rbe_x_dose` as `EFFECTIVE`); other quantities and non-nominal scenarios are skipped with a warning. `per_beam_doses=True` adds one `BEAM` RTDOSE per beam. The Dose Summation Type follows `pln.dose_convention` (`FRACTION` for per-fraction, `PLAN` for total doses)
 - GUI: "Save Result…" can export the selected quantities as DICOM (CT + RTDOSE) into a folder
+- DICOM import of RT Ion Plans: `DicomImporter.list_plans()` and `load_plan()` return steering information, spot weights (`result["w"]`) and an `IonPlan` from the IEC 61217 geometry, and `load_data()` includes them. Proton, helium, carbon and oxygen plans, the patient positions HFS/HFP/FFS/FFP, range shifters and a meterset in particles (NP) or in MU with a `particles_per_mu` calibration are supported. Photon RT Plans are listed but raise `NotImplementedError` on load
+- DICOM export of ion plans as RT Ion Plan (`RTPLAN.dcm`, plan intent RESEARCH, unapproved) from `stf`, spot weights (`weights=` or `result["w"]`) and `pln`, for Head First Supine. Spot weights are written as numbers of particles per fraction (dosimeter unit NP). The RTDOSE files of the same export reference the plan, and the plan references the exported RTSTRUCT. New exporter option `export_plan` (default True); photon steering information skips the plan with a warning. The GUI's DICOM result export includes the plan
 
 ### Changed
 

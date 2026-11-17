@@ -23,6 +23,7 @@ class DicomHandler(DicomImporter, DicomExporter):
         overwrite: bool = False,
         roi_interpreted_types=None,
         per_beam_doses: bool = False,
+        export_plan: bool = True,
     ):
         DicomImporter.__init__(self, path)
         DicomExporter.__init__(
@@ -34,4 +35,5 @@ class DicomHandler(DicomImporter, DicomExporter):
             overwrite=overwrite,
             roi_interpreted_types=roi_interpreted_types,
             per_beam_doses=per_beam_doses,
+            export_plan=export_plan,
         )

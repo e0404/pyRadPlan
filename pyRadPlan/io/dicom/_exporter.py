@@ -2,18 +2,21 @@
 
 import os
 import logging
+import warnings
 from typing import Any, ClassVar, Optional
 
+import pydicom
 import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
 from ..base import BaseExporter
-from ._export_common import PlanReference, resolve_export_context
+from ._export_common import RT_STRUCT_STORAGE, PlanReference, resolve_export_context
 from ._export_ct import export_ct
 from ._export_cst import export_cst, validate_roi_interpreted_types
 from ._export_dose import export_dose, export_result
+from ._export_plan import export_ion_plan, is_ion_stf
 from ._export_seg import export_seg
 from ._helpers import find_dicom_files
 
@@ -48,6 +51,9 @@ class DicomExporter(BaseExporter):
         With a ``result`` that holds per-beam doses (``physical_dose_beam``, ...), also
         write one RTDOSE per beam as ``RTDOSE_<quantity>_beam<N>.dcm`` (Dose Summation
         Type ``BEAM``, 1-based beam numbers in STF beam order).
+    export_plan : bool, default True
+        With an ion ``stf`` and spot weights, also write the RT Ion Plan (``RTPLAN.dcm``)
+        before the doses, which then reference it.
 
     Notes
     -----
@@ -57,8 +63,17 @@ class DicomExporter(BaseExporter):
     warning, and for multi-scenario results only the nominal (unsuffixed) scenario is written.
     With ``pln`` the Dose Summation Type follows ``pln.dose_convention`` (``"per_fraction"``
     gives ``FRACTION``, ``"total"`` gives ``PLAN``); without it, ``PLAN`` is written. The
-    ``dose=`` image is written as ``RTDOSE.dcm`` (Dose Type ``PHYSICAL``). ``stf`` is
-    accepted for the RT plan export and currently unused.
+    ``dose=`` image is written as ``RTDOSE.dcm`` (Dose Type ``PHYSICAL``).
+
+    With an ion ``stf`` and spot weights (``weights=`` or ``result["w"]``), ``save`` writes
+    an RT Ion Plan ``RTPLAN.dcm`` (plan intent RESEARCH, unapproved) with one beam per STF
+    beam (Beam Number = STF index + 1), using the isocenter of each beam and
+    ``pln.num_of_fractions`` planned fractions (one, with a warning, without ``pln``). Weights
+    are per fraction and written as numbers of particles (Primary Dosimeter Unit ``NP``). The
+    RTDOSE files of the same export reference the plan, and the plan references the RTSTRUCT
+    written in the same call. Only Head First Supine is supported
+    (:class:`NotImplementedError` otherwise); photon steering information is skipped with a
+    warning. See :mod:`pyRadPlan.io.dicom._export_plan` for the geometry conventions.
     """
 
     format: ClassVar[str] = "dcm"
@@ -74,6 +89,7 @@ class DicomExporter(BaseExporter):
     overwrite: bool = False
     roi_interpreted_types: Optional[dict[str, str]] = None
     per_beam_doses: bool = False
+    export_plan: bool = True
     #: Plan referenced by the exported RTDOSE files; set by the RT plan export.
     _plan_ref: Optional[PlanReference] = None
 
@@ -86,8 +102,10 @@ class DicomExporter(BaseExporter):
         overwrite: bool = False,
         roi_interpreted_types: Optional[dict[str, str]] = None,
         per_beam_doses: bool = False,
+        export_plan: bool = True,
     ):
         super().__init__(path)
+        self.export_plan = bool(export_plan)
         self.per_beam_doses = bool(per_beam_doses)
         self.overwrite = bool(overwrite)
         self.roi_interpreted_types = validate_roi_interpreted_types(roi_interpreted_types)
@@ -106,6 +124,7 @@ class DicomExporter(BaseExporter):
         result: Optional[dict] = None,
         pln: Optional[Any] = None,
         stf: Optional[Any] = None,
+        weights: Optional[Any] = None,
         **extra,
     ) -> None:
         if ct is None and cst is None and dose is None and result is None:
@@ -114,6 +133,15 @@ class DicomExporter(BaseExporter):
         if extra:
             logger.warning("DICOM exporter ignores unsupported objects: %s", list(extra))
 
+        preset = self._plan_ref
+        try:
+            self._save(ct, cst, dose, result, pln, stf, weights)
+        finally:
+            self._plan_ref = preset
+
+    def _save(  # noqa: PLR0913 - mirrors save
+        self, ct, cst, dose, result, pln, stf, weights
+    ) -> None:
         directory = self.path
         ctx = resolve_export_context(ct, cst, self.metadata, self.anonymize)
 
@@ -132,6 +160,7 @@ class DicomExporter(BaseExporter):
             ct = cst.ct_image
 
         ct_info = {}
+        struct_ref = None
         if ct is not None:
             ct_info = export_ct(ct, directory, ctx)
 
@@ -139,11 +168,24 @@ class DicomExporter(BaseExporter):
             if self.structure_format == "seg":
                 export_seg(cst, directory, ctx, ct_info)
             else:
-                export_cst(cst, directory, ctx, ct_info, self.roi_interpreted_types)
+                struct_path = export_cst(cst, directory, ctx, ct_info, self.roi_interpreted_types)
+                struct_ref = (
+                    RT_STRUCT_STORAGE,
+                    str(
+                        pydicom.dcmread(
+                            struct_path, specific_tags=["SOPInstanceUID"]
+                        ).SOPInstanceUID
+                    ),
+                )
 
         summation = "PLAN"
         if pln is not None and getattr(pln, "dose_convention", "total") == "per_fraction":
             summation = "FRACTION"
+
+        if self.export_plan and stf is not None:
+            self._export_plan(stf, pln, weights, result, directory, ctx, struct_ref)
+            if self._plan_ref is not None and self._plan_ref.skipped_beams and result is not None:
+                result = _without_beams(result, self._plan_ref.skipped_beams)
 
         if dose is not None:
             export_dose(dose, directory, ctx, summation_type=summation, plan_ref=self._plan_ref)
@@ -159,3 +201,36 @@ class DicomExporter(BaseExporter):
             )
             if not written and ct is None and cst is None and dose is None:
                 raise ValueError("The result holds no dose quantity to export.")
+
+    def _export_plan(self, stf, pln, weights, result, directory, ctx, struct_ref) -> None:
+        from pyRadPlan.stf import validate_stf  # noqa: PLC0415
+
+        stf = validate_stf(stf)
+        if weights is None and result is not None:
+            weights = result.get("w")
+        if weights is None:
+            warnings.warn(
+                "No spot weights (weights= or result['w']) for the steering information; "
+                "skipping the plan export.",
+                stacklevel=4,
+            )
+            return
+        if not is_ion_stf(stf):
+            warnings.warn(
+                "The DICOM RT plan export supports ion steering information only; "
+                "skipping the plan export.",
+                stacklevel=4,
+            )
+            return
+        self._plan_ref = export_ion_plan(
+            stf, pln, weights, directory, ctx, structure_set_ref=struct_ref
+        )
+
+
+def _without_beams(result: dict, skipped: list) -> dict:
+    """Copy of the result with the per-beam entries of the skipped beams set to None."""
+    out = dict(result)
+    for key, value in result.items():
+        if key.endswith("_beam") and isinstance(value, (list, tuple)):
+            out[key] = [None if i in skipped else v for i, v in enumerate(value)]
+    return out
