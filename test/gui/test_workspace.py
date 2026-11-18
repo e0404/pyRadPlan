@@ -61,3 +61,18 @@ def test_refresh_emits_all_keys(qapp):
 
 def test_singleton(qapp):
     assert WorkspaceManager.instance() is WorkspaceManager.instance()
+
+
+def test_the_session_tracks_a_change_before_the_widgets_hear_of_it(qapp):
+    ws = WorkspaceManager()
+    session = ws.session
+    assert session.workspace is ws.store and session.profile == "native"
+    assert not session.auto_plan and session.solver_preference == ()
+    ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object())
+    flags = []
+    ws.workspace_changed.connect(lambda keys: flags.append(session.tracker.dij_stale))
+
+    ws.pln = object()
+
+    assert flags == [True]
+    assert ws.store.pln is ws.pln and ws.present() == ws.store.present()

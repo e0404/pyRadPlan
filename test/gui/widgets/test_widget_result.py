@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from PySide6.QtGui import QColor
 import SimpleITK as sitk
 
 from pyRadPlan.gui.widgets._result_widget import ViewingWidget
@@ -135,10 +136,43 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     selected_before = widget.vois_widget.selected_vois()
     widget.vois_widget.voi_replaced.emit(voi.name, new_voi)
 
-    assert ws.cst.vois[0] is new_voi
-    assert ws.cst.vois[0].voi_type == new_type
+    # The session recreates the VOI from the edited fields; the list holds the stored one.
+    stored = ws.cst.vois[0]
+    assert stored.voi_type == new_type and stored.name == voi.name
+    assert widget.vois_widget._voi_by_name[voi.name] is stored
     # The viewer must not rebuild (and reset the selection) from its own write
     assert widget.vois_widget.selected_vois() == selected_before
+
+
+def test_structure_edits_during_a_run(qapp, test_data_photons, monkeypatch):
+    """A colour pick applies at once; a metadata edit waits for the run to end."""
+    from pyRadPlan.app import Operation
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    ws = _make_workspace(ct, cst)
+    widget = ViewingWidget(ws)
+    ws.set_many(result={"physical_dose": object()})
+    session = ws.session
+    operation = Operation("calc", "Calculating", lambda: None, lambda value: None)
+    session.begin(operation)
+    voi = ws.cst.vois[0]
+    picked = QColor(1, 2, 3)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.result.vois_widget.QColorDialog.getColor", lambda *a: picked
+    )
+    changes = []
+    ws.workspace_changed.connect(changes.append)
+
+    widget.vois_widget._pick_color(voi.name)
+    new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
+    widget.vois_widget.voi_replaced.emit(voi.name, recreate_voi(voi, voi_type=new_type))
+
+    assert tuple(ws.cst.vois[0].color) == (1, 2, 3)
+    assert ws.cst.vois[0] is voi and changes == []
+    session.finish(operation, None)
+    assert ws.cst.vois[0].voi_type == new_type and changes == [["cst"]]
+    assert session.stages()["optimization"] == "stale"
 
 
 def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
@@ -726,6 +760,50 @@ def test_overlay_meta_covers_per_scenario_lists():
     assert labels["rbe_x_dose_scenario 0"] == "RBE-weighted Dose"
     assert units["rbe_x_dose_scenario 1"] == "Gy (RBE)"
     assert labels["physical_dose_beam 0"] == "Dose"
+
+
+def test_beam_axes_are_mapped_to_the_viewer_voxel_space():
+    """The shared LPS beam geometry, in the viewer's anisotropic (z, x, y) voxel space."""
+    from types import SimpleNamespace
+
+    from pyRadPlan.gui.widgets._result_widget import _viewer_beams
+
+    image = sitk.Image([4, 5, 6], sitk.sitkFloat32)
+    image.SetOrigin((10.0, 20.0, 30.0))
+    image.SetSpacing((2.0, 4.0, 5.0))
+    ct = SimpleNamespace(cube_hu=image)
+    stf_beam = {
+        "index": 0,
+        "gantry": 0.0,
+        "couch": 0.0,
+        "iso_center": [12.0, 28.0, 45.0],
+        "source_direction": [0.0, -1.0, 0.0],
+        "name": "#0",
+        "label": "Beam #0: gantry 0°, couch 0°",
+        "pending": False,
+    }
+    plan_beam = {
+        **stf_beam,
+        "index": 1,
+        "name": "#1",
+        "orbit_u": [0.0, -1.0, 0.0],
+        "orbit_w": [1.0, 0.0, 0.0],
+        "orbit_axis": [0.0, 0.0, 1.0],
+        "pending": True,
+    }
+
+    beams = _viewer_beams(ct, {"beams": [stf_beam, plan_beam]})
+
+    np.testing.assert_allclose(beams[0]["iso_center"], [3.0, 1.0, 2.0])
+    np.testing.assert_allclose(beams[0]["source_direction"], [0.0, 0.0, -0.25])
+    # Only beams with plan angles (an orbit) can be rotated by dragging.
+    assert set(beams[0]) == {"iso_center", "source_direction", "name", "label"}
+    assert (beams[1]["index"], beams[1]["gantry"]) == (1, 0.0)
+    np.testing.assert_allclose(beams[1]["orbit"][1], [0.0, 0.5, 0.0])
+    np.testing.assert_allclose(beams[1]["orbit_axis"], [0.2, 0.0, 0.0])
+    assert "pending" not in beams[1]
+    edited = _viewer_beams(ct, {"beams": [stf_beam, plan_beam]}, edited=True)
+    assert [beam["pending"] for beam in edited] == [False, True]
 
 
 def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photons):

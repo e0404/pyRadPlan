@@ -31,12 +31,23 @@ def tissue_signature(cst: Any) -> Optional[tuple]:
     """Per-structure tissue properties, as far as they influence the dose influence.
 
     Keyed by the structure's position rather than its name, so renaming a structure leaves
-    the signature unchanged. ``None`` without a structure set.
+    the signature unchanged. ``None`` without a structure set; a structure without
+    serializable tissue properties contributes ``None``.
     """
     vois = getattr(cst, "vois", None)
     if vois is None:
         return None
-    return tuple(voi.tissue_properties.model_dump_json() for voi in vois)
+    return tuple(_tissue_json(voi) for voi in vois)
+
+
+def _tissue_json(voi: Any) -> Optional[str]:
+    dump = getattr(getattr(voi, "tissue_properties", None), "model_dump_json", None)
+    if not callable(dump):
+        return None
+    try:
+        return dump()
+    except Exception:  # noqa: BLE001 - an unserializable tissue cannot be compared
+        return None
 
 
 @dataclass(frozen=True)
@@ -131,8 +142,8 @@ def stage_status(present: Iterable[str], tracker: StageTracker) -> dict[str, Sta
 def available_actions(present: Iterable[str]) -> dict[str, bool]:
     """Which workflow actions can run, as the Qt widget enables its buttons.
 
-    The dose influence calculation generates the steering information itself when it is
-    missing or stale, so it only needs the patient and a plan, like ``generate_stf``.
+    The dose influence calculation generates the steering information itself, so it only
+    needs the patient and a plan, like ``generate_stf``.
     Stale inputs do not disable an action, they only change the status text.
     """
     have = set(present)

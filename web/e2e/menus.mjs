@@ -80,10 +80,24 @@ const closeTopDialog = async () => {
   await page.waitForTimeout(80);
 };
 
+/** Phantoms are opened from File > Open Example Phantom, as in the Qt GUI. */
+async function openPhantom(name) {
+  await clickItem("file", "phantoms");
+  await tid(`menu-item-phantom:${name}`).click();
+}
+
+/** Dose influence, then optimization (the Qt workflow buttons). */
+async function computeResult() {
+  await tid("btn-dij").click();
+  await waitIdle();
+  await tid("btn-optimize").click();
+  await waitIdle();
+}
+
 async function fresh(query = "?backend=mock&speed=0") {
   await page.goto(`${base}${query}`);
   await tid("boot-splash").waitFor({ state: "detached", timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
 }
 
 /** Click `trigger` and answer the file chooser it opens. */
@@ -111,7 +125,7 @@ try {
   expect(/\d\/\d/.test(splashText ?? ""), `splash shows the n/N counter: ${splashText}`);
   await shot("splash");
   await tid("boot-splash").waitFor({ state: "detached", timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
   await shot("start");
 
   // ------------------------------------------------------------------ File menu, empty session
@@ -126,13 +140,12 @@ try {
   await shot("file-menu-empty");
   await page.keyboard.press("Escape");
 
-  // ------------------------------------------------------------------ phantom + run all
-  await clickItem("file", "phantoms");
-  await tid("menu-item-phantom:TG119").click();
+  // ------------------------------------------------------------------ phantom + result
+  expect(!(await tid("btn-run-all").count()) && !(await tid("phantom-select").count()), "workflow widget has the Qt controls only (no Run All, no phantom selector)");
+  await openPhantom("TG119");
   await page.waitForFunction(() => document.querySelector('[data-testid="dot-load"]')?.getAttribute("data-status") === "done");
   await waitIdle();
-  await tid("btn-run-all").click();
-  await waitIdle();
+  await computeResult();
   await page.waitForFunction(() => document.querySelector('[data-testid="dot-result"]')?.getAttribute("data-status") === "done");
   await closeOptimizationStatus();
 
@@ -182,8 +195,7 @@ try {
   await closeOptimizationStatus();
   await tid("plan-apply").click();
   await page.waitForFunction(() => !/Modified/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""));
-  await tid("btn-run-all").click();
-  await waitIdle();
+  await computeResult();
   await closeOptimizationStatus();
 
   await clickItem("file", "save_dij");
@@ -249,7 +261,7 @@ try {
   await waitIdle();
 
   // ------------------------------------------------------------------ snapshot
-  await tid("btn-run-all").click();
+  await tid("btn-optimize").click();
   await waitIdle();
   await closeOptimizationStatus();
   await page.waitForFunction(() => document.querySelector('[data-testid="btn-snapshot"]')?.disabled === false);
@@ -386,8 +398,8 @@ try {
   // ------------------------------------------------------------------ close while busy
   await page.goto(`${base}?backend=mock&speed=3`);
   await tid("boot-splash").waitFor({ state: "detached", timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
-  await tid("btn-load-phantom").click();
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+  await openPhantom("TG119");
   await page.waitForFunction(() => document.querySelector('[data-testid="btn-stop"]')?.disabled === false);
   const prevented = await page.evaluate(() => {
     const e = new Event("beforeunload", { cancelable: true });
@@ -415,7 +427,7 @@ try {
 
   // ------------------------------------------------------------------ native runtime: image import, no stubs
   await fresh("?backend=mock&speed=0&runtime=native");
-  await tid("btn-load-phantom").click();
+  await openPhantom("TG119");
   await waitIdle();
   await tid("file-input").setInputFiles({ name: "ct_dose.nii.gz", mimeType: "application/gzip", buffer: bytes("x") });
   await tid("import-image-dialog").waitFor();

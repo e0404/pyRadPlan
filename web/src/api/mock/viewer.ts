@@ -13,6 +13,7 @@ import {
   QUANTITY_META,
   defaultQuantityKey,
   groupResultKeys,
+  keyLabel,
   quantityName,
   RESERVED_TAGS,
   sanitizeTag,
@@ -35,6 +36,8 @@ interface ViewerExt {
   results: Map<string, () => Float32Array>;
   cache: Map<() => Float32Array, Float32Array>;
   tags: string[];
+  /** Labels of the current result's `_scenario` components, by flat scenario index. */
+  scenarioLabels: string[];
   overlap: Record<string, number>;
   tissue: Record<string, TissueDraft>;
 }
@@ -54,6 +57,7 @@ function ext(s: MockSession): ViewerExt {
       results: new Map(),
       cache: new Map(),
       tags: [],
+      scenarioLabels: [],
       overlap: {},
       tissue: {},
     };
@@ -80,6 +84,7 @@ export function syncViewer(s: MockSession): ViewerExt {
     e.results.clear();
     e.cache.clear();
     e.tags = [];
+    e.scenarioLabels = [];
     e.doseRef = null;
     e.volumes = { ct: tick() };
     e.revMasks = tick();
@@ -97,6 +102,7 @@ export function syncViewer(s: MockSession): ViewerExt {
   if (s.dose !== e.doseRef) {
     e.doseRef = s.dose;
     for (const key of [...e.results.keys()]) if (!isTagged(e, key)) e.results.delete(key);
+    e.scenarioLabels = [];
     if (s.dose && s.phantom && s.plan) addCurrentResult(s, e, s.dose, s.phantom, s.plan);
   }
   return e;
@@ -105,6 +111,34 @@ export function syncViewer(s: MockSession): ViewerExt {
 function isTagged(e: ViewerExt, key: string): boolean {
   const stem = splitIndex(key)[0];
   return e.tags.some((t) => stem.endsWith("_" + t));
+}
+
+/** Setup shift in mm of the mock's worst-case scenarios (the wcScen default `setup.sd`). */
+const MOCK_SETUP_SHIFT = 2.25;
+
+/**
+ * Scenarios of a non-nominal scenario model, standing in for the dij's scenario set: the nominal
+ * scenario and the six setup shifts (plus two range shifts for ions), labelled as
+ * `Dij.scenario_labels()` does. Every model gets this set; the mock does not sample.
+ */
+export function mockScenarios(s: MockSession, plan: PlanSummary): { label: string; shift: Vec3; scale: number }[] {
+  const model = (s.ext.plan as { scenario?: { model?: string } } | undefined)?.scenario?.model ?? "nomScen";
+  if (model === "nomScen") return [];
+  const d = MOCK_SETUP_SHIFT.toFixed(2);
+  const out: { label: string; shift: Vec3; scale: number }[] = [{ label: "nominal", shift: [0, 0, 0], scale: 1 }];
+  for (let axis = 0; axis < 3; axis++) {
+    for (const sign of [-1, 1]) {
+      const shift: Vec3 = [0, 0, 0];
+      shift[axis] = sign * MOCK_SETUP_SHIFT;
+      const parts = [0, 1, 2].map((i) => (i === axis ? `${sign < 0 ? "-" : "+"}${d}` : "0.0"));
+      out.push({ label: `setup (${parts.join(", ")}) mm`, shift, scale: 1 });
+    }
+  }
+  if (plan.radiation_mode !== "photons") {
+    out.push({ label: "range -1.0 mm / -3.5 %", shift: [0, 0, 0], scale: 0.97 });
+    out.push({ label: "range +1.0 mm / +3.5 %", shift: [0, 0, 0], scale: 1.03 });
+  }
+  return out;
 }
 
 function addCurrentResult(s: MockSession, e: ViewerExt, dose: Float32Array, phantom: Phantom, plan: PlanSummary): void {
@@ -122,6 +156,15 @@ function addCurrentResult(s: MockSession, e: ViewerExt, dose: Float32Array, phan
       });
     });
   }
+  const scenarios = mockScenarios(s, plan);
+  scenarios.forEach((scenario, i) => {
+    fresh.set(`physical_dose_scenario ${i}`, () => {
+      if (i === 0) return dose;
+      const shifted: Vec3 = [iso[0] - scenario.shift[0], iso[1] - scenario.shift[1], iso[2] - scenario.shift[2]];
+      return fakeDose(phantom, plan.gantry_angles, prescription * scenario.scale, shifted);
+    });
+  });
+  e.scenarioLabels = scenarios.map((scenario) => scenario.label);
   if (plan.radiation_mode !== "photons") {
     fresh.set("rbe_x_dose", () => dose.map((v) => v * 1.1));
   }
@@ -177,7 +220,7 @@ export function viewerStateExtension(s: MockSession, state: SessionState): Parti
     revisions: { workspace, volumes: { ...e.volumes }, masks: e.revMasks, beams: e.revBeams, base_data: 0 },
     results: {
       groups,
-      scenario_labels: [],
+      scenario_labels: [...e.scenarioLabels],
       default: defaultQuantityKey(untagged.length ? untagged : keys),
       tags: [...e.tags],
       default_tag: s.plan ? `${s.plan.radiation_mode}_${s.plan.num_of_fractions}fx` : "result",
@@ -619,7 +662,7 @@ export const viewerHandlers: MockHandlers = {
           stats: dvh.stats,
         }));
       const unit = unitOf(key);
-      return { key, label: labelOf(key), unit, unit_info: { symbol: unit, dimensionless: unit === "" }, curves };
+      return { key, label: labelOf(key), name: keyLabel(groupResultKeys([...e.results.keys()]), key), unit, unit_info: { symbol: unit, dimensionless: unit === "" }, curves };
     };
     if (keys) return { sets: keys.map(setFor) };
     const key = String(params.quantity ?? defaultQuantityKey([...e.results.keys()]) ?? "physical_dose");
@@ -647,7 +690,7 @@ export const viewerHandlers: MockHandlers = {
     const rows = phantom.structures
       .filter((st) => !names || names.includes(st.name))
       .map((st) => ({ name: st.name, color: st.color, values: qiRow(data, st.mask, refVols, refDoses) }));
-    return { quantity: key, label: labelOf(key), unit, unit_symbol: unit, ref_vols: refVols, ref_doses: refDoses, metrics, rows };
+    return { quantity: key, label: labelOf(key), name: keyLabel(groupResultKeys([...e.results.keys()]), key), unit, unit_symbol: unit, ref_vols: refVols, ref_doses: refDoses, metrics, rows };
   },
 
   async "analysis.compare_units"(params) {

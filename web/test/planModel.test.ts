@@ -3,12 +3,13 @@ import type { PlanSummary } from "../src/api/protocol";
 import type { PlanDetail, PlanOptions } from "../src/api/protocol/plan";
 import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity } from "../src/components/objectives/objectivesModel";
 import {
+  applyBioSelection,
   captureState,
+  currentBio,
   draftFromPlan,
   equidistantAngles,
   formBeamAngles,
   modifiedKeys,
-  pickBioModel,
   planSetParams,
   syncedCouch,
 } from "../src/components/plan/planModel";
@@ -110,22 +111,29 @@ describe("plan form model", () => {
     expect(formBeamAngles({ gantry: "0 90", couch: "" })).toEqual({ gantry: [0, 90], couch: [0, 0] });
   });
 
-  it("re-lists the biological model like Qt (default follows the mode, unavailable explicit choice replaced with a note)", () => {
+  it("applies the backend's bio-model selection and describes the current one", () => {
+    const d = { ...draftFromPlan(plan, detail), bioParams: { constRBE: { rbe: 1.1 }, LEM: { kernel_set: "old", alpha: 2 } } };
+    const protons = options([bio("none", "none"), bio("constRBE", "constRBE")], "constRBE");
+    expect(currentBio(d, "protons", protons)).toEqual({ radiation_mode: "protons", model: "constRBE", option: "constRBE", values: { rbe: 1.1 }, label: "constRBE" });
+    expect(currentBio({ ...d, bioOption: null }, "protons", protons, "MCN · x (not supported by this machine)").label).toBe("MCN · x");
+
+    const carbon = options([bio("none", "none"), { ...bio("LEM:HIT", "LEM"), parameters: { kernel_set: "HIT" } }], "LEM:HIT");
+    const replaced = applyBioSelection(d, { option: "LEM:HIT", model: "LEM", replaced: true, unsupported: null, note: null }, carbon);
+    expect(replaced).toMatchObject({ bioOption: "LEM:HIT", bioModel: "LEM" });
+    expect(replaced.bioParams.LEM).toEqual({ alpha: 2, kernel_set: "HIT" });
+    const kept = applyBioSelection(d, { option: "constRBE", model: "constRBE", replaced: false, unsupported: null, note: null }, protons);
+    expect(kept.bioParams.constRBE).toEqual({ rbe: 1.1 });
+    const unsupported = applyBioSelection(d, { option: null, model: "MCN", replaced: false, unsupported: { model: "MCN", label: "MCN (not supported by this machine)", description: "" }, note: null }, protons);
+    expect(unsupported).toMatchObject({ bioOption: null, bioModel: "MCN" });
+    expect(applyBioSelection(d, undefined, protons).bioOption).toBe("constRBE");
+  });
+
+  it("sends back only the problem settings the plan detail lists (unshown entries stay in the plan)", () => {
     const d = draftFromPlan(plan, detail);
-    const protons = options([bio("none", "none"), bio("constRBE", "constRBE"), bio("MCN", "MCN")], "constRBE");
-    const carbon = options([bio("none", "none"), bio("LEM:HIT", "LEM")], "LEM:HIT");
-    const followed = pickBioModel(d, { mode: "protons", options: protons }, "carbon", carbon, "Generic", "HongPB");
-    expect(followed).toMatchObject({ option: "LEM:HIT", model: "LEM", note: null });
-
-    const explicit = { ...d, bioOption: "MCN", bioModel: "MCN" };
-    const carbonMcnOff = options([bio("none", "none"), bio("LEM:HIT", "LEM"), bio("MCN", "MCN", false, "Machine 'Generic' offers no MCN base data")], "LEM:HIT");
-    const replaced = pickBioModel(explicit, { mode: "protons", options: protons }, "carbon", carbonMcnOff, "Generic", "HongPB");
-    expect(replaced.option).toBe("LEM:HIT");
-    expect(replaced.note?.text).toBe("Biological model 'MCN' is not available on machine 'Generic'; selected 'LEM:HIT'.");
-    expect(replaced.note?.reason).toMatch(/offers no MCN/);
-
-    const kept = pickBioModel(explicit, { mode: "protons", options: protons }, "protons", protons, "Generic", "HongPB");
-    expect(kept).toMatchObject({ option: "MCN", note: null });
+    const clean = captureState(d);
+    const edited = { ...d, problemProps: { nonlin_fluence: { values: { ...d.problemProps.nonlin_fluence.values, p_norm: 3 }, solver: d.problemProps.nonlin_fluence.solver } } };
+    const p = planSetParams(edited, clean, null);
+    expect(p.problem).toEqual({ name: "nonlin_fluence", values: { max_iter: 50, p_norm: 3 } });
   });
 });
 

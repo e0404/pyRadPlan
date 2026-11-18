@@ -23,6 +23,7 @@ import type {
   ValidationDetail,
 } from "../api/protocol";
 import type {
+  CurrentBio,
   FormKind,
   ObjectiveChanges,
   ObjectivesCatalog,
@@ -182,6 +183,7 @@ export function fallbackPlanOptions(info: AppInfo | null, radiation_mode: string
     engines: engineNames.map((e) => ({ value: e, label: e, identifier: e })),
     bio_models: [{ value: model, label: model, identifier: model, model, parameters: {} }],
     default_bio_model: model,
+    bio_selection: { option: model, model, replaced: false, unsupported: null, note: null },
     scenario_models: [{ value: "nomScen", label: "Nominal Scenario", identifier: "nomScen" }],
     problems: [{ value: "nonlin_fluence", label: "Fluence (nonlinear)", identifier: "nonlin_fluence" }],
     solvers: (info?.solvers ?? []).map((sv) => ({ value: sv, label: sv, identifier: sv, gpu_compatible: false })),
@@ -191,17 +193,23 @@ export function fallbackPlanOptions(info: AppInfo | null, radiation_mode: string
   };
 }
 
-/** `plan.options` for a draft context (cached per radiation mode / machine / engine). */
-export function planOptions(radiation_mode: string, machine?: string, engine?: string | null): Promise<PlanOptions> {
+/**
+ * `plan.options` for a draft context (cached per radiation mode / machine / engine / current
+ * bio-model selection and plan revision). `currentBio` is the form's selection before the
+ * change; without it `bio_selection` restores the plan's model.
+ */
+export function planOptions(radiation_mode: string, machine?: string, engine?: string | null, currentBio?: CurrentBio): Promise<PlanOptions> {
   if (!hasMethod("plan.options")) {
     return Promise.resolve(fallbackPlanOptions(useApp.getState().info, radiation_mode, useApp.getState().state?.plan?.bio_model ?? null));
   }
-  const key = `${radiation_mode}|${machine ?? ""}|${engine ?? ""}|${useApp.getState().state?.revisions?.base_data ?? 0}`;
+  const revisions = useApp.getState().state?.revisions;
+  const key = JSON.stringify([radiation_mode, machine ?? "", engine ?? "", revisions?.base_data ?? 0, revisions?.workspace?.pln ?? 0, currentBio ?? null]);
   let p = optionsCache.get(key);
   if (!p) {
     const params: ParamsOf<"plan.options"> = { radiation_mode };
     if (machine) params.machine = machine;
     if (engine) params.engine = engine;
+    if (currentBio) params.current_bio = currentBio;
     p = request("plan.options", params);
     p.catch(() => optionsCache.delete(key));
     optionsCache.set(key, p);

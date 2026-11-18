@@ -78,9 +78,10 @@ async function fillSpin(testId, value) {
 try {
   await page.goto(`${base}?backend=mock&speed=0.4`);
   await tid("boot-splash").waitFor({ state: "detached", timeout: 20000 });
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
-  await tid("phantom-select").selectOption("TG119");
-  await tid("btn-load-phantom").click();
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+  await tid("menu-file").click();
+  await tid("menu-item-phantoms").click();
+  await tid("menu-item-phantom:TG119").click();
   await waitIdle();
   await page.waitForFunction(() => document.querySelectorAll('[data-testid^="obj-row-"]').length > 0);
   await page.waitForFunction(() => document.querySelector('[data-testid="plan-res-x"]')?.value === "5.00");

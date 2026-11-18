@@ -7,13 +7,9 @@ from typing import Any, Mapping, Optional
 
 from ._plan import DEFAULT_PLAN
 
-#: Default plan of the browser frontend: coarser dose grid (owner decision) and the Qt
-#: plan form's "total" dose convention.
-WEB_DEFAULT_PLAN: dict[str, Any] = {
-    **DEFAULT_PLAN,
-    "dose_grid_resolution": [5.0, 5.0, 5.0],
-    "dose_convention": "total",
-}
+#: Default plan of the browser frontend: the Qt plan form's, with a coarser dose grid
+#: (owner decision).
+WEB_DEFAULT_PLAN: dict[str, Any] = {**DEFAULT_PLAN, "dose_grid_resolution": [5.0, 5.0, 5.0]}
 
 PROFILES: dict[str, dict[str, Any]] = {
     "native": {"default_plan": dict(DEFAULT_PLAN), "locked_fields": []},

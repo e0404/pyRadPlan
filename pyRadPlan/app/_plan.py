@@ -21,7 +21,9 @@ PLAN_SUMMARY_FIELDS: tuple[str, ...] = (
     "bio_model",
 )
 
-#: The plan a session applies once patient data is loaded, the Qt plan form's defaults.
+#: The plan a session applies once patient data is loaded, the Qt plan form's defaults
+#: (total-course doses, which keep objectives meaningful for fraction-size dependent
+#: biological models; the plan model's own default is per fraction).
 DEFAULT_PLAN: dict[str, Any] = {
     "radiation_mode": "photons",
     "machine": "Generic",
@@ -32,6 +34,7 @@ DEFAULT_PLAN: dict[str, Any] = {
     "iso_center": None,
     "dose_grid_resolution": [3.0, 3.0, 3.0],
     "engine": None,
+    "dose_convention": "total",
 }
 
 
@@ -102,10 +105,14 @@ def plan_summary(pln: Any) -> Optional[dict[str, Any]]:
     }
 
 
-def _plan_class(radiation_mode: str) -> type:
+def plan_class(radiation_mode: str) -> type:
+    """Return the plan class of a radiation mode (``PhotonPlan`` or ``IonPlan``)."""
     from pyRadPlan.plan import IonPlan, PhotonPlan  # noqa: PLC0415
 
     return PhotonPlan if radiation_mode == "photons" else IonPlan
+
+
+_plan_class = plan_class
 
 
 def _couch_angles(gantry: list[float], summary: Mapping, changes: Mapping) -> list[float]:
@@ -156,6 +163,14 @@ def _prop_dose_calc(prop_dose_calc: dict, merged: Mapping) -> dict:
     return prop_dose_calc
 
 
+def _copy_field(name: str, value: Any) -> Any:
+    solver = value.get("solver") if name == "prop_opt" and isinstance(value, Mapping) else None
+    if solver is not None and not isinstance(solver, (str, Mapping)):
+        # A live solver instance (and its thread state) is kept, not copied.
+        return deepcopy(value, {id(solver): solver})
+    return deepcopy(value)
+
+
 def build_plan(
     current: Any, changes: Mapping[str, Any], overrides: Optional[Mapping[str, Any]] = None
 ) -> Any:
@@ -204,7 +219,7 @@ def build_plan(
     plan_data: dict[str, Any] = {}
     if current is not None:
         plan_data = {
-            name: deepcopy(getattr(current, name))
+            name: _copy_field(name, getattr(current, name))
             for name in type(current).model_fields
             if name not in ("machine", "radiation_mode")
         }

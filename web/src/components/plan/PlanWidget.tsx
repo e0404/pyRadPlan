@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FieldDescriptor, Vec3 } from "../../api/protocol";
-import { PLAN_MACHINE, type PlanOptions, type TissueCheckResult } from "../../api/protocol/plan";
+import { PLAN_MACHINE, type BioSelection, type PlanOptions, type TissueCheckResult } from "../../api/protocol/plan";
 import { useApp } from "../../store/appStore";
 import { registerPendingSource } from "../../store/pendingChanges";
 import { setDraftBeams } from "../../store/revisions";
@@ -31,7 +31,9 @@ import { BioModelDialog, EngineDialog, ScenarioDialog } from "./ConfigDialogs";
 import { OptimizationDialog } from "./OptimizationDialog";
 import {
   MODIFIED_NOTE,
+  applyBioSelection,
   captureState,
+  currentBio,
   draftFromPlan,
   equidistantAngles,
   fieldKeyOf,
@@ -39,8 +41,8 @@ import {
   formBeamAngles,
   formatNumberList,
   modifiedKeys,
+  optionParams,
   parseNumberList,
-  pickBioModel,
   pickIdentifier,
   pickMachine,
   planSetParams,
@@ -121,6 +123,8 @@ export function PlanWidget() {
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const [bioConfigurable, setBioConfigurable] = useState<boolean>(true);
   const [beamsText, setBeamsText] = useState<string | null>(null);
+  const [bioUnsupported, setBioUnsupported] = useState<BioSelection["unsupported"]>(null);
+  const bioUnsupportedRef = useRef<BioSelection["unsupported"]>(null);
   const relistSeq = useRef(0);
   const relistPending = useRef<Promise<void>>(Promise.resolve());
   const hadPlan = useRef(plan !== null);
@@ -154,46 +158,46 @@ export function PlanWidget() {
       const seq = ++relistSeq.current;
       if (!useApp.getState().session) return;
       try {
-        let opts = await planOptions(ctx.mode, ctx.machine, ctx.engine);
+        const previous = optionsCtx.current;
+        // The backend chooses the bio-model entry (`bio_selection`): from the form's selection
+        // after a change, restoring the plan's model on a sync.
+        const current = reason === "sync" ? undefined : currentBio(base, previous.mode, previous.options, bioUnsupportedRef.current?.label);
         let machine = ctx.machine;
         let engine = ctx.engine;
         if (reason === "mode") {
-          machine = pickMachine(base.machine, opts);
-          engine = pickIdentifier(base.engine, opts.engines);
-          opts = await planOptions(ctx.mode, machine, engine);
+          const first = await planOptions(ctx.mode, ctx.machine, ctx.engine);
+          machine = pickMachine(base.machine, first);
+          engine = pickIdentifier(base.engine, first.engines);
         }
+        const opts = await planOptions(ctx.mode, machine, engine, current);
         if (seq !== relistSeq.current) return;
-        const previous = optionsCtx.current;
         optionsCtx.current = { mode: ctx.mode, machine, engine, options: opts };
         setOptions(opts);
+        const selection = opts.bio_selection;
+        if (selection) {
+          bioUnsupportedRef.current = selection.unsupported;
+          setBioUnsupported(selection.unsupported);
+        }
         if (reason === "sync") {
           // A plan without an engine or problem shows the mode's default (Qt `_restore_engine_from_pln`).
           const engine = base.engine ?? pickIdentifier(null, opts.engines);
           const problem = opts.problems.some((p) => p.value === base.problem) ? base.problem : String(opts.problems[0]?.value ?? base.problem);
-          if ((engine !== base.engine || problem !== base.problem) && draftRef.current === base) {
-            const patched = { ...base, engine, problem };
+          const bio = applyBioSelection(base, selection, opts);
+          const bioChanged = bio.bioOption !== base.bioOption || bio.bioModel !== base.bioModel;
+          if ((engine !== base.engine || problem !== base.problem || bioChanged) && draftRef.current === base) {
+            const patched = { ...base, engine, problem, ...(bioChanged ? bio : {}) };
             draftRef.current = patched;
             setDraft(patched);
             setClean(captureState(patched));
           }
           return;
         }
-        const engineLabel = opts.engines.find((e) => e.value === engine)?.label ?? engine;
-        const pick = pickBioModel(base, { mode: previous.mode, options: previous.options }, ctx.mode, opts, machine, engineLabel);
         const problem = opts.problems.some((p) => p.value === base.problem) ? base.problem : String(opts.problems[0]?.value ?? base.problem);
         const d = draftRef.current;
-        const next = {
-          ...d,
-          machine,
-          engine,
-          problem,
-          bioOption: pick.option,
-          bioModel: pick.model,
-          bioParams: { ...d.bioParams, [pick.model]: pick.params },
-        };
+        const next = { ...d, machine, engine, problem, ...applyBioSelection(d, selection, opts) };
         draftRef.current = next;
         setDraft(next);
-        if (pick.note) setStatus({ text: pick.note.text, tooltip: pick.note.reason });
+        if (selection?.note) setStatus({ text: selection.note.text, tooltip: selection.note.reason });
       } catch (err) {
         if (seq === relistSeq.current) setStatus({ text: errorText(err), error: true });
       }
@@ -400,10 +404,10 @@ export function PlanWidget() {
   if (draft.bioOption === null) {
     bioOptions.push({
       key: UNSUPPORTED,
-      label: `${draft.bioModel} (not supported by this machine)`,
+      label: bioUnsupported?.label ?? `${draft.bioModel} (not supported by this machine)`,
       identifier: draft.bioModel,
       disabled: true,
-      title: "Model of the plan, which the machine cannot run.\nApply keeps it; select another model to replace it.",
+      title: bioUnsupported?.description ?? "Model of the plan, which the machine cannot run.\nApply keeps it; select another model to replace it.",
     });
   } else if (!bioOptions.some((o) => o.key === draft.bioOption)) {
     bioOptions.push({ key: draft.bioOption, label: draft.bioOption, identifier: draft.bioModel });
@@ -437,10 +441,7 @@ export function PlanWidget() {
   const onBioPick = (key: string) => {
     const o = options?.bio_models.find((x) => String(x.value) === key);
     if (!o) return;
-    setDraft((d) => {
-      const kept = Object.fromEntries(Object.entries(d.bioParams[o.model] ?? {}).filter(([k]) => !["data_model", "kernel_set", "quantity_variants", "quantity_table_name"].includes(k)));
-      return { ...d, bioOption: key, bioModel: o.model, bioParams: { ...d.bioParams, [o.model]: { ...kept, ...JSON.parse(JSON.stringify(o.parameters)) } } };
-    });
+    setDraft((d) => ({ ...d, bioOption: key, bioModel: o.model, bioParams: { ...d.bioParams, [o.model]: optionParams(o, d.bioParams[o.model]) } }));
   };
 
   const setGantryText = (gantry: string) => update({ gantry });

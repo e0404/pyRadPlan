@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { featureStatus, type StageStatus } from "../api";
-import { actions, useApp } from "../store/appStore";
+import { actions, useApp, type Progress } from "../store/appStore";
 import { chooseAndLoadDij, loadFile, snapshotResult } from "../store/ioActions";
 import { resolvePendingChanges } from "../store/pendingChanges";
 import { loadAccept } from "./io/capabilities";
@@ -27,10 +27,23 @@ function worst(...statuses: StageStatus[]): StageStatus {
   return statuses.includes("done") ? "stale" : "missing";
 }
 
+/** Status line while busy: the progress label, then its detail and fraction (Qt shows the progress levels there). */
+export function busyStatusText(busy: string, progress: Progress | null): string {
+  if (!progress?.label) return `${busy}…`;
+  const parts = [progress.label];
+  if (progress.detail) parts.push(progress.detail);
+  if (progress.fraction !== null && progress.fraction !== undefined) parts.push(`${Math.round(progress.fraction * 100)} %`);
+  return parts.length > 1 ? parts.join(" · ") : `${progress.label}…`;
+}
+
 const SNAPSHOT_TIP =
   "Keep a copy of the current result in the workspace. Use File > Save Result… to write it to disk.";
 
-/** Mirror of `pyRadPlan.gui.widgets.workflow.WorkflowWidget`: status row, progress and the stage grid. */
+/**
+ * Mirror of `pyRadPlan.gui.widgets.workflow.WorkflowWidget`: status row, busy bar and the stage
+ * grid with the Qt buttons in the Qt places. Phantoms are opened from File > Open Example Phantom,
+ * as in Qt.
+ */
 export function WorkflowWidget() {
   const state = useApp((s) => s.state);
   const info = useApp((s) => s.info);
@@ -38,26 +51,18 @@ export function WorkflowWidget() {
   const progress = useApp((s) => s.progress);
   const backend = useApp((s) => s.backend);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [phantom, setPhantom] = useState("");
 
-  const phantoms = info?.phantoms ?? [];
-  const selectedPhantom = phantom || phantoms[0] || "";
   const connected = state !== null;
   const idle = connected && busy === null;
   const can = (key: string) => idle && Boolean(state?.actions[key]);
   const hasMethod = (m: string) => !info?.methods || info.methods.includes(m);
-  const readyForRun = idle && Boolean(state?.has.ct && state.has.cst && state.has.pln);
 
   const stages = state?.stages;
   const loadStage: StageStatus = stages ? worst(stages.data) : "missing";
   const dijStage: StageStatus = stages ? (stages.dij === "missing" ? "missing" : worst(stages.stf, stages.dij)) : "missing";
   const resultStage: StageStatus = stages ? stages.optimization : "missing";
 
-  const statusText = busy
-    ? progress?.label
-      ? `${progress.label}${progress.fraction !== null && progress.fraction !== undefined ? ` · ${Math.round(progress.fraction * 100)} %` : "…"}`
-      : `${busy}…`
-    : statusWithSnapshots(state?.status ?? "Connecting…", state?.results?.tags);
+  const statusText = busy ? busyStatusText(busy, progress) : statusWithSnapshots(state?.status ?? "Connecting…", state?.results?.tags);
 
   const dicom = featureStatus(info, "dicom_import");
   const imageIo = featureStatus(info, "image_file_io");
@@ -90,7 +95,7 @@ export function WorkflowWidget() {
           disabled={busy === null || !backend?.canCancel}
           title={
             backend?.canCancel
-              ? "Stop the running calculation.\nAn optimization keeps its last iterate; other calculations are discarded.\nTakes effect at the next Python bytecode check."
+              ? "Stop the running calculation.\nAn optimization stops after its current iteration and keeps the last iterate (Stop again discards it).\nOther calculations are discarded at the next Python bytecode check."
               : "Stopping needs SharedArrayBuffer (cross-origin isolation)"
           }
           onClick={() => actions.stop()}
@@ -100,9 +105,6 @@ export function WorkflowWidget() {
         </button>
       </div>
       {busy !== null && <ProgressBar fraction={progress?.fraction ?? null} testId="workflow-progress" />}
-      <div className="progress-detail" data-testid="workflow-progress-detail">
-        {busy !== null ? (progress?.detail ?? "") : ""}
-      </div>
 
       <div className="wf-grid">
         <div className="wf-head">
@@ -179,40 +181,7 @@ export function WorkflowWidget() {
         <button className="btn" disabled title="Not yet implemented" data-testid="btn-import-binary">
           Import from Binary
         </button>
-        <button className="btn" disabled={!can("generate_stf")} onClick={() => void actions.generateStf()} data-testid="btn-stf">
-          Generate STF
-        </button>
-        <button
-          className="btn primary"
-          disabled={!readyForRun}
-          onClick={() => void guarded("Run All", false, () => actions.runAll())()}
-          data-testid="btn-run-all"
-        >
-          Run All
-        </button>
         <span />
-
-        <select
-          value={selectedPhantom}
-          onChange={(e) => setPhantom(e.target.value)}
-          disabled={!idle || phantoms.length === 0}
-          title="Phantoms shipped with pyRadPlan"
-          data-testid="phantom-select"
-        >
-          {phantoms.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-        <button
-          className="btn"
-          disabled={!idle || !selectedPhantom}
-          onClick={() => void actions.loadPhantom(selectedPhantom)}
-          data-testid="btn-load-phantom"
-        >
-          Load Phantom
-        </button>
         <span />
         <span />
       </div>

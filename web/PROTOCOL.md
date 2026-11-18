@@ -133,8 +133,9 @@ All additive unless marked **changed**. Implemented in `pyRadPlan/app/` (see
 4. `workflow.run_all` takes `{solver?, max_iter?, physical_only?}`, applies the default plan if
    there is none, and runs only the steps that are missing or stale.
 5. **changed** `actions.calc_dose_influence` is `true` whenever CT, structures and plan exist
-   (as the Qt button): it generates the steering information itself when that is missing or
-   stale. The SessionState example above showing `false` there is outdated.
+   (as the Qt button): it generates the steering information itself (since v1 amendment 20
+   always, before that when it was missing or stale). The SessionState example above showing
+   `false` there is outdated.
 6. `SessionState` adds `busy: string | null` (label of the running operation; `status` then equals
    it) and `ct.direction` (9 floats). `ct` / `plan` are `null` without CT / plan.
 7. `PlanSummary` adds `bio_model: string | null`. `iso_center` is `null` (automatic: target center
@@ -182,7 +183,10 @@ fields; every v0 request keeps its v0 result. A v0 client works unchanged agains
   `PreconditionError(code="busy")` while a long operation runs (natively/server; in Pyodide requests
   are serialized anyway).
 - **long**: sets `state.busy`, emits `progress` events, is stoppable (Pyodide interrupt buffer,
-  natively `session.cancel`), and refuses to start while busy (`code="busy"`).
+  natively `session.cancel`), and refuses to start while busy (`code="busy"`). A stopped
+  `workflow.optimize` ends after its current iteration and succeeds with its last iterate
+  (`session.history` outcome `"stopped"`); under Pyodide a second interrupt discards it with
+  `KeyboardInterrupt`. Other long methods fail when stopped.
 
 "May load base data" marks reads whose first call per machine reads machine base data (seconds);
 the result is cached per machine file.
@@ -391,7 +395,7 @@ Save Plan and Save Workspace).
 | Method | Cost | Params | Result |
 |---|---|---|---|
 | `plan.get` (extended) | read | `{detail?: boolean}` | without `detail`: v0 `PlanSummary`; with: `PlanDetail` |
-| `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?}` (default: the plan's, else the default plan's) | `PlanOptions` |
+| `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?, current_bio?}` (default: the plan's, else the default plan's; `current_bio`: amendment 22) | `PlanOptions` (+ `bio_selection`, amendment 22) |
 | `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver", name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
 | `plan.set` (extended) | write | partial `PlanSummary` plus the v1 fields below | `SessionState` |
 | `plan.tissue_check` | read, may load base data | `{draft?: {radiation_mode, machine, engine, bio_model}}` (the unapplied form; default: the plan) | `{marker: "error" \| "warning" \| "", issues: Issue[]}` (the ⚠ / ℹ marker) |
@@ -446,7 +450,7 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 | Method | Cost | Params | Result |
 |---|---|---|---|
 | `cst.get` | read | `{names?}` | `{structures: StructureDetail[]}` |
-| `cst.update_structure` | write | `{name, changes: {type?, color?, visible?, overlap_priority?, tissue?: TissueDraft}, apply_anyway?: boolean}` | `{state, structure: StructureDetail}`; the VOI is recreated with `create_voi` as the Qt Edit VOI dialog does; tissue errors fail with `PreconditionError(code="tissue_errors")` and the issues in `error.details` unless `apply_anyway` |
+| `cst.update_structure` | write | `{name, changes: {type?, color?, visible?, overlap_priority?, tissue?: TissueDraft}, apply_anyway?: boolean}` | `{state, structure: StructureDetail}`; the VOI is recreated with `create_voi` as the Qt Edit VOI dialog does; tissue errors fail with `PreconditionError(code="tissue_errors")` and the issues in `error.details` unless `apply_anyway`. Changes of only `color` / `visible` are display settings: set in place, accepted while busy, outdating nothing (`revisions.workspace.cst` still counts them) |
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
 | `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows |
 | `tissue.apply` | write | `{rows: [{structure, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
@@ -591,3 +595,55 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
 18. 2026-11-18 (integration): `plan.set` rejects an `engine` that is not available for the
     (new) radiation mode with `ValidationError` (`details: [{field: "engine", …}]`) instead of
     storing it; the dose calculation would otherwise fail later.
+19. 2026-11-18 (scenarios): `workflow.optimize`'s `optimization.solver` (v0 amendment 9) is always
+    the solver name or `null`, also when the plan configures the solver with
+    `plan.set {solver: {name, values}}` (stored as `prop_opt.solver = {name, …}`); it was the
+    configuration dict before. Clarification, no new field: after an optimization with a
+    multi-scenario dose influence, `state.results.groups[].components` list one
+    `"<identifier>_scenario <i>"` component per scenario (`kind: "scenario"`, flat index into
+    `results.scenario_labels`), served by `view.volume`, `analysis.dvh {keys}` and `analysis.qi`
+    like any other component key and carried into snapshots (`"<identifier>_scenario_<tag> <i>"`);
+    they are not in v0 `quantities`. Verified natively and under Pyodide (`test/app/test_app_scenarios.py`,
+    `e2e:pyodide` stage `robust`).
+20. 2026-11-18 (stf): **changed** `workflow.calc_dose_influence` (and `workflow.run_all` when it
+    calculates the dose influence) always generates the steering information again, also when
+    `stages.stf` is `"done"`, as the Qt "Calc. Dose Influence" does: the automatic isocenter
+    follows the structures, whose edits do not mark the stf stale. The result is unchanged
+    (`SessionState`, with `stf` and `dij` written together; `revisions.workspace.stf` and
+    `revisions.beams` advance). `workflow.generate_stf` stays a method of its own (beam preview
+    before the dose calculation, tests). The session option `always_regenerate_stf` is gone.
+21. 2026-11-18 (plan form): `plan.set` refuses a `bio_model` object with keys other than
+    `model`, `option`, `values` (`ValidationError`, `details: [{field: "bio_model"}]`); before,
+    a plain model specification lost its parameters silently. `problem.values` replaces the
+    fields of the problem form; `prop_opt` entries the form does not show (`convert_dose_objectives`,
+    entries of no problem field) are kept unless sent. A solver instance in `prop_opt` (pickled
+    plans) is kept as it is. Requests of the web frontend are unaffected: it sends `{model,
+    option, values}` and the problem values of `PlanDetail` (whose unshown entries are still
+    validated when sent).
+22. 2026-11-18 (plan form, one set of rules): `plan.options` takes
+    `current_bio?: {radiation_mode, model, option: string | null, values?, label?}` (the form's
+    biological model selection before a radiation mode, machine or engine change: the mode it was
+    made in, the option id or `null` for the plan's model kept as unsupported entry, the
+    non-selection parameters, the entry label) and returns
+    `bio_selection: {option: string | null, model, replaced: boolean, unsupported: {model, label,
+    description} | null, note: {text, reason} | null}`: the entry the form selects
+    (`pyRadPlan.app._planform.select_bio_model`, the rules of the Qt form, which uses the same
+    function). Without `current_bio` the plan's model is restored for the plan's radiation mode
+    (`unsupported` is the disabled "… (not supported by …)" entry keeping a model the context
+    cannot run), else the mode's default is selected. `replaced`: take over the selected option's
+    base-data parameters; `note`: the status note and its tooltip when a selection the context
+    cannot run was replaced. Frontends apply it and decide nothing themselves. `machine:
+    "__plan__"` now lists the models of the plan's own base data (it listed the plain formalism
+    list before). **changed** `plan.set`: a radiation mode change keeps the scenario model and
+    the problem settings (problem, its `prop_opt` entries, solver) when they are not sent, as the
+    Qt form does by sending them: the scenario model is rebuilt from its name and parameters for
+    the new mode, an explicit scenario set is kept as it is (also when sent as `{model:
+    "explicit"}`, which failed before); the problem is kept when the new mode offers it, otherwise
+    the mode's default problem starts from its defaults. They were reset to the mode's defaults
+    before. **changed** `PlanDetail.problem.values` lists only what the problem form (and, for
+    `max_iter` / `display`, the solver form) shows; `PlanDetail.engine_config.values` and the
+    engine form leave out `ENGINE_FORM_EXCLUDE` (`mult_scen`, `bio_model`, `dose_grid`,
+    `voxel_sub_ix`, `select_voxels_in_scenarios`). `plan.set` keeps such unshown problem and engine
+    entries of the plan (same problem / same engine) when they are not sent, and accepts them
+    when sent back with the plan's value; a changed value is still refused as an unknown field.
+    A plan carrying `convert_dose_objectives` can therefore be edited from the web.

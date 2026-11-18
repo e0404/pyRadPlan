@@ -37,20 +37,32 @@ def _image_label(value: Any) -> str:
     return "Custom value"
 
 
-def reference_images(result: Any, ct: Any) -> list[dict[str, Any]]:
-    """Return the result entries a Squared Mimicking reference can use (Qt ``_reference_dose_options``)."""
+def reference_values(result: Any, ct: Any) -> list[tuple[str, str, Any]]:
+    """Return ``(key, label, value)`` of the result entries usable as an image reference.
+
+    Images are used as they are; 3-D arrays (imported matRad cubes) are paired with the CT
+    grid, so they need a CT. Weights and per-beam lists are skipped.
+    """
     from pyRadPlan.quantities._display_names import result_key_labels  # noqa: PLC0415
 
     if not isinstance(result, Mapping):
         return []
-    keys = []
+    values = {}
     for key, value in result.items():
         if callable(getattr(value, "GetSize", None)):
-            keys.append(key)
+            values[key] = value
         elif isinstance(value, np.ndarray) and value.ndim == 3 and ct is not None:
-            keys.append(key)
-    labels = result_key_labels(keys)
-    return [{"value": {"$result": key}, "label": labels.get(key, key)} for key in keys]
+            values[key] = (value, ct.grid)
+    labels = result_key_labels(values)
+    return [(key, labels.get(key, key), value) for key, value in values.items()]
+
+
+def reference_images(result: Any, ct: Any) -> list[dict[str, Any]]:
+    """Return the result entries a Squared Mimicking reference can use, as choices."""
+    return [
+        {"value": {"$result": key}, "label": label}
+        for key, label, _ in reference_values(result, ct)
+    ]
 
 
 def _encode_parameter(value: Any, result: Any) -> Any:
@@ -154,19 +166,29 @@ def catalog(result: Any = None, ct: Any = None) -> dict[str, Any]:
     }
 
 
-def _voi(cst: Any, structure: str) -> Any:
-    for voi in getattr(cst, "vois", None) or []:
+def _voi(cst: Any, structure: str, voi_index: Optional[int] = None) -> Any:
+    vois = list(getattr(cst, "vois", None) or [])
+    if voi_index is not None:
+        # Names need not be unique; an in-process frontend also gives the position.
+        if 0 <= int(voi_index) < len(vois) and vois[int(voi_index)].name == structure:
+            return vois[int(voi_index)]
+        raise KeyError(f"No structure {structure!r} at position {voi_index}")
+    for voi in vois:
         if voi.name == structure:
             return voi
     raise KeyError(f"Unknown structure {structure!r}")
 
 
-def _objectives(voi: Any) -> list:
+def objectives_of(voi: Any) -> list:
+    """Return a VOI's objectives as objective instances, skipping empty and invalid entries.
+
+    Entries are indexed in this list by the edit functions.
+    """
     from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
 
     objectives = []
     for entry in getattr(voi, "objectives", None) or []:
-        if entry is None:
+        if entry is None or (isinstance(entry, (list, tuple)) and not entry):
             continue
         try:
             objectives.append(get_objective(entry))
@@ -220,33 +242,52 @@ def _write(ws: Any, voi: Any, objectives: list) -> None:
 
 
 def _shared_quantity(cst: Any) -> Optional[str]:
-    quantities = {objective.quantity for voi in cst.vois for objective in _objectives(voi)}
+    quantities = {objective.quantity for voi in cst.vois for objective in objectives_of(voi)}
     return next(iter(quantities)) if len(quantities) == 1 else None
 
 
-def add(ws: Any, structure: str) -> None:
+def add(ws: Any, structure: str, voi_index: Optional[int] = None) -> None:
     """Append the default objective of the VOI type (Qt "+ Add objective")."""
-    from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
+    from pyRadPlan.optimization.objectives import (  # noqa: PLC0415
+        get_available_objectives,
+        get_objective,
+    )
 
-    voi = _voi(ws.cst, structure)
+    voi = _voi(ws.cst, structure, voi_index)
     name = DEFAULT_BY_TYPE.get(str(voi.voi_type).upper(), DEFAULT_BY_TYPE["*"])
+    available = list(get_available_objectives())
+    if name not in available and available:
+        name = available[0]
     objective = get_objective(name)
+    # Follow the quantity the objectives agree on, so a new objective does not silently
+    # reintroduce a mix after "Change all quantities".
     quantity = _shared_quantity(ws.cst)
     if quantity is not None:
         objective = _validated(objective, {"quantity": quantity}, "")
-    _write(ws, voi, [*_objectives(voi), objective])
+    _write(ws, voi, [*objectives_of(voi), objective])
 
 
 def _at(voi: Any, index: int) -> tuple[list, Any]:
-    objectives = _objectives(voi)
+    objectives = objectives_of(voi)
     if not 0 <= int(index) < len(objectives):
         raise IndexError(f"{voi.name} has no objective {index}")
     return objectives, objectives[int(index)]
 
 
-def update(ws: Any, structure: str, index: int, changes: Mapping[str, Any]) -> None:
-    """Change priority, quantity, robustness or parameters of one objective."""
-    voi = _voi(ws.cst, structure)
+def update(
+    ws: Any,
+    structure: str,
+    index: int,
+    changes: Mapping[str, Any],
+    voi_index: Optional[int] = None,
+) -> None:
+    """Change priority, quantity, robustness or parameters of one objective.
+
+    A parameter value is a number, ``{"$result": key}`` for a result entry used as an image
+    reference, ``{"$custom": ...}`` to keep the current one, or (in-process) the value
+    itself.
+    """
+    voi = _voi(ws.cst, structure, voi_index)
     objectives, objective = _at(voi, index)
     allowed = {"priority", "quantity", "robustness", "parameters"}
     unknown = set(changes) - allowed
@@ -264,11 +305,13 @@ def update(ws: Any, structure: str, index: int, changes: Mapping[str, Any]) -> N
     _write(ws, voi, objectives)
 
 
-def change_type(ws: Any, structure: str, index: int, name: str) -> None:
+def change_type(
+    ws: Any, structure: str, index: int, name: str, voi_index: Optional[int] = None
+) -> None:
     """Replace an objective by another type, keeping priority and an allowed robustness."""
     from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
 
-    voi = _voi(ws.cst, structure)
+    voi = _voi(ws.cst, structure, voi_index)
     objectives, old = _at(voi, index)
     new = get_objective(name)
     changes: dict[str, Any] = {"priority": old.priority}
@@ -278,9 +321,9 @@ def change_type(ws: Any, structure: str, index: int, name: str) -> None:
     _write(ws, voi, objectives)
 
 
-def remove(ws: Any, structure: str, index: int) -> None:
+def remove(ws: Any, structure: str, index: int, voi_index: Optional[int] = None) -> None:
     """Delete one objective."""
-    voi = _voi(ws.cst, structure)
+    voi = _voi(ws.cst, structure, voi_index)
     objectives, _ = _at(voi, index)
     del objectives[int(index)]
     _write(ws, voi, objectives)
@@ -298,7 +341,7 @@ def set_quantity_all(ws: Any, quantity: str) -> None:
     previous = {voi.name: list(voi.objectives or []) for voi in cst.vois}
     try:
         for voi in cst.vois:
-            objectives = _objectives(voi)
+            objectives = objectives_of(voi)
             if any(o.quantity != quantity for o in objectives):
                 voi.objectives = [
                     _validated(o, {"quantity": quantity}, "quantity") for o in objectives

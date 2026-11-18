@@ -173,6 +173,84 @@ tests-backends:
         - uv pip install torch --index-url https://download.pytorch.org/whl/cpu
         - pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q --timeout=300
 
+# The web version (web/, see web/README.md): a Vite + React frontend running pyRadPlan.app in
+# Pyodide. The same three jobs as the "Web" GitHub workflow, only for the changes that can affect
+# it. The Node image brings its own Python (the wheel is pure Python and runs in Pyodide, the
+# native one only pickles a workspace and runs the shim tests); the browser is the Microsoft Edge
+# the e2e scripts launch, installed by Playwright, with WebGL on SwiftShader. The Pyodide packages
+# (numpy, scipy, ...) come from the jsDelivr CDN.
+.web:
+    stage: test
+    image: node:24-bookworm
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
+          changes:
+              - web/**/*
+              - pyRadPlan/**/*
+              - pyproject.toml
+              - .gitlab-ci.yml
+    variables:
+        PYTHON: /opt/venv/bin/python
+    before_script:
+        - apt-get update && apt-get install -y --no-install-recommends python3-venv
+        - python3 -m venv /opt/venv
+
+web-frontend:
+    extends: .web
+    script:
+        - cd web
+        - npm ci
+        - npx playwright install --with-deps msedge
+        - npm run typecheck
+        - npm test
+        - npm run build
+        # The scripts start their own Vite server and exit with a failure if a check fails.
+        - npm run e2e
+        - npm run e2e:viewer
+        - npm run e2e:plan
+        - npm run e2e:menus
+    artifacts:
+        when: on_failure
+        paths:
+            - web/e2e/screenshots/
+        expire_in: 1 week
+
+web-pyodide:
+    extends: .web
+    script:
+        - $PYTHON -m pip install -e . pytest
+        - cd web/pyodide
+        - npm ci
+        - npm run build
+        - npm run pipeline -- --mode photons --preset fast
+        - >
+            node -e 'const i = JSON.parse(require("fs").readFileSync("results/pyodide_photons_fast.json")).info;
+            console.log("target D95", i.target_d95);
+            if (!(i.target_d95 > 20 && i.target_d95 < 70)) { console.error("implausible target D95"); process.exit(1); }'
+        - npm run app-smoke -- --strict
+        - npm run test:shim
+    artifacts:
+        when: on_failure
+        paths:
+            - web/pyodide/results/*.json
+        expire_in: 1 week
+
+# The click-through of the whole GUI against the real Pyodide backend.
+web-pyodide-e2e:
+    extends: .web
+    script:
+        - (cd web/pyodide && npm ci && npm run build)
+        - cd web
+        - npm ci
+        - npx playwright install --with-deps msedge
+        - npm run e2e:pyodide
+    artifacts:
+        when: on_failure
+        paths:
+            - web/e2e/screenshots/pyodide-*
+            - web/e2e/downloads/
+        expire_in: 1 week
+
 packaging:
     stage: package
     dependencies: []

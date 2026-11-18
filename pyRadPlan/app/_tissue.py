@@ -38,15 +38,20 @@ def draft_of(tissue: Any) -> dict[str, Any]:
     }
 
 
-def tissue_of(draft: Mapping[str, Any], current: Any = None) -> Any:
-    """Tissue properties of a draft, keeping the cell line of *current* while it matches."""
+def tissue_of(draft: Any, current: Any = None) -> Any:
+    """Tissue properties of a draft, keeping the cell line of *current* while it matches.
+
+    Tissue properties (from an in-process frontend) are returned as they are.
+    """
     from pyRadPlan.biology._editing import (  # noqa: PLC0415
         build_tissue_properties,
         model_label_name,
         tissue_class,
     )
-    from pyRadPlan.biology.tissues import REFERENCE_FIELDS  # noqa: PLC0415
+    from pyRadPlan.biology.tissues import REFERENCE_FIELDS, TissueProperties  # noqa: PLC0415
 
+    if isinstance(draft, TissueProperties):
+        return draft
     label = draft.get("model") or "Generic"
     cls = tissue_class(label)
     values = {
@@ -366,23 +371,21 @@ def evaluate_tissues(
 
 
 def recreate_voi(voi: Any, **changes: Any) -> Any:
-    """Return a copy of a VOI with *changes*, recreated so its validators see them (Qt)."""
-    from pyRadPlan.cst import create_voi  # noqa: PLC0415
+    """Return a copy of a VOI with *changes* (:func:`pyRadPlan.cst.recreate_voi`)."""
+    from pyRadPlan.cst import recreate_voi as _recreate_voi  # noqa: PLC0415
 
-    data = dict(voi)
-    tissue = changes.pop("tissue_properties", None)
-    if tissue is not None:
-        data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
-    type_changed = "voi_type" in changes and changes["voi_type"] != voi.voi_type
-    data.update(changes)
-    new_voi = create_voi(data)
-    if "color" not in voi.model_fields_set and "color" not in changes:
-        new_voi.model_fields_set.discard("color")
-        if type_changed:
-            data.pop("color", None)
-            new_voi = create_voi(data)
-            new_voi.model_fields_set.discard("color")
-    return new_voi
+    return _recreate_voi(voi, **changes)
+
+
+def replace_tissues(cst: Any, tissues: Mapping[int, Any]) -> None:
+    """Give the structures at the positions of *tissues* their new tissue properties.
+
+    The structures are recreated (:func:`recreate_voi`) and assigned to *cst* at once.
+    """
+    vois = list(cst.vois)
+    for index, tissue in tissues.items():
+        vois[index] = recreate_voi(vois[index], tissue_properties=tissue)
+    cst.vois = vois
 
 
 def check_errors(pln: Any, cst: Any, replaced: Mapping[str, Any], **context: Any) -> list:

@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import json
 import math
 import os
 import types
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Iterable, Literal, Optional, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Literal,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import numpy as np
 from pydantic import BaseModel, ValidationError
@@ -71,13 +82,45 @@ def jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
+def _comparable(value: Any) -> Any:
+    if isinstance(value, (float, np.floating)) and not math.isfinite(value):
+        return repr(float(value))
+    if isinstance(value, np.ndarray):
+        return _comparable(value.tolist())
+    if isinstance(value, Mapping):
+        return {str(k): _comparable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_comparable(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_comparable(v) for v in value), key=lambda v: json.dumps(v, sort_keys=True))
+    if isinstance(value, BaseModel):
+        return _comparable(value.model_dump())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _comparable(dataclasses.asdict(value))
+    return jsonable(value)
+
+
+def comparison_key(value: Any) -> str:
+    """Return a string telling configuration values apart, for dirty tracking.
+
+    Equal values give equal keys; tuples and lists, numpy scalars and Python numbers,
+    enums and their values compare alike, non-finite floats stay distinct from ``None``.
+    The plan forms of both frontends and the session's keep-or-rebuild decisions use it.
+    """
+    return json.dumps(_comparable(value), sort_keys=True)
+
+
+def unwrap_optional(annotation: Any) -> tuple[Any, bool]:
+    """Strip Optional[...] from an annotation, returning (inner, was_optional)."""
     if get_origin(annotation) in _UNION_TYPES:
         args = [a for a in get_args(annotation) if a is not type(None)]
         if len(args) == 1:
             return args[0], True
         return annotation, type(None) in get_args(annotation)
     return annotation, False
+
+
+_unwrap_optional = unwrap_optional
 
 
 def _choice(value: Any, label: Optional[str] = None) -> dict[str, Any]:
@@ -140,13 +183,18 @@ def _bounds(constraints: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _label(name: str, meta: Any) -> str:
+def field_label(name: str, meta: Any = None) -> str:
+    """Label of a form field: its ``param_meta`` label (without a colon), else its name."""
     if meta is not None and getattr(meta, "label", None):
         return str(meta.label).rstrip(":")
     return name.replace("_", " ").capitalize()
 
 
-def _nested_fields(obj: Any) -> list[tuple[str, Any, dict]]:
+_label = field_label
+
+
+def nested_fields(obj: Any) -> list[tuple[str, Any, dict]]:
+    """Editable fields of a dataclass or pydantic model: ``(name, annotation, constraints)``."""
     if isinstance(obj, BaseModel):
         return [
             (name, info.annotation, field_constraints(info))
@@ -157,6 +205,9 @@ def _nested_fields(obj: Any) -> list[tuple[str, Any, dict]]:
     except Exception:  # noqa: BLE001 - unresolvable hints only cost the dedicated editors
         hints = {}
     return [(f.name, hints.get(f.name, Any), {}) for f in dataclasses.fields(obj) if f.init]
+
+
+_nested_fields = nested_fields
 
 
 def _field_descriptor(
@@ -202,10 +253,21 @@ def _group_descriptor(
     return {"name": ".".join((name, *path)), "label": label, "type": "group", "fields": fields}
 
 
-def _valid_entries(model_cls: type[BaseModel], values: Mapping[str, Any]) -> dict[str, Any]:
+def valid_entries(
+    model_cls: type[BaseModel],
+    values: Mapping[str, Any],
+    on_invalid: Optional[Callable[[ValidationError], None]] = None,
+) -> dict[str, Any]:
+    """Validate entries of *values* by field name, dropping invalid ones.
+
+    *on_invalid* is called with the validation error of the complete mapping when some
+    entries are dropped.
+    """
     try:
         validated = model_cls.model_validate(dict(values))
-    except ValidationError:
+    except ValidationError as exc:
+        if on_invalid is not None:
+            on_invalid(exc)
         entries = {}
         for key, value in values.items():
             try:
@@ -215,6 +277,9 @@ def _valid_entries(model_cls: type[BaseModel], values: Mapping[str, Any]) -> dic
             entries.update({n: getattr(validated, n) for n in validated.model_fields_set})
         return entries
     return {name: getattr(validated, name) for name in validated.model_fields_set}
+
+
+_valid_entries = valid_entries
 
 
 def _field_default(info: Any) -> Any:
@@ -349,7 +414,7 @@ def validate_values(
         default = (base or {}).get(name, _field_default(model_cls.model_fields[name]))
         try:
             replace_nested(default, overrides)
-            merged = _merged_mapping(default, overrides)
+            merged = merged_mapping(default, overrides)
             model_cls.model_validate({name: merged})
         except ValidationError as exc:
             raise FormValidationError(str(exc), validation_details(exc)) from None
@@ -359,7 +424,13 @@ def validate_values(
     return result
 
 
-def _merged_mapping(base: Any, overrides: Mapping[str, Any]) -> dict:
+def merged_mapping(base: Any, overrides: Mapping[str, Any]) -> dict:
+    """Return *base* (a dataclass or pydantic model) as a mapping with *overrides* applied.
+
+    Built for re-validation (``model_validate({name: merged})``): fields keep their values,
+    overridden nested ones become mappings; dataclass fields without ``init`` are left out.
+    Invalid overrides never have to be serialized.
+    """
     if isinstance(base, BaseModel):
         merged = {name: getattr(base, name) for name in type(base).model_fields}
     else:
@@ -367,7 +438,7 @@ def _merged_mapping(base: Any, overrides: Mapping[str, Any]) -> dict:
     for key, value in overrides.items():
         current = merged.get(key)
         if isinstance(value, Mapping) and is_nested_instance(current):
-            merged[key] = _merged_mapping(current, value)
+            merged[key] = merged_mapping(current, value)
         else:
             merged[key] = value
     return merged

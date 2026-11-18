@@ -1,6 +1,6 @@
 // Viewer parity checks (package B) against the mock backend: beams overlay and drag, pending
-// beams, orientation marker, quantity selector with components and snapshots, compact masks,
-// VOI list (overlap grouping, colour pick, Edit VOI) and the DVH / QI analysis window.
+// beams, orientation marker, quantity selector with components, scenarios and snapshots, compact masks,
+// VOI list (overlap grouping, colour pick, Edit VOI), the DVH / QI analysis window and its dark mode.
 // Dev server on port 5202; screenshots e2e/screenshots/viewer-*.png. Usage: npm run e2e:viewer
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -227,6 +227,73 @@ try {
   await tid("analysis-tab-gamma").click();
   await tid("gamma-tab").waitFor();
   await shot("analysis-gamma");
+  await tid("analysis-close").click();
+
+  // Robust plan through the GUI: scenario model, robust objective, dose influence, optimize;
+  // then the scenarios in the viewer's quantity selector and in the analysis window (Qt).
+  const pickItem = async (testId, text) => {
+    await tid(testId).click();
+    await tid(`${testId}-popup`).waitFor();
+    await tid(`${testId}-popup`).locator(".combo-item", { hasText: text }).first().click();
+  };
+  await pickItem("plan-scenario", "Worst-case Grid");
+  await tid("plan-apply").click();
+  await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""));
+  const robustKey = await page.evaluate(() => document.querySelector('[data-testid$="-robustness"]')?.getAttribute("data-testid"));
+  await pickItem(robustKey, "Objective worst case");
+  await page.waitForTimeout(300);
+  await tid("btn-dij").click();
+  await idle();
+  await tid("btn-optimize").click();
+  await idle();
+  if (await tid("opt-close").count()) await tid("opt-close").click();
+  const comps = await tid("quantity-select-component").locator("option").allTextContents();
+  expect(comps.includes("scenario 1: setup (-2.25, 0.0, 0.0) mm") && comps.filter((c) => c.startsWith("scenario ")).length === 7, `scenario components listed with labels (${comps.length} entries)`);
+  await tid("quantity-select-component").selectOption("physical_dose_scenario 2");
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().quantities["physical_dose_scenario 2"]);
+  await page.mouse.move(canvas.x + canvas.width * 0.5, canvas.y + canvas.height * 0.62);
+  await tid("viewer-readout").waitFor();
+  const shown = await app(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity);
+  expect(shown === "physical_dose_scenario 2", "viewer shows the selected scenario");
+  await shot("scenario-selected");
+  const groupWidth = async (id) => (await tid(`${id}-group`).boundingBox()).width;
+  expect((await groupWidth("quantity-select")) > 120, "viewer quantity combo keeps its width next to a long scenario label");
+  await tid("btn-dvh").click();
+  await tid("analysis-window").waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="qi-table"] tbody tr').length > 0);
+  expect((await tid("analysis-primary-component").inputValue()) === "physical_dose_scenario 2", "analysis opens with the viewer's scenario");
+  expect((await groupWidth("analysis-primary")) > 60, `analysis quantity combo not squeezed by the scenario label (${(await groupWidth("analysis-primary")).toFixed(0)} px)`);
+  await tid("analysis-primary-component").selectOption("physical_dose_scenario 4");
+  await tid("analysis-all-scenarios").check();
+  await page.waitForTimeout(600);
+  const qiName = await app(async () => {
+    const { backend, session } = window.__pyrpApp.useApp.getState();
+    return (await backend.request("analysis.qi", { quantity: "physical_dose_scenario 4" }, session)).name;
+  });
+  expect(qiName === "dose, scenario 4", "QI of a scenario quantity");
+  await shot("analysis-scenarios");
+
+  // The DVH plot follows the theme, also when it changes while the window is open.
+  const plotPixel = () =>
+    page.evaluate(() => {
+      const c = document.querySelector('[data-testid="dvh-plot"]');
+      const ctx = c.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      return Array.from(ctx.getImageData(Math.round(100 * dpr), Math.round(30 * dpr), 1, 1).data.slice(0, 3));
+    });
+  const lightPixel = await plotPixel();
+  await tid("menu-view").click();
+  await tid("menu-item-dark_mode").click();
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  await page.waitForTimeout(400);
+  const darkPixel = await plotPixel();
+  expect(lightPixel.every((v) => v > 200) && darkPixel.every((v) => v < 80), `DVH axes background follows the theme (light ${lightPixel}, dark ${darkPixel})`);
+  const tableBg = await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="qi-table"]').closest(".table-wrap")).backgroundColor);
+  expect(tableBg !== "rgb(255, 255, 255)", `QI table background follows the theme (${tableBg})`);
+  await page.mouse.move(plot.x + plot.width * 0.35, plot.y + plot.height * 0.5);
+  await shot("analysis-dark");
+  await tid("menu-view").click();
+  await tid("menu-item-dark_mode").click();
   await tid("analysis-close").click();
 
   if (problems.length) throw new Error(`browser reported problems:\n${problems.join("\n")}`);

@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyRadPlan.biology.models import TissueComparison, apply_provenance_fixes
-from pyRadPlan.cst import VOI, create_voi
+from pyRadPlan.cst import VOI, recreate_voi
 from pyRadPlan.biology.tissues import TissueProperties
 
 from .._tissue_params import (
@@ -164,7 +164,7 @@ def _picker_row(*widgets: QWidget, stretch: int = 0) -> QWidget:
 class VOIMetadataDialog(QDialog):
     """Small popup to edit the basic metadata of a single VOI.
 
-    On accept the VOI is recreated from the edited values through ``create_voi``, so
+    On accept the VOI is recreated from the edited values through ``recreate_voi``, so
     everything is validated together, and the result is exposed via
     :attr:`updated_voi` (the input VOI is left untouched). Both the VOI type and the
     tissue model are bound to a model class, hence the recreation.
@@ -709,24 +709,12 @@ class VOIMetadataDialog(QDialog):
                 self.updated_voi = self._voi
                 super().accept()
                 return
-            data = dict(self._voi)
-            data.update(
+            self.updated_voi = recreate_voi(
+                self._voi,
                 voi_type=new_type,
                 tissue_properties=tissue,
-                alpha_x=tissue.alpha_x,
-                beta_x=tissue.beta_x,
                 overlap_priority=self.priority_spin.value(),
             )
-            # An auto-assigned color is left unset (StructureSet.set_colors() keeps it that
-            # way); an explicit pick stays.
-            auto_color = "color" not in self._voi.model_fields_set
-            if auto_color and new_type != self._voi.voi_type:
-                # Let the new type's default_factory supply its own color
-                data.pop("color", None)
-            self.updated_voi = create_voi(data)
-            if auto_color:
-                # Recreating marks a copied color as set; keep it reading as auto-assigned
-                self.updated_voi.model_fields_set.discard("color")
         except (ValidationError, ValueError, TypeError) as exc:
             QMessageBox.warning(self, "Invalid value", str(exc))
             return
@@ -755,6 +743,7 @@ class VOIsWidget(QWidget):
         self._machine_provider: Optional[Callable[[], object]] = None
         self._bio_model_provider: Optional[Callable[[], object]] = None
         self._engine_provider: Optional[Callable[[], object]] = None
+        self._color_writer: Optional[Callable[[str, tuple[int, int, int]], None]] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -814,6 +803,22 @@ class VOIsWidget(QWidget):
         Resolved when the editor opens, like the machine provider, and for the same reason.
         """
         self._engine_provider = provider
+
+    def set_color_writer(
+        self, writer: Optional[Callable[[str, tuple[int, int, int]], None]]
+    ) -> None:
+        """
+        Set a callable writing a picked colour to the VOI of that name, e.g. through a session.
+
+        Without one, the picked colour is set on the listed VOI itself.
+        """
+        self._color_writer = writer
+
+    def replace_voi(self, name: str, voi: VOI) -> None:
+        """Hold *voi* as the VOI named *name* (e.g. the one stored after an edit), unrendered."""
+        old = self._voi_by_name.get(name)
+        self._vois = [voi if v is old else v for v in self._vois]
+        self._voi_by_name[name] = voi
 
     def set_vois(self, vois: list[VOI], checked: Optional[Iterable[str]] = None) -> None:
         """Populate the VOIs section with a variable number of checkboxes."""
@@ -1071,7 +1076,9 @@ class VOIsWidget(QWidget):
             rgb = (color.red(), color.green(), color.blue())
             self._voi_colors[name] = rgb
             voi = self._voi_by_name.get(name)
-            if voi is not None:
+            if self._color_writer is not None:
+                self._color_writer(name, rgb)
+            elif voi is not None:
                 voi.color = rgb
             swatch = self._voi_color_swatches[name]
             swatch.setStyleSheet(

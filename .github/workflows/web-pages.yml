@@ -1,0 +1,137 @@
+name: Web Pages
+
+# DRAFT, manual only (workflow_dispatch). Builds the browser version of pyRadPlan (web/) for a
+# static host and deploys it to GitHub Pages. Nothing runs from this file until it is merged and
+# started by hand, and the first deployment needs Settings > Pages > Source = "GitHub Actions".
+# Decision record, measurements and the open questions: docs/development/web_publishing.md.
+#
+#   - A GitHub Pages site is a single artifact per repository, replaced as a whole by every
+#     deployment. This workflow therefore publishes ONE channel (the directory `channel`, default
+#     "latest") plus a landing page. Keeping older versions next to it needs a different scheme
+#     (see the document). If the repository's Pages site is ever used for something else (docs,
+#     a project page), put this build into a separate repository or a sub-directory of that
+#     site's artifact instead of running both.
+#   - The build uses a relative Vite base ("./"), so the same artifact works under
+#     https://<org>.github.io/<repo>/<channel>/ and under a custom domain or any other prefix.
+#   - GitHub Pages cannot set response headers. PYRADPLAN_COI=1 adds web/pages/coi-serviceworker.js,
+#     which makes the page cross-origin isolated (SharedArrayBuffer, the Stop button) after one
+#     automatic reload on the first visit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Directory name below the site root, e.g. "latest" or "v0.10"'
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHON: python
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # setuptools-scm derives the wheel version from the tags
+          fetch-depth: 0
+
+      - name: Check the channel name
+        run: |
+          if ! [[ "$CHANNEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Invalid channel name '$CHANNEL'"
+            exit 1
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            web/pyodide/package-lock.json
+
+      - name: Build the wheels (pyRadPlan, SimpleITK shim, vendored pure wheels)
+        working-directory: web/pyodide
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the frontend
+        working-directory: web
+        env:
+          PYRADPLAN_COI: "1"
+        run: |
+          npm ci
+          npm run build -- --base=./
+
+      - name: Assemble the site
+        run: |
+          mkdir -p "_site/$CHANNEL"
+          cp -r web/dist/. "_site/$CHANNEL/"
+          cat > _site/index.html <<EOF
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=./$CHANNEL/">
+          <title>pyRadPlan in the browser (NOT FOR CLINICAL USE)</title>
+          <p><a href="./$CHANNEL/">pyRadPlan in the browser</a>. Research and education only, not a medical device.</p>
+          EOF
+          du -sh _site
+          find _site -type f -size +5M -exec ls -l {} +
+
+      # The site is served the way GitHub Pages does: no COOP/COEP headers, max-age caching, the
+      # same content types. Boots the real Pyodide backend, runs TG119, tests Stop and fails if
+      # the app contacts a host other than itself and cdn.jsdelivr.net.
+      - name: Smoke test
+        working-directory: web
+        run: |
+          npx playwright install --with-deps msedge
+          node e2e/pages-server.mjs ../_site --prefix=/pyRadPlan/ --port=8080 &
+          sleep 2
+          node e2e/pages.mjs "http://localhost:8080/pyRadPlan/$CHANNEL/" --stop
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

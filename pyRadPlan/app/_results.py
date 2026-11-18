@@ -12,7 +12,8 @@ from ._stages import SCENARIO_LABELS_KEY
 #: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
 RESERVED_TAGS = ("beam", "scenario")
 
-#: Colorbar / save-dialog label and unit of each known result key (Qt ``QUANTITY_META``).
+#: Colorbar / save-dialog label and unit of each known result quantity; per-beam and
+#: per-scenario keys resolve to their quantity's (see :func:`quantity_meta`).
 QUANTITY_META: dict[str, tuple[str, str]] = {
     "physical_dose": ("Dose", "Gy"),
     "let": ("LET", "keV/μm"),
@@ -23,7 +24,27 @@ QUANTITY_META: dict[str, tuple[str, str]] = {
     "let_dose": ("LET·Dose", "Gy·keV/μm"),
 }
 
-_SUFFIXES = ("_beam", "_scenario")
+#: Suffixes :func:`quantity_meta` strips, in this order: a per-beam list, a per-scenario
+#: list, and a per-beam list of each scenario (``<quantity>_beam_scenario``).
+QUANTITY_SUFFIXES: tuple[str, ...] = ("_beam", "_scenario", "_beam")
+
+
+def quantity_meta(
+    key: str,
+    default: tuple[str, str] = ("Quantity", ""),
+    suffixes: tuple[str, ...] = QUANTITY_SUFFIXES,
+) -> tuple[str, str]:
+    """Label and unit of a result key from :data:`QUANTITY_META`.
+
+    Each of *suffixes* is stripped in turn while the key is no known quantity, so
+    ``"physical_dose_beam"`` is labelled as ``"physical_dose"``. Pass
+    ``suffixes=("_beam",)`` to resolve per-beam keys only.
+    """
+    base = key
+    for suffix in suffixes:
+        if base not in QUANTITY_META and base.endswith(suffix):
+            base = base.removesuffix(suffix)
+    return QUANTITY_META.get(base, default)
 
 
 def _is_volume(value: Any) -> bool:
@@ -80,13 +101,6 @@ def scenario_labels(result: Any, dij: Any) -> list[str]:
     return []
 
 
-def _meta(base: str) -> tuple[str, str]:
-    for suffix in _SUFFIXES:
-        if base not in QUANTITY_META and base.endswith(suffix):
-            base = base.removesuffix(suffix)
-    return QUANTITY_META.get(base, ("Quantity", ""))
-
-
 def default_tag(pln: Any) -> str:
     """Return the default snapshot name, ``"<radiation_mode>_<n>fx"`` (Qt)."""
     try:
@@ -136,7 +150,7 @@ def result_catalog(result: Any, dij: Any, pln: Any, tags: list[str]) -> dict[str
     keys = list(result_components(result))
     groups = []
     for group in group_result_keys(keys):
-        meta_label, unit = _meta(group.base)
+        meta_label, unit = quantity_meta(group.base)
         groups.append(
             {
                 "base": group.base,

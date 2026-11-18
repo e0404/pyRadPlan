@@ -2,6 +2,9 @@
 
 Replaces MATLAB's base workspace: all six pipeline objects (ct, cst, pln, stf,
 dij, result) live here and interested widgets subscribe to *workspace_changed*.
+The objects are held by a Qt-free :class:`pyRadPlan.app.Workspace`, which the
+manager's :class:`pyRadPlan.app.Session` (stage tracking, workflow operations)
+shares with the web frontend's code.
 """
 
 from __future__ import annotations
@@ -9,6 +12,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Signal
+
+from pyRadPlan.app import WORKSPACE_KEYS, Session, Workspace
 
 
 class WorkspaceManager(QObject):
@@ -18,17 +23,31 @@ class WorkspaceManager(QObject):
     via *workspace_changed* (carrying a list of the changed key names) whenever
     any object is replaced or cleared.
 
+    The objects live in :attr:`store`, observed first by :attr:`session`, so the
+    session's stage flags are current when *workspace_changed* reaches the widgets.
+
     A process-wide singleton is available via :meth:`instance`.
     """
 
     workspace_changed = Signal(list)  # list[str] of changed key names
 
-    _KEYS = ("ct", "cst", "pln", "stf", "dij", "result")
+    _KEYS = WORKSPACE_KEYS
     _instance: Optional[WorkspaceManager] = None
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self._data: dict[str, Any] = dict.fromkeys(self._KEYS)
+        #: The Qt-free store holding the pipeline objects.
+        self.store = Workspace()
+        #: The workflow session on :attr:`store`. The plan form applies the default plan
+        #: and the optimization problem picks its solver, as before the session existed.
+        self.session = Session(
+            workspace=self.store,
+            profile="native",
+            auto_plan=False,
+            solver_preference=(),
+            capture_logs=False,
+        )
+        self.store.subscribe(self.workspace_changed.emit)
 
     # ------------------------------------------------------------------
     # Singleton
@@ -45,36 +64,25 @@ class WorkspaceManager(QObject):
     # Generic read / write
     # ------------------------------------------------------------------
 
-    def _set(self, key: str, value: Any) -> None:
-        self._data[key] = value
-        self.workspace_changed.emit([key])
-
-    def _get(self, key: str) -> Any:
-        return self._data[key]
-
     def set_many(self, **kwargs: Any) -> None:
         """Set multiple pipeline objects and emit a single *workspace_changed*."""
-        changed = [k for k in kwargs if k in self._KEYS]
-        for k in changed:
-            self._data[k] = kwargs[k]
-        if changed:
-            self.workspace_changed.emit(changed)
+        self.store.set_many(**kwargs)
 
     def clear(self, keys: Optional[list[str]] = None) -> None:
         """Set *keys* to *None* (or all keys when *keys* is omitted)."""
-        targets = list(keys) if keys is not None else list(self._KEYS)
-        for k in targets:
-            if k in self._KEYS:
-                self._data[k] = None
-        self.workspace_changed.emit(targets)
+        self.store.clear(keys)
 
     def has(self, *keys: str) -> bool:
         """Return *True* only when every named key holds a non-*None* value."""
-        return all(self._data.get(k) is not None for k in keys)
+        return self.store.has(*keys)
+
+    def present(self) -> frozenset[str]:
+        """Return the keys currently holding a value."""
+        return self.store.present()
 
     def refresh(self) -> None:
         """Re-emit *workspace_changed* for every key, forcing all widgets to update."""
-        self.workspace_changed.emit(list(self._KEYS))
+        self.store.refresh()
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -88,53 +96,53 @@ class WorkspaceManager(QObject):
     @property
     def ct(self):
         """The CT image object, or ``None``."""
-        return self._get("ct")
+        return self.store.get("ct")
 
     @ct.setter
     def ct(self, value) -> None:
-        self._set("ct", value)
+        self.store.set("ct", value)
 
     @property
     def cst(self):
         """The structure set (VOIs and objectives), or ``None``."""
-        return self._get("cst")
+        return self.store.get("cst")
 
     @cst.setter
     def cst(self, value) -> None:
-        self._set("cst", value)
+        self.store.set("cst", value)
 
     @property
     def pln(self):
         """The treatment plan, or ``None``."""
-        return self._get("pln")
+        return self.store.get("pln")
 
     @pln.setter
     def pln(self, value) -> None:
-        self._set("pln", value)
+        self.store.set("pln", value)
 
     @property
     def stf(self):
         """The steering information (beam geometry), or ``None``."""
-        return self._get("stf")
+        return self.store.get("stf")
 
     @stf.setter
     def stf(self, value) -> None:
-        self._set("stf", value)
+        self.store.set("stf", value)
 
     @property
     def dij(self):
         """The dose-influence matrix, or ``None``."""
-        return self._get("dij")
+        return self.store.get("dij")
 
     @dij.setter
     def dij(self, value) -> None:
-        self._set("dij", value)
+        self.store.set("dij", value)
 
     @property
     def result(self):
         """The optimization/forward-dose result dict, or ``None``."""
-        return self._get("result")
+        return self.store.get("result")
 
     @result.setter
     def result(self, value) -> None:
-        self._set("result", value)
+        self.store.set("result", value)

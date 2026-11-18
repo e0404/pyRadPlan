@@ -10,17 +10,18 @@ the Qt Third-party Licenses dialog (``gui/menus/_help.py``), ``app.settings`` /
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from importlib import metadata
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from ._forms import build_form, jsonable, validate_values
 from ._io import export_formats, import_formats, module_missing, sitk_missing
 from ._profiles import default_profile, running_in_pyodide
 from ._session import PreconditionError
 
-#: Shown when the optional AI dependencies are missing (Qt ``AI_MISSING_TIP``).
+#: Shown when the optional AI dependencies are missing (the Qt tooltip ``AI_MISSING_TIP``).
 AI_MISSING = "Install the optional 'ai' dependencies (pydantic-ai) to use this"
-#: Shown when no AI provider key is configured (Qt ``AI_NO_MODEL_TIP``).
+#: Shown when no AI provider key is configured (the Qt tooltip ``AI_NO_MODEL_TIP``).
 AI_NO_MODEL = (
     "No AI model available: set a provider API key (e.g. ANTHROPIC_API_KEY,"
     " OPENAI_API_KEY) in the environment or a .env file"
@@ -102,11 +103,11 @@ def quantity_list() -> list[dict[str, str]]:
     """List the quantities with their Qt selector name, colorbar label and unit."""
     from pyRadPlan.quantities import get_available_quantities  # noqa: PLC0415
 
-    from ._results import _meta  # noqa: PLC0415
+    from ._results import quantity_meta  # noqa: PLC0415
 
     rows = []
     for identifier, quantity in get_available_quantities().items():
-        meta_label, unit = _meta(identifier)
+        meta_label, unit = quantity_meta(identifier)
         rows.append(
             {
                 "identifier": identifier,
@@ -132,7 +133,9 @@ def app_info_v1() -> dict[str, Any]:
 # Third-party licenses (Qt Help > Third-party Licenses)
 # ----------------------------------------------------------------------
 
+#: Case-insensitive prefixes of files in a ``.dist-info`` directory that hold license texts.
 _LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+#: Fallback candidates when a distribution ships no ``RECORD`` to enumerate its files.
 _LICENSE_FILE_CANDIDATES = (
     "LICENSE",
     "LICENSE.txt",
@@ -144,7 +147,18 @@ _LICENSE_FILE_CANDIDATES = (
 )
 
 
-def _license_identifier(dist: metadata.Distribution) -> str:
+@dataclass(frozen=True)
+class DistributionInfo:
+    """Name, version and license identifier of an installed distribution."""
+
+    name: str
+    version: str
+    license: str
+    distribution: metadata.Distribution
+
+
+def license_identifier(dist: metadata.Distribution) -> str:
+    """Return a short license name from the metadata, or ``"unknown"``."""
     meta = dist.metadata
     expression = meta.get("License-Expression")
     if expression:
@@ -152,6 +166,7 @@ def _license_identifier(dist: metadata.Distribution) -> str:
     for classifier in meta.get_all("Classifier") or []:
         if classifier.startswith("License ::"):
             return classifier.split("::")[-1].strip()
+    # Older packages put either a short name or the complete text into License.
     text = (meta.get("License") or "").strip()
     if text and "\n" not in text and len(text) <= 60:
         return text
@@ -160,14 +175,26 @@ def _license_identifier(dist: metadata.Distribution) -> str:
     return "unknown"
 
 
+_license_identifier = license_identifier
+
+
 def _is_license_file(parts: tuple[str, ...]) -> bool:
+    """Whether a path relative to the ``.dist-info`` directory is a license notice."""
     if parts[0] == "licenses":
         return len(parts) > 1
     return len(parts) == 1 and parts[0].upper().startswith(_LICENSE_FILE_PREFIXES)
 
 
-def _license_text(dist: metadata.Distribution) -> Optional[str]:
-    """License files of the ``.dist-info`` folder (``gui/menus/_help.py:license_text``)."""
+def license_text(dist: metadata.Distribution) -> Optional[str]:
+    """Return the license text(s) shipped with *dist*, or ``None`` if there is none.
+
+    The ``LICENSE*`` / ``COPYING*`` / ``NOTICE*`` files and the ``licenses/``
+    directory of the distribution's ``.dist-info`` are read through
+    :meth:`importlib.metadata.Distribution.read_text`, which works from a
+    read-only install and also covers wheels without a ``License`` metadata
+    field. Several files are concatenated under their file names. As a last
+    resort the ``License`` metadata field is returned when it holds a full text.
+    """
     names: list[str] = []
     for path in dist.files or []:
         parts = path.parts
@@ -192,6 +219,9 @@ def _license_text(dist: metadata.Distribution) -> Optional[str]:
     return field if "\n" in field else None
 
 
+_license_text = license_text
+
+
 def _distributions() -> dict[str, metadata.Distribution]:
     found: dict[str, metadata.Distribution] = {}
     for dist in metadata.distributions():
@@ -201,26 +231,34 @@ def _distributions() -> dict[str, metadata.Distribution]:
     return dict(sorted(found.items()))
 
 
+def installed_distributions() -> list[DistributionInfo]:
+    """Return the installed distributions sorted by name, one entry per name."""
+    return [
+        DistributionInfo(
+            name=dist.metadata.get("Name"),
+            version=dist.version or "",
+            license=license_identifier(dist),
+            distribution=dist,
+        )
+        for dist in _distributions().values()
+    ]
+
+
 def licenses(name: Optional[str] = None) -> Any:
     """Installed distributions, or one with its license text (``app.licenses``)."""
-    found = _distributions()
     if name is None:
         return [
-            {
-                "name": dist.metadata.get("Name"),
-                "version": dist.version or "",
-                "license": _license_identifier(dist),
-            }
-            for dist in found.values()
+            {"name": info.name, "version": info.version, "license": info.license}
+            for info in installed_distributions()
         ]
-    dist = found.get(str(name).lower())
+    dist = _distributions().get(str(name).lower())
     if dist is None:
         raise KeyError(f"No installed distribution named {name!r}")
     return {
         "name": dist.metadata.get("Name"),
         "version": dist.version or "",
-        "license": _license_identifier(dist),
-        "text": _license_text(dist),
+        "license": license_identifier(dist),
+        "text": license_text(dist),
     }
 
 
@@ -283,11 +321,13 @@ def settings_sections() -> dict[str, Any]:
     }
 
 
-def _env_names(model_cls: type, field_name: str) -> list[str]:
-    """Environment variables a settings field is read from, the written one first.
+def env_names(model_cls: type, field_name: str) -> list[str]:
+    """Environment variable names a settings field is read from.
 
-    Same rule as ``gui/menus/_settings.py:_env_names``: the prefixed name is written,
-    legacy ``validation_alias`` names are cleared so they cannot override the choice.
+    The prefixed name comes first and is the one written back; any additional
+    names declared through a ``validation_alias`` (e.g. a legacy variable) are
+    returned after it so they can be cleared, which keeps a stale alias from
+    overriding what the user just chose.
     """
     from pydantic import AliasChoices  # noqa: PLC0415
 
@@ -299,6 +339,37 @@ def _env_names(model_cls: type, field_name: str) -> list[str]:
         if isinstance(candidate, str) and candidate.upper() not in names:
             names.append(candidate.upper())
     return names
+
+
+_env_names = env_names
+
+
+def apply_settings_values(
+    model_cls: type,
+    target: Any,
+    values: Mapping[str, Any],
+    render: Callable[[Any], str] = str,
+) -> None:
+    """Assign *values* to the settings object *target* and mirror them into the environment.
+
+    The environment is written under the variable names *model_cls* reads the
+    fields from (stale legacy aliases are cleared), so freshly constructed
+    settings instances observe the change as well. ``None`` removes the variable;
+    other values are written as ``render(value)``.
+    """
+    for name, value in values.items():
+        setattr(target, name, value)
+        env_name, *stale = env_names(model_cls, name)
+        for other in stale:
+            os.environ.pop(other, None)
+        if value is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = render(value)
+
+
+def _render_json(value: Any) -> str:
+    return str(jsonable(value))
 
 
 def settings_set(section: str, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -320,13 +391,5 @@ def settings_set(section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         text = "; ".join(f"{name}: {reason}" for name, reason in locked.items())
         raise PreconditionError(f"Cannot change {text}", "locked")
     validated = validate_values(model_cls, values, exclude=exclude)
-    for name, value in validated.items():
-        setattr(target, name, value)
-        env_name, *stale = _env_names(model_cls, name)
-        for other in stale:
-            os.environ.pop(other, None)
-        if value is None:
-            os.environ.pop(env_name, None)
-        else:
-            os.environ[env_name] = str(jsonable(value))
+    apply_settings_values(model_cls, target, validated, render=_render_json)
     return settings_sections()

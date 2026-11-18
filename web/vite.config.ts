@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, mkdirSync, copyFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, copyFileSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
@@ -58,8 +58,33 @@ function pyodideAssets(): Plugin {
   };
 }
 
+/**
+ * Static hosts that cannot set response headers (GitHub Pages): with `PYRADPLAN_COI=1` the build
+ * ships `pages/coi-serviceworker.js` and loads it first in `index.html`, which makes the page
+ * cross-origin isolated (SharedArrayBuffer, Stop button) through a service worker.
+ */
+function coiServiceWorker(): Plugin {
+  let base = "/";
+  return {
+    name: "pyradplan-coi-serviceworker",
+    apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml() {
+      if (process.env.PYRADPLAN_COI !== "1") return;
+      return [{ tag: "script", attrs: { src: `${base}coi-serviceworker.js` }, injectTo: "head-prepend" }];
+    },
+    generateBundle() {
+      if (process.env.PYRADPLAN_COI !== "1") return;
+      const source = readFileSync(resolve(here, "pages/coi-serviceworker.js"), "utf8");
+      this.emitFile({ type: "asset", fileName: "coi-serviceworker.js", source });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pyodideAssets()],
+  plugins: [react(), pyodideAssets(), coiServiceWorker()],
   server: { headers: isolationHeaders, port: 5173 },
   preview: { headers: isolationHeaders, port: 4173 },
   worker: { format: "es" },

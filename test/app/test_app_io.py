@@ -1,4 +1,5 @@
 import io
+import os
 import zipfile
 
 import numpy as np
@@ -276,3 +277,213 @@ def test_load_file_kinds(client):
         "data.load_file", {"filename": "x.mat", "data": descriptor, "kind": "other"}, buffers
     )
     assert response["error"]["type"] == "ValueError"
+
+
+# ----------------------------------------------------------------------
+# Paths (the Qt GUI): the same writers as the downloads
+# ----------------------------------------------------------------------
+
+
+def _save_path(session, **params):
+    return session.execute(session.prepare("save_path", **params))
+
+
+@pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
+def test_workspace_saved_to_a_path_loads_back(pipeline, tmp_path, suffix):
+    from pyRadPlan.app import Session
+
+    _, source = pipeline
+    path = tmp_path / f"ws{suffix}"
+    written = _save_path(source, object="workspace", format="pickle", path=path)
+    assert written == [str(path) if suffix else str(path) + ".pkl"]
+    restored = Session(auto_plan=False)
+    restored.load_path(written[0])
+    assert restored.workspace.present() == source.workspace.present()
+    assert restored.workspace.dij.total_num_of_bixels == source.workspace.dij.total_num_of_bixels
+
+
+@pytest.mark.parametrize("name", ["ws.mat", "ws.npz", "ws.txt"])
+def test_a_path_with_another_ending_is_refused(pipeline, tmp_path, name):
+    _, source = pipeline
+    with pytest.raises(
+        ValueError, match=r"Use \.pkl or \.pickle to save the complete workspace\."
+    ):
+        source.prepare("save_path", object="workspace", format="pickle", path=tmp_path / name)
+    assert not (tmp_path / name).exists()
+
+
+def test_label_maps_are_written_to_a_folder(pipeline, tmp_path):
+    from pyRadPlan.io import load_data
+
+    _, source = pipeline
+    written = _save_path(source, object="cst", format="nrrd", path=tmp_path / "labels")
+    assert written == [str(tmp_path / "labels")]
+    assert _names(load_data(tmp_path / "labels")["cst"]) == _names(source.workspace.cst)
+
+
+EXPORT_EXT = {"nifti": ".nii.gz", "nrrd": ".nrrd", "meta": ".mha"}
+
+
+@pytest.mark.parametrize("fmt", ["nifti", "nrrd", "meta"])
+def test_result_quantities_saved_to_paths_match_the_downloads(pipeline, tmp_path, fmt):
+    source_client, source = pipeline
+    _, download = _save(source_client, {"object": "result", "format": fmt})
+    (tmp_path / "download").mkdir()
+    downloaded = tmp_path / "download" / f"dose{EXPORT_EXT[fmt]}"
+    downloaded.write_bytes(download)
+    (single,) = _save_path(
+        source, object="result", format=fmt, path=tmp_path / "dose", quantities=["physical_dose"]
+    )
+    assert single == str(tmp_path / f"dose{EXPORT_EXT[fmt]}")
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(sitk.ReadImage(single)),
+        sitk.GetArrayFromImage(sitk.ReadImage(str(downloaded))),
+    )
+    keys = ["physical_dose", "physical_dose_beam 0"]
+    several = _save_path(
+        source, object="result", format=fmt, path=tmp_path / "all", quantities=keys
+    )
+    assert sorted(os.path.basename(p) for p in several) == sorted(
+        f"{k.replace(' ', '_')}{EXPORT_EXT[fmt]}" for k in keys
+    )
+
+
+def test_dialog_filters_come_from_the_format_tables():
+    from pyRadPlan.app._io import entry_for_filter, export_entries, export_filter, load_filter
+
+    load = load_filter().split(";;")
+    assert load[0].startswith("All supported (") and "*.MAT" in load[0]
+    assert load[-1] == "All files (*)"
+    assert "MATLAB / matRad (*.mat *.MAT)" in load
+    assert not any(entry.startswith("DICOM") for entry in load)
+    assert export_filter(export_entries("workspace")) == "pyRadPlan workspace (*.pkl *.pickle)"
+    images = export_entries("result", ("nifti", "nrrd", "meta"))
+    text = export_filter(images)
+    assert text == "NIfTI (*.nii.gz *.nii);;NRRD (*.nrrd);;MetaImage (*.mha *.mhd)"
+    assert entry_for_filter("NRRD (*.nrrd)", images).format == "nrrd"
+    assert entry_for_filter("", images).format == "nifti"
+
+
+# ----------------------------------------------------------------------
+# Native imports: image files, binary folders, DICOM folders
+# ----------------------------------------------------------------------
+
+
+def _image(path, array, spacing=(2.0, 2.0, 3.0)):
+    image = sitk.GetImageFromArray(array)
+    image.SetSpacing(spacing)
+    sitk.WriteImage(image, str(path))
+    return str(path)
+
+
+@pytest.fixture
+def image_files(tmp_path):
+    ct = np.full((4, 8, 8), -1000, dtype=np.int16)
+    ct[1:3, 2:6, 2:6] = 0
+    mask = np.zeros((4, 8, 8), dtype=np.uint8)
+    mask[1:3, 3:5, 3:5] = 1
+    labels = mask.copy()
+    labels[1:3, 2, 2] = 2
+    return {
+        "ct": _image(tmp_path / "ct.nii.gz", ct),
+        "other_ct": _image(tmp_path / "other.nii.gz", ct[:, :6, :6]),
+        "mask": _image(tmp_path / "PTV.nrrd", mask),
+        "labels": _image(tmp_path / "labels.nrrd", labels),
+        "dose": _image(tmp_path / "plan dose.mha", np.full((4, 8, 8), 1.5, dtype=np.float32)),
+    }
+
+
+def _import(session, path, mode, **params):
+    return session.execute(session.prepare("import_image", path=path, mode=mode, **params))
+
+
+def test_image_files_import_as_ct_structures_and_dose(image_files):
+    from pyRadPlan.app import Session
+    from pyRadPlan.app._io import inspect_image
+
+    session = Session(auto_plan=False)
+    _import(session, image_files["ct"], "ct_new")
+    ct = session.workspace.ct
+    assert ct.cube_hu.GetSize() == (8, 8, 4)
+
+    info = inspect_image(image_files["labels"], ct.cube_hu)
+    assert (info.num_labels, info.grid_matches, info.inferred) == (2, True, "structures")
+    _import(session, image_files["mask"], "structures")
+    _import(session, image_files["mask"], "structures")
+    assert [voi.name for voi in session.workspace.cst.vois] == ["PTV", "PTV_2"]
+
+    assert inspect_image(image_files["dose"]).default_name == "plan_dose"
+    assert _import(session, image_files["dose"], "dose") == "plan_dose"
+    assert _import(session, image_files["dose"], "dose") == "plan_dose_2"
+    result = session.workspace.result
+    assert sitk.GetArrayFromImage(result["plan_dose"]).max() == pytest.approx(1.5)
+    assert result["plan_dose"].GetSize() == ct.cube_hu.GetSize()
+
+    _import(session, image_files["ct"], "ct_replace")
+    assert session.workspace.has("cst", "result") and session.workspace.ct is not ct
+    _import(session, image_files["other_ct"], "ct_replace")
+    assert session.workspace.present() == {"ct"}
+
+
+def test_image_imports_need_a_ct_and_sitk_file_io(image_files, monkeypatch):
+    from pyRadPlan.app import PreconditionError, Session
+    from pyRadPlan.app import _io
+
+    session = Session(auto_plan=False)
+    with pytest.raises(PreconditionError) as error:
+        session.prepare("import_image", path=image_files["mask"], mode="structures")
+    assert error.value.code == "no_data"
+    monkeypatch.setattr(_io, "sitk_missing", lambda *names: "no file IO here")
+    for action, params in (
+        ("import_image", {"path": image_files["ct"], "mode": "ct_new"}),
+        ("import_binary", {"ct_file": image_files["ct"], "selections": []}),
+        ("scan_dicom", {"directory": "."}),
+    ):
+        with pytest.raises(PreconditionError) as error:
+            session.prepare(action, **params)
+        assert error.value.code == "not_available", action
+
+
+def test_binary_folder_imports_the_ct_and_masks(image_files, tmp_path):
+    from pyRadPlan.app import Session
+    from pyRadPlan.app._io import binary_folder_files, folder_kind
+
+    folder = tmp_path / "patient"
+    (folder / "masks").mkdir(parents=True)
+    ct = _image(folder / "ct.nii.gz", sitk.GetArrayFromImage(sitk.ReadImage(image_files["ct"])))
+    mask = sitk.GetArrayFromImage(sitk.ReadImage(image_files["mask"]))
+    _image(folder / "masks" / "PTV.nrrd", mask)
+    assert folder_kind(folder) == "images"
+    ct_file, masks = binary_folder_files(folder)
+    assert ct_file == ct and [os.path.basename(m) for m in masks] == ["PTV.nrrd"]
+    session = Session(auto_plan=False)
+    selections = [{"path": masks[0], "name": "Target", "voi_type": "TARGET"}]
+    session.execute(session.prepare("import_binary", ct_file=ct_file, selections=selections))
+    assert [voi.name for voi in session.workspace.cst.vois] == ["Target"]
+    selections[0]["voi_type"] = "IGNORED"
+    session.execute(session.prepare("import_binary", ct_file=ct_file, selections=selections))
+    assert session.workspace.present() == {"ct"}
+
+
+def test_dicom_folder_is_scanned_then_imported():
+    from pathlib import Path
+
+    from pyRadPlan.app import Session
+    from pyRadPlan.app._io import folder_kind
+
+    folder = Path(__file__).parents[1] / "data" / "dicom"
+    assert folder_kind(folder) == "dicom"
+    session = Session(auto_plan=False)
+    scan = session.execute(session.prepare("scan_dicom", directory=folder))
+    catalog = scan["catalog"]
+    assert catalog["series"] and catalog["structs"]
+    selection = {
+        "series_uid": catalog["series"][0]["series_uid"],
+        "struct_file": catalog["structs"][0]["path"],
+        "load_dose": False,
+        "dose_file": None,
+    }
+    session.execute(
+        session.prepare("import_dicom", importer=scan["importer"], selection=selection)
+    )
+    assert session.workspace.has("ct", "cst") and not session.workspace.has("result")

@@ -22,9 +22,10 @@ export function QuantitySelector(props: {
   const groupIndex = located ? groups.indexOf(located.group) : noneLabel !== undefined ? -1 : groups.length ? 0 : -1;
   const group = groupIndex >= 0 ? groups[groupIndex] : null;
   const component = located?.component ?? group?.components[0] ?? null;
+  const componentTitle = component ? componentText(component.label, component.kind, props.scenarioLabels ?? []) : "";
 
   return (
-    <span className="row fill" data-testid={props.testId} title={props.title}>
+    <span className="row fill quantity-selector" data-testid={props.testId} title={props.title}>
       <select
         className="fill"
         value={groupIndex}
@@ -49,7 +50,9 @@ export function QuantitySelector(props: {
       <select
         value={component?.key ?? ""}
         disabled={props.disabled || !group || group.components.length <= 1}
-        title="Total of all beams, a single beam contribution or the result of a single uncertainty scenario"
+        title={`Total of all beams, a single beam contribution or the result of a single uncertainty scenario${componentTitle ? `
+
+Shown: ${componentTitle}` : ""}`}
         data-testid={props.testId ? `${props.testId}-component` : undefined}
         onChange={(e) => onChange(e.target.value)}
       >

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
@@ -24,6 +23,7 @@ from pyRadPlan.core import (
 )
 
 from ._plan import DEFAULT_PLAN, build_plan, plan_summary
+from ._profiles import running_in_pyodide
 from ._results import carry_forward, is_tagged
 from ._session_v1 import SessionV1Mixin
 from ._stages import (
@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 #: An event sink, receiving the event dicts of ``web/PROTOCOL.md``.
 EventListener = Callable[[dict], None]
 
+#: Sessions emitting an event in the current context; an event emitted by a listener of
+#: the same session is dropped instead of recursing.
+_EMITTING: ContextVar[tuple[int, ...]] = ContextVar("pyRadPlan_app_emitting", default=())
+
 
 class PreconditionError(RuntimeError):
     """A workflow step cannot run in the session's current state.
@@ -57,11 +61,24 @@ class PreconditionError(RuntimeError):
     code
         Machine-readable reason a frontend can branch on, e.g. to offer
         ``physical_only`` for ``"bio_model_unsupported"``.
+    details
+        JSON-able entries the protocol sends as ``error.details`` (e.g. tissue issues).
+    data
+        Python objects for an in-process frontend that builds its own message, e.g. the
+        ``TissueIssue`` objects of ``"bio_model_unsupported"``; never serialized.
     """
 
-    def __init__(self, message: str, code: str = "not_available") -> None:
+    def __init__(
+        self,
+        message: str,
+        code: str = "not_available",
+        details: Optional[list] = None,
+        data: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = details
+        self.data = dict(data or {})
 
 
 @dataclass
@@ -71,7 +88,9 @@ class Operation:
     :meth:`Session.prepare` validates the preconditions and captures the inputs; only
     :attr:`compute` does expensive work and it never touches the workspace, so it can run
     on a worker thread (Qt) or synchronously (Pyodide); :attr:`commit` writes the result
-    to the workspace and belongs on the thread owning the workspace.
+    to the workspace and belongs on the thread owning the workspace. Hosts schedule the
+    parts through :meth:`Session.begin`, :meth:`Session.run`, :meth:`Session.finish` and
+    :meth:`Session.abort`.
     """
 
     name: str
@@ -81,6 +100,12 @@ class Operation:
     control: ComputeControl = field(default_factory=ComputeControl)
     #: Iteration cap of an optimization, used to turn its status into a fraction.
     max_iter: Optional[int] = None
+    #: Non-blocking issues found while preparing (e.g. ``TissueIssue`` warnings), already
+    #: reported as ``log`` events.
+    warnings: list = field(default_factory=list)
+    #: A stop request ends the computation with its result so far (an optimization keeps
+    #: its last iterate) instead of discarding it.
+    keeps_partial_result: bool = False
 
 
 class _EventLogHandler(logging.Handler):
@@ -97,6 +122,61 @@ class _EventLogHandler(logging.Handler):
         except Exception:  # noqa: BLE001 - a malformed record must not break compute
             message = str(record.msg)
         self._session._log(record.levelname.lower(), message, record.name)
+
+
+@contextmanager
+def _interrupt_requests_stop(operation: Operation) -> Iterator[None]:
+    """Under Pyodide, let the first interrupt stop *operation* the way the Qt Stop does.
+
+    The browser's Stop writes SIGINT to Pyodide's interrupt buffer, which raises
+    ``KeyboardInterrupt`` at the next bytecode check and so discards the run. For an
+    operation keeping its partial result, the first interrupt requests a cooperative stop
+    through its control instead (an optimization ends after the current iteration); a
+    second one raises ``KeyboardInterrupt`` as before.
+    """
+    if not operation.keeps_partial_result or not running_in_pyodide():
+        yield
+        return
+    import signal  # noqa: PLC0415
+
+    control = operation.control
+
+    def handler(signum: int, frame: Any) -> None:
+        if control.stop_requested:
+            raise KeyboardInterrupt
+        control.request_stop()
+
+    try:
+        previous = signal.signal(signal.SIGINT, handler)
+    except ValueError:  # not the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def dij_payload(loaded: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """Return the steering information and dose influence of a loaded file (Qt "Load Dij").
+
+    Raises
+    ------
+    PreconditionError
+        ``code="no_dij"`` if the file holds no dose influence matrix.
+    """
+    found = {key: loaded[key] for key in ("stf", "dij") if loaded.get(key) is not None}
+    if "dij" not in found:
+        raise PreconditionError(f"No dose-influence matrix found in {name}", "no_dij")
+    return found
+
+
+def _derived(build: Callable[[], Any], default: Any) -> Any:
+    try:
+        return build()
+    except Exception:  # noqa: BLE001 - the state reports what it cannot derive as missing
+        logger.debug("Could not derive a part of the session state", exc_info=True)
+        return default
 
 
 def _json_number(value: Any) -> Any:
@@ -121,9 +201,10 @@ class Session(SessionV1Mixin):
     """One planning session, independent of any GUI toolkit.
 
     Owns (or wraps) a :class:`Workspace` and offers the workflow operations of the Qt
-    workflow widget as plain method calls. All operations run synchronously in the
-    calling thread; a frontend that wants them elsewhere uses :meth:`prepare` and runs
-    the :class:`Operation` parts itself (see ``docs/development/app_layer.md``).
+    workflow widget as plain method calls. The convenience methods run synchronously in
+    the calling thread; a frontend that wants the work elsewhere uses :meth:`prepare` and
+    schedules the :class:`Operation` with :meth:`begin`, :meth:`run` and :meth:`finish`
+    (see ``docs/development/app_layer.md``).
 
     Parameters
     ----------
@@ -138,7 +219,8 @@ class Session(SessionV1Mixin):
         Partial ``PlanSummary`` of the plan applied by *auto_plan* and :meth:`run_all`.
     solver_preference
         Solvers tried in order when neither the request nor the plan names one; the first
-        registered one is used. Under Pyodide only ``"scipy"`` is registered.
+        registered one is used. Under Pyodide only ``"scipy"`` is registered. Empty: the
+        optimization problem's default solver applies.
     max_iter
         Default iteration cap of the optimization; ``None`` keeps the solver's.
     log_level
@@ -151,9 +233,12 @@ class Session(SessionV1Mixin):
     options
         Overrides of the profile (``default_plan`` entries are merged, ``locked_fields``
         replaced).
+    capture_logs
+        Forward the ``pyRadPlan`` log records emitted while an operation runs as ``log``
+        events. A host with its own log handler (the Qt log panel) turns this off.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - keyword-only host options
         self,
         session_id: str = "s1",
         *,
@@ -165,6 +250,7 @@ class Session(SessionV1Mixin):
         log_level: Optional[int] = None,
         profile: Optional[str] = None,
         options: Optional[Mapping[str, Any]] = None,
+        capture_logs: bool = True,
     ) -> None:
         self.id = session_id
         self._owns_workspace = workspace is None
@@ -174,13 +260,14 @@ class Session(SessionV1Mixin):
         self.solver_preference = tuple(solver_preference)
         self.max_iter = max_iter
         self.log_level = log_level
+        self.capture_logs = capture_logs
 
         self._listeners: list[EventListener] = []
         self._tracker = StageTracker().update([], self.workspace.present(), self.workspace.cst)
         self.views = ViewCache(self.workspace.get)
         self._busy: Optional[Operation] = None
+        self._idle_callbacks: list[Callable[[], Any]] = []
         self._logged: set[tuple[str, str]] = set()
-        self._emitting = False
         self._init_v1(profile, options, explicit_default_plan=default_plan is not None)
         self._unsubscribe = self.workspace.subscribe(self._on_workspace_changed)
 
@@ -213,9 +300,10 @@ class Session(SessionV1Mixin):
             remove()
 
     def _emit(self, event: dict) -> None:
-        if self._emitting:
+        active = _EMITTING.get()
+        if not self._listeners or id(self) in active:
             return
-        self._emitting = True
+        token = _EMITTING.set((*active, id(self)))
         try:
             event = {"event": event["event"], "session": self.id, **event}
             for callback in list(self._listeners):
@@ -226,10 +314,11 @@ class Session(SessionV1Mixin):
                         "Event listener raised", exc_info=True
                     )
         finally:
-            self._emitting = False
+            _EMITTING.reset(token)
 
     def _emit_state(self) -> None:
-        self._emit({"event": "state", "state": self.state()})
+        if self._listeners and id(self) not in _EMITTING.get():
+            self._emit({"event": "state", "state": self.state()})
 
     def _log(self, level: str, message: str, logger_name: str, report: bool = False) -> None:
         # Algorithms both log a warning and report it; the log shows it once.
@@ -299,6 +388,9 @@ class Session(SessionV1Mixin):
 
     @contextmanager
     def _capture_logs(self) -> Iterator[None]:
+        if not self.capture_logs:
+            yield
+            return
         package_logger = logging.getLogger("pyRadPlan")
         handler = _EventLogHandler(self, self.log_level or logging.NOTSET)
         previous = package_logger.level
@@ -336,15 +428,24 @@ class Session(SessionV1Mixin):
         return available_actions(self.workspace.present())
 
     def state(self) -> dict[str, Any]:
-        """Return the JSON-able ``SessionState`` (see ``web/PROTOCOL.md``)."""
+        """Return the JSON-able ``SessionState`` (see ``web/PROTOCOL.md``).
+
+        Parts that cannot be derived from the stored objects (e.g. placeholders a host
+        put into the workspace) are reported as missing instead of raising.
+        """
         ws = self.workspace
         present = ws.present()
-        ct_info = None
-        if ws.ct is not None:
-            ct_info = {**grid_info(ws.ct), "num_scenarios": int(ws.ct.num_of_ct_scen)}
-        structures = []
-        if ws.cst is not None:
-            structures = [
+
+        def ct_info() -> Optional[dict[str, Any]]:
+            if ws.ct is None:
+                return None
+            scenarios = int(getattr(ws.ct, "num_of_ct_scen", 1))
+            return {**grid_info(ws.ct), "num_scenarios": scenarios}
+
+        def structures() -> list[dict[str, Any]]:
+            if ws.cst is None:
+                return []
+            return [
                 {
                     "name": voi.name,
                     "type": voi.voi_type,
@@ -354,19 +455,109 @@ class Session(SessionV1Mixin):
                 }
                 for i, voi in enumerate(ws.cst.vois)
             ]
+
         state = {
             "session": self.id,
             "has": {key: key in present for key in WORKSPACE_KEYS},
             "stages": self.stages(),
             "actions": self.actions(),
-            "ct": ct_info,
-            "plan": plan_summary(ws.pln),
+            "ct": _derived(ct_info, None),
+            "plan": _derived(lambda: plan_summary(ws.pln), None),
             "quantities": result_quantities(ws.result),
-            "structures": structures,
+            "structures": _derived(structures, []),
             "status": self._busy.label if self._busy else status_text(present, self._tracker),
             "busy": self._busy.label if self._busy else None,
         }
         return self._v1_state(state)
+
+    # ------------------------------------------------------------------
+    # Host-scheduled operations
+    # ------------------------------------------------------------------
+
+    def begin(self, operation: Operation) -> None:
+        """Mark *operation* as running (on the thread owning the workspace).
+
+        Starts its history and emits the busy state. Every :meth:`begin` must be followed
+        by :meth:`finish` or :meth:`abort`.
+
+        Raises
+        ------
+        PreconditionError
+            ``code="busy"`` while another operation runs.
+        """
+        if self._busy is not None:
+            raise PreconditionError(f"{self._busy.label} is still running", "busy")
+        self._busy = operation
+        self._logged.clear()
+        self._v1_begin(operation)
+        self._emit_state()
+
+    def run(self, operation: Operation) -> Any:
+        """Compute *operation* and return its value; may run on a worker thread.
+
+        Installs the report, control and log observation in the calling thread, so the
+        progress, status and warning reports of the algorithms become events. Never writes
+        the workspace.
+        """
+        if self._busy is not operation:
+            raise RuntimeError(f"{operation.label}: call begin() before run()")
+        with (
+            observe_reports(self._on_report(operation)),
+            observe_control(operation.control),
+            self._capture_logs(),
+            _interrupt_requests_stop(operation),
+        ):
+            return operation.compute()
+
+    def finish(self, operation: Operation, value: Any) -> Any:
+        """Commit the computed *value* to the workspace and end *operation*.
+
+        Returns what the commit returns. A failing commit aborts the operation and
+        re-raises.
+        """
+        if self._busy is not operation:
+            raise RuntimeError(f"{operation.label} is not running")
+        try:
+            committed = operation.commit(value)
+        except BaseException as exc:
+            self.abort(operation, exc)
+            raise
+        self._v1_end(operation, "stopped" if operation.control.stop_requested else "done")
+        self._emit({"event": "progress", "label": operation.label, "fraction": 1.0, "detail": ""})
+        self._busy = None
+        self._emit_state()
+        self._run_idle_callbacks()
+        return committed
+
+    def abort(self, operation: Operation, exc: Optional[BaseException] = None) -> None:
+        """End *operation* without a result: ``"stopped"`` when cancelled, else ``"failed"``."""
+        if self._busy is not operation:
+            return
+        cancelled = isinstance(exc, (ComputeCancelledError, KeyboardInterrupt))
+        self._v1_end(operation, "stopped" if cancelled else "failed")
+        self._busy = None
+        self._emit_state()
+        self._run_idle_callbacks()
+
+    def call_when_idle(self, callback: Callable[[], Any]) -> None:
+        """Call *callback* now, or once the running operation has ended (or was aborted).
+
+        Lets an in-process frontend keep an edit the session refuses while busy, e.g. a
+        structure edited while a calculation runs, and apply it afterwards on the thread
+        ending the operation. A failing callback is logged.
+        """
+        if self._busy is None:
+            callback()
+        else:
+            self._idle_callbacks.append(callback)
+
+    def _run_idle_callbacks(self) -> None:
+        callbacks, self._idle_callbacks = self._idle_callbacks, []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 - one deferred edit must not break the others
+                logger.exception("A deferred edit failed")
 
     # ------------------------------------------------------------------
     # Running operations
@@ -376,36 +567,16 @@ class Session(SessionV1Mixin):
         """Run a prepared operation synchronously and commit its result.
 
         Progress, status and warning reports of the pyRadPlan algorithms it calls become
-        ``progress`` / ``log`` events; the state is emitted when it starts and ends.
+        ``progress`` / ``log`` events; the state is emitted when it starts and ends. The
+        same as :meth:`begin`, :meth:`run` and :meth:`finish` in one thread.
         """
-        if self._busy is not None:
-            raise PreconditionError(f"{self._busy.label} is still running", "busy")
-        self._busy = operation
-        self._logged.clear()
-        self._v1_begin(operation)
-        self._emit_state()
+        self.begin(operation)
         try:
-            with (
-                observe_reports(self._on_report(operation)),
-                observe_control(operation.control),
-                self._capture_logs(),
-            ):
-                value = operation.compute()
-            committed = operation.commit(value)
-            self._v1_end(operation, "done")
-            self._emit(
-                {"event": "progress", "label": operation.label, "fraction": 1.0, "detail": ""}
-            )
-            return committed
-        except (ComputeCancelledError, KeyboardInterrupt):
-            self._v1_end(operation, "stopped")
+            value = self.run(operation)
+        except BaseException as exc:
+            self.abort(operation, exc)
             raise
-        except BaseException:
-            self._v1_end(operation, "failed")
-            raise
-        finally:
-            self._busy = None
-            self._emit_state()
+        return self.finish(operation, value)
 
     def cancel(self) -> None:
         """Request a cooperative stop of the running operation (no-op when idle).
@@ -439,7 +610,7 @@ class Session(SessionV1Mixin):
     # Data
     # ------------------------------------------------------------------
 
-    def _commit_loaded(self, data: Mapping[str, Any]) -> None:
+    def _commit_loaded(self, data: Mapping[str, Any]) -> list[str]:
         ws = self.workspace
         payload, warnings = merge_loaded_data(data, ws.has("ct"), WORKSPACE_KEYS)
         for message in warnings:
@@ -454,23 +625,75 @@ class Session(SessionV1Mixin):
             try:
                 payload["pln"] = build_plan(None, self.default_plan)
             except Exception as exc:  # noqa: BLE001 - the data is loaded nonetheless
-                self._warn(f"Default plan not applied: {type(exc).__name__}: {exc}")
-        self._v1_loaded(data)
+                message = f"Default plan not applied: {type(exc).__name__}: {exc}"
+                self._warn(message)
+                warnings.append(message)
+        self._v1_loaded(data, payload)
         if payload:
             ws.set_many(**payload)
+        return warnings
 
-    def _prepare_load_path(self, path: Any, label: Optional[str] = None) -> Operation:
+    def merge_loaded(self, data: Mapping[str, Any]) -> list[str]:
+        """Merge objects a host loaded itself into the workspace, as a load does.
+
+        A CT starts a new patient (see :func:`merge_loaded_data`); snapshot tags travel with
+        a CT or result (``saved_result_tags``). Returns the user-facing warnings, which are
+        also reported as ``log`` events.
+        """
+        self._require_idle()
+        return self._commit_loaded(data)
+
+    def _prepare_load_dij(self, path: Any, label: Optional[str] = None) -> Operation:
+        name = os.path.basename(os.fspath(path))
+
         def compute() -> dict:
             from pyRadPlan.io import load_data  # noqa: PLC0415
 
-            return load_data(path)
+            return dij_payload(load_data(path), name)
+
+        return Operation(
+            "load_dij",
+            label or f"Loading dose influence from {name}",
+            compute,
+            lambda found: self.workspace.set_many(**found),
+        )
+
+    def _prepare_load_path(self, path: Any, label: Optional[str] = None) -> Operation:
+        from ._io import load_path_data  # noqa: PLC0415
 
         return Operation(
             "load_path",
             label or f"Loading {os.path.basename(os.fspath(path))}",
-            compute,
+            lambda: load_path_data(path),
             self._commit_loaded,
         )
+
+    # Native file operations (paths, not uploads), defined in ``_io``.
+
+    def _prepare_save_path(self, **params: Any) -> Operation:
+        from ._io import prepare_save_path  # noqa: PLC0415
+
+        return prepare_save_path(self, **params)
+
+    def _prepare_import_image(self, **params: Any) -> Operation:
+        from ._io import prepare_import_image  # noqa: PLC0415
+
+        return prepare_import_image(self, **params)
+
+    def _prepare_import_binary(self, **params: Any) -> Operation:
+        from ._io import prepare_import_binary  # noqa: PLC0415
+
+        return prepare_import_binary(self, **params)
+
+    def _prepare_scan_dicom(self, **params: Any) -> Operation:
+        from ._io import prepare_scan_dicom  # noqa: PLC0415
+
+        return prepare_scan_dicom(self, **params)
+
+    def _prepare_import_dicom(self, **params: Any) -> Operation:
+        from ._io import prepare_import_dicom  # noqa: PLC0415
+
+        return prepare_import_dicom(self, **params)
 
     def _prepare_load_phantom(self, name: str) -> Operation:
         from pyRadPlan.io import phantom_path  # noqa: PLC0415
@@ -478,22 +701,16 @@ class Session(SessionV1Mixin):
         return self._prepare_load_path(phantom_path(name), label=f"Loading {name}")
 
     def _prepare_load_file(self, filename: str, data: Any) -> Operation:
-        basename = os.path.basename(str(filename).replace("\\", "/")) or "upload"
-        payload = data if isinstance(data, (bytes, bytearray)) else np.asarray(data).tobytes()
+        from ._io import _load_upload, _payload_bytes, _upload_name  # noqa: PLC0415
 
-        def compute() -> dict:
-            from pyRadPlan.io import load_data  # noqa: PLC0415
-
-            directory = tempfile.mkdtemp(prefix="pyradplan-upload-")
-            path = os.path.join(directory, basename)
-            try:
-                with open(path, "wb") as handle:
-                    handle.write(payload)
-                return load_data(path)
-            finally:
-                shutil.rmtree(directory, ignore_errors=True)
-
-        return Operation("load_file", f"Loading {basename}", compute, self._commit_loaded)
+        basename = _upload_name(filename)
+        payload = _payload_bytes(data)
+        return Operation(
+            "load_file",
+            f"Loading {basename}",
+            lambda: _load_upload(basename, payload),
+            self._commit_loaded,
+        )
 
     def load_phantom(self, name: str) -> None:
         """Load a bundled phantom (see :func:`pyRadPlan.io.available_phantoms`)."""
@@ -530,68 +747,68 @@ class Session(SessionV1Mixin):
     # ------------------------------------------------------------------
 
     def _tissue_issues(self, pln: Any, cst: Any) -> list:
-        from pyRadPlan.biology.models import (  # noqa: PLC0415
-            BioMachineSummary,
-            BiologicalModel,
-            engine_bio_capability,
+        """Return the issues of the tissue check the plan's dose engine runs."""
+        from pyRadPlan.biology._editing import (  # noqa: PLC0415
+            load_machine_quietly,
+            plan_dose_engine,
+            tissue_issues_quietly,
         )
+        from pyRadPlan.biology.models import BiologicalModel  # noqa: PLC0415
 
         model = getattr(pln, "bio_model", None)
         if not isinstance(model, BiologicalModel) or model.model == "none" or cst is None:
             return []
-        try:
-            from pyRadPlan.dose.engines import get_engine_class  # noqa: PLC0415
-            from pyRadPlan.machines import load_from_name  # noqa: PLC0415
+        machine = getattr(pln, "machine", None)
+        if isinstance(machine, str) or machine is None:
+            machine = load_machine_quietly(
+                getattr(pln, "radiation_mode", ""), machine or "Generic"
+            )
+        return tissue_issues_quietly(machine, model, cst, plan_dose_engine(pln))
 
-            machine = pln.machine
-            if isinstance(machine, str) or machine is None:
-                machine = load_from_name(pln.radiation_mode, machine or "Generic")
-            summary = BioMachineSummary.from_machine(machine)
-            prop_dose_calc = pln.prop_dose_calc if isinstance(pln.prop_dose_calc, dict) else {}
-            engine = get_engine_class(pln.radiation_mode, prop_dose_calc.get("engine") or None)
-            capability = engine_bio_capability(engine) if engine is not None else None
-            return list(model.check_tissues(summary, cst, engine=capability))
-        except Exception:  # noqa: BLE001 - the dose engine runs the same check
-            logger.debug("Could not check the tissues of the plan", exc_info=True)
-            return []
-
-    def _check_bio_model(self, step: str, physical_only: bool) -> None:
+    def _check_bio_model(self, step: str, physical_only: bool) -> list:
         """Check the biological model as the Qt widget does, with the answer given up front.
 
         Invalid reference alpha_x / beta_x always block. Other errors block unless
         *physical_only* is set, which switches the plan's model to ``none`` (written to the
-        workspace, as the Qt dialog does). Warnings are reported as ``log`` events.
+        workspace, as the Qt dialog does). Warnings are reported as ``log`` events and
+        returned, unless the model was switched off. The errors travel as
+        ``PreconditionError.data``: ``issues`` (the ``TissueIssue`` errors) and ``model``
+        (the plan's ``BiologicalModel``).
         """
         ws = self.workspace
         issues = self._tissue_issues(ws.pln, ws.cst)
         errors = [issue for issue in issues if issue.is_error]
-        for issue in issues:
-            if not issue.is_error:
-                self._warn(f"{step}: {issue}")
+        warnings = [issue for issue in issues if not issue.is_error]
+        for issue in warnings:
+            self._warn(f"{step}: {issue}")
         if not errors:
-            return
+            return warnings
         text = "\n".join(f"- {issue}" for issue in errors)
-        model = ws.pln.bio_model.model
+        model = ws.pln.bio_model
+        data = {"issues": errors, "model": model}
         if any(issue.kind == "invalid_reference" for issue in errors):
             raise PreconditionError(
                 f"{step}: invalid reference photon parameters alpha_x / beta_x, which no "
                 f"biological model can be evaluated with:\n{text}",
                 "invalid_reference",
+                data=data,
             )
         if not physical_only:
             raise PreconditionError(
-                f"{step}: the biological model '{model}' cannot be evaluated for the "
+                f"{step}: the biological model '{model.model}' cannot be evaluated for the "
                 f"structures, machine and dose engine of the plan:\n{text}\n"
                 "Fix the tissue parameters, choose another model, or pass "
                 "physical_only=true to calculate the physical dose only.",
                 "bio_model_unsupported",
+                data=data,
             )
         from pyRadPlan.plan import validate_pln  # noqa: PLC0415
 
         pln = ws.pln
-        data = {name: deepcopy(getattr(pln, name)) for name in type(pln).model_fields}
-        data["bio_model"] = "none"
-        ws.pln = validate_pln(type(pln)(**data))
+        fields = {name: deepcopy(getattr(pln, name)) for name in type(pln).model_fields}
+        fields["bio_model"] = "none"
+        ws.pln = validate_pln(type(pln)(**fields))
+        return []
 
     def _check_objective_quantities(self) -> None:
         """Biological objectives need a dose influence computed with a biological model."""
@@ -604,23 +821,24 @@ class Session(SessionV1Mixin):
         from pyRadPlan.quantities import get_available_quantities  # noqa: PLC0415
 
         quantities = get_available_quantities()
-        found = []
+        found: list[tuple[str, str]] = []
         for voi in getattr(ws.cst, "vois", None) or []:
             for objective in getattr(voi, "objectives", None) or []:
                 identifier = getattr(objective, "quantity", None)
                 quantity = quantities.get(identifier) if isinstance(identifier, str) else None
                 if quantity is not None and quantity.biological:
-                    entry = f"{voi.name}: {identifier}"
+                    entry = (voi.name, identifier)
                     if entry not in found:
                         found.append(entry)
         if found:
             raise PreconditionError(
                 "These objectives are evaluated on biological quantities: "
-                + ", ".join(found)
+                + ", ".join(f"{name}: {identifier}" for name, identifier in found)
                 + ", but the dose influence holds the physical dose only. Select a "
                 "biological model and calculate the dose influence again, or evaluate the "
                 "objectives on the physical dose.",
                 "biological_objectives",
+                data={"objectives": found},
             )
 
     # ------------------------------------------------------------------
@@ -643,25 +861,27 @@ class Session(SessionV1Mixin):
 
     def _prepare_calc_dose_influence(self, physical_only: bool = False) -> Operation:
         self._require("calc_dose_influence")
-        self._check_bio_model("Calculate dose influence", physical_only)
+        warnings = self._check_bio_model("Calculate dose influence", physical_only)
         ws = self.workspace
-        ct, cst, pln, stf = ws.ct, ws.cst, ws.pln, ws.stf
-        regenerate = stf is None or self._tracker.stf_stale
+        ct, cst, pln = ws.ct, ws.cst, ws.pln
 
         def compute() -> tuple:
             from pyRadPlan import calc_dose_influence, generate_stf  # noqa: PLC0415
 
-            new_stf = generate_stf(ct, cst, pln) if regenerate else stf
-            return new_stf, calc_dose_influence(ct, cst, new_stf, pln)
+            stf = generate_stf(ct, cst, pln)
+            return stf, calc_dose_influence(ct, cst, stf, pln)
 
         def commit(value: tuple) -> None:
-            new_stf, dij = value
-            if regenerate:
-                ws.set_many(stf=new_stf, dij=dij)
-            else:
-                ws.dij = dij
+            stf, dij = value
+            ws.set_many(stf=stf, dij=dij)
 
-        return Operation("calc_dose_influence", "Calculating dose influence", compute, commit)
+        return Operation(
+            "calc_dose_influence",
+            "Calculating dose influence",
+            compute,
+            commit,
+            warnings=warnings,
+        )
 
     def _preferred_solver(self) -> Optional[str]:
         from pyRadPlan.optimization.solvers import get_available_solvers  # noqa: PLC0415
@@ -690,7 +910,8 @@ class Session(SessionV1Mixin):
         ws = self.workspace
         ct, cst, stf, dij, pln = ws.ct, ws.cst, ws.stf, ws.dij, ws.pln
         prop_opt = self._prop_opt(pln, solver, max_iter)
-        opt_pln = pln.model_copy(update={"prop_opt": prop_opt})
+        unchanged = prop_opt == dict(pln.prop_opt or {})
+        opt_pln = pln if unchanged else pln.model_copy(update={"prop_opt": prop_opt})
         previous = dict(ws.result or {})
 
         def compute() -> tuple:
@@ -712,13 +933,15 @@ class Session(SessionV1Mixin):
             carry_forward(previous, result, self.saved_tags)
             ws.result = result
             history = info.get("obj_history") or []
-            summary = {
-                "solver": prop_opt.get("solver"),
+            solver_config = prop_opt.get("solver")
+            return {
+                # A configured solver is stored as {"name": ..., <options>}; report its name.
+                "solver": solver_config.get("name")
+                if isinstance(solver_config, Mapping)
+                else solver_config,
                 "num_iter": info.get("num_iter"),
                 "objective": float(history[-1]) if history else None,
             }
-            logger.info("Optimization finished: %s", summary)
-            return summary
 
         max_iter_value = prop_opt.get("max_iter")
         return Operation(
@@ -727,6 +950,7 @@ class Session(SessionV1Mixin):
             compute,
             commit,
             max_iter=int(max_iter_value) if isinstance(max_iter_value, (int, float)) else None,
+            keeps_partial_result=True,
         )
 
     def _prepare_recalc(self, physical_only: bool = False) -> Operation:
@@ -743,7 +967,7 @@ class Session(SessionV1Mixin):
                 "recalculating dose.",
                 "beam_geometry_changed",
             )
-        self._check_bio_model("Recalculate dose", physical_only)
+        warnings = self._check_bio_model("Recalculate dose", physical_only)
         ct, cst, stf, pln = ws.ct, ws.cst, ws.stf, ws.pln
 
         def compute() -> tuple:
@@ -777,14 +1001,14 @@ class Session(SessionV1Mixin):
             else:
                 ws.set_many(stf=recalc_stf, result=result)
 
-        return Operation("recalc", "Recalculating dose", compute, commit)
+        return Operation("recalc", "Recalculating dose", compute, commit, warnings=warnings)
 
     def generate_stf(self) -> None:
         """Generate the steering information (beam geometry) for the plan."""
         self.execute(self.prepare("generate_stf"))
 
     def calc_dose_influence(self, physical_only: bool = False) -> None:
-        """Calculate the dose influence, generating the beams first if missing or stale."""
+        """Generate the beams and calculate their dose influence (Qt "Calc. Dose Influence")."""
         self.execute(self.prepare("calc_dose_influence", physical_only=physical_only))
 
     def optimize(self, solver: Optional[str] = None, max_iter: Optional[int] = None) -> dict:
@@ -792,7 +1016,9 @@ class Session(SessionV1Mixin):
 
         Returns the solver used, the iteration count and the final objective value.
         """
-        return self.execute(self.prepare("optimize", solver=solver, max_iter=max_iter))
+        summary = self.execute(self.prepare("optimize", solver=solver, max_iter=max_iter))
+        logger.info("Optimization finished: %s", summary)
+        return summary
 
     def recalc(self, physical_only: bool = False) -> None:
         """Recalculate the dose of the current weights with the current plan."""

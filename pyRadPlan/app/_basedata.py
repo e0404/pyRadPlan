@@ -40,10 +40,37 @@ def _check_kind(kind: str) -> None:
         raise ValueError(f"Unknown base data kind {kind!r}; use one of {', '.join(KINDS)}")
 
 
+def machine_identity(file_name: str) -> tuple[str, str]:
+    """Radiation mode and machine name of a machine file named ``<mode>_<name>.mat``."""
+    mode, _, name = os.path.splitext(file_name)[0].partition("_")
+    return mode, name
+
+
+def rbe_table_summary(file_name: str) -> dict[str, Any]:
+    """Model, tissue classes, reference and problems of an RBE table, as the dialog lists them.
+
+    An unreadable table is reported with the model ``"unreadable"`` and the read error as
+    ``problem``; a readable one without problems has ``problem`` ``None``.
+    """
+    from pyRadPlan.biology.models import TabulatedAlphaBetaModel  # noqa: PLC0415
+
+    try:
+        table = TabulatedAlphaBetaModel.quantity_table_kernel_set(file_name)
+    except Exception as exc:  # noqa: BLE001 - an unreadable table is listed as such
+        return {"model": "unreadable", "tissue_classes": "", "reference": "", "problem": str(exc)}
+    return {
+        "model": table.provenance_label,
+        "tissue_classes": ", ".join(
+            f"α_x={c.tissue.alpha_x:g}, β_x={c.tissue.beta_x:g}" for c in table.tissue_classes
+        ),
+        "reference": table.reference,
+        "problem": "\n".join(table.problems) or None,
+    }
+
+
 def _describe(entry: Any) -> dict[str, Any]:
     """One row of the Qt Base Data dialog (or phantom menu) for a base data file."""
     kind = entry.kind.name
-    stem = os.path.splitext(entry.name)[0]
     row: dict[str, Any] = {
         "name": entry.name,
         "file": entry.name,
@@ -52,27 +79,12 @@ def _describe(entry: Any) -> dict[str, Any]:
         "path": _path_text(entry.path),
     }
     if kind == "machines":
-        mode, _, name = stem.partition("_")
+        mode, name = machine_identity(entry.name)
         row.update(name=name, radiation_mode=mode)
     elif kind == "phantoms":
-        row["name"] = stem
+        row["name"] = os.path.splitext(entry.name)[0]
     elif kind == "rbe_tables":
-        from pyRadPlan.biology.models import TabulatedAlphaBetaModel  # noqa: PLC0415
-
-        try:
-            table = TabulatedAlphaBetaModel.quantity_table_kernel_set(entry.name)
-        except Exception as exc:  # noqa: BLE001 - an unreadable table is listed as such
-            row.update(model="unreadable", tissue_classes="", reference="", problem=str(exc))
-        else:
-            row.update(
-                model=table.provenance_label,
-                tissue_classes=", ".join(
-                    f"α_x={c.tissue.alpha_x:g}, β_x={c.tissue.beta_x:g}"
-                    for c in table.tissue_classes
-                ),
-                reference=table.reference,
-                problem="\n".join(table.problems) or None,
-            )
+        row.update(rbe_table_summary(entry.name))
     return row
 
 
@@ -107,8 +119,12 @@ def list_kind(kind: str) -> dict[str, Any]:
     return {"kind": kind, "folders": folders, "rows": [_describe(entry) for entry in entries]}
 
 
-def _mat_name(name: str) -> str:
+def mat_file_name(name: str) -> str:
+    """Return *name* with a ``.mat`` ending (kept if it has one, in any case)."""
     return name if name.lower().endswith(".mat") else f"{name}.mat"
+
+
+_mat_name = mat_file_name
 
 
 def _validator(

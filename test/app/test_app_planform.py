@@ -172,3 +172,185 @@ def test_bio_model_options_say_whether_they_are_configurable(web_client):
     configurable = {o["identifier"]: o["configurable"] for o in options["bio_models"]}
     assert configurable["none"] is False
     assert configurable["MCN"] is True
+
+
+def test_comparison_key_tells_values_apart():
+    import enum
+
+    import numpy as np
+
+    from pyRadPlan.app._forms import comparison_key
+
+    class Mode(enum.Enum):
+        A = "a"
+
+    assert comparison_key({"b": (1, 2), "a": np.float64(1.5)}) == comparison_key(
+        {"a": 1.5, "b": [1, 2]}
+    )
+    assert comparison_key(Mode.A) == comparison_key("a")
+    assert comparison_key(float("nan")) != comparison_key(None)
+    assert comparison_key({"rbe": 1.0}) == '{"rbe": 1.0}'
+
+
+def test_changes_from_form_sends_only_what_differs():
+    from pyRadPlan.app._planform import changes_from_form, plan_form_values
+    from pyRadPlan.optimization.solvers import get_solver
+    from pyRadPlan.plan import PhotonPlan
+
+    solver = get_solver("scipy")
+    pln = PhotonPlan(
+        prop_stf={"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 5.0},
+        prop_opt={"solver": solver, "legacy": 1},
+    )
+    form = plan_form_values(pln)
+    assert form["engine"] == "SVDPB" and form["machine"] == "Generic"
+    assert changes_from_form(pln, form) == {}
+    form["gantry_angles"] = [0.0, 90.0]
+    form["couch_angles"] = [0.0, 0.0]
+    assert set(changes_from_form(pln, form)) == {"gantry_angles", "couch_angles"}
+    form["engine_config"] = {"values": {"kernel_cutoff": 60.0}}
+    assert {"engine", "engine_config"} <= set(changes_from_form(pln, form))
+    assert changes_from_form(None, form) == form
+    assert changes_from_form(pln, {**form, "radiation_mode": "protons"})["engine"] == "SVDPB"
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = pln
+    session.set_plan(changes_from_form(pln, {**plan_form_values(pln), "num_of_fractions": 5}))
+    assert session.workspace.pln.num_of_fractions == 5
+    assert session.workspace.pln.prop_opt["solver"] is solver
+    assert session.workspace.pln.prop_opt["legacy"] == 1
+
+
+def test_plan_set_keeps_problem_entries_the_form_does_not_show():
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(
+        prop_opt={"convert_dose_objectives": False, "legacy": 1, "p_norm": 2.0}
+    )
+    session.set_plan({"problem": {"name": "nonlin_fluence", "values": {"p_norm": 3.0}}})
+    assert session.workspace.pln.prop_opt == {
+        "p_norm": 3.0,
+        "convert_dose_objectives": False,
+        "legacy": 1,
+    }
+
+
+def test_problem_settings_of_the_plan_detail_can_be_sent_back_edited():
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(
+        prop_opt={"convert_dose_objectives": False, "legacy": 1, "max_iter": 50}
+    )
+    values = session.plan_detail()["problem"]["values"]
+    assert "convert_dose_objectives" not in values and "legacy" not in values
+    session.set_plan({"problem": {"name": "nonlin_fluence", "values": {**values, "p_norm": 3.0}}})
+    assert session.workspace.pln.prop_opt == {
+        "p_norm": 3.0,
+        "max_iter": 50,
+        "convert_dose_objectives": False,
+        "legacy": 1,
+    }
+
+
+def test_unshown_problem_entries_sent_unchanged_are_kept():
+    from pyRadPlan.app._forms import FormValidationError
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(prop_opt={"convert_dose_objectives": False, "legacy": 1})
+    sent = {"convert_dose_objectives": False, "legacy": 1, "p_norm": 3.0}
+    session.set_plan({"problem": {"name": "nonlin_fluence", "values": sent}})
+    assert session.workspace.pln.prop_opt == sent
+    with pytest.raises(FormValidationError, match="convert_dose_objectives"):
+        session.set_plan(
+            {"problem": {"name": "nonlin_fluence", "values": {"convert_dose_objectives": True}}}
+        )
+
+
+def test_a_mode_change_keeps_scenario_model_and_problem_settings():
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(
+        scenarios={"model": "wcScen", "wc_sigma": 2.0},
+        prop_opt={"solver": {"name": "scipy", "max_iter": 7}, "convert_dose_objectives": False},
+    )
+    session.set_plan({"radiation_mode": "protons"})
+    pln = session.workspace.pln
+    assert pln.radiation_mode == "protons"
+    assert pln.scenarios.short_name == "wcScen" and pln.scenarios.wc_sigma == 2.0
+    assert pln.prop_opt == {
+        "solver": {"name": "scipy", "max_iter": 7},
+        "convert_dose_objectives": False,
+    }
+
+
+def test_a_mode_change_keeps_an_explicit_scenario_set():
+    from pyRadPlan.app._planform import changes_from_form, plan_form_values
+    from pyRadPlan.plan import PhotonPlan
+    from pyRadPlan.scenarios import ScenarioSet, SetupUncertainty
+
+    scenarios = ScenarioSet.from_points(
+        dimensions=[SetupUncertainty()], points={"setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]}
+    )
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(scenarios=scenarios)
+    session.set_plan({"radiation_mode": "protons"})
+    assert session.workspace.pln.scenarios.short_name == "explicit"
+
+    session.workspace.pln = PhotonPlan(scenarios=scenarios)
+    form = {**plan_form_values(session.workspace.pln), "radiation_mode": "protons"}
+    form.update(engine=None, engine_config={"values": {}}, bio_model="none")
+    session.set_plan(changes_from_form(session.workspace.pln, form))
+    assert session.workspace.pln.scenarios.short_name == "explicit"
+
+
+def test_a_mode_change_sending_scenarios_and_problem_uses_them():
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(
+        scenarios={"model": "wcScen"}, prop_opt={"convert_dose_objectives": False}
+    )
+    session.set_plan(
+        {
+            "radiation_mode": "protons",
+            "scenarios": {"model": "nomScen", "values": {}},
+            "problem": {"name": "nonlin_fluence", "values": {"p_norm": 4.0}},
+        }
+    )
+    pln = session.workspace.pln
+    assert pln.scenarios.short_name == "nomScen"
+    assert pln.prop_opt == {"p_norm": 4.0, "convert_dose_objectives": False}
+
+
+def test_engine_settings_the_engine_form_does_not_show_are_kept():
+    from pyRadPlan.app._planform import changes_from_form, plan_form_values
+    from pyRadPlan.plan import PhotonPlan
+
+    hidden = {"select_voxels_in_scenarios": False, "voxel_sub_ix": [1, 2, 3]}
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(prop_dose_calc={"engine": "SVDPB", **hidden})
+    assert session.plan_detail()["engine_config"]["values"] == {}
+    form = plan_form_values(session.workspace.pln)
+    assert form["engine_config"] == {"values": {}}
+    assert changes_from_form(session.workspace.pln, form) == {}
+
+    session.set_plan({"engine": "SVDPB", "engine_config": {"values": {"kernel_cutoff": 60.0}}})
+    prop = session.workspace.pln.prop_dose_calc
+    assert {k: prop[k] for k in hidden} == hidden and prop["kernel_cutoff"] == 60.0
+    session.set_plan({"engine_config": {"values": {**hidden, "kernel_cutoff": 50.0}}})
+    prop = session.workspace.pln.prop_dose_calc
+    assert {k: prop[k] for k in hidden} == hidden and prop["kernel_cutoff"] == 50.0
+
+
+def test_plan_set_rejects_a_plain_bio_model_specification():
+    from pyRadPlan.app._forms import FormValidationError
+
+    session = Session(auto_plan=False)
+    with pytest.raises(FormValidationError, match="model, option and values"):
+        session.set_plan(
+            {"radiation_mode": "protons", "bio_model": {"model": "constant_rbe", "rbe": 1.2}}
+        )

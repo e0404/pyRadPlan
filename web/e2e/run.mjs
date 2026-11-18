@@ -54,6 +54,21 @@ const closeStatus = async () => {
   if (await tid("opt-close").count()) await tid("opt-close").click();
 };
 
+// Phantoms are opened from File > Open Example Phantom, as in the Qt GUI.
+async function openPhantom(name) {
+  await tid("menu-file").click();
+  await tid("menu-item-phantoms").click();
+  await tid(`menu-item-phantom:${name}`).click();
+}
+
+// Dose influence, then optimization (the Qt workflow buttons).
+async function computeResult() {
+  await tid("btn-dij").click();
+  await waitIdle();
+  await tid("btn-optimize").click();
+  await waitIdle();
+}
+
 function expect(cond, message) {
   if (!cond) throw new Error(`check failed: ${message}`);
   console.log(`ok: ${message}`);
@@ -63,12 +78,12 @@ try {
   await page.goto(`${base}?backend=mock&speed=0.5`);
   await tid("boot-splash").waitFor({ state: "detached", timeout: 15000 });
   expect(await page.evaluate(() => globalThis.crossOriginIsolated), "page is cross-origin isolated (COOP/COEP)");
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
   await shot("start");
+  expect(!(await tid("btn-run-all").count()) && !(await tid("phantom-select").count()), "workflow widget has the Qt controls only (no Run All, no phantom selector)");
 
   // Load the TG119 phantom.
-  await tid("phantom-select").selectOption("TG119");
-  await tid("btn-load-phantom").click();
+  await openPhantom("TG119");
   await page.waitForFunction(() => document.querySelector('[data-testid="dot-load"]')?.getAttribute("data-status") === "done");
   await waitIdle();
   await page.waitForFunction(() => document.querySelector('[data-testid="slice-label"]')?.textContent?.includes("/ 128"));
@@ -93,7 +108,7 @@ try {
   // Dose influence with progress.
   await tid("btn-dij").click();
   await tid("workflow-progress").waitFor();
-  await page.waitForFunction(() => /beam/.test(document.querySelector('[data-testid="workflow-progress-detail"]')?.textContent ?? ""));
+  await page.waitForFunction(() => /beam/.test(document.querySelector('[data-testid="workflow-status"]')?.textContent ?? ""));
   await shot("dij-progress");
   await waitIdle();
   expect(
@@ -156,13 +171,12 @@ try {
   expect((await tid("dot-dij").getAttribute("data-status")) === "stale", "plan change marks the dose influence stale");
   await shot("plan-changed-stale");
 
-  // Run all -> fresh result with 6 beams.
-  await tid("btn-run-all").click();
-  await waitIdle();
+  // Dose influence + optimization -> fresh result with 6 beams.
+  await computeResult();
   await closeStatus();
-  expect((await tid("dot-result").getAttribute("data-status")) === "done", "run all refreshes the result");
+  expect((await tid("dot-result").getAttribute("data-status")) === "done", "dose influence + optimize refresh the result");
   await page.mouse.move(box.x - 50, box.y - 50);
-  await shot("run-all-6-beams");
+  await shot("result-6-beams");
 
   // DVH / QI analysis window.
   await tid("btn-dvh").click();
@@ -193,11 +207,12 @@ try {
   // Slice-mode fallback renders the same image (texture-size fallback path).
   await page.goto(`${base}?backend=mock&speed=0&sliceMode`);
   await tid("boot-splash").waitFor({ state: "detached", timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('[data-testid="phantom-select"] option') !== null);
-  await tid("btn-load-phantom").click();
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+  await openPhantom("TG119");
+  await page.waitForFunction(() => document.querySelector('[data-testid="dot-load"]')?.getAttribute("data-status") === "done");
   await waitIdle();
-  await tid("btn-run-all").click();
-  await waitIdle();
+  await computeResult();
+  await closeStatus();
   const info2 = await page.evaluate(() => window.__pyrpRenderer?.info);
   expect(info2?.ctSliceMode && info2?.quantitySliceMode, "slice-mode fallback active with ?sliceMode");
   await page.mouse.move(0, 0);

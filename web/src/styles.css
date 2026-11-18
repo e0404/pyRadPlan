@@ -388,15 +388,6 @@ label.check {
   white-space: nowrap;
 }
 
-.workflow .progress-detail {
-  font-size: 11px;
-  color: var(--text-dim);
-  min-height: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .wf-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

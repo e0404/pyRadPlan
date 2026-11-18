@@ -8,7 +8,7 @@ import pytest
 
 from pyRadPlan.gui.widgets.workflow._binary_import_dialog import BinaryImportDialog
 from pyRadPlan.gui.widgets.workflow._dicom_import_dialog import DicomImportDialog
-from pyRadPlan.gui.widgets.workflow._workflow_widget import _folder_has_images
+from pyRadPlan.app._io import folder_has_images as _folder_has_images
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
 
@@ -220,7 +220,7 @@ def test_image_import_dialog_preselects_from_dtype(qapp, binary_folder, tmp_path
 
 
 def test_unique_name_suffixes():
-    from pyRadPlan.gui.widgets.workflow._workflow_widget import _unique_name
+    from pyRadPlan.app._io import unique_name as _unique_name
 
     assert _unique_name("Heart", set()) == "Heart"
     assert _unique_name("Heart", {"Heart"}) == "Heart_2"

@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
-import re
-from copy import deepcopy
 from typing import Any, Callable, Optional
 
-import numpy as np
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +22,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.biology.models import BiologicalModel
+from pyRadPlan.app import Operation, PreconditionError, Session
+from pyRadPlan.app._io import (
+    entry_for_filter,
+    export_entries,
+    export_filter,
+    folder_kind,
+    image_keys,
+    is_image_file,
+    load_filter,
+    path_label,
+    writes_folder,
+)
+from pyRadPlan.app._results import default_tag, is_tagged
+from pyRadPlan.app._stages import available_actions, nested_fraction, progress_detail
+from pyRadPlan.app._stages import status_text
 from pyRadPlan.core import (
     ComputeCancelledError,
     ComputeControl,
@@ -37,148 +47,17 @@ from pyRadPlan.core import (
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
-from pyRadPlan.plan import validate_pln
-from pyRadPlan.quantities import get_available_quantities
 from .._base import WorkspaceWidget, Worker
-from .._display_names import SCENARIO_LABELS_KEY, bio_model_display_name, quantity_display_name
-from .._tissue_params import (
-    load_machine_quietly,
-    plan_dose_engine,
-    tissue_errors,
-    tissue_issues_quietly,
-    tissue_issues_text,
-    tissue_warnings,
-)
+from .._display_names import bio_model_display_name, quantity_display_name
+from .._tissue_params import tissue_issues_text
 
 logger = logging.getLogger(__name__)
 
-#: Suffix of the per-scenario result lists (see ``Dij.compute_result_ct_grid``).
-_SCENARIO_SUFFIX = "_scenario"
-#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
-_RESERVED_TAGS = ("beam", "scenario")
+#: Status dot of each column header -> the session stage it shows.
+_INDICATOR_STAGES = {"load": "data", "dij": "dij", "result": "optimization"}
 
-
-def _human_name(fmt: str, importer_cls) -> str:
-    """Best-effort human-readable label for a format, falling back to the key."""
-    return getattr(importer_cls, "name", None) or fmt.upper()
-
-
-def _build_load_filter() -> str:
-    """Build a QFileDialog filter string covering every registered importer."""
-    from pyRadPlan.io import get_available_formats, get_importer  # noqa: PLC0415
-
-    per_format: list[str] = []
-    all_patterns: list[str] = []
-    for fmt in sorted(get_available_formats()):
-        try:
-            importer_cls = get_importer(fmt)
-        except ValueError:
-            continue  # export-only format
-        # GTK file dialogs (Linux) match patterns case-sensitively.
-        exts = [e for ext in importer_cls.extensions for e in dict.fromkeys((ext, ext.upper()))]
-        patterns = " ".join(f"*{ext}" for ext in exts)
-        per_format.append(f"{_human_name(fmt, importer_cls)} ({patterns})")
-        all_patterns.extend(f"*{ext}" for ext in exts)
-
-    entries = [f"All supported ({' '.join(sorted(set(all_patterns)))})", *per_format]
-    entries.append("All files (*)")
-    return ";;".join(entries)
-
-
-def _unique_name(name: str, taken: set) -> str:
-    """Return *name*, or ``name_2``/``name_3``/... if it collides with *taken*."""
-    if name not in taken:
-        return name
-    i = 2
-    while f"{name}_{i}" in taken:
-        i += 1
-    return f"{name}_{i}"
-
-
-def _folder_has_images(directory: str) -> bool:
-    """Return True if the folder (or an immediate subfolder) holds SimpleITK images."""
-    from pyRadPlan.io import list_image_files  # noqa: PLC0415
-
-    if list_image_files(directory):
-        return True
-    for entry in sorted(os.listdir(directory)):
-        full = os.path.join(directory, entry)
-        if os.path.isdir(full) and list_image_files(full):
-            return True
-    return False
-
-
-def _build_save_filter() -> str:
-    """Offer the format that preserves all workspace objects and result quantities."""
-    return "pyRadPlan workspace (*.pkl *.pickle)"
-
-
-def _image_formats() -> list[tuple[str, str]]:
-    """Return (format_key, default_extension) for single-image (SimpleITK) exporters.
-
-    These write one 3-D image per file (nrrd/nifti/meta) and are the export targets
-    for individual result quantities.
-    """
-    from pyRadPlan.io import get_available_formats, get_exporter  # noqa: PLC0415
-
-    formats: list[tuple[str, str]] = []
-    for fmt in sorted(get_available_formats()):
-        try:
-            exporter_cls = get_exporter(fmt)
-        except ValueError:
-            continue
-        # Single-image formats are the non-container ones that write plain images;
-        # DICOM is directory/modality based and excluded here.
-        if exporter_cls.container or fmt == "dcm":
-            continue
-        formats.append((fmt, exporter_cls.extensions[0]))
-    return formats
-
-
-def _build_image_save_filter() -> str:
-    """Build a QFileDialog filter string for the single-image (SimpleITK) formats."""
-    from pyRadPlan.io import get_exporter  # noqa: PLC0415
-
-    entries: list[str] = []
-    for fmt, _ext in _image_formats():
-        exporter_cls = get_exporter(fmt)
-        patterns = " ".join(f"*{ext}" for ext in exporter_cls.extensions)
-        entries.append(f"{getattr(exporter_cls, 'name', fmt.upper())} ({patterns})")
-    return ";;".join(entries)
-
-
-def _recalculation_angles_match(pln, stf) -> bool:
-    """Whether forward dose can reuse the stored beams for the plan's angles.
-
-    Plans imported without angles use the existing steering information. A
-    single couch angle applies to every beam; angles are compared modulo 360.
-    """
-    if pln is None or stf is None or not stf.beams:
-        return False
-    props = pln.prop_stf or {}
-    for field, attribute in (("gantry_angles", "gantry_angle"), ("couch_angles", "couch_angle")):
-        value = props.get(field)
-        if value is None:
-            if field == "couch_angles" and props.get("gantry_angles") is not None:
-                value = [0.0]
-            else:
-                continue
-        try:
-            angles = np.asarray(value, dtype=float).ravel()
-        except (TypeError, ValueError):
-            return False
-        if field == "couch_angles":
-            if angles.size == 0:
-                angles = np.zeros(len(stf.beams))
-            elif angles.size == 1:
-                angles = np.repeat(angles, len(stf.beams))
-        if angles.size != len(stf.beams) or not np.all(np.isfinite(angles)):
-            return False
-        stored = np.array([getattr(beam, attribute) for beam in stf.beams])
-        difference = (angles - stored + 180.0) % 360.0 - 180.0
-        if not np.allclose(difference, 0.0, atol=1e-6, rtol=0.0):
-            return False
-    return True
+#: Status line of a current result, followed by the number of saved snapshots.
+_RESULT_AVAILABLE = "Optimization result available"
 
 
 class WorkflowWidget(WorkspaceWidget):
@@ -186,8 +65,10 @@ class WorkflowWidget(WorkspaceWidget):
 
     Binds to a :class:`~pyRadPlan.gui.workspace.WorkspaceManager` and enables or
     disables each workflow step depending on which pipeline objects
-    (ct, cst, pln, stf, dij, result) are currently available.  Long-running
-    computations (dose influence, optimization, forward dose) run in a
+    (ct, cst, pln, stf, dij, result) are currently available.  The workflow rules
+    (staleness, available steps, status text) and the steps themselves are those of the
+    manager's :class:`pyRadPlan.app.Session`; this widget asks the user, shows progress
+    and runs the long computations (dose influence, optimization, forward dose) in a
     background :class:`~PySide6.QtCore.QThread` so the UI stays responsive.
 
     Parameters
@@ -220,17 +101,10 @@ class WorkflowWidget(WorkspaceWidget):
         self._worker: Optional[Worker] = None
         self._control: Optional[ComputeControl] = None
         self._pending_success: Optional[Callable] = None
+        self._pending_error: Optional[Callable[[BaseException], bool]] = None
         #: Warnings reported by the running computation, shown once it ends.
         self._pending_warnings: list[str] = []
-        self._saved_tags: list[str] = []
         self._opt_status_win: Optional[OptimizationStatusWidget] = None
-        # matRad-style staleness: a downstream product (dij/result) is "stale"
-        # once an upstream object it was computed from changes.
-        self._dij_stale = False
-        self._result_stale = False
-        # Only some parts of the structure set feed the dose influence; objectives, for
-        # instance, only affect the optimization. Tracked to spot the ones that do.
-        self._tissue_signature: Optional[tuple] = None
         self._indicators: dict[str, QLabel] = {}
         #: Editors whose unapplied changes are offered before a computation, as
         #: ``(name, has_pending, apply)``; see :meth:`add_pending_changes_source`.
@@ -383,91 +257,57 @@ class WorkflowWidget(WorkspaceWidget):
     # Workspace → UI synchronisation
     # ------------------------------------------------------------------
 
+    @property
+    def session(self) -> Session:
+        """The workflow session of the workspace, whose rules and steps this widget uses."""
+        return self._ws.session
+
+    @property
+    def _saved_tags(self) -> list[str]:
+        """The snapshot tags of the result (kept by the session)."""
+        return self.session.saved_tags
+
+    @_saved_tags.setter
+    def _saved_tags(self, tags: list[str]) -> None:
+        self.session.saved_tags = list(tags)
+
+    @property
+    def _dij_stale(self) -> bool:
+        return self.session.tracker.dij_stale
+
+    @property
+    def _result_stale(self) -> bool:
+        return self.session.tracker.result_stale
+
     def _do_update(self, changed_keys: list) -> None:
         # This widget has no editable fields, only buttons/labels derived from
         # which pipeline objects exist.  It therefore *intentionally* reacts to
         # its own workspace writes (no ``hold_updates``) so that, e.g., the
         # "Save Result" button enables immediately after optimization finishes.
-        self._prune_saved_tags()
-        self._update_staleness(changed_keys)
+        # The session has seen the change already (it observes the store first).
         self._update_status()
         self._update_button_states()
         self._update_indicators()
 
-    def _prune_saved_tags(self) -> None:
-        """Drop snapshot tags whose keys no longer exist in the result.
-
-        Keeps the tag list consistent when the result is replaced or cleared by
-        any path (File menu, another widget, ``ws.clear()``), not just this
-        widget's own load handler.
-        """
-        result = self._ws.result or {}
-        self._saved_tags = [
-            tag for tag in self._saved_tags if any(key.endswith(f"_{tag}") for key in result)
-        ]
-
     def _is_tagged(self, key: str) -> bool:
         """Whether *key* is a snapshot key created by :meth:`_on_save_result`."""
-        return any(key.endswith(f"_{tag}") for tag in self._saved_tags)
-
-    @staticmethod
-    def _tissue_classes_signature(cst) -> Optional[tuple]:
-        """
-        Per-structure tissue properties, as far as they influence the dose influence.
-
-        Keyed by the structure's position rather than its name, so renaming a structure
-        leaves the signature unchanged.
-        """
-        vois = getattr(cst, "vois", None)
-        if vois is None:
-            return None
-        return tuple(voi.tissue_properties.model_dump_json() for voi in vois)
-
-    def _update_staleness(self, changed_keys: list) -> None:
-        """Flag downstream products as outdated when an upstream object changes.
-
-        A product written in the same update as its upstream (e.g. loading a
-        .mat that carries both ``pln`` and ``dij``) is fresh; only an
-        upstream-only change marks the product outdated.
-        """
-        ws = self._ws
-        keys = set(changed_keys)
-
-        # Editing the tissue parameters changes the alpha/beta the biological model
-        # yields per voxel, so the dose influence has to be recalculated. Other structure
-        # set edits (objectives, colors, names) leave it valid.
-        signature = self._tissue_classes_signature(ws.cst)
-        tissue_changed = self._tissue_signature is not None and signature != self._tissue_signature
-        self._tissue_signature = signature
-
-        if not ws.has("dij"):
-            self._dij_stale = False
-        elif "dij" in keys:
-            self._dij_stale = False
-        elif keys & {"pln", "stf"} or ("cst" in keys and tissue_changed):
-            self._dij_stale = True
-        if not ws.has("result"):
-            self._result_stale = False
-        elif "result" in keys:
-            self._result_stale = False
-        elif keys & {"pln", "cst", "stf", "dij"}:
-            self._result_stale = True
+        return is_tagged(key, self._saved_tags)
 
     def _update_indicators(self) -> None:
-        ws = self._ws
-        self._set_indicator("load", ws.has("ct", "cst"), stale=False)
-        self._set_indicator("dij", ws.has("dij"), stale=self._dij_stale)
-        self._set_indicator("result", ws.has("result"), stale=self._result_stale)
+        stages = self.session.stages()
+        for indicator, stage in _INDICATOR_STAGES.items():
+            self._set_indicator(indicator, stages[stage])
 
-    def _set_indicator(self, stage: str, done: bool, stale: bool) -> None:
+    def _set_indicator(self, stage: str, status: str) -> None:
+        """Show *status* (``missing`` / ``done`` / ``stale``) on the dot of *stage*."""
         dot = self._indicators.get(stage)
         if dot is None:
             return
-        if not done:
+        if status == "missing":
             dot.setText("○")
             dot.setStyleSheet("color: #888888;")
             dot.setToolTip("Not yet computed")
-        elif stale:
+        elif status == "stale":
             dot.setText("●")
             dot.setStyleSheet("color: #e67e22;")
             dot.setToolTip("Outdated — inputs changed since this was computed")
@@ -477,39 +317,24 @@ class WorkflowWidget(WorkspaceWidget):
             dot.setToolTip("Up to date")
 
     def _update_status(self) -> None:
-        ws = self._ws
-        if not ws.has("ct", "cst"):
-            text = "No data loaded"
-        elif not ws.has("pln"):
-            text = "CT and structures loaded – configure a plan to continue"
-        elif not ws.has("stf", "dij"):
-            text = "Ready for dose influence calculation"
-        elif self._dij_stale:
-            text = "Dose influence outdated — recalculate"
-        elif not ws.has("result"):
-            text = "Ready for optimization"
-        elif self._result_stale:
-            text = "Result outdated — re-optimize"
-        else:
-            n = len(self._saved_tags)
-            suffix = f" · {n} saved snapshot{'s' if n != 1 else ''}" if n else ""
-            text = f"Optimization result available{suffix}"
+        text = status_text(self._ws.present(), self.session.tracker)
+        n = len(self._saved_tags)
+        if n and text == _RESULT_AVAILABLE:
+            text += f" · {n} saved snapshot{'s' if n != 1 else ''}"
         self._lbl_status.setText(text)
 
     def _update_button_states(self) -> None:
-        ws = self._ws
-        has_patient = ws.has("ct", "cst")
-        has_pln = ws.has("pln")
-        has_stf_dij = ws.has("stf", "dij")
-        has_result = ws.has("result")
-
-        self._btn_calc_dose.setEnabled(has_patient and has_pln)
+        # Availability by the stored objects only: while a computation runs the busy
+        # cycle disables the buttons, and they are updated when it ends.
+        present = self._ws.present()
+        actions = available_actions(present)
+        self._btn_calc_dose.setEnabled(actions["calc_dose_influence"])
         # Loading a precomputed dij is always available; geometry compatibility is
         # not enforced for now.
         self._btn_load_dij.setEnabled(True)
-        self._btn_optimize.setEnabled(has_stf_dij)
-        self._btn_recalc.setEnabled(has_result and has_stf_dij)
-        self._btn_save_result.setEnabled(has_result)
+        self._btn_optimize.setEnabled(actions["optimize"])
+        self._btn_recalc.setEnabled(actions["recalc"])
+        self._btn_save_result.setEnabled("result" in present)
 
     # ------------------------------------------------------------------
     # Background-thread runner
@@ -522,6 +347,7 @@ class WorkflowWidget(WorkspaceWidget):
         on_success: Optional[Callable] = None,
         busy_text: Optional[str] = None,
         control: Optional[ComputeControl] = None,
+        on_error: Optional[Callable[[BaseException], bool]] = None,
         **kwargs: Any,
     ) -> None:
         """Execute *fn* in a QThread.
@@ -530,12 +356,15 @@ class WorkflowWidget(WorkspaceWidget):
         an error dialog on failure.  *busy_text* is shown in the status label
         while the computation runs.  *control* (if given) is installed so the
         computation can be cooperatively paused/stopped from the GUI thread.
+        *on_error(exc)* (if given) is called on the main thread when the computation
+        fails or is stopped; returning True means it explained the error itself.
         """
         if self.is_busy:
             QMessageBox.warning(self, "Busy", "A computation is already in progress.")
             return
 
         self._pending_success = on_success
+        self._pending_error = on_error
         self._pending_warnings = []
         # Every task gets a control so shutdown() can always request a stop.
         self._control = control if control is not None else ComputeControl()
@@ -557,6 +386,7 @@ class WorkflowWidget(WorkspaceWidget):
     @Slot(object)
     def _on_thread_finished(self, result: Any) -> None:
         self._cleanup_thread()
+        self._pending_error = None
         callback, self._pending_success = self._pending_success, None
         if callback is not None:
             callback(result)
@@ -566,11 +396,122 @@ class WorkflowWidget(WorkspaceWidget):
     def _on_thread_error(self, exc: object) -> None:
         self._cleanup_thread()
         self._pending_success = None
+        handler, self._pending_error = self._pending_error, None
+        handled = bool(handler(exc)) if handler is not None else False
         self._show_pending_warnings()
         if isinstance(exc, ComputeCancelledError):
             self._lbl_status.setText("Stopped")
             return
-        self._show_error(exc)
+        if not handled:
+            self._show_error(exc)
+
+    def _run_operation(
+        self,
+        operation: Operation,
+        on_done: Optional[Callable[[Any], None]] = None,
+        on_error: Optional[Callable[[BaseException], bool]] = None,
+    ) -> None:
+        """Run a prepared session operation: compute in the worker thread, commit here.
+
+        The session marks itself busy (:meth:`~pyRadPlan.app.Session.begin`), computes in
+        the worker thread with the operation's control (:meth:`~pyRadPlan.app.Session.run`)
+        and writes the result to the workspace on the GUI thread
+        (:meth:`~pyRadPlan.app.Session.finish`), then *on_done* receives what the commit
+        returned. A failed or stopped run aborts the operation; *on_error* may explain the
+        error instead of the default dialog by returning True.
+        """
+        if self.is_busy:
+            QMessageBox.warning(self, "Busy", "A computation is already in progress.")
+            return
+        session = self.session
+        session.begin(operation)
+
+        def finished(value: Any) -> None:
+            committed = session.finish(operation, value)
+            # A step writing nothing (a save) leaves no workspace change to refresh it.
+            self._update_status()
+            if on_done is not None:
+                on_done(committed)
+
+        def failed(exc: BaseException) -> bool:
+            session.abort(operation, exc)
+            self._update_status()
+            return on_error(exc) if on_error is not None else False
+
+        try:
+            self._run_in_thread(
+                lambda: session.run(operation),
+                on_success=finished,
+                on_error=failed,
+                control=operation.control,
+                busy_text=f"{operation.label}…",
+            )
+        except BaseException as exc:
+            session.abort(operation, exc)
+            raise
+
+    def _prepare(self, step: str, action: str, **params: Any) -> Optional[Operation]:
+        """Prepare a session operation, answering unmet preconditions with dialogs.
+
+        An unsupported biological model offers the physical dose only and prepares the
+        step again with it; other preconditions are explained. Returns ``None`` if the
+        step must not run.
+        """
+        try:
+            return self.session.prepare(action, **params)
+        except PreconditionError as exc:
+            if exc.code != "bio_model_unsupported":
+                self._explain_precondition(step, exc)
+                return None
+            name = bio_model_display_name(exc.data["model"])
+            if self._ask_physical_dose_only(step, name, exc.data["issues"]) != "physical":
+                return None
+        try:
+            return self.session.prepare(action, physical_only=True, **params)
+        except Exception as exc:  # noqa: BLE001 - surface, never crash
+            self._show_error(exc, step)
+            return None
+
+    def _explain_precondition(self, step: str, exc: PreconditionError) -> None:
+        """Show why *step* cannot run, in the words of the workflow's dialogs."""
+        if exc.code == "busy":
+            QMessageBox.warning(self, "Busy", "A computation is already in progress.")
+        elif exc.code == "invalid_reference":
+            invalid = [issue for issue in exc.data["issues"] if issue.kind == "invalid_reference"]
+            QMessageBox.critical(
+                self,
+                step,
+                "Invalid reference photon parameters α_x / β_x, which no biological "
+                f"model can be evaluated with:\n\n{tissue_issues_text(invalid)}\n\n"
+                "Correct the tissue parameters of these structures first.",
+            )
+        elif exc.code == "biological_objectives":
+            objectives = dict.fromkeys(
+                f"{name}: {quantity_display_name(identifier)}"
+                for name, identifier in exc.data["objectives"]
+            )
+            QMessageBox.warning(
+                self,
+                step,
+                "These objectives are evaluated on biological quantities:\n\n"
+                + "\n".join(f"• {entry}" for entry in objectives)
+                + "\n\nbut the dose influence was calculated without a biological model, so "
+                "it holds the physical dose only. Select a biological model in the plan and "
+                "calculate the dose influence again, or evaluate the objectives on the "
+                "physical dose.",
+            )
+        elif exc.code == "no_weights":
+            QMessageBox.warning(self, step, "No beamlet weights found in the current result.")
+        elif exc.code == "beam_geometry_changed":
+            QMessageBox.warning(
+                self,
+                step,
+                "The plan's beam angles or beam count differ from the stored steering "
+                "information. Calculate Dose Influence and optimize again before "
+                "recalculating dose.",
+            )
+        else:
+            QMessageBox.warning(self, step, str(exc))
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
@@ -654,34 +595,9 @@ class WorkflowWidget(WorkspaceWidget):
         else:
             self._progress.setRange(0, self._PROGRESS_STEPS)
             self._progress.setValue(round(fraction * self._PROGRESS_STEPS))
-        self._lbl_status.setText(
-            " · ".join(
-                f"{lvl.name} {lvl.current}/{lvl.total}"
-                if lvl.total
-                else f"{lvl.name} {lvl.current}"
-                for lvl in report.levels
-            )
-        )
+        self._lbl_status.setText(progress_detail(report.levels))
 
-    @staticmethod
-    def _nested_fraction(levels) -> Optional[float]:
-        """Combine nested progress levels (outer→inner) into a single fraction.
-
-        Each level contributes its progress weighted by the share of the
-        enclosing level it represents, e.g. beam 1/2 with ray 50/100 gives
-        ``0.5 + 0.5 * 0.5 = 0.75``.  Returns ``None`` when the outermost level is
-        indeterminate (no total), so the bar pulses instead.
-        """
-        fraction = 0.0
-        weight = 1.0
-        seen = False
-        for level in levels:
-            if not level.total:
-                break
-            fraction += weight * level.fraction
-            weight /= level.total
-            seen = True
-        return fraction if seen else None
+    _nested_fraction = staticmethod(nested_fraction)
 
     def _on_status_report(self, report: StatusReport) -> None:
         """Route a metric/status report to the status window and status line."""
@@ -723,9 +639,9 @@ class WorkflowWidget(WorkspaceWidget):
 
     def load_phantom(self, name: str) -> None:
         """Load the bundled phantom *name* (see :func:`pyRadPlan.io.available_phantoms`)."""
-        from pyRadPlan.io import phantom_path  # noqa: PLC0415
-
-        self._load_into_workspace(phantom_path(name), busy_text=f"Loading {name}…")
+        operation = self._prepare("Load", "load_phantom", name=name)
+        if operation is not None:
+            self._run_operation(operation, on_done=self._show_load_warnings)
 
     def load_dij(self) -> None:
         """Prompt for and load a precomputed dose-influence matrix (.mat)."""
@@ -751,24 +667,16 @@ class WorkflowWidget(WorkspaceWidget):
         """Export selected result quantities as image files."""
         self._on_save_result_to_disk()
 
-    def _load_into_workspace(self, path: str, busy_text: str) -> None:
+    def _load_into_workspace(self, path: str, label: str) -> None:
         """Load everything available from *path* and merge it into the workspace.
 
         Runs :func:`pyRadPlan.io.load_data` in the worker thread; on success the
-        recognized pipeline objects are merged into the workspace. A supplied CT starts
-        a new patient; imports without a CT update the existing patient.  A loaded
-        structure set requires a CT (in the file or already present); otherwise it
-        is skipped with a warning.  A bare ``dose`` image (formats without a matRad
-        ``result``) is wrapped into a result dict so the viewer can display it.
+        recognized pipeline objects are merged into the workspace by the session (see
+        :meth:`_merge_loaded_data`). *label* is shown while it runs.
         """
-
-        def _load() -> dict:
-            # Deferred: only needed inside the worker thread, not at widget construction.
-            from pyRadPlan.io import load_data  # noqa: PLC0415
-
-            return load_data(path)
-
-        self._run_in_thread(_load, on_success=self._merge_loaded_data, busy_text=busy_text)
+        operation = self._prepare("Load", "load_path", path=path, label=label)
+        if operation is not None:
+            self._run_operation(operation, on_done=self._show_load_warnings)
 
     def _merge_loaded_data(self, data: dict) -> None:
         """Merge recognized pipeline objects from a load into the workspace.
@@ -778,45 +686,25 @@ class WorkflowWidget(WorkspaceWidget):
         onto the current patient. A structure set requires a CT;
         otherwise it is skipped with a warning. A bare ``dose`` image (formats
         without a matRad ``result``) is wrapped into a result dict for the viewer.
+        A new patient or replacement result also replaces the snapshot tags.
         """
-        payload = {k: data[k] for k in self._ws.keys if data.get(k) is not None}
-        if "cst" in payload and "ct" not in payload and not self._ws.has("ct"):
-            QMessageBox.warning(
-                self,
-                "Load",
-                "Load a CT before loading a structure set; the structures were skipped.",
-            )
-            payload.pop("cst")
-        if "result" not in payload and data.get("dose") is not None:
-            # sitk.Image values are rendered directly by the result widget.
-            payload["result"] = {"physical_dose": data["dose"]}
-        if "ct" in payload or "result" in payload:
-            # A new patient or replacement result also replaces its snapshot tags.
-            self._saved_tags = [
-                tag for tag in data.get("saved_result_tags", []) if isinstance(tag, str)
-            ]
-        if "ct" in payload:
-            # Publish one complete patient state; observers must never see a new CT
-            # paired with the previous patient's structures or calculated data.
-            payload = {**dict.fromkeys(self._ws.keys), **payload}
-        if payload:
-            self._ws.set_many(**payload)
+        self._show_load_warnings(self.session.merge_loaded(data))
+
+    def _show_load_warnings(self, warnings: Optional[list[str]]) -> None:
+        for warning in warnings or []:
+            QMessageBox.warning(self, "Load", warning)
 
     def _on_load_file(self) -> None:
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Load patient data", "", _build_load_filter()
-        )
+        filepath, _ = QFileDialog.getOpenFileName(self, "Load patient data", "", load_filter())
         if not filepath:
             return
 
         # A bare image file carries no semantics (CT? mask? dose?); ask the user.
         # Container formats (.mat/.npz/.pkl) and DICOM keep the direct load path.
-        from pyRadPlan.io.sitk_based._binary_import import IMAGE_EXTENSIONS  # noqa: PLC0415
-
-        if filepath.lower().endswith(IMAGE_EXTENSIONS):
+        if is_image_file(filepath):
             self._open_image_import_dialog(filepath)
             return
-        self._load_into_workspace(filepath, busy_text="Loading patient data…")
+        self._load_into_workspace(filepath, "Loading patient data")
 
     def _open_image_import_dialog(self, filepath: str) -> None:
         """Ask what a bare image file represents and import it accordingly."""
@@ -832,90 +720,21 @@ class WorkflowWidget(WorkspaceWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         sel = dialog.selection()
-        mode = sel["mode"]
-
-        if mode in ("ct_new", "ct_replace"):
-
-            def _load() -> Any:
-                from pyRadPlan.io.sitk_based import read_ct_image  # noqa: PLC0415
-
-                return read_ct_image(filepath)
-
-            def _on_success(new_ct: Any) -> None:
-                if mode == "ct_new":
-                    self._ws.clear()
-                elif not sel["grid_matches"]:
-                    # Structures/dose influence/results were built on the old grid.
-                    self._ws.clear(["cst", "dij", "result"])
-                self._ws.ct = new_ct
-
-            self._run_in_thread(_load, on_success=_on_success, busy_text="Importing CT…")
-
-        elif mode == "structures":
-            existing = list(self._ws.cst.vois) if self._ws.has("cst") else []
-
-            def _load() -> Any:
-                from pyRadPlan.cst import validate_cst  # noqa: PLC0415
-                from pyRadPlan.io.sitk_based import image_file_to_vois  # noqa: PLC0415
-
-                new_vois = image_file_to_vois(ct, filepath)
-                taken = {v.name for v in existing}
-                merged = list(existing)
-                for voi in new_vois:
-                    unique = _unique_name(voi.name, taken)
-                    taken.add(unique)
-                    merged.append(
-                        voi if unique == voi.name else voi.model_copy(update={"name": unique})
-                    )
-                return validate_cst(merged, ct)
-
-            def _on_success(cst: Any) -> None:
-                self._ws.cst = cst
-
-            self._run_in_thread(_load, on_success=_on_success, busy_text="Importing structures…")
-
-        elif mode == "dose":
-
-            def _load() -> Any:
-                import SimpleITK as sitk  # noqa: PLC0415
-
-                from pyRadPlan.core.resample import resample_image  # noqa: PLC0415
-
-                image = sitk.ReadImage(filepath)
-                reference = ct.cube_hu
-                if (
-                    image.GetSize() != reference.GetSize()
-                    or image.GetSpacing() != reference.GetSpacing()
-                    or image.GetOrigin() != reference.GetOrigin()
-                    or image.GetDirection() != reference.GetDirection()
-                ):
-                    image = resample_image(
-                        image,
-                        interpolator=sitk.sitkLinear,
-                        target_image=reference,
-                        extrapolate=0,
-                    )
-                return image
-
-            def _on_success(image: Any) -> None:
-                result = dict(self._ws.result or {})
-                key = _unique_name(sel["name"], set(result))
-                result[key] = image
-                self._ws.result = result
-
-            self._run_in_thread(_load, on_success=_on_success, busy_text="Importing dose…")
+        operation = self._prepare(
+            "Import Image", "import_image", path=filepath, mode=sel["mode"], name=sel.get("name")
+        )
+        if operation is not None:
+            self._run_operation(operation)
 
     def _on_load_folder(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Load patient folder")
         if not directory:
             return
 
-        # Deferred: keep the DICOM stack out of widget construction.
-        from pyRadPlan.io.dicom import DicomImporter  # noqa: PLC0415
-
-        if DicomImporter.handles_directory(directory):
+        kind = folder_kind(directory)
+        if kind == "dicom":
             self._open_dicom_import_dialog(directory)
-        elif _folder_has_images(directory):
+        elif kind == "images":
             self._open_binary_import_dialog(directory)
         else:
             QMessageBox.warning(
@@ -935,22 +754,11 @@ class WorkflowWidget(WorkspaceWidget):
         if not ct_file:
             QMessageBox.warning(self, "Import", "No CT file selected.")
             return
-        selections = dialog.selections()
-
-        def _load() -> dict:
-            from pyRadPlan.io import load_binary_patient  # noqa: PLC0415
-            from pyRadPlan.io.sitk_based import read_ct_image  # noqa: PLC0415
-
-            active = [s for s in selections if str(s.get("voi_type", "")).upper() != "IGNORED"]
-            if not active:
-                # CT only; nothing to assemble into a structure set.
-                return {"ct": read_ct_image(ct_file)}
-            ct, cst = load_binary_patient(ct_file, [], selections=selections)
-            return {"ct": ct, "cst": cst}
-
-        self._run_in_thread(
-            _load, on_success=self._merge_loaded_data, busy_text="Importing binary data…"
+        operation = self._prepare(
+            "Import", "import_binary", ct_file=ct_file, selections=dialog.selections()
         )
+        if operation is not None:
+            self._run_operation(operation, on_done=self._show_load_warnings)
 
     def _open_dicom_import_dialog(self, directory: str) -> None:
         """Scan a DICOM folder, ask what to import, and load the choice.
@@ -959,17 +767,12 @@ class WorkflowWidget(WorkspaceWidget):
         the load reads the pixel data), so the progress bar and status line follow
         them instead of the window freezing.
         """
-        from ._dicom_import_dialog import scan_folder  # noqa: PLC0415
-        from pyRadPlan.io.dicom import DicomImporter  # noqa: PLC0415
-
-        importer = DicomImporter(directory)
-
-        self._run_in_thread(
-            scan_folder,
-            importer,
-            on_success=lambda catalog: self._start_dicom_import(importer, catalog),
-            busy_text="Scanning DICOM folder…",
-        )
+        operation = self._prepare("Import DICOM", "scan_dicom", directory=directory)
+        if operation is not None:
+            self._run_operation(
+                operation,
+                on_done=lambda scan: self._start_dicom_import(scan["importer"], scan["catalog"]),
+            )
 
     def _start_dicom_import(self, importer: Any, catalog: dict) -> None:
         """Ask which series/structures/dose to import from a scanned folder, then load."""
@@ -982,34 +785,11 @@ class WorkflowWidget(WorkspaceWidget):
         dialog = DicomImportDialog(importer, self, catalog=catalog)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        sel = dialog.selection()
-
-        def _load() -> dict:
-            # One step per object, so the bar reflects the whole import and each
-            # loader's own progress advances it by that step's share.
-            steps = 1 + bool(sel.get("struct_file")) + bool(sel.get("load_dose"))
-            data: dict[str, Any] = {}
-            with importer.progress("Importing DICOM", total=steps) as step:
-                data["ct"] = importer.load_ct(series_uid=sel.get("series_uid"))
-                step.advance()
-                if sel.get("struct_file"):
-                    cst = importer.load_cst(ct=data["ct"], struct_file=sel["struct_file"])
-                    if cst is not None:
-                        data["cst"] = cst
-                    step.advance()
-                if sel.get("load_dose"):
-                    # dose_file None => importer auto-selects the plan physical dose.
-                    # The CT is passed so the dose comes back on its grid, which is
-                    # what the viewer indexes the overlay with.
-                    dose = importer.load_dose(dose_file=sel.get("dose_file"), ct=data["ct"])
-                    if dose is not None:
-                        data["dose"] = dose
-                    step.advance()
-            return data
-
-        self._run_in_thread(
-            _load, on_success=self._merge_loaded_data, busy_text="Importing DICOM data…"
+        operation = self._prepare(
+            "Import DICOM", "import_dicom", importer=importer, selection=dialog.selection()
         )
+        if operation is not None:
+            self._run_operation(operation, on_done=self._show_load_warnings)
 
     def _on_load_dij(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(
@@ -1018,21 +798,17 @@ class WorkflowWidget(WorkspaceWidget):
         if not filepath:
             return
 
-        def _load() -> dict:
-            from pyRadPlan.io import load_data  # noqa: PLC0415
+        def explain(exc: BaseException) -> bool:
+            if not (isinstance(exc, PreconditionError) and exc.code == "no_dij"):
+                return False
+            QMessageBox.warning(self, "Load Dij", "No dose-influence matrix found in the file.")
+            return True
 
-            return load_data(filepath)
-
-        def _on_success(data: dict) -> None:
-            payload = {k: data[k] for k in ("stf", "dij") if data.get(k) is not None}
-            if "dij" not in payload:
-                QMessageBox.warning(
-                    self, "Load Dij", "No dose-influence matrix found in the file."
-                )
-                return
-            self._ws.set_many(**payload)
-
-        self._run_in_thread(_load, on_success=_on_success, busy_text="Loading dose influence…")
+        operation = self._prepare(
+            "Load Dij", "load_dij", path=filepath, label="Loading dose influence"
+        )
+        if operation is not None:
+            self._run_operation(operation, on_error=explain)
 
     def _on_import_binary(self) -> None:
         QMessageBox.information(self, "Binary Import", "Binary import is not yet implemented.")
@@ -1131,56 +907,6 @@ class WorkflowWidget(WorkspaceWidget):
         box.exec()
         return "physical" if box.clickedButton() is physical_btn else "cancel"
 
-    def _check_bio_model(self, step: str) -> bool:
-        """
-        Check the plan's biological model against its machine, dose engine and tissues.
-
-        Runs the check the plan's dose engine (its own, or the default engine of the
-        radiation mode) runs, before *step* starts. Invalid reference
-        α_x / β_x block the calculation; other errors offer to calculate the physical dose
-        only, which sets the plan's model to ``none`` in the workspace. Warnings (e.g. MKM
-        tissues matching mMKM kernels, which are evaluated with the base data's model) never
-        ask: they are logged, shown in the status line, and the calculation runs with the
-        biological model, whose dose engine reports them again. Returns whether *step* may
-        run.
-        """
-        pln, cst = self._ws.pln, self._ws.cst
-        model = getattr(pln, "bio_model", None)
-        if not isinstance(model, BiologicalModel) or model.model == "none" or cst is None:
-            return True
-        machine = getattr(pln, "machine", None)
-        if isinstance(machine, str) or machine is None:
-            machine = load_machine_quietly(
-                getattr(pln, "radiation_mode", ""), machine or "Generic"
-            )
-        name = bio_model_display_name(model)
-        issues = tissue_issues_quietly(machine, model, cst, plan_dose_engine(pln))
-        errors = tissue_errors(issues)
-        if not errors:
-            self._show_tissue_warnings(step, name, tissue_warnings(issues))
-            return True
-        invalid = [issue for issue in errors if issue.kind == "invalid_reference"]
-        if invalid:
-            QMessageBox.critical(
-                self,
-                step,
-                "Invalid reference photon parameters α_x / β_x, which no biological "
-                f"model can be evaluated with:\n\n{tissue_issues_text(invalid)}\n\n"
-                "Correct the tissue parameters of these structures first.",
-            )
-            return False
-        if self._ask_physical_dose_only(step, name, errors) != "physical":
-            return False
-        try:
-            data = {field: deepcopy(getattr(pln, field)) for field in type(pln).model_fields}
-            data["bio_model"] = "none"
-            physical_pln = validate_pln(type(pln)(**data))
-        except Exception as exc:  # noqa: BLE001 - surface, never crash
-            self._show_error(exc, step)
-            return False
-        self._ws.pln = physical_pln
-        return True
-
     def _show_tissue_warnings(self, step: str, model_name: str, warnings: list) -> None:
         """
         Log tissue warnings and show them in the status line, without asking anything.
@@ -1196,124 +922,44 @@ class WorkflowWidget(WorkspaceWidget):
             f"{len(warnings)} tissue warning(s): evaluated with the base data's model"
         )
 
+    def _run_calculation(self, step: str, action: str) -> None:
+        """Prepare a step using the plan's biological model and run it.
+
+        The session runs the check the plan's dose engine (its own, or the default engine
+        of the radiation mode) runs, before *step* starts. Invalid reference α_x / β_x
+        block the calculation; other errors offer to calculate the physical dose only,
+        which sets the plan's model to ``none`` in the workspace. Warnings (e.g. MKM
+        tissues matching mMKM kernels, which are evaluated with the base data's model)
+        never ask: they are logged, shown in the status line, and the calculation runs with
+        the biological model, whose dose engine reports them again.
+        """
+        operation = self._prepare(step, action)
+        if operation is None:
+            return
+        if operation.warnings:
+            name = bio_model_display_name(self._ws.pln.bio_model)
+            self._show_tissue_warnings(step, name, operation.warnings)
+        self._run_operation(operation)
+
     def _on_calc_dose(self) -> None:
         if not self._resolve_pending_changes("Calculate Dose Influence"):
             return
-        if not self._check_bio_model("Calculate Dose Influence"):
-            return
-        ct, cst, pln = self._ws.ct, self._ws.cst, self._ws.pln
-
-        def _compute():
-            # Deferred: only needed inside the worker thread, not at widget construction.
-            from pyRadPlan import calc_dose_influence, generate_stf  # noqa: PLC0415
-
-            stf = generate_stf(ct, cst, pln)
-            dij = calc_dose_influence(ct, cst, stf, pln)
-            return stf, dij
-
-        def _on_success(result: tuple) -> None:
-            stf, dij = result
-            self._ws.set_many(stf=stf, dij=dij)
-
-        self._run_in_thread(
-            _compute, on_success=_on_success, busy_text="Calculating dose influence…"
-        )
+        self._run_calculation("Calculate Dose Influence", "calc_dose_influence")
 
     # ------------------------------------------------------------------
     # Optimization callbacks
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _biological_objectives(cst: Any) -> list[str]:
-        """``"<structure>: <quantity>"`` of each objective on a biological quantity."""
-        quantities = get_available_quantities()
-        found = []
-        for voi in getattr(cst, "vois", None) or []:
-            for objective in getattr(voi, "objectives", None) or []:
-                identifier = getattr(objective, "quantity", None)
-                quantity = quantities.get(identifier) if isinstance(identifier, str) else None
-                if quantity is not None and quantity.biological:
-                    entry = f"{voi.name}: {quantity_display_name(identifier)}"
-                    if entry not in found:
-                        found.append(entry)
-        return found
-
-    def _check_objective_quantities(self) -> bool:
-        """
-        Explain upfront that biological objectives need a biological dose influence.
-
-        Without a biological model the dose influence carries no α/β or RBE data, and the
-        optimization could not compute a biological quantity. Returns whether it may run.
-        """
-        dij = self._ws.dij
-        if dij is None or getattr(dij, "bio_model", None) is not None:
-            return True
-        if getattr(dij, "alpha_dose", None) is not None:
-            return True
-        objectives = self._biological_objectives(self._ws.cst)
-        if not objectives:
-            return True
-        QMessageBox.warning(
-            self,
-            "Optimize",
-            "These objectives are evaluated on biological quantities:\n\n"
-            + "\n".join(f"• {entry}" for entry in objectives)
-            + "\n\nbut the dose influence was calculated without a biological model, so it "
-            "holds the physical dose only. Select a biological model in the plan and "
-            "calculate the dose influence again, or evaluate the objectives on the physical "
-            "dose.",
-        )
-        return False
-
     def _on_optimize(self) -> None:
         if not self._resolve_pending_changes("Optimize", outdates_input=True):
             return
-        if not self._check_objective_quantities():
+        # Biological objectives need a dose influence calculated with a biological model.
+        operation = self._prepare("Optimize", "optimize")
+        if operation is None:
             return
-        ct, cst, stf, dij, pln = (
-            self._ws.ct,
-            self._ws.cst,
-            self._ws.stf,
-            self._ws.dij,
-            self._ws.pln,
-        )
-        prev_result: dict[str, Any] = dict(self._ws.result or {})
-
-        def _compute() -> tuple:
-            # Deferred: only needed inside the worker thread, not at widget construction.
-            from pyRadPlan import fluence_optimization  # noqa: PLC0415
-
-            weights = fluence_optimization(ct, cst, stf, dij, pln)
-            scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
-            result = dij.compute_result_ct_grid(
-                weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
-            )
-            if scenarios:
-                result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
-            return weights, result
-
-        def _on_success(data: tuple) -> None:
-            weights, result = data
-            result["w"] = weights
-            # Carry forward named snapshots and imported doses from a previous
-            # run.  Matching by saved tag (not key prefix) keeps untagged keys
-            # of the fresh result (e.g. "physical_dose_beam") from being
-            # overwritten with stale data.
-            for key, val in prev_result.items():
-                if self._is_tagged(key) or key.startswith("import_"):
-                    result.setdefault(key, val)
-            self._ws.result = result
-
         # Live status window + cooperative pause/stop control for this optimization.
-        control = ComputeControl()
-        self._open_optimization_status_window(control)
-
-        self._run_in_thread(
-            _compute,
-            on_success=_on_success,
-            busy_text="Optimizing fluence…",
-            control=control,
-        )
+        self._open_optimization_status_window(operation.control)
+        self._run_operation(operation)
 
     def _open_optimization_status_window(self, control: ComputeControl) -> None:
         """Create (or reuse) the optimization status window and bind *control*."""
@@ -1331,234 +977,85 @@ class WorkflowWidget(WorkspaceWidget):
             self._opt_status_win.finalize()
 
     def _on_recalc_dose(self) -> None:
+        # The beams follow the plan's isocenter (moved on a copy, which outdates the dij);
+        # snapshots are kept, per-scenario results of the previous optimization replaced.
         if not self._resolve_pending_changes("Recalculate Dose", outdates_input=True):
             return
-        ct, cst, stf, pln = self._ws.ct, self._ws.cst, self._ws.stf, self._ws.pln
-        prev_result: dict[str, Any] = dict(self._ws.result or {})
-        weights = prev_result.get("w")
-
-        if weights is None:
-            QMessageBox.warning(
-                self,
-                "Recalculate Dose",
-                "No beamlet weights found in the current result.",
-            )
-            return
-
-        if not _recalculation_angles_match(pln, stf):
-            QMessageBox.warning(
-                self,
-                "Recalculate Dose",
-                "The plan's beam angles or beam count differ from the stored steering "
-                "information. Calculate Dose Influence and optimize again before "
-                "recalculating dose.",
-            )
-            return
-
-        if not self._check_bio_model("Recalculate Dose"):
-            return
-        # The check may have switched the plan to physical dose or fixed the structures
-        cst, pln = self._ws.cst, self._ws.pln
-
-        def _compute() -> tuple:
-            # Deferred: only needed inside the worker thread, not at widget construction.
-            from pyRadPlan import calc_dose_forward  # noqa: PLC0415
-            from pyRadPlan.stf import resolve_iso_centers  # noqa: PLC0415
-
-            # The beams follow the plan's isocenter (the target center of mass when
-            # automatic). Move them on a copy, so a failed run leaves the stf untouched.
-            iso_centers = resolve_iso_centers(
-                (pln.prop_stf or {}).get("iso_center"), cst, len(stf.beams)
-            )
-            recalc_stf = stf
-            if not np.allclose([beam.iso_center for beam in stf.beams], iso_centers):
-                recalc_stf = deepcopy(stf)
-                for beam, iso_center in zip(recalc_stf.beams, iso_centers):
-                    beam.iso_center = iso_center
-
-            # Already returns the weight-applied result quantities on the CT grid.
-            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
-            if any(key.endswith(_SCENARIO_SUFFIX) for key in new_result):
-                new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
-            return recalc_stf, new_result
-
-        def _on_success(data: tuple) -> None:
-            recalc_stf, new_result = data
-            # Per-scenario results of the previous optimization no longer match the new
-            # doses; the forward calculation brings its own when the plan has scenarios.
-            result = {
-                key: val
-                for key, val in prev_result.items()
-                if self._is_tagged(key)
-                or not (key.endswith(_SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
-            }
-            result.update(new_result)
-            if recalc_stf is stf:
-                self._ws.result = result
-            else:
-                # Storing the moved stf flags the dij, computed for the old one, as outdated.
-                self._ws.set_many(stf=recalc_stf, result=result)
-
-        self._run_in_thread(_compute, on_success=_on_success, busy_text="Recalculating dose…")
+        self._run_calculation("Recalculate Dose", "recalc")
 
     # ------------------------------------------------------------------
     # Result callbacks
     # ------------------------------------------------------------------
 
     def _on_save_result(self) -> None:
-        pln = self._ws.pln
-        default = "result"
-        if pln is not None:
-            try:
-                default = f"{pln.radiation_mode}_{pln.num_of_fractions}fx"
-            except AttributeError:
-                pass
-
+        default = default_tag(self._ws.pln)
         tag, ok = QInputDialog.getText(
             self, "Snapshot Result", "Name for this result snapshot:", text=default
         )
         if not ok or not tag.strip():
             return
-
-        tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
-        if tag in _RESERVED_TAGS:
-            QMessageBox.warning(
-                self,
-                "Snapshot Result",
-                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
-            )
-            return
-
-        result: dict[str, Any] = dict(self._ws.result or {})
         # Snapshot the current active quantities: every key that is not itself
         # a snapshot from an earlier save (reusing a tag overwrites it).
-        for key in list(result):
-            if not self._is_tagged(key):
-                result[f"{key}_{tag}"] = result[key]
-
-        if tag not in self._saved_tags:
-            self._saved_tags.append(tag)
-        self._ws.result = result
+        try:
+            self.session.snapshot(tag)
+        except (ValueError, PreconditionError) as exc:
+            QMessageBox.warning(self, "Snapshot Result", str(exc))
+            return
         self._update_status()
 
     # ------------------------------------------------------------------
     # Saving / export callbacks
     # ------------------------------------------------------------------
 
-    def _quantity_to_image(self, value: Any, ct: Any) -> Optional[Any]:
-        """Convert a result quantity into a CT-aligned ``sitk.Image`` (or *None*)."""
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
+    def _save(self, title: str, obj: str, fmt: str, path: str, **params: Any) -> None:
+        """Prepare the session's save of *obj* to *path* and run it; refusals are explained."""
+        try:
+            operation = self.session.prepare(
+                "save_path", object=obj, format=fmt, path=path, **params
+            )
+        except (PreconditionError, ValueError) as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return
+        self._run_save(operation, title)
 
-        if isinstance(value, sitk.Image):
-            return value
-        arr = np.asarray(value)
-        if arr.ndim != 3:
-            return None
-        # A raw 3-D array here comes from an imported matRad resultGUI, stored as
-        # (y, x, z); SimpleITK expects (z, y, x) (matching the matlab importer).
-        image = sitk.GetImageFromArray(np.transpose(arr, (2, 0, 1)))
-        if ct is not None and image.GetSize() == ct.cube_hu.GetSize():
-            image.CopyInformation(ct.cube_hu)
-        return image
+    def _run_save(self, operation: Operation, title: str) -> None:
+        """Run a save operation and report the written path(s)."""
 
-    @staticmethod
-    def _image_format_from_filter(selected: str) -> tuple[str, str]:
-        """Map a chosen file-dialog filter back to an (format_key, default_ext) pair.
+        def _on_done(written: list) -> None:
+            QMessageBox.information(self, title, "Saved:\n" + "\n".join(str(p) for p in written))
 
-        Falls back to the first single-image format if the filter cannot be matched.
-        """
-        from pyRadPlan.io import get_exporter  # noqa: PLC0415
-
-        formats = _image_formats()
-        for fmt, ext in formats:
-            name = getattr(get_exporter(fmt), "name", fmt.upper())
-            if selected and (name in selected or f"*{ext}" in selected):
-                return fmt, ext
-        return formats[0]
-
-    def _run_save(self, save_fn: Callable, busy_text: str, title: str) -> None:
-        """Run *save_fn* in the worker thread and report the written path(s)."""
-
-        def _on_success(written: Any) -> None:
-            paths = written if isinstance(written, list) else [written]
-            QMessageBox.information(self, title, "Saved:\n" + "\n".join(str(p) for p in paths))
-
-        self._run_in_thread(save_fn, on_success=_on_success, busy_text=busy_text)
+        self._run_operation(operation, on_done=_on_done)
 
     def _on_save_workspace(self) -> None:
-        ws = self._ws
-        if not ws.has("ct"):
+        if not self._ws.has("ct"):
             QMessageBox.warning(self, "Save Workspace", "Load a CT before saving a workspace.")
             return
         if not self._resolve_pending_changes("Save Workspace"):
             return
-        filepath, _ = QFileDialog.getSaveFileName(self, "Save workspace", "", _build_save_filter())
-        if not filepath:
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save workspace", "", export_filter(export_entries("workspace"))
+        )
+        if filepath:
+            self._save("Save Workspace", "workspace", "pickle", filepath)
+
+    def _save_single_object(self, title: str, obj: str) -> None:
+        """Save a single workspace object (pln/dij) to a chosen ``.mat`` file."""
+        if getattr(self._ws, obj) is None:
+            QMessageBox.warning(self, title, f"No {obj} available to save.")
             return
-        extension = os.path.splitext(filepath)[1].lower()
-        if extension and extension not in (".pkl", ".pickle"):
-            QMessageBox.warning(
-                self, "Save Workspace", "Use .pkl or .pickle to save the complete workspace."
-            )
-            return
-        objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
-        objects["saved_result_tags"] = list(self._saved_tags)
-
-        def _save() -> Any:
-            from pyRadPlan.io import save_data  # noqa: PLC0415
-
-            return save_data(file_name=filepath, format="pickle", **objects)
-
-        self._run_save(_save, "Saving workspace…", "Save Workspace")
-
-    def _save_single_object(self, title: str, kwarg: str, obj: Any) -> None:
-        """Save a single workspace object (pln/dij/cst) to a chosen ``.mat`` file."""
-        if obj is None:
-            QMessageBox.warning(self, title, f"No {kwarg} available to save.")
-            return
-        filepath, _ = QFileDialog.getSaveFileName(self, title, "", "MATLAB files (*.mat)")
-        if not filepath:
-            return
-
-        def _save() -> Any:
-            from pyRadPlan.io import save_data  # noqa: PLC0415
-
-            return save_data(file_name=filepath, format="mat", **{kwarg: obj})
-
-        self._run_save(_save, f"{title}…", title)
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, title, "", export_filter(export_entries(obj, ("mat",)))
+        )
+        if filepath:
+            self._save(title, obj, "mat", filepath, label=title)
 
     def _on_save_plan(self) -> None:
         if not self._resolve_pending_changes("Save Plan"):
             return
-        self._save_single_object("Save Plan", "pln", self._ws.pln)
+        self._save_single_object("Save Plan", "pln")
 
     def _on_save_dij(self) -> None:
-        self._save_single_object("Save Dij", "dij", self._ws.dij)
-
-    @staticmethod
-    def _cst_export_options() -> list[tuple[str, str, Optional[str], bool, bool]]:
-        """Return the CST export targets: (label, format, dicom_structure, is_dir, keeps_objectives).
-
-        Only formats with a registered exporter are offered. Container formats
-        (mat/pickle/npz) write a single file; the image/DICOM backends write a
-        folder (a label map for the SimpleITK formats, a CT + RTSTRUCT/SEG series
-        for DICOM). Objectives only survive in mat/pickle.
-        """
-        from pyRadPlan.io import get_available_formats  # noqa: PLC0415
-
-        available = get_available_formats()
-        candidates = [
-            ("MATLAB (*.mat)", "mat", None, False, True),
-            ("Pickle (*.pkl)", "pickle", None, False, True),
-            ("NumPy (*.npz)", "npz", None, False, False),
-            ("NIfTI label map (folder)", "nifti", None, True, False),
-            ("NRRD label map (folder)", "nrrd", None, True, False),
-            ("MetaImage label map (folder)", "meta", None, True, False),
-            ("DICOM RTSTRUCT (folder)", "dcm", "rtstruct", True, False),
-            ("DICOM SEG (folder)", "dcm", "seg", True, False),
-        ]
-        return [c for c in candidates if c[1] in available]
+        self._save_single_object("Save Dij", "dij")
 
     def _on_save_cst(self) -> None:
         cst = self._ws.cst
@@ -1566,18 +1063,16 @@ class WorkflowWidget(WorkspaceWidget):
             QMessageBox.warning(self, "Save CST", "No cst available to save.")
             return
 
-        options = self._cst_export_options()
-        labels = [opt[0] for opt in options]
+        entries = export_entries("cst")
+        labels = [path_label(entry) for entry in entries]
         choice, ok = QInputDialog.getItem(self, "Save CST", "Export format:", labels, 0, False)
         if not ok or not choice:
             return
-        _label, fmt, structure_format, is_dir, keeps_objectives = next(
-            opt for opt in options if opt[0] == choice
-        )
+        entry = entries[labels.index(choice)]
 
         # Warn before silently dropping objectives on an image/DICOM export.
         has_objectives = any(getattr(voi, "objectives", None) for voi in cst.vois)
-        if has_objectives and not keeps_objectives:
+        if has_objectives and not entry.keeps_objectives:
             if (
                 QMessageBox.warning(
                     self,
@@ -1590,46 +1085,30 @@ class WorkflowWidget(WorkspaceWidget):
             ):
                 return
 
-        if is_dir:
+        if writes_folder(entry):
             target = QFileDialog.getExistingDirectory(self, f"Save CST — {choice}")
         else:
-            from pyRadPlan.io import get_exporter  # noqa: PLC0415
-
-            patterns = " ".join(f"*{ext}" for ext in get_exporter(fmt).extensions)
             target, _ = QFileDialog.getSaveFileName(
-                self, f"Save CST — {choice}", "", f"{choice} ({patterns})"
+                self, f"Save CST — {choice}", "", export_filter([entry])
             )
-        if not target:
-            return
+        if target:
+            self._save(
+                "Save CST",
+                "cst",
+                entry.format,
+                target,
+                structure_format=entry.structure_format,
+                label="Saving CST",
+            )
 
-        def _save() -> Any:
-            from pyRadPlan.io import save_data  # noqa: PLC0415
-
-            if structure_format == "seg":
-                # save_data has no structure_format hook; use the exporter directly.
-                from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
-
-                DicomExporter(target, structure_format="seg").save(cst=cst)
-                return target
-            return save_data(file_name=target, format=fmt, cst=cst)
-
-        self._run_save(_save, "Saving CST…", "Save CST")
-
-    def _on_save_result_to_disk(self) -> None:  # noqa: PLR0911 - guard-heavy dialog flow
-        import numpy as np  # noqa: PLC0415
-        import SimpleITK as sitk  # noqa: PLC0415
-
+    def _on_save_result_to_disk(self) -> None:
         result = self._ws.result
         if not isinstance(result, dict) or not result:
             QMessageBox.warning(self, "Save Result", "No result available to save.")
             return
 
         # Offer only scalar image quantities (skip beamlet weights and per-beam lists).
-        keys = [
-            k
-            for k, v in result.items()
-            if isinstance(v, sitk.Image) or (isinstance(v, np.ndarray) and v.ndim == 3)
-        ]
+        keys = image_keys(result)
         if not keys:
             QMessageBox.warning(
                 self, "Save Result", "The result has no exportable image quantities."
@@ -1642,60 +1121,43 @@ class WorkflowWidget(WorkspaceWidget):
         dialog = SaveResultDialog(keys, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-
-        ct = self._ws.ct
-        images = {}
-        for key in dialog.selected_quantities():
-            image = self._quantity_to_image(result[key], ct)
-            if image is not None:
-                images[key] = image
-        if not images:
+        selected = dialog.selected_quantities()
+        if not selected:
             QMessageBox.warning(
                 self, "Save Result", "Selected quantities could not be converted to images."
             )
             return
 
-        if len(images) == 1:
-            ((key, image),) = images.items()
-            filepath, selected = QFileDialog.getSaveFileName(
-                self, "Save quantity", key, _build_image_save_filter()
+        entries = export_entries("result", ("nifti", "nrrd", "meta"))
+        if len(selected) == 1:
+            filepath, chosen = QFileDialog.getSaveFileName(
+                self, "Save quantity", selected[0], export_filter(entries)
             )
-            if not filepath:
-                return
-
-            # Honor the chosen image format explicitly: an extension-less name would
-            # otherwise fall back to .mat (mislabeling the quantity as physical dose)
-            # or make the sitk exporter write a folder instead of a single file.
-            fmt, ext = self._image_format_from_filter(selected)
-            if not filepath.lower().endswith(ext.lower()):
-                filepath += ext
-
-            def _save() -> Any:
-                from pyRadPlan.io import save_data  # noqa: PLC0415
-
-                return save_data(file_name=filepath, format=fmt, dose=image)
-
-            self._run_save(_save, "Saving quantity…", "Save Result")
+            if filepath:
+                entry = entry_for_filter(chosen, entries)
+                self._save(
+                    "Save Result",
+                    "result",
+                    entry.format,
+                    filepath,
+                    quantities=selected,
+                    label="Saving quantity",
+                )
             return
 
         # Multiple quantities: pick an output folder and an image format.
         directory = QFileDialog.getExistingDirectory(self, "Save quantities to folder")
         if not directory:
             return
-        formats = _image_formats()
-        labels = [f"{fmt} (*{ext})" for fmt, ext in formats]
+        labels = [entry.label for entry in entries]
         choice, ok = QInputDialog.getItem(self, "Save Result", "Image format:", labels, 0, False)
         if not ok:
             return
-        fmt, ext = formats[labels.index(choice)]
-
-        def _save() -> list:
-            from pyRadPlan.io import save_data  # noqa: PLC0415
-
-            written = []
-            for key, image in images.items():
-                target = os.path.join(directory, f"{key}{ext}")
-                written.append(save_data(format=fmt, file_name=target, dose=image))
-            return written
-
-        self._run_save(_save, "Saving quantities…", "Save Result")
+        self._save(
+            "Save Result",
+            "result",
+            entries[labels.index(choice)].format,
+            directory,
+            quantities=selected,
+            label="Saving quantities",
+        )

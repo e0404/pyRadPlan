@@ -19,6 +19,9 @@ import type {
   Vec3,
 } from "../protocol";
 import type {
+  BioModelChoice,
+  BioSelection,
+  CurrentBio,
   FormKind,
   PlanDetail,
   PlanOptions,
@@ -326,9 +329,15 @@ function planDetail(s: MockSession): PlanDetail | null {
     engine_config: { name: s.plan.engine, values: structuredClone(e.engineValues[s.plan.engine ?? ""] ?? {}) },
     bio: { model: option?.model ?? s.plan.bio_model ?? "none", option: e.bio.option, values: structuredClone(e.bio.values) },
     scenario: structuredClone(e.scenario),
-    problem: structuredClone(e.problem),
+    problem: { name: e.problem.name, values: structuredClone(shownProblemValues(e.problem.name, e.problem.values, true)) },
     solver: structuredClone(e.solver),
   };
+}
+
+/** Problem settings the problem form (or, for `max_iter` / `display`, the solver form) shows, or (`shown: false`) the others. */
+function shownProblemValues(name: string, values: Record<string, unknown>, shown: boolean): Record<string, unknown> {
+  const fields = new Set([...flatFields(PROBLEMS.find((pr) => pr.id === name)?.fields ?? []).map((f) => f.name.split(".")[0]), "max_iter", "display"]);
+  return Object.fromEntries(Object.entries(values).filter(([k]) => fields.has(k) === shown));
 }
 
 /** Follow bio model changes made by the core (e.g. `physical_only`). */
@@ -340,6 +349,47 @@ function syncBio(s: MockSession): void {
     const match = BIO_OPTIONS.find((o) => o.model === model && o.modes.includes(s.plan?.radiation_mode ?? ""));
     e.bio = { option: match?.id ?? null, values: match ? structuredClone(match.parameters) : {} };
   }
+}
+
+/**
+ * Simplified `bio_selection` (the real rules are `pyRadPlan.app._planform.select_bio_model`):
+ * the plan's model for its mode (an unsupported entry when disabled); after a change, a
+ * selection the context can run is kept unless it was the previous mode's default, else the
+ * mode's default, else `none`.
+ */
+function mockBioSelection(s: MockSession, mode: string, machine: string, list: BioModelChoice[], current: CurrentBio | undefined): BioSelection {
+  const enabled = (o: BioModelChoice) => o.enabled !== false;
+  const pick = (o: BioModelChoice | undefined, replaced: boolean, note: BioSelection["note"] = null): BioSelection => ({
+    option: o ? String(o.value) : null,
+    model: o?.model ?? "none",
+    replaced,
+    unsupported: null,
+    note,
+  });
+  const fallback = () => list.find((o) => o.value === DEFAULT_BIO[mode] && enabled(o)) ?? list.find((o) => o.model === "none") ?? list[0];
+  if (!current) {
+    if (s.plan && s.plan.radiation_mode === mode) {
+      const option = list.find((o) => o.value === ext(s).bio.option);
+      if (option && enabled(option)) return pick(option, false);
+      const model = s.plan.bio_model ?? "none";
+      return {
+        option: null,
+        model,
+        replaced: false,
+        unsupported: { model, label: `${option?.label ?? model} (not supported by this machine)`, description: `Model of the plan, which the machine cannot run:\n${option?.reason ?? ""}\nApply keeps it; select another model to replace it.` },
+        note: null,
+      };
+    }
+    return pick(fallback(), true);
+  }
+  const keep = current.radiation_mode === mode || current.model !== (bioOptionOf(DEFAULT_BIO[current.radiation_mode] ?? "none")?.model ?? "none");
+  const same = list.find((o) => o.value === current.option);
+  if (keep && same && enabled(same)) return pick(same, false);
+  const chosen = (keep ? list.find((o) => o.model === current.model && enabled(o)) : undefined) ?? fallback();
+  if (!keep) return pick(chosen, true);
+  const reason = same?.reason ?? "";
+  const context = !same ? `for ${mode}` : /engine/i.test(reason) ? "with the dose engine" : `on machine '${machine}'`;
+  return pick(chosen, true, { text: `Biological model '${current.label ?? current.model}' is not available ${context}; selected '${chosen?.label ?? "none"}'.`, reason });
 }
 
 function planOptions(s: MockSession, p: Record<string, unknown>): PlanOptions {
@@ -357,6 +407,7 @@ function planOptions(s: MockSession, p: Record<string, unknown>): PlanOptions {
       description: "The scenario set the applied plan carries itself. It is kept unless another model is selected.",
     } as (typeof scenarios)[number]);
   }
+  const bioModels = bioOptionsFor(mode, machine, engine ?? null);
   return {
     radiation_modes: RADIATION_MODES.map((m) => ({ value: m, label: m })),
     machines: (MACHINES[mode] ?? ["Generic"]).map((m) => ({ value: m, label: m })),
@@ -366,8 +417,9 @@ function planOptions(s: MockSession, p: Record<string, unknown>): PlanOptions {
       identifier: en.id,
       ...(en.mc ? { enabled: false, reason: MC_REASON } : {}),
     })),
-    bio_models: bioOptionsFor(mode, machine, engine ?? null),
+    bio_models: bioModels,
     default_bio_model: DEFAULT_BIO[mode] ?? "none",
+    bio_selection: mockBioSelection(s, mode, machine, bioModels, p.current_bio as CurrentBio | undefined),
     scenario_models: scenarios,
     problems: PROBLEMS.map((pr) => ({ value: pr.id, label: pr.label, identifier: pr.id })),
     solvers: SOLVERS.map(({ fields: _fields, ...c }) => c),
@@ -545,7 +597,9 @@ function planSet(ctx: MockContext, s: MockSession, p: PlanSetParams): SessionSta
     const pr = PROBLEMS.find((x) => x.id === p.problem!.name);
     if (!pr) details.push({ field: "problem.name", message: `Unknown planning problem '${p.problem.name}'` });
     else details.push(...validateValues(pr.fields, p.problem.values ?? {}, "problem."));
-    problem = { name: p.problem.name, values: structuredClone(p.problem.values ?? {}) };
+    // Settings the form does not show are kept unless sent.
+    const kept = p.problem.name === e.problem.name ? shownProblemValues(e.problem.name, e.problem.values, false) : {};
+    problem = { name: p.problem.name, values: { ...structuredClone(kept), ...structuredClone(p.problem.values ?? {}) } };
   }
   let solver = e.solver;
   if (p.solver !== undefined) {
@@ -1132,9 +1186,9 @@ export const planHandlers: MockHandlers = {
     if (!ctx.isBusy()) e.history = history;
     try {
       const result = (await withBioCheck(ctx, s, false, () => ctx.fallback())) as Record<string, unknown>;
-      history.outcome = "done";
-      const opt = result.optimization as Record<string, unknown> | undefined;
-      return opt ? { ...result, optimization: { ...opt, solver } } : result;
+      const { stopped, ...opt } = (result.optimization ?? {}) as Record<string, unknown>;
+      history.outcome = stopped ? "stopped" : "done";
+      return result.optimization ? { ...result, optimization: { ...opt, solver } } : result;
     } catch (err) {
       history.outcome = err instanceof Error && (err.name === "KeyboardInterrupt" || err.name === "ComputeCancelledError") ? "stopped" : "failed";
       throw err;

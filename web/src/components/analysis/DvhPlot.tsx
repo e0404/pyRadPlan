@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTheme } from "../../theme";
 import { niceTicks } from "../viewerModel";
 import {
   doseAtVolume,
@@ -10,6 +11,7 @@ import {
   type PlotCurve,
   type QiMarker,
 } from "./dvhModel";
+import { plotColors, rgba as rgbaOf } from "./plotTheme";
 
 export interface LegendEntry {
   label: string;
@@ -55,8 +57,6 @@ interface Frame {
   yMax: number;
 }
 
-const rgba = (c: readonly number[] | null, a = 1) => (c ? `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a})` : `rgba(30, 30, 30, ${a})`);
-
 /** Interactive DVH plot (Qt `DVHPlotWidget`) on a canvas. */
 export function DvhPlot(props: DvhPlotProps) {
   const ownRef = useRef<HTMLCanvasElement>(null);
@@ -64,6 +64,7 @@ export function DvhPlot(props: DvhPlotProps) {
   const [hoverX, setHoverX] = useState<number | null>(null);
   const [dragged, setDragged] = useState<{ parameter: number; value: number } | null>(null);
   const frameRef = useRef<Frame | null>(null);
+  const dark = useTheme((s) => s.dark);
   const [size, setSize] = useState<[number, number]>([600, 300]);
 
   useEffect(() => {
@@ -86,7 +87,10 @@ export function DvhPlot(props: DvhPlotProps) {
     canvas.height = Math.max(1, Math.round(h * dpr));
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#fff";
+    const theme = plotColors();
+    const fg = rgbaOf(theme.foreground);
+    const rgba = (c: readonly number[] | null, a = 1) => rgbaOf(c ?? theme.foreground, a);
+    ctx.fillStyle = rgbaOf(theme.figure);
     ctx.fillRect(0, 0, w, h);
     const primary = props.curves.filter((c) => !c.secondaryAxis);
     const secondary = props.curves.filter((c) => c.secondaryAxis);
@@ -102,14 +106,16 @@ export function DvhPlot(props: DvhPlotProps) {
       yMax: 102,
     };
     frameRef.current = frame;
+    ctx.fillStyle = rgbaOf(theme.axes);
+    ctx.fillRect(frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top);
     const X = (x: number) => frame.left + (x / frame.xMax) * (frame.right - frame.left);
     const X2 = (x: number) => frame.left + (x / frame.x2Max) * (frame.right - frame.left);
     const Y = (y: number) => frame.bottom - ((y - frame.yMin) / (frame.yMax - frame.yMin)) * (frame.bottom - frame.top);
 
     // Grid and axes.
     ctx.font = "11px system-ui, sans-serif";
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.12)";
-    ctx.fillStyle = "#333";
+    ctx.strokeStyle = rgbaOf(theme.grid);
+    ctx.fillStyle = fg;
     ctx.lineWidth = 1;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -129,7 +135,7 @@ export function DvhPlot(props: DvhPlotProps) {
       ctx.stroke();
       ctx.fillText(String(t), frame.left - 4, Y(t));
     }
-    ctx.strokeStyle = "#555";
+    ctx.strokeStyle = fg;
     ctx.strokeRect(frame.left + 0.5, frame.top + 0.5, frame.right - frame.left, frame.bottom - frame.top);
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
@@ -202,11 +208,11 @@ export function DvhPlot(props: DvhPlotProps) {
       const label = (text: string, x: number, y: number) => {
         ctx.font = "11px system-ui, sans-serif";
         const tw = ctx.measureText(text).width + 8;
-        ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.fillStyle = rgbaOf(theme.axes, 200 / 255);
         ctx.fillRect(x - tw / 2, y - 9, tw, 18);
-        ctx.strokeStyle = "rgba(0, 0, 0, 0.25)";
+        ctx.strokeStyle = rgbaOf(theme.grid);
         ctx.strokeRect(x - tw / 2 + 0.5, y - 8.5, tw - 1, 17);
-        ctx.fillStyle = "#222";
+        ctx.fillStyle = fg;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(text, x, y);
@@ -229,7 +235,7 @@ export function DvhPlot(props: DvhPlotProps) {
       const s = (isHighlighted ? HIGHLIGHT_MARKER_SIZE : MARKER_SIZE) / 2;
       const a = alpha(m.structure);
       ctx.fillStyle = rgba(m.color, a);
-      ctx.strokeStyle = `rgba(30, 30, 30, ${a})`;
+      ctx.strokeStyle = rgba(theme.foreground, a);
       ctx.lineWidth = 1;
       ctx.beginPath();
       if (m.kind === "dx") ctx.arc(X(pos[0]), Y(pos[1]), s, 0, 2 * Math.PI);
@@ -242,7 +248,7 @@ export function DvhPlot(props: DvhPlotProps) {
     if (hoverX !== null && props.curves.length) {
       const x = hoverX;
       ctx.setLineDash([2, 3]);
-      ctx.strokeStyle = "#222";
+      ctx.strokeStyle = fg;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(X(x) + 0.5, frame.top);
@@ -269,9 +275,9 @@ export function DvhPlot(props: DvhPlotProps) {
       let bx = X(x) + 6;
       if (X(x) > (frame.left + frame.right) / 2) bx = X(x) - width - 6;
       const by = frame.top + 4;
-      ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+      ctx.fillStyle = rgbaOf(theme.axes, 220 / 255);
       ctx.fillRect(bx, by, width, height);
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+      ctx.strokeStyle = rgbaOf(theme.grid);
       ctx.strokeRect(bx + 0.5, by + 0.5, width - 1, height - 1);
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
@@ -282,7 +288,7 @@ export function DvhPlot(props: DvhPlotProps) {
           ctx.fillText(r.symbol, tx, by + 4 + i * 15);
           tx += ctx.measureText(`${r.symbol} `).width;
         }
-        ctx.fillStyle = "#222";
+        ctx.fillStyle = fg;
         ctx.fillText(r.text, tx, by + 4 + i * 15);
       });
     }
@@ -292,8 +298,8 @@ export function DvhPlot(props: DvhPlotProps) {
       const lx = frame.right + 10;
       let ly = frame.top;
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillStyle = "#fff";
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+      ctx.fillStyle = rgbaOf(theme.axes);
+      ctx.strokeStyle = rgbaOf(theme.grid);
       const lh = props.legend.length * 16 + 8;
       ctx.fillRect(lx, ly, LEGEND_W - 16, lh);
       ctx.strokeRect(lx + 0.5, ly + 0.5, LEGEND_W - 17, lh - 1);
@@ -307,14 +313,14 @@ export function DvhPlot(props: DvhPlotProps) {
         ctx.lineTo(lx + 28, ly + 8);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = "#222";
+        ctx.fillStyle = fg;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.fillText(e.label, lx + 34, ly + 8, LEGEND_W - 54);
         ly += 16;
       }
     }
-  }, [props, size, hoverX, dragged, highlighted, ref]);
+  }, [props, size, hoverX, dragged, highlighted, ref, dark]);
 
   // -------------------------------------------------------------------------
   // Interaction

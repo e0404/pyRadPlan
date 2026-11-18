@@ -47,6 +47,33 @@ describe("mock backend, package A methods", () => {
     expect(carbon.default_bio_model).toBe("LEM:HIT");
   });
 
+  it("chooses the bio-model entry itself (bio_selection), the frontend only applies it", async () => {
+    const { req } = await loaded();
+    const restored = await req("plan.options", {});
+    expect(restored.bio_selection).toMatchObject({ option: "none", replaced: false, unsupported: null, note: null });
+    const followed = await req("plan.options", { radiation_mode: "carbon", current_bio: { radiation_mode: "photons", model: "none", option: "none" } });
+    expect(followed.bio_selection).toMatchObject({ option: "LEM:HIT", model: "LEM", replaced: true, note: null });
+    const kept = await req("plan.options", { radiation_mode: "carbon", machine: "HIT_APM", current_bio: { radiation_mode: "carbon", model: "mMKM", option: "mMKM:NIRS", label: "mMKM" } });
+    expect(kept.bio_selection).toMatchObject({ option: "mMKM:NIRS", replaced: false });
+    const replaced = await req("plan.options", { radiation_mode: "carbon", machine: "Generic", current_bio: { radiation_mode: "carbon", model: "mMKM", option: "mMKM:NIRS", label: "mMKM" } });
+    expect(replaced.bio_selection?.option).toBe("LEM:HIT");
+    expect(replaced.bio_selection?.note?.text).toBe("Biological model 'mMKM' is not available on machine 'Generic'; selected 'LEM · LEM IV (HIT)'.");
+  });
+
+  it("keeps scenario model and problem settings on a mode change and problem entries the form does not show", async () => {
+    const { backend, session, req } = await loaded();
+    await req("plan.set", { scenarios: { model: "wcScen", values: {} }, problem: { name: "nonlin_fluence", values: { convert_dose_objectives: false, max_iter: 40 } } });
+    const detail = (await req("plan.get", { detail: true })) as PlanDetail;
+    expect(detail.problem.values).toEqual({ max_iter: 40 });
+    await req("plan.set", { problem: { name: "nonlin_fluence", values: { ...detail.problem.values, max_iter: 60 } } });
+    await req("plan.set", { radiation_mode: "protons" });
+    const after = (await req("plan.get", { detail: true })) as PlanDetail;
+    expect(after.scenario.model).toBe("wcScen");
+    expect(after.problem.values).toEqual({ max_iter: 60 });
+    const internal = (backend as unknown as { sessions: Map<string, { ext: { plan: { problem: { values: Record<string, unknown> } } } }> }).sessions;
+    expect(internal.get(session)?.ext.plan.problem.values).toEqual({ convert_dose_objectives: false, max_iter: 60 });
+  });
+
   it("builds forms with nested groups and forwards max_iter into the solver form", async () => {
     const { req } = await loaded();
     const engine = await req("plan.form", { kind: "engine", name: "SVDPB" });

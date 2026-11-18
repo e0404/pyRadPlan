@@ -121,16 +121,13 @@ async function dismissDialogs() {
   await closeStatusWindow();
 }
 
-async function runAll(label) {
-  const start = Date.now();
-  await tid("btn-run-all").click();
-  // Unapplied plan edits are offered first (Qt pending-changes question).
+/** Click a workflow button and wait for its operation; offers the pending plan edits first (Qt). */
+async function runStep(testId, label) {
+  await tid(testId).click();
   await page.waitForTimeout(300);
   if (await tid("pending-changes-dialog").count()) await tid("msg-apply").click();
   await page.waitForFunction(() => document.querySelector('[data-testid="btn-stop"]')?.disabled === false, null, { timeout: 60000 }).catch(() => undefined);
   await waitIdle();
-  const seconds = (Date.now() - start) / 1000;
-  metrics[`run_all_${label}_s`] = +seconds.toFixed(1);
   await page.waitForTimeout(300);
   if (await tid("run-warnings").count()) {
     const text = ((await tid("run-warnings").textContent()) ?? "").replace(/\s+/g, " ").slice(0, 300);
@@ -138,8 +135,18 @@ async function runAll(label) {
     metrics[`warnings_${label}`] = text;
     await tid("msg-ok").click();
   }
-  if (await tid("error-dialog").count()) throw new Error(`run all (${label}) failed: ${await tid("error-dialog").textContent()}`);
-  expect((await tid("dot-result").getAttribute("data-status")) === "done", `Run All (${label}) in ${seconds.toFixed(1)} s`);
+  if (await tid("error-dialog").count()) throw new Error(`${label} failed: ${await tid("error-dialog").textContent()}`);
+}
+
+/** Calc. Dose Influence, then Optimize (the Qt workflow buttons). */
+async function computeResult(label) {
+  const start = Date.now();
+  await runStep("btn-dij", `${label}_dij`);
+  expect((await tid("dot-dij").getAttribute("data-status")) === "done", `dose influence (${label}) in ${((Date.now() - start) / 1000).toFixed(1)} s`);
+  await runStep("btn-optimize", `${label}_optimize`);
+  const seconds = (Date.now() - start) / 1000;
+  metrics[`result_${label}_s`] = +seconds.toFixed(1);
+  expect((await tid("dot-result").getAttribute("data-status")) === "done", `dose influence + optimization (${label}) in ${seconds.toFixed(1)} s`);
 }
 
 async function memory(label) {
@@ -184,7 +191,8 @@ try {
     const start = Date.now();
     await page.goto(`${base}?backend=pyodide`);
     await tid("boot-splash").waitFor({ state: "detached", timeout: 15 * 60 * 1000 });
-    await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session && document.querySelector('[data-testid="phantom-select"] option'));
+    await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+    expect(!(await tid("btn-run-all").count()) && !(await tid("phantom-select").count()), "workflow widget has the Qt controls only (no Run All, no phantom selector)");
     metrics.boot_s = +((Date.now() - start) / 1000).toFixed(1);
     const info = await store(() => window.__pyrpApp.useApp.getState().info);
     expect(info.runtime === "pyodide", `runtime pyodide, pyRadPlan ${info.version}, Python ${info.python}, boot ${metrics.boot_s} s`);
@@ -205,7 +213,7 @@ try {
   });
 
   await stage("run-default", async () => {
-    await runAll("default_plan");
+    await computeResult("default_plan");
     await shot("status-window-default");
     await closeStatusWindow();
     await memory("after_default_run");
@@ -270,7 +278,7 @@ try {
   });
 
   await stage("run-5-beams", async () => {
-    const run = runAll("5_beams_5mm");
+    const run = computeResult("5_beams_5mm");
     await tid("opt-status-window").waitFor({ timeout: 30 * 60 * 1000 });
     await page.waitForFunction(() => /iter \d+/.test(document.querySelector('[data-testid="opt-summary"]')?.textContent ?? ""), null, { timeout: 30 * 60 * 1000 });
     await shot("status-window-running");
@@ -469,9 +477,75 @@ try {
     await tid("menu-item-ui_mode:default").click();
   });
 
+  await stage("robust", async () => {
+    // Small robust case: 1 beam, worst-case grid scenarios, a robust objective, few iterations.
+    await tid("plan-gantry").fill("0");
+    await pick("plan-scenario", "Worst-case Grid");
+    await tid("plan-apply").click();
+    await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 60000 });
+    const robustKey = await page.evaluate(() => document.querySelector('[data-testid^="obj-OuterTarget-"][data-testid$="-robustness"]')?.getAttribute("data-testid"));
+    await pick(robustKey, "Voxel-wise worst case");
+    await page.waitForTimeout(800);
+    const objectives = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      return (await backend.request("cst.get", { names: ["OuterTarget"] }, session)).structures[0].objectives.map((o) => o.robustness);
+    });
+    expect(objectives.includes("voxel_worst_case"), `robust objective set: ${objectives.join(", ")}`);
+    const start = Date.now();
+    await runStep("btn-dij", "robust_dij");
+    await page.evaluate(() => window.__pyrpApp.actions.optimize({ max_iter: 15 }));
+    await waitIdle();
+    await closeStatusWindow();
+    metrics.result_robust_1_beam_s = +((Date.now() - start) / 1000).toFixed(1);
+    const s = await state();
+    const labels = s.results.scenario_labels;
+    expect(labels.length > 1 && labels[0] === "nominal", `robust result has ${labels.length} scenarios (${metrics.result_robust_1_beam_s} s)`);
+    const comps = await tid("quantity-select-component").locator("option").allTextContents();
+    expect(comps.includes(`scenario 1: ${labels[1]}`), `scenario components in the viewer selector: ${comps.slice(0, 4).join(" | ")} …`);
+    await tid("quantity-select-component").selectOption("physical_dose_scenario 1");
+    await page.waitForFunction(() => window.__pyrpApp.useApp.getState().quantities["physical_dose_scenario 1"], null, { timeout: 60000 });
+    const box = await tid("viewer-canvas").boundingBox();
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.6);
+    await shot("robust-scenario-viewer");
+    await tid("btn-dvh").click();
+    await tid("analysis-window").waitFor();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="qi-table"] tbody tr').length > 0, null, { timeout: 120000 });
+    expect((await tid("analysis-primary-component").inputValue()) === "physical_dose_scenario 1", "analysis opens on the viewer's scenario");
+    await tid("analysis-all-scenarios").check();
+    await page.waitForTimeout(2500);
+    const qi = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      return (await backend.request("analysis.qi", { quantity: "physical_dose_scenario 1" }, session)).name;
+    });
+    expect(qi === "dose, scenario 1", "QI of a scenario quantity");
+    await shot("robust-analysis");
+    await tid("analysis-close").click();
+    await memory("after_robust");
+    // Back to the nominal 5-beam plan for the next stages.
+    await page.keyboard.press("Escape");
+    await pick("plan-scenario", "Nominal Scenario");
+    await pick(robustKey, "None");
+    await page.waitForTimeout(500);
+    await tid("plan-gantry").fill("0 72 144 216 288");
+    await tid("plan-apply").click();
+    await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 60000 });
+  });
+
   await stage("protons", async () => {
+    // A worst-case scenario model applied for photons survives the switch to protons (v1
+    // amendment 22: the backend keeps it; the web sends no scenario on the mode change).
+    await pick("plan-scenario", "Worst-case Grid");
+    await tid("plan-apply").click();
+    await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 60000 });
     await pick("plan-mode", "protons");
     await page.waitForTimeout(1000);
+    const backendPick = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      const opts = await backend.request("plan.options", { radiation_mode: "protons" }, session);
+      return { option: opts.bio_selection?.option, default: opts.default_bio_model };
+    });
+    const shownBio = await tid("plan-bio").getAttribute("data-value");
+    expect(shownBio === backendPick.option && shownBio === backendPick.default, `the proton bio model is the backend's selection, the mode default (${shownBio})`);
     await tid("plan-bio").click();
     await tid("plan-bio-popup").waitFor();
     const bio = await tid("plan-bio-popup").locator(".combo-item").allTextContents();
@@ -480,12 +554,27 @@ try {
     expect(bio.length >= 2, `proton bio models: ${bio.join(" | ")}`);
     await tid("plan-apply").click();
     await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 120000 });
+    const switched = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      return backend.request("plan.get", { detail: true }, session);
+    });
+    expect(
+      switched.radiation_mode === "protons" && switched.scenario.model === "wcScen" && switched.bio.option === backendPick.default,
+      `photons -> protons keeps the scenario model (${switched.scenario.model}) and applies the selected bio model (${switched.bio.model})`,
+    );
+    await pick("plan-scenario", "Nominal Scenario");
+    await tid("plan-apply").click();
+    await page.waitForFunction(
+      () => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? "") && window.__pyrpApp.useApp.getState().state?.plan?.radiation_mode === "protons",
+      null,
+      { timeout: 120000 },
+    );
     await tid("plan-tissue").click();
     await tid("tissue-dialog").waitFor();
     await page.waitForTimeout(2000);
     await shot("tissue-dialog", tid("tissue-dialog"));
     await page.keyboard.press("Escape");
-    await runAll("protons_5_beams");
+    await computeResult("protons_5_beams");
     await closeStatusWindow();
     await page.waitForTimeout(1500);
     const ranges = await store(() => Object.fromEntries(Object.entries(window.__pyrpApp.useApp.getState().quantities).map(([k, v]) => [k, v.range])));
@@ -502,7 +591,7 @@ try {
     const applied = (await state()).plan;
     expect(applied.radiation_mode === "photons" && applied.engine !== "HongPB", `Apply right after a mode change sends the new mode's engine (${applied.engine})`);
     await tid("btn-dij").click();
-    await page.waitForFunction(() => /Beam/.test(document.querySelector('[data-testid="workflow-progress-detail"]')?.textContent ?? ""), null, { timeout: 120000 });
+    await page.waitForFunction(() => /Beam/.test(document.querySelector('[data-testid="workflow-status"]')?.textContent ?? ""), null, { timeout: 120000 });
     await tid("btn-stop").click();
     const start = Date.now();
     await page.waitForFunction(() => /stopped/.test(document.querySelector('[data-testid="statusbar"]')?.textContent ?? ""), null, { timeout: 60000 });
@@ -510,6 +599,33 @@ try {
     await waitIdle();
     expect((await tid("dot-dij").getAttribute("data-status")) !== "done", `Stop interrupts the dose calculation (${metrics.stop_latency_ms} ms)`);
     await shot("stopped");
+  });
+
+  await stage("stop-optimization", async () => {
+    await tid("plan-gantry").fill("0 120 240");
+    await tid("plan-apply").click();
+    await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 120000 });
+    await runStep("btn-dij", "stop_optimization_dij");
+    await tid("btn-optimize").click();
+    await page.waitForTimeout(300);
+    if (await tid("pending-changes-dialog").count()) await tid("msg-apply").click();
+    await page.waitForFunction(
+      () => Number(/iteration (\d+)/.exec(window.__pyrpApp.useApp.getState().progress?.detail ?? "")?.[1] ?? 0) >= 2,
+      null,
+      { timeout: 120000 },
+    );
+    await tid("btn-stop").click();
+    await waitIdle();
+    await page.waitForTimeout(300);
+    if (await tid("run-warnings").count()) await tid("msg-ok").click();
+    const run = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      return (await backend.request("session.history", {}, session)).optimization;
+    });
+    expect(run?.outcome === "stopped", `Stop ends the optimization (${run?.outcome} after ${run?.points.length} iterations)`);
+    expect((await tid("dot-result").getAttribute("data-status")) === "done", "the stopped optimization keeps its last iterate");
+    await closeStatusWindow();
+    await shot("optimization-stopped");
   });
 } finally {
   console.log(`\nmetrics: ${JSON.stringify(metrics)}`);

@@ -18,6 +18,58 @@ export function backendKindFromUrl(search: string = globalThis.location?.search 
   return kind === "mock" ? "mock" : "pyodide";
 }
 
+/** Where URL parameters may point the backend at code (see {@link trustedSource}). */
+export interface SourceTrust {
+  /** Development server: every value is honoured. */
+  dev: boolean;
+  /** Origin of the page; other origins are refused outside development. */
+  origin: string;
+  /** URL relative values resolve against. */
+  base: string;
+}
+
+function pageTrust(): SourceTrust {
+  const location = globalThis.location;
+  return {
+    dev: Boolean(import.meta.env.DEV),
+    origin: location?.origin ?? "",
+    base: location?.href ?? "http://localhost/",
+  };
+}
+
+/**
+ * The value of a URL parameter naming where the backend loads code from (`pyodide`,
+ * `packages`, `pyrp`), or `undefined` for the default. Outside development only URLs on the
+ * page's own origin are honoured: on a deployment, a crafted link must not make the app run
+ * code from elsewhere.
+ */
+export function trustedSource(value: string | null, trust: SourceTrust = pageTrust()): string | undefined {
+  if (value === null || value === "") return undefined;
+  if (trust.dev) return value;
+  try {
+    if (new URL(value, trust.base).origin === trust.origin) return value;
+  } catch {
+    // Not a URL: refused like a foreign one.
+  }
+  console.warn(`Ignoring the URL parameter value "${value}": not on this site's origin`);
+  return undefined;
+}
+
+/**
+ * The Pyodide backend locations given by URL parameters, as far as they are trusted.
+ * `pyodide=cdn` (the official Pyodide CDN, which also serves the default package wheels) is
+ * always honoured; it names no location of its own.
+ */
+export function backendSources(search: string, trust: SourceTrust = pageTrust()) {
+  const params = new URLSearchParams(search);
+  const pyodide = params.get("pyodide");
+  return {
+    pyodide: pyodide === "cdn" ? "cdn" : trustedSource(pyodide, trust),
+    packages: trustedSource(params.get("packages"), trust),
+    pyrp: trustedSource(params.get("pyrp"), trust),
+  };
+}
+
 export async function createBackend(kind: BackendKind, search: string = globalThis.location?.search ?? ""): Promise<Backend> {
   const params = new URLSearchParams(search);
   if (kind === "mock") {
@@ -26,10 +78,10 @@ export async function createBackend(kind: BackendKind, search: string = globalTh
   }
   // Loaded lazily so the mock build never touches the worker.
   const { PyodideBackend, PYODIDE_CDN } = await import("./pyodide/pyodideBackend");
-  const source = params.get("pyodide");
+  const sources = backendSources(search);
   return new PyodideBackend({
-    indexURL: source === "cdn" ? PYODIDE_CDN : (source ?? undefined),
-    packageBaseUrl: params.get("packages") ?? undefined,
-    pyrpBaseUrl: params.get("pyrp") ?? undefined,
+    indexURL: sources.pyodide === "cdn" ? PYODIDE_CDN : sources.pyodide,
+    packageBaseUrl: sources.packages,
+    pyrpBaseUrl: sources.pyrp,
   });
 }

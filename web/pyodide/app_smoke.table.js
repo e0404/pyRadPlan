@@ -207,6 +207,38 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
     expect: (r, _resp, ctx) => r.rows.some((row) => row.file === ctx.addedMachine) || "added machine not listed",
   },
   { v: 1, method: "base_data.remove", session: false, params: (ctx) => ({ kind: "machines", file: ctx.addedMachine }) },
+  {
+    v: 1,
+    python: (ctx) => `
+import json
+import pyRadPlan.app as app
+def call(method, **params):
+    reply = app.dispatch({"id": 1, "session": "${ctx.session}", "method": method, "params": params})
+    return reply["result"] if reply["ok"] else {"error": reply["error"]["message"]}
+none = json.dumps({"model": "none", "parameters": {}}, sort_keys=True)
+followed = call("plan.options", radiation_mode="protons", current_bio={"radiation_mode": "photons", "model": "none", "option": none})
+pln = app.default_manager().get("${ctx.session}").workspace.pln
+pln.prop_opt = {**pln.prop_opt, "convert_dose_objectives": False}
+values = call("plan.get", detail=True)["problem"]["values"]
+edited = call("plan.set", problem={"name": "nonlin_fluence", "values": {**values, "p_norm": 3.0}})
+call("plan.set", scenarios={"model": "wcScen", "values": {}})
+switched = call("plan.set", radiation_mode="protons")
+pln = app.default_manager().get("${ctx.session}").workspace.pln
+result = {"selected": followed["bio_selection"], "default": followed["default_bio_model"], "values": values, "edited": "error" not in edited, "prop_opt": {k: v for k, v in pln.prop_opt.items() if k != "solver"}, "scenario": pln.scenarios.short_name, "mode": pln.radiation_mode}
+call("plan.set", radiation_mode="photons", scenarios={"model": "nomScen", "values": {}})
+result`,
+    note: "bio_selection follows the mode default; convert_dose_objectives survives a web edit; a mode change keeps scenario + problem (v1 amendment 22)",
+    expect: (r) =>
+      (r.selected.option === r.default &&
+        r.selected.replaced &&
+        !("convert_dose_objectives" in r.values) &&
+        r.edited &&
+        r.prop_opt.convert_dose_objectives === false &&
+        r.prop_opt.p_norm === 3 &&
+        r.scenario === "wcScen" &&
+        r.mode === "protons") ||
+      JSON.stringify(r),
+  },
   { v: 1, method: "plan.set", params: PLAN, note: "coarse plan for the exports" },
   {
     v: 1,

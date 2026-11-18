@@ -1,4 +1,3 @@
-from importlib.util import find_spec
 from types import SimpleNamespace
 
 import numpy as np
@@ -13,6 +12,7 @@ from pyRadPlan.app import (
     recalculation_angles_match,
     stage_status,
     status_text,
+    tissue_signature,
 )
 from pyRadPlan.app._stages import progress_detail
 from pyRadPlan.app._workspace import WORKSPACE_KEYS
@@ -205,43 +205,83 @@ def test_nested_fraction_and_detail():
     assert progress_detail([outer, inner]) == "Beam 1/2 · Ray 50/100"
 
 
-@pytest.mark.skipif(find_spec("PySide6") is None, reason="needs the gui extra")
-def test_tracker_agrees_with_the_qt_workflow_widget():
-    """Replays workspace changes on the Qt widget and the tracker, comparing the flags."""
-    from PySide6.QtWidgets import QApplication
+#: What each product is computed from; ``"tissue"`` is the structures' tissue properties.
+_UPSTREAM = {
+    "stf": ("ct", "pln"),
+    "dij": ("ct", "pln", "stf", "tissue"),
+    "result": ("ct", "pln", "cst", "stf", "dij"),
+}
 
-    from pyRadPlan.gui.widgets.workflow import WorkflowWidget
-    from pyRadPlan.gui.workspace import WorkspaceManager
 
-    _app = QApplication.instance() or QApplication([])
+class _VersionOracle:
+    """Staleness by version counters: a product is stale once an input changed since."""
+
+    def __init__(self) -> None:
+        self.versions = dict.fromkeys((*WORKSPACE_KEYS, "tissue"), 0)
+        self.inputs: dict[str, dict[str, int]] = {}
+
+    def write(self, keys, present, tissue_changed):
+        for key in keys:
+            self.versions[key] += 1
+        if tissue_changed:
+            self.versions["tissue"] += 1
+        for product, upstream in _UPSTREAM.items():
+            if product not in present:
+                self.inputs.pop(product, None)
+            elif product in keys:
+                self.inputs[product] = {key: self.versions[key] for key in upstream}
+
+    def stale(self, product):
+        recorded = self.inputs.get(product)
+        return recorded is not None and any(self.versions[k] != v for k, v in recorded.items())
+
+
+def test_tracker_agrees_with_input_versions_over_random_changes():
+    """Replays random workspace writes and compares the flags with a version oracle."""
+    from pyRadPlan.biology.tissues import MKMTissueProperties
+    from pyRadPlan.cst import create_voi
+
     _, cst = _tg119()
-    manager = WorkspaceManager()
-    widget = WorkflowWidget(manager)
-    tracker = StageTracker()
+    voi = cst.vois[0]
+    tissue = MKMTissueProperties(alpha_x=0.2, beta_x=0.04, r_nucleus=3.9, r_domain=0.32)
+    data = dict(voi)
+    data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+    other = SimpleNamespace(vois=[create_voi(data), *cst.vois[1:]])
+    renamed = SimpleNamespace(vois=[voi.model_copy(update={"name": "x"}), *cst.vois[1:]])
+    structure_sets = [cst, other, renamed]
 
-    def apply(**changes):
-        nonlocal tracker
-        if changes.pop("_clear", False):
-            manager.clear(list(changes))
-        else:
-            manager.set_many(**changes)
-        present = {k for k in WORKSPACE_KEYS if manager.has(k)}
-        tracker = tracker.update(list(changes), present, manager.cst)
-        assert (tracker.dij_stale, tracker.result_stale) == (
-            widget._dij_stale,
-            widget._result_stale,
-        ), changes
-
+    t = Tracked()
+    oracle = _VersionOracle()
     rng = np.random.default_rng(7)
-    apply(ct=object(), cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    for _ in range(60):
-        key = rng.choice(["cst", "pln", "stf", "dij", "result", "stf+dij", "clear"])
-        if key == "stf+dij":
-            apply(stf=object(), dij=object())
-        elif key == "clear":
-            apply(_clear=True, **{str(rng.choice(["dij", "result"])): None})
-        elif key == "cst":
-            apply(cst=cst)
+
+    def apply(keys, clear=False):
+        before = tissue_signature(t.ws.cst)
+        if clear:
+            t.ws.clear(keys)
         else:
-            apply(**{str(key): object() if key != "result" else {}})
-    widget.deleteLater()
+            t.ws.set_many(**{key: values[key]() for key in keys})
+        oracle.write(keys, t.ws.present(), tissue_signature(t.ws.cst) != before)
+        for product, flag in (
+            ("stf", "stf_stale"),
+            ("dij", "dij_stale"),
+            ("result", "result_stale"),
+        ):
+            assert getattr(t.tracker, flag) == oracle.stale(product), (keys, product)
+
+    values = {
+        "ct": object,
+        "cst": lambda: structure_sets[int(rng.integers(3))],
+        "pln": object,
+        "stf": object,
+        "dij": object,
+        "result": dict,
+    }
+    apply(list(WORKSPACE_KEYS))
+    for _ in range(300):
+        choice = rng.integers(4)
+        if choice == 0:
+            apply([str(rng.choice(["stf", "dij", "result"]))], clear=True)
+        elif choice == 1:
+            apply([str(k) for k in rng.choice(WORKSPACE_KEYS, size=2, replace=False)])
+        else:
+            apply([str(rng.choice(WORKSPACE_KEYS))])

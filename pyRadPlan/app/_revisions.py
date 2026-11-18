@@ -45,9 +45,9 @@ class Revisions:
 
     def _sources(self) -> dict[str, Any]:
         sources = {}
-        ct = self._get("ct")
-        if ct is not None:
-            sources["ct"] = ct.cube_hu
+        cube = getattr(self._get("ct"), "cube_hu", None)
+        if cube is not None:
+            sources["ct"] = cube
         sources.update(result_components(self._get("result")))
         return sources
 
@@ -69,8 +69,8 @@ class Revisions:
         if keys & {"ct", "cst"}:
             cst = self._get("cst")
             vois = list(getattr(cst, "vois", None) or [])
-            names = tuple(voi.name for voi in vois)
-            objects = (self._get("ct"), *(voi.mask for voi in vois))
+            names = tuple(getattr(voi, "name", None) for voi in vois)
+            objects = (self._get("ct"), *(getattr(voi, "mask", None) for voi in vois))
             previous_names, previous_objects = self._mask_sources or ((), ())
             if (
                 names != previous_names

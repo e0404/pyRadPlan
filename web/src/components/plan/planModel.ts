@@ -1,11 +1,20 @@
 /**
  * Draft model of the plan form (Qt `PlanWidget`): the form's fields, the per-field
- * "modified" snapshot (`_capture_state`), the bio-model re-listing rules
- * (`_refresh_bio_models`) and the `plan.set` request of an Apply (`_build_plan`, sending only
- * what changed so plan settings the form cannot show survive).
+ * "modified" snapshot (`_capture_state`), applying the backend's bio-model selection
+ * (`plan.options.bio_selection`, the rules of Qt `_refresh_bio_models`) and the `plan.set`
+ * request of an Apply (sending only what changed so plan settings the form cannot show survive).
  */
 import type { FieldDescriptor, PlanSummary, Vec3 } from "../../api/protocol";
-import { PLAN_MACHINE, type BioModelChoice, type DoseConvention, type PlanDetail, type PlanOptions, type PlanSetParams } from "../../api/protocol/plan";
+import {
+  PLAN_MACHINE,
+  type BioModelChoice,
+  type BioSelection,
+  type CurrentBio,
+  type DoseConvention,
+  type PlanDetail,
+  type PlanOptions,
+  type PlanSetParams,
+} from "../../api/protocol/plan";
 
 export interface SolverSpec {
   name: string;
@@ -227,7 +236,8 @@ function numberIn(text: string, label: string, f: FieldDescriptor | undefined, f
 /**
  * The `plan.set` params of an Apply: the fields that changed since the form was clean.
  * A changed radiation mode sends machine, engine and model too (the backend resets them to the
- * mode's defaults otherwise). Throws a `ValueError`-like message for invalid entries.
+ * mode's defaults otherwise); the scenario model and problem settings the backend keeps itself
+ * (v1 amendment 22). Throws a `ValueError`-like message for invalid entries.
  */
 export function planSetParams(d: PlanDraft, clean: Record<FieldKey, string>, options: PlanOptions | null): PlanSetParams {
   const mod = modifiedKeys(d, clean);
@@ -331,61 +341,32 @@ export function pickIdentifier(current: string | null, choices: PlanOptions["eng
   return String(choices.find((c) => c.enabled !== false)?.value ?? choices[0]?.value ?? "") || null;
 }
 
-export interface BioPick {
-  option: string | null;
-  model: string;
-  params: Record<string, unknown>;
-  /** Status note and reason when a selection the new context cannot run was replaced. */
-  note: { text: string; reason: string } | null;
+type BioDraft = Pick<PlanDraft, "bioOption" | "bioModel" | "bioParams">;
+
+/** A model's parameters with an option's base-data selection taken over (Qt `_apply_option_parameters`). */
+export function optionParams(choice: BioModelChoice, params: Record<string, unknown> | undefined): Record<string, unknown> {
+  return { ...nonSelection(params ?? {}), ...clone(choice.parameters) };
 }
 
 /**
- * Bio-model selection after the options were re-listed (Qt `_refresh_bio_models` without a
- * plan to restore): a selection the context can run is kept (or another entry of its formalism);
- * a mode's default follows into the new mode's default; otherwise the default, else `none`.
+ * The draft's biological model selection as `plan.options {current_bio}`: what the backend
+ * needs to choose the entry after a radiation mode, machine or engine change.
  */
-export function pickBioModel(
-  draft: Pick<PlanDraft, "bioOption" | "bioModel" | "bioParams">,
-  previous: { mode: string; options: PlanOptions | null },
-  mode: string,
-  options: PlanOptions,
-  machine: string,
-  engineLabel: string | null,
-): BioPick {
-  const list = options.bio_models;
-  const available = (o: BioModelChoice) => o.enabled !== false;
-  const prevOptions = previous.options;
-  const prevDefaultModel = prevOptions?.bio_models.find((o) => o.value === prevOptions.default_bio_model)?.model;
-  const prevLabel = prevOptions?.bio_models.find((o) => o.value === draft.bioOption)?.label ?? draft.bioModel;
-  const explicit = draft.bioModel !== "" && draft.bioModel !== prevDefaultModel;
-  const keep = explicit || previous.mode === mode;
-  const params = (o: BioModelChoice): Record<string, unknown> => ({
-    ...nonSelection(draft.bioParams[o.model] ?? {}),
-    ...clone(o.parameters),
-  });
-  let chosen: BioModelChoice | undefined;
-  if (keep && draft.bioOption !== null) chosen = list.find((o) => o.value === draft.bioOption && available(o));
-  if (chosen) return { option: String(chosen.value), model: chosen.model, params: clone(draft.bioParams[chosen.model] ?? params(chosen)), note: null };
-  if (keep && draft.bioOption === null) {
-    return { option: null, model: draft.bioModel, params: clone(draft.bioParams[draft.bioModel] ?? {}), note: null };
-  }
-  if (keep) chosen = list.find((o) => o.model === draft.bioModel && available(o));
-  if (!chosen) chosen = list.find((o) => o.value === options.default_bio_model && available(o));
-  if (!chosen) {
-    const defaultModel = list.find((o) => o.value === options.default_bio_model)?.model;
-    chosen = list.find((o) => o.model === defaultModel && available(o));
-  }
-  if (!chosen) chosen = list.find((o) => o.model === "none") ?? list[0];
-  if (!chosen) return { option: "none", model: "none", params: {}, note: null };
-  let note: BioPick["note"] = null;
-  if (keep && previous.options) {
-    const same = list.find((o) => o.value === draft.bioOption) ?? list.find((o) => o.model === draft.bioModel);
-    let context = `for ${mode}`;
-    if (same) context = same.reason && engineLabel && /engine/i.test(same.reason) ? `with the dose engine ${engineLabel}` : `on machine '${machine}'`;
-    note = {
-      text: `Biological model '${prevLabel}' is not available ${context}; selected '${chosen.label}'.`,
-      reason: same?.reason ?? "",
-    };
-  }
-  return { option: String(chosen.value), model: chosen.model, params: params(chosen), note };
+export function currentBio(d: BioDraft, mode: string, options: PlanOptions | null, unsupportedLabel?: string | null): CurrentBio {
+  const label =
+    d.bioOption === null
+      ? (unsupportedLabel ?? d.bioModel).split(" (not supported")[0]
+      : (options?.bio_models.find((o) => o.value === d.bioOption)?.label ?? d.bioModel);
+  return { radiation_mode: mode, model: d.bioModel, option: d.bioOption, values: clone(nonSelection(d.bioParams[d.bioModel] ?? {})), label };
+}
+
+/** The draft's bio fields with the backend's `bio_selection` applied (unchanged without one). */
+export function applyBioSelection(d: BioDraft, selection: BioSelection | undefined, options: PlanOptions): BioDraft {
+  if (!selection) return { bioOption: d.bioOption, bioModel: d.bioModel, bioParams: d.bioParams };
+  if (selection.unsupported) return { bioOption: null, bioModel: selection.unsupported.model, bioParams: d.bioParams };
+  const choice = options.bio_models.find((o) => o.value === selection.option);
+  const model = selection.model;
+  const kept = d.bioParams[model];
+  const params = choice && (selection.replaced || !kept) ? optionParams(choice, kept) : clone(kept ?? {});
+  return { bioOption: selection.option, bioModel: model, bioParams: { ...d.bioParams, [model]: params } };
 }

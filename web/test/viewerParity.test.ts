@@ -280,6 +280,34 @@ describe("mock v1 viewer methods", () => {
     expect(beamVol.data.shape).toEqual([129, 167, 167]);
   });
 
+  it("offers the scenario components of a robust plan, labelled, in the viewer and the analysis", async () => {
+    const backend = new MockBackend({ speed: 0 });
+    const { session } = await backend.request("session.create", {});
+    await backend.request("data.load_phantom", { name: "TG119" }, session);
+    await backend.request("plan.set", { scenarios: { model: "wcScen", values: {} } }, session);
+    await backend.request("workflow.calc_dose_influence", {}, session);
+    const state = await backend.request("workflow.optimize", { max_iter: 3 }, session);
+    const dose = state.results!.groups.find((g) => g.base === "physical_dose" && !g.tag)!;
+    const scenarios = dose.components.filter((c) => c.kind === "scenario");
+    expect(scenarios.map((c) => c.key)).toEqual(Array.from({ length: 7 }, (_, i) => `physical_dose_scenario ${i}`));
+    expect(state.results!.scenario_labels[0]).toBe("nominal");
+    expect(state.results!.scenario_labels[1]).toBe("setup (-2.25, 0.0, 0.0) mm");
+    expect(state.quantities).toEqual(["physical_dose"]);
+    const full = await backend.request("view.volume", { name: "physical_dose" }, session);
+    const nominal = await backend.request("view.volume", { name: "physical_dose_scenario 0" }, session);
+    const shifted = await backend.request("view.volume", { name: "physical_dose_scenario 2" }, session);
+    expect(nominal.data.data).toEqual(full.data.data);
+    expect(shifted.data.data).not.toEqual(full.data.data);
+    const dvh = await backend.request("analysis.dvh", { keys: ["physical_dose_scenario 2"], num_points: 100, range: "per_structure" }, session);
+    expect(dvh.sets?.[0].name).toBe("dose, scenario 2");
+    expect(keyLabel(state.results!.groups, "physical_dose_scenario 2")).toBe("dose, scenario 2");
+    await backend.request("plan.set", { scenarios: { model: "nomScen", values: {} } }, session);
+    await backend.request("workflow.run_all", { max_iter: 3 }, session);
+    const nominalPlan = await backend.request("session.state", {}, session);
+    expect(nominalPlan.results!.scenario_labels).toEqual([]);
+    expect(nominalPlan.results!.groups[0].components.some((c) => c.kind === "scenario")).toBe(false);
+  });
+
   it("serves beams, compact masks, DVH sets and QIs", async () => {
     const { backend, session } = await ready();
     const beams = await backend.request("view.beams", {}, session);

@@ -378,7 +378,7 @@ export function AnalysisWindow(props: { onClose: () => void }) {
       ) : (
         <div className="analysis-body">
           <div className="analysis-controls">
-            <fieldset className="qt-group" style={{ flex: 1 }}>
+            <fieldset className="qt-group" style={{ flex: 1.5, minWidth: 300 }}>
               <legend>Quantities</legend>
               <div className="form-grid" style={{ gridTemplateColumns: "auto minmax(0, 1fr)" }}>
                 <label>Primary:</label>

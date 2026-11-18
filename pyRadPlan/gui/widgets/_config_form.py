@@ -14,7 +14,6 @@ overrides, see :func:`~pyRadPlan.core.replace_nested`.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 import types
@@ -28,7 +27,6 @@ from typing import (
     Union,
     get_args,
     get_origin,
-    get_type_hints,
 )
 
 from pydantic import BaseModel, ValidationError
@@ -48,6 +46,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app._forms import field_label
+from pyRadPlan.app._forms import merged_mapping as _merged_mapping
+from pyRadPlan.app._forms import nested_fields as _nested_fields
+from pyRadPlan.app._forms import unwrap_optional as _unwrap_optional
+from pyRadPlan.app._forms import valid_entries
 from pyRadPlan.core import field_constraints, is_nested_instance, replace_nested
 from ._base import AdaptiveDoubleSpinBox, parse_number_list
 
@@ -58,16 +61,6 @@ _FLOAT_LIMIT = 1e12
 _UNION_TYPES = (Union, types.UnionType)
 
 
-def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
-    """Strip Optional[...] from an annotation, returning (inner, was_optional)."""
-    if get_origin(annotation) in _UNION_TYPES:
-        args = [a for a in get_args(annotation) if a is not type(None)]
-        if len(args) == 1:
-            return args[0], True
-        return annotation, type(None) in get_args(annotation)
-    return annotation, False
-
-
 def _literal_choices(annotation: Any) -> tuple[tuple, bool]:
     """Choices of the Literal members of a union, and whether it also admits any string."""
     if get_origin(annotation) not in _UNION_TYPES:
@@ -75,39 +68,6 @@ def _literal_choices(annotation: Any) -> tuple[tuple, bool]:
     members = get_args(annotation)
     choices = tuple(c for m in members if get_origin(m) is Literal for c in get_args(m))
     return choices, str in members
-
-
-def _nested_fields(obj: Any) -> list[tuple[str, Any, dict]]:
-    """Editable fields of a dataclass or pydantic model: ``(name, annotation, constraints)``."""
-    if isinstance(obj, BaseModel):
-        return [
-            (name, info.annotation, field_constraints(info))
-            for name, info in type(obj).model_fields.items()
-        ]
-    try:
-        hints = get_type_hints(type(obj))
-    except Exception:  # noqa: BLE001 - unresolvable hints only cost the dedicated widgets
-        hints = {}
-    return [
-        (field.name, hints.get(field.name, Any), {})
-        for field in dataclasses.fields(obj)
-        if field.init
-    ]
-
-
-def _merged_mapping(base: Any, overrides: Mapping[str, Any]) -> dict:
-    """Plain mapping of *base* (a dataclass or pydantic model) with *overrides* applied.
-
-    Built for re-validation: the mapping is merged from the base's dump rather than dumped
-    from the updated instance, so an invalid override never has to be serialized.
-    """
-    mapping = base.model_dump() if isinstance(base, BaseModel) else dataclasses.asdict(base)
-    for key, value in overrides.items():
-        if isinstance(value, Mapping) and is_nested_instance(getattr(base, key, None)):
-            mapping[key] = _merged_mapping(getattr(base, key), value)
-        else:
-            mapping[key] = value
-    return mapping
 
 
 class _CollapsibleSection(QWidget):
@@ -228,26 +188,15 @@ class ConfigFormWidget(QWidget):
         model_cls: type[BaseModel], values: dict[str, Any], log: bool
     ) -> dict[str, Any]:
         """Validate entries of *values* by field name, dropping invalid ones."""
-        try:
-            validated = model_cls.model_validate(values)
-        except ValidationError as exc:
-            if log:
-                logger.info(
-                    "Some initial values are invalid for %s and will be ignored: %s",
-                    model_cls.__name__,
-                    exc,
-                )
-        else:
-            return {name: getattr(validated, name) for name in validated.model_fields_set}
 
-        entries = {}
-        for key, value in values.items():
-            try:
-                validated = model_cls.model_validate({key: value})
-            except ValidationError:
-                continue
-            entries.update({name: getattr(validated, name) for name in validated.model_fields_set})
-        return entries
+        def _log(exc: ValidationError) -> None:
+            logger.info(
+                "Some initial values are invalid for %s and will be ignored: %s",
+                model_cls.__name__,
+                exc,
+            )
+
+        return valid_entries(model_cls, values, on_invalid=_log if log else None)
 
     # ------------------------------------------------------------------
     # Public API
@@ -287,7 +236,7 @@ class ConfigFormWidget(QWidget):
         meta = field_constraints(info).get("param_meta")
         if meta is not None and meta.label:
             return meta.label
-        return name.replace("_", " ").capitalize() + ":"
+        return f"{field_label(name)}:"
 
     def _create_editor(self, name: str, info) -> Optional[QWidget]:
         constraints = field_constraints(info)
@@ -606,6 +555,8 @@ class ConfigFormDialog(QDialog):
         Window title (e.g. ``"Configure SVD Pencil Beam"``).
     parent:
         Optional Qt parent widget.
+    exclude:
+        Field names not shown (nor reported by :meth:`values`).
     """
 
     def __init__(
@@ -614,12 +565,13 @@ class ConfigFormDialog(QDialog):
         initial: Optional[Mapping[str, Any]] = None,
         title: str = "Configure",
         parent: Optional[QWidget] = None,
+        exclude: Optional[set[str]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
 
         root = QVBoxLayout(self)
-        self._form = ConfigFormWidget(model_cls, initial=initial)
+        self._form = ConfigFormWidget(model_cls, initial=initial, exclude=exclude)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

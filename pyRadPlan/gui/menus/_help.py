@@ -9,8 +9,6 @@ the version, the license note and the non-clinical-use disclaimer.
 from __future__ import annotations
 
 import platform
-from dataclasses import dataclass
-from importlib import metadata
 from typing import Optional
 
 from PySide6.QtCore import Qt, QUrl
@@ -34,6 +32,11 @@ from PySide6.QtWidgets import (
 )
 
 import pyRadPlan
+from pyRadPlan.app._settings import (  # noqa: F401 - re-exported for the GUI
+    DistributionInfo,
+    installed_distributions,
+    license_text,
+)
 from pyRadPlan.gui.assets import asset_path
 
 DOCUMENTATION_URL = "https://pyradplan.readthedocs.io"
@@ -46,109 +49,7 @@ DISCLAIMER = (
 )
 LICENSE_NOTE = "Released under the BSD 3-Clause License. Copyright (c) 2024-2026, DKFZ."
 
-#: Case-insensitive prefixes of files in a ``.dist-info`` directory that hold license texts.
-_LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE")
-#: Fallback candidates when a distribution ships no ``RECORD`` to enumerate its files.
-_LICENSE_FILE_CANDIDATES = (
-    "LICENSE",
-    "LICENSE.txt",
-    "LICENSE.md",
-    "LICENSE.rst",
-    "LICENCE",
-    "COPYING",
-    "COPYING.txt",
-)
 NO_LICENSE_TEXT = "No license text found for this distribution."
-
-
-@dataclass(frozen=True)
-class DistributionInfo:
-    """Name, version and license identifier of an installed distribution."""
-
-    name: str
-    version: str
-    license: str
-    distribution: metadata.Distribution
-
-
-def _license_identifier(dist: metadata.Distribution) -> str:
-    """Return a short license name from the metadata, or ``"unknown"``."""
-    meta = dist.metadata
-    expression = meta.get("License-Expression")
-    if expression:
-        return expression.strip()
-    for classifier in meta.get_all("Classifier") or []:
-        if classifier.startswith("License ::"):
-            return classifier.split("::")[-1].strip()
-    # Older packages put either a short name or the complete text into License.
-    text = (meta.get("License") or "").strip()
-    if text and "\n" not in text and len(text) <= 60:
-        return text
-    if text:
-        return "see license text"
-    return "unknown"
-
-
-def _is_license_file(parts: tuple[str, ...]) -> bool:
-    """Whether a path relative to the ``.dist-info`` directory is a license notice."""
-    if parts[0] == "licenses":
-        return len(parts) > 1
-    return len(parts) == 1 and parts[0].upper().startswith(_LICENSE_FILE_PREFIXES)
-
-
-def license_text(dist: metadata.Distribution) -> Optional[str]:
-    """Return the license text(s) shipped with *dist*, or ``None`` if there is none.
-
-    The ``LICENSE*`` / ``COPYING*`` / ``NOTICE*`` files and the ``licenses/``
-    directory of the distribution's ``.dist-info`` are read through
-    :meth:`importlib.metadata.Distribution.read_text`, which works from a
-    read-only install and also covers wheels without a ``License`` metadata
-    field. Several files are concatenated under their file names. As a last
-    resort the ``License`` metadata field is returned when it holds a full text.
-    """
-    names: list[str] = []
-    for path in dist.files or []:
-        parts = path.parts
-        if len(parts) >= 2 and parts[0].endswith((".dist-info", ".egg-info")):
-            if _is_license_file(parts[1:]):
-                names.append("/".join(parts[1:]))
-    if not names:
-        names = list(_LICENSE_FILE_CANDIDATES)
-
-    texts: list[tuple[str, str]] = []
-    for name in sorted(dict.fromkeys(names)):
-        try:
-            text = dist.read_text(name)
-        except (OSError, UnicodeDecodeError, ValueError):
-            text = None
-        if text and text.strip():
-            texts.append((name, text.strip()))
-
-    if len(texts) == 1:
-        return texts[0][1]
-    if texts:
-        return "\n\n\n".join(f"{name}\n{'=' * len(name)}\n\n{text}" for name, text in texts)
-
-    field = (dist.metadata.get("License") or "").strip()
-    if "\n" in field:
-        return field
-    return None
-
-
-def installed_distributions() -> list[DistributionInfo]:
-    """Return the installed distributions sorted by name, one entry per name."""
-    found: dict[str, DistributionInfo] = {}
-    for dist in metadata.distributions():
-        name = dist.metadata.get("Name")
-        if not name or name.lower() in found:
-            continue
-        found[name.lower()] = DistributionInfo(
-            name=name,
-            version=dist.version or "",
-            license=_license_identifier(dist),
-            distribution=dist,
-        )
-    return [found[key] for key in sorted(found)]
 
 
 class ThirdPartyLicensesDialog(QDialog):

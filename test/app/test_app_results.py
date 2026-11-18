@@ -1,6 +1,6 @@
 import pytest
 
-from pyRadPlan.app._results import result_components, sanitize_tag
+from pyRadPlan.app._results import quantity_meta, result_components, sanitize_tag
 
 TINY_PLAN = {"gantry_angles": [0.0, 180.0], "bixel_width": 10.0, "dose_grid_resolution": [8, 8, 8]}
 
@@ -78,6 +78,22 @@ def test_result_key_helpers():
     assert sanitize_tag(" my run! ") == "my_run"
     with pytest.raises(ValueError):
         sanitize_tag("scenario")
+
+
+@pytest.mark.parametrize(
+    ("key", "meta", "beam_only"),
+    [
+        ("rbe_x_dose", ("RBE-weighted Dose", "Gy (RBE)"), ("RBE-weighted Dose", "Gy (RBE)")),
+        ("physical_dose_beam", ("Dose", "Gy"), ("Dose", "Gy")),
+        ("let_scenario", ("LET", "keV/μm"), ("", "")),
+        ("physical_dose_beam_scenario", ("Dose", "Gy"), ("", "")),
+        ("physical_dose_saved", ("Quantity", ""), ("", "")),
+    ],
+)
+def test_quantity_meta_resolves_component_keys(key, meta, beam_only):
+    """One table serves the viewers (any component key) and the save dialog (per beam)."""
+    assert quantity_meta(key) == meta
+    assert quantity_meta(key, ("", ""), suffixes=("_beam",)) == beam_only
 
 
 def test_snapshot_tags_survive_a_workspace_pickle(optimized):

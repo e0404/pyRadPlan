@@ -62,7 +62,7 @@ def component_info(result: Any, key: str) -> dict[str, Any]:
     """
     from pyRadPlan.quantities._display_names import group_result_keys  # noqa: PLC0415
 
-    from ._results import _meta  # noqa: PLC0415
+    from ._results import quantity_meta  # noqa: PLC0415
 
     keys = list(result_components(result))
     if key not in keys:
@@ -71,7 +71,7 @@ def component_info(result: Any, key: str) -> dict[str, Any]:
         for (component, member), kind in zip(group.components, group.kinds):
             if member != key:
                 continue
-            meta_label, unit = _meta(group.base)
+            meta_label, unit = quantity_meta(group.base)
             label = group.label if component == "full" else f"{group.label}, {component}"
             return {
                 "key": key,
@@ -196,14 +196,28 @@ def _plane_dtype(count: int) -> np.dtype:
 
 
 # ----------------------------------------------------------------------
-# Beam geometry (``gui/widgets/_result_widget.py:_beam_geometry`` in LPS millimetres)
+# Beam geometry in LPS millimetres (the Qt viewer maps it to its voxel space)
 # ----------------------------------------------------------------------
 
 
 def _as_angle_array(value: Any) -> np.ndarray:
+    """Flatten a ``prop_stf`` angle entry (list, scalar, array or None) to 1-D floats."""
     if value is None:
         return np.empty(0)
     return np.atleast_1d(np.asarray(value, dtype=float)).ravel()
+
+
+def plan_beam_angles(pln: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Gantry and couch angle of every beam of *pln*, ``None`` if it defines no beams."""
+    return _beam_angles(getattr(pln, "prop_stf", None) or {})
+
+
+def plan_iso_centers(pln: Any, cst: Any) -> Optional[np.ndarray]:
+    """Isocenters of *pln* in mm, shape ``(k, 3)``, resolved as the stf generators do.
+
+    ``None`` when the plan sets none and there is no target to derive it from.
+    """
+    return _iso_centers((getattr(pln, "prop_stf", None) or {}).get("iso_center"), cst)
 
 
 def _beam_angles(prop_stf: Mapping[str, Any]) -> Optional[tuple[np.ndarray, np.ndarray]]:
@@ -257,16 +271,25 @@ def _vec(values: Any) -> list[float]:
     return [float(v) for v in np.asarray(values, dtype=float).ravel()]
 
 
+_RESOLVE = object()
+
+
 def beam_geometry(
-    pln: Any, stf: Any, cst: Any, draft: Optional[Mapping[str, Any]] = None
+    pln: Any,
+    stf: Any,
+    cst: Any,
+    draft: Optional[Mapping[str, Any]] = None,
+    *,
+    iso_centers: Any = _RESOLVE,
 ) -> dict[str, Any]:
     """Beam axes of the plan (or of an unapplied *draft* of its angles) in LPS millimetres.
 
-    Mirrors the Qt viewer (``_result_widget.py:_apply_beams`` / ``_beam_geometry``): the
-    stf beams are used while their angles equal the plan's (or the draft's), else the
-    angles themselves; with plan angles the plan isocenters take precedence over the
-    stf's. Beams with plan angles carry their gantry orbit (``orbit_u`` / ``orbit_w``, the
-    source directions at gantry 0 and 90 degrees, and ``orbit_axis = u x w``).
+    The geometry both the Qt viewer and the web viewer draw: the stf beams are used while
+    their angles equal the plan's (or the draft's), else the angles themselves; with plan
+    angles the plan isocenters take precedence over the stf's, as Recalculate Dose moves
+    the beams to them. Beams with plan angles carry their gantry orbit (``orbit_u`` /
+    ``orbit_w``, the source directions at gantry 0 and 90 degrees, and
+    ``orbit_axis = u x w``), so a viewer can rotate them.
 
     Parameters
     ----------
@@ -274,6 +297,9 @@ def beam_geometry(
         ``{gantry_angles, couch_angles?, iso_center?}`` of the plan form; a given
         ``iso_center`` (``None``: automatic) replaces the plan's. Draft beams whose angles
         differ from the applied plan are ``pending``.
+    iso_centers
+        The isocenters of the plan (with the draft applied), if the caller resolved them
+        already (:func:`plan_iso_centers`); resolved here when omitted.
     """
     prop_stf = dict(getattr(pln, "prop_stf", None) or {})
     applied = _beam_angles(prop_stf)
@@ -283,7 +309,8 @@ def beam_geometry(
         if "iso_center" in draft:
             prop_stf["iso_center"] = draft["iso_center"]
     angles = _beam_angles(prop_stf)
-    iso_centers = _iso_centers(prop_stf.get("iso_center"), cst)
+    if iso_centers is _RESOLVE:
+        iso_centers = _iso_centers(prop_stf.get("iso_center"), cst)
 
     def plan_iso(i: int) -> np.ndarray:
         return iso_centers[min(i, len(iso_centers) - 1)]

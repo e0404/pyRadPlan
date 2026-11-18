@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .._result_widget import QUANTITY_META
+from pyRadPlan.app._results import quantity_meta
+
 from ._labels import TruncatedCheckBox
 
 
@@ -47,7 +48,7 @@ class SaveResultDialog(QDialog):
         col = QVBoxLayout(container)
         col.setContentsMargins(4, 4, 4, 4)
         for key in quantities:
-            label, _unit = QUANTITY_META.get(key, ("", ""))
+            label, _unit = quantity_meta(key, ("", ""), suffixes=("_beam",))
             text = f"{label} ({key})" if label else key
             checkbox = TruncatedCheckBox(text)
             self._checkboxes[key] = checkbox

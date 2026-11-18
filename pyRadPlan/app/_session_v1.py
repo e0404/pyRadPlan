@@ -13,21 +13,26 @@ from ._history import SessionHistory
 from ._profiles import resolve_profile, running_in_pyodide
 from ._revisions import Revisions
 
+#: Structure changes that only affect how a structure is shown (``update_structure``).
+DISPLAY_CHANGES = frozenset({"color", "visible"})
 
-def _precondition(message: str, code: str) -> Exception:
+
+def _precondition(
+    message: str, code: str, details: Optional[list] = None, data: Optional[Mapping] = None
+) -> Exception:
     from ._session import PreconditionError  # noqa: PLC0415
 
-    return PreconditionError(message, code)
+    return PreconditionError(message, code, details=details, data=data)
 
 
 def _tissue_errors(errors: list) -> Exception:
-    error = _precondition(
+    return _precondition(
         "The biological model cannot be evaluated for these tissues; pass apply_anyway=true "
         "to write them nonetheless.",
         "tissue_errors",
+        details=[_planform.issue_dict(issue) for issue in errors],
+        data={"issues": list(errors)},
     )
-    error.details = [_planform.issue_dict(issue) for issue in errors]
-    return error
 
 
 class SessionV1Mixin:
@@ -58,9 +63,10 @@ class SessionV1Mixin:
         if not changed_keys or "result" in changed_keys:
             self.saved_tags = _results.prune_tags(self.workspace.result, self.saved_tags)
 
-    def _v1_loaded(self, data: Mapping[str, Any]) -> None:
-        tags = data.get("saved_result_tags")
-        if data.get("ct") is not None or data.get("result") is not None:
+    def _v1_loaded(self, data: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+        # A new patient or a replacement result (also a bare dose) brings its own tags.
+        if "ct" in payload or "result" in payload:
+            tags = data.get("saved_result_tags")
             self.saved_tags = [t for t in (tags or []) if isinstance(t, str)]
 
     def snapshot_tags(self) -> list[str]:
@@ -91,7 +97,10 @@ class SessionV1Mixin:
         present = ws.present()
         idle = self._busy is None
         state["revisions"] = self.revisions.as_dict()
-        state["results"] = _results.result_catalog(ws.result, ws.dij, ws.pln, self.saved_tags)
+        try:
+            state["results"] = _results.result_catalog(ws.result, ws.dij, ws.pln, self.saved_tags)
+        except Exception:  # noqa: BLE001 - placeholders a host stored have no catalog
+            state["results"] = _results.result_catalog(None, None, None, [])
         state["options"] = {
             "profile": self.profile,
             "default_plan": dict(self.default_plan),
@@ -108,7 +117,7 @@ class SessionV1Mixin:
                 "save_workspace": idle and "ct" in present,
             }
         )
-        if ws.cst is not None:
+        if state["structures"]:
             by_name = {voi.name: voi for voi in ws.cst.vois}
             for entry in state["structures"]:
                 voi = by_name.get(entry["name"])
@@ -226,17 +235,35 @@ class SessionV1Mixin:
         return self.cst_get([name])["structures"][0]
 
     def update_structure(
-        self, name: str, changes: Mapping[str, Any], apply_anyway: bool = False
-    ) -> dict[str, Any]:
-        """``cst.update_structure``: type, colour, visibility, overlap priority, tissue."""
-        self._require_idle()
+        self,
+        name: str,
+        changes: Mapping[str, Any],
+        apply_anyway: bool = False,
+        detail: bool = True,
+    ) -> Optional[dict[str, Any]]:
+        """Change a structure's type, colour, visibility, overlap priority or tissue.
+
+        Colour and visibility only change how the structure is shown. On their own they are
+        set on the structure in place, outdate nothing and are accepted while an operation
+        runs; listeners get a state event (once idle) and ``revisions.workspace.cst``
+        counts the change. The other changes recreate the structure and write the structure
+        set, which is refused while an operation runs; a changed tissue the biological
+        model cannot be evaluated for is refused unless *apply_anyway*. A tissue is a
+        ``TissueDraft`` or (in-process) tissue properties.
+
+        Returns the ``StructureDetail`` after the change (``cst.update_structure``), or
+        ``None`` without *detail*.
+        """
+        unknown = set(changes) - {"type", "color", "visible", "overlap_priority", "tissue"}
+        if unknown:
+            raise ValueError(f"Unknown structure change(s): {sorted(unknown)}")
+        display_only = set(changes) <= DISPLAY_CHANGES
+        if not display_only:
+            self._require_idle()
         ws = self.workspace
         cst = ws.cst
         if cst is None:
             raise LookupError("No structure set loaded")
-        unknown = set(changes) - {"type", "color", "visible", "overlap_priority", "tissue"}
-        if unknown:
-            raise ValueError(f"Unknown structure change(s): {sorted(unknown)}")
         vois = list(cst.vois)
         index = next((i for i, v in enumerate(vois) if v.name == name), None)
         if index is None:
@@ -249,21 +276,29 @@ class SessionV1Mixin:
             update["color"] = tuple(int(c) for c in changes["color"])
         if "visible" in changes:
             update["visible"] = bool(changes["visible"])
+        if display_only:
+            if update:
+                for field, value in update.items():
+                    setattr(voi, field, value)
+                self.revisions.update(["cst"])
+                if self._busy is None:
+                    self._emit_state()
+            return self._structure(name) if detail else None
         if "overlap_priority" in changes:
             update["overlap_priority"] = int(changes["overlap_priority"])
         if changes.get("tissue") is not None:
             tissue = _tissue.tissue_of(changes["tissue"], voi.tissue_properties)
             if tissue != voi.tissue_properties:
-                errors = _tissue.check_errors(ws.pln, cst, {name: tissue})
-                if errors and not apply_anyway:
-                    raise _tissue_errors(errors)
+                if not apply_anyway:
+                    errors = _tissue.check_errors(ws.pln, cst, {name: tissue})
+                    if errors:
+                        raise _tissue_errors(errors)
                 update["tissue_properties"] = tissue
-        if not update:
-            return {"state": self.state(), "structure": self._structure(name)}
-        vois[index] = _tissue.recreate_voi(voi, **update)
-        cst.vois = vois
-        ws.cst = cst
-        return {"state": self.state(), "structure": self._structure(name)}
+        if update:
+            vois[index] = _tissue.recreate_voi(voi, **update)
+            cst.vois = vois
+            ws.cst = cst
+        return self._structure(name) if detail else None
 
     def tissue_schema(self, **context: Any) -> dict[str, Any]:
         """``tissue.schema``."""
@@ -275,10 +310,13 @@ class SessionV1Mixin:
             raise LookupError("No structure set loaded")
         return _tissue.evaluate_tissues(self.workspace.pln, self.workspace.cst, rows, **params)
 
-    def tissue_apply(
-        self, rows: Sequence[Mapping[str, Any]], apply_anyway: bool = False
-    ) -> dict[str, Any]:
-        """``tissue.apply``: write edited tissues (VOIs recreated as in the Qt dialog)."""
+    def tissue_apply(self, rows: Sequence[Mapping[str, Any]], apply_anyway: bool = False) -> None:
+        """``tissue.apply``: write edited tissues (VOIs recreated as in the Qt dialog).
+
+        Rows are ``{"structure": name, "tissue": TissueDraft}``; an in-process frontend may
+        pass tissue properties and ``voi_index``, the structure's position, which also tells
+        apart structures of the same name.
+        """
         self._require_idle()
         ws = self.workspace
         cst = ws.cst
@@ -286,50 +324,71 @@ class SessionV1Mixin:
             raise LookupError("No structure set loaded")
         vois = list(cst.vois)
         by_name = {voi.name: i for i, voi in enumerate(vois)}
-        replaced = {}
+        replaced: dict[int, Any] = {}
         for row in rows:
             name = row["structure"]
-            if name not in by_name:
+            index = row.get("voi_index")
+            if index is None:
+                index = by_name.get(name)
+            elif not (0 <= index < len(vois) and vois[index].name == name):
+                raise KeyError(f"No structure {name!r} at position {index}")
+            if index is None:
                 raise KeyError(f"Unknown structure {name!r}")
-            voi = vois[by_name[name]]
+            voi = vois[index]
             tissue = _tissue.tissue_of(row["tissue"], voi.tissue_properties)
             if tissue != voi.tissue_properties:
-                replaced[name] = tissue
-        if replaced:
-            errors = _tissue.check_errors(ws.pln, cst, replaced)
-            if errors and not apply_anyway:
+                replaced[index] = tissue
+        if not replaced:
+            return
+        if not apply_anyway:
+            by_structure = {vois[i].name: tissue for i, tissue in replaced.items()}
+            errors = _tissue.check_errors(ws.pln, cst, by_structure)
+            if errors:
                 raise _tissue_errors(errors)
-            for name, tissue in replaced.items():
-                i = by_name[name]
-                vois[i] = _tissue.recreate_voi(vois[i], tissue_properties=tissue)
-            cst.vois = vois
-            ws.cst = cst
-        return {"state": self.state()}
+        _tissue.replace_tissues(cst, replaced)
+        ws.cst = cst
 
     def objectives_catalog(self) -> dict[str, Any]:
         """``objectives.catalog``."""
         return _objectives.catalog(self.workspace.result, self.workspace.ct)
 
-    def objectives_edit(self, op: str, structure: Optional[str] = None, **params: Any) -> dict:
-        """Run one objectives operation (``add``, ``update``, ``change_type``, ``remove``)."""
+    def objectives_edit(
+        self, op: str, structure: Optional[str] = None, detail: bool = True, **params: Any
+    ) -> Optional[dict]:
+        """Run one objectives operation (``add``, ``update``, ``change_type``, ``remove``).
+
+        Returns the ``StructureDetail`` of *structure* afterwards (``None`` without
+        *detail*). An in-process frontend may pass ``voi_index``, the structure's position,
+        which also tells apart structures of the same name.
+        """
         self._require_idle()
         if self.workspace.cst is None:
             raise LookupError("No structure set loaded")
+        if op not in ("add", "update", "change_type", "remove"):
+            raise ValueError(f"Unknown objectives operation {op!r}")
         getattr(_objectives, op)(self.workspace, structure, **params)
-        return {"state": self.state(), "structure": self._structure(structure)}
+        return self._structure(structure) if detail else None
 
-    def objectives_set_quantity_all(self, quantity: str) -> dict[str, Any]:
+    def objectives_set_quantity_all(self, quantity: str) -> None:
         """``objectives.set_quantity_all``."""
         self._require_idle()
         _objectives.set_quantity_all(self.workspace, quantity)
-        return {"state": self.state()}
 
     # ------------------------------------------------------------------
     # Results
     # ------------------------------------------------------------------
 
-    def snapshot(self, tag: Optional[str] = None) -> dict[str, Any]:
-        """Keep a copy of the current result under *tag* (Qt "Snapshot Result")."""
+    def snapshot(self, tag: Optional[str] = None) -> str:
+        """Keep a copy of the current result under *tag* (Qt "Snapshot Result").
+
+        Returns the stored tag (sanitized, the plan's default tag when omitted).
+
+        Raises
+        ------
+        ValueError
+            If the tag is empty after sanitizing or names the per-beam / per-scenario
+            results.
+        """
         self._require_idle()
         ws = self.workspace
         if ws.result is None:
@@ -339,4 +398,4 @@ class SessionV1Mixin:
         if tag not in self.saved_tags:
             self.saved_tags.append(tag)
         ws.result = result
-        return {"state": self.state(), "tag": tag}
+        return tag

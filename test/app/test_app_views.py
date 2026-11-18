@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pytest
 import SimpleITK as sitk
@@ -117,69 +115,53 @@ def test_crop_of_an_empty_structure():
 
 
 # ----------------------------------------------------------------------
-# Beams against the Qt viewer's helpers
+# Beams (the geometry both viewers draw)
 # ----------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def qt_beams():
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    pytest.importorskip("PySide6")
-    from pyRadPlan.gui.widgets import _result_widget
-
-    return _result_widget
-
-
-def _to_lps_expectation(qt, ct, entry):
-    origin = np.array(ct.cube_hu.GetOrigin())
-    spacing = np.array(ct.cube_hu.GetSpacing())
-    return {
-        "iso_center": qt._to_viewer_vox(entry["iso_center"], origin, spacing),
-        "source_direction": qt._to_viewer_direction(entry["source_direction"], spacing),
-        "orbit": None
-        if "orbit_u" not in entry
-        else (
-            qt._to_viewer_direction(entry["orbit_u"], spacing),
-            qt._to_viewer_direction(entry["orbit_w"], spacing),
-        ),
-        "orbit_axis": None
-        if "orbit_axis" not in entry
-        else qt._to_viewer_direction(entry["orbit_axis"], spacing),
-    }
+def _check_orbit(beam):
+    """The source direction lies on the beam's gantry orbit, whose axis is u x w."""
+    u, w, axis = (np.asarray(beam[k]) for k in ("orbit_u", "orbit_w", "orbit_axis"))
+    gantry = np.deg2rad(beam["gantry"])
+    np.testing.assert_allclose(
+        np.cos(gantry) * u + np.sin(gantry) * w, beam["source_direction"], atol=1e-9
+    )
+    np.testing.assert_allclose(axis, np.cross(u, w), atol=1e-12)
+    assert np.isclose(np.linalg.norm(axis), 1.0) and abs(u @ w) < 1e-12
 
 
-def _compare(qt, ct, ours, theirs):
-    assert len(ours) == len(theirs)
-    for mine, qt_entry in zip(ours, theirs):
-        mapped = _to_lps_expectation(qt, ct, mine)
-        np.testing.assert_allclose(mapped["iso_center"], qt_entry["iso_center"])
-        np.testing.assert_allclose(mapped["source_direction"], qt_entry["source_direction"])
-        assert mine["name"] == qt_entry["name"] and mine["label"] == qt_entry["label"]
-        if "orbit" in qt_entry:
-            np.testing.assert_allclose(mapped["orbit"][0], qt_entry["orbit"][0], atol=1e-12)
-            np.testing.assert_allclose(mapped["orbit"][1], qt_entry["orbit"][1], atol=1e-12)
-            np.testing.assert_allclose(mapped["orbit_axis"], qt_entry["orbit_axis"], atol=1e-12)
-            assert (mine["gantry"], mine["couch"]) == (qt_entry["gantry"], qt_entry["couch"])
-        else:
-            assert mapped["orbit"] is None
-        assert np.isclose(np.linalg.norm(mine["source_direction"]), 1.0)
+def test_beams_from_the_stf_follow_the_steering_information(pipeline):
+    from pyRadPlan.app._views import plan_iso_centers
 
-
-def test_beams_from_the_stf_match_the_qt_viewer(pipeline, qt_beams):
     client, session = pipeline
     ws = session.workspace
     result = client.ok("view.beams")["result"]
     assert result["source"] == "stf"
-    iso = qt_beams._plan_iso_centers(ws.pln, ws.cst)
+    iso = plan_iso_centers(ws.pln, ws.cst)
     np.testing.assert_allclose(result["iso_centers"], iso)
-    expected = qt_beams._beam_geometry(ws.ct, ws.pln, ws.stf, iso)
-    _compare(qt_beams, ws.ct, result["beams"], expected)
-    assert not any(beam["pending"] for beam in result["beams"])
+    assert len(result["beams"]) == len(ws.stf.beams)
+    for beam, stf_beam in zip(result["beams"], ws.stf.beams):
+        source = np.asarray(stf_beam.source_point, dtype=float)
+        np.testing.assert_allclose(beam["source_direction"], source / np.linalg.norm(source))
+        np.testing.assert_allclose(beam["iso_center"], iso[0])
+        assert (beam["gantry"], beam["couch"]) == (stf_beam.gantry_angle, stf_beam.couch_angle)
+        assert beam["label"] == f"Beam #{beam['index']}: gantry {beam['gantry']:g}°, couch 0°"
+        assert not beam["pending"]
+        _check_orbit(beam)
 
 
-def test_beams_from_the_plan_match_the_qt_viewer(pipeline, qt_beams):
+def test_beams_from_the_plan_agree_with_the_stf(pipeline):
     _, session = pipeline
     ws = session.workspace
+    from_stf = beam_geometry(ws.pln, ws.stf, ws.cst)["beams"]
+    from_plan = beam_geometry(ws.pln, None, ws.cst)
+    assert from_plan["source"] == "plan"
+    for derived, generated in zip(from_plan["beams"], from_stf):
+        np.testing.assert_allclose(
+            derived["source_direction"], generated["source_direction"], atol=1e-9
+        )
+        np.testing.assert_allclose(derived["iso_center"], generated["iso_center"])
+
     pln = ws.pln.model_copy(
         update={
             "prop_stf": {**ws.pln.prop_stf, "gantry_angles": [10.0, 200.0], "couch_angles": [15.0]}
@@ -187,21 +169,18 @@ def test_beams_from_the_plan_match_the_qt_viewer(pipeline, qt_beams):
     )
     result = beam_geometry(pln, ws.stf, ws.cst)
     assert result["source"] == "plan"
-    iso = qt_beams._plan_iso_centers(pln, ws.cst)
-    _compare(qt_beams, ws.ct, result["beams"], qt_beams._beam_geometry(ws.ct, pln, ws.stf, iso))
     assert [b["couch"] for b in result["beams"]] == [15.0, 15.0]
+    for beam in result["beams"]:
+        _check_orbit(beam)
 
 
-def test_draft_beams_are_pending_where_they_differ(pipeline, qt_beams):
-    client, session = pipeline
-    ws = session.workspace
+def test_draft_beams_are_pending_where_they_differ(pipeline):
+    client, _ = pipeline
     draft = {"gantry_angles": [0.0, 90.0, 240.0], "couch_angles": [0.0, 0.0, 0.0]}
     result = client.ok("view.beams", {"draft": draft})["result"]
     assert result["source"] == "plan"
     assert [b["pending"] for b in result["beams"]] == [False, True, False]
-    edited = ws.pln.model_copy(update={"prop_stf": {**ws.pln.prop_stf, **draft}})
-    iso = qt_beams._plan_iso_centers(edited, ws.cst)
-    _compare(qt_beams, ws.ct, result["beams"], qt_beams._beam_geometry(ws.ct, edited, ws.stf, iso))
+    assert [b["gantry"] for b in result["beams"]] == draft["gantry_angles"]
 
     moved = client.ok("view.beams", {"draft": {**draft, "iso_center": [1.0, 2.0, 3.0]}})["result"]
     assert moved["iso_centers"] == [[1.0, 2.0, 3.0]]

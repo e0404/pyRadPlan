@@ -29,7 +29,9 @@ npm run dev            # http://localhost:5173/  (COOP/COEP headers set)
 
 Other URL parameters: `pyodide=cdn|<url>` (Pyodide runtime location), `packages=<url>` (package wheel
 mirror), `pyrp=<url>` (pyRadPlan wheel directory), `sliceMode` (force the renderer's per-slice texture
-fallback). `VITE_BACKEND=mock` changes the default backend at build time.
+fallback). Outside the dev server, `pyodide`, `packages` and `pyrp` are honoured only for URLs on the
+page's own origin (and `pyodide=cdn`), so a crafted link cannot load code from elsewhere.
+`VITE_BACKEND=mock` changes the default backend at build time.
 
 ```sh
 npm run build          # type check + production build into dist/ (includes dist/pyodide-runtime/)
@@ -48,13 +50,14 @@ npm run e2e:menus      # menus, dialogs, saves (downloads), loads, base data, se
 npm run e2e:pyodide    # the whole GUI against the real Pyodide backend (~3 min, see below); `-- --preview` uses the production build
 ```
 
-`e2e:pyodide` clicks through TG119 with the web profile defaults in stages (boot, phantom, default
-Run All, plan form + engine / scenario / optimization dialogs, objectives, 5-beam Run All with the
-status window, viewer, snapshot + analysis window, VOI edit, every File-menu save the capabilities
-report available (downloads kept in `e2e/downloads/`), reload of the workspace pickle and the plan
-`.mat`, Load Dij, base data add/remove, Preferences, licenses, About, log level, dark mode,
-educational mode, a proton plan with its bio models and the tissue dialog, Stop during the dose
-calculation). Each stage screenshots `pyodide-*.png`; a failing stage is recorded
+`e2e:pyodide` clicks through TG119 with the web profile defaults in stages (boot, phantom from
+File > Open Example Phantom, Calc. Dose Influence + Optimize of the default plan, plan form +
+engine / scenario / optimization dialogs, objectives, 5 beams with the status window, viewer,
+snapshot + analysis window, VOI edit, every File-menu save the capabilities report available
+(downloads kept in `e2e/downloads/`), reload of the workspace pickle and the plan `.mat`, Load Dij,
+base data add/remove, Preferences, licenses, About, log level, dark mode, educational mode, a robust
+1-beam plan (worst-case grid, robust objective) with its scenarios in the viewer and the analysis
+window, a proton plan with its bio models and the tissue dialog, Stop during the dose calculation). Each stage screenshots `pyodide-*.png`; a failing stage is recorded
 (`pyodide-fail-<stage>.png`) and the run continues; `--only=<stage,...>` runs a subset. Timings
 and memory go to `e2e/screenshots/pyodide-metrics.json`. It needs the wheels in `public/pyrp/`
 (`npm run build -- --skip-pure` in `web/pyodide`) and network access to the Pyodide CDN.
@@ -66,6 +69,25 @@ The backend calls themselves are covered without a browser by `npm run app-smoke
 The e2e scripts use the installed Microsoft Edge (`channel: "msedge"`); `npm run e2e -- --chromium`
 uses Playwright's own Chromium instead (`npx playwright install chromium` first), `-- --headed` shows
 the browser.
+
+## CI
+
+The GitHub workflow [`.github/workflows/web.yml`](../.github/workflows/web.yml) (push to
+`main`/`develop`/`rc/**`/`devops/**`, pull requests, manual dispatch; only when `web/`, `pyRadPlan/`,
+`pyproject.toml` or the workflow change) and the `web-*` jobs of `.gitlab-ci.yml` (internal branches,
+same file filter) run three jobs, all on Linux with Node 24:
+
+| Job | What it runs | Time |
+|---|---|---|
+| frontend | `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, the four mock-backend e2e scripts | ~8 min |
+| pyodide | in `web/pyodide`: `npm run build`, `npm run pipeline -- --mode photons --preset fast` (plus a plausibility check of the target D95), `npm run app-smoke -- --strict`, `npm run test:shim` (Python 3.13 with `pip install -e .` and pytest) | ~10 min |
+| pyodide-e2e | wheels from `npm run build`, then `npm run e2e:pyodide` (the full click-through against the real backend) | ~12 min |
+
+The browser is Microsoft Edge installed with `npx playwright install --with-deps msedge`, because
+the scripts launch `channel: "msedge"`; WebGL runs on SwiftShader as locally. The Pyodide packages
+come from the jsDelivr CDN. GitHub caches the npm downloads and `web/pyodide/.cache/packages`. A
+failed run uploads the e2e screenshots (`pyodide-fail-<stage>.png` for the real backend) as an
+artifact. To reproduce a job locally, run the same commands in the same order.
 
 ## Layout
 

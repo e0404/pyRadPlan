@@ -419,7 +419,9 @@ export class MockBackend extends BaseBackend {
 
   private async calcDij(s: MockSession): Promise<void> {
     this.requireReady(s);
-    if (this.stage(s, "stf") !== "done") await this.generateStf(s);
+    // v1 amendment 20: the beams are always generated again (the automatic isocenter follows
+    // the structures, whose edits do not outdate the stf).
+    await this.generateStf(s);
     const n = s.plan.gantry_angles.length;
     this.log(s, "info", `Dose influence calculation (${s.plan.engine ?? "default engine"})…`);
     this.progress(s, "Dose calculation", null, "preparing");
@@ -436,26 +438,37 @@ export class MockBackend extends BaseBackend {
     this.publish(s);
   }
 
-  private async optimize(s: MockSession, maxIter: number): Promise<{ solver: string; num_iter: number; objective: number }> {
+  private async optimize(
+    s: MockSession,
+    maxIter: number,
+  ): Promise<{ solver: string; num_iter: number; objective: number; stopped?: boolean }> {
     this.requireReady(s);
     if (s.computed.dij === undefined) {
       throw precondition("Calculate the dose influence first", "not_available");
     }
     this.log(s, "info", `Fluence optimization (max ${maxIter} iterations)…`);
     let objective = 1520;
+    let iterations = maxIter;
     for (let it = 1; it <= maxIter; it++) {
       objective = objective * 0.9 + 4;
       if (it % 5 === 0 || it === maxIter) {
         this.progress(s, "Optimization", it / maxIter, `iteration ${it}/${maxIter} · f = ${objective.toFixed(2)}`, { iteration: it, objective });
       }
-      await this.sleep(12);
+      try {
+        await this.sleep(12);
+      } catch (err) {
+        // Stop ends an optimization after this iteration with its last iterate (as the real backend).
+        if (!(err instanceof Cancelled)) throw err;
+        iterations = it;
+        break;
+      }
     }
     this.computeDose(s);
     this.touch(s, "optimization");
     this.log(s, "info", `Optimization finished: objective ${objective.toFixed(3)}, max dose ${s.doseMax.toFixed(2)} Gy`);
     this.progress(s, "Optimization", 1);
     this.publish(s);
-    return { solver: "scipy", num_iter: maxIter, objective };
+    return { solver: "scipy", num_iter: iterations, objective, ...(iterations < maxIter ? { stopped: true } : {}) };
   }
 
   private computeDose(s: MockSession & { phantom: Phantom; plan: PlanSummary }): void {

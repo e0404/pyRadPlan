@@ -88,6 +88,18 @@ describe("MockBackend", () => {
     expect(state.stages).toMatchObject({ dij: "done", optimization: "stale" });
   });
 
+  it("generates the beams again on every dose influence calculation", async () => {
+    const { backend, session, events } = await newSession();
+    await backend.request("data.load_phantom", { name: "TG119" }, session);
+    let state = await backend.request("workflow.generate_stf", {}, session);
+    expect(state.stages.stf).toBe("done");
+    const stfRuns = () => events.filter((e) => e.event === "progress" && e.label === "Generating STF" && e.fraction === 1).length;
+    const before = stfRuns();
+    state = await backend.request("workflow.calc_dose_influence", {}, session);
+    expect(state.stages).toMatchObject({ stf: "done", dij: "done" });
+    expect(stfRuns()).toBe(before + 1);
+  });
+
   it("returns protocol errors as BackendError", async () => {
     const { backend, session } = await newSession();
     const pre = await backend.request("workflow.optimize", {}, session).catch((e: unknown) => e);
@@ -116,6 +128,22 @@ describe("MockBackend", () => {
     expect(err).toBeInstanceOf(BackendError);
     expect((err as BackendError).type).toBe("KeyboardInterrupt");
     expect(backend.cancel()).toBe(false);
+  });
+
+  it("keeps the last iterate of a stopped optimization", async () => {
+    const backend = new MockBackend({ speed: 0.2 });
+    const { session } = await backend.request("session.create", {});
+    await backend.request("data.load_phantom", { name: "BOXPHANTOM" }, session);
+    await backend.request("workflow.calc_dose_influence", {}, session);
+    const running = backend.request("workflow.optimize", { max_iter: 500 }, session);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(backend.cancel()).toBe(true);
+    const result = await running;
+    expect(result.optimization?.num_iter).toBeLessThan(500);
+    expect(result.optimization).not.toHaveProperty("stopped");
+    expect(result.stages.optimization).toBe("done");
+    const history = await backend.request("session.history", {}, session);
+    expect(history.optimization?.outcome).toBe("stopped");
   });
 
   it("accepts uploads as uint8 arrays", async () => {

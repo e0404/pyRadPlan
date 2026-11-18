@@ -71,6 +71,32 @@ export interface BeamPreset {
   typical: boolean;
 }
 
+/** The form's biological model selection before a re-listing (`plan.options {current_bio}`, v1 amendment 22). */
+export interface CurrentBio {
+  /** The radiation mode the selection was made in. */
+  radiation_mode: string;
+  model: string;
+  /** Option id; null for the plan's model kept as the unsupported entry. */
+  option: string | null;
+  /** Model parameters besides the base-data selection. */
+  values?: Record<string, unknown>;
+  /** Label of the selected entry, for the replacement note. */
+  label?: string;
+}
+
+/** The entry the plan form selects (v1 amendment 22); the rules are the backend's. */
+export interface BioSelection {
+  /** Option id; null while `unsupported` is selected (or without any entry). */
+  option: string | null;
+  model: string;
+  /** The selection was replaced: take over the selected option's base-data parameters. */
+  replaced: boolean;
+  /** The plan's model the context cannot run, kept as a last, disabled entry. */
+  unsupported: { model: string; label: string; description: string } | null;
+  /** Status note (and its tooltip) when a selection the new context cannot run was replaced. */
+  note: { text: string; reason: string } | null;
+}
+
 export interface PlanOptions {
   /** v1 amendment 11: the radiation mode the options describe. */
   radiation_mode?: string;
@@ -79,6 +105,8 @@ export interface PlanOptions {
   engines: Choice[];
   bio_models: BioModelChoice[];
   default_bio_model: string;
+  /** v1 amendment 22; absent from older backends. */
+  bio_selection?: BioSelection;
   scenario_models: Choice[];
   problems: Choice[];
   solvers: SolverChoice[];
@@ -210,7 +238,7 @@ export interface OptimizerMetrics {
 export interface PlanMethods {
   "plan.get": { params: { detail?: boolean }; result: PlanSummary | PlanDetail | null };
   "plan.options": {
-    params: { radiation_mode?: string; machine?: string; engine?: string };
+    params: { radiation_mode?: string; machine?: string; engine?: string; current_bio?: CurrentBio };
     result: PlanOptions;
   };
   "plan.form": {

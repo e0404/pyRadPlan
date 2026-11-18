@@ -18,6 +18,28 @@ Columns:
   `frontend` (no backend needed).
 - **Methods**: protocol methods it needs (v0 names or v1 names from `web/PROTOCOL.md`).
 
+## Code shared with the Qt GUI
+
+The Qt GUI runs on the same `pyRadPlan.app` session (see `docs/development/app_layer.md`, "The Qt
+GUI on the session"), so the rules behind most rows below are one implementation for both
+frontends rather than a web copy of Qt code: the workflow steps, loads and the merge of loaded
+data, the native imports (image file, binary folder, DICOM folder; Qt only, the web reports them
+unavailable), every save (the Qt dialogs write to paths, the web downloads the same writer's
+output), the format tables behind the Qt file filters and `capabilities.formats`, the objectives
+table edits, structure (VOI editor, colour) and tissue writes, the default plan, and the plan form's
+Apply: the Qt form sends its fields as `plan.set` params through `Session.set_plan` (only those
+differing from the plan, `changes_from_form`), shows its option lists from the helpers behind
+`plan.options` and compares values with the app's `comparison_key`. Which biological model entry
+the plan form selects after a radiation mode, machine or engine change, or for a plan (the
+"(not supported …)" entry, the replacement note), is `select_bio_model` in
+`pyRadPlan/app/_planform.py` for both: Qt calls it, the web applies `plan.options.bio_selection`
+(v1 amendment 22). A radiation mode change keeps the scenario model and problem settings on the
+backend for both. Both engine "…" forms leave out `ENGINE_FORM_EXCLUDE` (`mult_scen`,
+`bio_model`, `dose_grid`, `voxel_sub_ix`, `select_voxels_in_scenarios`); values a loaded plan
+carries for them stay in the plan. What is still Qt-only logic is listed in
+`docs/development/app_layer.md` ("Known gaps"): mainly the per-field dirty snapshot of the plan
+form, which the web ports in `planModel.ts`.
+
 ## Runtime checks behind the stubs
 
 What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
@@ -171,13 +193,15 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 |---|---|---|---|---|
 | Status label (texts of `_update_status`) | `:479-497` | verified on Pyodide | impl: add the " · N saved snapshots" suffix | `state.status`, `state.results.tags` |
 | Refresh | `:262-264,1040-1041` | verified on Pyodide | done | `session.state` |
-| Stop (cooperative; optimization keeps last iterate) | `:265-272,613-619` | verified on Pyodide | done | interrupt buffer / `session.cancel` (native) |
+| Stop (cooperative; optimization keeps last iterate: under Pyodide the first interrupt requests the cooperative stop of an optimization, a second one discards it) | `:265-272,613-619` | verified on Pyodide | done | interrupt buffer / `session.cancel` (native) |
 | Busy bar (indeterminate → determinate nested fraction) | `:276-282,636-684` | verified on Pyodide | done | `progress` events |
+| Progress text in the status label while busy (Qt: the progress levels; web: label · detail · fraction, no separate detail line) | `:657-664,697` | done (mock e2e) | frontend | `progress` events |
+| Button grid exactly as Qt: Loading = Load File / Load Folder / Import from Binary, Dose Influence = Calc. Dose Influence / Load Dij, Result Computation = Optimize / Recalculate Dose, Export / Save = Snapshot Result; no Run All, Generate STF or phantom selector (phantoms: File > Open Example Phantom) | `:284-330` | verified on Pyodide | impl | – |
 | Status dots Loading / Dose Influence / Result Computation (tooltips) | `:302-316,456-477` | verified on Pyodide | done | `state.stages` |
 | Load File | `:286` | verified on Pyodide | impl (formats as in File menu) | `data.load_file` |
 | Load Folder | `:287` | stub (as Qt; reason from the real capabilities) | stub: SimpleITK file IO | – |
 | Import from Binary (Qt: permanently disabled "Not yet implemented") | `:288-290` | stub (as Qt; reason from the real capabilities) | mirror-off | – |
-| Calc. Dose Influence (pending-edit check, bio-model check dialog, generates stf) | `:291,1199-1220` | verified on Pyodide | done | `workflow.calc_dose_influence` |
+| Calc. Dose Influence (pending-edit check, bio-model check dialog, always generates the stf again; v1 amendment 20) | `:291,1199-1220` | verified on Pyodide | done | `workflow.calc_dose_influence` |
 | Load Dij (stf + dij from .mat; warns when the file has no dij) | `:292,1014-1035` | verified on Pyodide | impl | `data.load_dij` |
 | Optimize (pending-edit check, biological-objective check, opens the status window) | `:293,1268-1316` | verified on Pyodide | impl (status window) | `workflow.optimize`, `progress` events |
 | Recalculate Dose (weights, angle match, bio check, moves beams to iso) | `:294,1333-1402` | done (mock e2e) | done | `workflow.recalc` |
@@ -215,10 +239,10 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | ✨ AI beam angles | `:412-417,1709-1774` | stub (as Qt; reason from the real capabilities) | stub: AI not installed in the browser | `app.info.capabilities` |
 | Bixel width / spot spacing [mm] 0.1..100 (5) | `:431-439` | verified on Pyodide | done | `plan.set` |
 | Iso center [mm] + Auto. (shows target centre of mass; per-beam isos "multiple iso centers") | `:441-462,1489-1536` | verified on Pyodide | impl | `plan.get {detail}` (`resolved_iso_center`) |
-| Biological model combo (options "formalism · provenance", unavailable entries disabled with reason, unsupported plan model kept) | `:465-479,866-1000` | verified on Pyodide | impl | `plan.options {radiation_mode, machine, engine}`, `plan.set {bio_model}` |
+| Biological model combo (options "formalism · provenance", unavailable entries disabled with reason, unsupported plan model kept; the selection after a mode / machine / engine change is the backend's `bio_selection`, the proton default verified on Pyodide) | `:465-479,866-1000`, `pyRadPlan/app/_planform.py:select_bio_model` | verified on Pyodide | impl (shared rules) | `plan.options {radiation_mode, machine, engine, current_bio}`, `plan.set {bio_model}` |
 | Bio "…" → config form (model parameters) | `:1042-1109` | done (mock e2e) | impl | `plan.form {kind:"bio_model"}` |
-| Replacement note when the bio model changed with mode/machine (status, tooltip) | `:813-819,910-937` | done (mock e2e) | frontend from `plan.options` | `plan.options` |
-| Scenario model (Nominal, Worst-case Grid, Importance Grid, Random Samples; Explicit only when the plan holds one) `[adv]` | `:486-499,1242-1302` | verified on Pyodide | impl | `plan.options`, `plan.set {scenarios}` |
+| Replacement note when the bio model changed with mode/machine (status, tooltip) | `:813-819`, `select_bio_model` | done (mock e2e; backend note checked against Qt in `test_plan_form_read.py`) | backend (`bio_selection.note`) | `plan.options {current_bio}` |
+| Scenario model (Nominal, Worst-case Grid, Importance Grid, Random Samples; Explicit only when the plan holds one; kept on a radiation mode change, verified on Pyodide photons → protons) `[adv]` | `:486-499,1242-1302` | verified on Pyodide | impl | `plan.options`, `plan.set {scenarios}` |
 | Scenario "…" → config form (setup sd/shift, range abs/rel/combined, ct_phase, wc_sigma, distribution, grid/sample counts) `[adv]` | `:1263-1278` | verified on Pyodide | impl | `plan.form {kind:"scenario"}` |
 | Optimized quantity ("auto", disabled "not yet implemented") `[adv]` | `:508-517` | stub (as Qt; reason from the real capabilities) | mirror-off | – |
 | Set tissue parameters (enabled with cst) → Tissue dialog | `:519-525,1111-1123` | verified on Pyodide | impl (see Tissue dialog) | `tissue.*` |
@@ -232,7 +256,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Discard (enabled when modified and a plan exists) | `:300-303,1641-1665` | done (mock e2e) | done | – |
 | Apply / "Apply *" bold when modified | `:305-307,1613-1630` | verified on Pyodide | impl (all v1 fields) | `plan.set` |
 | Orange modified frame per field | `:107-142,1956-1994` | done (mock e2e) | frontend | – |
-| Default plan auto-applied on load | `:1388-1406` | verified on Pyodide | done | `session.create` profile |
+| Default plan auto-applied on load (Qt: the form, initialised from the session's `default_plan`, applies itself through `set_plan`; deferred until a running load has ended) | `:1388-1406` | verified on Pyodide | done | `session.create` profile |
 
 ### Optimization dialog (`widgets/plan/_optimization_dialog.py`)
 
@@ -356,7 +380,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | CT / CST / Quantity / Isolines / Isocenter checkboxes | `:63-87` | verified on Pyodide | done | – |
 | Beams checkbox (disabled until beam angles exist) | `:89-92,151-157` | verified on Pyodide | impl | `view.beams` |
 | Orientation checkbox | `:94-102` | verified on Pyodide | done | – |
-| Overlay quantity selector (two combos: quantity group incl. snapshot groups, component full / beam i / scenario i: label) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
+| Overlay quantity selector (two combos: quantity group incl. snapshot groups, component full / beam i / scenario i: label; scenario components after a robust optimization verified on Pyodide with a worst-case grid plan) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
 | Set isolines dialog (OK / Cancel / Reset; says "(Gy)") | `:130-132,167-199` | done (mock e2e) | done | – |
 | Recenter | `:134-136` | done (mock e2e) | done | – |
 | Show DVH / QI → analysis window | `:145-149`, `_result_widget.py:861-887` | verified on Pyodide | impl (see Analysis) | `analysis.*` |
@@ -395,9 +419,9 @@ Qt has no context menu here; editing goes through the click on the name.
 |---|---|---|---|---|
 | Window "DVH / QI Analysis" (non-modal, closes with its viewer) | `_analysis_win.py:17-86` | verified on Pyodide | impl | – |
 | Tabs DVH / QI and Gamma Analysis | `_analysis_widget.py:120-162` | verified on Pyodide | impl | – |
-| Primary quantity selector (group + component) | `_analysis_widget.py:182-186` | verified on Pyodide | impl | `state.results` |
+| Primary quantity selector (group + component; opens on the viewer's quantity, incl. a scenario; the quantity combo stretches and the component combo fits its text without squeezing it, long scenario labels elided with the full text as tooltip) | `_analysis_widget.py:182-186`, `widgets/_quantity_selector.py:52-62` | verified on Pyodide | impl | `state.results` |
 | Compare quantity selector ("— None —"; dashed curves; second x axis for incompatible units) | `_analysis_widget.py:188-193,766-779` | verified on Pyodide | impl | `analysis.dvh` (`unit_info`), `analysis.compare_units` |
-| All scenarios checkbox (thin band curves of every scenario of the primary group) | `_analysis_widget.py:195-202,788-794` | done (mock e2e) | impl | `analysis.dvh {keys}` |
+| All scenarios checkbox (thin band curves of every scenario of the primary group; shown only when the group has scenarios) | `_analysis_widget.py:195-202,788-794` | verified on Pyodide | impl | `analysis.dvh {keys}` |
 | Structures groups by type, colour swatch + checkbox, All / None | `_analysis_widget.py:456-552,752-764` | verified on Pyodide | impl | `state.structures` |
 | Structure colour pick (analysis-local in Qt) | `_analysis_widget.py:540-552` | done (mock e2e) | frontend (local) | – |
 | QI parameters D_x [%] (default "2 5 50 95 98", shared) | `_analysis_widget.py:262-267` | verified on Pyodide | impl | `analysis.qi {ref_vols}` |
@@ -405,6 +429,7 @@ Qt has no context menu here; editing goes through the click on the name.
 | "Show in DVH" toggles for D_x / V_x markers | `_analysis_widget.py:308-322` | verified on Pyodide | frontend | – |
 | Metric checkboxes mean / std / max / min, All / None | `_analysis_widget.py:279-382` | verified on Pyodide | frontend | – |
 | DVH plot: per-structure curves (1000 bins, range per structure), legend, grid, axis "<label> [<unit>]", "Volume [%]" | `analysis/_dvh.py:93-288`, `pyRadPlan/analysis/_dvh_plot.py:116-287` | verified on Pyodide | impl | `analysis.dvh {range:"per_structure", num_points:1000}` |
+| DVH plot and analysis window follow light / dark mode, also when switched while open (figure `--window`, axes `--base`, text / ticks / axes / cursor `--text`, grid blended; legend, hover box, marker labels on the axes colour; QI table, tabs, title bar from the theme variables) | `widgets/_plot_theme.py`, `analysis/_dvh.py:507-528` | done (mock e2e) | frontend | – |
 | Hover cursor: dotted line + readout of every curve's volume | `analysis/_dvh.py:449-501` | verified on Pyodide | frontend | – |
 | Highlight (from table, curve click, marker click; empty click clears) | `analysis/_dvh.py:305-314,425-447` | done (mock e2e) | frontend | – |
 | QI markers (D_x circles, V_x squares), guide lines, draggable parameter line, release → QI point dialog | `analysis/_dvh.py:318-414` | done (mock e2e) | frontend (math on the returned curve arrays) | `analysis.qi` |
@@ -430,24 +455,21 @@ Qt has no context menu here; editing goes through the click on the name.
    other, the shim needs a `SimpleITK.SimpleITK` submodule whose `Image` accepts the native reduce
    format, and should itself reduce to that name and format. Without it, workspace pickles are
    runtime-specific (the app reports this in `capabilities.formats`).
-2. The Qt-free helpers in `gui/widgets/_tissue_params.py` (`available_tissue_classes`,
-   `ranked_tissue_picks`, `compare_tissues_quietly`, `tissue_issues_quietly`,
-   `build_tissue_properties`, `apply_derived_reference`, `apply_base_data_class`,
-   `load_machine_quietly`, `bio_options_quietly`, field/label helpers) live in a module that imports
-   PySide6. The tissue and plan-option methods need them; they should move to a Qt-free module
-   (proposal: `pyRadPlan/biology/_editing.py`, re-exported from the GUI module so the GUI keeps
-   working). Duplicating ~600 lines into the app layer is the fallback.
+2. Done: the Qt-free tissue helpers (`available_tissue_classes`, `ranked_tissue_picks`,
+   `compare_tissues_quietly`, `tissue_issues_quietly`, `build_tissue_properties`,
+   `load_machine_quietly`, `bio_options_quietly`, field/label helpers) live in
+   `pyRadPlan/biology/_editing.py`, which both the app layer and `gui/widgets/_tissue_params.py`
+   (re-exporting them) import; nothing was duplicated.
 3. `contourpy` must be added to the Pyodide bootstrap package list for DICOM RTSTRUCT export.
-4. `pyRadPlan.app.DEFAULT_PLAN` claims to be the Qt plan-form defaults but omits
-   `dose_convention: "total"`, the Qt form default (`_plan_widget.py:347-352`). Not changed (the
-   native default stays as instructed); see ambiguity 1.
+4. Done: `pyRadPlan.app.DEFAULT_PLAN` (native and web profile) carries the Qt form's
+   `dose_convention: "total"` (`_plan_widget.py:347-352`); see ambiguity 1.
 
 ## Ambiguities found in the Qt GUI
 
 1. Dose convention: the Qt plan form defaults to "total" (`_plan_widget.py:352`) while `Plan`
    defaults to "per_fraction" (`pyRadPlan/plan/_plans.py:76-81`), so the Qt default plan reports
-   total-course doses and the app layer's default plan does not. Owner decision needed for the web
-   profile; this spec proposes `"total"` to mimic Qt.
+   total-course doses. Resolved: both profiles of the app layer default to `"total"` as the Qt
+   form does.
 2. DVH binning: Qt uses 1000 bins with a range per structure (`pyRadPlan/analysis/_dvh.py:319-327`);
    protocol v0 `analysis.dvh` uses 500 bins on one shared axis. v1 adds `range` and keeps v0's
    defaults; the analysis window requests Qt's settings.
@@ -461,36 +483,34 @@ Qt has no context menu here; editing goes through the click on the name.
    (`_result_widget.py:41-56`). v1 sends both.
 6. The viewer's quantity choice is reset to the default after every result change
    (`_result_widget.py:553-556`), overriding the user's selection.
-7. VOI colour picks mutate `voi.color` in place without a workspace notification
-   (`result/vois_widget.py:1072-1075`); the web persists them through `cst.update_structure`.
+7. VOI colour picks mutate `voi.color` in place without a workspace notification. Both
+   frontends now go through `cst.update_structure` / `Session.update_structure`, which treats
+   colour and visibility as display settings: set in place, accepted while a run is busy,
+   outdating nothing, counted in `revisions.workspace.cst`.
 8. The viewer ignores the CT direction matrix for beams, isocenter and the "Pos" readout
    (`_result_widget.py:187-196`, `quantity_widget.py:562`); only the orientation marker uses it.
    v1 sends LPS geometry and leaves the mapping to the renderer.
-9. The engine "…" form shows the inherited `DoseEngineBase` fields (`mult_scen`, `bio_model`,
-   `dose_grid`, `voxel_sub_ix`, …) because no exclude list is passed (`_plan_widget.py:1228`);
-   values written there may conflict with the scenario combo and the dose grid fields (the dose grid
-   is overwritten on Apply, `_plan_widget.py:1810-1821`). v1 excludes them from the engine form.
-10. `Union[Literal["auto"], bool]` fields (`calc_let`, `calc_bio_dose`) cannot be set to a bool in
-    the Qt form (`_config_form.py:340`); `Optional[bool]` None looks like False. v1 represents them
-    as choices `auto / true / false` and `nullable` booleans.
-11. Objectives: changing the type drops quantity and parameters (`_optimization_widget.py:583-587`);
+9. `Union[Literal["auto"], bool]` fields (`calc_let`, `calc_bio_dose`) cannot be set to a bool in
+   the Qt form (`_config_form.py:340`); `Optional[bool]` None looks like False. v1 represents them
+   as choices `auto / true / false` and `nullable` booleans.
+10. Objectives: changing the type drops quantity and parameters (`_optimization_widget.py:583-587`);
     parameter spins ignore the model bounds (`:364`); `f_diff` is read-only (`:359-372`);
     unparsable objectives vanish on the next write (`:259-270,702`). v1 keeps the type-change rule,
     sends bounds and makes `f_diff` a choice (an improvement, flagged here).
-12. Tissue spins clamp the display to 0..100 while the stored value is unclamped
+11. Tissue spins clamp the display to 0..100 while the stored value is unclamped
     (`_tissue_params.py:1372-1425`).
-13. The busy lock leaves Base Data and Settings enabled during a computation
+12. The busy lock leaves Base Data and Settings enabled during a computation
     (`_main_win.py:146-150`). The web follows the backend: any long request blocks the worker, so
     base-data edits wait (they are cheap methods, but the worker is single-threaded).
-14. A cst-only `.mat` cannot be loaded at all (`load_data` raises `KeyError: 'ct'`), although the
+13. A cst-only `.mat` cannot be loaded at all (`load_data` raises `KeyError: 'ct'`), although the
     Qt merge rule handles "structures without CT in the file" (`_workflow_widget.py:783-789`).
-15. Snapshot tags are only recognized when at least two result stems carry them
+14. Snapshot tags are only recognized when at least two result stems carry them
     (`widgets/_display_names.py:146-178`), so a snapshot of a result with one quantity is not
     grouped as a snapshot.
-16. The isoline dialog always says "(Gy)" (`result/visualization_widget.py:172`); the Save Result
+15. The isoline dialog always says "(Gy)" (`result/visualization_widget.py:172`); the Save Result
     and VOI labels are truncated to 12 characters.
-17. The AI tooltip calls `pydantic-ai` optional while it is a core dependency in `pyproject.toml`.
-18. Pending-edit questions are asked for Save Plan and Save Workspace but not for Save Dij / CST /
+16. The AI tooltip calls `pydantic-ai` optional while it is a core dependency in `pyproject.toml`.
+17. Pending-edit questions are asked for Save Plan and Save Workspace but not for Save Dij / CST /
     Result (`_workflow_widget.py:1494,1531-1537,1563,1618`).
 
 ## Deliberate deviations
@@ -503,18 +523,29 @@ Backend part A (plan editor, structures, tissues, objectives, results):
 1. `Union[Literal[...], bool]` engine fields (`calc_let`, `calc_bio_dose`, …) are choices of the
    literals plus `true` / `false`; Qt can only keep "auto" (`_config_form.py:340`).
 2. `Optional[bool]` fields are `nullable` (null shown distinctly); Qt shows `None` as unchecked.
-3. The engine form leaves out the inherited `DoseEngineBase` fields the plan sets elsewhere
-   (`mult_scen`, `bio_model`, `dose_grid`, `voxel_sub_ix`, `select_voxels_in_scenarios`), which
-   Qt shows and then partly overwrites on Apply (`_plan_widget.py:1228,1810-1821`).
-4. A VOI colour change goes through `cst.update_structure` and notifies the workspace; Qt writes
-   `voi.color` in place without a notification (`result/vois_widget.py:1072-1075`).
-5. Objective parameters carry the model bounds and units, `f_diff` is an editable choice, and a
-   rejected edit writes nothing; Qt's spins allow ±1e9, show `f_diff` read-only and mutate the
-   objective before validation (`_optimization_widget.py:345-374,597-598,666-670`).
-6. Tissue parameter values are not clamped to 0..100 for display (`_tissue_params.py:1373`);
+3. A VOI colour change goes through `cst.update_structure` in both frontends (the Qt viewer
+   through `Session.update_structure`); as in Qt it does not outdate the result.
+4. Objective parameters carry the model bounds and units and `f_diff` is an editable choice; Qt's
+   spins allow ±1e9 and show `f_diff` read-only (`_optimization_widget.py:345-374`). Edits of both
+   frontends go through the session's validated objectives editor, so a rejected edit writes
+   nothing in either (the Qt table shows the reason in its status line).
+5. Tissue parameter values are not clamped to 0..100 for display (`_tissue_params.py:1373`);
    the model validates them.
-7. (Phase 0) A CT written without its products marks stf, dij and result stale
+6. (Phase 0) A CT written without its products marks stf, dij and result stale
    (`pyRadPlan/app/_stages.py`, `StageTracker.update`).
+7. (Plan form on the session, 2026-11-18) Behaviour of both frontends now: `plan.set` keeps a live
+   solver instance of `prop_opt` instead of deep-copying it, keeps `prop_opt` entries the problem
+   form does not show (`convert_dose_objectives`, entries of no problem field) when
+   `problem.values` does not send them or sends them back unchanged, and rejects a `bio_model`
+   mapping with keys other than `model`, `option`, `values` (a plain specification
+   `{model, **parameters}` lost its parameters silently before). The Qt Apply sends only what
+   differs from the plan, so a plan without an explicit dose engine keeps leaving it to the
+   radiation mode (Qt named the engine shown on every Apply). The web sends its modified fields
+   (`planSetParams`); a radiation mode change keeps the scenario model and the problem settings on
+   the backend (v1 amendment 22), so both frontends keep them without the web resending them. Qt
+   editing a plan with `convert_dose_objectives` (problem dialog, or a mode change) was refused
+   with "Unknown field(s)" before and now works; a mode change with an explicit scenario set
+   keeps the set (Qt failed to build `{model: "explicit"}` before).
 
 ## Frontend work packages
 
