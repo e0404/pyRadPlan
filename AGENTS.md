@@ -59,6 +59,10 @@ Keep the `benchmark_*.py` / `profile_*.py` prefixes when adding new performance 
 
 Update [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) conventions. Categories: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`.
 
+## Commits
+
+Keep commit messages short: one header line in the imperative (at most ~72 characters), then optionally a blank line and at most 2–3 lines on why, followed by any `Co-Authored-By` lines. Details belong in the PR description and the changelog, not in the commit message.
+
 ## Dependencies
 
 Every dependency in `pyproject.toml` has an upper bound, so a new release reaches users only after Dependabot's pull request raising the bound has passed CI:
