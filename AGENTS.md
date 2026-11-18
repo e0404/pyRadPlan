@@ -87,8 +87,10 @@ Releases are cut from a release candidate branch, never from `develop` directly,
 stays open for regular work while the candidate is stabilised:
 
 1. Branch `rc/X.Y.Z` from `develop` and open the release PR from `rc/X.Y.Z` into `main`
-   (`gh pr create --base main --template release.md`).
-2. Review `rc/X.Y.Z` and address the remaining concerns on it.
+   (`gh pr create --base main --template release.md`). Draft its release summary from the
+   changelog: a short, plain-language overview for users that later becomes the tag annotation
+   and the top of the GitHub release, because the changelog alone is too detailed for most users.
+2. Review `rc/X.Y.Z` and the release summary, and address the remaining concerns on it.
 3. Once the review is addressed and approved and CI is green, update the executed example
    notebooks, which stay tracked in `docs/tutorials/examples/` from the last release:
    `python docs/execute_examples.py --release [name ...]` runs the examples and stages them.
@@ -97,8 +99,9 @@ stays open for regular work while the candidate is stabilised:
    (`[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD`), `CITATION.cff`. This is the last commit
    before merging.
 5. Merge `rc/X.Y.Z` into `main`.
-6. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
-   `main` back into `develop`, and delete `rc/X.Y.Z`.
+6. After merging, tag `vX.Y.Z` on `main` with the release summary as its annotation
+   (`git tag -a vX.Y.Z --cleanup=verbatim -F <file>`), verify the published release and the
+   PyPI upload, merge `main` back into `develop`, and delete `rc/X.Y.Z`.
 
 When proposing or preparing a release, follow
 [.github/PULL_REQUEST_TEMPLATE/release.md](.github/PULL_REQUEST_TEMPLATE/release.md) — it is
