@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from pyRadPlan.optimization.problems import (
 )
 from pyRadPlan.optimization.solvers import OptimizerSciPy, SolverBase
 from pyRadPlan.plan import create_pln
+from pyRadPlan.scenarios import CTPhaseUncertainty, ScenarioSet
 
 
 @pytest.fixture
@@ -172,9 +174,7 @@ def test_supported_properties_still_reach_the_solver():
 def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, monkeypatch):
     """The photon LQ effect a dij with alphax / betax allows is not evaluated for a constant RBE."""
     pln, ct, cst, stf, dij = small_proton_case
-    num_voxels = dij.dose_grid.num_voxels
-    dij.alphax = np.full((num_voxels, 1), 0.1)
-    dij.betax = np.full((num_voxels, 1), 0.05)
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
     dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
 
@@ -198,6 +198,55 @@ def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, m
     assert len(calls) == len(dose.scenarios)
 
 
+@pytest.mark.parametrize("changed", [None, "float32", "alphax", "betax"])
+def test_dij_lq_params_must_match_the_structure_set(small_proton_case, changed):
+    pln, ct, cst, stf, dij = small_proton_case
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
+    prob = NonLinearFluencePlanningProblem(pln)
+
+    if changed == "float32":
+        assert not np.array_equal(dij.alphax.astype(np.float32), dij.alphax)
+        dij.alphax = dij.alphax.astype(np.float32)
+        dij.betax = dij.betax.astype(np.float32)
+    if changed in (None, "float32"):
+        prob.solve(ct, cst, stf, dij)
+        return
+
+    values = np.array(getattr(dij, changed))
+    values[0, 0] += 1
+    setattr(dij, changed, values)
+    with pytest.raises(ValueError, match=rf"{changed} \(1 voxels\)"):
+        prob.solve(ct, cst, stf, dij)
+
+
+@pytest.mark.parametrize("ct_phase", [[1, 0], [1], [0, 1], [1, 0, 1]])
+def test_dij_lq_check_uses_the_engine_column_order(ct_phase):
+    """The dose engines store one column per CT phase, in first-appearance order."""
+    scenarios = ScenarioSet.from_points(
+        (CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5]),),
+        {"ct_phase": [[p] for p in ct_phase]},
+    )
+    columns = list(dict.fromkeys(ct_phase))
+    assert scenarios.voxel_param_ct_phases() == columns
+
+    # per CT phase, as StructureSet.get_tissue_data returns them
+    alpha = np.array([[0.1, 0.2], [0.3, 0.4]])
+    beta = np.array([[0.05, 0.06], [0.07, 0.08]])
+    prob = NonLinearFluencePlanningProblem()
+    prob._ct = SimpleNamespace(num_of_ct_scen=2)
+    prob._cst = SimpleNamespace(get_tissue_data=lambda resample_grid: (alpha, beta, None, None))
+    prob._dij = SimpleNamespace(
+        alphax=alpha[:, columns], betax=beta[:, columns], dose_grid=None, scenarios=scenarios
+    )
+    prob._check_tissue_data_matches_dij()
+
+    if columns != sorted(columns):
+        prob._dij.alphax = alpha
+        with pytest.raises(ValueError, match="alphax"):
+            prob._check_tissue_data_matches_dij()
+
+
 @pytest.mark.parametrize("rbe_path", ["constant", "effect"])
 def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_path):
     """Without the bypass, each objective gets its own gradient row, also across quantities."""
@@ -205,9 +254,7 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     if rbe_path == "constant":
         dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     else:
-        num_voxels = dij.dose_grid.num_voxels
-        dij.alphax = np.full((num_voxels, 1), 0.1)
-        dij.betax = np.full((num_voxels, 1), 0.05)
+        dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
         alpha_dose = np.empty_like(dij.physical_dose)
         sqrt_beta_dose = np.empty_like(dij.physical_dose)
         for i, mat in enumerate(dij.physical_dose.flat):
