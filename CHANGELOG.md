@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Changed
+
+- numpy 2.4 and 2.5 are supported
+- All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
+- Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
+- Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
+
+### Deprecated
+
+- `StructureSet.get_reference_lq_params` and `get_tissue_class_indices`: the `overlap_is_applied` argument has no effect, because the result is the same with and without overlap priorities applied. Passing it emits a `DeprecationWarning`
+
+### Fixed
+
+- Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+- Dose influence matrices failed to validate ("Invalid shape!") with numpydantic 2.0 on Python 3.12.3, the system Python of Ubuntu 24.04, so no dose could be calculated there. This also broke the Linux desktop installer
+- Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
+- Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
+- Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
+- Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
+- GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
+- Ray tracers: the lateral cut-off was applied on the ray-matrix plane behind the patient instead of at the isocenter plane, and did not account for the tilt of off-axis rays, so the traced region was narrower than the geometric cut-off of the dose engines (about 11 % for photons in a 240 mm phantom, ~1 % for ions). Voxels in between got no radiological depth and no dose. Every voxel inside the geometric cut-off now gets a depth. Photon dose influence matrices gain entries at the edge of the cut-off, existing entries are unchanged (TG119, two beams, 50 mm cut-off, dij sampling off: +0.7 % non-zeros, dose up to +0.26 % of the maximum). With dij sampling on (the default), the additional voxels shift the random sampling, so photon results with a fixed `random_seed` differ from 0.8.0 within the sampling noise (up to ±1.6 % of the maximum dose in the same case). Photon ray tracing traces about 30 % more rays and takes correspondingly longer. Proton dose influence matrices on TG119 are bit-identical. matRad applies the cut-off unscaled on the ray-matrix plane, so photon dose influence matrices now have slightly more entries than matRad's
+- Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
+- `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
+- GUI: in the plan settings, the orange border that marks a field with unapplied changes no longer changes how the field is drawn. On spin boxes such as the dose grid resolution, the up/down arrows used to change their look and position while the field was marked; they now look the same with and without the border
+- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number. They used to come from the VOI listed last, so a dose influence matrix with `alphax` / `betax` calculated with 0.8.0 can differ where VOIs with different tissues overlap; optimizing it then raises a `ValueError` (see below), and it has to be recalculated. Empty placeholders such as `None` in a VOI's objectives are dropped, so such a VOI counts as having no objectives.
+- Optimization: the check that the Dij's `alphax` / `betax` match the structure set only logged an error, and computed the reference values differently from the dose engines. The check now builds the values with `StructureSet.get_tissue_data`, like the dose engines, and raises a `ValueError`.
+
+## [0.8.0] - 2026-11-05
+
 ### Added
 
 - `core.resample.resample_array` resamples NumPy, CuPy, PyTorch and other Array API arrays and returns them on their namespace, device and dtype. Full volumes use SimpleITK by default; `prefer_native=False` resamples on the array's backend. `ArrayBackendGridResampler` prepares repeated sampling of selected voxels
@@ -16,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
 - GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
 - JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
+- Desktop installers and browser container images: the phantoms of matRad 3.2.3, the CORT patient cases `HEAD_AND_NECK`, `LIVER` and `PROSTATE` and the `BOXPHANTOM`, are listed under File → Open Example Phantom next to TG119. The builds download them from the matRad release; they are not part of the Python package
 - Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
 
 ### Changed
@@ -24,10 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Influence matrices store row indices and column pointers as int32 when they fit, a third less memory for the sparse buffers; larger matrices keep int64
 - Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
 - Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
+- Browser container: `PYRADPLAN_BASE_DATA_PATH` is `/shared:/opt/pyradplan/data` by default, so a course folder mounted at `/shared` is found without setting it; a deployment that sets it must keep `/opt/pyradplan/data` for the phantoms of matRad
 - GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
 - GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
 - Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
 - GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
+- GUI: the slice viewer responds much faster on large patients, with unchanged display. On a 456 × 456 × 125 head-and-neck CT with 24 structures, a slice step takes about 3 ms instead of about 210 ms, and the main window opens in about 1 s instead of 2.6 s. Structure contours and dose isolines are traced in C (contourpy) instead of Python, only within each structure's bounding box, and cached per slice. Full-volume minima and maxima are computed once instead of on every slice. Dragging the slider or scrolling with the mouse wheel renders only the latest slice
+- `StructureSet.target_center_of_mass` is about 5x faster on large images, with unchanged results
 
 ### Deprecated
 
@@ -35,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Loading matRad `.mat` files is more lenient about objectives. Files with an EUD objective no longer fail with "pop from empty list": missing or invalid objective parameters now keep their defaults and log a warning. Mean-dose objectives now read and write matRad's `f_diff` setting (stored as 1 = linear, 2 = quadratic). Objectives without a pyRadPlan equivalent, such as matRad's `DoseConstraints`, are now skipped with a warning instead of stopping the import
+- Loading matRad `.mat` files now reads each structure's visibility (`Visible`); before, all structures were shown. Colors stored as whole numbers, such as `[0 0 1]` for blue, are read on matRad's 0–1 scale instead of as almost black. Saving to matRad `.mat` now writes the visibility and color of each structure
 - GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
 - GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
 - GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
@@ -723,7 +760,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0

@@ -7,5 +7,6 @@
 !pyRadPlan
 !packaging/container/entrypoint.sh
 !packaging/briefcase/scripts/collect_licenses.py
+!packaging/briefcase/scripts/fetch_matrad_phantoms.py
 **/__pycache__
 **/*.pyc

@@ -1171,6 +1171,25 @@ def test_voi_objectives_from_wrapped_object_array(generic_input_3d):
     assert all(isinstance(o, Objective) for o in voi.objectives)
 
 
+def test_voi_skips_unsupported_matrad_objective(generic_input_3d):
+    """A matRad objective without pyRadPlan equivalent is dropped with a warning."""
+    from pyRadPlan.optimization.objectives import SquaredOverdosing  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    supported = {
+        "className": "DoseObjectives.matRad_SquaredOverdosing",
+        "parameters": [30.0],
+        "penalty": 100.0,
+    }
+    constraint = {"className": "DoseConstraints.matRad_MinMaxDVH", "parameters": [60, 95, 100]}
+    with pytest.warns(UserWarning, match="DoseConstraints.matRad_MinMaxDVH"):
+        voi = create_voi(
+            voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=[supported, constraint]
+        )
+    assert len(voi.objectives) == 1
+    assert isinstance(voi.objectives[0], SquaredOverdosing)
+
+
 def test_voi_single_objective_dict_still_works(generic_input_3d):
     """A single objective dict (the TG119 shape) is unaffected by the flattening."""
     from pyRadPlan.optimization.objectives import SquaredOverdosing  # noqa: PLC0415
@@ -1182,6 +1201,21 @@ def test_voi_single_objective_dict_still_works(generic_input_3d):
         "penalty": 100.0,
     }
     voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=obj)
+    assert len(voi.objectives) == 1
+    assert isinstance(voi.objectives[0], SquaredOverdosing)
+
+
+@pytest.mark.parametrize("placeholder", [None, [None], [()], [[]], [np.array([])]])
+def test_voi_drops_empty_objective_placeholders(generic_input_3d, placeholder):
+    """A VOI with only empty placeholders has no objectives, also on assignment."""
+    from pyRadPlan.optimization.objectives import SquaredOverdosing  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=placeholder)
+    assert voi.objectives == []
+
+    obj = {"name": "Squared Overdosing", "d_max": 30.0}
+    voi.objectives = [None, obj]
     assert len(voi.objectives) == 1
     assert isinstance(voi.objectives[0], SquaredOverdosing)
 

@@ -223,6 +223,7 @@ installer-linux:
         - export PATH=/opt/briefcase-venv/bin:$PATH
         - python packaging/briefcase/scripts/sync_version.py
         - cd packaging/briefcase
+        - python scripts/fetch_matrad_phantoms.py src/pyradplan_app/data
         - python scripts/run_briefcase.py create linux system --no-input
         - python scripts/run_briefcase.py build linux system --no-input
         - python scripts/run_briefcase.py run linux system --test --no-input
@@ -261,6 +262,9 @@ container:
             --build-arg VERSION="$CI_COMMIT_SHORT_SHA"
             --build-arg REVISION="$CI_COMMIT_SHA" --build-arg SOURCE="$CI_PROJECT_URL"
             -t pyradplan-web .
+        - >
+            docker run --rm --entrypoint python3 pyradplan-web -c
+            "from pyRadPlan.io import available_phantoms; names = available_phantoms(); print(names); assert {'BOXPHANTOM', 'HEAD_AND_NECK', 'LIVER', 'PROSTATE'} <= set(names)"
         - docker run -d --name web -e XPRA_PASSWORD=ci-test pyradplan-web
         - sh packaging/container/smoke_test.sh web
         - >

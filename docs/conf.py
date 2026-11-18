@@ -69,6 +69,7 @@ nb_execution_timeout = 1800  # per cell; guards the build against a hanging exam
 nb_execution_raise_on_error = False  # a failing example is reported, the build goes on
 nb_execution_show_tb = True
 nb_output_stderr = "remove"
+nb_merge_streams = True  # the kernel may split one print into several stream outputs
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]

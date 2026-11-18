@@ -189,9 +189,10 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         # direct mode, and from the canonical `physical_dose` container otherwise.
         self._dtype = self._infer_dtype(xp)
 
-        # Fluence cache for derivative calculation
+        # Fluence the quantity cache was computed for
         self._w_cache: Union[Array, None] = None
-        self._w_grad_cache: Union[Array, None] = None
+        # Fluence of the chain derivative being evaluated
+        self._grad_fluence: Union[Array, None] = None
         # Quantity vector cache (shape mirrors the scenario container layout)
         self._q_cache = np.empty_like(getattr(self._dij, "physical_dose"), dtype=object)
         self._qgrad_cache = np.empty_like(self._q_cache)
@@ -295,7 +296,8 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         Returns
         -------
         NDArray
-            Derivative of the quantity w.r.t. the fluence per scenario slot.
+            Derivative of the quantity w.r.t. the fluence per scenario slot. The container is
+            reused and overwritten by the next call.
         """
 
         per_slot = isinstance(d_quantity, np.ndarray) and d_quantity.dtype == np.dtype(object)
@@ -307,16 +309,15 @@ class FluenceDependentQuantity(RTQuantity, ABC):
         if not xp.isdtype(fluence.dtype, self._dtype):
             fluence = xp.asarray(fluence, dtype=self._dtype)
 
-        if self._w_grad_cache is None or not xp.all(self._w_grad_cache == fluence):
-            self._w_grad_cache = xp.asarray(fluence, copy=True)
-            self._compute_chain_derivative_cache(d_quantity)
+        self._grad_fluence = fluence
+        self._compute_chain_derivative_cache(d_quantity)
 
         return self._qgrad_cache
 
     def _invalidate_scenario_caches(self) -> None:
         self._evaluation_plan_cache = None
         self._w_cache = None
-        self._w_grad_cache = None
+        self._grad_fluence = None
         q_cache = getattr(self, "_q_cache", None)
         if q_cache is not None:
             self._q_cache = np.empty_like(q_cache)

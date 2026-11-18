@@ -2121,8 +2121,8 @@ def test_selecting_an_option_sets_its_base_data_parameters(qapp, monkeypatch):
 
     widget._cmb_bio_model.setCurrentIndex(labels.index("α/β kernels · mMKM"))
     assert widget.has_pending_changes()
-    assert widget._cmb_bio_model.styleSheet()  # marked modified
-    assert not widget._btn_bio_config.styleSheet()  # its parameters are unchanged
+    assert widget._is_field_modified(widget._cmb_bio_model)
+    assert not widget._is_field_modified(widget._btn_bio_config)
     widget._on_apply()
     assert ws.pln.bio_model.model == "alpha_beta_kernels"
     assert ws.pln.bio_model.data_model == "mMKM"
@@ -2970,12 +2970,84 @@ def test_discard_restores_the_scenario_configuration(qapp):
     widget._scenario_props["wcScen"] = {"wc_sigma": 3.0}
     widget._update_dirty_state()
     assert widget.has_pending_changes()
-    assert widget._btn_scenario_config.styleSheet() != ""
+    assert widget._is_field_modified(widget._btn_scenario_config)
 
     widget._btn_discard.click()
     assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
     assert not widget.has_pending_changes()
-    assert widget._btn_scenario_config.styleSheet() == ""
+    assert not widget._is_field_modified(widget._btn_scenario_config)
+
+
+def test_modified_border_leaves_the_field_rendering_untouched(qapp):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QSpinBox
+
+    spin = QSpinBox()
+    spin.resize(80, 24)
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert all(type(c).__name__ != "_ModifiedFrame" for c in spin.children())
+
+    PlanWidget._set_field_modified(spin, True)
+    assert PlanWidget._is_field_modified(spin)
+    assert spin.styleSheet() == ""
+
+    # The frame follows the field when it is resized.
+    spin.resize(120, 30)
+    marked = spin.grab().toImage()
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+    assert frame.geometry() == spin.rect()
+    orange = QColor("#e67e22")
+    assert marked.pixelColor(0, marked.height() // 2) == orange
+    assert marked.pixelColor(marked.width() // 2, 0) == orange
+
+    # Inside the outline the field, including its arrows, is drawn as without the mark.
+    inner = QRect(3, 3, 114, 24)
+    marked_inner = spin.grab(inner).toImage()
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert spin.grab(inner).toImage() == marked_inner
+    assert spin.grab().toImage().pixelColor(0, marked.height() // 2) != orange
+
+
+@pytest.mark.parametrize("dpr", [1.0, 1.25, 1.5, 1.75, 2.0])
+def test_modified_border_shows_every_edge_off_the_pixel_grid(qapp, dpr):
+    # With fractional display scaling a field can start in the middle of a device
+    # pixel; a border drawn as a logical 1 px line on its edge then lost its left side.
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    spin = QDoubleSpinBox()
+    spin.resize(94, 26)
+    PlanWidget._set_field_modified(spin, True)
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+
+    image = QImage(int(140 * dpr), int(50 * dpr), QImage.Format.Format_ARGB32)
+    image.setDevicePixelRatio(dpr)
+    image.fill(QColor("black"))
+    origin = 10 + 0.5 / dpr
+    painter = QPainter(image)
+    painter.translate(origin, origin)
+    frame.render(painter, QPoint(0, 0))
+    painter.end()
+
+    orange = QColor("#e67e22")
+    x0, y0 = origin * dpr, origin * dpr
+    x1, y1 = x0 + 94 * dpr, y0 + 26 * dpr
+    mid_x, mid_y = int((x0 + x1) / 2), int((y0 + y1) / 2)
+
+    def hits(coords, pixel):
+        return [c for c in coords if pixel(c) == orange]
+
+    edges = {
+        "left": hits(range(int(x0) - 1, int(x0) + 3), lambda x: image.pixelColor(x, mid_y)),
+        "right": hits(range(int(x1) - 3, int(x1) + 2), lambda x: image.pixelColor(x, mid_y)),
+        "top": hits(range(int(y0) - 1, int(y0) + 3), lambda y: image.pixelColor(mid_x, y)),
+        "bottom": hits(range(int(y1) - 3, int(y1) + 2), lambda y: image.pixelColor(mid_x, y)),
+    }
+    assert all(edges.values()), edges
+    assert len({len(px) for px in edges.values()}) == 1, edges
 
 
 def test_scenario_config_button_is_advanced(qapp):

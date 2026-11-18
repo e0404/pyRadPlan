@@ -415,18 +415,60 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         self.report_warning(message)
 
     def _dij_tissue_columns(self, values: np.ndarray) -> np.ndarray:
-        """Columns of a per-CT-phase voxel parameter array that the Dij's scenarios compute."""
+        """Arrange per-CT-phase voxel parameters in the Dij's columns, like the dose engines."""
+        num_phases = self._ct.num_of_ct_scen
+        # a structure set without per-phase structures serves every CT phase
+        if num_phases > 1 and values.shape[1] == 1:
+            values = np.repeat(values, num_phases, axis=1)
         scenarios = self._dij.scenarios
-        if scenarios is None or values.shape[1] == self._dij.alphax.shape[1]:
+        if scenarios is None:
             return values
-        computed = scenarios.computed_indices()
-        phases = sorted(set(scenarios.ct_phases()[computed].tolist()))
-        if phases and phases[-1] < values.shape[1]:
+        phases = scenarios.voxel_param_ct_phases()
+        if phases and max(phases) < values.shape[1]:
             return values[:, phases]
         return values
 
+    def _check_tissue_data_matches_dij(self) -> None:
+        """Raise if the Dij's reference alpha_x / beta_x differ from the structure set's.
+
+        The values are built with :meth:`StructureSet.get_tissue_data`, like the dose
+        engines do, so a Dij calculated with this structure set always matches.
+        """
+        if getattr(self._dij, "alphax", None) is None:
+            return
+        ax, bx, _, _ = self._cst.get_tissue_data(resample_grid=self._dij.dose_grid)
+        expected = {
+            "alphax": self._dij_tissue_columns(ax),
+            "betax": self._dij_tissue_columns(bx),
+        }
+        mismatched = []
+        for name, reference in expected.items():
+            stored = getattr(self._dij, name, None)
+            if stored is None:
+                continue
+            stored = xp_utils.to_numpy(stored)
+            # a Dij stored at lower precision holds the rounded structure set values
+            values = (
+                reference.astype(stored.dtype)
+                if np.issubdtype(stored.dtype, np.floating)
+                else reference
+            )
+            if stored.shape != values.shape:
+                mismatched.append(f"{name} (shape {stored.shape} vs {values.shape})")
+            elif not np.array_equal(stored, values):
+                num_voxels = int(np.any(stored != values, axis=1).sum())
+                mismatched.append(f"{name} ({num_voxels} voxels)")
+        if mismatched:
+            raise ValueError(
+                "Inconsistency between the biological tissue parameters of the structure set "
+                f"and the Dij: {', '.join(mismatched)} differ. Recalculate the Dij with this "
+                "structure set."
+            )
+
     def _initialize(self):
         """Initialize the data for the planning problem."""
+
+        self._check_tissue_data_matches_dij()
 
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)
@@ -436,19 +478,6 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             self._cst = self._cst.apply_overlap_priorities()
 
         self._cst = self._cst.resample_on_new_ct(self._ct)
-
-        # check consistency of bio models and dij
-        if getattr(self._dij, "alphax", None) is not None:
-            ax, bx = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
-            ax, bx = self._dij_tissue_columns(ax), self._dij_tissue_columns(bx)
-            if (
-                ax.shape != self._dij.alphax.shape
-                or not np.array_equal(ax, self._dij.alphax)
-                or not np.array_equal(bx, self._dij.betax)
-            ):
-                logger.error(
-                    "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
-                )
         if self._dose_convention == "total":
             logger.info(
                 "Objective references are interpreted for the total course "

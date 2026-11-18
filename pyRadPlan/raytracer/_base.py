@@ -1,7 +1,9 @@
 """Interface for voxel geometry ray tracers."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Union, Any, Optional
+from typing import TYPE_CHECKING, Union, Any, Optional
 import logging
 import time
 
@@ -14,13 +16,23 @@ from ..core.xp_utils.typing import Array
 from . import _kernels
 from ..core.np2sitk import linear_indices_to_image_coordinates
 from ..geometry import lps
-from ..stf._beam import Beam
+
+if TYPE_CHECKING:
+    from ..stf._beam import Beam
 
 logger = logging.getLogger(__name__)
 
 
 class RayTracerBase(ABC):
-    """Base class for all ray tracers."""
+    """Base class for all ray tracers.
+
+    Attributes
+    ----------
+    lateral_cut_off : float
+        Lateral cut-off in mm: the radius around each ray at the isocenter plane within which
+        voxels get a radiological depth. The traced region diverges with the rays, so it is
+        narrower in front of the isocenter and wider behind it.
+    """
 
     lateral_cut_off: float
     precision: np.dtype
@@ -222,6 +234,8 @@ class RayTracerBase(ABC):
             geometry is unchanged and available from ``self.cubes``.
         """
 
+        from ..stf._beam import Beam  # noqa: PLC0415 - stf.generators imports the ray tracer
+
         if not isinstance(beam, Beam):
             beam = Beam.model_validate(beam)
 
@@ -241,16 +255,26 @@ class RayTracerBase(ABC):
         ray_matrix_scale = 1 + ray_matrix_bev_y / beam.sad
 
         # If we have reference positions, we use them to restrict the raytracing region
-        reference_positions_bev = ray_matrix_scale * np.array(
-            [ray.ray_pos_bev for ray in beam.rays]
-        )
+        ray_pos_bev = np.array([ray.ray_pos_bev for ray in beam.rays])
+        reference_positions_bev = ray_matrix_scale * ray_pos_bev
+
+        # The dose engines select a cone around each ray axis with lateral_cut_off as radius
+        # at the isocenter plane. On the ray-matrix plane, the cone of a ray with tilt
+        # t = offset / SAD is an ellipse reaching up to (1 + t^2) / (1 - t * a) times the
+        # scaled cut-off from the ray position, with a = cut-off / SAD. A voxel takes its
+        # depth from the ray of its grid cell, up to half a cell diagonal away
+        tilt = np.hypot(ray_pos_bev[:, 0], ray_pos_bev[:, 2]) / beam.sad
+        aperture = self.lateral_cut_off / beam.sad
+        ray_matrix_cut_off = ray_matrix_scale * self.lateral_cut_off * (1.0 + tilt**2) / (
+            1.0 - tilt * aperture
+        ) + ray_spacing / np.sqrt(2.0)
 
         if self.fixed_ray_spacing_length is not None:
             ray_extent = self.fixed_ray_spacing_length
         else:
-            # look at max ray_positions in bev and add lateral cutoff
-            ray_extent = 2.0 * (
-                np.max(np.abs(reference_positions_bev[:, [0, 2]])) + self.lateral_cut_off
+            # half-width of the ray matrix covering all candidate discs
+            ray_extent = np.max(
+                np.max(np.abs(reference_positions_bev[:, [0, 2]]), axis=1) + ray_matrix_cut_off
             )
 
         spacing_range = ray_spacing * np.arange(
@@ -259,7 +283,9 @@ class RayTracerBase(ABC):
             dtype=self.precision,
         )
 
-        candidate_ray_mx = self._get_candidate_ray_matrix(spacing_range, reference_positions_bev)
+        candidate_ray_mx = self._get_candidate_ray_matrix(
+            spacing_range, reference_positions_bev, ray_matrix_cut_off
+        )
 
         ray_idx_z, ray_idx_x = np.nonzero(candidate_ray_mx)
 
@@ -415,8 +441,25 @@ class RayTracerBase(ABC):
 
         return rad_depth_cubes
 
-    def _get_candidate_ray_matrix(self, spacing_range: Array, ref_pos_bev: Array) -> Array:
-        """Get candidate ray matrix for given ray spacing and reference positions."""
+    def _get_candidate_ray_matrix(
+        self, spacing_range: Array, ref_pos_bev: Array, cut_off: Union[float, Array]
+    ) -> Array:
+        """Get the candidate ray matrix, the union of discs around the reference positions.
+
+        Parameters
+        ----------
+        spacing_range : Array
+            Grid coordinates (N,) of the ray matrix along BEV x and z.
+        ref_pos_bev : Array
+            Reference positions (M, 3) in BEV on the ray-matrix plane.
+        cut_off : float or Array
+            Disc radius on the ray-matrix plane, scalar or one per reference position (M,).
+
+        Returns
+        -------
+        Array
+            Boolean (N, N) matrix indexed (z, x), True where a grid ray lies in a disc.
+        """
 
         xp = array_api_compat.array_namespace(spacing_range, ref_pos_bev)
 
@@ -431,8 +474,9 @@ class RayTracerBase(ABC):
         grid = xp.astype(spacing_range, xp.float64)
         ref_x = xp.astype(ref_pos_bev[:, 0], xp.float64)[:, None]
         ref_z = xp.astype(ref_pos_bev[:, 2], xp.float64)[:, None]
+        radius = xp.reshape(xp.astype(xp.asarray(cut_off, device=device), xp.float64), (-1, 1))
 
-        half_width_sq = float(self.lateral_cut_off) ** 2 - (grid[None, :] - ref_z) ** 2  # (M, N)
+        half_width_sq = radius**2 - (grid[None, :] - ref_z) ** 2  # (M, N)
         # keep only the (disc, row) pairs the disc actually reaches
         inside = xp.reshape(half_width_sq >= 0, (-1,))
         half_width = xp.sqrt(xp.reshape(half_width_sq, (-1,))[inside])

@@ -136,6 +136,11 @@ jobs:
       - name: Sync the app version and changelog with pyRadPlan
         run: python packaging/briefcase/scripts/sync_version.py
 
+      # Into the app's sources, which Briefcase copies into the bundle (pyradplan_app/app.py).
+      - name: Download the phantoms of matRad
+        working-directory: packaging/briefcase
+        run: python scripts/fetch_matrad_phantoms.py src/pyradplan_app/data
+
       - name: Create the app scaffold
         working-directory: packaging/briefcase
         run: python scripts/run_briefcase.py create ${{ matrix.platform }} ${{ matrix.format }} --no-input

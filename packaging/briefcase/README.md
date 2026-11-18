@@ -12,7 +12,8 @@ install pyRadPlan.
 | Path | Purpose |
 |---|---|
 | `pyproject.toml` | The Briefcase project (app metadata, requirements, per-platform settings). Separate from the repository's root `pyproject.toml`, which describes the library. |
-| `src/pyradplan_app/` | The app package Briefcase launches. It only calls `pyRadPlan.gui.main()`; the icons live in `resources/`. |
+| `src/pyradplan_app/` | The app package Briefcase launches. It adds the app's `data/` folder to the shared base data folders and calls `pyRadPlan.gui.main()`; the icons live in `resources/`. |
+| `scripts/fetch_matrad_phantoms.py` | Downloads the phantoms of matRad into `src/pyradplan_app/data/` (git-ignored), see below. Also used by the container image. |
 | `tests/pyradplan_app/__main__.py` | Smoke test that runs inside the built bundle (`briefcase run --test`). |
 | `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project, and the root `CHANGELOG.md` next to it (git-ignored; Briefcase needs a changelog there for the Linux package). |
 | `scripts/collect_licenses.py` | Writes the third-party license notices into the bundle. |
@@ -41,6 +42,7 @@ everything from this directory:
 ```bash
 cd packaging/briefcase
 python scripts/sync_version.py            # or --check
+python scripts/fetch_matrad_phantoms.py src/pyradplan_app/data   # optional, ~160 MB
 briefcase create <platform> <format>      # scaffold + install requirements
 briefcase build <platform> <format>
 briefcase run <platform> <format> --test  # smoke test inside the bundle
@@ -83,11 +85,26 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
 
 The packages are only built for the platform they are built on; there is no cross-compilation.
 
+### Phantoms of matRad
+
+Besides pyRadPlan's TG119, the app ships the phantoms of matRad: the patient cases of the
+[CORT dataset](https://doi.org/10.1186/2047-217X-3-37) (`HEAD_AND_NECK`, `LIVER`,
+`PROSTATE`), with the CT images downsampled by matRad, and `BOXPHANTOM`, about 160 MB together.
+They are not part of this repository: `scripts/fetch_matrad_phantoms.py` downloads them from
+the matRad release pinned in the script and checks them against its SHA-256 hashes, into
+`src/pyradplan_app/data/phantoms` with matRad's license and a README on the origin of the data
+next to them. Briefcase copies the folder into the bundle with the app's sources, and the app
+searches it after the shared base data folders the user configured
+(`PYRADPLAN_BASE_DATA_PATH`), so the phantoms are listed under File → Open Example Phantom.
+Without the download the app builds and runs as before, with TG119 only. For a newer matRad
+release, change `MATRAD_RELEASE` and the hashes in the script.
+
 ### Smoke test
 
 `briefcase run <platform> <format> --test` starts `tests/pyradplan_app/__main__.py` inside the
 bundle instead of the GUI. It imports pyRadPlan, loads the bundled TG119 phantom, runs a small
-photon dose calculation and optimization and builds the main window offscreen
+photon dose calculation and optimization, loads the `HEAD_AND_NECK` phantom of matRad if the
+bundle has the phantoms and builds the main window offscreen
 (`QT_QPA_PLATFORM=offscreen` is the default in the test). The result is reported through the
 `>>>>>>>>>> EXIT <code> <<<<<<<<<<` line Briefcase looks for, so no test framework is bundled.
 Test mode copies `tests/` into the bundle; a following `briefcase build ... --update`

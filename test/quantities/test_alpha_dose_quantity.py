@@ -83,7 +83,7 @@ def test_alpha_dose_dense(sample_dij_dense):
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
     ret_deriv = alpha_dose.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
-    assert np.array_equal(alpha_dose._w_grad_cache, fluence)
+    assert np.array_equal(alpha_dose._grad_fluence, fluence)
     assert np.array_equal(alpha_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_dense.alpha_dose.dtype
@@ -108,7 +108,7 @@ def test_alpha_dose_sparse(sample_dij_sparse):
     assert np.array_equal(ret_callable.flat[0], ret_compute.flat[0])
 
     ret_deriv = alpha_dose.compute_chain_derivative(xp.ones((1, 125), dtype=xp.float32), fluence)
-    assert np.array_equal(alpha_dose._w_grad_cache, fluence)
+    assert np.array_equal(alpha_dose._grad_fluence, fluence)
     assert np.array_equal(alpha_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_sparse.alpha_dose.dtype
