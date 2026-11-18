@@ -26,6 +26,8 @@ def test_builtin_formats_are_registered():
         "meta",
         "pickle",
         "hdf5",
+        "topas",
+        "fred",
     }
     assert get_importer("mat") is MatlabImporter
     assert get_exporter("mat") is MatlabExporter

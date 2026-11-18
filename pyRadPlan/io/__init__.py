@@ -40,6 +40,7 @@ from .sitk_based import (
     load_binary_patient,
     list_image_files,
 )
+from .mc import TopasExporter, FredExporter
 from ._bundle import ExportBundle
 from ._factory import (
     register_importer,
@@ -79,6 +80,8 @@ __all__ = [
     "NiftiHandler",
     "NrrdHandler",
     "MetaImageHandler",
+    "TopasExporter",
+    "FredExporter",
     "validate_matrad_patient",
     "register_importer",
     "register_exporter",

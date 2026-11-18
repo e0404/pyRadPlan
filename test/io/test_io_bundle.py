@@ -1,5 +1,6 @@
 """Tests for the supported object kinds of the exporters and for ExportBundle."""
 
+import os
 import json
 import warnings
 
@@ -159,7 +160,7 @@ def test_single_warning_lists_dropped_objects(workspace, tmp_path):
         save_data(file_name=tmp_path / "ws.npz", **objects)
     messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
     assert messages == ["The npz format cannot store pln, stf, dij; they were not saved."]
-    assert caught[0].filename == __file__
+    assert os.path.normcase(caught[0].filename) == os.path.normcase(__file__)
 
 
 def test_single_warning_without_file_name(workspace, tmp_path, monkeypatch):

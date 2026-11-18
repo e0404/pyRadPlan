@@ -277,7 +277,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         Keyword arguments forwarded to the exporter's constructor, e.g.
         ``{"structure_format": "seg", "anonymize": True}`` for DICOM. DICOM refuses to
         write into a directory that already contains DICOM files unless
-        ``{"overwrite": True}`` is given.
+        ``{"overwrite": True}`` is given. The ``"topas"`` and ``"fred"`` formats write
+        Monte Carlo simulation inputs of ``ct``, ``pln``, ``stf`` and spot weights into a
+        directory (e.g. ``{"num_histories": 1e6}``).
     **extra
         Further named objects passed through to the exporter. The DICOM exporter
         consumes ``result`` (a result dictionary, exported as RTDOSE files) and ``pln``
@@ -305,8 +307,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
 
     # DICOM is directory-based and always writes the full multi-file set together.
     if not is_container_format(fmt):
-        if file_name is None and fmt == "dcm":
-            raise ValueError("DICOM export needs 'file_name' to name the output directory.")
+        if file_name is None and fmt in ("dcm", "topas", "fred"):
+            label = "DICOM" if fmt == "dcm" else fmt.upper()
+            raise ValueError(f"{label} export needs 'file_name' to name the output directory.")
         target = os.fspath(file_name) if file_name is not None else os.getcwd()
         exporter_cls(target, **options).save(**objects)
         return target
