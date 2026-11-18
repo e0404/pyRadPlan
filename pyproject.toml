@@ -225,8 +225,8 @@ zero = true
 format = "simple"
 
 [tool.codespell]
-skip = "./matRad,*/matRad/*,*.ipynb"
-ignore-words-list = "coo,HEL"
+skip = "./matRad,*/matRad/*,*.ipynb,*/package-lock.json,*/colormapData.ts"
+ignore-words-list = "coo,HEL,onText,numberIn"
 
 [tool.pydocstringformatter]
 write = true

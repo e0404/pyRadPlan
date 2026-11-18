@@ -17,7 +17,6 @@ from pydantic import (
 
 import numpy as np
 import SimpleITK as sitk
-import matplotlib.colors as mcolors
 
 from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
@@ -625,7 +624,8 @@ class VOI(PyRadPlanBaseModel, ABC):
         """
 
         if isinstance(v, str):
-            # convert color to rgb tuple
+            import matplotlib.colors as mcolors  # noqa: PLC0415 - optional at runtime (Pyodide)
+
             rgb = mcolors.to_rgb(v)
             return tuple(int(round(c * 255)) for c in rgb)
 

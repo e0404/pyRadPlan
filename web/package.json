@@ -1,0 +1,37 @@
+{
+  "name": "pyradplan-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Browser frontend for pyRadPlan (Pyodide in a web worker)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "node e2e/run.mjs",
+    "e2e:pyodide": "node e2e/pyodide.mjs",
+    "e2e:viewer": "node e2e/viewer.mjs",
+    "e2e:menus": "node e2e/menus.mjs",
+    "e2e:plan": "node e2e/plan.mjs",
+    "gen:colormaps": "python scripts/gen_colormaps.py"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zustand": "5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "playwright": "1.65.1",
+    "pyodide": "314.0.8",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

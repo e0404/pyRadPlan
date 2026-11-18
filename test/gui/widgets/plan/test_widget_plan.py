@@ -723,7 +723,7 @@ def test_tissue_dialog_derives_reference_params(qapp, test_data_protons):
 def test_machine_summary_is_reread_after_base_data_changes(monkeypatch, tmp_path):
     """Files replaced through pyRadPlan keep size and mtime within a clock tick; reread them."""
     from pyRadPlan.core import add_base_data_file, base_data_generation
-    from pyRadPlan.gui.widgets import _tissue_params
+    from pyRadPlan.biology import _editing as _tissue_params
 
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(_tissue_params, "_MACHINE_SUMMARY_CACHE", {})
@@ -741,7 +741,7 @@ def test_machine_summary_is_reread_after_base_data_changes(monkeypatch, tmp_path
 
 def test_machine_base_data_is_read_once_per_file(monkeypatch):
     """The editors keep what they read off a machine, so opening one does not re-read it."""
-    from pyRadPlan.gui.widgets import _tissue_params
+    from pyRadPlan.biology import _editing as _tissue_params
 
     key = ("protons", "Generic")
     monkeypatch.setattr(_tissue_params, "_MACHINE_SUMMARY_CACHE", {})
