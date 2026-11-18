@@ -415,13 +415,16 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         self.report_warning(message)
 
     def _dij_tissue_columns(self, values: np.ndarray) -> np.ndarray:
-        """Columns of a per-CT-phase voxel parameter array that the Dij's scenarios compute."""
+        """Arrange per-CT-phase voxel parameters in the Dij's columns, like the dose engines."""
+        num_phases = self._ct.num_of_ct_scen
+        # a structure set without per-phase structures serves every CT phase
+        if num_phases > 1 and values.shape[1] == 1:
+            values = np.repeat(values, num_phases, axis=1)
         scenarios = self._dij.scenarios
-        if scenarios is None or values.shape[1] == self._dij.alphax.shape[1]:
+        if scenarios is None:
             return values
-        computed = scenarios.computed_indices()
-        phases = sorted(set(scenarios.ct_phases()[computed].tolist()))
-        if phases and phases[-1] < values.shape[1]:
+        phases = scenarios.voxel_param_ct_phases()
+        if phases and max(phases) < values.shape[1]:
             return values[:, phases]
         return values
 
@@ -434,24 +437,22 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         if getattr(self._dij, "alphax", None) is None:
             return
         ax, bx, _, _ = self._cst.get_tissue_data(resample_grid=self._dij.dose_grid)
-        num_phases = self._ct.num_of_ct_scen
-
-        def per_dij_column(values: np.ndarray) -> np.ndarray:
-            # a structure set without per-phase structures serves every CT phase
-            if num_phases > 1 and values.shape[1] == 1:
-                values = np.repeat(values, num_phases, axis=1)
-            return self._dij_tissue_columns(values)
-
         expected = {
-            "alphax": per_dij_column(ax),
-            "betax": per_dij_column(bx),
+            "alphax": self._dij_tissue_columns(ax),
+            "betax": self._dij_tissue_columns(bx),
         }
         mismatched = []
-        for name, values in expected.items():
+        for name, reference in expected.items():
             stored = getattr(self._dij, name, None)
             if stored is None:
                 continue
             stored = xp_utils.to_numpy(stored)
+            # a Dij stored at lower precision holds the rounded structure set values
+            values = (
+                reference.astype(stored.dtype)
+                if np.issubdtype(stored.dtype, np.floating)
+                else reference
+            )
             if stored.shape != values.shape:
                 mismatched.append(f"{name} (shape {stored.shape} vs {values.shape})")
             elif not np.array_equal(stored, values):
