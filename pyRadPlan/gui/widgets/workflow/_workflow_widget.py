@@ -1572,7 +1572,8 @@ class WorkflowWidget(WorkspaceWidget):
 
         Only formats with a registered exporter are offered. Container formats
         (mat/hdf5/pickle/npz) write a single file; the image/DICOM backends write a
-        folder (a label map for the SimpleITK formats, a CT + RTSTRUCT/SEG series
+        folder (a segmentation for the SimpleITK formats, written as a label map or, for
+        overlapping structures, as layers; a CT + RTSTRUCT/SEG series
         for DICOM). Objectives only survive in mat/hdf5/pickle.
         """
         from pyRadPlan.io import get_available_formats  # noqa: PLC0415
@@ -1583,9 +1584,9 @@ class WorkflowWidget(WorkspaceWidget):
             ("HDF5 (*.h5)", "hdf5", None, False, True),
             ("Pickle (*.pkl)", "pickle", None, False, True),
             ("NumPy (*.npz)", "npz", None, False, False),
-            ("NIfTI label map (folder)", "nifti", None, True, False),
-            ("NRRD label map (folder)", "nrrd", None, True, False),
-            ("MetaImage label map (folder)", "meta", None, True, False),
+            ("NIfTI segmentation (folder)", "nifti", None, True, False),
+            ("NRRD segmentation (folder)", "nrrd", None, True, False),
+            ("MetaImage segmentation (folder)", "meta", None, True, False),
             ("DICOM RTSTRUCT (folder)", "dcm", "rtstruct", True, False),
             ("DICOM SEG (folder)", "dcm", "seg", True, False),
         ]

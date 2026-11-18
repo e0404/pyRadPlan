@@ -18,7 +18,9 @@ from ._export_common import (
     DETACHED_STUDY_MANAGEMENT,
     RT_STRUCT_STORAGE,
     ExportContext,
+    first_phase_image,
     populate_common,
+    warn_if_multiphase,
 )
 
 
@@ -140,7 +142,8 @@ def export_cst(
         The path of the written RTSTRUCT file.
     """
     overrides = validate_roi_interpreted_types(roi_interpreted_types)
-    ct_image = cst.ct_image.cube_hu
+    ct_image = first_phase_image(cst)
+    warn_if_multiphase(cst, "RTSTRUCT")
 
     ds = Dataset()
     populate_common(

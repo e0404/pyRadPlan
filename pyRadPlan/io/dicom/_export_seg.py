@@ -16,8 +16,10 @@ from ._export_common import (
     CT_IMAGE_STORAGE,
     SEG_STORAGE,
     ExportContext,
+    first_phase_image,
     populate_common,
     direction_to_orientation,
+    warn_if_multiphase,
 )
 
 
@@ -144,7 +146,8 @@ def export_seg(
     str
         The path of the written SEG file.
     """
-    reference = cst.ct_image.cube_hu
+    reference = first_phase_image(cst)
+    warn_if_multiphase(cst, "SEG")
     size = reference.GetSize()
     spacing = reference.GetSpacing()
     orientation = direction_to_orientation(reference.GetDirection())

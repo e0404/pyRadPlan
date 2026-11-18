@@ -1,10 +1,12 @@
 """Shared helpers and constants for DICOM export."""
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+import SimpleITK as sitk
 from pydicom.dataset import FileMetaDataset
 from pydicom.uid import generate_uid, ExplicitVRLittleEndian
 
@@ -199,6 +201,24 @@ def make_file_meta(sop_class_uid: str, sop_instance_uid: str) -> FileMetaDataset
     fm.TransferSyntaxUID = ExplicitVRLittleEndian
     fm.ImplementationClassUID = generate_uid()
     return fm
+
+
+def first_phase_image(cst: StructureSet) -> sitk.Image:
+    """Return the 3D reference image of a structure set (first phase of a 4D CT)."""
+    image = cst.ct_image.cube_hu
+    return image[:, :, :, 0] if image.GetDimension() == 4 else image
+
+
+def warn_if_multiphase(cst: StructureSet, kind: str) -> None:
+    """Warn that ``kind`` (RTSTRUCT or SEG) holds only the first phase of a 4D structure set."""
+    phases = max((v.mask.GetSize()[3] for v in cst.vois if v.mask.GetDimension() == 4), default=1)
+    if phases > 1:
+        warnings.warn(
+            f"The {kind} export holds the structures of the first of {phases} phases only; "
+            "the further phases are not exported.",
+            UserWarning,
+            stacklevel=4,
+        )
 
 
 def direction_to_orientation(direction: tuple) -> list:

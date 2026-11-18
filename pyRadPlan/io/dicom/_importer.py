@@ -10,7 +10,7 @@ import pydicom
 import SimpleITK as sitk
 
 from pyRadPlan.core.resample import resample_image
-from pyRadPlan.ct import CT
+from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet
 
 from ..base import BaseImporter
@@ -33,6 +33,8 @@ def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
     computed.
     """
     reference = ct.cube_hu
+    if reference.GetDimension() == 4:
+        reference = reference[:, :, :, 0]
     if (
         dose.GetSize() == reference.GetSize()
         and np.allclose(dose.GetSpacing(), reference.GetSpacing())
@@ -53,8 +55,43 @@ def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
     )
 
 
+def _first_phase(ct: CT) -> CT:
+    """Return the CT itself, or its first phase as a 3D CT for a 4D CT."""
+    if ct.cube_hu.GetDimension() != 4:
+        return ct
+    return validate_ct(cube_hu=ct.cube_hu[:, :, :, 0], dicom_info=ct.dicom_info)
+
+
+def _same_geometry(a: sitk.Image, b: sitk.Image) -> bool:
+    return (
+        a.GetSize() == b.GetSize()
+        and np.allclose(a.GetSpacing(), b.GetSpacing())
+        and np.allclose(a.GetOrigin(), b.GetOrigin())
+        and np.allclose(a.GetDirection(), b.GetDirection())
+    )
+
+
+def _join_phases(images: list[sitk.Image]) -> sitk.Image:
+    """Stack 3D phases along a fourth axis, keeping the 3D geometry of the first."""
+    joined = sitk.JoinSeries(images)
+    direction = np.eye(4)
+    direction[:3, :3] = np.reshape(images[0].GetDirection(), (3, 3))
+    joined.SetOrigin((*images[0].GetOrigin(), 0.0))
+    joined.SetSpacing((*images[0].GetSpacing(), 1.0))
+    joined.SetDirection(direction.ravel().tolist())
+    return joined
+
+
 class DicomImporter(BaseImporter):
-    """Importer for a folder (or single file) of DICOM data."""
+    """Importer for a folder (or single file) of DICOM data.
+
+    CT series that form a 4D CT (one series per phase, sharing the frame of reference and
+    the slice count, each with a distinct Temporal Position Identifier, as written by the
+    DICOM export of a 4D CT) are imported together as a 4D CT with the phases in
+    temporal order. Structure sets and doses refer to the first phase and are imported on
+    its grid; structures are repeated on every phase. If the series do not form a
+    consistent 4D CT, the largest series is imported with a warning.
+    """
 
     format: ClassVar[str] = "dcm"
     name: ClassVar[str] = "DICOM Importer"
@@ -205,6 +242,35 @@ class DicomImporter(BaseImporter):
         _, groups = self._classify()
         return [plan_summary(self._headers[f], f) for f in groups["RTPLAN"]]
 
+    def _phase_series(self, series: list[dict]) -> Optional[list[dict]]:
+        """Order the series by temporal position if they form the phases of a 4D CT."""
+        temporal = []
+        for entry in series:
+            ds = self._headers[entry["files"][0]]
+            position = getattr(ds, "TemporalPositionIdentifier", None)
+            if position is None:
+                return None
+            temporal.append((int(position), str(getattr(ds, "FrameOfReferenceUID", "")), entry))
+        if len({t[0] for t in temporal}) != len(temporal):
+            return None
+        if len({t[1] for t in temporal}) != 1 or len({e["num_slices"] for e in series}) != 1:
+            return None
+        return [t[2] for t in sorted(temporal, key=lambda t: t[0])]
+
+    def _load_phases(self, directory: str, phases: list[dict]) -> Optional[CT]:
+        """Import the phase series as a 4D CT, or None if their geometry differs."""
+        cts = [
+            import_ct(directory, entry["files"], reporter=self, headers=self._headers)
+            for entry in phases
+        ]
+        reference = cts[0].cube_hu
+        if not all(_same_geometry(reference, ct.cube_hu) for ct in cts[1:]):
+            return None
+        logger.info("Importing %d CT phases as a 4D CT.", len(cts))
+        return validate_ct(
+            cube_hu=_join_phases([ct.cube_hu for ct in cts]), dicom_info=cts[0].dicom_info
+        )
+
     def load_ct(self, series_uid: Optional[str] = None) -> CT:
         directory, groups = self._classify()
         if not groups["CT"]:
@@ -215,6 +281,18 @@ class DicomImporter(BaseImporter):
             match = next((s for s in series if s["series_uid"] == series_uid), None)
             if match is None:
                 raise ValueError(f"CT series {series_uid!r} not found in {self.path}.")
+            files = match["files"]
+        elif len(series) > 1 and (phases := self._phase_series(series)) is not None:
+            ct = self._load_phases(directory, phases)
+            if ct is not None:
+                self._ct = ct
+                return ct
+            warnings.warn(
+                f"The CT series in {self.path} look like the phases of a 4D CT but differ in "
+                "geometry; importing the largest series only.",
+                stacklevel=2,
+            )
+            match = max(series, key=lambda s: s["num_slices"])
             files = match["files"]
         elif len(series) > 1:
             match = max(series, key=lambda s: s["num_slices"])
@@ -253,16 +331,18 @@ class DicomImporter(BaseImporter):
 
         f = struct_file
         logger.info("Importing structure set %s.", os.path.basename(f))
+        ct_3d = _first_phase(ct)
         if f in groups["RTSTRUCT"]:
-            vois = import_rtstruct(pydicom.dcmread(f), ct, reporter=self)
+            vois = import_rtstruct(pydicom.dcmread(f), ct_3d, reporter=self)
         else:
             ct_datasets = [self._headers[c] for c in groups["CT"]]
-            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct, reporter=self)
+            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct_3d, reporter=self)
 
         if not vois:
             return None
         logger.info("Assembling structure set from %d VOI(s).", len(vois))
-        return validate_cst(vois, ct)
+        cst = validate_cst(vois, ct_3d)
+        return validate_cst(cst, ct=ct) if ct_3d is not ct else cst
 
     def load_dose(
         self, dose_file: Optional[str] = None, ct: Optional[CT] = None

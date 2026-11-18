@@ -1,7 +1,7 @@
 """Export a pyRadPlan CT as a DICOM CT image series."""
 
 import os
-import warnings
+from typing import Optional
 
 import numpy as np
 import SimpleITK as sitk
@@ -22,6 +22,11 @@ def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
     """
     Write a CT as a DICOM series into ``directory``.
 
+    A 4D CT is written as one series per phase (``CT_p01_0001.dcm``, ...). The series
+    share the study and the frame of reference, have their own Series Instance UIDs and
+    a Series Description naming the phase, and carry the Temporal Position Identifier
+    (1-based phase) and the Number of Temporal Positions.
+
     Parameters
     ----------
     ct : CT
@@ -35,15 +40,47 @@ def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
     -------
     dict
         Information for cross-referencing: ``series_uid`` and the per-slice
-        ``sop_instance_uids``.
+        ``sop_instance_uids`` of the (first) series, and ``phases``, the same
+        information for every phase.
     """
     image = ct.cube_hu
     if image.GetDimension() == 4:
-        warnings.warn(
-            "DICOM export of a 4D CT writes only the first phase.", UserWarning, stacklevel=2
-        )
-        image = image[:, :, :, 0]
+        num_phases = image.GetSize()[3]
+        phases = [
+            _export_series(
+                image[:, :, :, p],
+                directory,
+                ctx,
+                f"CT_p{p + 1:02d}_{{:04d}}.dcm",
+                f"pyRadPlan CT phase {p + 1}/{num_phases} - research use only",
+                p + 1,
+                (p + 1, num_phases),
+            )
+            for p in range(num_phases)
+        ]
+    else:
+        phases = [
+            _export_series(
+                image,
+                directory,
+                ctx,
+                "CT_{:04d}.dcm",
+                "pyRadPlan CT export - research use only",
+                1,
+            )
+        ]
+    return {**phases[0], "phases": phases}
 
+
+def _export_series(  # noqa: PLR0913 - one series needs its naming and numbering
+    image: sitk.Image,
+    directory: str,
+    ctx: ExportContext,
+    file_pattern: str,
+    description: str,
+    series_number: int,
+    temporal: Optional[tuple[int, int]] = None,
+) -> dict:
     arr = sitk.GetArrayFromImage(image)  # (z, y, x)
     nz, ny, nx = arr.shape
     spacing = image.GetSpacing()
@@ -59,13 +96,7 @@ def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
 
         ds = Dataset()
         sop_uid = populate_common(
-            ds,
-            ctx,
-            CT_IMAGE_STORAGE,
-            series_uid,
-            "CT",
-            1,
-            "pyRadPlan CT export - research use only",
+            ds, ctx, CT_IMAGE_STORAGE, series_uid, "CT", series_number, description
         )
         sop_instance_uids.append(sop_uid)
 
@@ -74,8 +105,11 @@ def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
         ds.PatientPosition = ctx.patient_position
         ds.KVP = ctx.kvp
         ds.ImageType = ["DERIVED", "SECONDARY", "AXIAL"]
-        ds.AcquisitionNumber = 1
+        ds.AcquisitionNumber = series_number
         ds.InstanceNumber = z + 1
+        if temporal is not None:
+            ds.TemporalPositionIdentifier = temporal[0]
+            ds.NumberOfTemporalPositions = temporal[1]
         ds.SliceLocation = float(position[2])
         ds.ImagePositionPatient = [float(p) for p in position]
         ds.ImageOrientationPatient = [float(o) for o in orientation]
@@ -96,6 +130,6 @@ def export_ct(ct: CT, directory: str, ctx: ExportContext) -> dict:
 
         ds.PixelData = arr_i16[z].tobytes()
 
-        ds.save_as(os.path.join(directory, f"CT_{z + 1:04d}.dcm"), enforce_file_format=True)
+        ds.save_as(os.path.join(directory, file_pattern.format(z + 1)), enforce_file_format=True)
 
     return {"series_uid": series_uid, "sop_instance_uids": sop_instance_uids}

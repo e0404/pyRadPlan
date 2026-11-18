@@ -2,6 +2,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.core import Grid
 from pyRadPlan.ct import CT, DicomInfo, resample_ct, validate_ct
-from pyRadPlan.io import load_patient, save_data
+from pyRadPlan.io import load_data, load_patient, save_data
 from pyRadPlan.io._helpers import roi_interpreted_type
 from pyRadPlan.io.dicom import DicomExporter, DicomImporter, find_dicom_files
 from pyRadPlan.io.dicom._export_common import resolve_export_context
@@ -258,12 +259,6 @@ def test_mismatch_warning(dicom_patient, tg119_ct, caplog):
         ctx = resolve_export_context(tg119_ct, cst)
     assert "differ" in caplog.text
     assert ctx.patient_id == tg119_ct.dicom_info.patient_id
-
-
-def test_4d_ct_warns(plain_ct, tmp_path):
-    ct4d = CT(cube_hu=sitk.JoinSeries([plain_ct.cube_hu, plain_ct.cube_hu]))
-    with pytest.warns(UserWarning, match="first phase"):
-        _export(tmp_path, ct4d)
 
 
 def test_save_data_exporter_options(dicom_patient, tmp_path):
@@ -1116,3 +1111,203 @@ def _fake_result_for(ct):
 def test_dvh_rtdose_validates(dicom_standard, dvh_export):
     out, _, _ = dvh_export
     assert _validation_errors(dicom_standard, out / "RTDOSE.dcm") == []
+
+
+# --------------------------------------------------------------------------
+# 4D CT (one series per phase) and overlapping segments
+# --------------------------------------------------------------------------
+
+NUM_PHASES = 3
+
+
+def _ct_4d_phases():
+    rng = np.random.default_rng(7)
+    phases = []
+    for _ in range(NUM_PHASES):
+        image = sitk.GetImageFromArray(rng.integers(-1000, 1000, (10, 20, 20)).astype(np.float32))
+        phases.append(image)
+    cube = sitk.JoinSeries(phases)
+    cube.SetSpacing((2.0, 2.5, 3.0, 1.0))
+    cube.SetOrigin((-10.0, -12.0, -5.0, 0.0))
+    return validate_ct(cube_hu=cube)
+
+
+def _cst_for(ct, moving=False):
+    from pyRadPlan.cst import validate_cst, validate_voi
+
+    boxes = {
+        "Body": ((0, 10), (2, 18), (2, 18), "EXTERNAL"),
+        "PTV": ((3, 8), (6, 14), (6, 14), "TARGET"),
+        "CTV": ((4, 7), (8, 12), (8, 12), "TARGET"),
+    }
+    vois = []
+    for name, (z, y, x, voi_type) in boxes.items():
+        mask = np.zeros((10, 20, 20), np.uint8)
+        mask[z[0] : z[1], y[0] : y[1], x[0] : x[1]] = 1
+        if ct.num_of_ct_scen > 1:
+            mask = np.stack([np.roll(mask, p if moving else 0, axis=2) for p in range(NUM_PHASES)])
+        vois.append(validate_voi(name=name, voi_type=voi_type, mask=mask, ct_image=ct))
+    return validate_cst(vois, ct)
+
+
+@pytest.fixture(scope="module")
+def ct_4d_export(tmp_path_factory):
+    ct = _ct_4d_phases()
+    out = tmp_path_factory.mktemp("ct4d")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        DicomExporter(out).save(ct=ct)
+    return ct, out
+
+
+def test_4d_ct_writes_one_series_per_phase(ct_4d_export):
+    _, out = ct_4d_export
+    files = sorted(out.glob("*.dcm"))
+    assert len(files) == NUM_PHASES * 10
+
+    by_series = {}
+    for path in files:
+        ds = _read(path)
+        by_series.setdefault(ds.SeriesInstanceUID, []).append(ds)
+    assert len(by_series) == NUM_PHASES
+
+    datasets = [ds for series in by_series.values() for ds in series]
+    assert len({ds.StudyInstanceUID for ds in datasets}) == 1
+    assert len({ds.FrameOfReferenceUID for ds in datasets}) == 1
+
+    phases = []
+    for series in by_series.values():
+        phase = series[0].TemporalPositionIdentifier
+        phases.append(phase)
+        assert {ds.TemporalPositionIdentifier for ds in series} == {phase}
+        assert {ds.NumberOfTemporalPositions for ds in series} == {NUM_PHASES}
+        assert {ds.SeriesDescription for ds in series} == {
+            f"pyRadPlan CT phase {phase}/{NUM_PHASES} - research use only"
+        }
+        assert {ds.SeriesNumber for ds in series} == {phase}
+        assert sorted(ds.InstanceNumber for ds in series) == list(range(1, 11))
+        ordered = sorted(series, key=lambda d: d.InstanceNumber)
+        z = [float(ds.ImagePositionPatient[2]) for ds in ordered]
+        assert z == pytest.approx([-5.0 + 3.0 * k for k in range(10)])
+    assert sorted(phases) == [1, 2, 3]
+
+
+def test_4d_ct_imports_as_4d_ct(ct_4d_export):
+    ct, out = ct_4d_export
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ct2 = DicomImporter(out).load_ct()
+    assert ct2.num_of_ct_scen == NUM_PHASES
+    cube, cube2 = ct.cube_hu, ct2.cube_hu
+    assert cube2.GetSize() == cube.GetSize()
+    assert np.allclose(cube2.GetSpacing(), cube.GetSpacing())
+    assert np.allclose(cube2.GetOrigin(), cube.GetOrigin())
+    assert np.allclose(cube2.GetDirection(), cube.GetDirection())
+    assert np.array_equal(sitk.GetArrayFromImage(cube2), sitk.GetArrayFromImage(cube))
+    assert ct2.dicom_info.study_instance_uid == _read(next(out.glob("*.dcm"))).StudyInstanceUID
+
+
+def test_4d_ct_load_data_and_load_patient(ct_4d_export):
+    _, out = ct_4d_export
+    assert load_data(out)["ct"].num_of_ct_scen == NUM_PHASES
+    with pytest.warns(UserWarning, match="cst"):
+        ct, _ = load_patient(out)
+    assert ct.num_of_ct_scen == NUM_PHASES
+
+
+def test_4d_ct_without_temporal_positions_imports_largest_series(tmp_path):
+    DicomExporter(tmp_path / "out").save(ct=_ct_4d_phases())
+    for path in (tmp_path / "out").glob("*.dcm"):
+        ds = _read(path)
+        del ds.TemporalPositionIdentifier
+        ds.save_as(path)
+    with pytest.warns(UserWarning, match="Multiple CT series"):
+        ct2 = DicomImporter(tmp_path / "out").load_ct()
+    assert ct2.num_of_ct_scen == 1
+
+
+def test_4d_ct_with_differing_geometry_imports_largest_series(tmp_path):
+    DicomExporter(tmp_path / "out").save(ct=_ct_4d_phases())
+    for path in (tmp_path / "out").glob("CT_p03_*.dcm"):
+        ds = _read(path)
+        ds.ImagePositionPatient = [ds.ImagePositionPatient[0] + 5.0, *ds.ImagePositionPatient[1:]]
+        ds.save_as(path)
+    with pytest.warns(UserWarning, match="differ in geometry"):
+        ct2 = DicomImporter(tmp_path / "out").load_ct()
+    assert ct2.num_of_ct_scen == 1
+
+
+@pytest.mark.parametrize("fmt", ["rtstruct", "seg"])
+def test_4d_cst_exports_first_phase_referencing_first_series(fmt, tmp_path):
+    ct = _ct_4d_phases()
+    cst = _cst_for(ct, moving=True)
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning, match="first of 3 phases"):
+        DicomExporter(out, structure_format=fmt).save(ct=ct, cst=cst)
+
+    first_series = _read(out / "CT_p01_0001.dcm").SeriesInstanceUID
+    if fmt == "rtstruct":
+        ds = _read(out / "RTSTRUCT.dcm")
+        ref = ds.ReferencedFrameOfReferenceSequence[0].RTReferencedStudySequence[0]
+        assert ref.RTReferencedSeriesSequence[0].SeriesInstanceUID == first_series
+    else:
+        ds = _read(out / "SEG.dcm")
+        assert ds.ReferencedSeriesSequence[0].SeriesInstanceUID == first_series
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        imported = DicomImporter(out).load_data()
+    assert imported["ct"].num_of_ct_scen == NUM_PHASES
+    cst2 = imported["cst"]
+    assert cst2.num_of_scenarios == NUM_PHASES
+    by_name = {v.name: v for v in cst2.vois}
+    for voi in cst.vois:
+        phases = by_name[voi.name].scenario_indices(order="numpy")
+        assert all(np.array_equal(phases[0], p) for p in phases)
+        assert np.array_equal(phases[0], voi.scenario_indices(0, order="numpy"))
+
+
+def test_seg_export_keeps_overlapping_segments(tmp_path):
+    ct = validate_ct(cube_hu=_ct_4d_phases().cube_hu[:, :, :, 0])
+    cst = _cst_for(ct)
+    arrays = {v.name: sitk.GetArrayFromImage(v.mask) for v in cst.vois}
+    assert (arrays["Body"] & arrays["PTV"] & arrays["CTV"]).any()
+
+    DicomExporter(tmp_path / "out", structure_format="seg").save(ct=ct, cst=cst)
+    seg = _read(tmp_path / "out" / "SEG.dcm")
+    frames = seg.pixel_array
+    numbers = [
+        f.SegmentIdentificationSequence[0].ReferencedSegmentNumber
+        for f in seg.PerFrameFunctionalGroupsSequence
+    ]
+    assert [s.SegmentLabel for s in seg.SegmentSequence] == ["Body", "PTV", "CTV"]
+    for number, name in enumerate(arrays, start=1):
+        slices = [frames[i] for i, n in enumerate(numbers) if n == number]
+        assert len(slices) == int(arrays[name].any(axis=(1, 2)).sum())
+        assert sum(int(s.sum()) for s in slices) == int(arrays[name].sum())
+
+    imported = DicomImporter(tmp_path / "out").load_cst(ct)
+    for voi in imported.vois:
+        assert np.array_equal(sitk.GetArrayFromImage(voi.mask), arrays[voi.name])
+
+
+def test_4d_ct_files_validate(dicom_standard, ct_4d_export):
+    _, out = ct_4d_export
+    # Temporal Position Identifier and Number of Temporal Positions are not attributes of the
+    # CT IOD, but vendors use them to mark the phases of a 4D CT; nothing else may be reported.
+    expected = {
+        ("General", "(0020,0100)", "TagUnexpected"),
+        ("General", "(0020,0105)", "TagUnexpected"),
+    }
+    for name in ("CT_p01_0001.dcm", "CT_p02_0005.dcm", "CT_p03_0010.dcm"):
+        errors = _validation_errors(dicom_standard, out / name)
+        assert {e[1:] for e in errors} == expected
+
+
+@pytest.mark.parametrize("fmt, name", [("rtstruct", "RTSTRUCT.dcm"), ("seg", "SEG.dcm")])
+def test_4d_export_with_structures_validates(dicom_standard, fmt, name, tmp_path):
+    ct = _ct_4d_phases()
+    out = tmp_path / "out"
+    with pytest.warns(UserWarning, match="first of 3 phases"):
+        DicomExporter(out, structure_format=fmt).save(ct=ct, cst=_cst_for(ct))
+    assert _validation_errors(dicom_standard, out / name) == []
