@@ -38,6 +38,15 @@ def unmet_requirements(monkeypatch):
     monkeypatch.setattr(_base_ai_beamlet, "model_facts", lambda model_dir: ({}, None, ["torch"]))
 
 
+@pytest.fixture
+def met_requirements(monkeypatch):
+    """Pretend the packages the model declares are installed."""
+    model_facts = _base_ai_beamlet.model_facts
+    monkeypatch.setattr(
+        _base_ai_beamlet, "model_facts", lambda model_dir: (*model_facts(model_dir)[:2], [])
+    )
+
+
 def _pln(radiation_mode="protons", model=DUMMY_MODEL):
     prop = {"engine": "AIBeamlet"}
     if model is not None:
@@ -60,7 +69,7 @@ def test_model_framework_missing(unmet_requirements):
     assert "HongPB" in get_available_engines("protons")
 
 
-def test_model_available():
+def test_model_available(met_requirements):
     assert AIBeamletEngine.is_available(_pln(), None) == (True, "")
     assert "AIBeamlet" in get_available_engines(_pln())
 
@@ -159,7 +168,7 @@ def test_modality_mismatch():
     assert "'protons'" in msg and "'VHEE'" in msg
 
 
-def test_no_model_named_uses_local_models():
+def test_no_model_named_uses_local_models(met_requirements):
     assert AIBeamletEngine.is_available("protons", None) == (True, "")
     assert AIBeamletEngine.is_available(_pln(model=None), None) == (True, "")
     available, msg = AIBeamletEngine.is_available("VHEE", None)
@@ -208,7 +217,7 @@ def test_model_taken_from_prop_dose_calc():
     assert AIBeamletEngine(_pln(model=None)).model is None
 
 
-def test_availability_reads_model_from_engine_instance():
+def test_availability_reads_model_from_engine_instance(met_requirements):
     engine = AIBeamletEngine(_pln())
 
     class _PlnWithEngine:
