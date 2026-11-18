@@ -14,7 +14,7 @@ Top-level API
 Low-level handlers
 ------------------
 Per-format handlers (:class:`MatlabHandler`, :class:`DicomHandler`, :class:`NpzHandler`,
-:class:`PickleHandler`, :class:`NiftiHandler`, :class:`NrrdHandler`,
+:class:`PickleHandler`, :class:`Hdf5Handler`, :class:`NiftiHandler`, :class:`NrrdHandler`,
 :class:`MetaImageHandler`) bundle an importer and exporter and can be used directly::
 
     handler = DicomHandler(path)
@@ -31,6 +31,7 @@ from .matlab import MatlabHandler, validate_matrad_patient
 from .dicom import DicomHandler
 from .npz import NpzHandler
 from .pickle import PickleHandler
+from .hdf5 import Hdf5Handler
 from .sitk_based import (
     NiftiHandler,
     NrrdHandler,
@@ -71,6 +72,7 @@ __all__ = [
     "DicomHandler",
     "NpzHandler",
     "PickleHandler",
+    "Hdf5Handler",
     "NiftiHandler",
     "NrrdHandler",
     "MetaImageHandler",
