@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
 - Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
 
+### Deprecated
+
+- `StructureSet.get_reference_lq_params` and `get_tissue_class_indices`: the `overlap_is_applied` argument has no effect, because the result is the same with and without overlap priorities applied. Passing it emits a `DeprecationWarning`
+
 ### Fixed
 
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
@@ -26,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
 - `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
 - GUI: in the plan settings, the orange border that marks a field with unapplied changes no longer changes how the field is drawn. On spin boxes such as the dose grid resolution, the up/down arrows used to change their look and position while the field was marked; they now look the same with and without the border
-- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number.
+- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number. They used to come from the VOI listed last, so a dose influence matrix with `alphax` / `betax` calculated with 0.8.0 can differ where VOIs with different tissues overlap; optimizing it then raises a `ValueError` (see below), and it has to be recalculated. Empty placeholders such as `None` in a VOI's objectives are dropped, so such a VOI counts as having no objectives.
 - Optimization: the check that the Dij's `alphax` / `betax` match the structure set only logged an error, and computed the reference values differently from the dose engines. The check now builds the values with `StructureSet.get_tissue_data`, like the dose engines, and raises a `ValueError`.
 
 ## [0.8.0] - 2026-11-05

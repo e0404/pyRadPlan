@@ -713,6 +713,38 @@ def test_apply_overlap_priorities_warns_when_objectives_fully_overlapped(
     assert any("CTV" in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.parametrize("without_objectives", [(), (0,), (1, 4), (0, 1, 2, 3, 4)])
+@pytest.mark.parametrize("priorities", [(1, 2, 5, 10, 5), (3, 2, 1, 1, 4), (1, 1, 1, 1, 1)])
+def test_tissue_data_does_not_depend_on_overlap_removal(
+    generic_ct, generic_vois, without_objectives, priorities, caplog
+):
+    """Shared voxels go to the lowest priority number, which overlap removal never carves."""
+    for i, (voi, priority) in enumerate(zip(generic_vois, priorities)):
+        voi.overlap_priority = priority
+        voi.tissue_properties = TissueProperties(alpha_x=0.1 * (i + 1), beta_x=0.01 * (i + 1))
+        if i in without_objectives:
+            voi.objectives = []
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+
+    with caplog.at_level("WARNING", logger="pyRadPlan.cst._cst"):
+        data = cst.get_tissue_data()
+    assert not caplog.records
+
+    overlapped = cst.apply_overlap_priorities()
+    for value, value_overlapped in zip(data[:3], overlapped.get_tissue_data()[:3]):
+        np.testing.assert_array_equal(value, value_overlapped)
+
+
+def test_overlap_is_applied_is_deprecated(generic_ct, generic_vois):
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+    with pytest.warns(DeprecationWarning, match="overlap_is_applied"):
+        alpha, _ = cst.get_reference_lq_params(True)
+    with pytest.warns(DeprecationWarning, match="overlap_is_applied"):
+        ix = cst.get_tissue_class_indices(overlap_is_applied=False)
+    np.testing.assert_array_equal(alpha, cst.get_reference_lq_params()[0])
+    np.testing.assert_array_equal(ix, cst.get_tissue_class_indices())
+
+
 # --- Helpers for body segmentation tests ---
 def _make_test_ct():
     """Create a small CT with a main component, an internal cavity (hole), and a small extra component."""
