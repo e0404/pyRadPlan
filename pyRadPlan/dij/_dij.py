@@ -27,7 +27,7 @@ import SimpleITK as sitk
 import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
-from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core import PyRadPlanBaseModel, decode_input
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, create_bio_model
 from pyRadPlan.scenarios import ScenarioModel, ScenarioSet
 from pyRadPlan.util import swap_orientation_sparse_matrix
@@ -1549,6 +1549,7 @@ def create_dij(
                 data.attach_scenarios(scenario_model)
             return data
 
+        data = decode_input(data)
         if "beamNum" in data and np.min(data["beamNum"]) != 0:
             # add context when from matRad
             context = {"from_matRad": True}
