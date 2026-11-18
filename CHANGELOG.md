@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- DICOM RTSTRUCT import combines contours on the same slice even-odd, so an inner contour is a hole; ring structures stored as an outer and an inner contour (e.g. PTV minus CTV) were imported filled
 - `Jaw` derived the device type `JawX`/`JawY` from the orientation, so validating a dumped jaw again failed; field-based photon beamlets keep their `MLC`/`Jaw` and beamlet subclasses when validated from a dump
 - Field-based photon dose calculation mirrored jaw and MLC openings left-right: `FieldShapeAsBLD` flipped the device x axis on the assumption that IEC X points to the patient's right. Per IEC 61217 (and DICOM PS3.3) the beam limiting device x axis at collimator angle 0 is the beam's eye view x axis, the patient's left at gantry and couch angle 0 for a head-first supine patient. Doses of fields with x-asymmetric apertures change accordingly
 - DICOM RTDOSE export of flipped and oblique dose grids: the Grid Frame Offset Vector is projected on the slice normal, and positions, orientation and spacing are written as valid Decimal Strings

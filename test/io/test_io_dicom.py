@@ -623,7 +623,7 @@ def test_fill_polygon_degenerate_contours_are_empty_not_an_error():
     assert not _fill([(1.5, 3.5), (5.5, 3.5), (1.5, 3.5)]).any()  # a line, there and back
 
 
-def test_compute_segment_mask_ors_contours_on_the_same_slice():
+def test_compute_segment_mask_combines_contours_on_the_same_slice():
     """Two contours on one slice are combined, and land on the slice they name."""
     from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
 
@@ -659,6 +659,33 @@ def test_compute_segment_mask_ors_contours_on_the_same_slice():
     assert filled[2, 2] and filled[3, 3], "first contour"
     assert filled[5, 5] and filled[6, 6], "second contour"
     assert filled.sum() == 8, "both contours, nothing between them"
+
+
+def test_compute_segment_mask_inner_contour_is_a_hole():
+    """A contour inside another on the same slice cuts a hole (even-odd rule).
+
+    Ring structures such as PTV minus CTV are commonly stored as an outer and an inner
+    contour on each slice instead of a single keyhole contour.
+    """
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    ct = _unit_ct(num_x=10, num_y=10)
+    z_pos = float(ct.z[1])
+
+    def contour(x0, x1, y0, y1):
+        item = mock.Mock()
+        item.ContourGeometricType = "CLOSED_PLANAR"
+        item.ContourData = [x0, y0, z_pos, x1, y0, z_pos, x1, y1, z_pos, x0, y1, z_pos]
+        return item
+
+    roi = mock.Mock()
+    roi.ContourSequence = [contour(0.5, 8.5, 0.5, 8.5), contour(2.5, 6.5, 2.5, 6.5)]
+
+    filled = _compute_segment_mask(ct, roi, _axis_interpolators(ct))[:, :, 1]
+
+    assert filled[1, 1] and filled[8, 8] and filled[2, 5], "the ring is kept"
+    assert not filled[3:7, 3:7].any(), "the inner contour is a hole"
+    assert filled.sum() == 8 * 8 - 4 * 4
 
 
 # --------------------------------------------------------------------------

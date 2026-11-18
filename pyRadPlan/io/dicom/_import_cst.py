@@ -378,7 +378,8 @@ def _compute_segment_mask(ct, roi_contour, interpolators=None):
             continue
         slice_idx = int(np.argmin(np.abs(ct_z_positions - z_pos)))
         num_x, num_y = window.shape
-        segment_cube[x_start : x_start + num_x, y_start : y_start + num_y, slice_idx] |= (
+        # Contours on the same plane combine even-odd: an inner contour is a hole.
+        segment_cube[x_start : x_start + num_x, y_start : y_start + num_y, slice_idx] ^= (
             window.astype(np.uint8)
         )
 

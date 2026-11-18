@@ -219,8 +219,11 @@ def _map_energies(
         else:
             missing.append(float(energy))
     if missing:
+        shown = ", ".join(f"{m:.3f}" for m in missing[:5])
+        if len(missing) > 5:
+            shown += f", ... ({len(missing)} in total)"
         raise ValueError(
-            f"Nominal beam energies {[round(m, 3) for m in missing]} have no machine energy within {tolerance} "
+            f"Nominal beam energies [{shown}] have no machine energy within {tolerance} "
             f"(MeV/u) in machine '{machine.name}' ({machine.energies.min():.2f} to "
             f"{machine.energies.max():.2f}). Pass another machine or a larger "
             "`energy_tolerance`."
