@@ -12,6 +12,7 @@ from pydicom.tag import Tag
 from pydicom.uid import generate_uid
 from pydicom.valuerep import format_number_as_ds
 
+from ._export_dvh import DvhExport, add_dvh_module
 from ._export_common import (
     RT_DOSE_STORAGE,
     ExportContext,
@@ -67,6 +68,7 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
     series_number: int = 2,
     plan_ref: Optional[PlanReference] = None,
     beam_number: Optional[int] = None,
+    dvh: Optional[DvhExport] = None,
 ) -> str:
     """
     Write a dose distribution as a multi-frame DICOM RTDOSE file.
@@ -93,6 +95,9 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
         Plan to reference in the Referenced RT Plan Sequence.
     beam_number : int, optional
         Beam number of a ``"BEAM"`` dose (required with ``plan_ref``).
+    dvh : DvhExport, optional
+        Structures to write the RT DVH module for (one cumulative DVH per structure,
+        computed from the dose as stored in the file).
 
     Returns
     -------
@@ -157,6 +162,11 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
             plan_ref, summation_type, beam_number
         )
 
+    if dvh is not None:
+        stored = sitk.GetImageFromArray(pixels.astype(np.float64) * scaling)
+        stored.CopyInformation(dose)
+        add_dvh_module(ds, stored, dose_type, dvh)
+
     ds.PixelData = pixels.tobytes()
 
     out_path = os.path.join(directory, file_name)
@@ -186,6 +196,7 @@ def export_result(  # noqa: PLR0913 - export options
     summation_type: str = "PLAN",
     per_beam: bool = False,
     plan_ref: Optional[PlanReference] = None,
+    dvh: Optional[DvhExport] = None,
 ) -> list[str]:
     """
     Write the dose quantities of a result dictionary as RTDOSE files.
@@ -194,7 +205,8 @@ def export_result(  # noqa: PLR0913 - export options
     ``EFFECTIVE`` as ``RTDOSE_<quantity>.dcm``. Other quantities (LET, effect, alpha, ...)
     are skipped with a warning, as are scenario results beyond the nominal scenario (the
     unsuffixed entries). With ``per_beam``, the ``<quantity>_beam`` lists are written as
-    ``RTDOSE_<quantity>_beam<N>.dcm`` with Dose Summation Type ``BEAM``.
+    ``RTDOSE_<quantity>_beam<N>.dcm`` with Dose Summation Type ``BEAM``. With ``dvh``, every
+    file also gets the RT DVH module.
 
     Returns
     -------
@@ -238,6 +250,7 @@ def export_result(  # noqa: PLR0913 - export options
                     comment=quantity,
                     series_number=series_number,
                     plan_ref=plan_ref,
+                    dvh=dvh,
                 )
             )
             series_number += 1
@@ -261,6 +274,7 @@ def export_result(  # noqa: PLR0913 - export options
                         series_number=series_number,
                         plan_ref=plan_ref,
                         beam_number=number,
+                        dvh=dvh,
                     )
                 )
                 series_number += 1

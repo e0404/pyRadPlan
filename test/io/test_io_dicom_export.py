@@ -962,3 +962,157 @@ def test_non_axial_dose_validates(dicom_standard, tmp_path, name):
     out = tmp_path / "out"
     DicomExporter(out).save(dose=_oriented_dose(_DIRECTIONS[name]))
     assert _validation_errors(dicom_standard, out / "RTDOSE.dcm") == []
+
+
+# --------------------------------------------------------------------------
+# DVH sequence of the RTDOSE
+# --------------------------------------------------------------------------
+
+
+def _gradient_dose(ct):
+    array = np.zeros(sitk.GetArrayFromImage(ct.cube_hu).shape)
+    array += np.linspace(0.0, 60.0, array.shape[-1])
+    image = sitk.GetImageFromArray(array)
+    image.CopyInformation(ct.cube_hu)
+    return image
+
+
+@pytest.fixture(scope="module")
+def dvh_export(dicom_patient, tmp_path_factory):
+    ct, cst = dicom_patient
+    dose = _gradient_dose(ct)
+    target = tmp_path_factory.mktemp("dvh_export")
+    DicomExporter(target, dvh=True).save(ct=ct, cst=cst, dose=dose)
+    return target, cst, dose
+
+
+def test_dvh_sequence_structure(dvh_export):
+    out, cst, _ = dvh_export
+    dose = _read(out / "RTDOSE.dcm")
+    struct = _read(out / "RTSTRUCT.dcm")
+
+    reference = dose.ReferencedStructureSetSequence[0]
+    assert reference.ReferencedSOPClassUID == struct.SOPClassUID
+    assert reference.ReferencedSOPInstanceUID == struct.SOPInstanceUID
+
+    assert len(dose.DVHSequence) == len(cst.vois)
+    roi_numbers = {r.ROIName: r.ROINumber for r in struct.StructureSetROISequence}
+    for voi, item in zip(cst.vois, dose.DVHSequence):
+        assert item.DVHType == "CUMULATIVE"
+        assert item.DoseUnits == "GY"
+        assert item.DoseType == dose.DoseType
+        assert item.DVHDoseScaling == 1
+        assert item.DVHVolumeUnits == "CM3"
+        assert len(item.DVHData) == 2 * item.DVHNumberOfBins
+        roi = item.DVHReferencedROISequence[0]
+        assert roi.ReferencedROINumber == roi_numbers[voi.name]
+        assert roi.DVHROIContributionType == "INCLUDED"
+        assert item.DVHMinimumDose <= item.DVHMeanDose <= item.DVHMaximumDose
+
+
+def test_dvh_sequence_matches_dvh_compute(dvh_export):
+    from pyRadPlan.analysis import DVH
+
+    out, cst, dose = dvh_export
+    ds = _read(out / "RTDOSE.dcm")
+    stored = sitk.GetImageFromArray(ds.pixel_array.astype(np.float64) * float(ds.DoseGridScaling))
+    stored.CopyInformation(dose)
+    spacing = stored.GetSpacing()
+    voxel_volume = spacing[0] * spacing[1] * spacing[2] / 1000.0
+
+    for voi, item in zip(cst.vois, ds.DVHSequence):
+        data = np.asarray(item.DVHData, dtype=float).reshape(-1, 2)
+        width = data[0, 0]
+        assert np.allclose(data[:, 0], width)
+        edges = np.arange(item.DVHNumberOfBins + 1) * width
+        reference = DVH.compute(
+            stored,
+            mask=voi.mask,
+            num_points=item.DVHNumberOfBins,
+            max_value=edges[-1],
+        )
+        expected = reference.cum_volume / 100.0 * (_voxels(voi) * voxel_volume)
+        assert np.allclose(data[:, 1], expected, rtol=1e-6, atol=1e-6 * expected[0])
+        assert data[0, 1] == pytest.approx(_voxels(voi) * voxel_volume, rel=1e-6)
+
+        selected = sitk.GetArrayFromImage(stored)[sitk.GetArrayFromImage(voi.mask).astype(bool)]
+        assert item.DVHMeanDose == pytest.approx(selected.mean(), rel=1e-6)
+        assert item.DVHMaximumDose == pytest.approx(selected.max(), rel=1e-6)
+        assert item.DVHMinimumDose == pytest.approx(selected.min(), rel=1e-6, abs=1e-9)
+
+
+def _voxels(voi):
+    return int(sitk.GetArrayFromImage(voi.mask).astype(bool).sum())
+
+
+def test_dvh_off_by_default(dicom_patient, tmp_path):
+    ct, cst = dicom_patient
+    out = _export(tmp_path, ct=ct, cst=cst, dose=_dose_like(ct))
+    ds = _read(out / "RTDOSE.dcm")
+    assert "DVHSequence" not in ds and "ReferencedStructureSetSequence" not in ds
+
+
+def test_dvh_resamples_masks_to_dose_grid(dicom_patient, tmp_path):
+    ct, cst = dicom_patient
+    coarse = sitk.Resample(
+        _gradient_dose(ct),
+        [max(s // 2, 1) for s in ct.cube_hu.GetSize()],
+        sitk.Transform(),
+        sitk.sitkLinear,
+        ct.cube_hu.GetOrigin(),
+        [2 * s for s in ct.cube_hu.GetSpacing()],
+        ct.cube_hu.GetDirection(),
+    )
+    DicomExporter(tmp_path / "out", dvh=True).save(ct=ct, cst=cst, dose=coarse)
+    ds = _read(tmp_path / "out" / "RTDOSE.dcm")
+    assert len(ds.DVHSequence) >= 1
+    voxel_volume = np.prod(coarse.GetSpacing()) / 1000.0
+    for item in ds.DVHSequence:
+        total = float(item.DVHData[1])
+        assert total > 0
+        assert total / voxel_volume == pytest.approx(round(total / voxel_volume), abs=1e-3)
+
+
+@pytest.mark.parametrize("kwargs", [{"structure_format": "seg"}, {"no_cst": True}])
+def test_dvh_without_rtstruct_warns_and_skips(dicom_patient, tmp_path, kwargs):
+    ct, cst = dicom_patient
+    no_cst = kwargs.pop("no_cst", False)
+    with pytest.warns(UserWarning, match="DVH export needs a structure set"):
+        DicomExporter(tmp_path / "out", dvh=True, **kwargs).save(
+            ct=ct, cst=None if no_cst else cst, dose=_dose_like(ct)
+        )
+    ds = _read(tmp_path / "out" / "RTDOSE.dcm")
+    assert "DVHSequence" not in ds
+
+
+def test_dvh_in_result_doses(plain_ct, tmp_path):
+    mask = np.zeros((4, 8, 8), dtype=np.uint8)
+    mask[1:3, 2:6, 2:6] = 1
+    mask = sitk.GetImageFromArray(mask)
+    mask.CopyInformation(plain_ct.cube_hu)
+    from pyRadPlan.cst import create_cst
+
+    cst = create_cst({"vois": [{"voi_type": "TARGET", "name": "PTV", "mask": mask}]}, ct=plain_ct)
+    DicomExporter(tmp_path / "out", dvh=True).save(
+        ct=plain_ct, cst=cst, result=_fake_result_for(plain_ct)
+    )
+    for name in ("RTDOSE_physical_dose.dcm", "RTDOSE_rbe_x_dose.dcm"):
+        ds = _read(tmp_path / "out" / name)
+        assert len(ds.DVHSequence) == 1
+        assert ds.DVHSequence[0].DoseType == ds.DoseType
+
+
+def _fake_result_for(ct):
+    rng = np.random.default_rng(1)
+
+    def img(scale):
+        image = sitk.GetImageFromArray((rng.random((4, 8, 8)) * scale).astype(np.float32))
+        image.CopyInformation(ct.cube_hu)
+        return image
+
+    return {"physical_dose": img(2.0), "rbe_x_dose": img(2.2)}
+
+
+def test_dvh_rtdose_validates(dicom_standard, dvh_export):
+    out, _, _ = dvh_export
+    assert _validation_errors(dicom_standard, out / "RTDOSE.dcm") == []

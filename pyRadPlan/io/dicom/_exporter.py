@@ -16,6 +16,7 @@ from ._export_common import RT_STRUCT_STORAGE, PlanReference, resolve_export_con
 from ._export_ct import export_ct
 from ._export_cst import export_cst, validate_roi_interpreted_types
 from ._export_dose import export_dose, export_result
+from ._export_dvh import DvhExport
 from ._export_photon_plan import export_photon_plan, is_photon_stf
 from ._export_plan import export_ion_plan, is_ion_stf
 from ._export_seg import export_seg
@@ -55,6 +56,11 @@ class DicomExporter(BaseExporter):
     export_plan : bool, default True
         With an ``stf`` (and spot weights for ions), also write the RT (Ion) Plan
         (``RTPLAN.dcm``) before the doses, which then reference it.
+    dvh : bool, default False
+        Add the RT DVH module to the RTDOSE files: one cumulative DVH per exported ROI
+        (1000 bins from zero to the maximum dose, volumes in cm3), computed on the dose grid
+        with the masks of the structures. Needs a ``cst`` exported as RTSTRUCT in the same
+        call, which the DVHs reference; otherwise a warning is issued and no DVHs are written.
 
     Notes
     -----
@@ -97,6 +103,7 @@ class DicomExporter(BaseExporter):
     roi_interpreted_types: Optional[dict[str, str]] = None
     per_beam_doses: bool = False
     export_plan: bool = True
+    dvh: bool = False
     #: Plan referenced by the exported RTDOSE files; set by the RT plan export.
     _plan_ref: Optional[PlanReference] = None
 
@@ -110,9 +117,11 @@ class DicomExporter(BaseExporter):
         roi_interpreted_types: Optional[dict[str, str]] = None,
         per_beam_doses: bool = False,
         export_plan: bool = True,
+        dvh: bool = False,
     ):
         super().__init__(path)
         self.export_plan = bool(export_plan)
+        self.dvh = bool(dvh)
         self.per_beam_doses = bool(per_beam_doses)
         self.overwrite = bool(overwrite)
         self.roi_interpreted_types = validate_roi_interpreted_types(roi_interpreted_types)
@@ -185,6 +194,17 @@ class DicomExporter(BaseExporter):
                     ),
                 )
 
+        dvh_export = None
+        if self.dvh:
+            if cst is not None and struct_ref is not None:
+                dvh_export = DvhExport(cst, struct_ref)
+            else:
+                warnings.warn(
+                    "DVH export needs a structure set exported as RTSTRUCT in the same call; "
+                    "skipping the DVHs.",
+                    stacklevel=4,
+                )
+
         summation = "PLAN"
         if pln is not None and getattr(pln, "dose_convention", "total") == "per_fraction":
             summation = "FRACTION"
@@ -195,7 +215,14 @@ class DicomExporter(BaseExporter):
                 result = _without_beams(result, self._plan_ref.skipped_beams)
 
         if dose is not None:
-            export_dose(dose, directory, ctx, summation_type=summation, plan_ref=self._plan_ref)
+            export_dose(
+                dose,
+                directory,
+                ctx,
+                summation_type=summation,
+                plan_ref=self._plan_ref,
+                dvh=dvh_export,
+            )
 
         if result is not None:
             written = export_result(
@@ -205,6 +232,7 @@ class DicomExporter(BaseExporter):
                 summation_type=summation,
                 per_beam=self.per_beam_doses,
                 plan_ref=self._plan_ref,
+                dvh=dvh_export,
             )
             if not written and ct is None and cst is None and dose is None:
                 raise ValueError("The result holds no dose quantity to export.")
