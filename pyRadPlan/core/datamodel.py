@@ -11,6 +11,24 @@ from pydantic.alias_generators import to_camel
 from copy import deepcopy
 
 import array_api_compat
+import SimpleITK as sitk
+
+
+def _images_equal(a: sitk.Image, b: sitk.Image) -> bool:
+    """Whether two images share geometry, pixel type and voxel values."""
+    if (
+        a.GetDimension() != b.GetDimension()
+        or a.GetSize() != b.GetSize()
+        or a.GetPixelID() != b.GetPixelID()
+    ):
+        return False
+    if not (
+        np.allclose(a.GetSpacing(), b.GetSpacing())
+        and np.allclose(a.GetOrigin(), b.GetOrigin())
+        and np.allclose(a.GetDirection(), b.GetDirection())
+    ):
+        return False
+    return bool(np.array_equal(sitk.GetArrayViewFromImage(a), sitk.GetArrayViewFromImage(b)))
 
 
 class PyRadPlanBaseModel(BaseModel):
@@ -45,22 +63,32 @@ class PyRadPlanBaseModel(BaseModel):
         If this fails, it compares the dictionaries. This is due to some issues
         comparing numpy arrays within the models.
         """
+        # SimpleITK's image comparison returns an image (always truthy) or raises for
+        # different dimensions, so models holding images are compared entry by entry.
+        if any(isinstance(v, sitk.Image) for v in self.__dict__.values()):
+            return self._eq_dicts(other)
         try:
             return super().__eq__(other)
-        except (ValueError, TypeError):
-            if self.__dict__.keys() != other.__dict__.keys():
+        except (ValueError, TypeError, RuntimeError):
+            return self._eq_dicts(other)
+
+    def _eq_dicts(self, other: Any) -> bool:
+        """Compare the field dictionaries entry by entry (arrays, images and nested dicts)."""
+        if not isinstance(other, PyRadPlanBaseModel):
+            return False
+        if self.__dict__.keys() != other.__dict__.keys():
+            return False
+        stack = [(self.__dict__, other.__dict__)]
+        while stack:
+            dict_a, dict_b = stack.pop()
+            if dict_a.keys() != dict_b.keys():
                 return False
-            stack = [(self.__dict__, other.__dict__)]
-            while stack:
-                dict_a, dict_b = stack.pop()
-                if dict_a.keys() != dict_b.keys():
+            for key in dict_a:
+                if isinstance(dict_a[key], dict) and isinstance(dict_b[key], dict):
+                    stack.append((dict_a[key], dict_b[key]))
+                elif not self._eq_dict_entry(dict_a, dict_b, key):
                     return False
-                for key in dict_a:
-                    if isinstance(dict_a[key], dict) and isinstance(dict_b[key], dict):
-                        stack.append((dict_a[key], dict_b[key]))
-                    elif not self._eq_dict_entry(dict_a, dict_b, key):
-                        return False
-            return True
+        return True
 
     def __ne__(self, other: Any) -> bool:
         """
@@ -76,6 +104,12 @@ class PyRadPlanBaseModel(BaseModel):
     def _eq_dict_entry(self, dict_a: dict, dict_b: dict, key: Any) -> bool:
         """Compare two dictionary entries for equality."""
 
+        if isinstance(dict_a[key], sitk.Image) or isinstance(dict_b[key], sitk.Image):
+            return (
+                isinstance(dict_a[key], sitk.Image)
+                and isinstance(dict_b[key], sitk.Image)
+                and _images_equal(dict_a[key], dict_b[key])
+            )
         if (
             isinstance(dict_a[key], np.ndarray)
             and isinstance(dict_b[key], np.ndarray)

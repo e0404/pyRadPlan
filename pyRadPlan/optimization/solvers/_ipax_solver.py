@@ -140,8 +140,7 @@ class OptimizerIpax(NonLinearOptimizer):
         if b is None:
             return None
         # Bounds must share x0's namespace/device. Under force_cpu_inner_solve x0
-        # is round-tripped to NumPy, so deriving the device from x0 (rather than
-        # self.device, which holds the original backend) keeps them consistent.
+        # is round-tripped to NumPy, so deriving the device from x0 keeps them consistent.
         barr = xp.asarray(b, dtype=x0.dtype, device=array_api_compat.device(x0))
         if barr.ndim == 0:
             value = float(barr)
@@ -175,9 +174,6 @@ class OptimizerIpax(NonLinearOptimizer):
         return not cont or self._keyboard_listener.stop_event.is_set()
 
     def _solve_problem(self, x0: Array) -> tuple[Array, dict]:
-        if isinstance(x0, list):
-            x0 = np.asarray(x0)
-
         xp = array_api_compat.array_namespace(x0)
 
         objective = self.objective
@@ -245,7 +241,7 @@ class OptimizerIpax(NonLinearOptimizer):
             "status": result.status.value,
             "message": result.message,
             "objective": float(result.objective),
-            "num_iter": int(result.n_iter),
+            "num_iter": max(int(result.n_iter) - 1, 0),  # ipax counts starting point
             "kkt_error": float(result.kkt_error),
             "solve_time": float(result.solve_time),
         }

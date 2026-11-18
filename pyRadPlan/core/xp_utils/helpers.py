@@ -1612,6 +1612,13 @@ def _rebuild_scipy_csc_in_namespace(
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
         return torch.sparse_csc_tensor(indptr, indices, data, size=shape)
 
+    jsparse = loaded_backend("jax.experimental.sparse")
+    if array_api_compat.is_jax_namespace(xp_new) and jsparse is not None:
+        jnp = loaded_backend("jax.numpy")
+        return jsparse.CSC(
+            (data, indices.astype(jnp.int32), indptr.astype(jnp.int32)), shape=shape
+        )
+
     raise TypeError(
         f"Rebuilding a CSC sparse matrix in namespace '{xp_new.__name__}' is not yet supported."
     )

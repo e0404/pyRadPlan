@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 
 import numpy as np
 
@@ -8,6 +8,7 @@ from pyRadPlan.cst import validate_cst, StructureSet
 from pyRadPlan.plan import validate_pln, Plan
 from pyRadPlan.dij import Dij
 from pyRadPlan.result import PlanResult
+from pyRadPlan.scenarios import ScenarioModel, ScenarioSet
 
 from .engines import get_engine
 
@@ -17,6 +18,7 @@ def calc_dose_influence(
     cst: Union[StructureSet, dict],
     stf: Union[SteeringInformation, dict],
     pln: Union[Plan, dict],
+    scenarios: Optional[Union[str, dict, ScenarioModel, ScenarioSet]] = None,
 ) -> Dij:
     """
     Calculate the dose influence matrix.
@@ -29,6 +31,10 @@ def calc_dose_influence(
         A CST object.
     stf : STF
         A STF object.
+    pln : Plan
+        The plan.
+    scenarios : str or dict or ScenarioModel or ScenarioSet, optional
+        Scenarios to compute instead of the plan's scenario model.
 
     Returns
     -------
@@ -43,7 +49,7 @@ def calc_dose_influence(
 
     engine = get_engine(pln)
 
-    dij = engine.calc_dose_influence(ct, cst, stf)
+    dij = engine.calc_dose_influence(ct, cst, stf, scenarios=scenarios)
     return dij
 
 
@@ -53,6 +59,7 @@ def calc_dose_forward(
     stf: Union[SteeringInformation, dict],
     pln: Union[Plan, dict],
     weights: np.ndarray = None,
+    scenarios: Optional[Union[str, dict, ScenarioModel, ScenarioSet]] = None,
 ) -> PlanResult:
     """
     Calculate forward-dose results on the CT grid.
@@ -65,8 +72,12 @@ def calc_dose_forward(
         A CST object.
     stf : STF
         A STF object.
+    pln : Plan
+        The plan.
     weights : np.ndarray
         The weights for the beamlets.
+    scenarios : str or dict or ScenarioModel or ScenarioSet, optional
+        Scenarios to compute instead of the plan's scenario model.
 
     Returns
     -------
@@ -80,4 +91,4 @@ def calc_dose_forward(
 
     engine = get_engine(pln)
 
-    return engine.calc_dose_forward(ct, cst, stf, weights)
+    return engine.calc_dose_forward(ct, cst, stf, weights, scenarios=scenarios)

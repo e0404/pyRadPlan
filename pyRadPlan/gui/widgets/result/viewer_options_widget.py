@@ -73,7 +73,7 @@ class ViewerOptionsWidget(QWidget):
 
     def _build_ct_window_controls(self, layout: QVBoxLayout) -> None:
         """Add CT preset combo and center/width spin+slider pairs to layout."""
-        layout.addWidget(QLabel("CT Window:"))
+        layout.addWidget(QLabel("CT window:"))
         self.ct_preset_combo = QComboBox()
         self.ct_preset_combo.addItems(["Custom", "Abdomen", "Lung", "Bone", "Brain"])
         self.ct_preset_combo.currentTextChanged.connect(self._on_ct_preset_changed)
@@ -135,14 +135,14 @@ class ViewerOptionsWidget(QWidget):
 
     def _build_opacity_reset(self, layout: QVBoxLayout) -> None:
         """Add opacity slider and reset button to layout."""
-        layout.addWidget(QLabel("Overlay Opacity:"))
+        layout.addWidget(QLabel("Overlay opacity:"))
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(40)
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         layout.addWidget(self.opacity_slider)
 
-        self.reset_btn = QPushButton("Reset Options")
+        self.reset_btn = QPushButton("Reset options")
         self.reset_btn.setToolTip("Reset all viewer options to defaults")
         self.reset_btn.clicked.connect(self.reset_requested)
         layout.addWidget(self.reset_btn)

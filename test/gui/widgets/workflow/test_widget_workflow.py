@@ -750,7 +750,7 @@ def _answer_message_boxes(monkeypatch, button_text):
 
     def exec_(box):
         shown.append(f"{box.text()}\n{box.informativeText()}")
-        next(b for b in box.buttons() if b.text() == button_text).click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == button_text).click()
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", exec_)
@@ -987,7 +987,7 @@ def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
 
     def exec_(box):
         shown.append([b.text() for b in box.buttons()])
-        next(b for b in box.buttons() if b.text() == "Cancel").click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == "Cancel").click()
         return 0
 
     from PySide6.QtWidgets import QMessageBox
@@ -999,3 +999,154 @@ def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
     assert len(shown) == 1
     assert not any(text.startswith("Use the base data's model") for text in shown[0])
     assert runs == []
+
+
+def _optimize_setup(monkeypatch, scenarios, calls, objectives=()):
+    """A workflow widget whose optimization runs synchronously on a stand-in dij."""
+    from types import SimpleNamespace
+
+    from pyRadPlan.plan import PhotonPlan
+
+    def compute_result_ct_grid(weights, **kwargs):
+        calls.append(kwargs)
+        return create_result(
+            {
+                "physical_dose": _dose_image(),
+                "physical_dose_scenario": [_dose_image(), _dose_image()],
+                "scenario_labels": ("a", "b"),
+            },
+            fluence=weights,
+        )
+
+    optimized = create_result(
+        {"physical_dose": _dose_image()}, fluence=np.ones(2), info={"status": "done"}
+    )
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    voi = SimpleNamespace(name="t", objectives=list(objectives))
+    ws.set_many(
+        pln=PhotonPlan(),
+        cst=SimpleNamespace(vois=[voi]),
+        dij=SimpleNamespace(
+            bio_model=object(),
+            alpha_dose=None,
+            scenarios=None if scenarios is None else list(range(scenarios)),
+            compute_result_ct_grid=compute_result_ct_grid,
+        ),
+    )
+    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: optimized)
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+    return ws, w, optimized
+
+
+@pytest.mark.parametrize(("scenarios", "expected"), [(None, False), (1, False), (3, True)])
+def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, expected):
+    calls = []
+    ws, w, optimized = _optimize_setup(monkeypatch, scenarios, calls)
+
+    w._on_optimize()
+
+    assert bool(calls) is expected
+    if expected:
+        assert calls[0]["scenarios"] is True
+        assert ws.result.stored_scenario_quantities == ["physical_dose"]
+    assert ws.result.info == optimized.info
+    assert "physical_dose" in ws.result
+
+
+def test_recalculate_drops_stale_results_per_scenario(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    forward = Mock(return_value=_result())
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    w._saved_tags = ["saved"]
+    ws.result = _result_with(
+        ws.result,
+        scenario_quantities={
+            "physical_dose": [_dose_image(), _dose_image()],
+            "physical_dose_saved": [_dose_image(), _dose_image()],
+        },
+    )
+    snapshot = ws.result.scenario_quantities["physical_dose_saved"]
+
+    w._on_recalc_dose()
+
+    assert "physical_dose" not in ws.result.scenario_quantities
+    assert ws.result.scenario_quantities["physical_dose_saved"] == snapshot
+
+
+def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.result = {
+        "physical_dose": _dose_image(),
+        "physical_dose_scenario": [_dose_image(), None],
+    }
+    scenario_doses = ws.result.scenario_quantities["physical_dose"]
+    names = iter(["scenario", "robust"])
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kw: (next(names), True))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    w._on_save_result()  # "scenario" would read as the per-scenario suffix
+    assert len(warnings) == 1
+    assert ws.result.stored_quantities == ["physical_dose"]
+    assert ws.result.stored_scenario_quantities == ["physical_dose"]
+
+    w._on_save_result()
+    assert ws.result.scenario_quantities["physical_dose_robust"] == scenario_doses
+    assert w._is_tagged("physical_dose_robust")
+    assert not w._is_tagged("physical_dose")
+
+    # Snapshots per scenario survive a re-optimization
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    w._carry_forward_extras(fresh, ws.result)
+    assert fresh.stored_scenario_quantities == ["physical_dose_robust"]
+
+
+def test_optimize_keeps_every_result_per_scenario_with_their_labels(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    objectives = [SimpleNamespace(quantity="physical_dose")]
+    ws, w, _ = _optimize_setup(monkeypatch, 2, calls, objectives)
+
+    w._on_optimize()
+
+    # Also the RBE dose the viewer shows first, though the objectives are on physical dose
+    assert calls[0].get("scenario_quantities") is None
+    assert ws.result.scenario_labels == ("a", "b")
+
+
+def test_recalculate_keeps_the_scenarios_of_every_quantity(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    dose = _dose_image()
+    forward = Mock(
+        return_value=create_result(
+            {
+                "physical_dose": dose,
+                "rbe_x_dose": dose,
+                "physical_dose_scenario": [dose, dose],
+                "rbe_x_dose_scenario": [dose, dose],
+                "let_scenario": [dose, dose],
+                "scenario_labels": ("from plan 0", "from plan 1"),
+            }
+        )
+    )
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    ws.result = ws.result.model_copy(update={"scenario_labels": ("stale",)})
+
+    w._on_recalc_dose()
+
+    assert ws.result.scenario_labels == ("from plan 0", "from plan 1")
+    # Not only those the objectives evaluate: the viewer shows a proton plan's RBE dose first
+    for key in ("physical_dose", "rbe_x_dose", "let"):
+        assert [q.values for q in ws.result.scenario_quantities[key]] == [dose, dose]

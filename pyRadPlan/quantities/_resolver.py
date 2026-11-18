@@ -1,6 +1,7 @@
 """Resolver that builds the dependency graph of fluence-dependent quantities."""
 
 import logging
+from collections.abc import Mapping
 from typing import Iterable, Optional
 
 from pyRadPlan.dij import Dij
@@ -28,6 +29,17 @@ class QuantityResolver:
     - Otherwise mode is ``"indirect"``; both ``required_dependencies`` and
       ``optional_dependencies`` are resolved recursively.
     - If neither path is available, a ``ValueError`` is raised.
+
+    Parameters
+    ----------
+    dij : Dij
+        The dose influence data.
+    scenarios : sequence of int or mapping of str to sequence of int, optional
+        Scenario indices every resolved quantity computes, or per requested identifier the
+        indices that quantity computes. With a mapping, :meth:`resolve` widens every
+        dependency to the union of its consumers' scenarios (plus its own entry), so that a
+        consumer never reads a scenario its dependency did not evaluate; quantities neither
+        listed nor used by a listed one compute their default scenarios.
     """
 
     def __init__(self, dij: Dij, *, scenarios=None, _dij_already_in_namespace: bool = False):
@@ -75,7 +87,9 @@ class QuantityResolver:
         try:
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
-            inst = cls(self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios)
+            inst = cls(
+                self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios_of(identifier)
+            )
         finally:
             self._resolving.discard(identifier)
 
@@ -84,7 +98,34 @@ class QuantityResolver:
 
     def resolve(self, identifiers: Iterable[str]) -> list[FluenceDependentQuantity]:
         """Resolve every identifier and return them in input order."""
-        return [self.get(i) for i in identifiers]
+        resolved = [self.get(i) for i in identifiers]
+        if isinstance(self._scenarios, Mapping):
+            self._propagate_scenarios()
+        return resolved
+
+    def _scenarios_of(self, identifier: str):
+        if isinstance(self._scenarios, Mapping):
+            return self._scenarios.get(identifier)
+        return self._scenarios
+
+    def _propagate_scenarios(self) -> None:
+        """Give each dependency the union of its consumers' scenarios and its own entry."""
+        needed = {
+            identifier: {int(i) for i in self._scenarios[identifier]}
+            for identifier in self._instances
+            if identifier in self._scenarios
+        }
+        # Instances are stored after their dependencies, so consumers come first in reverse.
+        for identifier, quantity in reversed(self._instances.items()):
+            if identifier not in needed:
+                continue
+            for dep_id in quantity.dependencies:
+                needed.setdefault(dep_id, set()).update(needed[identifier])
+        for identifier, indices in needed.items():
+            quantity = self._instances[identifier]
+            scenarios = sorted(indices)
+            if quantity.scenarios.tolist() != scenarios:
+                quantity.scenarios = scenarios
 
     def reachable(
         self, roots: Iterable[FluenceDependentQuantity]

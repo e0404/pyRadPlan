@@ -8,6 +8,7 @@ confusion of several look-alike load/import buttons.
 
 from __future__ import annotations
 
+import os
 from typing import Optional, get_args
 
 from PySide6.QtCore import Signal
@@ -15,9 +16,12 @@ from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QMenu, QWidget
 
 from pyRadPlan._settings import GuiSettings, GuiUiMode, get_settings
+from pyRadPlan.core import user_base_data_dir
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
+from pyRadPlan.io import list_phantoms
 
+from ._base_data import open_folder_in_browser
 from ._settings import apply_settings_values
 
 #: Tooltip per GUI presentation mode (``settings.gui.ui_mode``).
@@ -69,6 +73,12 @@ class FileMenu(QMenu):
         )
         self._act_load_folder.triggered.connect(self._wf.load_folder)
 
+        self._phantom_menu = self.addMenu("Open Example Phantom")
+        self._phantom_menu.setToolTipsVisible(True)
+        # Rebuilt on every opening, so phantoms copied into a folder appear without a restart.
+        self._phantom_menu.aboutToShow.connect(self._rebuild_phantom_menu)
+        self._rebuild_phantom_menu()
+
         self.addSeparator()
         self._act_save_plan = self.addAction("Save Plan…")
         self._act_save_plan.triggered.connect(self._wf.save_plan)
@@ -116,6 +126,29 @@ class FileMenu(QMenu):
         self._act_save_cst.setEnabled(self._ws.has("cst"))
         self._act_save_result.setEnabled(self._ws.has("result"))
         self._act_save.setEnabled(self._ws.has("ct"))
+
+    def _rebuild_phantom_menu(self) -> None:
+        """List the phantoms of all phantom folders, grouped by source (see list_phantoms)."""
+        menu = self._phantom_menu
+        menu.clear()
+        previous_source = None
+        for entry in list_phantoms():
+            if previous_source is not None and entry.source != previous_source:
+                menu.addSeparator()
+            previous_source = entry.source
+            name = os.path.splitext(entry.name)[0]
+            action = menu.addAction(name)
+            action.setData(name)
+            if entry.source == "bundled":
+                action.setToolTip("Shipped with pyRadPlan")
+            else:
+                action.setToolTip(str(entry.path))
+            action.triggered.connect(lambda checked=False, n=name: self._wf.load_phantom(n))
+        menu.addSeparator()
+        open_folder = menu.addAction("Open Phantom Folder")
+        folder = user_base_data_dir("phantoms")
+        open_folder.setToolTip(f"Phantoms (.mat, .npz) copied to {folder} are listed here")
+        open_folder.triggered.connect(lambda checked=False: open_folder_in_browser(folder))
 
     def refresh_ui_mode(self) -> None:
         """Check the *UI Mode* entry matching the configured ``settings.gui.ui_mode``."""

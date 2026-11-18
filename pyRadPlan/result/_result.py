@@ -11,7 +11,6 @@ import logging
 
 from pydantic import (
     Field,
-    PrivateAttr,
     model_validator,
     field_serializer,
     field_validator,
@@ -30,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 class BeamAccessor(Mapping):
     """
-    A class to access beam quantities in a PlanResult object.
+    A class to access beam (or scenario) quantities in a PlanResult object.
 
-    Provides attribute and dict-like access to per-beam quantity distributions.
+    Provides attribute and dict-like access to per-beam (per-scenario) quantity distributions.
     """
 
     def __init__(self, beam_quantities: dict):
@@ -78,6 +77,11 @@ class PlanResult(PyRadPlanBaseModel):
     beam_quantities : Dict[str, List[QuantityDistribution]]
         A dictionary of beam quantities, where the key is the quantity name and the value is a list of QuantityDistribution objects.
         Beam quantities are called by e.g. beam.physical_dose[i]
+    scenario_quantities : Dict[str, List[Optional[QuantityDistribution]]]
+        Per-scenario quantities, one entry per scenario slot of the Dij (``None`` for scenarios
+        not computed). Called by e.g. ``scenario.physical_dose[i]``
+    scenario_labels : tuple[str, ...], optional
+        The labels of the scenarios of ``scenario_quantities``, by flat scenario index.
     sequence : Sequence
         The sequencing information.
 
@@ -87,6 +91,8 @@ class PlanResult(PyRadPlanBaseModel):
         Returns the list of stored quantities.
     stored_beam_quantities : List[str]
         Returns the list of stored beam quantities.
+    stored_scenario_quantities : List[str]
+        Returns the list of stored per-scenario quantities.
     add_quantity(key: str, value: Union[dict, QuantityDistribution], **kwargs) -> None
         Adds or updates one quantity entry
     add_beam_quantity(key: str, value: Union[list[dict], list[QuantityDistribution]], **kwargs) -> None
@@ -97,6 +103,10 @@ class PlanResult(PyRadPlanBaseModel):
 
     quantities: Dict[str, QuantityDistribution] = Field(default_factory=dict)
     beam_quantities: Dict[str, List[QuantityDistribution]] = Field(default_factory=dict)
+    scenario_quantities: Dict[str, List[Optional[QuantityDistribution]]] = Field(
+        default_factory=dict
+    )
+    scenario_labels: Optional[tuple[str, ...]] = None
 
     # "w" is matRad's name for the beamlet weights.
     fluence: Optional[np.ndarray] = Field(default=None, alias="w")
@@ -106,8 +116,6 @@ class PlanResult(PyRadPlanBaseModel):
     used_optimizer: Union[str, dict[str, Any]] = Field(default="")
 
     sequence: Optional[Sequence] = Field(default=None, alias="sequencing")
-
-    _beam_accessor: Optional[BeamAccessor] = PrivateAttr(default=None)
 
     @field_validator("info", "used_optimizer", mode="before")
     @classmethod
@@ -132,11 +140,20 @@ class PlanResult(PyRadPlanBaseModel):
         return list(self.beam_quantities.keys()) if self.beam_quantities else []
 
     @property
+    def stored_scenario_quantities(self) -> List[str]:
+        """Return the list of stored per-scenario quantities."""
+        return list(self.scenario_quantities.keys()) if self.scenario_quantities else []
+
+    @property
     def beam(self) -> BeamAccessor:
         """Per-beam quantities, accessible as ``result.beam.physical_dose[i]``."""
-        if self._beam_accessor is None:
-            self._beam_accessor = BeamAccessor(self.beam_quantities)
-        return self._beam_accessor
+        # Not cached: ``model_copy(update=...)`` would carry over an accessor of the old dict.
+        return BeamAccessor(self.beam_quantities)
+
+    @property
+    def scenario(self) -> BeamAccessor:
+        """Per-scenario quantities, accessible as ``result.scenario.physical_dose[i]``."""
+        return BeamAccessor(self.scenario_quantities)
 
     @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
@@ -190,24 +207,30 @@ class PlanResult(PyRadPlanBaseModel):
 
         # This here is necessary because of dynamic keys
         fields = cls.model_fields
-        static_field_names = {n for n in fields if n not in {"quantities", "beam_quantities"}}
+        containers = {"quantities", "beam_quantities", "scenario_quantities"}
+        static_field_names = {n for n in fields if n not in containers}
         static_aliases = {
-            f.alias
-            for f in fields.values()
-            if f.alias and f.alias not in {"quantities", "beam_quantities"}
+            f.alias for f in fields.values() if f.alias and f.alias not in containers
         }
         static_keys = static_field_names.union(static_aliases)
 
         # Place dynamic values into temporary public keys.
-        quantities_tmp = {}
-        beam_quantities_tmp = {}
+        containers_tmp: dict[str, dict] = {name: {} for name in containers}
+        quantities_tmp = containers_tmp["quantities"]
+        beam_quantities_tmp = containers_tmp["beam_quantities"]
+        scenario_quantities_tmp = containers_tmp["scenario_quantities"]
         for key, value in list(data.items()):
             if key in static_keys:
                 continue
-            if key == "quantities":
-                quantities_tmp.update(value)
-            elif key == "beam_quantities":
-                beam_quantities_tmp.update(value)
+            if key in containers_tmp:
+                containers_tmp[key].update(value)
+            elif isinstance(value, list) and key.endswith("_scenario"):
+                scenario_quantities_tmp[key.removesuffix("_scenario")] = [
+                    None
+                    if v is None
+                    else QuantityDistribution.model_validate(v, context=info.context)
+                    for v in value
+                ]
             elif isinstance(value, list):
                 beam_quantities_tmp[key.replace("_beam", "")] = [
                     QuantityDistribution.model_validate(v, context=info.context) for v in value
@@ -219,8 +242,7 @@ class PlanResult(PyRadPlanBaseModel):
                 )
             data.pop(key)
 
-        data["quantities"] = quantities_tmp
-        data["beam_quantities"] = beam_quantities_tmp
+        data.update(containers_tmp)
 
         return data
 
@@ -243,6 +265,11 @@ class PlanResult(PyRadPlanBaseModel):
         elif name == "beam_quantities":
             raise AttributeError(
                 "Direct modification of 'beam_quantities' is not allowed. Use add_beam_quantity() instead."
+            )
+        elif name == "scenario_quantities":
+            raise AttributeError(
+                "Direct modification of 'scenario_quantities' is not allowed. "
+                "Use add_scenario_quantity() instead."
             )
         super().__setattr__(name, value)
 
@@ -331,6 +358,23 @@ class PlanResult(PyRadPlanBaseModel):
         else:
             raise ValueError("No beam quantity provided to add_beam_quantity.")
 
+    def add_scenario_quantity(
+        self, key: str, value: list[Union[dict, QuantityDistribution, None]]
+    ) -> None:
+        """
+        Add or update a per-scenario quantity.
+
+        Parameters
+        ----------
+        key : str
+            The name of the quantity.
+        value : list
+            One entry per scenario slot; ``None`` for scenarios without a result.
+        """
+        self.scenario_quantities[key] = [
+            None if v is None else QuantityDistribution.model_validate(v) for v in value
+        ]
+
     @field_serializer("quantities")
     def custom_quantities_serializer(self, v: Dict, info: SerializationInfo) -> Any:
         """Serialize the dose fields in various contexts."""
@@ -360,6 +404,14 @@ class PlanResult(PyRadPlanBaseModel):
                         numpy_array = np.transpose(sitk.GetArrayFromImage(beam.values), (1, 2, 0))
                         dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array
                 return dict_tmp
+            return None
+        return v
+
+    @field_serializer("scenario_quantities", "scenario_labels")
+    def custom_scenario_serializer(self, v: Any, info: SerializationInfo) -> Any:
+        """Leave out the per-scenario results for matRad, whose layout differs."""
+        context = info.context
+        if context and context.get("matRad") == "mat-file":
             return None
         return v
 

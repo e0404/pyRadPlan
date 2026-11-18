@@ -311,3 +311,50 @@ def test_missing_distribution():
     """Test handling of missing HU distribution."""
     with pytest.raises(ValidationError):
         PlanResult.model_validate({})
+
+
+def test_scenario_quantities_from_dict(sample_image):
+    """``"<key>_scenario"`` lists become per-scenario quantities, keeping empty slots."""
+    result = create_result(
+        {
+            "physical_dose": sample_image,
+            "physical_dose_beam": [sample_image],
+            "physical_dose_scenario": [sample_image, None, sample_image],
+            "scenario_labels": ("nominal", "derived", "setup"),
+        }
+    )
+    assert result.stored_quantities == ["physical_dose"]
+    assert result.stored_beam_quantities == ["physical_dose"]
+    assert result.stored_scenario_quantities == ["physical_dose"]
+    assert isinstance(result.scenario.physical_dose[0], QuantityDistribution)
+    assert result.scenario.physical_dose[1] is None
+    assert result.scenario_labels == ("nominal", "derived", "setup")
+
+    with pytest.raises(AttributeError):
+        result.scenario_quantities = {}
+
+    result.add_scenario_quantity("let", [None, sample_image])
+    assert result.scenario["let"][0] is None
+
+
+def test_accessors_follow_a_copy(sample_image):
+    result = create_result(
+        {"physical_dose_beam": [sample_image], "physical_dose_scenario": [sample_image]}
+    )
+    assert "physical_dose" in result.beam and "physical_dose" in result.scenario
+    copy = result.model_copy(update={"beam_quantities": {}, "scenario_quantities": {}})
+    assert "physical_dose" not in copy.beam and "physical_dose" not in copy.scenario
+
+
+def test_to_matrad_leaves_out_scenario_quantities(sample_image):
+    result = create_result(
+        {
+            "physical_dose": sample_image,
+            "physical_dose_scenario": [sample_image, None],
+            "scenario_labels": ("a", "b"),
+        }
+    )
+    matrad_dict = result.to_matrad()
+    assert "physicalDose" in matrad_dict
+    assert "scenarioQuantities" not in matrad_dict
+    assert "scenarioLabels" not in matrad_dict

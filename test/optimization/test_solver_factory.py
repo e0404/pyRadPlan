@@ -1,8 +1,15 @@
 import pytest
 import logging
 
+import numpy as np
+
 from pyRadPlan.core import field_constraints
-from pyRadPlan.optimization.solvers import get_available_solvers, get_solver, SolverBase
+from pyRadPlan.optimization.solvers import (
+    get_available_solvers,
+    get_solver,
+    register_solver,
+    SolverBase,
+)
 
 
 def test_get_available_solvers():
@@ -103,3 +110,33 @@ def test_solver_config_models_hide_the_wiring():
         }
         assert {"objective", "gradient", "bounds", "status_callback"} <= hidden
         assert "max_iter" in fields and "max_iter" not in hidden
+
+
+def test_register_solver_requires_short_name():
+    """Regression: the base class assigned `ClassVar[str]` as value, so the check never fired."""
+
+    class Unnamed(SolverBase):
+        name = "Unnamed"
+
+        def _solve_problem(self, x0):
+            return x0, {}
+
+        def _callback(self, *args):
+            return None
+
+    with pytest.raises(ValueError, match="short_name"):
+        register_solver(Unnamed)
+    assert Unnamed not in get_available_solvers().values()
+
+
+@pytest.mark.parametrize("short_name", sorted(get_available_solvers()))
+def test_solvers_accept_a_list_as_x0(short_name):
+    """Regression: the solvers dropped their own list conversion, so a list x0 raised."""
+    solver = get_solver(short_name)
+    solver.max_iter = 50
+    solver.objective = lambda x: ((x - 2.0) ** 2).sum()
+    solver.gradient = lambda x: 2.0 * (x - 2.0)
+
+    x, _ = solver.solve([1.0, 1.0])
+
+    assert np.allclose(np.asarray(x), 2.0, atol=1e-3)

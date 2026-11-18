@@ -10,8 +10,13 @@ class SqrtBetaDose(FluenceDependentQuantity):
     identifier = "sqrt_beta_dose"
     biological = True
     name = "SqrtBetaDose"
+    # sqrt(n) keeps the total-course effect equal to alpha_dose + sqrt_beta_dose**2.
+    fraction_exponent = 0.5
     optional_dependencies = ("physical_dose",)
     indirect_dij_fields = ("betax",)
+
+    def uses_voxel_params(self) -> bool:
+        return self._mode == "indirect" or super().uses_voxel_params()
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         if self._mode == "direct":
@@ -20,18 +25,17 @@ class SqrtBetaDose(FluenceDependentQuantity):
             )
         # Indirect path: sqrt_beta_x * physical_dose
         dose = self._deps["physical_dose"].compute(self._w_cache).flat[scenario_index]
+        column = self._dij.voxel_param_column(scenario_index)
         return self.array_backend.asarray(
-            self.array_backend.sqrt(self._dij.betax[:, scenario_index]) * dose, copy=False
+            self.array_backend.sqrt(self._dij.betax[:, column]) * dose, copy=False
         )
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
-        # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
         if self._mode == "direct":
-            return self.array_backend.asarray(
-                self._dij.sqrt_beta_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
-            )
+            return self._backproject(self._dij.sqrt_beta_dose.flat[scenario_index], d_quantity)
         # Chain rule for sqrt_beta_x * Dose: d/dw = sqrt_beta_x * dDose/dw, scaled by d_quantity.
-        scaled = self.array_backend.sqrt(self._dij.betax[:, scenario_index]) * d_quantity
+        column = self._dij.voxel_param_column(scenario_index)
+        scaled = self.array_backend.sqrt(self._dij.betax[:, column]) * d_quantity
         return self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
             scaled, scenario_index
         )

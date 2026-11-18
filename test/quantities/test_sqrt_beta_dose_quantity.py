@@ -85,7 +85,7 @@ def test_sqrt_beta_dose_dense(sample_dij_dense):
     ret_deriv = sqrt_beta_dose.compute_chain_derivative(
         xp.ones((1, 125), dtype=xp.float32), fluence
     )
-    assert np.array_equal(sqrt_beta_dose._w_grad_cache, fluence)
+    assert np.array_equal(sqrt_beta_dose._grad_fluence, fluence)
     assert np.array_equal(sqrt_beta_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_dense.sqrt_beta_dose.dtype
@@ -112,7 +112,7 @@ def test_sqrt_beta_dose_sparse(sample_dij_sparse):
     ret_deriv = sqrt_beta_dose.compute_chain_derivative(
         xp.ones((1, 125), dtype=xp.float32), fluence
     )
-    assert np.array_equal(sqrt_beta_dose._w_grad_cache, fluence)
+    assert np.array_equal(sqrt_beta_dose._grad_fluence, fluence)
     assert np.array_equal(sqrt_beta_dose._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_sparse.sqrt_beta_dose.dtype

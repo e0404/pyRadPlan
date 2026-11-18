@@ -210,3 +210,57 @@ def test_choose_device_torch_cpu_fallback():
             assert choose_device(xp) == torch.device("cpu")
     finally:
         settings.xp.prefer_gpu = prefer_gpu
+
+
+@pytest.fixture
+def cpu_only(monkeypatch):
+    """Simulate an install without any GPU-capable backend, with a GPU still preferred."""
+    from pyRadPlan.core import xp_utils
+
+    for name in ("cupy_available", "pytorch_gpu_available", "jax_gpu_available"):
+        monkeypatch.setattr(xp_utils, name, lambda: False)
+    settings = get_settings().xp
+    monkeypatch.setattr(settings, "prefer_gpu", True)
+    monkeypatch.setattr(settings, "preferred_gpu_array_backend", None)
+    return settings
+
+
+def test_choose_device_cpu_only_fallback_is_silent(cpu_only, caplog):
+    """Without any GPU backend installed, numpy is the only choice: no warning, just a debug log."""
+    import warnings
+
+    import array_api_compat.numpy as xp
+
+    with caplog.at_level("DEBUG", logger="pyRadPlan.core.xp_utils"), warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert choose_device(xp) is None
+    assert any("Falling back to CPU" in record.message for record in caplog.records)
+
+
+def test_choose_device_warns_when_gpu_backend_pinned(cpu_only):
+    """An explicitly requested GPU backend that cannot be served is a real mismatch."""
+    import array_api_compat.numpy as xp
+
+    cpu_only.preferred_gpu_array_backend = "cupy"
+    with pytest.warns(UserWarning, match="Falling back to CPU"):
+        assert choose_device(xp) is None
+
+
+def test_choose_device_warns_for_gpu_capable_namespace_without_gpu(cpu_only, monkeypatch):
+    """A torch/jax/cupy namespace whose GPU is unavailable still warns."""
+    from pyRadPlan.core import xp_utils
+    import array_api_compat.numpy as xp
+
+    monkeypatch.setattr(xp_utils, "_is_gpu_capable_namespace", lambda _xp: True)
+    with pytest.warns(UserWarning, match="Falling back to CPU"):
+        assert choose_device(xp) is None
+
+
+def test_choose_device_warns_when_a_gpu_backend_exists_but_namespace_is_cpu(cpu_only, monkeypatch):
+    """A GPU backend is available, yet the given namespace cannot use it: worth a warning."""
+    from pyRadPlan.core import xp_utils
+    import array_api_compat.numpy as xp
+
+    monkeypatch.setattr(xp_utils, "cupy_available", lambda: True)
+    with pytest.warns(UserWarning, match="Falling back to CPU"):
+        assert choose_device(xp) is None

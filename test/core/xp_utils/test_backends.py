@@ -58,6 +58,7 @@ def test_cpu_namespace_choice_probes_no_gpu_backend():
         "import pyRadPlan\n"
         "from pyRadPlan.core import xp_utils\n"
         "pyRadPlan.settings.xp.prefer_gpu = False\n"
+        "pyRadPlan.settings.xp.preferred_cpu_array_backend = 'numpy'\n"
         "assert xp_utils.choose_array_api_namespace().__name__ == 'array_api_compat.numpy'\n"
         f"loaded = [m for m in {_GPU_BACKENDS!r} if m in sys.modules]\n"
         "assert not loaded, f'loaded {loaded}'\n"

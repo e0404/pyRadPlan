@@ -382,6 +382,21 @@ def test_load_cst_multiple_structure_sets_uses_first(dicom_dir, tmp_path):
     assert [v.name for v in cst.vois] == ["Target", "Body", "Core"]
 
 
+def test_multiple_structure_sets_choice_ignores_directory_order(dicom_dir, tmp_path, monkeypatch):
+    # ext4 lists files in hash order, not by name.
+    for f in os.listdir(dicom_dir):
+        if f == "RTstruct.dcm" or f.startswith("ct_slice"):
+            shutil.copy(dicom_dir / f, tmp_path / f)
+    shutil.copy(tmp_path / "RTstruct.dcm", tmp_path / "RTstruct2.dcm")
+    listdir = os.listdir
+    monkeypatch.setattr(os, "listdir", lambda path: sorted(listdir(path), reverse=True))
+
+    importer = DicomImporter(tmp_path)
+    ct = importer.load_ct()
+    with pytest.warns(UserWarning, match=r"using the first \(RTstruct\.dcm\)"):
+        importer.load_cst(ct)
+
+
 # --------------------------------------------------------------------------
 # Contour rasterization
 # --------------------------------------------------------------------------

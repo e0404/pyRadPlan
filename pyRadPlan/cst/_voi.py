@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 from typing_extensions import Annotated, Self
 import warnings
 from pydantic import (
+    AliasChoices,
     Field,
     SerializeAsAny,
     ValidationInfo,
@@ -143,7 +144,11 @@ class VOI(PyRadPlanBaseModel, ABC):
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
 
-    visible: bool = Field(default=True, description="Flag to set visibility in GUI applications")
+    visible: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("visible", "Visible"),
+        description="Flag to set visibility in GUI applications",
+    )
     color: tuple[int, int, int] = Field(
         default_factory=lambda data: DEFAULT_VOI_COLORS[data["voi_type"]][0],
         alias="visibleColor",
@@ -297,8 +302,9 @@ class VOI(PyRadPlanBaseModel, ABC):
         """
         Convert objective definitions (names or dictionaries) into Objective instances.
 
-        Entries that are not recognizable objective definitions (e.g. empty placeholders from
-        matRad imports) are passed through unchanged.
+        Empty placeholders (``None``, empty lists, tuples or arrays, e.g. from matRad imports)
+        are dropped, so a VOI has objectives exactly if ``objectives`` is not empty. Other
+        entries that are not recognizable objective definitions are passed through unchanged.
 
         Parameters
         ----------
@@ -320,8 +326,10 @@ class VOI(PyRadPlanBaseModel, ABC):
         def _flatten(value: Any) -> list:
             if isinstance(value, np.ndarray):
                 return [item for element in value.ravel().tolist() for item in _flatten(element)]
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple)):
                 return [item for element in value for item in _flatten(element)]
+            if value is None:
+                return []
             return [value]
 
         def _coerce(entry: Any) -> Any:
@@ -330,12 +338,23 @@ class VOI(PyRadPlanBaseModel, ABC):
                 return {name: entry[name] for name in entry.dtype.names}
             return entry
 
-        return [
-            get_objective(entry)
-            if isinstance(entry, dict) and ("name" in entry or "className" in entry)
-            else entry
-            for entry in (_coerce(e) for e in _flatten(v))
-        ]
+        objectives = []
+        for entry in (_coerce(e) for e in _flatten(v)):
+            if isinstance(entry, dict) and "className" in entry and "name" not in entry:
+                # A matRad objective pyRadPlan cannot represent (e.g. DoseConstraints)
+                # should not abort the whole patient import.
+                try:
+                    objectives.append(get_objective(entry))
+                except ValueError as exc:
+                    warnings.warn(
+                        f"Skipping matRad objective '{entry.get('className')}': {exc}",
+                        stacklevel=2,
+                    )
+            elif isinstance(entry, dict) and "name" in entry:
+                objectives.append(get_objective(entry))
+            else:
+                objectives.append(entry)
+        return objectives
 
     @model_validator(mode="before")
     @classmethod
@@ -1026,17 +1045,14 @@ class VOI(PyRadPlanBaseModel, ABC):
         voi_list = [0]  # We store an ID which will be changed by cst if exported from there
         voi_list.append(self.name)
         voi_list.append(self.voi_type)
-        if self.num_of_scenarios == 1:
-            index_lists = np.ndarray(shape=(1,), dtype=object)
-            mask_array = sitk.GetArrayFromImage(self.mask)
-            mask_array = np.swapaxes(mask_array, 1, 2)
-            indices = np.argwhere(mask_array.ravel(order="C") > 0) + 1
-            index_lists[0] = np.array(indices, dtype=float)
-
-        else:
-            index_lists = self.scenario_indices(order="numpy")
-            for i, index_list in enumerate(index_lists):
-                index_lists[i] = index_list.astype(float)
+        # matRad indices are 1-based and column-major over MATLAB's (y, x, z) cube
+        mask_array = sitk.GetArrayFromImage(self.mask)
+        scenario_arrays = [mask_array] if mask_array.ndim == 3 else list(mask_array)
+        index_lists = np.ndarray(shape=(len(scenario_arrays),), dtype=object)
+        for i, scenario_array in enumerate(scenario_arrays):
+            matrad_array = np.swapaxes(scenario_array, 1, 2)
+            indices = np.argwhere(matrad_array.ravel(order="C") > 0) + 1
+            index_lists[i] = np.array(indices, dtype=float)
 
         voi_list.append(index_lists)
 
@@ -1044,6 +1060,8 @@ class VOI(PyRadPlanBaseModel, ABC):
             "alphaX": self.tissue_properties.alpha_x,
             "betaX": self.tissue_properties.beta_x,
             "Priority": self.overlap_priority,
+            "Visible": self.visible,
+            "visibleColor": np.asarray(self.color, dtype=float) / 255.0,
             # Not read by matRad, which ignores unknown fields here; keeps the full tissue.
             "tissueProperties": {
                 key: value
@@ -1082,12 +1100,17 @@ class VOI(PyRadPlanBaseModel, ABC):
                 self.mask, new_ct.cube_hu, sitk.Transform(), sitk.sitkNearestNeighbor, 0
             )
         elif self.mask.GetDimension() == 4:
+            reference = (
+                new_ct.cube_hu[:, :, :, 0]
+                if new_ct.cube_hu.GetDimension() == 4
+                else new_ct.cube_hu
+            )
             new_mask = []
             for i in range(self.mask.GetSize()[-1]):
                 new_mask.append(
                     sitk.Resample(
                         self.mask[:, :, :, i],
-                        new_ct.cube_hu,
+                        reference,
                         sitk.Transform(),
                         sitk.sitkNearestNeighbor,
                         0,
@@ -1304,17 +1327,18 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
             return data
 
         # obtain voi type if we have a dict including camelCase check
-        voi_type = data.get("voi_type", data.get("voiType", None))
+        key = "voi_type" if "voi_type" in data else "voiType"
+        voi_type = str(data.get(key, "")).strip().upper()
 
         if voi_type in __VOITYPES__:
-            return __VOITYPES__[voi_type].model_validate(data)
+            return __VOITYPES__[voi_type].model_validate({**data, key: voi_type})
 
-        raise ValueError(f"Invalid VOI type: {voi_type}")
+        raise ValueError(f"Invalid VOI type: {data.get(key)}")
 
-    voi_type = kwargs.get("voi_type", "")
+    voi_type = str(kwargs.get("voi_type", "")).strip().upper()
 
     if voi_type in __VOITYPES__:
-        return __VOITYPES__[voi_type](**kwargs)
+        return __VOITYPES__[voi_type](**{**kwargs, "voi_type": voi_type})
 
     raise ValueError(f"Invalid VOI type: {voi_type}")
 

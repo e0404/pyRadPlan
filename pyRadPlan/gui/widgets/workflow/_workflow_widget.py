@@ -53,6 +53,9 @@ from .._tissue_params import (
 
 logger = logging.getLogger(__name__)
 
+#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
+_RESERVED_TAGS = ("beam", "scenario")
+
 
 def _human_name(fmt: str, importer_cls) -> str:
     """Best-effort human-readable label for a format, falling back to the key."""
@@ -70,9 +73,11 @@ def _build_load_filter() -> str:
             importer_cls = get_importer(fmt)
         except ValueError:
             continue  # export-only format
-        patterns = " ".join(f"*{ext}" for ext in importer_cls.extensions)
+        # GTK file dialogs (Linux) match patterns case-sensitively.
+        exts = [e for ext in importer_cls.extensions for e in dict.fromkeys((ext, ext.upper()))]
+        patterns = " ".join(f"*{ext}" for ext in exts)
         per_format.append(f"{_human_name(fmt, importer_cls)} ({patterns})")
-        all_patterns.extend(f"*{ext}" for ext in importer_cls.extensions)
+        all_patterns.extend(f"*{ext}" for ext in exts)
 
     entries = [f"All supported ({' '.join(sorted(set(all_patterns)))})", *per_format]
     entries.append("All files (*)")
@@ -98,6 +103,7 @@ def _result_with(
     result: Optional[PlanResult],
     quantities: Optional[dict] = None,
     beam_quantities: Optional[dict] = None,
+    scenario_quantities: Optional[dict] = None,
 ) -> PlanResult:
     """Return a copy of *result* with the given quantities added or replaced.
 
@@ -120,9 +126,23 @@ def _result_with(
                 for key, values in beam_quantities.items()
             },
         }
+    if scenario_quantities:
+        update["scenario_quantities"] = {
+            **(result.scenario_quantities if result is not None else {}),
+            **{
+                key: [None if v is None else validate_distribution(v) for v in values]
+                for key, values in scenario_quantities.items()
+            },
+        }
 
     if result is None:
-        return create_result({**(quantities or {}), **(beam_quantities or {})})
+        return create_result(
+            {
+                **(quantities or {}),
+                **(beam_quantities or {}),
+                **{f"{key}_scenario": v for key, v in (scenario_quantities or {}).items()},
+            }
+        )
     return result.model_copy(update=update)
 
 
@@ -323,7 +343,12 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
-        self._btn_save_result = self._add_button("Save / Keep Result", self._on_save_result)
+        self._btn_save_result = self._add_button(
+            "Snapshot Result",
+            self._on_save_result,
+            tooltip="Keep a copy of the current result in the workspace. "
+            "Use File > Save Result… to write it to disk.",
+        )
 
         # Each column is a workflow stage, progressing left to right (as in
         # matRad): loading -> dose influence -> result computation -> export.
@@ -438,10 +463,14 @@ class WorkflowWidget(WorkspaceWidget):
 
     @staticmethod
     def _result_quantity_keys(result: Optional[PlanResult]) -> list[str]:
-        """All quantity names in *result* (whole-volume and per-beam)."""
+        """All quantity names in *result* (whole-volume, per-beam and per-scenario)."""
         if result is None:
             return []
-        return list(result.stored_quantities) + list(result.stored_beam_quantities)
+        return (
+            list(result.stored_quantities)
+            + list(result.stored_beam_quantities)
+            + list(result.stored_scenario_quantities)
+        )
 
     def _carry_forward_extras(self, new_result: PlanResult, prev: Optional[PlanResult]) -> None:
         """Copy tagged snapshots and imported doses from *prev* into *new_result*.
@@ -460,6 +489,9 @@ class WorkflowWidget(WorkspaceWidget):
             carry = self._is_tagged(key) or key.startswith(IMPORT_PREFIX)
             if carry and key not in new_result.beam_quantities:
                 new_result.add_beam_quantity(key, prev.beam_quantities[key])
+        for key in prev.stored_scenario_quantities:
+            if self._is_tagged(key) and key not in new_result.scenario_quantities:
+                new_result.add_scenario_quantity(key, prev.scenario_quantities[key])
 
     @staticmethod
     def _tissue_classes_signature(cst) -> Optional[tuple]:
@@ -771,6 +803,12 @@ class WorkflowWidget(WorkspaceWidget):
     def load_folder(self) -> None:
         """Prompt for and load a DICOM (or structured image) folder."""
         self._on_load_folder()
+
+    def load_phantom(self, name: str) -> None:
+        """Load the bundled phantom *name* (see :func:`pyRadPlan.io.available_phantoms`)."""
+        from pyRadPlan.io import phantom_path  # noqa: PLC0415
+
+        self._load_into_workspace(phantom_path(name), busy_text=f"Loading {name}…")
 
     def load_dij(self) -> None:
         """Prompt for and load a precomputed dose-influence matrix (.mat)."""
@@ -1331,7 +1369,16 @@ class WorkflowWidget(WorkspaceWidget):
 
             # ``fluence_optimization`` already computes the CT-grid result and
             # returns a PlanResult (with the beamlet weights in ``result.fluence``).
-            return fluence_optimization(ct, cst, stf, dij, pln)
+            result = fluence_optimization(ct, cst, stf, dij, pln)
+            if dij.scenarios is None or len(dij.scenarios) <= 1:
+                return result
+            # The optimization reports the nominal scenario only; add every scenario.
+            with_scenarios = dij.compute_result_ct_grid(
+                result.fluence, num_of_fractions=pln.result_dose_factor, scenarios=True
+            )
+            return with_scenarios.model_copy(
+                update={"info": result.info, "used_optimizer": result.used_optimizer}
+            )
 
         def _on_success(result: PlanResult) -> None:
             # Carry forward saved snapshots and imported doses from a previous run;
@@ -1412,11 +1459,26 @@ class WorkflowWidget(WorkspaceWidget):
                     beam.iso_center = iso_center
 
             # Already returns the weight-applied result quantities on the CT grid.
-            return recalc_stf, calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            return recalc_stf, new_result
 
         def _on_success(data: tuple) -> None:
             recalc_stf, new_result = data
             result = _result_with(prev_result, new_result.quantities, new_result.beam_quantities)
+            # Per-scenario results of the previous optimization no longer match the new
+            # doses; the forward calculation brings its own when the plan has scenarios.
+            scenario_quantities = {
+                key: values
+                for key, values in result.scenario_quantities.items()
+                if self._is_tagged(key)
+            }
+            scenario_quantities.update(new_result.scenario_quantities)
+            result = result.model_copy(
+                update={
+                    "scenario_quantities": scenario_quantities,
+                    "scenario_labels": new_result.scenario_labels,
+                }
+            )
             if recalc_stf is stf:
                 self._ws.result = result
             else:
@@ -1439,12 +1501,19 @@ class WorkflowWidget(WorkspaceWidget):
                 pass
 
         tag, ok = QInputDialog.getText(
-            self, "Save Result", "Name for this result snapshot:", text=default
+            self, "Snapshot Result", "Name for this result snapshot:", text=default
         )
         if not ok or not tag.strip():
             return
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
+        if tag in _RESERVED_TAGS:
+            QMessageBox.warning(
+                self,
+                "Snapshot Result",
+                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
+            )
+            return
 
         result: Optional[PlanResult] = self._ws.result
         if result is None:
@@ -1463,10 +1532,15 @@ class WorkflowWidget(WorkspaceWidget):
             for key in result.stored_beam_quantities
             if not self._is_tagged(key)
         }
+        scenario_snapshots = {
+            f"{key}_{tag}": result.scenario_quantities[key]
+            for key in result.stored_scenario_quantities
+            if not self._is_tagged(key)
+        }
 
         if tag not in self._saved_tags:
             self._saved_tags.append(tag)
-        self._ws.result = _result_with(result, snapshots, beam_snapshots)
+        self._ws.result = _result_with(result, snapshots, beam_snapshots, scenario_snapshots)
         self._update_status()
 
     # ------------------------------------------------------------------
