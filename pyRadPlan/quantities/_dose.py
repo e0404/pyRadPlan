@@ -11,6 +11,7 @@ class Dose(FluenceDependentQuantity):
     dim = 1
     identifier = "physical_dose"
     name = "dose"
+    fraction_exponent = 1.0
 
     def _compute_quantity_single_scenario(self, scenario_index: int) -> Array:
         return self.array_backend.asarray(
@@ -18,7 +19,4 @@ class Dose(FluenceDependentQuantity):
         )
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
-        # Transpose form is array-api compliant (scipy / array_api_strict compatibility).
-        return self.array_backend.asarray(
-            self._dij.physical_dose.flat[scenario_index].__rmatmul__(d_quantity), copy=False
-        )
+        return self._backproject(self._dij.physical_dose.flat[scenario_index], d_quantity)

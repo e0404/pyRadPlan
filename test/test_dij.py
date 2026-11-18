@@ -90,6 +90,22 @@ def test_dij_creation_invalid_physical_dose_shape(sample_dij_dict):
         create_dij(**sample_dij_dict)
 
 
+@pytest.mark.parametrize("shape", [(1,), (1, 1, 1), (2, 3)])
+def test_dij_containers_of_any_dimension(sample_dij_dict, shape):
+    container = np.empty(shape, dtype=object)
+    container.flat[0] = sample_dij_dict["physical_dose"][0][0][0]
+    sample_dij_dict["physical_dose"] = container
+    assert create_dij(**sample_dij_dict).physical_dose.shape == shape
+
+
+def test_dij_rejects_a_zero_dimensional_container(sample_dij_dict):
+    container = np.empty((), dtype=object)
+    container[()] = sample_dij_dict["physical_dose"][0][0][0]
+    sample_dij_dict["physical_dose"] = container
+    with pytest.raises(ValueError, match="at least one dimension"):
+        create_dij(**sample_dij_dict)
+
+
 def test_dij_creation_invalid_beam_num(sample_dij_dict):
     sample_dij_dict["beam_num"] = np.ones(5)  # Invalid shape
     with pytest.raises(ValueError):
@@ -336,3 +352,21 @@ def test_to_namespace_shared_indices_values_correct(sample_dij_shared_indices):
     np.testing.assert_array_equal(let_out.indices, shared_indices)
     # check for shared memory
     assert phys_out.indices.ctypes.data == let_out.indices.ctypes.data
+
+
+def test_to_namespace_shared_indices_jax(sample_dij_shared_indices):
+    """Shared-index CSC matrices are rebuilt as JAX sparse arrays."""
+    jnp = pytest.importorskip("jax.numpy")
+    jsparse = pytest.importorskip("jax.experimental.sparse")
+
+    dij, data_phys, data_let, _ = sample_dij_shared_indices
+
+    dij_out = dij.to_namespace(jnp)
+
+    for out, ref, data in (
+        (dij_out.physical_dose.flat[0], dij.physical_dose.flat[0], data_phys),
+        (dij_out.let_dose.flat[0], dij.let_dose.flat[0], data_let),
+    ):
+        assert isinstance(out, jsparse.CSC)
+        np.testing.assert_array_equal(np.asarray(out.data), data)
+        np.testing.assert_array_equal(np.asarray(out.todense()), ref.toarray())

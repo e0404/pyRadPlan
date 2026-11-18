@@ -2,12 +2,14 @@
 
 Everybody is welcome to contribute, still we recommend to get in touch such that we do not double the work.
 
+Development happens on [GitHub](https://github.com/e0404/pyRadPlan): report bugs and propose features in the issues, and contribute through pull requests. If you do not have write access to the repository, fork it, push your branch to the fork and open the pull request from there.
+
 ## Branch Name Rules
 On the pyRadPlan repository, we will adhere to the branch rules below. If you plan to contribute, we encourage employing them as well.
 
 There's two predefined branch names for main development
 - **main:**         Protected main branch. Only latest release version + hotfixes
-- **develop:**      Development branch. Used to prepare patches & minor versions and main target for merge requests.
+- **develop:**      Development branch. Used to prepare patches & minor versions and main target for pull requests.
 
 For individual development work, we will use branch groups. The following groups are allowed
 - **bugfix/*:**      Fixing a bug
@@ -17,6 +19,7 @@ For individual development work, we will use branch groups. The following groups
 - **interface/*:**   Interface to other software
 - **devops/*:**      Work on DevOps like the CI pipeline or formatting hooks (e.g., devops/addPython311)
 - **dev/*:**         Individual development efforts that are not part of a single group above, or don't have a clear purpose or timeline regarding merging
+- **internal/*:**    Confidential work of the core team. These branches only exist on the internal GitLab, which runs the tests for them. Never push them to GitHub, and do not open merge requests into `main` or `develop` there, as both are mirrored from GitHub. Once the work is no longer confidential, push it to GitHub under one of the groups above and open a pull request.
 
 
 ## Code Style
@@ -25,12 +28,12 @@ The hook will be automatically installed when doing an editable install of the d
 
 After successfully running `pip install -e .[dev]` check in the console that `pre-commit --version` provides a correct response. Afterwards run `pre-commit install`. This reads the `.pre-commit_config.yaml` and adds a hook to your git repository, which whenever a commit is made the changed files are reformatted to ensure the PEP standards.
 
-## Preparing a Merge Request
-When you think a something is ready to integrate, prepare a merge request. Here's what you should do before submitting:
+## Preparing a Pull Request
+When you think a something is ready to integrate, prepare a pull request. Here's what you should do before submitting:
 - Make sure the **pre-commit** hook has formatted your code (see above).
 - Run **pytest** run unit tests before publishing the code. Run on the test folder via `pytest test`, or choose any test file following the pytest syntax. We encourage writing at least fundamental unit tests for new code. Will also install `coverage` and the pytest extension to monitor coverage. If coverage drops too much because of insufficient testing, we will (probably) not merge.
-- Examples are [jupytext](https://jupytext.readthedocs.io) percent scripts in `examples/`; do not commit `.ipynb` notebooks. The documentation build converts them into notebooks without outputs; neither CI nor Read the Docs executes them, and executed notebooks are only committed on release commits (see the Release merge request template). Check that changed examples run with `python docs/execute_examples.py <name>`.
+- Examples are [jupytext](https://jupytext.readthedocs.io) percent scripts in `examples/`; do not commit `.ipynb` notebooks. The documentation build converts them into notebooks without outputs; neither CI nor Read the Docs executes them. The executed notebooks of the last release stay tracked in `docs/tutorials/examples/` and only change on release commits (see the [release pull request template](.github/PULL_REQUEST_TEMPLATE/release.md)): if a build replaced one because its script changed, undo that with `git restore docs/tutorials/examples`. Check that changed examples run with `python docs/execute_examples.py <name>`.
 
-Merge requests should (almost) always point to the `develop` branch. Exceptions are hotfixes of a crucial problem.
+Pull requests should (almost) always point to the `develop` branch. Exceptions are hotfixes of a crucial problem.
 
-To finalize the MR, please modify the CHANGELOG.md in the [UNRELEASED] section at the top with your changes. The CHANGELOG.md follows the [Keep A Changelog](https://keepachangelog.com/) conventions.
+To finalize the PR, please modify the CHANGELOG.md in the [UNRELEASED] section at the top with your changes. The CHANGELOG.md follows the [Keep A Changelog](https://keepachangelog.com/) conventions.

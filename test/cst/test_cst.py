@@ -6,6 +6,7 @@ import numpy as np
 
 from pyRadPlan.io.matlab import _matfile as matfile
 from pyRadPlan.ct import create_ct
+from pyRadPlan.core import Grid
 
 
 from pyRadPlan.ct import CT
@@ -83,6 +84,50 @@ def test_cst_to_matrad(matrad_import, tmpdir):
 
     assert isinstance(tmp, dict)
     assert isinstance(tmp["cst"], list)
+
+
+def test_cst_from_matrad_reads_visibility_and_unit_colors():
+    """matRad's ``Visible`` flag is read and integer color triples stay on the 0..1 scale."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    props_hidden = {"Visible": 0.0, "visibleColor": np.array([0, 0, 1], dtype=np.uint8)}
+    props_shown = {"Visible": 1.0, "visibleColor": np.array([1.0, 0.5, 0.0])}
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), props_shown, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), props_hidden, []],
+        ],
+        ct=ct,
+    )
+
+    assert cst.vois[0].visible is True
+    assert cst.vois[0].color == (255, 128, 0)
+    assert cst.vois[1].visible is False
+    assert cst.vois[1].color == (0, 0, 255)
+
+
+def test_cst_to_matrad_visibility_and_color_roundtrip(tmpdir):
+    """Visibility and color survive a matRad ``.mat`` round-trip."""
+    ct = create_ct(cube_hu=sitk.Image(4, 4, 4, sitk.sitkInt16))
+    cst = create_cst(
+        [
+            [0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []],
+            [1, "OAR1", "OAR", np.array([4.0, 5.0]), {}, []],
+        ],
+        ct=ct,
+    )
+    cst.vois[0].color = (0, 0, 255)
+    cst.vois[1].visible = False
+
+    props = cst.to_matrad()[1][4]
+    assert props["Visible"] is False
+    np.testing.assert_allclose(props["visibleColor"], np.asarray(cst.vois[1].color) / 255.0)
+
+    tmp_mat_path = os.path.join(tmpdir, "test_cst_visible.mat")
+    matfile.save(tmp_mat_path, {"cst": cst.to_matrad()})
+    restored = create_cst(matfile.load(tmp_mat_path)["cst"], ct=ct)
+
+    assert [v.visible for v in restored.vois] == [True, False]
+    assert [v.color for v in restored.vois] == [v.color for v in cst.vois]
 
 
 def test_cst_to_matrad_objectives_roundtrip(tmpdir):
@@ -221,6 +266,20 @@ def test_target_center_of_mass():
 
     com = cst.target_center_of_mass()
     assert np.allclose(com, np.array([1.5, 1.5, 1.5]))
+
+
+def test_center_of_mass_matches_ndimage_on_anisotropic_grid():
+    """The projection-based center of mass equals ndimage.center_of_mass."""
+    from scipy import ndimage  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    mask = (rng.random((7, 11, 13)) > 0.8).astype(np.uint8)  # (z, y, x)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 2.5, 3.0))
+    image.SetOrigin((-10.0, 4.0, 7.5))
+
+    expected = image.TransformContinuousIndexToPhysicalPoint(ndimage.center_of_mass(mask.T))
+    assert np.allclose(StructureSet._center_of_mass(image), expected)
 
 
 # ---------------------------------------------------------------------------
@@ -543,11 +602,23 @@ def generic_vois(generic_ct):
     mask_image5 = sitk.GetImageFromArray(mask5)
     mask_image5.CopyInformation(generic_ct.cube_hu)
 
-    voi1 = Target(name="CTV", mask=mask_image1, ct_image=generic_ct, overlap_priority=1)
-    voi2 = Target(name="PTV", mask=mask_image2, ct_image=generic_ct, overlap_priority=2)
-    voi3 = OAR(name="OAR", mask=mask_image3, ct_image=generic_ct, overlap_priority=5)
-    voi4 = ExternalVOI(name="BODY", mask=mask_image4, ct_image=generic_ct, overlap_priority=10)
-    voi5 = HelperVOI(name="HELPER", mask=mask_image5, ct_image=generic_ct, overlap_priority=5)
+    # only VOIs with objectives take voxels from others
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}]
+    voi1 = Target(
+        name="CTV", mask=mask_image1, ct_image=generic_ct, overlap_priority=1, objectives=obj
+    )
+    voi2 = Target(
+        name="PTV", mask=mask_image2, ct_image=generic_ct, overlap_priority=2, objectives=obj
+    )
+    voi3 = OAR(
+        name="OAR", mask=mask_image3, ct_image=generic_ct, overlap_priority=5, objectives=obj
+    )
+    voi4 = ExternalVOI(
+        name="BODY", mask=mask_image4, ct_image=generic_ct, overlap_priority=10, objectives=obj
+    )
+    voi5 = HelperVOI(
+        name="HELPER", mask=mask_image5, ct_image=generic_ct, overlap_priority=5, objectives=obj
+    )
 
     return [voi1, voi2, voi3, voi4, voi5]
 
@@ -612,6 +683,7 @@ def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
 
 def test_apply_overlap_flags(generic_ct):
     """Test standard boolean overrides for overlap applying exclusions."""
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}]
     mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
     mask1[2:8, 2:8, 2:8] = 1  # overlap_priority 2
 
@@ -630,6 +702,7 @@ def test_apply_overlap_flags(generic_ct):
         mask=sitk.GetImageFromArray(mask1),
         overlap_priority=2,
         apply_overlap=True,
+        objectives=obj,
     )
     v2 = Target(
         name="v2",
@@ -637,6 +710,7 @@ def test_apply_overlap_flags(generic_ct):
         mask=sitk.GetImageFromArray(mask2),
         overlap_priority=1,
         apply_overlap=False,
+        objectives=obj,
     )
     v3 = Target(
         name="v3",
@@ -644,6 +718,7 @@ def test_apply_overlap_flags(generic_ct):
         mask=sitk.GetImageFromArray(mask3),
         overlap_priority=3,
         apply_overlap=None,
+        objectives=obj,
     )
     v4 = Target(
         name="v4",
@@ -651,6 +726,7 @@ def test_apply_overlap_flags(generic_ct):
         mask=sitk.GetImageFromArray(mask4),
         overlap_priority=4,
         apply_overlap=True,
+        objectives=obj,
     )
 
     for v in [v1, v2, v3, v4]:
@@ -684,6 +760,7 @@ def test_apply_overlap_flags(generic_ct):
 
 def test_apply_overlap_false_keeps_voxels(generic_ct):
     """A lower-priority VOI with apply_overlap=False keeps its voxels but still cuts lower ones."""
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}]
     masks = [np.zeros((10, 10, 10), dtype=np.uint8) for _ in range(3)]
     masks[0][2:8, 2:8, 2:8] = 1
     masks[1][4:9, 4:9, 4:9] = 1
@@ -696,6 +773,7 @@ def test_apply_overlap_false_keeps_voxels(generic_ct):
             mask=sitk.GetImageFromArray(m),
             overlap_priority=i + 1,
             apply_overlap=flag,
+            objectives=obj,
         )
         for i, (m, flag) in enumerate(zip(masks, [True, False, True]))
     ]
@@ -708,6 +786,70 @@ def test_apply_overlap_false_keeps_voxels(generic_ct):
 
     assert np.array_equal(m1_out, masks[1])
     assert np.array_equal(m2_out, 1 - (masks[0] | masks[1]))
+
+
+def test_apply_overlap_priorities_ignores_vois_without_objectives(generic_ct, generic_vois):
+    ctv, ptv, oar, body, helper = generic_vois
+    ctv.objectives = []
+    helper.objectives = []
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+
+    overlapped = cst.apply_overlap_priorities()
+    masks = [sitk.GetArrayViewFromImage(v.mask) > 0 for v in cst.vois]
+    new_masks = [sitk.GetArrayViewFromImage(v.mask) > 0 for v in overlapped.vois]
+
+    # the CTV without objectives does not take its voxel from the PTV
+    np.testing.assert_array_equal(new_masks[0], masks[0])
+    np.testing.assert_array_equal(new_masks[1], masks[1])
+    # the HELPER without objectives does not take voxels from the BODY, the PTV and OAR do
+    np.testing.assert_array_equal(new_masks[3], masks[3] & ~masks[1] & ~masks[2])
+    # the HELPER without objectives keeps the voxels it shares with the PTV
+    np.testing.assert_array_equal(new_masks[4], masks[4])
+
+
+def test_apply_overlap_priorities_warns_when_objectives_fully_overlapped(
+    generic_ct, generic_vois, caplog
+):
+    generic_vois[0].overlap_priority = 3
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+
+    with caplog.at_level("WARNING", logger="pyRadPlan.cst._cst"):
+        overlapped = cst.apply_overlap_priorities()
+
+    assert not sitk.GetArrayViewFromImage(overlapped.vois[0].mask).any()
+    assert any("CTV" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("without_objectives", [(), (0,), (1, 4), (0, 1, 2, 3, 4)])
+@pytest.mark.parametrize("priorities", [(1, 2, 5, 10, 5), (3, 2, 1, 1, 4), (1, 1, 1, 1, 1)])
+def test_tissue_data_does_not_depend_on_overlap_removal(
+    generic_ct, generic_vois, without_objectives, priorities, caplog
+):
+    """Shared voxels go to the lowest priority number, which overlap removal never carves."""
+    for i, (voi, priority) in enumerate(zip(generic_vois, priorities)):
+        voi.overlap_priority = priority
+        voi.tissue_properties = TissueProperties(alpha_x=0.1 * (i + 1), beta_x=0.01 * (i + 1))
+        if i in without_objectives:
+            voi.objectives = []
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+
+    with caplog.at_level("WARNING", logger="pyRadPlan.cst._cst"):
+        data = cst.get_tissue_data()
+    assert not caplog.records
+
+    overlapped = cst.apply_overlap_priorities()
+    for value, value_overlapped in zip(data[:3], overlapped.get_tissue_data()[:3]):
+        np.testing.assert_array_equal(value, value_overlapped)
+
+
+def test_overlap_is_applied_is_deprecated(generic_ct, generic_vois):
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+    with pytest.warns(DeprecationWarning, match="overlap_is_applied"):
+        alpha, _ = cst.get_reference_lq_params(True)
+    with pytest.warns(DeprecationWarning, match="overlap_is_applied"):
+        ix = cst.get_tissue_class_indices(overlap_is_applied=False)
+    np.testing.assert_array_equal(alpha, cst.get_reference_lq_params()[0])
+    np.testing.assert_array_equal(ix, cst.get_tissue_class_indices())
 
 
 # --- Helpers for body segmentation tests ---
@@ -986,21 +1128,25 @@ def test_tissue_classes_merge_equal_tissues_with_unset_parameters(generic_ct):
     assert z_profile.tolist() == [0, 0, 0, 0, 0, 0, 1, 1, 1, 0]
 
 
+@pytest.mark.parametrize("with_objectives", [True, False])
 @pytest.mark.parametrize("target_first", [True, False])
-def test_tissue_class_indices_follow_overlap_priority(generic_ct, target_first):
+def test_tissue_class_indices_follow_overlap_priority(generic_ct, target_first, with_objectives):
     target_tissue = TissueProperties.from_preset("HSG", "LEM_II")
     oar_tissue = TissueProperties.from_preset("CHO", "LEM_II")
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}] if with_objectives else []
     target = Target(
         name="PTV",
         ct_image=generic_ct,
         mask=_mask(generic_ct, np.s_[2:6]),
         tissue_properties=target_tissue,
+        objectives=obj,
     )
     oar = OAR(
         name="OAR",
         ct_image=generic_ct,
         mask=_mask(generic_ct, np.s_[4:8]),
         tissue_properties=oar_tissue,
+        objectives=obj,
     )
     vois = [target, oar] if target_first else [oar, target]
     cst = StructureSet(ct_image=generic_ct, vois=vois)
@@ -1102,3 +1248,185 @@ def test_optimization_target_union(cst_mixed_targets):
 
     assert sitk.GetArrayFromImage(cst.target_union_mask()).sum() == 2
     assert sitk.GetArrayFromImage(cst.optimization_target_mask()).sum() == 1
+
+
+@pytest.mark.parametrize("resampled", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("same_priority", [False, True])
+def test_combined_tissue_data_matches_separate_getters(
+    generic_ct, resampled, reverse, same_priority
+):
+    """Preserve overlap ordering, duplicate tissue classes and outside values."""
+    tissues = [
+        TissueProperties(alpha_x=0.1, beta_x=0.05),
+        TissueProperties(alpha_x=0.2, beta_x=0.07),
+    ]
+    vois = [
+        Target(
+            name="T",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[2:6]),
+            tissue_properties=tissues[0],
+        ),
+        OAR(
+            name="O",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[4:8]),
+            tissue_properties=tissues[1],
+        ),
+        OAR(
+            name="duplicate",
+            ct_image=generic_ct,
+            mask=_mask(generic_ct, np.s_[8:9]),
+            tissue_properties=tissues[0],
+        ),
+    ]
+    if same_priority:
+        for voi in vois:
+            voi.overlap_priority = 2
+    cst = StructureSet(ct_image=generic_ct, vois=vois[::-1] if reverse else vois)
+    grid = generic_ct.grid.resample(dict(x=1.7, y=2.1, z=2.3)) if resampled else None
+    expected = (
+        *cst.get_reference_lq_params(resample_grid=grid),
+        cst.get_tissue_class_indices(resample_grid=grid),
+    )
+    masks = [sitk.GetArrayFromImage(v.mask) for v in cst.vois]
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=grid)
+    for actual, old in zip((alpha, beta, indices), expected):
+        np.testing.assert_array_equal(actual, old)
+    assert list(classes) == list(cst.get_tissue_classes())
+    for voi, before in zip(cst.vois, masks):
+        np.testing.assert_array_equal(sitk.GetArrayFromImage(voi.mask), before)
+
+
+def test_matrad_numpy_cell_array_multi_voxel_roundtrip():
+    """Regression: cst{i,4} as an object array holding a multi-voxel index list."""
+    ct = CT(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    mask = np.zeros((3, 4, 5), dtype=np.uint8)
+    mask[1, 2, 0:3] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(restored.vois[0].indices_numpy, voi.indices_numpy)
+
+
+def _ct_4d(num_scenarios=3):
+    cube_3d = sitk.Image([5, 4, 3], sitk.sitkFloat32)
+    return create_ct(cube_hu=sitk.JoinSeries([cube_3d] * num_scenarios))
+
+
+def test_cst_from_matrad_on_4d_ct_single_index_list():
+    """A single index list is used for every scenario of a 4D CT."""
+    ct = _ct_4d(num_scenarios=3)
+
+    cst = create_cst([[0, "Target", "TARGET", np.array([1.0, 2.0]), {}, []]], ct=ct)
+
+    mask = sitk.GetArrayViewFromImage(cst.vois[0].mask)
+    assert mask.shape == (3, 3, 4, 5)
+    assert all(mask[s].sum() == 2 for s in range(3))
+    assert np.array_equal(mask[0], mask[2])
+
+
+def test_cst_from_matrad_on_4d_ct_rejects_wrong_number_of_index_lists():
+    ct = _ct_4d(num_scenarios=3)
+    idx = [np.array([1.0]), np.array([2.0])]
+
+    with pytest.raises(ValueError):
+        create_cst([[0, "Target", "TARGET", idx, {}, []]], ct=ct)
+
+
+def test_cst_to_matrad_roundtrip_4d():
+    ct = _ct_4d(num_scenarios=2)
+    mask = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    mask[0, 1, 2, 3] = 1
+    mask[1, 2, 0, 1] = 1
+    mask[1, 0, 3, 4] = 1
+    voi = create_voi(name="target", voi_type="TARGET", mask=mask, ct_image=ct)
+
+    restored = validate_cst(validate_cst([voi], ct).to_matrad(), ct)
+
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(restored.vois[0].mask), mask)
+
+
+def test_empty_cst_overlap_and_lq_params(generic_ct):
+    cst = StructureSet(vois=[], ct_image=generic_ct)
+
+    assert cst.apply_overlap_priorities().vois == []
+    alpha, beta = cst.get_reference_lq_params()
+    assert alpha.shape == beta.shape == (np.prod(generic_ct.size), 1)
+    assert not alpha.any() and not beta.any()
+
+
+def test_apply_overlap_priorities_4d():
+    ct = _ct_4d(num_scenarios=2)
+    target = np.zeros((2, 3, 4, 5), dtype=np.uint8)
+    target[0, 1, 1, 1] = 1
+    oar = np.zeros_like(target)
+    oar[:, 1, 1, 1] = 1
+    cst = StructureSet(
+        vois=[
+            create_voi(
+                name="T",
+                voi_type="TARGET",
+                mask=target,
+                ct_image=ct,
+                objectives=[{"name": "Squared Deviation", "d_ref": 60.0}],
+            ),
+            create_voi(
+                name="O",
+                voi_type="OAR",
+                mask=oar,
+                ct_image=ct,
+                objectives=[{"name": "Squared Overdosing", "d_max": 30.0}],
+            ),
+        ],
+        ct_image=ct,
+    )
+
+    overlapped = cst.apply_overlap_priorities()
+
+    oar_mask = sitk.GetArrayViewFromImage(overlapped.vois[1].mask)
+    assert overlapped.vois[1].mask.GetDimension() == 4
+    assert oar_mask[0].sum() == 0  # covered by the target in scenario 0
+    assert oar_mask[1, 1, 1, 1] == 1  # free in scenario 1
+    np.testing.assert_array_equal(sitk.GetArrayViewFromImage(overlapped.vois[0].mask), target)
+
+
+def test_reference_lq_params_and_tissue_indices_4d_per_scenario():
+    cst, exp = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    dims = exp["dims_zyx"]
+
+    alpha, beta = cst.get_reference_lq_params()
+    tissue_ix = cst.get_tissue_class_indices()
+
+    assert alpha.shape == beta.shape == tissue_ix.shape == (int(np.prod(dims)), 2)
+    oar_class = list(cst.get_tissue_classes()).index(cst.vois[1].tissue_properties)
+    assert oar_class != 0
+    for s in range(2):
+        ix = _flat_idx(exp["oar"][s], dims, "numpy")
+        other = 1 - s
+        assert alpha[ix, s] == 0.5 and beta[ix, s] == 0.05
+        assert tissue_ix[ix, s] == oar_class
+        # the OAR moved away from this voxel in the other scenario
+        assert alpha[ix, other] == 0.0
+        assert tissue_ix[ix, other] == 0
+
+
+@pytest.mark.parametrize("resample", [False, True])
+def test_combined_tissue_data_preserves_moving_phase_masks(resample):
+    """One label resampling per phase matches the independent tissue getters."""
+    cst, _ = _build_4d_cst(num_scenarios=2)
+    cst.vois[1] = cst.vois[1].model_copy(update={"alpha_x": 0.5, "beta_x": 0.05})
+    grid = Grid.from_sitk_image(cst.ct_image.cube_hu[:, :, :, 0])
+    target = grid.resample({"x": 1.5, "y": 1.5, "z": 1.5}) if resample else None
+    alpha, beta, indices, classes = cst.get_tissue_data(resample_grid=target)
+    expected_alpha, expected_beta = cst.get_reference_lq_params(resample_grid=target)
+    expected_indices = cst.get_tissue_class_indices(resample_grid=target)
+    np.testing.assert_array_equal(alpha, expected_alpha)
+    np.testing.assert_array_equal(beta, expected_beta)
+    np.testing.assert_array_equal(indices, expected_indices)
+    assert list(classes) == list(cst.get_tissue_classes())
+    assert alpha.shape[1] == 2
+    assert np.any(alpha[:, 0] != alpha[:, 1])

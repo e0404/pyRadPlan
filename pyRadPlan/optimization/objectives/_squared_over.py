@@ -31,13 +31,18 @@ class SquaredOverdosing(Objective):
         ParameterMetadata(kind="reference"),
     ]
 
+    def _overvalues(self, xp, values: Array) -> Array:
+        # Not xp.clip, which masks and syncs on cupy; zeros_like as torch rejects a Python scalar
+        excess = values - self.d_max
+        return xp.maximum(excess, xp.zeros_like(excess))
+
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
+        overvalues = self._overvalues(xp, values)
 
-        return (overvalues @ overvalues) / array_api_compat.size(values)
+        return (overvalues @ overvalues) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        overvalues = xp.clip(values - self.d_max, min=0.0, max=None)
-        return 2.0 * overvalues / array_api_compat.size(overvalues)
+        overvalues = self._overvalues(xp, values)
+        return 2.0 * overvalues / float(array_api_compat.size(overvalues))

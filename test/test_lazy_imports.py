@@ -4,9 +4,12 @@ import ast
 import importlib
 import inspect
 import json
+import os
+import pkgutil
 import subprocess
 import sys
 from importlib.util import find_spec
+from pathlib import Path
 
 import pytest
 
@@ -97,3 +100,41 @@ def test_unknown_attribute_raises():
     with pytest.raises(AttributeError, match="no_such_name"):
         pyRadPlan.no_such_name  # noqa: B018
     assert not hasattr(pyRadPlan, "__wrapped__")
+
+
+@pytest.mark.parametrize("first", ["pyRadPlan._settings", "pyRadPlan.core.resample"])
+def test_resampling_exports_support_settings_first_import(first):
+    """Prepared resampling must not create a cycle during settings construction."""
+    check = (
+        f"import {first}\n"
+        "from pyRadPlan import core\n"
+        "from pyRadPlan.core import resample\n"
+        "for name in ('resample_image', 'resample_array', 'resample_numpy_array', "
+        "'ArrayBackendGridResampler'):\n"
+        "    assert getattr(core, name) is getattr(resample, name)\n"
+    )
+    subprocess.run([sys.executable, "-c", check], check=True)
+
+
+_SUBPACKAGES = sorted(m.name for m in pkgutil.iter_modules(pyRadPlan.__path__) if m.ispkg)
+
+
+@pytest.mark.parametrize("subpackage", _SUBPACKAGES)
+def test_subpackage_imports_first(subpackage):
+    """Every subpackage imports in a fresh interpreter, whatever else is imported later."""
+    if subpackage == "gui" and find_spec("PySide6") is None:
+        pytest.skip("needs the gui extra")
+    # Import the same source tree as this test session, not an installed copy.
+    source_root = str(Path(pyRadPlan.__file__).resolve().parent.parent)
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(filter(None, [source_root, os.environ.get("PYTHONPATH")])),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", f"import pyRadPlan.{subpackage}"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr

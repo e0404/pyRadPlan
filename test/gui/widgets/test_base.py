@@ -131,6 +131,7 @@ def test_adaptive_spin_box_small_values_round_trip_in_any_locale(qapp, locale_na
 
 
 def test_adaptive_spin_box_size_ignores_a_wide_range(qapp):
+    """Fractional font sizes (e.g. the main window's compact font) included."""
     from pyRadPlan.gui.widgets._base import AdaptiveDoubleSpinBox
 
     narrow = AdaptiveDoubleSpinBox()
@@ -138,4 +139,25 @@ def test_adaptive_spin_box_size_ignores_a_wide_range(qapp):
     wide = AdaptiveDoubleSpinBox()
     wide.setRange(-1.0e9, 1.0e9)
 
-    assert wide.sizeHint().width() <= narrow.sizeHint().width()
+    font = qapp.font()
+    for tenths in range(60, 200, 3):
+        font.setPointSizeF(tenths / 10)
+        narrow.setFont(font)
+        wide.setFont(font)
+        assert wide.sizeHint().width() <= narrow.sizeHint().width(), font.pointSizeF()
+
+
+@pytest.mark.parametrize("exception", [RuntimeError("failed"), SystemExit("Aborting")])
+def test_worker_reports_a_failing_computation(qapp, exception):
+    from pyRadPlan.gui.widgets._base import Worker
+
+    def compute():
+        raise exception
+
+    worker = Worker(compute)
+    errors = []
+    worker.error.connect(errors.append)
+
+    worker.run()
+
+    assert errors == [exception]

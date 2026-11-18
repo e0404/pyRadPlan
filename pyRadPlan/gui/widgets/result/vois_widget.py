@@ -116,7 +116,7 @@ _TISSUE_COMBO_TOOLTIP = "RBE model whose tissue parameters are edited below"
 COMPARISON_DELAY_MS = 150
 
 _GROUPBOX_STYLE = (
-    "QGroupBox { font-size: 10pt; font-weight: 600; margin-top: 6px; "
+    "QGroupBox { font-weight: 600; margin-top: 6px; "
     "border: 1px solid palette(mid); border-radius: 4px; padding: 4px 6px 4px 6px; }"
     "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
 )

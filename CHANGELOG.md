@@ -7,6 +7,166 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Changed
+
+- numpy 2.4 and 2.5 are supported
+- All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
+- Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
+- Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
+
+### Deprecated
+
+- `StructureSet.get_reference_lq_params` and `get_tissue_class_indices`: the `overlap_is_applied` argument has no effect, because the result is the same with and without overlap priorities applied. Passing it emits a `DeprecationWarning`
+
+### Fixed
+
+- Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+- Dose influence matrices failed to validate ("Invalid shape!") with numpydantic 2.0 on Python 3.12.3, the system Python of Ubuntu 24.04, so no dose could be calculated there. This also broke the Linux desktop installer
+- Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
+- Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
+- Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
+- Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
+- GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
+- Ray tracers: the lateral cut-off was applied on the ray-matrix plane behind the patient instead of at the isocenter plane, and did not account for the tilt of off-axis rays, so the traced region was narrower than the geometric cut-off of the dose engines (about 11 % for photons in a 240 mm phantom, ~1 % for ions). Voxels in between got no radiological depth and no dose. Every voxel inside the geometric cut-off now gets a depth. Photon dose influence matrices gain entries at the edge of the cut-off, existing entries are unchanged (TG119, two beams, 50 mm cut-off, dij sampling off: +0.7 % non-zeros, dose up to +0.26 % of the maximum). With dij sampling on (the default), the additional voxels shift the random sampling, so photon results with a fixed `random_seed` differ from 0.8.0 within the sampling noise (up to ±1.6 % of the maximum dose in the same case). Photon ray tracing traces about 30 % more rays and takes correspondingly longer. Proton dose influence matrices on TG119 are bit-identical. matRad applies the cut-off unscaled on the ray-matrix plane, so photon dose influence matrices now have slightly more entries than matRad's
+- Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
+- `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
+- GUI: in the plan settings, the orange border that marks a field with unapplied changes no longer changes how the field is drawn. On spin boxes such as the dose grid resolution, the up/down arrows used to change their look and position while the field was marked; they now look the same with and without the border
+- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number. They used to come from the VOI listed last, so a dose influence matrix with `alphax` / `betax` calculated with 0.8.0 can differ where VOIs with different tissues overlap; optimizing it then raises a `ValueError` (see below), and it has to be recalculated. Empty placeholders such as `None` in a VOI's objectives are dropped, so such a VOI counts as having no objectives.
+- Optimization: the check that the Dij's `alphax` / `betax` match the structure set only logged an error, and computed the reference values differently from the dose engines. The check now builds the values with `StructureSet.get_tissue_data`, like the dose engines, and raises a `ValueError`.
+
+## [0.8.0] - 2026-11-05
+
+### Added
+
+- `core.resample.resample_array` resamples NumPy, CuPy, PyTorch and other Array API arrays and returns them on their namespace, device and dtype. Full volumes use SimpleITK by default; `prefer_native=False` resamples on the array's backend. `ArrayBackendGridResampler` prepares repeated sampling of selected voxels
+- `core.xp_utils.ArrayBackendGridInterpolator` and `ArrayBackend1DInterpolator`: interpolation on rectilinear grids that keeps its grid preparation across queries and evaluates several fields with one coordinate search; `interpnd` takes `prefer_native` to choose between the native (SciPy/CuPy/JAX) and the generic Array API implementation
+- `core.xp_utils.grouped_max`: maximum per integer group on the arrays' device
+- Ray tracers: `trace_cubes_array` returns the radiological depth arrays on the tracing backend; `trace_cubes` still returns images
+- GUI: a *Dark Mode* switch in the *View* menu of the main and result windows. It follows the operating system's color scheme until it is used; where the platform cannot switch the scheme itself (e.g. Linux sessions without a GNOME/KDE theme plugin, or Qt < 6.8), the GUI switches to the Fusion style with a dark or light palette
+- GUI: the slice viewer marks the isocenter with a red "x", and the 5 slices on either side of it show a fainter half cross pointing in the mouse-wheel direction that leads to the isocenter slice
+- JupyterHub sessions of the browser GUI: the `pyradplan-hub` image (`packaging/container/Dockerfile.hub`, published as `ghcr.io/e0404/pyradplan-hub` with each release) runs as a JupyterHub server and gives every logged-in user a pod of their own with the GUI, ending when the GUI is closed; `packaging/container/jupyterhub-values.yaml` installs Zero to JupyterHub into a single Kubernetes namespace without cluster-wide permissions, with users set up in advance with a password each (`packaging/container/make_hub_users.py`), a limit on simultaneous sessions and culling of sessions whose browser tab was closed
+- Desktop installers and browser container images: the phantoms of matRad 3.2.3, the CORT patient cases `HEAD_AND_NECK`, `LIVER` and `PROSTATE` and the `BOXPHANTOM`, are listed under File → Open Example Phantom next to TG119. The builds download them from the matRad release; they are not part of the Python package
+- Robustness operators carry a `label` (e.g. "Voxel-wise worst case"); custom operators may set one, otherwise their `name` is shown
+
+### Changed
+
+- Pencil-beam dose calculation is faster with unchanged results. On TG119 with the GUI defaults (3 mm dose grid, 5 mm bixels), five-field photon IMRT is 2.2x faster with NumPy and 3.2x faster with CuPy, three-field protons 1.4x and 1.6x faster. Main contributions: photon dose sampling uses a grouped maximum instead of sorting each ray, the convolved photon kernels share one interpolator, beam geometry and voxel masks are compacted once per beam instead of per ray, dose setup and tissue data preparation are faster, and radiological depths stay on the compute device
+- Influence matrices store row indices and column pointers as int32 when they fit, a third less memory for the sparse buffers; larger matrices keep int64
+- Browser container: without `XPRA_PASSWORD` the web client connects without asking for a password (it asked for one and accepted any); `XPRA_BIND` sets the address the web client listens on
+- Browser container: with a CPU limit, the calculations use as many threads as the limit allows instead of one per CPU of the host, so the session keeps responding during dose calculations and optimizations
+- Browser container: `PYRADPLAN_BASE_DATA_PATH` is `/shared:/opt/pyradplan/data` by default, so a course folder mounted at `/shared` is found without setting it; a deployment that sets it must keep `/opt/pyradplan/data` for the phantoms of matRad
+- GUI: the plan widget lists dose engines, scenario models, planning problems and solvers, and the objective table lists robustness settings, by their full names; the identifiers stay visible in the open dropdowns
+- GUI: the Objective, Quantity and Robustness columns of the objective table are narrower; longer names are shortened with "…" and shown in full in the open dropdown
+- Display names of the scenario models and the planning problem: `wcScen` is "Worst-case Grid", `impScen` "Importance Grid", `rndScen` "Random Samples" and `nonlin_fluence` "Fluence (nonlinear)"
+- GUI: the workflow's "Save / Keep Result" button is now "Snapshot Result" with tooltip to counter ambiguity
+- GUI: the slice viewer responds much faster on large patients, with unchanged display. On a 456 × 456 × 125 head-and-neck CT with 24 structures, a slice step takes about 3 ms instead of about 210 ms, and the main window opens in about 1 s instead of 2.6 s. Structure contours and dose isolines are traced in C (contourpy) instead of Python, only within each structure's bounding box, and cached per slice. Full-volume minima and maxima are computed once instead of on every slice. Dragging the slider or scrolling with the mouse wheel renders only the latest slice
+- `StructureSet.target_center_of_mass` is about 5x faster on large images, with unchanged results
+
+### Deprecated
+
+- `resample_numpy_array`: use `resample_array`, which takes the same arguments and also accepts arrays of other backends
+
+### Fixed
+
+- Loading matRad `.mat` files is more lenient about objectives. Files with an EUD objective no longer fail with "pop from empty list": missing or invalid objective parameters now keep their defaults and log a warning. Mean-dose objectives now read and write matRad's `f_diff` setting (stored as 1 = linear, 2 = quadratic). Objectives without a pyRadPlan equivalent, such as matRad's `DoseConstraints`, are now skipped with a warning instead of stopping the import
+- Loading matRad `.mat` files now reads each structure's visibility (`Visible`); before, all structures were shown. Colors stored as whole numbers, such as `[0 0 1]` for blue, are read on matRad's 0–1 scale instead of as almost black. Saving to matRad `.mat` now writes the visibility and color of each structure
+- GUI: widgets no longer switch to a larger font after pressing Apply or when a modified field is reset. The compact font is now set on the application rather than the main window, and the VOI and analysis group boxes no longer use fixed font sizes
+- GUI: labels and buttons outside the workflow panel and menus now consistently use sentence case
+- GUI: the slice viewer drew the isocenter marker and the beam axes half a voxel off the isocenter, towards the top left of the image (1.5 mm in each direction on TG119's axial slices), so the dose appeared shifted against them. They now sit on the isocenter
+- GUI: Optimize and Recalculate Dose over a scenario set keep the per-scenario results of every quantity. Before, they kept them only for the physical dose and the quantities the objectives evaluate, so a proton plan with physical-dose objectives, shown as RBE-weighted dose, offered no scenarios in the viewer and the DVH widget
+- IPOPT solver ignored `bounds` (always solved on [0, inf)), wrote the solution into the caller's `x0` and returned garbage for a float32 `x0`
+- SciPy solver ignored `max_time`, and cancelling a TNC run raised `StopIteration` instead of returning the last iterate
+- SciPy and IPOPT solvers used outside the built-in planning problems (called directly or from a custom planning problem) evaluated a torch `x0` on the default device instead of its own
+- ipax solver reported `num_iter` one too high (ipax also counts the starting point)
+- `register_solver` accepted a solver without `short_name`
+
+## [0.7.0] - 2026-11-02
+
+### Added
+
+- Scenario models for uncertainty handling, matching matRad's `nomScen`, `wcScen`, `impScen` and `rndScen` (realizations, probabilities, weights and the `(ct, shift, range)` layout verified against matRad reference tables): `NominalScenarioModel`, `WorstCaseScenarioModel`, `ImportanceScenarioModel` and `RandomScenarioModel` in `pyRadPlan.scenarios`, with matRad's `combinations`, `combineRange`, grid-point counts, `nSamples` and `includeNominalScenario`. A model is a pydantic configuration of *uncertainty dimensions* (`SetupUncertainty`, `RangeUncertainty`, `CTPhaseUncertainty`; each declares whether it affects geometry, range or per-voxel parameters) and a joint distribution (`IndependentGaussian` as in matRad, or a `MultivariateGaussian` with full covariance), and generates a `ScenarioSet` lazily. The set lists the realizations with probability, weight, tags and a flat index, answers `group_by`, `extent`, `voxel_param_set` and `nominal_index`, can be built from explicit points (`ScenarioSet.from_points`) and extended (`extend`), may hold *derived* scenarios defined as linear combinations of computed ones (`ScenarioBasis`; a unit coefficient shares the referenced matrices), and offers a re-tieable grid view (`layout`, `with_axes`, `isel`, `sel`, `grid_view`, optional `to_xarray`). `ExplicitScenarioModel` wraps a hand-built set; new dimensions, distributions and models register with `register_dimension`, `register_distribution` and `register_scenario_model`. User guide: *Uncertainty and Scenarios*
+- Dose calculation over scenario sets: the pencil-beam engines compute one influence matrix per scenario (flat `(n,)` containers addressed by the scenario's flat index), sharing the ray tracing between scenarios with the same setup shift and applying CT phase and range perturbations per scenario; engines declare `supported_uncertainties` and refuse sets with dimensions they cannot apply. `calc_dose_influence` / `calc_dose_forward` accept a `scenarios=` override. The progress reporting (console bars and the GUI status line) counts the computed scenarios as the outermost level ahead of the beams and rays; `ProgressReporter.progress()` handles can advance by any step and optionally show a console bar. `Dij.scenarios` records the set (validated against the containers), `Dij.num_of_scenarios`, `voxel_param_column`, `attach_scenarios` and `extend_scenarios` were added, and the per-voxel parameter arrays (`alphax`, `betax`, `tissue_class_ix`) carry one column per voxel parameter set (per used CT phase). matRad `dij` cell arrays are flattened on import and written back on the `(ct, shift, range)` grid on export. The quantities evaluate every scenario of the set, including derived ones, and the stf generators derive their target margins from the set's extents
+- The influence matrices of several computed scenarios share one sparsity pattern: `Dij.share_scenario_structure()` rewrites them over the union of their patterns with a single row-index array (int32 where it fits) and explicit zeros where a scenario misses a voxel, so the index arrays are stored and uploaded to the GPU once; the dose engines apply it when the option `share_scenario_structure` is set (off by default) and log the share of explicit zeros. `Dij.to_namespace` also uploads index arrays shared by several matrices as int32, so cupy keeps sharing them instead of copying them per matrix
+- Robust optimization on scenario sets. Objectives carry a `robustness` setting (matRad's property; its names `STOCH`, `VWWC`, `VWWC_INV`, `OWC`, `COWC` are accepted and normalized) selecting a robustness operator from `pyRadPlan.optimization.robustness`: `none` (nominal scenario only), `expected_value` (weighted average over the scenarios with the set's weights), `expected_quantity` (objective of the expected dose), `voxel_worst_case` / `voxel_worst_case_inverted` (per-voxel minimum in targets and maximum in organs at risk, or the reverse), `objective_worst_case` and `composite_worst_case` (worst scenario per objective or over all objectives sharing the operator, with matRad's `logsumexp` / `pnorm` smooth maximum or the exact maximum, configured through `pln.prop_opt["max_approximation"]` and `["p_norm"]`). Operators return per-scenario cotangents, so every scenario's gradient is back-projected through its own influence matrix; custom operators register with `register_robustness_operator`
+- 4D structure sets in robust optimization: objectives evaluate each scenario on the contour of its CT phase, as matRad does (`none`, `expected_value`, `objective_worst_case`, `composite_worst_case`); the voxel-wise worst case reads the contour of its single phase, the expected quantity and `Variance` the first phase. Image-reference objectives on contours that differ between the phases are refused
+- `Variance` objective: minimizes the voxel-mean variance of the quantity over the scenarios (matrix-free; the probabilistic counterpart of matRad's `PROB` variance term)
+- Per-scenario optimization results: `Dij.compute_result_ct_grid` / `compute_result_dose_grid` / `get_result_arrays_from_intensity` take `scenarios=True` (or a list of flat indices) and add `"<quantity>_scenario"` lists with one image per scenario of the set (`ScenarioSet.label(i)` / `Dij.scenario_labels()` name them). `ScenarioSet.nominal_indices()` lists the unperturbed scenario per CT phase. The unsuffixed results default to the nominal scenario (`Dij.nominal_scenario_index()`; the first computed scenario when the set has none) instead of the first slot
+- `scenario_quantities` of `Dij.get_result_arrays_from_intensity`, `compute_result_dose_grid` and `compute_result_ct_grid` limits the per-scenario lists to the given results; the GUI keeps them for the physical dose and the quantities the objectives evaluate
+- Per-scenario forward dose: `calc_dose_forward` over a scenario set with several computed scenarios returns the nominal scenario's doses as before plus a `"<quantity>_scenario"` list with one image per scenario (before, a forward calculation over several scenarios returned the first slot silently, then refused the set)
+- GUI: the result selector offers the scenarios of a robust result as components next to the beams (labelled from the dose influence data's scenario set, e.g. "scenario 3: setup (+3.0, 0.0, 0.0) mm"), the DVH widget can overlay the curves of all scenarios behind the nominal ones, the objective editor has a Robustness column, and the plan widget's scenario model has a "…" button configuring the model's parameters (setup and range uncertainties, CT phases, worst-case extent, grid points, samples); the configuration forms now also edit nested pydantic models and tuple-valued parameters
+
+### Changed
+
+- `Plan.mult_scen` is now `Plan.scenarios` (also accepting a model name, a parameter dictionary or a `ScenarioSet`); `mult_scen` / `multScen` remain as input aliases and matRad export keeps writing `multScen`. The engine and stf-generator parameter keeps the name `mult_scen` for now
+- Objectives without a robustness setting are evaluated on the nominal scenario(s) only when the dose influence data holds several scenarios (before, their values were summed over all scenarios). Quantities compute only the scenarios the objectives need (`QuantityResolver(dij, scenarios={identifier: [...]})` per quantity, widened to the consumers of a dependency), and the planning problem reports one value and one jacobian row per robust term (a composite worst case over several objectives counts once). The problem logs which scenarios each quantity evaluates, and `pln.prop_opt["evaluate_all_scenarios"] = True` makes every quantity evaluate the whole set regardless of the objectives' needs
+
+### Deprecated
+
+- `NominalScenario` (use `NominalScenarioModel`) and the flat scenario parameters `range_rel_sd`, `range_abs_sd`, `shift_sd`, `ct_scen_prob` and the matRad-style derived properties (`scen_mask`, `linear_mask`, `iso_shift`, ...) of the scenario models; configure the nested `setup`, `range` and `ct_phase` dimensions and query the `ScenarioSet` instead
+
+### Fixed
+
+- Multi-scenario dose calculation: isocenter shifts no longer accumulate across setup scenarios (the stf is copied per shift), every scenario selects its own CT phase (the first phase was used for all), the particle engines take the reference tissue parameters of each phase, the relative range margin of the stf generators no longer reuses the absolute one, and the per-voxel parameter column of a scenario is its CT phase rather than its scenario index. The stf generators now take the plan's scenario model (the plan's model was ignored and the nominal one used) and grow the target by setup shift plus range plus beamlet margin as matRad does
+- Fluence optimization over several scenarios back-projects each scenario's objective gradient through that scenario's influence matrix (the summed gradient of all scenarios was applied to every matrix)
+- Objectives normalize by the voxel count as a Python float, so their values and gradients keep the dose's float32 dtype on cupy (cupy promoted the division by a large integer to float64)
+- GPU ray tracing (cupy, torch) could read unfinished inputs when the GPU was busy with other work, silently dropping parts of the dose and making dose calculations and optimizations irreproducible: the plane-alpha side streams of the Siddon ray tracer now wait for the current stream before they start
+- `StructureSet` from a matRad cst: a cst on a 4D CT failed with a SimpleITK error (and a single index list was repeated 4 times instead of once per CT scenario), and index cells given as numpy object arrays (e.g. the output of `StructureSet.to_matrad`) failed for VOIs with more than one voxel
+- `VOI.to_matrad` for a 4D VOI wrote 0-based indices in numpy order instead of matRad's 1-based column-major indices
+- 4D structure sets: `apply_overlap_priorities`, `get_reference_lq_params`, `get_tissue_class_indices` and `resample_on_new_ct` failed; the LQ parameters and tissue class indices now have one column per CT scenario taken from that scenario's masks
+- `apply_overlap_priorities` and `get_reference_lq_params` failed with an `IndexError` on an empty structure set
+- `create_voi` rejected a lowercase or padded `voi_type` (e.g. `"target"`), which the `voi_type` field itself accepts
+- Comparing CTs, VOIs or structure sets (`==`) ignored their voxel values (SimpleITK's image comparison is always truthy) and raised for a 3D and a 4D image; models holding images now compare geometry and voxel values
+- Pencil-beam dose calculation failed with a broadcasting error when some rays of a beam missed the patient (e.g. under large setup shifts); such rays now take the SSD of the closest ray that hits the patient, and a beam missing the patient entirely reports it
+- 4D CTs: `calc_dose_influence`, `calc_dose_forward`, `generate_stf` and the planning problems accept a 3D structure set with a 4D CT (its structures are repeated for every phase, as in matRad) as well as 4D structure sets; before, the structure set validation, the stf generators and the structure resampling of the planning problems failed with SimpleITK errors
+- `CT`: creating one from a dict no longer modifies the dict or the given SimpleITK image (e.g. a second CT built from `ct.cube_hu` with a new origin moved the first one too)
+- `CT.x`, `CT.y`, `CT.z` could have one element too many due to floating-point rounding
+- `CT.to_matrad`: `cubeDim` was in x, y, z instead of matRad's y, x, z order, and multi-scenario CTs failed; a single-cell `cubeHU` (as `to_matrad` writes it) was read back as a 4D CT
+- Multi-scenario CTs: `compute_wet` failed, a centered origin had -1 instead of 0 in its 4th component, and a 3-element `origin` (as `CT.origin` returns it) was rejected
+- `CT.compute_wet` accepted HLUTs with more than two columns or a single row
+- Importing a matRad stf with a beam that has only one ray no longer fails
+- `FieldShapeAsMask` accepts masks given as nested lists, and the warning about padding an even-sized mask is logged correctly instead of raising a logging error
+- `Plan.to_matrad` (and `.mat` export): `propStf`, `propOpt`, `propDoseCalc` and `propSeq` keys were snake_case, so matRad ignored them (e.g. `gantry_angles`)
+- `create_pln(radiation_mode="VHEE")` raised "Unknown radiation mode"
+- `create_pln` with a dict without radiation mode gave a proton plan without the proton default biological model
+- An invalid `scenarios` (`mult_scen`) raised a `TypeError` instead of a `ValidationError`
+- `Dij.to_matrad` (and `.mat` export) wrote `bixelNum`, `rayNum` and `beamNum` 0-based instead of matRad's 1-based numbering, and pyRadPlan could not import its own export
+- GUI: a FRED run that failed (e.g. FRED not installed) left the application busy forever, so settings could no longer be changed; the error is now shown and the GUI stays usable
+
+## [0.6.1] - 2026-10-30
+
+### Added
+
+- GUI: the info widget and the About dialog show the Python version next to the pyRadPlan version, e.g. "pyRadPlan v0.6.0 (Python 3.12.7)"
+- Windows desktop installer: a "Create a desktop shortcut" option next to the installation folder and a "Launch pyRadPlan" option on the final page, both checked by default
+
+### Changed
+
+- Bumped ipax to 0.13.0 containing a bugfix to consistently allocate on the correct device
+- macOS desktop installers require macOS 14 or later and use Apple's Accelerate for NumPy and SciPy linear algebra instead of the bundled OpenBLAS
+
+### Fixed
+
+- FRED retries start with a clean temporary directory after a failed simulation, so partial scorer files from the failed run cannot be read or saved as output of the retry
+- The online documentation builds again on Read the Docs (the 0.6.0 build failed on numpydantic array annotations with current `sphinx-autodoc-typehints`)
+- IMRT, IMPT and VHEE stf generators: with a bixel width / spot spacing below the CT resolution, the ray grid was padded on one side only, so every field lacked one row and column of rays on its +x and +z side (as in matRad, it is now padded on all sides)
+- Dose engines can be reused for several calculations. A second calculation on the same engine object computed every quantity twice (twice the forward dose, an `IndexError` in a following influence calculation), and kept what the first one resolved for its own patient: the dose grid and voxel subset (dose was then computed only on the first cst's voxels), the scenario model and the biological model (one dropped for unsuitable tissues stayed dropped). A calculation now leaves these settings as the user gave them, also the particle lateral model ("auto" / "fastest" resolve per machine) and the LET scorers a LET-based model switches on in TOPAS and FRED. TOPAS no longer compounds `scaling_factor` with the weights of every call, and FRED no longer writes into the folder tree a previous calculation deleted
+- `calc_dose_forward` with weights wrote them into the caller's stf, the TOPAS input pass replaced the stf weights by history counts, and field-based photon calculations resampled the stf's field shapes in place; all three now leave the stf unchanged
+- `keep_rad_depth_cubes=True` failed with a `Dij` validation error: the radiological depth cubes are now stored as arrays (one per beam, dose grid in z, y, x order)
+- Particle pencil-beam engines: beams after the first used the lateral cutoffs computed for an earlier beam wherever they share an energy, since the kernels were cached with their cutoffs while the cutoffs are recomputed per beam from its SSDs. This affected dose calculations with beams of different SSDs (only voxels at the lateral cutoff)
+- Keyboard cancellation of optimizations on Linux and macOS: an arrow or function key pressed in the terminal stopped the optimization as if it were ESC, and an optimization started as a background job (`python run.py &`) was stopped by the shell with `SIGTTOU`
+- Base data files (machines, RBE and stopping power tables) are found by name case-insensitively on Linux too, as on Windows and macOS, so e.g. `machine="generic"` no longer fails there only
+- `pyRadPlanGUI` can be stopped with Ctrl+C in the terminal it was started from
+- OpenMP clash detection: a package installed behind a symlink (e.g. a venv's `lib64 -> lib` on Linux) or loaded through an 8.3 short path or a junction on Windows was reported as clashing with its own runtime, which disabled that solver
+- GUI "Load patient data": files with an uppercase extension (e.g. `A.MAT`) were hidden in the case-sensitive GTK file dialogs on Linux
+- Desktop app on Linux: opening several files with it (`Exec=... %F`) made it exit with an argument error; the first file is opened
+- `MatRadEngineOctave`: the default Octave executable was a Windows path, so it always failed on Linux and macOS; it now defaults to `$OCTAVE_EXECUTABLE` or `octave-cli` on the `PATH`
+- DICOM import from a folder: files were taken in file system order, which is arbitrary on Linux (ext4), so the structure set chosen when there are several varied; they are now sorted by name
+- JAX backend: converting a Dij to JAX (`Dij.to_namespace`) failed for pencil-beam dose influence matrices, and fluence optimization failed on JAX arrays
+
+## [0.6.0] - 2026-10-28
+
 ### Added
 
 - Outcome objectives: `OutcomeObjective` base class and `OutcomeModel`, which optimizes a torch outcome model (e.g. NTCP CNN) loaded from the model hub. Its preprocessor implements the new `pyRadPlan.ai.modelhub.OutcomePreprocessor`
@@ -26,7 +186,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development implementation plan for explicit optimization quantities and opt-in `dose_auto` strategies, including prescription conversion, fraction normalization, GUI integration, and migration (design only).
 - Biological models (`pyRadPlan.biology.models`): constant RBE, LET-based LQ models (Wedenberg, McNamara, Carabé, Mairani helium, linear scaling), and three formalisms evaluating base data of any radiobiological model: precomputed α/β kernels (`alpha_beta_kernels`), α/β tables averaged over the fragment fluence spectra (`alpha_beta_tables`) and z\* kernels (`zstar_kernels`, α = α_0 + β_0·z\*). Models are lightweight parameter objects declaring `required_quantities` and `output_quantities`; per-calculation state lives in a `BioModelEvaluator` created by `model.evaluator(machine, voxel_params)`, which evaluates named inputs from `BioEvaluationContext` into a mapping-backed `BioModelResult` and converts them to its declared additive influence quantities; discrete tissue classes are selected through a `TissueParameterLookup` (`"exact"`)
 - `Plan.bio_model` accepts a model name, a `{"model": name, **parameters}` dict or a model instance, validates it against the radiation mode and serialises it back. Ion plans default to a biological model (`pyRadPlan.plan.default_bio_models`; protons: `constant_rbe`, helium: `HEL`, carbon/oxygen: `alpha_beta_kernels`; photons/VHEE: `none`). If the model cannot be applied to the patient (e.g. no machine tissue class matches a structure's tissue, or the machine lacks the required kernels), the dose engine warns and calculates physical dose only (`dij.bio_model` is then `None`); pass `calc_bio_dose=True` to make this an error
-- `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective dose parameters and reported result doses refer to one fraction or to the total course; `Dij.compute_result_*` take `num_of_fractions` for the scaling and the optimizer logs the interpretation it applies
+- `Plan.dose_convention` (`"per_fraction"`, default, or `"total"`): whether objective reference parameters (scalar values and reference images) and reported results refer to one fraction or to the total course. Conversions follow each quantity's declared fraction scaling (`RTQuantity.fraction_exponent`, `total_course_factor()`): doses and effects scale with the number of fractions, `sqrt_beta_dose` with its square root, LET not at all; custom quantities must declare it to be used with `"total"`. `Dij.compute_result_*` take `num_of_fractions` for the scaling, and the optimizer logs the interpretation it applies
 - `Dij.bio_model`: the biological model the dose engine used (validated like `Plan.bio_model`; `None`, dict or instance), serialised as its parameter dict; `dij.rbe` is derived from it for constant-RBE models and a legacy scalar `rbe`/`RBE` (matRad) is folded into a `constant_rbe` model on import and written back as `RBE` on export. `alphax`/`betax` carry one column per CT scenario
 - `rbe_x_dose` quantity (`RBExDose`) with two paths decided by `dij.bio_model` (`RBExDose.choose_path`): LQ inversion of the `effect` (`lq_inverse_dose`) or the constant RBE; models providing alpha/beta without matrices on the dij raise a clear error. Result assembly in `Dij` uses the same rule and inversion
 - `QuantityResolver.try_get`; optional quantity dependencies that cannot be computed for a dij are skipped instead of failing the resolution
@@ -49,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matRad interoperability of biological models: `pln.bioModel` names (`constRBE`, `LEM`) and model structs are understood on import (`bio_model_spec_from_matrad`); `Plan.to_matrad()` writes the matRad model name and preserves explicitly configured parameters in `bioModelParameters` for a lossless pyRadPlan `.mat` round trip
 - `bio_influence_from_let` derives the evaluator's declared biological influence matrices from physical dose and LET·dose matrices; the FRED engine uses it for LET-based models (`calc_bio_dose="auto"`) and stores the LET matrix under the canonical `let_dose` name
 - TOPAS scores the dose-averaged LET of protons and computes LET-based biological models (e.g. `WED`, `MCN`, `CAR`, `LSM`) for proton plans
-- `Plan.machine` accepts a loaded `Machine` object; the GUI plan widget lists it as "<name> (from plan)", builds the biological model options and tissue checks from it and keeps it on Apply
+- `Plan.machine` accepts a loaded `Machine` object; the GUI plan widget lists it as "<name> (from plan)", builds the biological model options and tissue checks from it and keeps it on Apply; steering and dose calculation use the loaded machine's base data, and dose engines raise if it does not match the steering information's machine name or radiation mode
 - GUI: the plan widget's beam-count indicator became an editable spin box that fills the gantry angles with that many equally spaced angles (e.g. 8 beams -> 0, 45, ... 315 deg), and the couch angles now follow the gantry angles once the gantry edit is finished — a single couch angle is repeated for every beam, otherwise an added beam gets a couch angle of 0, and a removed one drops its angle, so the two fields always match in length
 - GUI: a "Discard" button next to "Apply" in the plan panel resets the form, including the dose-engine settings, to the applied plan
 - GUI: before calculating the dose influence, optimizing, recalculating the dose or saving the plan or workspace, the workflow panel asks what to do with plan changes that are not applied yet: apply them, continue with the applied plan, or cancel. Applying them before optimizing or recalculating the dose outdates the dose influence, so that step does not run
@@ -63,10 +223,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: a "Stop" button next to "Refresh" in the workflow panel stops the running calculation. An optimization returns its last iterate; dose influence calculation, steering generation and imports are aborted at their next progress step (e.g. the next ray) via `ComputeCancelledError`, which progress steps of `ProgressReporter` now raise once a stop is requested through the active `ComputeControl`
 - GUI: an interactive DVH plot in the analysis window. Hovering shows a data cursor listing every curve's volume at the mouse position. Clicking a curve or a QI table row highlights that structure in both. "Show in DVH" checkboxes next to the D_x and V_x inputs mark the table's D_x and V_x points on the curves, each kind separately; selecting such a cell or clicking its marker adds a solid line at the value and a dashed line at the parameter (e.g. D98: dashed at 98 %, solid at its dose). Dragging the dashed line moves the point along the curve, and double-clicking the plot picks a new point; after confirmation in a short dialog the point replaces the old metric or is added to the D_x / V_x inputs
 - GUI: `pyRadPlanGUI` / `pyRadPlan.gui.gui()` show a splash screen right away, with a progress bar and a status line counting the steps (e.g. `Loading optimization… 7/15`), and the array backends while they are probed (e.g. `Detecting array backends: CuPy…`), while pyRadPlan's subpackages load and the main window is built, so slow starts (e.g. the first launch after a reboot, which can take close to a minute) give visible feedback
-- `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a bundled phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the bundled phantoms by name
+- Phantoms are base data: besides the shipped TG119, every `.mat` (matRad) or `.npz` file in `~/.pyradplan/phantoms` or in the `phantoms` folder of a shared base data folder is a phantom, named by its file name without the ending. `pyRadPlan.io.list_phantoms()` lists them with their source
+- Shared base data folders: the `PYRADPLAN_BASE_DATA_PATH` setting (`pyRadPlan.settings.base_data_path`, also in a `.env` file or the GUI's Settings → Preferences) lists folders separated like `PATH` (`;` on Windows, `:` elsewhere), each laid out like the data directory (`phantoms/`, `machines/`, `rbe/`, `physics/stopping/`). Their files are found after the user's own, e.g. to give a course's installations the same preselected cases and machines. `pyRadPlan.core.shared_base_data_roots()` and `shared_base_data_dirs()` return the folders; the Base Data overview lists their files as "Shared"
+- GUI: File → Open Example Phantom loads a phantom from all phantom folders without browsing for its file, also in the desktop installers. The list is read again whenever the menu opens, and "Open Phantom Folder" opens `~/.pyradplan/phantoms`
+- `pyRadPlanGUI TG119`: the console script and `pyRadPlan.gui.gui()` accept the name of a phantom in place of a path. `pyRadPlan.io.phantom_path` and `available_phantoms` resolve the phantoms by name
+- GUI: a Help menu with links to the documentation and the source repository, a "Third-party Licenses…" browser listing the installed packages with their license texts, and an "About pyRadPlan…" dialog showing the version, the BSD license note and the research-and-education / not-for-clinical-use disclaimer
+- A per-user `.env` file at `<data_dir>/.env` (`~/.pyradplan/.env` by default, relocatable via `PYRADPLAN_DATA_DIR`) is read for all `PYRADPLAN_*` settings, the AI provider API keys and `KMP_DUPLICATE_LIB_OK`, so an installed desktop app can be configured without a writable working directory; a `.env` in the working directory keeps precedence, and real environment variables win over both
+- Desktop installers: a Briefcase project under `packaging/briefcase` packages the GUI (CPU-only) as a Windows MSI, macOS DMG and Linux .deb, with a bundled smoke test and a `Desktop installers` GitHub Actions workflow that attaches the installers to a release
+- Browser container: `packaging/container` runs the Qt GUI through Xpra's HTML5 client,
+  with a Compose example and shared smoke test; GitHub and GitLab build and test the
+  image and publish tagged releases to their container registries.
+- Responsive layout, favicon and links to Group Website, LinkedIn and GitHub in documentation website
 
 ### Changed
 
+- The TOPAS dose engine writes its date-stamped simulation directory to `<data_dir>/topas/` (`~/.pyradplan/topas/` by default) instead of into the installed package, which may be read-only; `simu_dir` can still be set explicitly
 - The data folders shipped with pyRadPlan use snake_case: `pyRadPlan/data/RBEtables` is now `pyRadPlan/data/rbe`, `SPtables` is `physics/stopping` and `TOPAS` is `topas`. Code reading these folders through `importlib.resources` needs the new package names (e.g. `pyRadPlan.data.rbe`); table names in plans are unchanged
 - The documentation tutorials are built from the jupytext example scripts in `examples/` and the documentation shows example outputs for releases only, from notebooks executed and committed during the release; examples are not executed in CI or on Read the Docs; example notebooks are no longer part of the repository
 - The pencil beam dose engines and the ion stf generators no longer ignore densities outside the patient contours by default (`ignore_outside_densities=False`), so air outside the patient is traced for dose calculation and energy selection alike. Set it to `True` on both to restore the previous dose engine behaviour
@@ -91,6 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RBExDose` with a constant RBE scales the physical-dose vector instead of building a scaled copy of the influence matrix on every evaluation, and chains its derivative through the physical-dose quantity
 - `ExactClassLookup` converts the reference tissue classes into the caller's namespace/device/dtype once instead of per bixel, and skips the redundant per-bixel match check (and its device synchronization) once the whole dose grid has been validated. It also rejects empty or inconsistent class declarations
 - `calc_let` and `calc_bio_dose` of the particle engines accept `"auto"` (new default): supported biological influence matrices are computed whenever the evaluator declares them and LET whenever the machine provides it (pencil beam) or the model requires it (FRED); `False` switches the matrices off explicitly (LET-based models still receive the LET kernel in the pencil-beam engines), `calc_bio_dose=True` without an evaluator providing influence quantities raises. FRED sets `Dij.rbe` for constant-RBE models; the unused `calc_bio_dose` of the TOPAS engine was removed
+- Documentation style update to adhere to the logo color scheme; the light theme meets the WCAG AA contrast standards
 
 ### Deprecated
 
@@ -98,6 +270,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GUI: started without a console (e.g. with `pythonw`), dose calculations failed with `AttributeError: 'NoneType' object has no attribute 'write'` and the GUI froze after the error dialog: the console progress bar wrote to the missing `sys.stderr` and left tqdm's lock held. The GUI now discards console output when there is no console, and `ProgressReporter.track` draws no console bar without a `sys.stderr`
+- No more `Requested GPU device is not available ... Falling back to CPU` warning on CPU-only installs (no cupy/torch/jax): when a GPU is merely preferred but no GPU-capable backend exists, numpy is the only choice and the fallback is logged at debug level. The warning is kept for a real mismatch, i.e. an explicitly set `preferred_gpu_array_backend` or a torch/jax/cupy namespace whose GPU is unavailable
+- The pyRadPlan wheel no longer ships the repository's `test/`, `docs/`, `examples/` and `benchmark/` directories: package discovery is restricted to `pyRadPlan`
 - GUI: editing a number field of the objectives table or the configuration dialogs, e.g. a reference dose or a penalty, gave a value ten times too large or more in locales with a decimal comma: the fields displayed a decimal point, which these locales read as a thousands separator, so overwriting the "60" of "60.0" with "45" set 450. The fields now display the decimal separator of the locale. The parameter fields of the objectives table are also no longer sized for their full ±1e9 range
 - Ion machine files listing more focus sizes (`initFocus.SisFWHMAtIso`) than foci with beam optics, as the HIT base data with fluence spectra does, load again; the surplus sizes are ignored. Energy spectra given as a histogram (`energySpectrum.type = 'histogram'` with `energy_MeVpN` and `weight`) are read as well; the Monte Carlo engines use their weighted mean and spread
 - FRED: ion energies are written per nucleon (`Tu`, `EuFWHM`), as the machines tabulate them; carbon was simulated with about a twelfth of its energy before. FRED is now available for oxygen plans (it was registered as `oxygen16`) and writes helium and oxygen inputs. Ion calculations with FRED are not validated yet (the oxygen test case's dose is about 20 times the reference) and warn about it; proton calculations agree with the reference
@@ -585,7 +760,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/e0404/pyRadPlan/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/e0404/pyRadPlan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/e0404/pyRadPlan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/e0404/pyRadPlan/compare/v0.3.5...v0.4.0

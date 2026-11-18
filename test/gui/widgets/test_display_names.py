@@ -21,6 +21,8 @@ from pyRadPlan.gui.widgets._display_names import (
         ("let", "LETd"),
         ("alpha_dose_beam", "AlphaDose beam"),
         ("physical_dose_beam 2", "dose beam 2"),
+        ("physical_dose_scenario", "dose scenario"),
+        ("rbe_x_dose_scenario 3", "RBExDose scenario 3"),
         ("alpha", "alpha"),  # unregistered result keys are kept
         ("physicalDose", "physicalDose"),
     ],
@@ -62,6 +64,52 @@ def test_group_result_keys_splits_snapshot_tags():
     # a single suffixed entry is not mistaken for a snapshot tag
     assert "physical_dose_var" in by_label
     assert "physical_dose_var (protons_30fx)" in by_label
+
+
+def test_group_result_keys_lists_scenarios_after_beams():
+    keys = [
+        "physical_dose_scenario 0",
+        "physical_dose_scenario 2",
+        "physical_dose",
+        "physical_dose_beam 0",
+        "alpha_scenario 1",
+        "alpha",
+    ]
+    groups = group_result_keys(keys)
+    assert [(g.label, [c for c, _ in g.components]) for g in groups] == [
+        ("dose", ["full", "beam 0", "scenario 0", "scenario 2"]),
+        ("alpha", ["full", "scenario 1"]),
+    ]
+    assert groups[0].kinds == ("full", "beam", "scenario", "scenario")
+    assert groups[0].keys_of("scenario") == (
+        "physical_dose_scenario 0",
+        "physical_dose_scenario 2",
+    )
+    assert groups[0].keys_of("beam") == ("physical_dose_beam 0",)
+
+
+def test_scenario_suffix_is_not_a_snapshot_tag():
+    current = ["physical_dose", "physical_dose_scenario 0", "rbe_x_dose", "rbe_x_dose_scenario 0"]
+    saved = [
+        "physical_dose_saved",
+        "physical_dose_scenario_saved 0",
+        "rbe_x_dose_saved",
+        "rbe_x_dose_scenario_saved 0",
+    ]
+    groups = {(g.base, g.tag): g for g in group_result_keys(current + saved)}
+    assert set(groups) == {
+        ("physical_dose", ""),
+        ("rbe_x_dose", ""),
+        ("physical_dose", "saved"),
+        ("rbe_x_dose", "saved"),
+    }
+    assert groups["physical_dose", "saved"].keys == (
+        "physical_dose_saved",
+        "physical_dose_scenario_saved 0",
+    )
+    assert result_key_labels(saved)["physical_dose_scenario_saved 0"] == (
+        "dose (saved), scenario 0"
+    )
 
 
 def test_result_key_labels():

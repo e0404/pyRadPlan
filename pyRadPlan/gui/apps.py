@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Optional, Union
@@ -56,6 +57,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     process's command line (e.g. Jupyter's ``-f kernel.json``).
     """
     import argparse  # noqa: PLC0415
+    import signal  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(
         prog="pyRadPlanGUI",
@@ -70,7 +72,11 @@ def main(argv: Optional[list[str]] = None) -> None:
             "or the name of a bundled phantom, e.g. TG119."
         ),
     )
-    gui(parser.parse_args(argv).patient)
+    args = parser.parse_args(argv)
+    # Python's SIGINT handler only runs once Qt's event loop hands control back, which
+    # it never does, so Ctrl+C in the launching terminal would not stop the GUI.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    gui(args.patient)
 
 
 def gui(patient: Optional[str] = None) -> None:
@@ -93,6 +99,7 @@ def gui(patient: Optional[str] = None) -> None:
         StartupSplash,
     )
 
+    _ensure_std_streams()
     _app = QApplication.instance() or QApplication(sys.argv)
     imports = [entry for entry in _STARTUP_IMPORTS if entry[1] not in sys.modules]
     total = (
@@ -126,6 +133,18 @@ def gui(patient: Optional[str] = None) -> None:
         launch_main_window(workspace, splash=splash)
     finally:
         splash.close()
+
+
+def _ensure_std_streams() -> None:
+    """Replace missing standard streams with :data:`os.devnull`.
+
+    A process started without a console (``pythonw``, the desktop bundle) has
+    ``sys.stdout`` and ``sys.stderr`` set to ``None``, so any ``print`` or progress bar
+    in a computation would raise. The GUI shows its output in the log panel instead.
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
 
 
 def _load_array_backend(splash: StartupSplash) -> None:
