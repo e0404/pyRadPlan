@@ -42,7 +42,7 @@ class DoseWeightedLET(FluenceDependentQuantity):
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         xp = self.array_backend
-        let_dose, safe_dose, d_positive = self._quotient_terms(self._w_grad_cache, scenario_index)
+        let_dose, safe_dose, d_positive = self._quotient_terms(self._grad_fluence, scenario_index)
         zero = xp.zeros_like(safe_dose)
 
         grad_let_dose = xp.where(d_positive, d_quantity / safe_dose, zero)

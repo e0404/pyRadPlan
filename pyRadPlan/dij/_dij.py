@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from numpydantic import NDArray, Shape
+from numpydantic import NDArray
 from ..core.xp_utils.typing import Array, ArrayNamespace
 
 import array_api_compat
@@ -36,7 +36,9 @@ from ..core.xp_utils import to_namespace
 from ..core.xp_utils.helpers import _rebuild_scipy_csc_in_namespace
 
 InfluenceMatrixArray = Union[Array, sp.spmatrix, sp.sparray]
-InfluenceMatrixContainer = NDArray[Shape["*, ..."], object]
+# Any shape instead of Shape["*, ..."], which numpydantic 2.0 cannot validate on Python 3.12.3
+# (Ubuntu 24.04's system Python); the validator requires at least one dimension.
+InfluenceMatrixContainer = NDArray[Any, object]
 
 _QUANTITY_FIELDS: tuple[str, ...] = (
     "physical_dose",
@@ -665,6 +667,8 @@ class Dij(PyRadPlanBaseModel):
 
         # Starting here, it should be a NDArray of objects
         v: InfluenceMatrixContainer = handler(v)  # run any other validators
+        if v.ndim == 0:
+            raise ValueError("An influence matrix container needs at least one dimension")
 
         [_check_influence_matrix(v.flat[i], info) for i in range(v.size) if v.flat[i] is not None]
 
