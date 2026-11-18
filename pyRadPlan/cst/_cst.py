@@ -887,8 +887,14 @@ class StructureSet(PyRadPlanBaseModel):
         priority number win voxels that several VOIs share. That VOI keeps the voxel in
         :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
         the result is the same with and without overlap priorities applied.
+
+        VOIs with ``apply_overlap=None`` are ignored by the overlap handling and are left
+        out, so they never take voxels' tissue data from the other VOIs.
         """
-        return sorted(enumerate(self.vois, 1), key=lambda item: -item[1].overlap_priority)
+        labeled = [
+            (label, voi) for label, voi in enumerate(self.vois, 1) if voi.apply_overlap is not None
+        ]
+        return sorted(labeled, key=lambda item: -item[1].overlap_priority)
 
     def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
         """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""

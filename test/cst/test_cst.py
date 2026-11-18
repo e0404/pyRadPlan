@@ -788,6 +788,28 @@ def test_apply_overlap_false_keeps_voxels(generic_ct):
     assert np.array_equal(m2_out, 1 - (masks[0] | masks[1]))
 
 
+def test_tissue_data_ignores_vois_without_overlap_handling(generic_ct, generic_vois):
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+    data = cst.get_tissue_data()
+
+    full_mask = sitk.Image(generic_ct.cube_hu.GetSize(), sitk.sitkUInt8) + 1
+    full_mask.CopyInformation(generic_ct.cube_hu)
+    helper = HelperVOI(
+        name="FULL",
+        ct_image=generic_ct,
+        mask=full_mask,
+        overlap_priority=0,
+        apply_overlap=None,
+        tissue_properties=TissueProperties(alpha_x=0.5, beta_x=0.05),
+    )
+    data_with_helper = StructureSet(
+        ct_image=generic_ct, vois=[*generic_vois, helper]
+    ).get_tissue_data()
+
+    for value, value_with_helper in zip(data[:3], data_with_helper[:3]):
+        np.testing.assert_array_equal(value, value_with_helper)
+
+
 def test_apply_overlap_priorities_ignores_vois_without_objectives(generic_ct, generic_vois):
     ctv, ptv, oar, body, helper = generic_vois
     ctv.objectives = []
