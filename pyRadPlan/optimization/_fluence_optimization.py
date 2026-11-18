@@ -1,5 +1,8 @@
 import logging
-from typing import Optional, TypedDict
+from collections.abc import Mapping
+from typing import Any, Optional, TypedDict
+
+import numpy as np
 
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_cst
@@ -10,6 +13,27 @@ from pyRadPlan.result import PlanResult
 from .problems import get_problem_from_pln
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_solver_info(solver_info: Any) -> dict[str, Any]:
+    """
+    Reduce the raw solver output to its scalar entries.
+
+    Solvers also report arrays and solver objects (the solution, gradients, Hessian
+    approximations) that are either stored on the result already or cannot be saved.
+    """
+    if not isinstance(solver_info, Mapping):
+        return {}
+    summary: dict[str, Any] = {}
+    for key, raw in solver_info.items():
+        value = raw
+        if isinstance(raw, np.generic) or (isinstance(raw, np.ndarray) and raw.ndim == 0):
+            value = raw.item()
+        elif isinstance(raw, bytes):
+            value = raw.decode(errors="replace")
+        if isinstance(value, (bool, int, float, str)):
+            summary[str(key)] = value
+    return summary
 
 
 class OptInfo(TypedDict, total=False):
@@ -110,7 +134,7 @@ def fluence_optimization(  # noqa: PLR0913
             opt_info["num_iter"] = int(result_info["num_iter"])
 
     result = _dij.compute_result_ct_grid(fluence, num_of_fractions=_pln.result_dose_factor)
-    result.info = result_info
+    result.info = _summarize_solver_info(result_info)
     # solve() resolves the solver from its identifier, so read it back afterwards.
     solver = getattr(planning_prob, "solver", None)
     if solver is not None:

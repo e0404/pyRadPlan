@@ -461,7 +461,8 @@ def test_image_reference_accepts_imported_dose(mimicking_workspace):
 
     ws, widget, voi_idx, ref = mimicking_workspace
 
-    measured = sitk.Cast(ws.ct.cube_hu, sitk.sitkFloat32)
+    # An imported dose lives on the grid of the result (the import resamples it).
+    measured = sitk.Image(ref)
     ws.result.add_quantity("import_measured", measured)
     ws.result = ws.result  # re-emit so the objectives editor rebuilds its dropdowns
 

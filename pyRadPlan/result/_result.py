@@ -6,8 +6,10 @@ Defines a result pydantic model and factories.
 
 from collections.abc import Mapping
 from typing import List, Any, Optional, Union, Dict
+from typing_extensions import Self
 import numpy as np
 import logging
+import re
 
 from pydantic import (
     Field,
@@ -22,9 +24,56 @@ import SimpleITK as sitk
 
 from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.result._sequence import Sequence
 
 logger = logging.getLogger(__name__)
+
+_CONTAINERS = ("quantities", "beam_quantities", "scenario_quantities")
+
+#: matRad result fields whose name does not follow from the camelCase conversion.
+_MATRAD_QUANTITY_NAMES = {
+    "RBExDose": "rbe_x_dose",
+    "RBExD": "rbe_x_dose",
+    "LET": "let",
+    "BED": "bed",
+    "RBE": "rbe",
+}
+_QUANTITY_NAMES_TO_MATRAD = {
+    "rbe_x_dose": "RBExDose",
+    "let": "LET",
+    "bed": "BED",
+    "rbe": "RBE",
+}
+#: Fields only matRad writes; their presence marks a dictionary as a matRad result.
+_MATRAD_ONLY_KEYS = frozenset(
+    {"physicalDose", "usedOptimizer", "wUnsequenced", "wSequenced", "apertureInfo"}
+    | set(_MATRAD_QUANTITY_NAMES)
+)
+_MATRAD_BEAM_KEY = re.compile(r".+_beam\d+$")
+#: Tolerance (in mm, and for direction cosines) up to which two grids count as identical.
+_GEOMETRY_TOLERANCE = 1e-4
+
+
+def _from_matrad_name(name: str) -> str:
+    return _MATRAD_QUANTITY_NAMES.get(name) or to_snake(name)
+
+
+def _to_matrad_name(name: str) -> str:
+    return _QUANTITY_NAMES_TO_MATRAD.get(name) or to_camel(name)
+
+
+def _is_matrad_cube(value: Any) -> bool:
+    """Whether a matRad result field holds a cube (or a cell array of cubes)."""
+    return isinstance(value, np.ndarray) and (value.dtype == object or value.ndim in (3, 4))
+
+
+def looks_like_matrad(data: Mapping) -> bool:
+    """Whether a result dictionary uses matRad's field names."""
+    return any(
+        isinstance(key, str) and (key in _MATRAD_ONLY_KEYS or _MATRAD_BEAM_KEY.match(key))
+        for key in data
+    )
 
 
 class BeamAccessor(Mapping):
@@ -117,6 +166,16 @@ class PlanResult(PyRadPlanBaseModel):
 
     sequence: Optional[Sequence] = Field(default=None, alias="sequencing")
 
+    @field_validator("fluence", "mu", mode="before")
+    @classmethod
+    def _to_numpy_vector(cls, v: Any) -> Any:
+        """Accept weights from any array backend (and plain sequences) as numpy."""
+        if v is None or isinstance(v, np.ndarray):
+            return v
+        if isinstance(v, (list, tuple)):
+            return np.asarray(v, dtype=float)
+        return to_numpy(v)
+
     @field_validator("info", "used_optimizer", mode="before")
     @classmethod
     def _coerce_empty(cls, v: Any, info: ValidationInfo) -> Any:
@@ -156,6 +215,14 @@ class PlanResult(PyRadPlanBaseModel):
         return BeamAccessor(self.scenario_quantities)
 
     @classmethod
+    def _static_keys(cls) -> set[str]:
+        """Names and aliases of the fields that are no quantity containers."""
+        fields = cls.model_fields
+        names = {n for n in fields if n not in _CONTAINERS}
+        aliases = {f.alias for f in fields.values() if f.alias and f.alias not in _CONTAINERS}
+        return names | aliases
+
+    @classmethod
     def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
         """Handle data coming from matRad by grouping beam quantities."""
         # If the data is from matRad, we need to handle the beam quantities differently.
@@ -170,20 +237,37 @@ class PlanResult(PyRadPlanBaseModel):
         # Per-beam keys are collected with their beam number so that the beam order
         # follows the number in the key rather than the key order of the source file.
         beam_groups: dict[str, list[tuple[int, Any]]] = {}
+        static_keys = cls._static_keys()
+        skipped: list[str] = []
 
         for key, value in data.items():
             if key in ["w", "wUnsequenced"]:
                 out["fluence"] = value
-            elif "_beam" in key:
-                prefix, _, number = key.partition("_beam")
-                group = beam_groups.setdefault(to_snake(prefix) + "_beam", [])
-                group.append((int(number) if number.isdigit() else len(group), value))
             elif key in ["w_sequenced", "wSequenced"]:
                 sequence["fluence"] = value
             elif key in ["apertureInfo", "aperture_info"]:
                 sequence["aperture_info"] = value
+            elif "_beam" in key:
+                prefix, _, number = key.partition("_beam")
+                if not _is_matrad_cube(value):
+                    skipped.append(key)
+                    continue
+                group = beam_groups.setdefault(_from_matrad_name(prefix) + "_beam", [])
+                group.append((int(number) if number.isdigit() else len(group), value))
+            elif key in static_keys or _from_matrad_name(key) in static_keys:
+                out[key if key in static_keys else _from_matrad_name(key)] = value
+            elif _is_matrad_cube(value):
+                out[_from_matrad_name(key)] = value
             else:
-                out[to_snake(key)] = value
+                # resultGUI also carries derived data (e.g. quality indicators or DVHs)
+                # that is no distribution; it must not invalidate the cubes.
+                skipped.append(key)
+
+        if skipped:
+            logger.warning(
+                "Ignoring matRad result fields that are no quantity distributions: %s",
+                ", ".join(skipped),
+            )
 
         for key, group in beam_groups.items():
             out[key] = [value for _, value in sorted(group, key=lambda entry: entry[0])]
@@ -206,19 +290,22 @@ class PlanResult(PyRadPlanBaseModel):
         data = dict(data)
 
         # This here is necessary because of dynamic keys
-        fields = cls.model_fields
-        containers = {"quantities", "beam_quantities", "scenario_quantities"}
-        static_field_names = {n for n in fields if n not in containers}
-        static_aliases = {
-            f.alias for f in fields.values() if f.alias and f.alias not in containers
-        }
-        static_keys = static_field_names.union(static_aliases)
+        static_keys = cls._static_keys()
 
         # Place dynamic values into temporary public keys.
-        containers_tmp: dict[str, dict] = {name: {} for name in containers}
+        containers_tmp: dict[str, dict] = {name: {} for name in _CONTAINERS}
         quantities_tmp = containers_tmp["quantities"]
         beam_quantities_tmp = containers_tmp["beam_quantities"]
         scenario_quantities_tmp = containers_tmp["scenario_quantities"]
+        # Bare arrays carry no geometry and adopt the grid of the other quantities.
+        bare: list[QuantityDistribution] = []
+        placed: list[QuantityDistribution] = []
+
+        def validate(v: Any) -> QuantityDistribution:
+            distribution = QuantityDistribution.model_validate(v, context=info.context)
+            (bare if isinstance(v, np.ndarray) else placed).append(distribution)
+            return distribution
+
         for key, value in list(data.items()):
             if key in static_keys:
                 continue
@@ -226,25 +313,160 @@ class PlanResult(PyRadPlanBaseModel):
                 containers_tmp[key].update(value)
             elif isinstance(value, list) and key.endswith("_scenario"):
                 scenario_quantities_tmp[key.removesuffix("_scenario")] = [
-                    None
-                    if v is None
-                    else QuantityDistribution.model_validate(v, context=info.context)
-                    for v in value
+                    None if v is None else validate(v) for v in value
                 ]
             elif isinstance(value, list):
-                beam_quantities_tmp[key.replace("_beam", "")] = [
-                    QuantityDistribution.model_validate(v, context=info.context) for v in value
-                ]
+                beam_quantities_tmp[key.replace("_beam", "")] = [validate(v) for v in value]
             else:
                 # The Cubes have to be validated here because dynamic keys are not fields.
-                quantities_tmp[key] = QuantityDistribution.model_validate(
-                    value, context=info.context
-                )
+                try:
+                    quantities_tmp[key] = validate(value)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"'{key}' is neither a field of PlanResult nor a valid quantity "
+                        f"distribution: {exc}"
+                    ) from exc
             data.pop(key)
+
+        if placed:
+            for distribution in bare:
+                cls._adopt_grid(distribution, placed[0])
 
         data.update(containers_tmp)
 
         return data
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> Self:
+        """
+        Check that the stored quantities can belong to one and the same result.
+
+        Only the structure is checked (names, grid, number of beams and scenarios).
+        Where a quantity comes from is not: an imported distribution need not know the
+        model or the plan it was computed with.
+        """
+        reserved = self._static_keys() | set(_CONTAINERS)
+        distributions: list[tuple[str, QuantityDistribution]] = []
+        for container in _CONTAINERS:
+            for name, value in getattr(self, container).items():
+                if name in reserved or hasattr(type(self), name):
+                    raise ValueError(
+                        f"'{name}' cannot be used as a quantity name, it is an attribute "
+                        "of PlanResult."
+                    )
+                entries = value if isinstance(value, list) else [value]
+                distributions += [(name, entry) for entry in entries if entry is not None]
+
+        self._check_common_grid(distributions)
+
+        beam_counts = {name: len(v) for name, v in self.beam_quantities.items()}
+        if len(set(beam_counts.values())) > 1:
+            raise ValueError(f"Per-beam quantities differ in their number of beams: {beam_counts}")
+
+        scenario_counts = {name: len(v) for name, v in self.scenario_quantities.items()}
+        if len(set(scenario_counts.values())) > 1:
+            raise ValueError(
+                f"Per-scenario quantities differ in their number of scenarios: {scenario_counts}"
+            )
+        if self.scenario_labels is not None and scenario_counts:
+            num_scenarios = next(iter(scenario_counts.values()))
+            if len(self.scenario_labels) != num_scenarios:
+                raise ValueError(
+                    f"{len(self.scenario_labels)} scenario labels were given for "
+                    f"{num_scenarios} scenarios."
+                )
+        return self
+
+    @staticmethod
+    def _check_common_grid(distributions: list[tuple[str, QuantityDistribution]]) -> None:
+        if not distributions:
+            return
+
+        def geometry(image: sitk.Image) -> np.ndarray:
+            return np.concatenate([image.GetSpacing(), image.GetOrigin(), image.GetDirection()])
+
+        ref_name, ref = distributions[0]
+        ref_size, ref_geometry = ref.values.GetSize(), geometry(ref.values)
+        for name, distribution in distributions[1:]:
+            image = distribution.values
+            if image is ref.values:
+                continue
+            if image.GetSize() != ref_size or not np.allclose(
+                geometry(image), ref_geometry, rtol=0.0, atol=_GEOMETRY_TOLERANCE
+            ):
+                raise ValueError(
+                    f"All quantities of a result must share one grid, but '{name}' "
+                    f"(size {image.GetSize()}, spacing {image.GetSpacing()}, origin "
+                    f"{image.GetOrigin()}) differs from '{ref_name}' (size {ref_size}, "
+                    f"spacing {ref.values.GetSpacing()}, origin {ref.values.GetOrigin()})."
+                )
+
+    @staticmethod
+    def _adopt_grid(distribution: QuantityDistribution, reference: QuantityDistribution) -> None:
+        """Place *distribution* on the grid of *reference* if their sizes agree."""
+        if distribution.values.GetSize() == reference.values.GetSize():
+            distribution.values.CopyInformation(reference.values)
+
+    def _validate_entry(self, value: Any) -> QuantityDistribution:
+        """Validate a quantity to add; a bare array adopts the grid of this result."""
+        distribution = QuantityDistribution.model_validate(value)
+        if isinstance(value, np.ndarray):
+            for container in _CONTAINERS:
+                for stored in getattr(self, container).values():
+                    for entry in stored if isinstance(stored, list) else [stored]:
+                        if entry is not None:
+                            self._adopt_grid(distribution, entry)
+                            return distribution
+        return distribution
+
+    def _store_checked(self, container: str, key: str, value: Any) -> None:
+        """Store *value* under *key*, rolling back if the result becomes inconsistent."""
+        entries = getattr(self, container)
+        missing = object()
+        previous = entries.get(key, missing)
+        entries[key] = value
+        try:
+            self._check_consistency()
+        except ValueError:
+            if previous is missing:
+                del entries[key]
+            else:
+                entries[key] = previous
+            raise
+
+    @classmethod
+    def from_matrad(
+        cls, data: Union[Mapping, "PlanResult"], reference_image: Optional[sitk.Image] = None
+    ) -> Self:
+        """
+        Create a PlanResult from a matRad ``resultGUI`` structure.
+
+        Parameters
+        ----------
+        data : Mapping
+            The ``resultGUI`` structure as loaded from a ``.mat`` file.
+        reference_image : sitk.Image, optional
+            Image of the grid the result lives on, usually the CT cube. matRad stores
+            its cubes without geometry, so without it the quantities end up with unit
+            spacing at the origin. Cubes of another size are left untouched.
+
+        Returns
+        -------
+        PlanResult
+            The validated result.
+        """
+        if isinstance(data, cls):
+            return data
+        result = cls.model_validate(data, context={"from_matRad": True})
+        if reference_image is not None and reference_image.GetDimension() == 3:
+            for container in _CONTAINERS:
+                for value in getattr(result, container).values():
+                    for entry in value if isinstance(value, list) else [value]:
+                        if entry is not None and (
+                            entry.values.GetSize() == reference_image.GetSize()
+                        ):
+                            entry.values.CopyInformation(reference_image)
+        return result
 
     def __getattr__(self, item):
         # Stored quantities are reachable as attributes (result.physical_dose).
@@ -307,10 +529,10 @@ class PlanResult(PyRadPlanBaseModel):
         if key is not None and value is not None:
             if kwargs:
                 raise ValueError("Cannot mix positional and keyword arguments in add_quantity.")
-            self.quantities[key] = QuantityDistribution.model_validate(value)
+            self._store_checked("quantities", key, self._validate_entry(value))
         elif kwargs:
             for k, v in kwargs.items():
-                self.quantities[k] = QuantityDistribution.model_validate(v)
+                self._store_checked("quantities", k, self._validate_entry(v))
         else:
             raise ValueError("No quantity provided to add_quantity.")
 
@@ -347,14 +569,10 @@ class PlanResult(PyRadPlanBaseModel):
                 raise ValueError(
                     "Cannot mix positional and keyword arguments in add_beam_quantity."
                 )
-            if key not in self.beam_quantities:
-                self.beam_quantities[key] = []
-            self.beam_quantities[key] = [QuantityDistribution.model_validate(v) for v in value]
+            self._store_checked("beam_quantities", key, [self._validate_entry(v) for v in value])
         elif kwargs:
             for k, v in kwargs.items():
-                if k not in self.beam_quantities:
-                    self.beam_quantities[k] = []
-                self.beam_quantities[k] = [QuantityDistribution.model_validate(w) for w in v]
+                self._store_checked("beam_quantities", k, [self._validate_entry(w) for w in v])
         else:
             raise ValueError("No beam quantity provided to add_beam_quantity.")
 
@@ -371,9 +589,11 @@ class PlanResult(PyRadPlanBaseModel):
         value : list
             One entry per scenario slot; ``None`` for scenarios without a result.
         """
-        self.scenario_quantities[key] = [
-            None if v is None else QuantityDistribution.model_validate(v) for v in value
-        ]
+        self._store_checked(
+            "scenario_quantities",
+            key,
+            [None if v is None else self._validate_entry(v) for v in value],
+        )
 
     @field_serializer("quantities")
     def custom_quantities_serializer(self, v: Dict, info: SerializationInfo) -> Any:
@@ -387,7 +607,7 @@ class PlanResult(PyRadPlanBaseModel):
                     # TODO: multScen support
                     # wrapped_array = np.ndarray(shape=(1,), dtype=object)
                     # wrapped_array[0] = numpy_array
-                    dict_tmp[to_camel(key)] = numpy_array  # wrapped_array
+                    dict_tmp[_to_matrad_name(key)] = numpy_array  # wrapped_array
                 return dict_tmp
             return None
         return v
@@ -402,7 +622,7 @@ class PlanResult(PyRadPlanBaseModel):
                 for key, value in v.items():
                     for idx, beam in enumerate(value, start=1):
                         numpy_array = np.transpose(sitk.GetArrayFromImage(beam.values), (1, 2, 0))
-                        dict_tmp[f"{to_camel(key)}_beam{idx}"] = numpy_array
+                        dict_tmp[f"{_to_matrad_name(key)}_beam{idx}"] = numpy_array
                 return dict_tmp
             return None
         return v
@@ -481,20 +701,16 @@ def create_result(
         raise TypeError(f"Expected dict or PlanResult, got {type(data).__name__}")
 
     if data:
-        # Merge additional key-value pairs (like info) into the dictionary.
-        data.update(kwargs)
+        # Merge additional key-value pairs (like info) into a copy of the dictionary.
+        data = {**data, **kwargs}
 
-        context = {"from_matRad": False}
-        for key in data:
-            if "beam1" in key:
-                logger.info(
-                    "matRad typical convention detected. Assuming matRad import. "
-                    "If this is not the case, please rename variable '...beam1'"
-                )
-                context = {"from_matRad": True}
-                break
+        # A dictionary read from a matRad file is recognized by its field names. Code
+        # that knows its source should call ``PlanResult.from_matrad`` instead.
+        from_matrad = looks_like_matrad(data)
+        if from_matrad:
+            logger.info("matRad field names detected. Assuming a matRad result.")
 
-        return PlanResult.model_validate(data, context=context)
+        return PlanResult.model_validate(data, context={"from_matRad": from_matrad})
     return PlanResult(**kwargs)
 
 
