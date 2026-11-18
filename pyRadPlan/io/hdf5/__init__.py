@@ -16,12 +16,13 @@ File layout (``format_version`` 1)::
                             (kind ct, cst, pln, stf, dij) or the object itself (kind tree:
                             dicts, lists, strings, numbers, arrays, images) with every array
                             leaf replaced by a tagged dictionary
-    /<name>/arrays/<n>      the array data of the leaves; sparse matrices are a subgroup with
-                            the datasets data, indices and indptr (CSC)
+    /<name>/arrays/<n>      the array data of the larger leaves; sparse matrices are a subgroup
+                            with the datasets data, indices and indptr (CSC)
 
 Leaf tags (all carry the key ``"__array__"``)::
 
     {"__array__": "ndarray", "dtype": "<f8", "shape": [2, 3], "dataset": "arrays/0"}
+    {"__array__": "ndarray", "dtype": "float64", "shape": [3], "data": [0.0, 1.5, "NaN"]}
     {"__array__": "ndarray", "dtype": "object", "shape": [2], "data": [<tag or None>, ...]}
     {"__array__": "ndarray", "dtype": "<U3", "shape": [2], "data": ["abc", "d"]}
     {"__array__": "sparse", "format": "csc", "container": "matrix" | "array", "dtype": ...,
@@ -31,9 +32,13 @@ Leaf tags (all carry the key ``"__array__"``)::
      "components": 3}
     {"__array__": "float", "value": "nan" | "inf" | "-inf"}
 
-Datasets of at least 64 KiB are stored chunked with shuffle and gzip level 1, smaller ones
-uncompressed. The kinds ct, cst, pln, stf and dij are rebuilt with the matching ``validate_*``
-factory, so the loaded objects equal the saved ones.
+Numeric arrays below 4 KiB are stored inline in the tree, in the format of
+:func:`pyRadPlan.core.json_leaf_encoder` (``"data"`` holds the flat values in C order), because
+a dataset costs about 1.5 KiB of file and some milliseconds regardless of its size; a stf has
+four tiny arrays per ray. The reader accepts both forms, so files written without inline
+arrays load unchanged. Datasets of at least 64 KiB are stored chunked with shuffle and gzip
+level 1, smaller ones uncompressed. The kinds ct, cst, pln, stf and dij are rebuilt with the
+matching ``validate_*`` factory, so the loaded objects equal the saved ones.
 """
 
 from .._factory import register_importer, register_exporter

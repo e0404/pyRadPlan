@@ -406,7 +406,8 @@ class DicomImporter(BaseImporter):
             energy is mapped to the closest machine energy within ``energy_tolerance``.
         particles_per_mu : float or callable, optional
             Particles per MU (or a function of the machine energy). Required for plans whose
-            Primary Dosimeter Unit is MU; plans in NP (particles) need none.
+            Primary Dosimeter Unit is MU, where it scales the weights; plans in NP (particles)
+            need none.
         energy_tolerance : float
             Largest accepted difference to a machine energy in MeV(/u).
 
@@ -415,7 +416,8 @@ class DicomImporter(BaseImporter):
         dict or None
             ``stf``, ``pln``, ``weights`` and ``result`` (``{"w": weights}``, as in a matRad
             result), or ``None`` if the source has no RTPLAN. The weights are matRad-style
-            MU per spot: particles divided by ``num_particles_per_mu`` (default 1e6).
+            in units of 1e6 particles per spot, as the dose engines interpret them: particles
+            divided by 1e6, or ``MU * particles_per_mu / 1e6`` for plans in MU.
 
         Raises
         ------

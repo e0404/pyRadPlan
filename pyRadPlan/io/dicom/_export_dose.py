@@ -19,14 +19,10 @@ from ._export_common import (
     PlanReference,
     populate_common,
     direction_to_orientation,
+    ds_list,
 )
 
 _UINT32_MAX = 2**32 - 1
-
-
-def _ds(values) -> list:
-    """Quantize numbers to Decimal Strings (16 characters at most)."""
-    return [float(format_number_as_ds(float(v))) for v in values]
 
 
 def _frame_offsets(dose: sitk.Image, orientation: list) -> list:
@@ -110,6 +106,13 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
     orientation = direction_to_orientation(dose.GetDirection())
     position = dose.TransformIndexToPhysicalPoint((0, 0, 0))
 
+    finite = np.isfinite(arr)
+    if not finite.all():
+        warnings.warn(
+            f"Dose contains {int((~finite).sum())} non-finite voxel(s); they are written as 0.",
+            stacklevel=2,
+        )
+        arr = np.where(finite, arr, 0.0)
     max_value = float(arr.max()) if arr.size else 0.0
     if max_value > 0:
         # DoseGridScaling is a DS (16 characters at most), so quantize it before use.
@@ -133,16 +136,16 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
     ds.OperatorsName = ""
 
     ds.InstanceNumber = 1
-    ds.ImagePositionPatient = _ds(position)
-    ds.ImageOrientationPatient = _ds(orientation)
-    ds.PixelSpacing = _ds([spacing[1], spacing[0]])  # row (y), column (x)
-    ds.SliceThickness = _ds([spacing[2]])[0]
+    ds.ImagePositionPatient = ds_list(position)
+    ds.ImageOrientationPatient = ds_list(orientation)
+    ds.PixelSpacing = ds_list([spacing[1], spacing[0]])  # row (y), column (x)
+    ds.SliceThickness = ds_list([spacing[2]])[0]
 
     ds.Rows = ny
     ds.Columns = nx
     ds.NumberOfFrames = nz
     ds.FrameIncrementPointer = Tag(0x3004, 0x000C)  # -> GridFrameOffsetVector
-    ds.GridFrameOffsetVector = _ds(_frame_offsets(dose, orientation))
+    ds.GridFrameOffsetVector = ds_list(_frame_offsets(dose, orientation))
 
     ds.SamplesPerPixel = 1
     ds.PhotometricInterpretation = "MONOCHROME2"

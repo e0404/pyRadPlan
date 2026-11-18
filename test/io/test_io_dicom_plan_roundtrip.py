@@ -56,3 +56,28 @@ def test_ion_plan_round_trip(tg119, tmp_path, gantry, couch):
     imported = _spots(plan["stf"], plan["result"]["w"])
     assert len(imported) == len(original)
     np.testing.assert_allclose(np.array(imported), np.array(original), rtol=1e-6, atol=1e-3)
+
+
+def test_weights_round_trip_with_other_particles_per_mu(tg119, tmp_path):
+    ct, cst = tg119
+    pln = IonPlan(radiation_mode="protons", machine="Generic", num_of_fractions=1)
+    pln.prop_stf = {"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 10}
+    stf = generate_stf(ct, cst, pln)
+    for beam in stf.beams:
+        for ray in beam.rays:
+            for beamlet in ray.beamlets:
+                beamlet.num_particles_per_mu = 3.0e6
+    weights = np.random.default_rng(0).uniform(0.2, 1.0, stf.total_number_of_bixels)
+
+    save_data(
+        file_name=tmp_path / "plan",
+        format="dcm",
+        ct=ct,
+        cst=cst,
+        pln=pln,
+        stf=stf,
+        weights=weights,
+    )
+    plan = DicomImporter(tmp_path / "plan").load_plan(ct=ct)
+
+    np.testing.assert_allclose(sorted(plan["result"]["w"]), sorted(weights), rtol=1e-5)

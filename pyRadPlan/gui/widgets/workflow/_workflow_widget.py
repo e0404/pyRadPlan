@@ -1534,11 +1534,14 @@ class WorkflowWidget(WorkspaceWidget):
             fmt = "pickle" if "*.pkl" in (selected_filter or "") else "hdf5"
         objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
         objects["saved_result_tags"] = list(self._saved_tags)
+        exporter_options = {"strict": True} if fmt == "hdf5" else None
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            return save_data(file_name=filepath, format=fmt, **objects)
+            return save_data(
+                file_name=filepath, format=fmt, exporter_options=exporter_options, **objects
+            )
 
         self._run_save(_save, "Saving workspace…", "Save Workspace")
 
@@ -1567,14 +1570,14 @@ class WorkflowWidget(WorkspaceWidget):
         self._save_single_object("Save Dij", "dij", self._ws.dij)
 
     @staticmethod
-    def _cst_export_options() -> list[tuple[str, str, Optional[str], bool, bool]]:
-        """Return the CST export targets: (label, format, dicom_structure, is_dir, keeps_objectives).
+    def _cst_export_options() -> list[tuple[str, str, Optional[dict], bool, bool]]:
+        """Return the CST export targets: (label, format, exporter_options, is_dir, keeps_objectives).
 
         Only formats with a registered exporter are offered. Container formats
         (mat/hdf5/pickle/npz) write a single file; the image/DICOM backends write a
-        folder (a segmentation for the SimpleITK formats, written as a label map or, for
-        overlapping structures, as layers; a CT + RTSTRUCT/SEG series
-        for DICOM). Objectives only survive in mat/hdf5/pickle.
+        folder (a label map for the SimpleITK formats, or a Slicer segmentation that keeps
+        overlapping structures; a CT + RTSTRUCT/SEG series for DICOM). Objectives only
+        survive in mat/hdf5/pickle.
         """
         from pyRadPlan.io import get_available_formats  # noqa: PLC0415
 
@@ -1587,8 +1590,15 @@ class WorkflowWidget(WorkspaceWidget):
             ("NIfTI segmentation (folder)", "nifti", None, True, False),
             ("NRRD segmentation (folder)", "nrrd", None, True, False),
             ("MetaImage segmentation (folder)", "meta", None, True, False),
-            ("DICOM RTSTRUCT (folder)", "dcm", "rtstruct", True, False),
-            ("DICOM SEG (folder)", "dcm", "seg", True, False),
+            (
+                "Slicer segmentation (.seg.nrrd, keeps overlaps) (folder)",
+                "nrrd",
+                {"segmentation": "layers"},
+                True,
+                False,
+            ),
+            ("DICOM RTSTRUCT (folder)", "dcm", {"structure_format": "rtstruct"}, True, False),
+            ("DICOM SEG (folder)", "dcm", {"structure_format": "seg"}, True, False),
         ]
         return [c for c in candidates if c[1] in available]
 
@@ -1603,7 +1613,7 @@ class WorkflowWidget(WorkspaceWidget):
         choice, ok = QInputDialog.getItem(self, "Save CST", "Export format:", labels, 0, False)
         if not ok or not choice:
             return
-        _label, fmt, structure_format, is_dir, keeps_objectives = next(
+        _label, fmt, preset_options, is_dir, keeps_objectives = next(
             opt for opt in options if opt[0] == choice
         )
 
@@ -1634,7 +1644,7 @@ class WorkflowWidget(WorkspaceWidget):
         if not target:
             return
 
-        options = {"structure_format": structure_format} if structure_format else None
+        options = dict(preset_options) if preset_options else None
         if fmt == "dcm":
             from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
 

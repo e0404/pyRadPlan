@@ -32,10 +32,10 @@ Weights
 -------
 Spot weights are per fraction (the influence matrix of pyRadPlan is always per fraction,
 independent of ``Plan.dose_convention``) and are written as numbers of particles,
-``w * num_particles_per_mu``, with Primary Dosimeter Unit ``NP``: Scan Spot Meterset
-Weights, Beam Meterset and Final Cumulative Meterset Weight are all particle numbers per
-fraction. Spots with zero weight and layers without remaining spots are dropped; beams
-without any spot are skipped with a warning.
+``w * 1e6`` (a weight is in units of 1e6 particles, as the dose engines interpret it), with
+Primary Dosimeter Unit ``NP``: Scan Spot Meterset Weights, Beam Meterset and Final
+Cumulative Meterset Weight are all particle numbers per fraction. Spots with zero weight and
+layers without remaining spots are dropped; beams without any spot are skipped with a warning.
 """
 
 import os
@@ -51,9 +51,9 @@ from ._export_common import (
     RT_ION_PLAN_STORAGE,
     ExportContext,
     PlanReference,
+    ds_list,
     populate_common,
 )
-from ._export_dose import _ds
 
 #: pyRadPlan radiation mode -> (RadiationType, mass number, atomic number, charge state).
 _ION_SPECIES = {
@@ -62,6 +62,8 @@ _ION_SPECIES = {
     "carbon": ("ION", 12, 6, 6),
     "oxygen": ("ION", 16, 8, 8),
 }
+
+_PARTICLES_PER_WEIGHT = 1.0e6
 
 _FWHM_PER_SIGMA = 2.0 * np.sqrt(2.0 * np.log(2.0))
 
@@ -135,7 +137,7 @@ def _layers(beam, weights: np.ndarray, offset: int) -> list[dict]:
                 },
             )
             layer["positions"].append((x, y))
-            layer["particles"].append(weight * float(beamlet.num_particles_per_mu))
+            layer["particles"].append(weight * _PARTICLES_PER_WEIGHT)
     # highest energy first, as a beam is usually delivered
     return sorted(layers.values(), key=lambda lay: (-lay["energy"], lay["focus_ix"]))
 
@@ -161,8 +163,8 @@ def _range_shifter_settings(shifters: list, active, sad: float) -> Sequence:
         item = Dataset()
         item.ReferencedRangeShifterNumber = number
         item.RangeShifterSetting = "IN" if shifter == active else "OUT"
-        item.IsocenterToRangeShifterDistance = _ds([sad - source_distance])[0]
-        item.RangeShifterWaterEquivalentThickness = _ds([thickness])[0]
+        item.IsocenterToRangeShifterDistance = ds_list([sad - source_distance])[0]
+        item.RangeShifterWaterEquivalentThickness = ds_list([thickness])[0]
         seq.append(item)
     return seq
 
@@ -172,8 +174,8 @@ def _control_point(  # noqa: PLR0913 - DICOM control point attributes
 ) -> Dataset:
     cp = Dataset()
     cp.ControlPointIndex = index
-    cp.NominalBeamEnergy = _ds([layer["energy"]])[0]
-    cp.CumulativeMetersetWeight = _ds([cumulative])[0]
+    cp.NominalBeamEnergy = ds_list([layer["energy"]])[0]
+    cp.CumulativeMetersetWeight = ds_list([cumulative])[0]
     cp.ScanSpotTuneID = f"focus{layer['focus_ix']}"
     positions = np.asarray(layer["positions"], dtype=float).reshape(-1, 2)
     cp.NumberOfScanSpotPositions = len(positions)
@@ -211,7 +213,7 @@ def _beam_item(  # noqa: PLR0913 - DICOM beam attributes
     item.ScanMode = "MODULATED"
     item.TreatmentMachineName = machine_name
     item.PrimaryDosimeterUnit = "NP"
-    item.VirtualSourceAxisDistances = _ds([sad, sad])
+    item.VirtualSourceAxisDistances = ds_list([sad, sad])
     item.TreatmentDeliveryType = "TREATMENT"
 
     shifters = sorted({lay["shifter"] for lay in layers if lay["shifter"] is not None})
@@ -231,7 +233,7 @@ def _beam_item(  # noqa: PLR0913 - DICOM beam attributes
     # the cumulative weights match the spot weights.
     totals = [float(np.sum(np.asarray(lay["particles"], dtype=np.float32))) for lay in layers]
     final = float(np.sum(totals))
-    item.FinalCumulativeMetersetWeight = _ds([final])[0]
+    item.FinalCumulativeMetersetWeight = ds_list([final])[0]
     item.NumberOfControlPoints = 2 * len(layers)
 
     control_points = Sequence()
@@ -241,18 +243,18 @@ def _beam_item(  # noqa: PLR0913 - DICOM beam attributes
             2 * k, cumulative, layer, machine, sad, shifters, layer["particles"]
         )
         if k == 0:
-            first.GantryAngle = _ds([float(beam.gantry_angle) % 360.0])[0]
+            first.GantryAngle = ds_list([float(beam.gantry_angle) % 360.0])[0]
             first.GantryRotationDirection = "NONE"
             first.BeamLimitingDeviceAngle = 0.0
             first.BeamLimitingDeviceRotationDirection = "NONE"
-            first.PatientSupportAngle = _ds([float(beam.couch_angle) % 360.0])[0]
+            first.PatientSupportAngle = ds_list([float(beam.couch_angle) % 360.0])[0]
             first.PatientSupportRotationDirection = "NONE"
             first.TableTopPitchAngle = 0.0
             first.TableTopPitchRotationDirection = "NONE"
             first.TableTopRollAngle = 0.0
             first.TableTopRollRotationDirection = "NONE"
-            first.IsocenterPosition = _ds(np.asarray(beam.iso_center, dtype=float))
-            first.SnoutPosition = _ds([snout_position])[0]
+            first.IsocenterPosition = ds_list(np.asarray(beam.iso_center, dtype=float))
+            first.SnoutPosition = ds_list([snout_position])[0]
         control_points.append(first)
         cumulative += totals[k]
         control_points.append(
@@ -348,8 +350,7 @@ def export_ion_plan(  # noqa: PLR0913 - export options
         Provides ``num_of_fractions`` (1 with a warning if unavailable) and the machine.
     weights : array_like
         One weight per bixel in STF order (beam, ray, beamlet), per fraction. The number of
-        particles of a spot is ``weight * num_particles_per_mu`` (Primary Dosimeter Unit
-        ``NP``).
+        particles of a spot is ``weight * 1e6`` (Primary Dosimeter Unit ``NP``).
     directory : str
         Output directory.
     ctx : ExportContext
@@ -419,7 +420,7 @@ def export_ion_plan(  # noqa: PLR0913 - export options
         item, total = _beam_item(beam, number, layers, machine_obj, machine_name, snout)
         beam_items.append(item)
         referenced = Dataset()
-        referenced.BeamMeterset = _ds([total])[0]
+        referenced.BeamMeterset = ds_list([total])[0]
         referenced.ReferencedBeamNumber = number
         referenced_beams.append(referenced)
 

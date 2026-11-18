@@ -18,6 +18,7 @@ from ._export_common import (
     DETACHED_STUDY_MANAGEMENT,
     RT_STRUCT_STORAGE,
     ExportContext,
+    ds_list,
     first_phase_image,
     populate_common,
     warn_if_multiphase,
@@ -48,10 +49,9 @@ def _slice_contours(mask_slice: np.ndarray) -> list:
     """Return closed contour polygons (index coordinates) for one mask slice."""
     if not mask_slice.any():
         return []
-    gen = contourpy.contour_generator(
-        z=mask_slice.astype(float), line_type=contourpy.LineType.Separate
-    )
-    return [line for line in gen.lines(0.5) if len(line) >= 3]
+    padded = np.pad(mask_slice.astype(float), 1)
+    gen = contourpy.contour_generator(z=padded, line_type=contourpy.LineType.Separate)
+    return [line - 1.0 for line in gen.lines(0.5) if len(line) >= 3]
 
 
 def _voi_contour_sequence(voi, ct_image) -> Sequence:
@@ -68,7 +68,7 @@ def _voi_contour_sequence(voi, ct_image) -> Sequence:
                 phys = ct_image.TransformContinuousIndexToPhysicalPoint(
                     (float(xi), float(yi), float(z))
                 )
-                contour_data.extend([float(phys[0]), float(phys[1]), float(phys[2])])
+                contour_data.extend(ds_list(phys))
             item = Dataset()
             item.ContourGeometricType = "CLOSED_PLANAR"
             item.NumberOfContourPoints = len(line)
@@ -179,7 +179,9 @@ def export_cst(
         roi_contour = Dataset()
         roi_contour.ROIDisplayColor = [int(c) for c in voi.color]
         roi_contour.ReferencedROINumber = i
-        roi_contour.ContourSequence = _voi_contour_sequence(voi, ct_image)
+        contour_sequence = _voi_contour_sequence(voi, ct_image)
+        if contour_sequence:
+            roi_contour.ContourSequence = contour_sequence
         contour_seq.append(roi_contour)
 
         obs = Dataset()

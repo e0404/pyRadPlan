@@ -1311,3 +1311,33 @@ def test_4d_export_with_structures_validates(dicom_standard, fmt, name, tmp_path
     with pytest.warns(UserWarning, match="first of 3 phases"):
         DicomExporter(out, structure_format=fmt).save(ct=ct, cst=_cst_for(ct))
     assert _validation_errors(dicom_standard, out / name) == []
+
+
+def test_nan_dose_voxels_are_written_as_zero_with_a_warning(tmp_path, plain_ct):
+    arr = np.ones((4, 8, 8))
+    arr[1, 2, 3] = np.nan
+    arr[2, 2, 2] = 3.0
+    dose = sitk.GetImageFromArray(arr)
+    dose.CopyInformation(plain_ct.cube_hu)
+
+    with pytest.warns(UserWarning, match="non-finite"):
+        out = _export(tmp_path, ct=plain_ct, dose=dose)
+
+    ds = _read(out / "RTDOSE.dcm")
+    pixels = ds.pixel_array.astype(float) * float(ds.DoseGridScaling)
+    assert pixels[1, 2, 3] == 0.0
+    assert pixels.max() == pytest.approx(3.0, rel=1e-6)
+    assert pixels[0, 0, 0] == pytest.approx(1.0, rel=1e-6)
+
+
+def test_empty_roi_has_no_empty_contour_sequence(tmp_path, plain_ct):
+    mask = sitk.GetImageFromArray(np.zeros((4, 8, 8), np.uint8))
+    mask.CopyInformation(plain_ct.cube_hu)
+    from pyRadPlan.cst import validate_cst
+
+    cst = validate_cst(
+        [{"name": "empty", "voi_type": "OAR", "mask": mask, "ct_image": plain_ct}], plain_ct
+    )
+    out = _export(tmp_path, ct=plain_ct, cst=cst)
+    ds = _read(out / "RTSTRUCT.dcm")
+    assert "ContourSequence" not in ds.ROIContourSequence[0]

@@ -68,6 +68,8 @@ _PATIENT_POSITIONS = {
 
 ParticlesPerMU = Union[float, Callable[[float], float]]
 
+_PARTICLES_PER_WEIGHT = 1.0e6
+
 
 def plan_kind(ds: pydicom.Dataset) -> str:
     """Return ``"ion"``, ``"photon"`` or ``"other"`` for an RTPLAN dataset."""
@@ -128,7 +130,7 @@ def plan_summary(ds: pydicom.Dataset, path: str) -> dict:
 
 
 def _rot_y(angle_deg: float) -> np.ndarray:
-    """Active rotation about the fixed Y axis; its columns are the gantry axes in the fixed system."""
+    """Active rotation about the fixed Y axis; its columns are the gantry axes (fixed system)."""
     c, s = np.cos(np.radians(angle_deg)), np.sin(np.radians(angle_deg))
     return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
 
@@ -268,7 +270,10 @@ def import_ion_plan(
         Machine (default ``"Generic"``) providing the energies and foci.
     particles_per_mu : float or callable, optional
         Calibration in particles per MU (optionally a function of the machine energy), required
-        when the beams' Primary Dosimeter Unit is ``MU``.
+        when the beams' Primary Dosimeter Unit is ``MU``. A spot weight is in units of 1e6
+        particles, as the dose engines interpret it, so the weight of a spot of ``m`` MU is
+        ``m * particles_per_mu / 1e6``; the calibration is kept as ``num_particles_per_mu`` of
+        the beamlets.
     energy_tolerance : float
         Maximum difference to the closest machine energy in MeV(/u).
 
@@ -276,7 +281,7 @@ def import_ion_plan(
     -------
     dict
         ``stf`` (:class:`SteeringInformation`), ``pln`` (:class:`IonPlan`),
-        ``weights`` (spot weights in stf bixel order, "MU" in the matRad sense) and
+        ``weights`` (spot weights in stf bixel order, in units of 1e6 particles) and
         ``result`` (``{"w": weights}``, the key the workspace and matRad results use).
     """
     kind = plan_kind(ds)
@@ -317,6 +322,11 @@ def import_ion_plan(
     }
 
     selected = [b for b in beams_ds if meterset.get(int(b.BeamNumber), 0.0) > 0.0]
+    if not any("BeamMeterset" in ref for ref in getattr(group, "ReferencedBeamSequence", [])):
+        raise ValueError(
+            "The RT Ion Plan has no Beam Meterset (300A,0086) in its Referenced Beam Sequence, "
+            "which is needed to scale the spot weights."
+        )
     skipped = len(beams_ds) - len(selected)
     if skipped:
         logger.info("Skipping %d beam(s) with no meterset (e.g. setup fields).", skipped)
@@ -618,11 +628,11 @@ def _import_beam(
         for (energy, (thickness, distance, number)), weight in ray["beamlets"].items():
             meterset_value = beam_meterset * weight / final_cmw
             if unit == "NP":
-                ppm = 1.0e6
-                value = meterset_value / ppm
+                ppm = _PARTICLES_PER_WEIGHT
+                value = meterset_value / _PARTICLES_PER_WEIGHT
             else:
                 ppm = _ppm(particles_per_mu, energy)
-                value = meterset_value
+                value = meterset_value * ppm / _PARTICLES_PER_WEIGHT
             shifter = RangeShifter(
                 id=number,
                 eq_thickness=thickness,

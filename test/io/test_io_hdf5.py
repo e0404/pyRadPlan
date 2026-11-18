@@ -15,9 +15,8 @@ from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.ct import CT, DicomInfo
 from pyRadPlan.io import Hdf5Handler, load_data, save_data
 from pyRadPlan.io._factory import detect_format, is_container_format
-from pyRadPlan.io.hdf5._codec import COMPRESSION_THRESHOLD
+from pyRadPlan.io.hdf5._codec import COMPRESSION_THRESHOLD, INLINE_THRESHOLD
 from pyRadPlan.machines import create_bld
-from pyRadPlan.stf._beamlet import Beamlet
 
 
 def assert_same(a, b, path="obj"):
@@ -25,9 +24,7 @@ def assert_same(a, b, path="obj"):
     if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
         assert a == b or (math.isnan(a) and math.isnan(b)), path
         return
-    # Generated IonSpots come back as plain Beamlets (same fields), as with the JSON round trip.
-    if not (isinstance(a, Beamlet) and isinstance(b, Beamlet)):
-        assert type(a) is type(b), f"{path}: {type(a)} != {type(b)}"
+    assert type(a) is type(b), f"{path}: {type(a)} != {type(b)}"
     if isinstance(a, PyRadPlanBaseModel):
         fields = type(a).model_fields
         assert_same(
@@ -202,7 +199,8 @@ def test_photon_field_based_stf(tmp_path, tg119):
 def test_compression_applied_to_large_datasets_only(tmp_path):
     big = np.zeros((128, 128), dtype=np.float32)
     assert big.nbytes >= COMPRESSION_THRESHOLD
-    small = np.arange(10.0)
+    small = np.arange(INLINE_THRESHOLD // 8 + 1.0)
+    assert small.nbytes < COMPRESSION_THRESHOLD
     out = tmp_path / "c.h5"
     save_data(file_name=str(out), tree={"big": big, "small": small})
     with h5py.File(out) as fh:
@@ -280,6 +278,102 @@ def test_unsupported_objects_are_skipped_with_warning(tmp_path):
     messages = " ".join(str(w.message) for w in record)
     assert "'model'" in messages and "'thing'" in messages and "'nested'" in messages
     assert list(load_data(out)) == ["keep"]
+
+
+def _datasets(path):
+    names = []
+
+    def collect(name, obj):
+        if isinstance(obj, h5py.Dataset) and "/arrays/" in name:
+            names.append(name)
+
+    with h5py.File(path) as fh:
+        fh.visititems(collect)
+    return names
+
+
+def test_small_arrays_are_inline_and_large_ones_datasets(tmp_path):
+    small = np.arange(10, dtype=np.float32)
+    odd = np.array([[1.5, np.nan], [np.inf, -np.inf]])
+    flags = np.array([True, False, True])
+    cplx = np.array([1 + 2j, 3 - 1j])
+    large = np.arange(INLINE_THRESHOLD // 8 + 1, dtype=np.float64)
+    out = tmp_path / "i.h5"
+    save_data(
+        file_name=str(out),
+        tree={"small": small, "odd": odd, "flags": flags, "cplx": cplx, "large": large},
+    )
+    assert _datasets(out) == ["tree/arrays/0"]
+    with h5py.File(out) as fh:
+        text = fh["tree/tree"][()].decode()
+    assert '"data"' in text and text.count('"dataset"') == 1
+
+    loaded = load_data(out)["tree"]
+    for key, ref in [("small", small), ("odd", odd), ("flags", flags), ("cplx", cplx)]:
+        assert loaded[key].dtype == ref.dtype and loaded[key].shape == ref.shape
+        np.testing.assert_array_equal(loaded[key], ref)
+    np.testing.assert_array_equal(loaded["large"], large)
+
+
+def test_files_without_inline_arrays_still_load(tmp_path, ion_workspace, monkeypatch):
+    import pyRadPlan.io.hdf5._codec as codec
+
+    monkeypatch.setattr(codec, "INLINE_THRESHOLD", 0)
+    out = tmp_path / "old.h5"
+    save_data(file_name=str(out), **ion_workspace)
+    assert len(_datasets(out)) > 100
+    monkeypatch.undo()
+
+    data = load_data(out)
+    for key, value in ion_workspace.items():
+        assert_same(data[key], value, key)
+
+    inline = tmp_path / "new.h5"
+    save_data(file_name=str(inline), **ion_workspace)
+    assert len(_datasets(inline)) < len(_datasets(out))
+    with h5py.File(inline) as fh:
+        assert fh.attrs["format_version"] == 1
+    for key, value in ion_workspace.items():
+        assert_same(load_data(inline)[key], value, key)
+
+
+def test_strict_exporter_raises_instead_of_skipping(tmp_path):
+    class Unsupported:
+        pass
+
+    out = tmp_path / "s.h5"
+    with pytest.raises(TypeError, match="'thing'"):
+        save_data(
+            file_name=str(out),
+            format="hdf5",
+            exporter_options={"strict": True},
+            keep=[1, 2],
+            thing=Unsupported(),
+        )
+    with pytest.raises(ValueError, match="'model'"):
+        save_data(
+            file_name=str(out),
+            format="hdf5",
+            exporter_options={"strict": True},
+            model=DicomInfo(patient_id="x"),
+        )
+    assert not out.exists() and not (tmp_path / "s.h5.tmp").exists()
+
+    save_data(file_name=str(out), exporter_options={"strict": True}, keep=[1, 2], other={"a": 1})
+    assert list(load_data(out)) == ["keep", "other"]
+
+
+def test_load_cst_uses_the_passed_ct(tmp_path, ion_workspace):
+    from pyRadPlan.io import load_patient
+
+    out = tmp_path / "ws.h5"
+    save_data(file_name=str(out), ct=ion_workspace["ct"], cst=ion_workspace["cst"])
+    ct, cst = load_patient(out)
+    assert cst.ct_image is ct
+    assert_same(cst, ion_workspace["cst"])
+
+    other = ion_workspace["ct"].model_copy(deep=True)
+    assert Hdf5Handler(out).load_cst(other).ct_image is other
 
 
 def test_nothing_to_export_raises(tmp_path):

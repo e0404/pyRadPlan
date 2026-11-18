@@ -119,8 +119,9 @@ class McExporter(BaseExporter):
         engine = self.engine_cls()
         pln = validate_pln(pln).model_copy(deep=True)
         if pln.radiation_mode not in engine.possible_radiation_modes:
+            modes = ", ".join(engine.possible_radiation_modes)
             raise ValueError(
-                f"The {self.format} export supports ion plans ({', '.join(engine.possible_radiation_modes)}), "
+                f"The {self.format} export supports ion plans ({modes}), "
                 f"not radiation mode {pln.radiation_mode!r}."
             )
 

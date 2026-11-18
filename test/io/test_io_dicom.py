@@ -771,3 +771,140 @@ def test_load_data_dose_shares_the_ct_grid(dicom_dir):
     # An index valid for the CT must be valid for the dose, on every axis.
     array = sitk.GetArrayFromImage(dose)
     assert array.shape == sitk.GetArrayFromImage(ct.cube_hu).shape
+
+
+# --------------------------------------------------------------------------
+# SEG placement, contour merging and border contours
+# --------------------------------------------------------------------------
+
+
+def _asymmetric_ct_and_cst(direction, masks):
+    arr = np.arange(4 * 6 * 8, dtype=np.float32).reshape(4, 6, 8)
+    img = sitk.GetImageFromArray(arr)
+    img.SetSpacing((2.0, 3.0, 4.0))
+    img.SetOrigin((10, -20, 30))
+    img.SetDirection(direction)
+    ct = validate_ct(cube_hu=img)
+    vois = []
+    for name, index in masks.items():
+        mask = np.zeros((4, 6, 8), np.uint8)
+        mask[index] = 1
+        mask_img = sitk.GetImageFromArray(mask)
+        mask_img.CopyInformation(img)
+        vois.append({"name": name, "voi_type": "OAR", "mask": mask_img, "ct_image": ct})
+    return ct, validate_cst(vois, ct)
+
+
+@pytest.mark.parametrize(
+    "direction",
+    [
+        (1, 0, 0, 0, 1, 0, 0, 0, 1),
+        (-1, 0, 0, 0, -1, 0, 0, 0, 1),
+        (1, 0, 0, 0, 1, 0, 0, 0, -1),
+    ],
+    ids=["HFS", "HFP", "flipped-z"],
+)
+def test_seg_roundtrip_of_asymmetric_masks_is_exact(tmp_path, direction):
+    ct, cst = _asymmetric_ct_and_cst(
+        direction, {"A": np.s_[1:3, 1:3, 1:5], "single": np.s_[2, 4:6, 0:2]}
+    )
+    DicomExporter(tmp_path, structure_format="seg").save(ct=ct, cst=cst)
+
+    importer = DicomImporter(tmp_path)
+    cst2 = importer.load_cst(importer.load_ct())
+
+    for voi in cst.vois:
+        imported = next(v for v in cst2.vois if v.name == voi.name)
+        original = sitk.GetArrayFromImage(voi.mask)
+        in_original_grid = sitk.Resample(
+            imported.mask, voi.mask, sitk.Transform(), sitk.sitkNearestNeighbor, 0
+        )
+        assert imported.mask.GetSize() == voi.mask.GetSize()
+        np.testing.assert_array_equal(
+            sitk.GetArrayFromImage(in_original_grid), original, err_msg=voi.name
+        )
+
+
+def test_seg_import_handles_a_single_frame(tmp_path):
+    ct, cst = _asymmetric_ct_and_cst((1, 0, 0, 0, 1, 0, 0, 0, 1), {"single": np.s_[2, 4:6, 0:2]})
+    DicomExporter(tmp_path, structure_format="seg").save(ct=ct, cst=cst)
+    assert pydicom.dcmread(tmp_path / "SEG.dcm").NumberOfFrames == 1
+
+    cst2 = DicomImporter(tmp_path).load_cst()
+
+    assert [v.name for v in cst2.vois] == ["single"]
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(cst2.vois[0].mask), sitk.GetArrayFromImage(cst.vois[0].mask)
+    )
+
+
+def test_seg_without_non_empty_masks_is_not_written(tmp_path):
+    ct, cst = _asymmetric_ct_and_cst((1, 0, 0, 0, 1, 0, 0, 0, 1), {"empty": np.s_[0:0]})
+    with pytest.warns(UserWarning, match="no SEG"):
+        DicomExporter(tmp_path, structure_format="seg").save(ct=ct, cst=cst)
+    assert not (tmp_path / "SEG.dcm").exists()
+
+
+def _square_contour(z_pos, x0=0.5, x1=8.5, y0=0.5, y1=8.5):
+    item = mock.Mock()
+    item.ContourGeometricType = "CLOSED_PLANAR"
+    item.ContourData = [x0, y0, z_pos, x1, y0, z_pos, x1, y1, z_pos, x0, y1, z_pos]
+    return item
+
+
+def _thick_slice_ct():
+    img = sitk.GetImageFromArray(np.zeros((3, 10, 10), np.float32))
+    img.SetSpacing((1.0, 1.0, 3.0))
+    return validate_ct(cube_hu=img)
+
+
+def _segment_mask(ct, contours):
+    from pyRadPlan.io.dicom._import_cst import _axis_interpolators, _compute_segment_mask
+
+    roi = mock.Mock()
+    roi.ContourSequence = contours
+    return _compute_segment_mask(ct, roi, _axis_interpolators(ct))
+
+
+def test_contours_on_finer_planes_than_the_ct_do_not_cancel():
+    ct = _thick_slice_ct()
+    cube = _segment_mask(ct, [_square_contour(z) for z in (0, 1, 2, 3, 4, 5, 6)])
+    assert [int(cube[:, :, k].sum()) for k in range(3)] == [64, 64, 64]
+
+
+def test_duplicate_contour_on_one_plane_is_kept():
+    ct = _thick_slice_ct()
+    cube = _segment_mask(ct, [_square_contour(3.0), _square_contour(3.0)])
+    assert int(cube.sum()) == 64
+
+
+def test_contours_outside_the_ct_are_skipped_with_one_warning(caplog):
+    ct = _thick_slice_ct()
+    contours = [_square_contour(z) for z in (-20.0, -10.0, 3.0, 30.0)]
+    with caplog.at_level("WARNING"):
+        cube = _segment_mask(ct, contours)
+    assert [int(cube[:, :, k].sum()) for k in range(3)] == [0, 64, 0]
+    assert sum("outside the CT" in r.message for r in caplog.records) == 1
+
+
+def test_rtstruct_roundtrip_keeps_masks_touching_the_border(tmp_path):
+    arr = np.zeros((3, 20, 30), np.float32)
+    img = sitk.GetImageFromArray(arr)
+    img.SetSpacing((2.0, 2.0, 3.0))
+    img.SetOrigin((-30, -20, 0))
+    ct = validate_ct(cube_hu=img)
+    mask = np.zeros((3, 20, 30), np.uint8)
+    mask[0] = 1
+    mask[1, :12, :15] = 1
+    mask[2, 5:15, 5:15] = 1
+    mask_img = sitk.GetImageFromArray(mask)
+    mask_img.CopyInformation(img)
+    cst = validate_cst(
+        [{"name": "BODY", "voi_type": "EXTERNAL", "mask": mask_img, "ct_image": ct}], ct
+    )
+    DicomExporter(tmp_path).save(ct=ct, cst=cst)
+
+    importer = DicomImporter(tmp_path)
+    cst2 = importer.load_cst(importer.load_ct())
+
+    np.testing.assert_array_equal(sitk.GetArrayFromImage(cst2.vois[0].mask), mask)

@@ -302,11 +302,27 @@ def test_mu_needs_calibration(generic_proton):
         _import(ds)
 
     out = _import(ds, particles_per_mu=2.5e6)
-    np.testing.assert_allclose(out["weights"], [50.0])
+    np.testing.assert_allclose(out["weights"], [50.0 * 2.5])
     assert out["stf"].beams[0].rays[0].beamlets[0].num_particles_per_mu == 2.5e6
 
     out = _import(ds, particles_per_mu=lambda energy: energy * 1e4)
     assert out["stf"].beams[0].rays[0].beamlets[0].num_particles_per_mu == pytest.approx(e0 * 1e4)
+
+
+def test_mu_weight_is_mu_times_particles_per_mu_in_millions(generic_proton):
+    e0 = _energy(generic_proton, 30)
+    ds = make_plan([{"layers": [(e0, [(0.0, 0.0, 10.0)])], "meterset": 4.0}], unit="MU")
+    out = _import(ds, particles_per_mu=2.5e6)
+    np.testing.assert_allclose(out["weights"], [4.0 * 2.5])
+
+
+def test_missing_beam_meterset_has_a_specific_message(generic_proton):
+    e0 = _energy(generic_proton, 30)
+    ds = make_plan([{"layers": [(e0, [(0.0, 0.0, 10.0)])], "meterset": 50.0}])
+    for ref in ds.FractionGroupSequence[0].ReferencedBeamSequence:
+        del ref.BeamMeterset
+    with pytest.raises(ValueError, match="no Beam Meterset"):
+        _import(ds)
 
 
 def test_energy_mapping_and_errors(generic_proton):

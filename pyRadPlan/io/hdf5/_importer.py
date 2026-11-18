@@ -115,6 +115,10 @@ class Hdf5Importer(BaseImporter):
         return ct
 
     def load_cst(self, ct: Optional[CT] = None) -> Optional[StructureSet]:
+        if ct is not None:
+            with self._open() as fh:
+                if "cst" in self._names(fh) and _attr(fh["cst"].attrs.get("ct_ref")) is not None:
+                    return validate_cst(read_tree(fh["cst"]), ct=ct)
         return self._single("cst")
 
     def load_dose(self) -> Optional[sitk.Image]:

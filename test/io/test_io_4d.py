@@ -180,7 +180,14 @@ def test_layers_keep_overlaps(fmt, tmp_path):
 @pytest.mark.parametrize("fmt", FORMATS)
 def test_auto_picks_layers_for_overlaps_and_labelmap_for_disjoint(fmt, tmp_path):
     ct = _make_ct_3d()
-    save_data(ct=ct, cst=_make_cst(ct), format=fmt, file_name=str(tmp_path / "overlap"))
+    auto = {"segmentation": "auto"}
+    save_data(
+        ct=ct,
+        cst=_make_cst(ct),
+        format=fmt,
+        file_name=str(tmp_path / "overlap"),
+        exporter_options=auto,
+    )
     _assert_same_cst(_make_cst(ct), load_data(tmp_path / "overlap")["cst"])
     names = {p.name for p in (tmp_path / "overlap").iterdir()}
     layered = "cst.seg.nrrd" if fmt == "nrrd" else f"cst{'.nii.gz' if fmt == 'nifti' else '.mha'}"
@@ -191,7 +198,13 @@ def test_auto_picks_layers_for_overlaps_and_labelmap_for_disjoint(fmt, tmp_path)
     disjoint = _make_cst(ct, masks)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        save_data(ct=ct, cst=disjoint, format=fmt, file_name=str(tmp_path / "disjoint"))
+        save_data(
+            ct=ct,
+            cst=disjoint,
+            format=fmt,
+            file_name=str(tmp_path / "disjoint"),
+            exporter_options=auto,
+        )
     names = {p.name for p in (tmp_path / "disjoint").iterdir()}
     assert "cst.seg.nrrd" not in names
     assert any(n.startswith("cst.") and not n.endswith(".json") for n in names)
@@ -220,6 +233,71 @@ def test_labelmap_warns_about_lost_voxels(fmt, tmp_path):
     assert restored["PTV"].indices.size == cst.vois[1].indices.size
     assert "CTV" not in restored  # completely covered by the PTV, so no label is left
     assert restored["Body"].indices.size < cst.vois[0].indices.size
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_default_segmentation_is_labelmap(fmt, tmp_path):
+    ct = _make_ct_3d()
+    with pytest.warns(UserWarning, match="overlapping voxels of"):
+        save_data(ct=ct, cst=_make_cst(ct), format=fmt, file_name=str(tmp_path / "p"))
+    names = {p.name for p in (tmp_path / "p").iterdir()}
+    assert "cst.seg.nrrd" not in names
+    assert any(n.startswith("cst.") and not n.endswith(".json") for n in names)
+
+
+def _save(ct, cst, fmt, path, mode):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        save_data(
+            ct=ct,
+            cst=cst,
+            format=fmt,
+            file_name=str(path),
+            exporter_options={"segmentation": mode},
+        )
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reexport_removes_stale_segmentation_variants(fmt, tmp_path):
+    ct = _make_ct_3d()
+    out = tmp_path / "p"
+    _save(ct, _make_cst(ct), fmt, out, "layers")
+
+    masks = _masks_3d()
+    del masks["Body"], masks["CTV"]
+    second = _make_cst(ct, masks)
+    _save(ct, second, fmt, out, "labelmap")
+
+    _assert_same_cst(second, load_data(out)["cst"])
+    stems = {p.name for p in out.iterdir() if p.name.startswith("cst")}
+    assert not any(".seg." in n for n in stems)
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reexport_3d_after_4d_removes_phase_files(fmt, tmp_path):
+    ct4 = _make_ct_4d()
+    out = tmp_path / "p"
+    _save(ct4, _make_cst(ct4, phased=True), fmt, out, "labelmap")
+    assert any(p.name.startswith("cst_phase") for p in out.iterdir())
+
+    ct3 = _make_ct_3d()
+    cst3 = _make_cst(ct3)
+    _save(ct3, cst3, fmt, out, "layers")
+
+    assert not any(p.name.startswith("cst_phase") for p in out.iterdir())
+    loaded = load_data(out)["cst"]
+    assert loaded.num_of_scenarios == 1
+    _assert_same_cst(cst3, loaded, order_matters=True)
+
+
+def test_reexport_keeps_unrelated_files(tmp_path):
+    ct = _make_ct_3d()
+    out = tmp_path / "p"
+    out.mkdir()
+    (out / "cst_notes.txt").write_text("keep")
+    (out / "cst_backup.json").write_text("{}")
+    _save(ct, _make_cst(ct), "nrrd", out, "labelmap")
+    assert (out / "cst_notes.txt").exists() and (out / "cst_backup.json").exists()
 
 
 def test_invalid_segmentation_mode(tmp_path):
@@ -310,7 +388,13 @@ def _read_header(path) -> dict:
 def test_slicer_seg_nrrd_layout(tmp_path):
     ct = _make_ct_3d()
     cst = _make_cst(ct)
-    save_data(ct=ct, cst=cst, format="nrrd", file_name=str(tmp_path / "p"))
+    save_data(
+        ct=ct,
+        cst=cst,
+        format="nrrd",
+        file_name=str(tmp_path / "p"),
+        exporter_options={"segmentation": "layers"},
+    )
     path = tmp_path / "p" / "cst.seg.nrrd"
     h = _read_header(path)
 
@@ -360,7 +444,13 @@ def test_slicer_seg_nrrd_single_layer_is_3d(tmp_path):
 def test_slicer_seg_nrrd_import_without_sidecar_or_pyradplan_keys(tmp_path):
     ct = _make_ct_3d()
     cst = _make_cst(ct)
-    save_data(ct=ct, cst=cst, format="nrrd", file_name=str(tmp_path / "p"))
+    save_data(
+        ct=ct,
+        cst=cst,
+        format="nrrd",
+        file_name=str(tmp_path / "p"),
+        exporter_options={"segmentation": "layers"},
+    )
     path = tmp_path / "p" / "cst.seg.nrrd"
     (tmp_path / "p" / "cst.json").unlink()
     raw = path.read_bytes()
@@ -381,7 +471,13 @@ def test_slicer_seg_nrrd_oblique_geometry(tmp_path):
     cube.SetDirection((0, -1, 0, 1, 0, 0, 0, 0, 1))
     ct = CT(cube_hu=cube)
     cst = _make_cst(ct)
-    save_data(ct=ct, cst=cst, format="nrrd", file_name=str(tmp_path / "p"))
+    save_data(
+        ct=ct,
+        cst=cst,
+        format="nrrd",
+        file_name=str(tmp_path / "p"),
+        exporter_options={"segmentation": "layers"},
+    )
     image = sitk.ReadImage(str(tmp_path / "p" / "cst.seg.nrrd"))
     assert np.allclose(image.GetDirection(), cube.GetDirection())
     assert np.allclose(image.GetOrigin(), cube.GetOrigin())
@@ -391,7 +487,13 @@ def test_slicer_seg_nrrd_oblique_geometry(tmp_path):
 
 def test_slicer_seg_nrrd_data_is_gzip(tmp_path):
     ct = _make_ct_3d()
-    save_data(ct=ct, cst=_make_cst(ct), format="nrrd", file_name=str(tmp_path / "p"))
+    save_data(
+        ct=ct,
+        cst=_make_cst(ct),
+        format="nrrd",
+        file_name=str(tmp_path / "p"),
+        exporter_options={"segmentation": "layers"},
+    )
     raw = (tmp_path / "p" / "cst.seg.nrrd").read_bytes().split(b"\n\n", 1)[1]
     assert len(gzip.decompress(raw)) == 3 * np.prod(SHAPE)
 
@@ -439,12 +541,24 @@ def test_4d_cst_roundtrip_per_phase_files(fmt, segmentation, tmp_path):
 def test_3d_cst_on_4d_ct_roundtrip_is_repeated_on_all_phases(tmp_path):
     ct4d = _make_ct_4d()
     cst = _make_cst(ct4d)
-    save_data(ct=ct4d, cst=cst, format="nifti", file_name=str(tmp_path / "p"))
+    save_data(
+        ct=ct4d,
+        cst=cst,
+        format="nifti",
+        file_name=str(tmp_path / "p"),
+        exporter_options={"segmentation": "layers"},
+    )
     assert (tmp_path / "p" / "cst_phase3.nii.gz").exists()
     _assert_same_cst(cst, load_data(tmp_path / "p")["cst"], order_matters=True)
 
     ct3d = _make_ct_3d()
-    save_data(ct=ct3d, cst=_make_cst(ct3d), format="nifti", file_name=str(tmp_path / "q"))
+    save_data(
+        ct=ct3d,
+        cst=_make_cst(ct3d),
+        format="nifti",
+        file_name=str(tmp_path / "q"),
+        exporter_options={"segmentation": "layers"},
+    )
     cst_single = load_patient(tmp_path / "q")[1]
     ct4d_only = tmp_path / "q4"
     save_data(ct=ct4d, format="nifti", file_name=str(ct4d_only))

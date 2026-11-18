@@ -1,6 +1,7 @@
 """DICOM exporter: writes CT, RTSTRUCT and RTDOSE into a folder."""
 
 import os
+import tempfile
 import logging
 import warnings
 from typing import Any, ClassVar, Optional
@@ -82,9 +83,9 @@ class DicomExporter(BaseExporter):
     an RT Ion Plan ``RTPLAN.dcm`` (plan intent RESEARCH, unapproved) with one beam per STF
     beam (Beam Number = STF index + 1), using the isocenter of each beam and
     ``pln.num_of_fractions`` planned fractions (one, with a warning, without ``pln``). Weights
-    are per fraction and written as numbers of particles (Primary Dosimeter Unit ``NP``). The
-    RTDOSE files of the same export reference the plan, and the plan references the RTSTRUCT
-    written in the same call. Only Head First Supine is supported
+    are per fraction and written as numbers of particles, ``w * 1e6`` (Primary Dosimeter Unit
+    ``NP``). The RTDOSE files of the same export reference the plan, and the plan references
+    the RTSTRUCT written in the same call. Only Head First Supine is supported
     (:class:`NotImplementedError` otherwise). See :mod:`pyRadPlan.io.dicom._export_plan` for
     the geometry conventions.
     """
@@ -167,6 +168,7 @@ class DicomExporter(BaseExporter):
                 f"Directory {str(directory)!r} already contains {len(existing)} DICOM file(s); "
                 "pass overwrite=True to replace them."
             )
+        self._validate_plan(stf, pln, weights, result, ctx)
         os.makedirs(directory, exist_ok=True)
         for path in existing:
             os.remove(path)
@@ -236,6 +238,18 @@ class DicomExporter(BaseExporter):
             )
             if not written and ct is None and cst is None and dose is None:
                 raise ValueError("The result holds no dose quantity to export.")
+
+    def _validate_plan(self, stf, pln, weights, result, ctx) -> None:
+        """Run the plan export into a scratch directory so that errors surface before any write."""
+        if not (self.export_plan and stf is not None):
+            return
+        preset = self._plan_ref
+        try:
+            with tempfile.TemporaryDirectory() as scratch, warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self._export_plan(stf, pln, weights, result, scratch, ctx, None)
+        finally:
+            self._plan_ref = preset
 
     def _export_plan(self, stf, pln, weights, result, directory, ctx, struct_ref) -> None:
         from pyRadPlan.stf import validate_stf  # noqa: PLC0415

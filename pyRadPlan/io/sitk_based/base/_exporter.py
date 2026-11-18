@@ -1,6 +1,7 @@
 """Shared exporter base for SimpleITK-based backends (NIfTI, NRRD, MetaImage)."""
 
 import os
+import re
 import warnings
 from typing import ClassVar, Literal, Optional
 
@@ -41,14 +42,15 @@ class SitkExporterBase(BaseExporter):
     ----------
     path : str or os.PathLike
         Target file or directory.
-    segmentation : {"auto", "labelmap", "layers"}, default "auto"
+    segmentation : {"labelmap", "auto", "layers"}, default "labelmap"
         How a structure set is stored. ``"labelmap"`` writes one label per voxel, so
         overlapping structures lose voxels (a warning names the affected VOIs).
         ``"layers"`` keeps all overlaps: a 3D Slicer segmentation ``cst.seg.nrrd`` with one
         layer per set of non-overlapping segments for NRRD, a 4D one-hot image with one
         channel per VOI for NIfTI and MetaImage. ``"auto"`` writes a label map unless
         VOIs overlap. The image and ``cst.json`` hold the VOI names, types and colors; the
-        importers read all variants.
+        importers read all variants. Exporting a structure set removes the structure set
+        files (``cst*``) of earlier exports from the folder.
 
     Notes
     -----
@@ -61,6 +63,7 @@ class SitkExporterBase(BaseExporter):
     name: ClassVar[str] = "SimpleITK Exporter"
     extensions: ClassVar[tuple[str, ...]] = ()
     container: ClassVar[bool] = False
+    supports: ClassVar[frozenset[str]] = frozenset({"ct", "cst", "dose"})
     #: Stamp pyradplan/Slicer keys into the label image (NRRD/MetaImage only).
     stamp_interop_metadata: ClassVar[bool] = False
     #: Write ``segmentation="layers"`` as a 3D Slicer ``.seg.nrrd`` (else a 4D one-hot image).
@@ -68,12 +71,12 @@ class SitkExporterBase(BaseExporter):
 
     #: Default used when the exporter is reached via the combined handler (whose
     #: cooperative __init__ chain does not pass through SitkExporterBase.__init__).
-    segmentation: str = "auto"
+    segmentation: str = "labelmap"
 
     def __init__(
         self,
         path,
-        segmentation: Literal["auto", "labelmap", "layers"] = "auto",
+        segmentation: Literal["labelmap", "auto", "layers"] = "labelmap",
     ):
         super().__init__(path)
         if segmentation not in SEGMENTATION_MODES:
@@ -122,8 +125,21 @@ class SitkExporterBase(BaseExporter):
         if dose is not None:
             write_image(dose, os.path.join(self.path, f"dose{ext}"))
 
-        if cst is not None and cst.vois:
-            self._save_cst(cst, ext)
+        if cst is not None:
+            self._remove_stale_cst()
+            if cst.vois:
+                self._save_cst(cst, ext)
+
+    def _remove_stale_cst(self) -> None:
+        """Delete structure set files of earlier exports (all variants and sidecars)."""
+        exts = "|".join(re.escape(e) for e in self.extensions)
+        pattern = re.compile(
+            rf"cst(_phase\d+)?(\.seg)?({exts})|cst(_phase\d+)?\.json", re.IGNORECASE
+        )
+        for name in os.listdir(self.path):
+            full = os.path.join(self.path, name)
+            if pattern.fullmatch(name) and os.path.isfile(full):
+                os.remove(full)
 
     def _save_cst(self, cst: StructureSet, ext: str) -> None:
         phases = num_phases(cst)

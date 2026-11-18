@@ -21,9 +21,21 @@ from ._serialization import ARRAY_TAG, decode_tree, to_json_tree
 def _has_array_tag(obj: Any) -> bool:
     """Whether a tree of dicts, lists and tuples contains a tagged array leaf.
 
-    A tree holding an array or image is native data (e.g. a python-mode dump), not a JSON
-    dump, so the scan stops there; this keeps validating large native trees cheap.
+    A subtree holding an array or image is native data (e.g. a python-mode dump), not a JSON
+    dump, so the scan of that subtree stops there; this keeps validating large native trees
+    cheap. The entries of a top-level dict or list are scanned separately, so a tree mixing
+    native and JSON-encoded entries is still detected.
     """
+    if isinstance(obj, dict):
+        if ARRAY_TAG in obj:
+            return True
+        return any(_scan_array_tag(value) for value in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return any(_scan_array_tag(value) for value in obj)
+    return False
+
+
+def _scan_array_tag(obj: Any) -> bool:
     stack = [obj]
     while stack:
         item = stack.pop()

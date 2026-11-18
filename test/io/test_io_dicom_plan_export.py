@@ -7,6 +7,7 @@ import numpy as np
 import pydicom
 import pymatreader
 import pytest
+import SimpleITK as sitk
 
 from pyRadPlan import IonPlan, generate_stf, load_tg119
 from pyRadPlan.cst import validate_cst
@@ -130,7 +131,7 @@ def _spots(stf, w):
                 if w[index] > 0:
                     point = _isocenter_plane_point(beam, ray)
                     key = (round(beamlet.energy, 2), *np.round(point, 3))
-                    spots[key] = spots.get(key, 0.0) + w[index] * beamlet.num_particles_per_mu
+                    spots[key] = spots.get(key, 0.0) + w[index] * 1e6
                 index += 1
         out.append(spots)
     return out
@@ -261,11 +262,10 @@ def _check_weights(plan, stf, w, fractions):
     for number, (beam_ds, beam) in enumerate(zip(plan.IonBeamSequence, stf.beams), start=1):
         n = beam.total_number_of_bixels
         beam_w = w[index : index + n]
-        npmu = np.array([b.num_particles_per_mu for r in beam.rays for b in r.beamlets])
         energies = np.array([b.energy for r in beam.rays for b in r.beamlets])
         index += n
         nonzero = beam_w > 0
-        expected = float(np.sum(beam_w[nonzero] * npmu[nonzero]))
+        expected = float(np.sum(beam_w[nonzero])) * 1e6
 
         assert beam_ds.BeamNumber == number
         assert beam_ds.PrimaryDosimeterUnit == "NP"
@@ -578,3 +578,75 @@ def test_photon_stf_exports_plan_and_dose_references_it(tmp_path):
     assert plan.SOPClassUID == "1.2.840.10008.5.1.4.1.1.481.5"
     ds = pydicom.dcmread(out / "RTDOSE_physical_dose.dcm")
     assert ds.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID == plan.SOPInstanceUID
+
+
+def _ds_elements(dataset):
+    for element in dataset.iterall():
+        if element.VR == "DS":
+            values = element.value
+            if not isinstance(values, (list, pydicom.multival.MultiValue)):
+                values = [values]
+            for value in values:
+                yield element.keyword, str(value)
+
+
+def test_all_decimal_strings_have_at_most_16_characters(tmp_path, generated):
+    pln, _, _, stf, w, result = generated
+    img = sitk.GetImageFromArray(np.zeros((3, 10, 10), np.float32))
+    img.SetSpacing((0.976562511920929, 0.976562511920929, 1.1))
+    img.SetOrigin((-249.51171875, -123.30000000000001, 0.1))
+    ct = validate_ct(cube_hu=img)
+    mask = np.zeros((3, 10, 10), np.uint8)
+    mask[:, 3:6, 3:7] = 1
+    mask_img = sitk.GetImageFromArray(mask)
+    mask_img.CopyInformation(img)
+    cst = validate_cst(
+        [{"name": "PTV", "voi_type": "TARGET", "mask": mask_img, "ct_image": ct}], ct
+    )
+    dose = sitk.GetImageFromArray(np.random.default_rng(0).random((3, 10, 10)))
+    dose.CopyInformation(img)
+
+    for fmt in ("rtstruct", "seg"):
+        out = tmp_path / fmt
+        DicomExporter(out, structure_format=fmt).save(
+            ct=ct, cst=cst, dose=dose, stf=stf, pln=pln, weights=w
+        )
+        files = sorted(out.glob("*.dcm"))
+        assert any(f.name.startswith("CT") for f in files)
+        for path in files:
+            too_long = [(kw, v) for kw, v in _ds_elements(pydicom.dcmread(path)) if len(v) > 16]
+            assert not too_long, f"{path.name}: {too_long[:2]}"
+
+
+def test_failed_plan_export_leaves_the_previous_export_untouched(tmp_path, proton_mat):
+    pln, ct, cst, stf, w = proton_mat
+    out = tmp_path / "out"
+    DicomExporter(out).save(ct=ct, cst=cst, stf=stf, pln=pln, weights=w)
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    assert "RTPLAN.dcm" in before
+
+    bad_options = [
+        ({"weights": w[:-1]}, {}, ValueError),
+        ({"weights": -w}, {}, ValueError),
+        ({"weights": np.zeros_like(w)}, {}, ValueError),
+        ({"weights": w}, {"metadata": {"patient_position": "FFS"}}, NotImplementedError),
+    ]
+    for kwargs, options, error in bad_options:
+        with pytest.raises(error):
+            DicomExporter(out, overwrite=True, **options).save(
+                ct=ct, cst=cst, stf=stf, pln=pln, **kwargs
+            )
+        assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def test_particle_number_is_weight_times_one_million(tmp_path, proton_mat):
+    pln, ct, cst, stf, w = proton_mat
+    for ray in stf.beams[0].rays:
+        for beamlet in ray.beamlets:
+            beamlet.num_particles_per_mu = 3.7e6
+    out = _export(tmp_path, ct=ct, stf=stf, pln=pln, weights=w)
+    plan = pydicom.dcmread(out / "RTPLAN.dcm")
+    expected = float(np.sum(w[: stf.beams[0].total_number_of_bixels])) * 1e6
+    assert float(plan.IonBeamSequence[0].FinalCumulativeMetersetWeight) == pytest.approx(
+        expected, rel=1e-5
+    )

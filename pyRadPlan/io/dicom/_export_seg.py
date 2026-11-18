@@ -1,6 +1,7 @@
 """Export a pyRadPlan StructureSet as a DICOM SEG file."""
 
 import os
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -19,6 +20,7 @@ from ._export_common import (
     first_phase_image,
     populate_common,
     direction_to_orientation,
+    ds_list,
     warn_if_multiphase,
 )
 
@@ -74,12 +76,12 @@ def _shared_functional_groups(orientation: list, spacing: tuple) -> Sequence:
     shared = Dataset()
 
     plane_orient = Dataset()
-    plane_orient.ImageOrientationPatient = [float(o) for o in orientation]
+    plane_orient.ImageOrientationPatient = ds_list(orientation)
     shared.PlaneOrientationSequence = Sequence([plane_orient])
 
     measures = Dataset()
-    measures.PixelSpacing = [float(spacing[1]), float(spacing[0])]
-    measures.SliceThickness = float(spacing[2])
+    measures.PixelSpacing = ds_list([spacing[1], spacing[0]])
+    measures.SliceThickness = ds_list([spacing[2]])[0]
     shared.PixelMeasuresSequence = Sequence([measures])
 
     return Sequence([shared])
@@ -123,7 +125,7 @@ def _new_seg_dataset(ctx: ExportContext, size: tuple) -> Dataset:
 
 def export_seg(
     cst: StructureSet, directory: str, ctx: ExportContext, ct_info: Optional[dict] = None
-) -> str:
+) -> Optional[str]:
     """
     Write a StructureSet as a multi-frame DICOM SEG file.
 
@@ -143,8 +145,8 @@ def export_seg(
 
     Returns
     -------
-    str
-        The path of the written SEG file.
+    str or None
+        The path of the written SEG file, or ``None`` (with a warning) if every mask is empty.
     """
     reference = first_phase_image(cst)
     warn_if_multiphase(cst, "SEG")
@@ -178,7 +180,7 @@ def export_seg(
 
             per_frame = Dataset()
             plane_pos = Dataset()
-            plane_pos.ImagePositionPatient = [float(p) for p in position]
+            plane_pos.ImagePositionPatient = ds_list(position)
             per_frame.PlanePositionSequence = Sequence([plane_pos])
             seg_id = Dataset()
             seg_id.ReferencedSegmentNumber = i
@@ -189,6 +191,14 @@ def export_seg(
             per_frame_seq.append(per_frame)
 
             frames.append((slice_mask > 0).astype(np.uint8))
+
+    if not frames:
+        warnings.warn(
+            "No structure has a non-empty mask; a SEG needs at least one frame, so no SEG "
+            "file is written.",
+            stacklevel=3,
+        )
+        return None
 
     if ct_info and ct_info.get("series_uid"):
         ds.ReferencedSeriesSequence = _referenced_series(ct_info)
@@ -202,11 +212,7 @@ def export_seg(
 
     # BINARY segmentation: pack all frames into a contiguous 1-bit stream
     # (LSB-first, as required by DICOM); pydicom's pixel_array unpacks it back.
-    if frames:
-        bits = np.stack(frames).astype(np.uint8).ravel()
-    else:
-        bits = np.zeros(size[1] * size[0], dtype=np.uint8)
-        ds.NumberOfFrames = 1
+    bits = np.stack(frames).astype(np.uint8).ravel()
     ds.PixelData = np.packbits(bits, bitorder="little").tobytes()
 
     out_path = os.path.join(directory, "SEG.dcm")

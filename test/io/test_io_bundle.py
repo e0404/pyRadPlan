@@ -207,6 +207,35 @@ def test_nothing_supported_raises(workspace, tmp_path):
         save_data(file_name=tmp_path / "ws.npz", pln=None)
 
 
+def test_custom_exporter_receives_extras_by_default(workspace, tmp_path, monkeypatch):
+    from pyRadPlan.io import _factory
+    from pyRadPlan.io.base import BaseExporter
+
+    received = {}
+
+    class CustomExporter(BaseExporter):
+        format = "custom_test"
+        extensions = (".customtest",)
+
+        def save(self, *, ct=None, cst=None, dose=None, **extra):
+            received.update(ct=ct, cst=cst, dose=dose, **extra)
+
+    assert CustomExporter.supports == frozenset({ANY_OBJECT})
+    monkeypatch.setitem(_factory.EXPORTERS, "custom_test", CustomExporter)
+    monkeypatch.setitem(_factory._EXTENSION_MAP, ".customtest", "custom_test")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        save_data(
+            file_name=tmp_path / "x.customtest",
+            ct=workspace["ct"],
+            pln=workspace["pln"],
+            stf=workspace["stf"],
+        )
+    assert received["pln"] is workspace["pln"]
+    assert received["stf"] is workspace["stf"]
+
+
 def test_dict_calls_stay_backward_compatible(workspace, tmp_path):
     ct, cst = workspace["ct"], workspace["cst"]
     save_data({"ct": ct, "cst": cst}, file_name=tmp_path / "a.mat")

@@ -12,7 +12,13 @@ import scipy.sparse as sp
 import SimpleITK as sitk
 from pydantic_core import to_jsonable_python
 
-from pyRadPlan.core import ARRAY_TAG, decode_tree, encode_tree, json_leaf_decoder
+from pyRadPlan.core import (
+    ARRAY_TAG,
+    decode_tree,
+    encode_tree,
+    json_leaf_decoder,
+    json_leaf_encoder,
+)
 from pyRadPlan.core._serialization import _pixel_id
 from pyRadPlan.core.xp_utils import to_numpy
 
@@ -21,6 +27,7 @@ FORMAT_VERSION = 1
 COMPRESSION = "gzip"
 COMPRESSION_OPTS = 1
 COMPRESSION_THRESHOLD = 64 * 1024
+INLINE_THRESHOLD = 4 * 1024
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
@@ -47,6 +54,10 @@ def check_json_tree(obj: Any, path: str = "tree") -> None:
 
 class ArrayWriter:
     """Leaf encoder writing array leaves as datasets below ``group/arrays``.
+
+    Numeric arrays smaller than ``INLINE_THRESHOLD`` bytes are stored inline in the JSON tree
+    (the format of :func:`pyRadPlan.core.json_leaf_encoder`), as an HDF5 dataset has a
+    large overhead per array.
 
     Parameters
     ----------
@@ -100,6 +111,8 @@ class ArrayWriter:
             tag["data"] = arr.reshape(-1).tolist()
         elif kind == "S":
             tag["data"] = [v.hex() for v in arr.reshape(-1).tolist()]
+        elif kind in "biufc" and arr.nbytes < INLINE_THRESHOLD:
+            return json_leaf_encoder(arr)
         elif kind in "biufc":
             name = self._next()
             self._dataset(self.arrays, name, arr)
@@ -149,7 +162,7 @@ def _inf(value: float) -> str:
 
 
 class ArrayReader:
-    """Leaf decoder reading the datasets written by :class:`ArrayWriter`.
+    """Leaf decoder reading the datasets and inline arrays written by :class:`ArrayWriter`.
 
     Parameters
     ----------
@@ -192,6 +205,8 @@ class ArrayReader:
         dtype = np.dtype(leaf["dtype"])
         if "dataset" in leaf:
             return np.asarray(self._read(leaf["dataset"]), dtype=dtype).reshape(shape)
+        if dtype.kind in "biufc":
+            return json_leaf_decoder(leaf)
         data = leaf["data"]
         if dtype.kind == "S":
             data = [bytes.fromhex(v) for v in data]

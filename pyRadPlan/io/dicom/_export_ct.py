@@ -15,6 +15,7 @@ from ._export_common import (
     ExportContext,
     populate_common,
     direction_to_orientation,
+    ds_list,
 )
 
 
@@ -110,11 +111,11 @@ def _export_series(  # noqa: PLR0913 - one series needs its naming and numbering
         if temporal is not None:
             ds.TemporalPositionIdentifier = temporal[0]
             ds.NumberOfTemporalPositions = temporal[1]
-        ds.SliceLocation = float(position[2])
-        ds.ImagePositionPatient = [float(p) for p in position]
-        ds.ImageOrientationPatient = [float(o) for o in orientation]
-        ds.PixelSpacing = [float(spacing[1]), float(spacing[0])]  # row (y), column (x)
-        ds.SliceThickness = float(spacing[2])
+        ds.SliceLocation = ds_list([position[2]])[0]
+        ds.ImagePositionPatient = ds_list(position)
+        ds.ImageOrientationPatient = ds_list(orientation)
+        ds.PixelSpacing = ds_list([spacing[1], spacing[0]])  # row (y), column (x)
+        ds.SliceThickness = ds_list([spacing[2]])[0]
 
         ds.Rows = ny
         ds.Columns = nx

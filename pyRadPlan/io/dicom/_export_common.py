@@ -9,6 +9,7 @@ from typing import Any, Optional
 import SimpleITK as sitk
 from pydicom.dataset import FileMetaDataset
 from pydicom.uid import generate_uid, ExplicitVRLittleEndian
+from pydicom.valuerep import format_number_as_ds
 
 import pyRadPlan
 from pyRadPlan.cst import StructureSet
@@ -219,6 +220,11 @@ def warn_if_multiphase(cst: StructureSet, kind: str) -> None:
             UserWarning,
             stacklevel=4,
         )
+
+
+def ds_list(values) -> list:
+    """Quantize numbers to Decimal Strings (16 characters at most)."""
+    return [float(format_number_as_ds(float(v))) for v in values]
 
 
 def direction_to_orientation(direction: tuple) -> list:

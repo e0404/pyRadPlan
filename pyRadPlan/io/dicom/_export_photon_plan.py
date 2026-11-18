@@ -53,8 +53,7 @@ from pydicom.sequence import Sequence
 from pyRadPlan.machines.base import MLC, Jaw
 from pyRadPlan.stf import FieldShape, FieldShapeAsBLD, FieldShapeAsMask, FieldShapeComposite
 
-from ._export_common import RT_PLAN_STORAGE, ExportContext, PlanReference
-from ._export_dose import _ds
+from ._export_common import RT_PLAN_STORAGE, ExportContext, PlanReference, ds_list
 from ._export_plan import (
     _resolve_machine,
     planned_fractions,
@@ -94,14 +93,14 @@ def _device_item(
     item = Dataset()
     item.RTBeamLimitingDeviceType = device_type
     if distance:
-        item.SourceToBeamLimitingDeviceDistance = _ds([distance])[0]
+        item.SourceToBeamLimitingDeviceDistance = ds_list([distance])[0]
     item.NumberOfLeafJawPairs = len(pairs)
     if boundaries is not None:
-        item.LeafPositionBoundaries = _ds(boundaries)
+        item.LeafPositionBoundaries = ds_list(boundaries)
     position = Dataset()
     position.RTBeamLimitingDeviceType = device_type
     # IEC leaf (element) subscript order: all of bank 1, then all of bank 2
-    position.LeafJawPositions = _ds(np.concatenate([pairs[:, 0], pairs[:, 1]]))
+    position.LeafJawPositions = ds_list(np.concatenate([pairs[:, 0], pairs[:, 1]]))
     return item, position
 
 
@@ -232,7 +231,7 @@ def _beam_item(beam, number, devices, description, machine_name) -> Dataset:
     item.RadiationType = "PHOTON"
     item.TreatmentMachineName = machine_name
     item.PrimaryDosimeterUnit = "MU"
-    item.SourceAxisDistance = _ds([beam.sad])[0]
+    item.SourceAxisDistance = ds_list([beam.sad])[0]
     item.BeamLimitingDeviceSequence = [d for d, _ in devices]
     item.TreatmentDeliveryType = "TREATMENT"
     item.NumberOfWedges = 0
@@ -245,18 +244,18 @@ def _beam_item(beam, number, devices, description, machine_name) -> Dataset:
 
     first = Dataset()
     first.ControlPointIndex = 0
-    first.NominalBeamEnergy = _ds([energy])[0]
-    first.GantryAngle = _ds([float(beam.gantry_angle) % 360.0])[0]
+    first.NominalBeamEnergy = ds_list([energy])[0]
+    first.GantryAngle = ds_list([float(beam.gantry_angle) % 360.0])[0]
     first.GantryRotationDirection = "NONE"
     first.BeamLimitingDeviceAngle = 0.0
     first.BeamLimitingDeviceRotationDirection = "NONE"
-    first.PatientSupportAngle = _ds([float(beam.couch_angle) % 360.0])[0]
+    first.PatientSupportAngle = ds_list([float(beam.couch_angle) % 360.0])[0]
     first.PatientSupportRotationDirection = "NONE"
     first.TableTopPitchAngle = 0.0
     first.TableTopPitchRotationDirection = "NONE"
     first.TableTopRollAngle = 0.0
     first.TableTopRollRotationDirection = "NONE"
-    first.IsocenterPosition = _ds(np.asarray(beam.iso_center, dtype=float))
+    first.IsocenterPosition = ds_list(np.asarray(beam.iso_center, dtype=float))
     first.BeamLimitingDevicePositionSequence = [p for _, p in devices]
     first.CumulativeMetersetWeight = 0.0
     second = Dataset()

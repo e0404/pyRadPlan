@@ -13,6 +13,7 @@ from pyRadPlan import PhotonPlan, calc_dose_forward, generate_stf, load_tg119
 from pyRadPlan.core import (
     ARRAY_TAG,
     PyRadPlanBaseModel,
+    decode_input,
     decode_tree,
     encode_tree,
     json_leaf_decoder,
@@ -427,6 +428,45 @@ def test_field_based_photon_stf(tg119, n_blds, expected):
     pln = pln.model_copy(deep=True)
     pln.prop_stf.pop("blds")
     assert_same(restored, pln)
+
+
+def test_generated_stfs_keep_their_beamlet_types(tg119):
+    from pyRadPlan.stf import IonSpot, PhotonBixel
+
+    ct, cst = tg119
+    for pln, expected in [
+        (IonPlan(radiation_mode="protons", machine="Generic"), IonSpot),
+        (PhotonPlan(machine="Generic"), PhotonBixel),
+    ]:
+        pln.prop_stf = {"gantry_angles": [0, 90], "couch_angles": [0, 0], "bixel_width": 20}
+        stf = generate_stf(ct, cst, pln)
+        assert {type(b) for b in _beamlets(stf)} == {expected}
+        _both(stf, validate_stf)
+        restored = validate_stf(json_roundtrip(stf.model_dump(mode="json")))
+        assert restored == stf
+        assert validate_stf(stf.model_dump()) == stf
+
+
+def test_matrad_stf_beamlets_follow_the_radiation_mode(proton_raw):
+    from pyRadPlan.stf import IonSpot
+
+    stf = validate_stf(proton_raw["stf"])
+    assert {type(b) for b in _beamlets(stf)} == {IonSpot}
+    assert validate_stf(json_roundtrip(stf.model_dump(mode="json"))) == stf
+
+
+def test_validate_decodes_tagged_leaves_next_to_native_ones(small_case):
+    ct, cst = small_case
+    vois = json_roundtrip(cst.model_dump(mode="json"))["vois"]
+    restored = validate_cst({"vois": vois, "ct_image": ct})
+    assert all(isinstance(v.mask, sitk.Image) for v in restored.vois)
+    assert_same(restored.vois[0].mask, cst.vois[0].mask)
+
+    mixed = {"native": np.zeros(2), "tagged": json_roundtrip(encode_tree({"a": np.arange(3)}))}
+    out = decode_input(mixed)
+    assert isinstance(out["tagged"]["a"], np.ndarray)
+    assert out["native"] is mixed["native"]
+    assert decode_input([np.zeros(2), mixed["tagged"]])[1]["a"].tolist() == [0, 1, 2]
 
 
 def test_ion_dij(proton_raw):

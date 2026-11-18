@@ -169,8 +169,10 @@ def test_cst_export_options_resolve_against_registry(qapp):
     # The container formats that preserve objectives, plus the image and both
     # DICOM structure representations, are all offered.
     assert {"mat", "hdf5", "pickle", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
-    dicom_structs = {struct for _l, fmt, struct, *_ in options if fmt == "dcm"}
+    dicom_structs = {opts["structure_format"] for _l, fmt, opts, *_ in options if fmt == "dcm"}
     assert dicom_structs == {"rtstruct", "seg"}
+    nrrd_options = [opts for _l, fmt, opts, *_ in options if fmt == "nrrd"]
+    assert nrrd_options == [None, {"segmentation": "layers"}]
     # Only mat/hdf5/pickle advertise objective preservation.
     keeps = {fmt for _l, fmt, _s, _d, keep in options if keep}
     assert keeps == {"mat", "hdf5", "pickle"}
@@ -590,11 +592,30 @@ def test_save_workspace_h5_reloads_identical_state(qapp, tmp_path, monkeypatch):
     assert restored_ws.cst == ws.cst
     assert [v.objectives for v in restored_ws.cst.vois] == [v.objectives for v in ws.cst.vois]
     assert restored_ws.pln == ws.pln
-    _assert_equal_values(restored_ws.stf.model_dump(), ws.stf.model_dump())
+    assert restored_ws.stf == ws.stf
     _assert_equal_values(restored_ws.dij.model_dump(), ws.dij.model_dump())
     _assert_equal_values(restored_ws.result, ws.result)
     assert restored._saved_tags == ["saved"]
     assert restored._is_tagged("physical_dose_saved")
+
+
+def test_save_workspace_h5_fails_instead_of_dropping_objects(qapp, tmp_path, monkeypatch):
+    from pyRadPlan import load_tg119
+
+    ct, cst = load_tg119()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=ct, cst=cst, result={"physical_dose": object()})
+    path = tmp_path / "workspace.h5"
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName",
+        lambda *args: (str(path), ""),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
+
+    with pytest.raises(TypeError, match="'result'"):
+        w._on_save_workspace()
+    assert not path.exists()
 
 
 def test_save_workspace_without_ct_stops_before_file_dialog(qapp, monkeypatch):

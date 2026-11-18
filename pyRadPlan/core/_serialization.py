@@ -9,7 +9,7 @@ write the leaves as plain JSON.
 JSON leaf formats (every leaf is a dictionary with the key ``"__array__"``)::
 
     {"__array__": "ndarray", "dtype": "float64", "shape": [2, 3], "data": [... flat C order]}
-    {"__array__": "ndarray", "dtype": "object", "shape": [2], "data": [<encoded leaf or None>, ...]}
+    {"__array__": "ndarray", "dtype": "object", "shape": [2], "data": [<leaf or None>, ...]}
     {"__array__": "sparse", "format": "csc", "container": "matrix" | "array", "dtype": ...,
      "shape": [rows, cols], "data": [...], "indices": [...], "indptr": [...]}
     {"__array__": "sitk.Image", "dtype": ..., "pixel_type": "32-bit float", "shape": [...],
@@ -60,7 +60,7 @@ def _nonfinite_name(value: float) -> str:
 
 
 def is_array_leaf(obj: Any) -> bool:
-    """Whether ``obj`` is a leaf of a data tree: an array, sparse matrix, image or non-finite float.
+    """Whether ``obj`` is an array leaf: array, sparse matrix, image or non-finite float.
 
     Parameters
     ----------
