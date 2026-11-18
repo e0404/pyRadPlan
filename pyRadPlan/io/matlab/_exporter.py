@@ -8,7 +8,7 @@ import SimpleITK as sitk
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
-from ..base import BaseExporter
+from ..base import ANY_OBJECT, BaseExporter
 from . import _matfile
 
 
@@ -26,6 +26,7 @@ class MatlabExporter(BaseExporter):
     name: ClassVar[str] = "MATLAB Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".mat",)
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({ANY_OBJECT})
 
     def save(
         self,

@@ -108,9 +108,22 @@ def _folder_has_images(directory: str) -> bool:
     return False
 
 
+_HDF5_WORKSPACE_EXTENSIONS = (".h5", ".hdf5")
+_PICKLE_WORKSPACE_EXTENSIONS = (".pkl", ".pickle")
+
+
 def _build_save_filter() -> str:
-    """Offer the format that preserves all workspace objects and result quantities."""
-    return "pyRadPlan workspace (*.pkl *.pickle)"
+    """Offer the formats that preserve all workspace objects and result quantities.
+
+    HDF5 comes first and is the default; pickle stays available for workspaces that
+    hold objects HDF5 cannot rebuild.
+    """
+    return ";;".join(
+        [
+            "pyRadPlan workspace, HDF5 (*.h5 *.hdf5)",
+            "pyRadPlan workspace, pickle (*.pkl *.pickle)",
+        ]
+    )
 
 
 def _image_formats() -> list[tuple[str, str]]:
@@ -738,7 +751,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._on_load_dij()
 
     def save_workspace(self) -> None:
-        """Save the complete workspace to a pickle file."""
+        """Save the complete workspace to an HDF5 (default) or pickle file."""
         self._on_save_workspace()
 
     def save_plan(self) -> None:
@@ -816,7 +829,7 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         # A bare image file carries no semantics (CT? mask? dose?); ask the user.
-        # Container formats (.mat/.npz/.pkl) and DICOM keep the direct load path.
+        # Container formats (.mat/.npz/.h5/.pkl) and DICOM keep the direct load path.
         from pyRadPlan.io.sitk_based._binary_import import IMAGE_EXTENSIONS  # noqa: PLC0415
 
         if filepath.lower().endswith(IMAGE_EXTENSIONS):
@@ -1499,22 +1512,33 @@ class WorkflowWidget(WorkspaceWidget):
             return
         if not self._resolve_pending_changes("Save Workspace"):
             return
-        filepath, _ = QFileDialog.getSaveFileName(self, "Save workspace", "", _build_save_filter())
+        filepath, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save workspace", "", _build_save_filter()
+        )
         if not filepath:
             return
         extension = os.path.splitext(filepath)[1].lower()
-        if extension and extension not in (".pkl", ".pickle"):
+        if extension and extension not in (
+            *_HDF5_WORKSPACE_EXTENSIONS,
+            *_PICKLE_WORKSPACE_EXTENSIONS,
+        ):
             QMessageBox.warning(
-                self, "Save Workspace", "Use .pkl or .pickle to save the complete workspace."
+                self,
+                "Save Workspace",
+                "Use .h5, .hdf5, .pkl or .pickle to save the complete workspace.",
             )
             return
+        if extension:
+            fmt = "pickle" if extension in _PICKLE_WORKSPACE_EXTENSIONS else "hdf5"
+        else:
+            fmt = "pickle" if "*.pkl" in (selected_filter or "") else "hdf5"
         objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
         objects["saved_result_tags"] = list(self._saved_tags)
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            return save_data(file_name=filepath, format="pickle", **objects)
+            return save_data(file_name=filepath, format=fmt, **objects)
 
         self._run_save(_save, "Saving workspace…", "Save Workspace")
 
@@ -1547,15 +1571,16 @@ class WorkflowWidget(WorkspaceWidget):
         """Return the CST export targets: (label, format, dicom_structure, is_dir, keeps_objectives).
 
         Only formats with a registered exporter are offered. Container formats
-        (mat/pickle/npz) write a single file; the image/DICOM backends write a
+        (mat/hdf5/pickle/npz) write a single file; the image/DICOM backends write a
         folder (a label map for the SimpleITK formats, a CT + RTSTRUCT/SEG series
-        for DICOM). Objectives only survive in mat/pickle.
+        for DICOM). Objectives only survive in mat/hdf5/pickle.
         """
         from pyRadPlan.io import get_available_formats  # noqa: PLC0415
 
         available = get_available_formats()
         candidates = [
             ("MATLAB (*.mat)", "mat", None, False, True),
+            ("HDF5 (*.h5)", "hdf5", None, False, True),
             ("Pickle (*.pkl)", "pickle", None, False, True),
             ("NumPy (*.npz)", "npz", None, False, False),
             ("NIfTI label map (folder)", "nifti", None, True, False),

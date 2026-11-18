@@ -93,6 +93,9 @@ class DicomExporter(BaseExporter):
     name: ClassVar[str] = "DICOM Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".dcm",)
     container: ClassVar[bool] = False
+    supports: ClassVar[frozenset[str]] = frozenset(
+        {"ct", "cst", "dose", "result", "pln", "stf", "weights"}
+    )
 
     #: Default used when the exporter is reached via the combined handler (whose
     #: cooperative __init__ chain does not pass through DicomExporter.__init__).
@@ -145,9 +148,6 @@ class DicomExporter(BaseExporter):
     ) -> None:
         if ct is None and cst is None and dose is None and result is None:
             raise ValueError("Nothing to export: provide at least one of ct, cst, dose, result.")
-
-        if extra:
-            logger.warning("DICOM exporter ignores unsupported objects: %s", list(extra))
 
         preset = self._plan_ref
         try:

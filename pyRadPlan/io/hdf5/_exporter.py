@@ -16,7 +16,7 @@ from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
 from pyRadPlan.stf import SteeringInformation
 
-from ..base import BaseExporter
+from ..base import ANY_OBJECT, BaseExporter
 from ._codec import FORMAT_NAME, FORMAT_VERSION, write_tree
 
 _MODEL_KINDS = (
@@ -39,6 +39,7 @@ class Hdf5Exporter(BaseExporter):
     name: ClassVar[str] = "HDF5 Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".h5", ".hdf5")
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({ANY_OBJECT})
 
     def save(
         self,

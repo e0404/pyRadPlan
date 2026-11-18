@@ -11,7 +11,9 @@ from pyRadPlan.core import BaseDataFile, get_base_data_kind, list_base_data
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 
+from .base import ANY_OBJECT
 from .matlab import validate_matrad_patient
+from ._bundle import ExportBundle
 from ._factory import (
     DEFAULT_SAVE_FORMAT,
     detect_format,
@@ -188,12 +190,14 @@ def load_data(path: os.PathLike) -> dict:
 
 
 def _collect_objects(data, ct, cst, dose, extra) -> dict:
-    """Gather the named objects to save into a single dict."""
+    """Gather the named objects to save into a single dict, leaving out ``None`` values."""
     objects: dict = {}
     if data is not None:
-        if not isinstance(data, dict):
-            raise TypeError("'data' must be a dict of named objects.")
-        objects.update(data)
+        if isinstance(data, ExportBundle):
+            data = data.to_dict()
+        elif not isinstance(data, dict):
+            raise TypeError("'data' must be a dict of named objects or an ExportBundle.")
+        objects.update({k: v for k, v in data.items() if v is not None})
     for key, value in (("ct", ct), ("cst", cst), ("dose", dose)):
         if value is not None:
             objects[key] = value
@@ -201,6 +205,26 @@ def _collect_objects(data, ct, cst, dose, extra) -> dict:
     if not objects:
         raise ValueError("Nothing to save: provide ct, cst, dose, extra objects or a data dict.")
     return objects
+
+
+def _split_supported(objects: dict, fmt: str) -> dict:
+    """Keep the objects the exporter of ``fmt`` stores and warn once about the others."""
+    supports = get_exporter(fmt).supports
+    if ANY_OBJECT in supports:
+        return objects
+    kept = {k: v for k, v in objects.items() if k in supports}
+    dropped = [k for k in objects if k not in supports]
+    if dropped:
+        warnings.warn(
+            f"The {fmt} format cannot store {', '.join(dropped)}; they were not saved.",
+            UserWarning,
+            stacklevel=3,
+        )
+    if not kept:
+        raise ValueError(
+            f"Nothing to export: the {fmt} format stores {', '.join(sorted(supports))}."
+        )
+    return kept
 
 
 def _resolve_format(file_name, fmt) -> str:
@@ -218,7 +242,7 @@ def _resolve_format(file_name, fmt) -> str:
 
 
 def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
-    data: Optional[dict] = None,
+    data: Optional[Union[dict, ExportBundle]] = None,
     *,
     file_name: Optional[Union[str, os.PathLike]] = None,
     format: Optional[str] = None,  # noqa: A002 - intentional public API name
@@ -236,8 +260,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
 
     Parameters
     ----------
-    data : dict, optional
-        A dictionary of named objects to save (e.g. ``{"ct": ct, "cst": cst}``).
+    data : dict or ExportBundle, optional
+        A dictionary of named objects to save (e.g. ``{"ct": ct, "cst": cst}``) or an
+        :class:`ExportBundle`. Entries that are ``None`` are ignored.
     file_name : str or os.PathLike, optional
         Target file name. If it has no extension, the format's default extension
         is appended. For DICOM, this is treated as the output directory and is
@@ -262,9 +287,17 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     -------
     str or list[str]
         The path(s) written.
+
+    Warns
+    -----
+    UserWarning
+        Once per call, listing the objects the format cannot store (see
+        :attr:`BaseExporter.supports`); only the others are saved. If none is left,
+        a :class:`ValueError` is raised.
     """
     objects = _collect_objects(data, ct, cst, dose, extra)
     fmt = _resolve_format(file_name, format)
+    objects = _split_supported(objects, fmt)
 
     ext = default_extension(fmt)
     exporter_cls = get_exporter(fmt)

@@ -7,6 +7,7 @@ Top-level API
 - :func:`load_patient` -- load a CT and StructureSet from a file or DICOM folder.
 - :func:`load_data` -- load everything available (ct, cst, dose, ...) into a dict.
 - :func:`save_data` -- save pyRadPlan objects, format chosen from extension/argument.
+- :class:`ExportBundle` -- typed container of a workspace's objects for saving and loading.
 - :func:`load_tg119` -- load the bundled TG119 phantom.
 - :func:`phantom_path` / :func:`available_phantoms` / :func:`list_phantoms` -- locate the
   phantoms (shipped, the user's and shared ones) by name.
@@ -39,6 +40,7 @@ from .sitk_based import (
     load_binary_patient,
     list_image_files,
 )
+from ._bundle import ExportBundle
 from ._factory import (
     register_importer,
     register_exporter,
@@ -60,6 +62,7 @@ __all__ = [
     "load_patient",
     "load_data",
     "save_data",
+    "ExportBundle",
     "load_tg119",
     "phantom_path",
     "available_phantoms",
