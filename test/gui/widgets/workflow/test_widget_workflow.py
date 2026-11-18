@@ -5,7 +5,6 @@ from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
-from pyRadPlan.gui.widgets.workflow._workflow_widget import IMPORT_PREFIX, _result_with
 from pyRadPlan.gui.workspace import WorkspaceManager
 
 # Widget methods are patched on the class: undoing a patch on an instance leaves
@@ -257,44 +256,111 @@ def test_workspace_validates_a_result_dict(qapp):
     assert ws.result is None
 
 
-def test_save_result_snapshots_quantities(qapp, monkeypatch):
-    """Save/Keep Result tags a copy of the current quantities onto the result."""
+def test_snapshot_is_a_result_of_its_own(qapp, monkeypatch):
+    """Snapshot Result keeps a copy of the active result under the given name."""
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
     ws.result = create_result(
-        {"physical_dose": _dose_image(), "physical_dose_beam": [_dose_image()]}
+        {"physical_dose": _dose_image(), "physical_dose_beam": [_dose_image()]},
+        fluence=np.ones(2),
     )
     original = ws.result
 
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QInputDialog.getText",
-        lambda *a, **k: ("run1", True),
+        lambda *a, **k: ("run 1", True),
     )
     w._on_save_result()
 
-    assert isinstance(ws.result, PlanResult)
-    # The snapshot is added; a new object is stored so the viewer refreshes.
+    assert ws.result is original
+    assert list(ws.results) == ["current", "run_1"]
+    snapshot = ws.results["run_1"]
+    assert snapshot is not original
+    assert snapshot["physical_dose"] is original["physical_dose"]
+    assert snapshot.stored_beam_quantities == ["physical_dose"]
+    assert snapshot.fluence is original.fluence
+
+    # The snapshot survives a re-optimization untouched.
+    ws.result = create_result({"physical_dose": _dose_image(2.0)})
+    assert ws.results["run_1"] is snapshot
     assert ws.result is not original
-    assert sorted(ws.result.stored_quantities) == ["physical_dose", "physical_dose_run1"]
-    assert sorted(ws.result.stored_beam_quantities) == ["physical_dose", "physical_dose_run1"]
-    assert w._is_tagged("physical_dose_run1")
-
-    # Snapshots survive a re-optimization, the fresh quantities take precedence.
-    fresh = create_result({"physical_dose": _dose_image(2.0)})
-    w._carry_forward_extras(fresh, ws.result)
-    assert sorted(fresh.stored_quantities) == ["physical_dose", "physical_dose_run1"]
 
 
-def test_imported_dose_is_carried_forward(qapp):
-    """An imported quantity is prefixed so it survives the next optimization."""
+def test_imported_dose_is_a_result_on_its_own_grid(qapp, monkeypatch, tmp_path):
+    """An imported dose keeps its grid and does not join the active result."""
+    from types import SimpleNamespace
+
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
+    ws.set_many(
+        ct=SimpleNamespace(cube_hu=sitk.Image([4, 4, 2], sitk.sitkFloat32)),
+        result={"physical_dose": _dose_image()},
+    )
+    active = ws.result
+    measured = sitk.Image([8, 8, 4], sitk.sitkFloat32)
+    measured.SetSpacing((0.5, 0.5, 0.5))
+    path = tmp_path / "measured.nrrd"
+    sitk.WriteImage(measured, str(path))
 
-    imported = _result_with(None, quantities={f"{IMPORT_PREFIX}ct_dose": _dose_image()})
-    fresh = create_result({"physical_dose": _dose_image(2.0)})
-    w._carry_forward_extras(fresh, imported)
+    from PySide6.QtWidgets import QDialog
 
-    assert f"{IMPORT_PREFIX}ct_dose" in fresh
+    dialog = SimpleNamespace(
+        exec=lambda: QDialog.DialogCode.Accepted,
+        selection=lambda: {"mode": "dose", "name": "film scan"},
+    )
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._image_import_dialog.ImageImportDialog",
+        lambda *a, **k: dialog,
+    )
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    w._open_image_import_dialog(str(path))
+    w._open_image_import_dialog(str(path))
+
+    assert ws.result is active
+    assert list(ws.results) == ["current", "film_scan", "film_scan_2"]
+    imported = ws.results["film_scan"]["physical_dose"].values
+    assert imported.GetSize() == (8, 8, 4)
+    assert imported.GetSpacing() == (0.5, 0.5, 0.5)
+    # Importing does not mark an outdated result as up to date
+    assert not w._result_stale
+    ws.pln = object()
+    assert w._result_stale
+    w._open_image_import_dialog(str(path))
+    assert w._result_stale
+
+
+def test_session_of_version_0_9_is_split_into_results(qapp):
+    """Snapshots and imported doses of older sessions were mangled into one result."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    dose, snapshot, imported = _dose_image(1.0), _dose_image(2.0), _dose_image(3.0)
+
+    w._merge_loaded_data(
+        {
+            "result": {
+                "physical_dose": dose,
+                "physical_dose_beam": [dose],
+                "w": np.ones(2),
+                "physical_dose_run1": snapshot,
+                "physical_dose_beam_run1": [snapshot],
+                "import_measured": imported,
+            },
+            "saved_result_tags": ["run1"],
+        }
+    )
+
+    assert list(ws.results) == ["current", "run1", "measured"]
+    assert ws.result.stored_quantities == ["physical_dose"]
+    assert ws.result.stored_beam_quantities == ["physical_dose"]
+    np.testing.assert_array_equal(ws.result.fluence, np.ones(2))
+    assert ws.results["run1"].stored_quantities == ["physical_dose"]
+    assert ws.results["run1"].stored_beam_quantities == ["physical_dose"]
+    assert ws.results["run1"]["physical_dose"].values is snapshot
+    assert ws.results["measured"]["physical_dose"].values is imported
 
 
 @pytest.mark.parametrize("same_grid", [False, True])
@@ -309,7 +375,7 @@ def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     ws.set_many(
         ct=old_ct, cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
     )
-    w._saved_tags = ["old"]
+    ws.add_result("old", _result())
     states = []
     ws.workspace_changed.connect(lambda keys: states.append({k: getattr(ws, k) for k in ws.keys}))
 
@@ -319,7 +385,7 @@ def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     assert states[0]["ct"] is new_ct
     assert all(states[0][key] is None for key in ws.keys if key != "ct")
     assert not w._btn_optimize.isEnabled()
-    assert w._saved_tags == []
+    assert ws.results == {}
 
 
 def test_import_without_ct_keeps_current_patient(qapp):
@@ -346,12 +412,9 @@ def _recalc_setup(monkeypatch, prop_stf, beam_isos, forward):
             beams=[SimpleNamespace(iso_center=np.asarray(iso, dtype=float)) for iso in beam_isos]
         ),
         dij=object(),
-        result={
-            "w": np.array([2.0, 3.0]),
-            "physical_dose": _dose_image(),
-            "physical_dose_saved": _dose_image(),
-        },
+        result={"w": np.array([2.0, 3.0]), "physical_dose": _dose_image()},
     )
+    ws.add_result("saved", {"physical_dose": _dose_image()})
     monkeypatch.setattr("pyRadPlan.calc_dose_forward", forward)
     monkeypatch.setattr(
         WorkflowWidget,
@@ -379,7 +442,7 @@ def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, pr
     forward = Mock(return_value=fresh)
     ws, w = _recalc_setup(monkeypatch, prop_stf, [np.zeros(3)] * 2, forward)
     old_stf, weights = ws.stf, ws.result.fluence
-    snapshot = ws.result["physical_dose_saved"]
+    snapshot = ws.results["saved"]
 
     w._on_recalc_dose()
 
@@ -391,7 +454,7 @@ def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, pr
     assert w._dij_stale and not w._result_stale
     assert ws.result["physical_dose"] is fresh["physical_dose"]
     assert ws.result.fluence is weights
-    assert ws.result["physical_dose_saved"] is snapshot
+    assert ws.results["saved"] is snapshot
 
 
 def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
@@ -406,6 +469,7 @@ def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
     forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result.fluence)
     assert ws.stf is stf
     assert not w._dij_stale
+    assert w._lbl_status.text().endswith("1 further result")
 
 
 def test_failed_recalculation_leaves_the_stf_untouched(qapp, monkeypatch):
@@ -477,7 +541,7 @@ def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
 
 
 @pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
-def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monkeypatch, suffix):
+def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffix):
     import numpy as np
     import SimpleITK as sitk
     from pyRadPlan.ct import validate_ct
@@ -495,9 +559,10 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
         pln=PhotonPlan(prop_opt={"solver": "scipy"}),
         stf={"test": 1},
         dij={"test": 2},
-        result={"physical_dose": dose, "w": weights, "physical_dose_saved": dose},
+        result={"physical_dose": dose, "w": weights},
     )
-    w._saved_tags = ["saved"]
+    ws.add_result("saved", ws.result.model_copy())
+    ws.add_result("measured", {"physical_dose": dose * 2.0})
     path = tmp_path / ("workspace" + suffix)
     filters = []
 
@@ -526,7 +591,10 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
         sitk.GetArrayFromImage(restored_dose), sitk.GetArrayFromImage(dose)
     )
     assert restored_dose.GetOrigin() == dose.GetOrigin()
-    assert restored._is_tagged("physical_dose_saved")
+    assert list(restored_ws.results) == ["current", "saved", "measured"]
+    assert restored_ws.active_result == "current"
+    # A snapshot still shares its images with the result it was taken from
+    assert restored_ws.results["saved"]["physical_dose"].values is restored_dose
 
 
 @pytest.mark.parametrize("suffix", [".mat", ".npz"])
@@ -1059,25 +1127,29 @@ def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, ex
     assert "physical_dose" in ws.result
 
 
-def test_recalculate_drops_stale_results_per_scenario(qapp, monkeypatch):
+def test_recalculate_replaces_the_active_result_only(qapp, monkeypatch):
     from unittest.mock import Mock
 
     forward = Mock(return_value=_result())
     ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
-    w._saved_tags = ["saved"]
-    ws.result = _result_with(
-        ws.result,
-        scenario_quantities={
-            "physical_dose": [_dose_image(), _dose_image()],
-            "physical_dose_saved": [_dose_image(), _dose_image()],
-        },
-    )
-    snapshot = ws.result.scenario_quantities["physical_dose_saved"]
+    ws.result = {
+        "w": np.array([2.0, 3.0]),
+        "physical_dose": _dose_image(),
+        "let": _dose_image(),
+        "physical_dose_scenario": [_dose_image(), _dose_image()],
+        "scenario_labels": ("a", "b"),
+    }
+    ws.add_result("saved", ws.result.model_copy())
+    snapshot = ws.results["saved"]
 
     w._on_recalc_dose()
 
-    assert "physical_dose" not in ws.result.scenario_quantities
-    assert ws.result.scenario_quantities["physical_dose_saved"] == snapshot
+    # Nothing of the previous doses is left behind in the recalculated result
+    assert ws.result.stored_quantities == forward.return_value.stored_quantities
+    assert ws.result.scenario_quantities == {}
+    assert ws.result.scenario_labels is None
+    assert ws.results["saved"] is snapshot
+    assert snapshot.scenario_labels == ("a", "b")
 
 
 def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
@@ -1088,27 +1160,26 @@ def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
     ws.result = {
         "physical_dose": _dose_image(),
         "physical_dose_scenario": [_dose_image(), None],
+        "scenario_labels": ("nominal", "shifted"),
     }
     scenario_doses = ws.result.scenario_quantities["physical_dose"]
-    names = iter(["scenario", "robust"])
+    names = iter(["current", "scenario"])
     monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kw: (next(names), True))
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
 
-    w._on_save_result()  # "scenario" would read as the per-scenario suffix
+    w._on_save_result()  # the name of the result being worked on
     assert len(warnings) == 1
-    assert ws.result.stored_quantities == ["physical_dose"]
-    assert ws.result.stored_scenario_quantities == ["physical_dose"]
+    assert list(ws.results) == ["current"]
 
-    w._on_save_result()
-    assert ws.result.scenario_quantities["physical_dose_robust"] == scenario_doses
-    assert w._is_tagged("physical_dose_robust")
-    assert not w._is_tagged("physical_dose")
+    w._on_save_result()  # no longer clashes with the per-scenario entries
+    assert len(warnings) == 1
+    assert ws.results["scenario"].scenario_quantities["physical_dose"] == scenario_doses
 
-    # Snapshots per scenario survive a re-optimization
-    fresh = create_result({"physical_dose": _dose_image(2.0)})
-    w._carry_forward_extras(fresh, ws.result)
-    assert fresh.stored_scenario_quantities == ["physical_dose_robust"]
+    # The snapshot keeps its scenarios and their labels through a re-optimization
+    ws.result = create_result({"physical_dose": _dose_image(2.0)})
+    assert ws.results["scenario"].stored_scenario_quantities == ["physical_dose"]
+    assert ws.results["scenario"].scenario_labels == ("nominal", "shifted")
 
 
 def test_optimize_keeps_every_result_per_scenario_with_their_labels(qapp, monkeypatch):

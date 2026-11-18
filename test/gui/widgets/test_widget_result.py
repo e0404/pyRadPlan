@@ -108,19 +108,61 @@ def test_viewing_widget_single_quantity_result(qapp, test_data_photons):
 
 
 def test_viewing_widget_reuses_unchanged_quantities(qapp, test_data_photons):
-    """A replaced result sharing its images (e.g. a snapshot) is not converted again."""
-    from pyRadPlan.gui.widgets.workflow._workflow_widget import _result_with
-
+    """Unchanged images (also those a snapshot shares) are not converted again."""
     ct, cst, _ = test_data_photons
     ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
-    before = widget._display_arrays(ws.result)["physical_dose"]
+    before = widget._display_arrays(ws.result_entries(), ct.cube_hu)["physical_dose"]
 
-    ws.result = _result_with(
-        ws.result, quantities={"physical_dose_saved": ws.result.physical_dose}
+    ws.add_result("saved", ws.result.model_copy())
+
+    arrays = widget._display_arrays(ws.result_entries(), ct.cube_hu)
+    assert list(arrays) == ["physical_dose", "saved/physical_dose"]
+    assert arrays["physical_dose"] is before
+    assert arrays["saved/physical_dose"] is before
+    assert list(widget.quantity_widget._quantities) == list(arrays)
+
+
+def test_viewing_widget_shows_results_of_other_grids_and_scenarios(qapp, test_data_photons):
+    """Each result is listed with its own scenario labels, resampled onto the CT."""
+    ct, cst, _ = test_data_photons
+    dose = _result_for(ct).physical_dose.values
+    ws = _make_workspace(ct, cst, None)
+    ws.result = {
+        "physical_dose": dose,
+        "physical_dose_scenario": [dose, dose],
+        "scenario_labels": ("nominal", "shifted"),
+    }
+    coarse = sitk.Image([s // 2 for s in dose.GetSize()], sitk.sitkFloat32)
+    coarse.SetSpacing([2.0 * s for s in dose.GetSpacing()])
+    coarse.SetOrigin(dose.GetOrigin())
+    coarse.SetDirection(dose.GetDirection())
+    ws.add_result(
+        "measured",
+        {
+            "physical_dose": coarse + 1.0,
+            "physical_dose_scenario": [coarse, coarse, coarse],
+            "scenario_labels": ("a", "b", "c"),
+        },
     )
+    widget = ViewingWidget(ws)
 
-    assert widget._display_arrays(ws.result)["physical_dose"] is before
+    quantities = widget.quantity_widget._quantities
+    assert "measured/physical_dose" in quantities
+    assert "measured/physical_dose_scenario 2" in quantities
+    assert quantities["measured/physical_dose"].shape == quantities["physical_dose"].shape
+    assert quantities["measured/physical_dose"].max() == pytest.approx(1.0)
+
+    selector = widget.vis_widget.quantity_selector
+    texts = {}
+    for key in ("physical_dose_scenario 1", "measured/physical_dose_scenario 1"):
+        assert selector.set_current_key(key)
+        texts[key] = selector.component_combo.currentText()
+    assert texts == {
+        "physical_dose_scenario 1": "scenario 1: shifted",
+        "measured/physical_dose_scenario 1": "scenario 1: b",
+    }
+    assert selector.quantity_combo.currentText() == "dose (measured)"
 
 
 def test_viewing_widget_clears_on_workspace_clear(qapp, test_data_photons):

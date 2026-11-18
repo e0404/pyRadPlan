@@ -461,16 +461,17 @@ def test_image_reference_accepts_imported_dose(mimicking_workspace):
 
     ws, widget, voi_idx, ref = mimicking_workspace
 
-    # An imported dose lives on the grid of the result (the import resamples it).
-    measured = sitk.Image(ref)
-    ws.result.add_quantity("import_measured", measured)
-    ws.result = ws.result  # re-emit so the objectives editor rebuilds its dropdowns
+    # An imported dose is a result of its own and keeps its own grid.
+    measured = sitk.Image([8, 8, 8], sitk.sitkFloat32)
+    measured.SetSpacing((2.0, 2.0, 2.0))
+    ws.add_result("measured", {"physical_dose": measured})
 
     cmb = _image_reference_combos(widget)[0]
-    cmb.setCurrentIndex(cmb.findText("import_measured"))
+    cmb.setCurrentIndex(cmb.findText("dose (measured)"))
 
     d_ref = _objectives(ws.cst.vois[voi_idx])[-1].d_ref
-    assert d_ref is ws.result.quantities["import_measured"].values
+    assert d_ref is ws.results["measured"].quantities["physical_dose"].values
+    assert d_ref.GetSize() == (8, 8, 8)
 
 
 def _tg119_dose_image(ct):

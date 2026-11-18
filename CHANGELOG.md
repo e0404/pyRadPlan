@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** `fluence_optimization` returns a `PlanResult` instead of the fluence vector, which is available as `result.fluence`. `Dij.compute_result_ct_grid`, `Dij.compute_result_dose_grid` and `calc_dose_forward` return a `PlanResult` instead of a dictionary of images; their `"<quantity>_scenario"` lists are `result.scenario_quantities`
+- GUI: the workspace keeps every result on its own. A snapshot, an imported dose and the result being worked on are separate results (`WorkspaceManager.results`, `add_result`, `remove_result`, `active_result`; `workspace.result` is the active one), each with its own beams, scenarios and scenario labels. Optimizing or recalculating replaces only the active result, and a recalculation no longer leaves quantities of the previous doses behind. The viewer, the analysis window and the reference dose of an objective list the quantities of all results, e.g. `dose (protons_30fx)`. An imported dose keeps its own grid, is shown resampled onto the CT, and a dose loaded together with a patient is listed as `dose (imported)`. Save Result exports the quantities of all results. Saved workspaces store all results; workspaces saved with earlier versions are split into their results when loaded. Any name can be used for a snapshot, including `beam` and `scenario`
 
 ### Fixed
 

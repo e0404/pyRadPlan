@@ -185,15 +185,14 @@ def _resolve_patient(patient: str) -> str:
 
 def _load_patient(path: str) -> WorkspaceManager:
     """Load the patient dataset at *path* into the shared workspace and return it."""
-    from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
+    from pyRadPlan.gui.workspace import WorkspaceManager, loaded_results  # noqa: PLC0415
     from pyRadPlan.io import load_data  # noqa: PLC0415
 
     data = load_data(path)
     workspace = WorkspaceManager.instance()
-    payload = {k: data[k] for k in workspace.keys if data.get(k) is not None}
-    if "result" not in payload and data.get("dose") is not None:
-        payload["result"] = {"physical_dose": data["dose"]}
-    workspace.set_many(**payload)
+    payload = {k: data[k] for k in workspace.keys if k != "result" and data.get(k) is not None}
+    results, active = loaded_results(data)
+    workspace.set_many(**payload, results=results, active_result=active)
     return workspace
 
 

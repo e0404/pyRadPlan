@@ -34,14 +34,18 @@ from pyRadPlan.core import (
     StatusReport,
     WarningReport,
 )
-from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.gui.workspace import WorkspaceManager, loaded_results, unique_result_name
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.result import PlanResult
 from .._base import WorkspaceWidget, Worker
-from .._display_names import bio_model_display_name, quantity_display_name
+from .._display_names import (
+    bio_model_display_name,
+    quantity_display_name,
+    result_key,
+)
 from .._tissue_params import (
     load_machine_quietly,
     plan_dose_engine,
@@ -52,9 +56,6 @@ from .._tissue_params import (
 )
 
 logger = logging.getLogger(__name__)
-
-#: Snapshot names that would be mistaken for the per-beam / per-scenario result suffixes.
-_RESERVED_TAGS = ("beam", "scenario")
 
 
 def _human_name(fmt: str, importer_cls) -> str:
@@ -94,56 +95,9 @@ def _unique_name(name: str, taken: set) -> str:
     return f"{name}_{i}"
 
 
-#: Prefix marking a quantity that was imported rather than computed. Imported
-#: quantities survive a re-optimization (see ``_carry_forward_extras``).
-IMPORT_PREFIX = "import_"
-
-
-def _result_with(
-    result: Optional[PlanResult],
-    quantities: Optional[dict] = None,
-    beam_quantities: Optional[dict] = None,
-    scenario_quantities: Optional[dict] = None,
-) -> PlanResult:
-    """Return a copy of *result* with the given quantities added or replaced.
-
-    A new object is returned rather than updating *result* in place, because the
-    viewer caches its display arrays on the identity of the result object.
-    """
-    from pyRadPlan.result import create_result, validate_distribution  # noqa: PLC0415
-
-    update: dict[str, Any] = {}
-    if quantities:
-        update["quantities"] = {
-            **(result.quantities if result is not None else {}),
-            **{key: validate_distribution(v) for key, v in quantities.items()},
-        }
-    if beam_quantities:
-        update["beam_quantities"] = {
-            **(result.beam_quantities if result is not None else {}),
-            **{
-                key: [validate_distribution(v) for v in values]
-                for key, values in beam_quantities.items()
-            },
-        }
-    if scenario_quantities:
-        update["scenario_quantities"] = {
-            **(result.scenario_quantities if result is not None else {}),
-            **{
-                key: [None if v is None else validate_distribution(v) for v in values]
-                for key, values in scenario_quantities.items()
-            },
-        }
-
-    if result is None:
-        return create_result(
-            {
-                **(quantities or {}),
-                **(beam_quantities or {}),
-                **{f"{key}_scenario": v for key, v in (scenario_quantities or {}).items()},
-            }
-        )
-    return result.model_copy(update=update)
+def _file_stem(key: str) -> str:
+    """File name stem for the result key *key* (``"<result>/<quantity>"``)."""
+    return re.sub(r"[^\w.-]+", "_", key)
 
 
 def _folder_has_images(directory: str) -> bool:
@@ -273,12 +227,13 @@ class WorkflowWidget(WorkspaceWidget):
         self._pending_success: Optional[Callable] = None
         #: Warnings reported by the running computation, shown once it ends.
         self._pending_warnings: list[str] = []
-        self._saved_tags: list[str] = []
         self._opt_status_win: Optional[OptimizationStatusWidget] = None
         # matRad-style staleness: a downstream product (dij/result) is "stale"
         # once an upstream object it was computed from changes.
         self._dij_stale = False
         self._result_stale = False
+        #: Active result the staleness refers to; other results do not refresh it.
+        self._fresh_result: Optional[PlanResult] = None
         # Only some parts of the structure set feed the dose influence; objectives, for
         # instance, only affect the optimization. Tracked to spot the ones that do.
         self._tissue_signature: Optional[tuple] = None
@@ -439,59 +394,10 @@ class WorkflowWidget(WorkspaceWidget):
         # which pipeline objects exist.  It therefore *intentionally* reacts to
         # its own workspace writes (no ``hold_updates``) so that, e.g., the
         # "Save Result" button enables immediately after optimization finishes.
-        self._prune_saved_tags()
         self._update_staleness(changed_keys)
         self._update_status()
         self._update_button_states()
         self._update_indicators()
-
-    def _prune_saved_tags(self) -> None:
-        """Drop snapshot tags whose keys no longer exist in the result.
-
-        Keeps the tag list consistent when the result is replaced or cleared by
-        any path (File menu, another widget, ``ws.clear()``), not just this
-        widget's own load handler.
-        """
-        keys = self._result_quantity_keys(self._ws.result)
-        self._saved_tags = [
-            tag for tag in self._saved_tags if any(key.endswith(f"_{tag}") for key in keys)
-        ]
-
-    def _is_tagged(self, key: str) -> bool:
-        """Whether *key* is a snapshot key created by :meth:`_on_save_result`."""
-        return any(key.endswith(f"_{tag}") for tag in self._saved_tags)
-
-    @staticmethod
-    def _result_quantity_keys(result: Optional[PlanResult]) -> list[str]:
-        """All quantity names in *result* (whole-volume, per-beam and per-scenario)."""
-        if result is None:
-            return []
-        return (
-            list(result.stored_quantities)
-            + list(result.stored_beam_quantities)
-            + list(result.stored_scenario_quantities)
-        )
-
-    def _carry_forward_extras(self, new_result: PlanResult, prev: Optional[PlanResult]) -> None:
-        """Copy tagged snapshots and imported doses from *prev* into *new_result*.
-
-        Freshly computed quantities take precedence; only extra keys not already
-        present (saved snapshots and imported doses) are carried over.
-        """
-        if prev is None:
-            return
-        for key in prev.stored_quantities:
-            if (
-                self._is_tagged(key) or key.startswith(IMPORT_PREFIX)
-            ) and key not in new_result.quantities:
-                new_result.add_quantity(key, prev.quantities[key])
-        for key in prev.stored_beam_quantities:
-            carry = self._is_tagged(key) or key.startswith(IMPORT_PREFIX)
-            if carry and key not in new_result.beam_quantities:
-                new_result.add_beam_quantity(key, prev.beam_quantities[key])
-        for key in prev.stored_scenario_quantities:
-            if self._is_tagged(key) and key not in new_result.scenario_quantities:
-                new_result.add_scenario_quantity(key, prev.scenario_quantities[key])
 
     @staticmethod
     def _tissue_classes_signature(cst) -> Optional[tuple]:
@@ -529,12 +435,13 @@ class WorkflowWidget(WorkspaceWidget):
             self._dij_stale = False
         elif keys & {"pln", "stf"} or ("cst" in keys and tissue_changed):
             self._dij_stale = True
-        if not ws.has("result"):
-            self._result_stale = False
-        elif "result" in keys:
+        # Snapshots and imported doses also announce "result", but leave the active one as is
+        result = ws.result
+        if result is None or result is not self._fresh_result:
             self._result_stale = False
         elif keys & {"pln", "cst", "stf", "dij"}:
             self._result_stale = True
+        self._fresh_result = result
 
     def _update_indicators(self) -> None:
         ws = self._ws
@@ -574,8 +481,8 @@ class WorkflowWidget(WorkspaceWidget):
         elif self._result_stale:
             text = "Result outdated — re-optimize"
         else:
-            n = len(self._saved_tags)
-            suffix = f" · {n} saved snapshot{'s' if n != 1 else ''}" if n else ""
+            n = len(ws.results) - 1
+            suffix = f" · {n} further result{'s' if n != 1 else ''}" if n else ""
             text = f"Optimization result available{suffix}"
         self._lbl_status.setText(text)
 
@@ -841,8 +748,8 @@ class WorkflowWidget(WorkspaceWidget):
         recognized pipeline objects are merged into the workspace. A supplied CT starts
         a new patient; imports without a CT update the existing patient.  A loaded
         structure set requires a CT (in the file or already present); otherwise it
-        is skipped with a warning.  A bare ``dose`` image (formats without a matRad
-        ``result``) is wrapped into a result dict so the viewer can display it.
+        is skipped with a warning.  A bare ``dose`` image (formats without a plan
+        result) is kept as an imported result so the viewer can display it.
         """
 
         def _load() -> dict:
@@ -859,10 +766,10 @@ class WorkflowWidget(WorkspaceWidget):
         A supplied CT replaces the patient and clears objects absent from the import.
         Imports without a CT keep existing objects, allowing a plan to be loaded
         onto the current patient. A structure set requires a CT;
-        otherwise it is skipped with a warning. A bare ``dose`` image (formats
-        without a matRad ``result``) is wrapped into a result dict for the viewer.
+        otherwise it is skipped with a warning. Loaded results replace those of the
+        workspace (see :func:`~pyRadPlan.gui.workspace.loaded_results`).
         """
-        payload = {k: data[k] for k in self._ws.keys if data.get(k) is not None}
+        payload = {k: data[k] for k in self._ws.keys if k != "result" and data.get(k) is not None}
         if "cst" in payload and "ct" not in payload and not self._ws.has("ct"):
             QMessageBox.warning(
                 self,
@@ -870,18 +777,13 @@ class WorkflowWidget(WorkspaceWidget):
                 "Load a CT before loading a structure set; the structures were skipped.",
             )
             payload.pop("cst")
-        if "result" not in payload and data.get("dose") is not None:
-            # The workspace validates this into a PlanResult on the way in.
-            payload["result"] = {"physical_dose": data["dose"]}
-        if "ct" in payload or "result" in payload:
-            # A new patient or replacement result also replaces its snapshot tags.
-            self._saved_tags = [
-                tag for tag in data.get("saved_result_tags", []) if isinstance(tag, str)
-            ]
+        results, active = loaded_results(data)
         if "ct" in payload:
             # Publish one complete patient state; observers must never see a new CT
             # paired with the previous patient's structures or calculated data.
-            payload = {**dict.fromkeys(self._ws.keys), **payload}
+            payload = {**dict.fromkeys(self._ws.keys[:-1]), **payload}
+        if results or "ct" in payload:
+            payload.update(results=results, active_result=active)
         if payload:
             self._ws.set_many(**payload)
 
@@ -962,30 +864,13 @@ class WorkflowWidget(WorkspaceWidget):
             def _load() -> Any:
                 import SimpleITK as sitk  # noqa: PLC0415
 
-                from pyRadPlan.core.resample import resample_image  # noqa: PLC0415
-
-                image = sitk.ReadImage(filepath)
-                reference = ct.cube_hu
-                if (
-                    image.GetSize() != reference.GetSize()
-                    or image.GetSpacing() != reference.GetSpacing()
-                    or image.GetOrigin() != reference.GetOrigin()
-                    or image.GetDirection() != reference.GetDirection()
-                ):
-                    image = resample_image(
-                        image,
-                        interpolator=sitk.sitkLinear,
-                        target_image=reference,
-                        extrapolate=0,
-                    )
-                return image
+                return sitk.ReadImage(filepath)
 
             def _on_success(image: Any) -> None:
-                result = self._ws.result
-                key = _unique_name(
-                    f"{IMPORT_PREFIX}{sel['name']}", set(self._result_quantity_keys(result))
-                )
-                self._ws.result = _result_with(result, quantities={key: image})
+                # A result of its own, on its own grid; the viewer resamples it for display.
+                taken = {*self._ws.results, self._ws.active_result}
+                name = unique_result_name(sel["name"], taken)
+                self._ws.add_result(name, {"physical_dose": image})
 
             self._run_in_thread(_load, on_success=_on_success, busy_text="Importing dose…")
 
@@ -1361,7 +1246,6 @@ class WorkflowWidget(WorkspaceWidget):
             self._ws.dij,
             self._ws.pln,
         )
-        prev_result: Optional[PlanResult] = self._ws.result
 
         def _compute() -> PlanResult:
             # Deferred: only needed inside the worker thread, not at widget construction.
@@ -1381,9 +1265,7 @@ class WorkflowWidget(WorkspaceWidget):
             )
 
         def _on_success(result: PlanResult) -> None:
-            # Carry forward saved snapshots and imported doses from a previous run;
-            # the freshly optimized quantities take precedence.
-            self._carry_forward_extras(result, prev_result)
+            # Replaces the active result only; snapshots and imported doses are their own.
             self._ws.result = result
 
         # Live status window + cooperative pause/stop control for this optimization.
@@ -1416,8 +1298,7 @@ class WorkflowWidget(WorkspaceWidget):
         if not self._resolve_pending_changes("Recalculate Dose", outdates_input=True):
             return
         ct, cst, stf, pln = self._ws.ct, self._ws.cst, self._ws.stf, self._ws.pln
-        prev_result: Optional[PlanResult] = self._ws.result
-        weights = prev_result.fluence if prev_result is not None else None
+        weights = self._ws.result.fluence if self._ws.has("result") else None
 
         if weights is None:
             QMessageBox.warning(
@@ -1463,22 +1344,11 @@ class WorkflowWidget(WorkspaceWidget):
             return recalc_stf, new_result
 
         def _on_success(data: tuple) -> None:
-            recalc_stf, new_result = data
-            result = _result_with(prev_result, new_result.quantities, new_result.beam_quantities)
-            # Per-scenario results of the previous optimization no longer match the new
-            # doses; the forward calculation brings its own when the plan has scenarios.
-            scenario_quantities = {
-                key: values
-                for key, values in result.scenario_quantities.items()
-                if self._is_tagged(key)
-            }
-            scenario_quantities.update(new_result.scenario_quantities)
-            result = result.model_copy(
-                update={
-                    "scenario_quantities": scenario_quantities,
-                    "scenario_labels": new_result.scenario_labels,
-                }
-            )
+            recalc_stf, result = data
+            # The recalculated result replaces the previous one entirely: quantities
+            # the forward calculation does not bring would belong to the old doses.
+            if result.fluence is None:
+                result = result.model_copy(update={"fluence": weights})
             if recalc_stf is stf:
                 self._ws.result = result
             else:
@@ -1507,41 +1377,20 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         tag = re.sub(r"\W+", "_", tag.strip()).strip("_")
-        if tag in _RESERVED_TAGS:
+        result: Optional[PlanResult] = self._ws.result
+        if result is None:
+            QMessageBox.warning(self, "Snapshot Result", "No result available to save.")
+            return
+        if not tag or tag == self._ws.active_result:
             QMessageBox.warning(
                 self,
                 "Snapshot Result",
-                f"'{tag}' names per-{tag} results and cannot be used as a snapshot name.",
+                f"'{tag}' names the result being worked on; choose another snapshot name.",
             )
             return
 
-        result: Optional[PlanResult] = self._ws.result
-        if result is None:
-            QMessageBox.warning(self, "Save Result", "No result available to save.")
-            return
-
-        # Snapshot the current active quantities: every key that is not itself
-        # a snapshot from an earlier save (reusing a tag overwrites it).
-        snapshots = {
-            f"{key}_{tag}": result.quantities[key]
-            for key in result.stored_quantities
-            if not self._is_tagged(key)
-        }
-        beam_snapshots = {
-            f"{key}_{tag}": result.beam_quantities[key]
-            for key in result.stored_beam_quantities
-            if not self._is_tagged(key)
-        }
-        scenario_snapshots = {
-            f"{key}_{tag}": result.scenario_quantities[key]
-            for key in result.stored_scenario_quantities
-            if not self._is_tagged(key)
-        }
-
-        if tag not in self._saved_tags:
-            self._saved_tags.append(tag)
-        self._ws.result = _result_with(result, snapshots, beam_snapshots, scenario_snapshots)
-        self._update_status()
+        # A result of its own that shares the images; reusing a name overwrites it.
+        self._ws.add_result(tag, result.model_copy())
 
     # ------------------------------------------------------------------
     # Saving / export callbacks
@@ -1588,7 +1437,8 @@ class WorkflowWidget(WorkspaceWidget):
             )
             return
         objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
-        objects["saved_result_tags"] = list(self._saved_tags)
+        # ``result`` is the active one of ``results``, for readers of a single result.
+        objects.update(results=ws.results, active_result=ws.active_result)
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
@@ -1701,14 +1551,16 @@ class WorkflowWidget(WorkspaceWidget):
         self._run_save(_save, "Saving CST…", "Save CST")
 
     def _on_save_result_to_disk(self) -> None:  # noqa: PLR0911 - guard-heavy dialog flow
-        result: Optional[PlanResult] = self._ws.result
-        if result is None:
+        # Offer only whole-volume quantities (skip beamlet weights and per-beam lists).
+        available = {
+            result_key(tag, name): distribution.values
+            for tag, result in self._ws.result_entries()
+            for name, distribution in result.quantities.items()
+        }
+        if not self._ws.results:
             QMessageBox.warning(self, "Save Result", "No result available to save.")
             return
-
-        # Offer only whole-volume quantities (skip beamlet weights and per-beam lists).
-        keys = result.stored_quantities
-        if not keys:
+        if not available:
             QMessageBox.warning(
                 self, "Save Result", "The result has no exportable image quantities."
             )
@@ -1717,11 +1569,11 @@ class WorkflowWidget(WorkspaceWidget):
         # Deferred: keeps the Qt result-widget stack out of workflow construction.
         from ..result._save_result_dialog import SaveResultDialog  # noqa: PLC0415
 
-        dialog = SaveResultDialog(keys, self)
+        dialog = SaveResultDialog(list(available), self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        images = {key: result[key].values for key in dialog.selected_quantities()}
+        images = {key: available[key] for key in dialog.selected_quantities()}
         if not images:
             QMessageBox.warning(self, "Save Result", "No quantities were selected.")
             return
@@ -1729,7 +1581,7 @@ class WorkflowWidget(WorkspaceWidget):
         if len(images) == 1:
             ((key, image),) = images.items()
             filepath, selected = QFileDialog.getSaveFileName(
-                self, "Save quantity", key, _build_image_save_filter()
+                self, "Save quantity", _file_stem(key), _build_image_save_filter()
             )
             if not filepath:
                 return
@@ -1765,7 +1617,7 @@ class WorkflowWidget(WorkspaceWidget):
 
             written = []
             for key, image in images.items():
-                target = os.path.join(directory, f"{key}{ext}")
+                target = os.path.join(directory, f"{_file_stem(key)}{ext}")
                 written.append(save_data(format=fmt, file_name=target, dose=image))
             return written
 

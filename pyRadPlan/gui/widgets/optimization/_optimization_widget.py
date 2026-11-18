@@ -44,6 +44,7 @@ from pyRadPlan.gui.workspace import WorkspaceManager
 from .._base import AdaptiveDoubleSpinBox, CompactComboBox, WorkspaceWidget
 from .._display_names import (
     add_identified_item,
+    result_key,
     result_key_labels,
     robustness_display_name,
     select_identifier,
@@ -394,7 +395,7 @@ class OptimizationWidget(WorkspaceWidget):
             cmb.insertItem(0, self._summarize_image_reference(value), value)
             current = 0
         cmb.setCurrentIndex(current)
-        if cmb.count() == 1 and current == 0 and self._ws.result is None:
+        if cmb.count() == 1 and current == 0 and not self._ws.results:
             cmb.setToolTip("No result doses available yet — compute or import a dose first")
         else:
             cmb.setToolTip("Reference dose image (picked from the workspace results)")
@@ -408,19 +409,18 @@ class OptimizationWidget(WorkspaceWidget):
     def _reference_dose_options(self) -> list[tuple[str, Any, str]]:
         """Workspace result quantities usable as an image-reference value.
 
-        Each whole-volume quantity in the :class:`~pyRadPlan.result.PlanResult`
-        (optimized doses, imported doses and saved snapshots) is exposed as a
-        ``sitk.Image`` reference.  Per-beam quantities and beamlet weights are not
-        offered as references.  Returns ``(label, value, key)`` triples.
+        Each whole-volume quantity of every workspace result (the active one,
+        imported doses and snapshots) is exposed as a ``sitk.Image`` reference.
+        Per-beam quantities and beamlet weights are not offered as references.
+        Returns ``(label, value, key)`` triples.
         """
-        options: list[tuple[str, Any, str]] = []
-        result = self._ws.result
-        if result is None:
-            return options
-        labels = result_key_labels(result.stored_quantities)
-        for key in result.stored_quantities:
-            options.append((labels[key], result.quantities[key].values, key))
-        return options
+        images = {
+            result_key(tag, name): distribution.values
+            for tag, result in self._ws.result_entries()
+            for name, distribution in result.quantities.items()
+        }
+        labels = result_key_labels(images)
+        return [(labels[key], image, key) for key, image in images.items()]
 
     @staticmethod
     def _image_ref_matches(current: Any, candidate: Any) -> bool:
