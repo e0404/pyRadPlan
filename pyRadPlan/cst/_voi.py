@@ -302,8 +302,9 @@ class VOI(PyRadPlanBaseModel, ABC):
         """
         Convert objective definitions (names or dictionaries) into Objective instances.
 
-        Entries that are not recognizable objective definitions (e.g. empty placeholders from
-        matRad imports) are passed through unchanged.
+        Empty placeholders (``None``, empty lists, tuples or arrays, e.g. from matRad imports)
+        are dropped, so a VOI has objectives exactly if ``objectives`` is not empty. Other
+        entries that are not recognizable objective definitions are passed through unchanged.
 
         Parameters
         ----------
@@ -325,8 +326,10 @@ class VOI(PyRadPlanBaseModel, ABC):
         def _flatten(value: Any) -> list:
             if isinstance(value, np.ndarray):
                 return [item for element in value.ravel().tolist() for item in _flatten(element)]
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple)):
                 return [item for element in value for item in _flatten(element)]
+            if value is None:
+                return []
             return [value]
 
         def _coerce(entry: Any) -> Any:

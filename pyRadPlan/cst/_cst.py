@@ -1,5 +1,7 @@
 """Structure Set Implementation."""
 
+import logging
+import warnings
 from typing import Any, Literal, Union, Optional
 from typing_extensions import Self
 from pydantic import (
@@ -16,6 +18,18 @@ from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 from ..biology.tissues._base import TissueProperties
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_overlap_is_applied(overlap_is_applied: Optional[bool]) -> None:
+    if overlap_is_applied is not None:
+        warnings.warn(
+            "overlap_is_applied is deprecated and has no effect: the result is the same with "
+            "and without overlap priorities applied.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -648,6 +662,11 @@ class StructureSet(PyRadPlanBaseModel):
         """
         Apply overlaps to the StructureSet.
 
+        Only VOIs with objectives are resolved against each other: a voxel is removed
+        from a VOI with objectives if it also belongs to a VOI with objectives and a
+        lower overlap priority number. VOIs without objectives neither take voxels from
+        other VOIs nor lose any, so they keep their full masks.
+
         Returns
         -------
         StructureSet
@@ -657,35 +676,42 @@ class StructureSet(PyRadPlanBaseModel):
         if not self.vois:
             return self.model_copy(deep=True)
 
-        # gather overlaps
-        overlaps = [v.overlap_priority for v in self.vois]
-
-        # sort by overlap priority
-        ix_sorted = np.argsort(overlaps)
+        ix_sorted = np.argsort([v.overlap_priority for v in self.vois], kind="stable")
 
         # Work on numpy arrays, since sitk's mask filters do not support 4D images
-        # Will aggregate the overlap masks using OR
-        overlap_mask = sitk.GetArrayViewFromImage(self.vois[ix_sorted[0]].mask) > 0
-        last_priority_mask = np.zeros_like(overlap_mask)
+        shape = sitk.GetArrayViewFromImage(self.vois[ix_sorted[0]].mask).shape
+        # union of the VOIs with objectives and a strictly lower priority number
+        carving_mask = np.zeros(shape, dtype=bool)
+        # union of the VOIs with objectives in the current priority group
+        group_mask = np.zeros(shape, dtype=bool)
+        group_priority = self.vois[ix_sorted[0]].overlap_priority
 
         new_vois = [None] * len(self.vois)
-        new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].model_copy()
 
-        for i, ix_voi in enumerate(ix_sorted[1:], 1):
+        for ix_voi in ix_sorted:
             curr_voi = self.vois[ix_voi].model_copy()
-            curr_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
-
-            # if the overlap priority is higher than we need to apply overlap
-            if curr_voi.overlap_priority >= new_vois[ix_sorted[i - 1]].overlap_priority:
-                if curr_voi.overlap_priority > new_vois[ix_sorted[i - 1]].overlap_priority:
-                    last_priority_mask = overlap_mask
-                curr_mask = curr_mask & ~last_priority_mask
-
-            curr_voi.mask = curr_mask.astype(np.uint8)
-
-            overlap_mask = overlap_mask | curr_mask
+            if curr_voi.overlap_priority != group_priority:
+                carving_mask = carving_mask | group_mask
+                group_mask = np.zeros(shape, dtype=bool)
+                group_priority = curr_voi.overlap_priority
 
             new_vois[ix_voi] = curr_voi
+            if not curr_voi.objectives:
+                continue
+
+            orig_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
+            group_mask = group_mask | orig_mask
+
+            if carving_mask.any():
+                curr_mask = orig_mask & ~carving_mask
+                curr_voi.mask = curr_mask.astype(np.uint8)
+                if orig_mask.any() and not curr_mask.any():
+                    logger.warning(
+                        "%s: objectives defined, but the structure is fully overlapped by "
+                        "structures with higher overlap priority. Its objectives will not be "
+                        "considered during optimization.",
+                        curr_voi.name,
+                    )
 
         return self.model_copy(deep=True, update={"vois": new_vois})
 
@@ -773,7 +799,8 @@ class StructureSet(PyRadPlanBaseModel):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Prepare reference alpha, beta, tissue indices and classes together.
 
-        Resolve overlaps once and resample one VOI-label volume using nearest
+        A voxel that several VOIs share gets the values of the VOI with the lowest
+        overlap priority number. One VOI-label volume is resampled using nearest
         neighbors. Label zero denotes unassigned voxels: their alpha/beta are
         zero and their tissue index is zero, preserving the separate getters'
         conventions. The structure set is not modified.
@@ -792,46 +819,72 @@ class StructureSet(PyRadPlanBaseModel):
         classes : numpy.ndarray
             Distinct tissue properties in original first-occurrence order.
         """
-        cst = self.apply_overlap_priorities()
         classes = self.get_tissue_classes()
         class_list = list(classes)
         labels = np.zeros(
-            (int(np.prod(cst.ct_image.size)), cst.ct_image.num_of_ct_scen), dtype=np.int64
+            (int(np.prod(self.ct_image.size)), self.ct_image.num_of_ct_scen), dtype=np.int64
         )
-        alpha = np.zeros(len(cst.vois) + 1)
-        beta = np.zeros(len(cst.vois) + 1)
-        tissue = np.zeros(len(cst.vois) + 1, dtype=np.int64)
-        for label, voi in enumerate(cst.vois, 1):
+        alpha = np.zeros(len(self.vois) + 1)
+        beta = np.zeros(len(self.vois) + 1)
+        tissue = np.zeros(len(self.vois) + 1, dtype=np.int64)
+        for label, voi in self._labeled_vois_highest_priority_last():
             for phase, indices in enumerate(voi.scenario_indices(order="numpy")):
                 labels[indices, phase] = label
             alpha[label] = voi.tissue_properties.alpha_x
             beta[label] = voi.tissue_properties.beta_x
             tissue[label] = class_list.index(voi.tissue_properties)
         if resample_grid is not None:
-            labels = cst._resample_scenario_columns(labels, resample_grid)
+            labels = self._resample_scenario_columns(labels, resample_grid)
         return alpha[labels], beta[labels], tissue[labels], classes
 
     def get_reference_lq_params(
-        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
+        self, overlap_is_applied: Optional[bool] = None, resample_grid: Optional[Grid] = None
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
+        """
+        Get the reference LQ parameters (alpha_x and beta_x) for the given CT.
 
-        cst = self if overlap_is_applied else self.apply_overlap_priorities()
-        num_voxels = np.prod(cst.ct_image.size)
+        A voxel that several VOIs share gets the parameters of the VOI with the lowest
+        overlap priority number.
+
+        Parameters
+        ----------
+        overlap_is_applied : bool, optional
+            Deprecated, has no effect: the result is the same with and without overlap
+            priorities applied.
+        resample_grid : Grid, optional
+            Grid to resample the parameters onto (nearest neighbor), e.g. the dose grid.
+
+        Returns
+        -------
+        alpha, beta : numpy.ndarray
+            Shaped (num_voxels, num_ct_scenarios), voxels in numpy order.
+        """
+        _warn_overlap_is_applied(overlap_is_applied)
+        num_voxels = np.prod(self.ct_image.size)
         # One column per CT scenario, filled from the VOI masks of that scenario
-        num_ct_scen = cst.ct_image.num_of_ct_scen
+        num_ct_scen = self.ct_image.num_of_ct_scen
         alpha = np.zeros((num_voxels, num_ct_scen))
         beta = np.zeros((num_voxels, num_ct_scen))
-        for voi in cst.vois:
+        for _, voi in self._labeled_vois_highest_priority_last():
             for scen, ix in enumerate(voi.scenario_indices(order="numpy")):
                 alpha[ix, scen] = voi.tissue_properties.alpha_x
                 beta[ix, scen] = voi.tissue_properties.beta_x
 
         if resample_grid is not None:
-            alpha = cst._resample_scenario_columns(alpha, resample_grid)
-            beta = cst._resample_scenario_columns(beta, resample_grid)
+            alpha = self._resample_scenario_columns(alpha, resample_grid)
+            beta = self._resample_scenario_columns(beta, resample_grid)
 
         return alpha, beta
+
+    def _labeled_vois_highest_priority_last(self) -> list[tuple[int, VOI]]:
+        """Return the VOIs with 1-based labels, highest overlap priority last.
+
+        Writing per-voxel values in this order lets the VOI with the lowest overlap
+        priority number win voxels that several VOIs share. That VOI keeps the voxel in
+        :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
+        the result is the same with and without overlap priorities applied.
+        """
+        return sorted(enumerate(self.vois, 1), key=lambda item: -item[1].overlap_priority)
 
     def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
         """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""
@@ -851,18 +904,20 @@ class StructureSet(PyRadPlanBaseModel):
         )
 
     def get_tissue_class_indices(
-        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
+        self, overlap_is_applied: Optional[bool] = None, resample_grid: Optional[Grid] = None
     ) -> np.ndarray:
         """
         Get the tissue class index of every voxel of the CT.
 
-        Indices refer to :meth:`get_tissue_classes`. Overlapping VOIs are resolved by
-        their overlap priority; voxels outside every VOI get index 0.
+        Indices refer to :meth:`get_tissue_classes`. A voxel that several VOIs share gets
+        the class of the VOI with the lowest overlap priority number; voxels outside every
+        VOI get index 0.
 
         Parameters
         ----------
         overlap_is_applied : bool, optional
-            Whether overlap priorities were already applied to this structure set.
+            Deprecated, has no effect: the result is the same with and without overlap
+            priorities applied.
         resample_grid : Grid, optional
             Grid to resample the indices onto (nearest neighbor), e.g. the dose grid.
 
@@ -872,19 +927,19 @@ class StructureSet(PyRadPlanBaseModel):
             Indices of shape (num_voxels, num_ct_scenarios), voxels in numpy order.
         """
 
-        cst = self if overlap_is_applied else self.apply_overlap_priorities()
-        num_voxels = np.prod(cst.ct_image.size)
+        _warn_overlap_is_applied(overlap_is_applied)
+        num_voxels = np.prod(self.ct_image.size)
         # One column per CT scenario, filled from the VOI masks of that scenario
-        num_ct_scen = cst.ct_image.num_of_ct_scen
+        num_ct_scen = self.ct_image.num_of_ct_scen
         ix = np.zeros((num_voxels, num_ct_scen), dtype=np.int64)
         tissue_classes = list(self.get_tissue_classes())
-        for voi in cst.vois:
+        for _, voi in self._labeled_vois_highest_priority_last():
             tissue_ix = tissue_classes.index(voi.tissue_properties)
             for scen, voxels in enumerate(voi.scenario_indices(order="numpy")):
                 ix[voxels, scen] = tissue_ix
 
         if resample_grid is not None:
-            ix = cst._resample_scenario_columns(ix, resample_grid)
+            ix = self._resample_scenario_columns(ix, resample_grid)
 
         return ix
 

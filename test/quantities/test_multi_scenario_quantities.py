@@ -426,11 +426,65 @@ def test_per_slot_cotangents_fold_derived_slots_onto_their_basis(derived_dij, mo
 
     # a slot without a cotangent is skipped, its basis slot still carries the derived one
     cotangents.flat[0] = None
-    dose._w_grad_cache = None
     deriv = dose.compute_chain_derivative(cotangents, fluence)
     assert np.allclose(
         np.asarray(deriv.flat[0]), (0.25 * g[2]) @ matrices[0], rtol=1e-4, atol=1e-5
     )
+
+
+def test_chain_derivative_follows_the_array_cotangent_at_unchanged_fluence(two_scenario_dij):
+    dose = Dose(two_scenario_dij, scenarios=[0, 1])
+    fluence = xp.arange(N_BIX, dtype=xp.float32)
+    rng = np.random.default_rng(7)
+    matrices = [two_scenario_dij.physical_dose.flat[s] for s in range(2)]
+    g1, g2 = (rng.standard_normal((1, N_VOX)).astype(np.float32) for _ in range(2))
+
+    deriv = dose.compute_chain_derivative(xp.asarray(g1), fluence)
+    first = [np.array(deriv.flat[s]) for s in range(2)]
+    deriv = dose.compute_chain_derivative(xp.asarray(g2), fluence)
+    for s in range(2):
+        assert np.allclose(first[s], g1 @ matrices[s], rtol=1e-4, atol=1e-5)
+        assert np.allclose(np.asarray(deriv.flat[s]), g2 @ matrices[s], rtol=1e-4, atol=1e-5)
+        assert not np.allclose(np.asarray(deriv.flat[s]), first[s])
+
+
+def test_chain_derivative_follows_the_per_slot_cotangents_at_unchanged_fluence(two_scenario_dij):
+    dose = Dose(two_scenario_dij, scenarios=[0, 1])
+    fluence = xp.arange(N_BIX, dtype=xp.float32)
+    rng = np.random.default_rng(8)
+    matrices = [two_scenario_dij.physical_dose.flat[s] for s in range(2)]
+
+    def per_slot(arrays):
+        cotangents = np.empty((2,), dtype=object)
+        for s, array in enumerate(arrays):
+            cotangents.flat[s] = xp.asarray(array)
+        return cotangents
+
+    g1 = [rng.standard_normal((1, N_VOX)).astype(np.float32) for _ in range(2)]
+    g2 = [rng.standard_normal((1, N_VOX)).astype(np.float32) for _ in range(2)]
+
+    deriv = dose.compute_chain_derivative(per_slot(g1), fluence)
+    first = [np.array(deriv.flat[s]) for s in range(2)]
+    deriv = dose.compute_chain_derivative(per_slot(g2), fluence)
+    for s in range(2):
+        assert np.allclose(first[s], g1[s] @ matrices[s], rtol=1e-4, atol=1e-5)
+        assert np.allclose(np.asarray(deriv.flat[s]), g2[s] @ matrices[s], rtol=1e-4, atol=1e-5)
+        assert not np.allclose(np.asarray(deriv.flat[s]), first[s])
+
+
+@pytest.mark.parametrize("quantity_cls", [Effect, RBExDose])
+def test_chain_derivative_is_linear_in_the_cotangent_at_unchanged_fluence(
+    two_scenario_dij, quantity_cls
+):
+    quantity = quantity_cls(two_scenario_dij, scenarios=[0, 1])
+    fluence = xp.arange(N_BIX, dtype=xp.float32)
+    grad = xp.ones((1, N_VOX), dtype=xp.float32)
+    quantity(fluence)
+
+    first = [np.array(quantity.compute_chain_derivative(grad, fluence).flat[s]) for s in (0, 1)]
+    second = quantity.compute_chain_derivative(3.0 * grad, fluence)
+    for s in range(2):
+        assert np.allclose(np.asarray(second.flat[s]), 3.0 * first[s], rtol=1e-4)
 
 
 def test_derived_scenario_alone_computes_its_basis(derived_dij):

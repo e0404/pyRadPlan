@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Changed
+
+- numpy 2.4 and 2.5 are supported
+- All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
+- Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
+- Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
+
+### Deprecated
+
+- `StructureSet.get_reference_lq_params` and `get_tissue_class_indices`: the `overlap_is_applied` argument has no effect, because the result is the same with and without overlap priorities applied. Passing it emits a `DeprecationWarning`
+
+### Fixed
+
+- Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+- Dose influence matrices failed to validate ("Invalid shape!") with numpydantic 2.0 on Python 3.12.3, the system Python of Ubuntu 24.04, so no dose could be calculated there. This also broke the Linux desktop installer
+- Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
+- Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
+- Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
+- Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
+- GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
+- Ray tracers: the lateral cut-off was applied on the ray-matrix plane behind the patient instead of at the isocenter plane, and did not account for the tilt of off-axis rays, so the traced region was narrower than the geometric cut-off of the dose engines (about 11 % for photons in a 240 mm phantom, ~1 % for ions). Voxels in between got no radiological depth and no dose. Every voxel inside the geometric cut-off now gets a depth. Photon dose influence matrices gain entries at the edge of the cut-off, existing entries are unchanged (TG119, two beams, 50 mm cut-off, dij sampling off: +0.7 % non-zeros, dose up to +0.26 % of the maximum). With dij sampling on (the default), the additional voxels shift the random sampling, so photon results with a fixed `random_seed` differ from 0.8.0 within the sampling noise (up to ±1.6 % of the maximum dose in the same case). Photon ray tracing traces about 30 % more rays and takes correspondingly longer. Proton dose influence matrices on TG119 are bit-identical. matRad applies the cut-off unscaled on the ray-matrix plane, so photon dose influence matrices now have slightly more entries than matRad's
+- Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
+- `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
+- GUI: in the plan settings, the orange border that marks a field with unapplied changes no longer changes how the field is drawn. On spin boxes such as the dose grid resolution, the up/down arrows used to change their look and position while the field was marked; they now look the same with and without the border
+- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number. They used to come from the VOI listed last, so a dose influence matrix with `alphax` / `betax` calculated with 0.8.0 can differ where VOIs with different tissues overlap; optimizing it then raises a `ValueError` (see below), and it has to be recalculated. Empty placeholders such as `None` in a VOI's objectives are dropped, so such a VOI counts as having no objectives.
+- Optimization: the check that the Dij's `alphax` / `betax` match the structure set only logged an error, and computed the reference values differently from the dose engines. The check now builds the values with `StructureSet.get_tissue_data`, like the dose engines, and raises a `ValueError`.
+
 ## [0.8.0] - 2026-11-05
 
 ### Added
@@ -727,7 +756,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1

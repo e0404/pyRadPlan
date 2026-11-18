@@ -90,6 +90,22 @@ def test_dij_creation_invalid_physical_dose_shape(sample_dij_dict):
         create_dij(**sample_dij_dict)
 
 
+@pytest.mark.parametrize("shape", [(1,), (1, 1, 1), (2, 3)])
+def test_dij_containers_of_any_dimension(sample_dij_dict, shape):
+    container = np.empty(shape, dtype=object)
+    container.flat[0] = sample_dij_dict["physical_dose"][0][0][0]
+    sample_dij_dict["physical_dose"] = container
+    assert create_dij(**sample_dij_dict).physical_dose.shape == shape
+
+
+def test_dij_rejects_a_zero_dimensional_container(sample_dij_dict):
+    container = np.empty((), dtype=object)
+    container[()] = sample_dij_dict["physical_dose"][0][0][0]
+    sample_dij_dict["physical_dose"] = container
+    with pytest.raises(ValueError, match="at least one dimension"):
+        create_dij(**sample_dij_dict)
+
+
 def test_dij_creation_invalid_beam_num(sample_dij_dict):
     sample_dij_dict["beam_num"] = np.ones(5)  # Invalid shape
     with pytest.raises(ValueError):
