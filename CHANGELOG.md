@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first, also in the standalone Windows app, which did not start
+- GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
 - A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
 
 ## [0.9.0] - 2026-11-18
