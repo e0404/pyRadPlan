@@ -161,15 +161,12 @@ def _quantity_on_ct_grid(value: Any, ct: Any) -> np.ndarray:
             )
         return sitk.GetArrayFromImage(image)
     array = np.asarray(value)
-    if array.shape == (nz, ny, nx):
-        return array
-    if array.shape == (ny, nx, nz):
-        # Raw matRad cubes (an imported resultGUI) are stored as (y, x, z).
-        return np.transpose(array, (2, 0, 1))
-    raise ValueError(
-        f"Result array of shape {array.shape} does not match the CT grid "
-        f"(z, y, x) = {(nz, ny, nx)}"
-    )
+    if array.shape != (nz, ny, nx):
+        raise ValueError(
+            f"Result array of shape {array.shape} does not match the CT grid "
+            f"(z, y, x) = {(nz, ny, nx)}"
+        )
+    return array
 
 
 def _finite_range(array: np.ndarray) -> list[Optional[float]]:

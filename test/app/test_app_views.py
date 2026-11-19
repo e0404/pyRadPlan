@@ -190,3 +190,62 @@ def test_draft_beams_are_pending_where_they_differ(pipeline):
 def test_no_beams_without_angles(client):
     result = client.ok("view.beams")["result"]
     assert result == {"source": None, "iso_centers": [], "beams": []}
+
+
+def _cubic_matrad_file(tmp_path):
+    from pyRadPlan.cst import create_cst, create_voi
+    from pyRadPlan.ct import create_ct
+    from pyRadPlan.io import save_data
+
+    n = 4
+    ct = create_ct(cube_hu=np.zeros((n, n, n)), resolution={"x": 2.0, "y": 3.0, "z": 4.0})
+    mask = np.zeros((n, n, n), dtype=bool)
+    mask[3, 1, 2] = True
+    mask[3, 1, 1] = True
+    voi = create_voi(
+        {"name": "Target", "voi_type": "TARGET", "ct_image": ct, "mask": _mask_image(mask, ct)}
+    )
+    cst = create_cst(vois=[voi], ct_image=ct)
+
+    dose_yxz = np.zeros((n, n, n))
+    dose_yxz[1, 2, 3] = 5.0
+    dose_yxz[1, 1, 3] = 3.0
+    path = tmp_path / "cubic.mat"
+    save_data(file_name=path, format="mat", ct=ct, cst=cst, resultGUI={"physicalDose": dose_yxz})
+    return path, mask
+
+
+def _mask_image(mask, ct):
+    image = sitk.GetImageFromArray(mask.astype(np.uint8))
+    image.CopyInformation(ct.cube_hu)
+    return image
+
+
+def test_cubic_matrad_result_keeps_its_voxel_positions(tmp_path):
+    from pyRadPlan.app import Session
+
+    path, _ = _cubic_matrad_file(tmp_path)
+    session = Session(auto_plan=False)
+    session.load_path(path)
+
+    dose = session.workspace.result["physicalDose"]
+    assert isinstance(dose, sitk.Image)
+    assert dose.GetSize() == (4, 4, 4)
+    assert dose.GetSpacing() == session.workspace.ct.cube_hu.GetSpacing()
+
+    volume = session.volume("physicalDose")["data"]
+    assert volume[3, 1, 2] == 5.0
+    assert volume[3, 1, 1] == 3.0
+    assert np.count_nonzero(volume) == 2
+
+    curves = session.dvh("physicalDose", names=["Target"])
+    assert curves["curves"][0]["stats"] == {"mean": 4.0, "min": 3.0, "max": 5.0}
+
+
+def test_ambiguous_raw_arrays_are_not_reinterpreted():
+    from pyRadPlan.app._views import _quantity_on_ct_grid
+
+    ct = _FakeCT(np.zeros((3, 4, 5)))
+    assert _quantity_on_ct_grid(np.ones((3, 4, 5)), ct).shape == (3, 4, 5)
+    with pytest.raises(ValueError, match="does not match"):
+        _quantity_on_ct_grid(np.ones((4, 5, 3)), ct)

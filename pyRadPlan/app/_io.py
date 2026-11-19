@@ -962,8 +962,8 @@ def _safe_name(name: str) -> str:
 def quantity_to_image(value: Any, ct: Any) -> Optional[Any]:
     """Convert a result quantity into a CT-aligned ``sitk.Image``.
 
-    Images are returned as they are; ``None`` for anything that is neither an image nor a
-    3-D array.
+    Images are returned as they are; 3-D arrays are taken as ``(z, y, x)``; ``None`` for
+    anything else.
     """
     sitk = _sitk()
     if isinstance(value, sitk.Image):
@@ -971,8 +971,7 @@ def quantity_to_image(value: Any, ct: Any) -> Optional[Any]:
     array = np.asarray(value)
     if array.ndim != 3:
         return None
-    # Raw 3-D arrays come from an imported matRad resultGUI, stored as (y, x, z).
-    image = sitk.GetImageFromArray(np.transpose(array, (2, 0, 1)))
+    image = sitk.GetImageFromArray(array)
     if ct is not None and image.GetSize() == ct.cube_hu.GetSize():
         image.CopyInformation(ct.cube_hu)
     return image
