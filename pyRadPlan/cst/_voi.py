@@ -17,7 +17,6 @@ from pydantic import (
 
 import numpy as np
 import SimpleITK as sitk
-import matplotlib.colors as mcolors
 
 from pyRadPlan.core import PyRadPlanBaseModel, np2sitk
 from pyRadPlan.ct import CT
@@ -625,7 +624,8 @@ class VOI(PyRadPlanBaseModel, ABC):
         """
 
         if isinstance(v, str):
-            # convert color to rgb tuple
+            import matplotlib.colors as mcolors  # noqa: PLC0415 - optional at runtime (Pyodide)
+
             rgb = mcolors.to_rgb(v)
             return tuple(int(round(c * 255)) for c in rgb)
 
@@ -1341,6 +1341,48 @@ def create_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:
         return __VOITYPES__[voi_type](**{**kwargs, "voi_type": voi_type})
 
     raise ValueError(f"Invalid VOI type: {voi_type}")
+
+
+def recreate_voi(voi: VOI, **changes: Any) -> VOI:
+    """
+    Return a copy of a VOI with changed fields, validated as a new VOI.
+
+    A VOI mirrors ``alpha_x`` / ``beta_x`` of its tissue properties and rejects an
+    assignment that leaves the two inconsistent, so edits are applied by recreating it
+    through :func:`create_voi` rather than by assigning fields one by one.
+
+    Parameters
+    ----------
+    voi : VOI
+        The VOI to copy; it is not modified.
+    **changes
+        Field values to change. ``tissue_properties`` also sets ``alpha_x`` and
+        ``beta_x``; a changed ``voi_type`` may change the VOI class.
+
+    Returns
+    -------
+    VOI
+        The new VOI.
+
+    Notes
+    -----
+    An automatically assigned color (``color`` not explicitly set on *voi*) stays
+    unset on the copy, so :meth:`~pyRadPlan.cst.StructureSet.set_colors` keeps
+    treating it as such; with a changed ``voi_type`` the new type's default color is
+    used. An explicitly set color is kept.
+    """
+    data = dict(voi)
+    tissue = changes.pop("tissue_properties", None)
+    if tissue is not None:
+        data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
+    auto_color = "color" not in voi.model_fields_set and "color" not in changes
+    if auto_color and "voi_type" in changes and changes["voi_type"] != voi.voi_type:
+        data.pop("color", None)
+    data.update(changes)
+    new_voi = create_voi(data)
+    if auto_color:
+        new_voi.model_fields_set.discard("color")
+    return new_voi
 
 
 def validate_voi(data: Union[dict[str, Any], VOI, None] = None, **kwargs) -> VOI:

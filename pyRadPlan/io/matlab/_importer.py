@@ -85,6 +85,41 @@ def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = T
     return patient_dict
 
 
+def _cube_to_sitk(cube: Any, ct: CT) -> Optional[sitk.Image]:
+    """Convert a matRad (y, x, z) cube to a SimpleITK image on the CT grid, ``None`` if it differs."""
+    cube = np.asarray(cube, dtype=float)
+    reference = ct.cube_hu
+    if reference.GetDimension() == 4:
+        reference = reference[:, :, :, 0]
+    if cube.ndim != 3:
+        return None
+    image = sitk.GetImageFromArray(np.transpose(cube, (2, 0, 1)))
+    if image.GetSize() != reference.GetSize():
+        return None
+    image.CopyInformation(reference)
+    return image
+
+
+def _normalize_result(result: Any, ct: CT) -> Any:
+    """Convert the (y, x, z) cubes of a matRad resultGUI to images on the CT grid.
+
+    Cubes that do not match the CT grid are dropped, as their order cannot be verified.
+    """
+    if not isinstance(result, dict):
+        return result
+    normalized = {}
+    for key, value in result.items():
+        if isinstance(value, np.ndarray) and value.ndim == 3:
+            image = _cube_to_sitk(value, ct)
+            if image is None:
+                logger.warning(f"resultGUI['{key}'] does not match the CT grid, ignored.")
+                continue
+            normalized[key] = image
+        else:
+            normalized[key] = value
+    return normalized
+
+
 def _result_dose_to_sitk(result: dict, ct: CT) -> Optional[sitk.Image]:
     """Extract a physical dose cube from a matRad resultGUI dict as a SimpleITK image."""
     if not isinstance(result, dict):
@@ -94,11 +129,13 @@ def _result_dose_to_sitk(result: dict, ct: CT) -> Optional[sitk.Image]:
     if cube is None:
         return None
 
-    cube = np.asarray(cube, dtype=float)
-    # matRad cubes are stored as (y, x, z); SimpleITK expects (z, y, x).
-    dose_image = sitk.GetImageFromArray(np.transpose(cube, (2, 0, 1)))
-    if dose_image.GetSize() == ct.cube_hu.GetSize():
-        dose_image.CopyInformation(ct.cube_hu)
+    if isinstance(cube, sitk.Image):
+        return cube
+
+    dose_image = _cube_to_sitk(cube, ct)
+    if dose_image is None:
+        cube = np.asarray(cube, dtype=float)
+        dose_image = sitk.GetImageFromArray(np.transpose(cube, (2, 0, 1)))
     return dose_image
 
 
@@ -150,6 +187,6 @@ class MatlabImporter(BaseImporter):
             dose = _result_dose_to_sitk(result, patient_dict["ct"])
             if dose is not None:
                 patient_dict["dose"] = dose
-            patient_dict["result"] = result
+            patient_dict["result"] = _normalize_result(result, patient_dict["ct"])
 
         return patient_dict

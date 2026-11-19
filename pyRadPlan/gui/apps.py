@@ -252,10 +252,8 @@ def analysis_viewer(
     # Deferred: keeps the Qt stack out of package import time, as in gui().
     from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
-    from pyRadPlan.gui.widgets._result_widget import (  # noqa: PLC0415
-        QUANTITY_META,
-        default_quantity_key,
-    )
+    from pyRadPlan.app._results import quantity_meta  # noqa: PLC0415
+    from pyRadPlan.app._views import default_quantity  # noqa: PLC0415
     from pyRadPlan.gui.windows._analysis_win import show_analysis  # noqa: PLC0415
     from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
 
@@ -286,7 +284,7 @@ def analysis_viewer(
             continue
         if array.ndim != 3:
             continue
-        label, unit = QUANTITY_META.get(key, (key, ""))
+        label, unit = quantity_meta(key, (key, ""), suffixes=("_beam",))
         quantities[key] = array
         overlay_labels[key] = label
         overlay_units[key] = unit
@@ -303,7 +301,7 @@ def analysis_viewer(
         overlay={"voi_colors": _voi_colors(cst)},
         overlay_units=overlay_units,
         overlay_labels=overlay_labels,
-        initial_quantity=default_quantity_key(list(quantities)),
+        initial_quantity=default_quantity(list(quantities)),
         voi_types={voi.name: getattr(voi, "voi_type", "") for voi in cst.vois},
     )
     if window is None:
