@@ -256,20 +256,20 @@ export interface PlanMethods {
   };
   "tissue.evaluate": { params: TissueEvaluateParams; result: TissueEvaluateResult };
   "tissue.apply": {
-    params: { rows: Array<{ structure: string; tissue: TissueDraft }>; apply_anyway?: boolean };
+    params: { rows: Array<{ structure: number; tissue: TissueDraft }>; apply_anyway?: boolean };
     result: { state: SessionState };
   };
   "objectives.catalog": { params: Record<string, never>; result: ObjectivesCatalog };
-  "objectives.add": { params: { structure: string }; result: StructureResult };
+  "objectives.add": { params: { structure: number }; result: StructureResult };
   "objectives.update": {
-    params: { structure: string; index: number; changes: ObjectiveChanges };
+    params: { structure: number; index: number; changes: ObjectiveChanges };
     result: StructureResult;
   };
   "objectives.change_type": {
-    params: { structure: string; index: number; name: string };
+    params: { structure: number; index: number; name: string };
     result: StructureResult;
   };
-  "objectives.remove": { params: { structure: string; index: number }; result: StructureResult };
+  "objectives.remove": { params: { structure: number; index: number }; result: StructureResult };
   "objectives.set_quantity_all": { params: { quantity: string }; result: { state: SessionState } };
   "workflow.optimize": {
     params: { solver?: string; max_iter?: number };

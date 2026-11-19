@@ -45,7 +45,7 @@ export function mockRuntime(): MockRuntime {
 // Capabilities
 // ---------------------------------------------------------------------------
 
-const BROWSER_REASONS = {
+export const BROWSER_REASONS = {
   image_file_io: "Image files need SimpleITK file IO, which the browser runtime does not provide.",
   dicom_import: "DICOM CT and dose import need SimpleITK file IO, which the browser runtime does not provide.",
   ai: "The AI features need pydantic_ai, which is not installed in the browser runtime.",
@@ -57,6 +57,8 @@ const BROWSER_REASONS = {
   open_folder: "A browser cannot open folders on your computer.",
   host_paths: "Folders of the host computer are not visible in the browser.",
   base_data_persistence: "Base data added in the browser lasts until the page is closed.",
+  pickle_load:
+    "Loading a pickle runs code from the file, which could read the data in this page; it is disabled in the browser. Use .mat or .npz instead",
 } as const;
 
 export function mockCapabilities(runtime: MockRuntime): Capabilities {
@@ -65,6 +67,7 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
     image_file_io: { available: !web, reason: web ? BROWSER_REASONS.image_file_io : null },
     dicom_import: { available: !web, reason: web ? BROWSER_REASONS.dicom_import : null },
     dicom_export: { available: true, reason: null },
+    pickle_load: { available: !web, reason: web ? BROWSER_REASONS.pickle_load : null },
     ai: { available: !web, reason: web ? BROWSER_REASONS.ai : null },
     ipopt: { available: !web, reason: web ? BROWSER_REASONS.ipopt : null },
     gpu: { available: !web, reason: web ? BROWSER_REASONS.gpu : null },
@@ -100,9 +103,10 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
     });
   const image = (format: string, label: string, extension: string): ExportFormat =>
     exp({ object: "result", format, label, extension, available: !web, reason: imageReason });
-  const imp = (e: Omit<ImportFormat, "available" | "reason"> & { image?: boolean }): ImportFormat => {
-    const { image: isImage, ...rest } = e;
-    return { ...rest, available: !(isImage && web), reason: isImage && web ? imageReason : null };
+  const imp = (e: Omit<ImportFormat, "available" | "reason"> & { image?: boolean; pickle?: boolean }): ImportFormat => {
+    const { image: isImage, pickle: isPickle, ...rest } = e;
+    const blocked = web && (isImage || isPickle);
+    return { ...rest, available: !blocked, reason: blocked ? (isImage ? imageReason : BROWSER_REASONS.pickle_load) : null };
   };
   const exports: ExportFormat[] = [
     exp({ object: "pln", format: "mat", label: "MATLAB (*.mat)", extension: ".mat", mime: mat }),
@@ -160,7 +164,14 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
   const imports: ImportFormat[] = [
     imp({ format: "mat", label: "matRad MATLAB", extensions: [".mat"], objects: ["ct", "cst", "pln", "stf", "dij", "result"] }),
     imp({ format: "npz", label: "NumPy", extensions: [".npz"], objects: ["ct", "cst", "dose"] }),
-    imp({ format: "pickle", label: "Pickle", extensions: [".pkl", ".pickle"], objects: ["ct", "cst", "pln", "stf", "dij", "result"] }),
+    imp({
+      format: "pickle",
+      label: "pyRadPlan workspace (*.pkl)",
+      extensions: [".pkl", ".pickle"],
+      objects: ["ct", "cst", "pln", "stf", "dij", "result", "dose"],
+      pickle: true,
+      note: "Unpickling runs code from the file: load only files you trust",
+    }),
     imp({ format: "nifti", label: "NIfTI", extensions: [".nii", ".nii.gz"], objects: ["ct", "cst", "dose"], image: true }),
     imp({ format: "nrrd", label: "NRRD", extensions: [".nrrd"], objects: ["ct", "cst", "dose"], image: true }),
     imp({ format: "meta", label: "MetaImage", extensions: [".mha", ".mhd"], objects: ["ct", "cst", "dose"], image: true }),
@@ -540,6 +551,7 @@ function formSchema(section: { id: SettingsSectionId; title: string; fields: Fie
 }
 
 const IMAGE_EXTENSIONS = /\.(nii|nii\.gz|nrrd|mha|mhd|dcm)$/i;
+const PICKLE_EXTENSIONS = /\.(pkl|pickle)$/i;
 const CONTAINER_EXTENSIONS = /\.(mat|npz|pkl|pickle)$/i;
 
 /** Handler table plus the process-wide mock state (settings, base data) it works on. */
@@ -584,6 +596,7 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
           "not_available",
         );
       }
+      if (PICKLE_EXTENSIONS.test(filename) && web) throw precondition(BROWSER_REASONS.pickle_load, "not_available");
       if (IMAGE_EXTENSIONS.test(filename)) {
         if (web) throw precondition(`Cannot load ${filename}: ${BROWSER_REASONS.image_file_io}`, "not_available");
       } else if (!CONTAINER_EXTENSIONS.test(filename)) {

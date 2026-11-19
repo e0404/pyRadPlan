@@ -74,6 +74,11 @@ export function App() {
   const kind = useApp((s) => s.backend?.kind);
   return (
     <div className="main-window">
+      {kind === "mock" && (
+        <div className="mock-banner" role="alert" data-testid="mock-banner">
+          MOCK BACKEND: all plans, doses and results are invented for interface development and are not calculated by pyRadPlan. Do not use them for anything.
+        </div>
+      )}
       <MenuBar />
       <div className="columns">
         <div className="column">

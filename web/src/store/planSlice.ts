@@ -138,7 +138,7 @@ function applyState(state: SessionState | undefined): void {
 
 function mergeStructure(structure: StructureDetail | undefined): void {
   if (!structure) return;
-  useApp.setState((s) => ({ structureDetails: { ...s.structureDetails, [structure.name]: structure } }));
+  useApp.setState((s) => ({ structureDetails: { ...s.structureDetails, [structure.index]: structure } }));
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ export async function refreshStructures(): Promise<void> {
   if (!hasMethod("cst.get") || !useApp.getState().state?.has.cst) return;
   try {
     const { structures } = await request("cst.get", {});
-    useApp.setState({ structureDetails: Object.fromEntries(structures.map((d) => [d.name, d])) });
+    useApp.setState({ structureDetails: Object.fromEntries(structures.map((d) => [d.index, d])) });
   } catch (err) {
     console.warn("cst.get failed", err);
   }
@@ -288,12 +288,12 @@ async function objectivesWrite<M extends Method>(method: M, params: ParamsOf<M>,
 }
 
 export const objectiveActions = {
-  add: (structure: string) => objectivesWrite("objectives.add", { structure }, "new objective"),
-  update: (structure: string, index: number, changes: ObjectiveChanges, what = "change") =>
+  add: (structure: number) => objectivesWrite("objectives.add", { structure }, "new objective"),
+  update: (structure: number, index: number, changes: ObjectiveChanges, what = "change") =>
     objectivesWrite("objectives.update", { structure, index, changes }, what),
-  changeType: (structure: string, index: number, name: string) =>
+  changeType: (structure: number, index: number, name: string) =>
     objectivesWrite("objectives.change_type", { structure, index, name }, `objective ${JSON.stringify(name)}`),
-  remove: (structure: string, index: number) => objectivesWrite("objectives.remove", { structure, index }, "removal"),
+  remove: (structure: number, index: number) => objectivesWrite("objectives.remove", { structure, index }, "removal"),
   async setQuantityAll(quantity: string): Promise<boolean> {
     const ok = await objectivesWrite("objectives.set_quantity_all", { quantity }, `quantity ${JSON.stringify(quantity)}`);
     if (ok) await refreshStructures();

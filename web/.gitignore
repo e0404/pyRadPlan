@@ -2,3 +2,4 @@ node_modules/
 dist/
 e2e/downloads/
 e2e/screenshots/
+src/api/mock/fixtures/

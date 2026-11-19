@@ -126,20 +126,20 @@ describe("compact masks", () => {
     const cache = new ContourCache();
     cache.setMasks(
       [
-        { name: "full", color: [1, 2, 3], data: full },
-        { name: "crop", color: [1, 2, 3], storage: { kind: "crop", data: crop, bbox: [1, 2, 3, 2, 5, 6] } },
-        { name: "bits", color: [1, 2, 3], storage: { kind: "bits", plane, bit: 5, bbox: null } },
-        { name: "bits2", color: [1, 2, 3], storage: { kind: "bits", plane, bit: 5 } },
+        { index: 0, name: "full", color: [1, 2, 3], data: full },
+        { index: 1, name: "crop", color: [1, 2, 3], storage: { kind: "crop", data: crop, bbox: [1, 2, 3, 2, 5, 6] } },
+        { index: 2, name: "bits", color: [1, 2, 3], storage: { kind: "bits", plane, bit: 5, bbox: null } },
+        { index: 3, name: "bits2", color: [1, 2, 3], storage: { kind: "bits", plane, bit: 5 } },
       ],
       g,
     );
-    const ref = segmentsLength(cache.contour("full", "axial", 1));
+    const ref = segmentsLength(cache.contour(0, "axial", 1));
     expect(ref).toBeCloseTo(segmentsLength(marchingSquares(full.subarray(64, 128), 8, 8, 0.5)));
-    expect(segmentsLength(cache.contour("crop", "axial", 1))).toBeCloseTo(ref);
-    expect(segmentsLength(cache.contour("crop", "sagittal", 4))).toBeGreaterThan(0);
-    expect(cache.contour("bits", "axial", 1)).toHaveLength(0); // bbox null = empty
-    expect(segmentsLength(cache.contour("bits2", "axial", 1))).toBeCloseTo(ref);
-    expect(maskCenterOfMass({ name: "c", color: [0, 0, 0], storage: { kind: "crop", data: crop, bbox: [1, 2, 3, 2, 5, 6] } }, g)).toEqual([4, 3, 1]);
+    expect(segmentsLength(cache.contour(1, "axial", 1))).toBeCloseTo(ref);
+    expect(segmentsLength(cache.contour(1, "sagittal", 4))).toBeGreaterThan(0);
+    expect(cache.contour(2, "axial", 1)).toHaveLength(0); // bbox null = empty
+    expect(segmentsLength(cache.contour(3, "axial", 1))).toBeCloseTo(ref);
+    expect(maskCenterOfMass({ index: 0, name: "c", color: [0, 0, 0], storage: { kind: "crop", data: crop, bbox: [1, 2, 3, 2, 5, 6] } }, g)).toEqual([4, 3, 1]);
   });
 
   it("decodes every view.structure_masks encoding", () => {
@@ -149,12 +149,12 @@ describe("compact masks", () => {
       encoding: "bits",
       planes: [{ dtype: "uint8", shape: [1, 2, 2], data: new Uint8Array([1, 3, 0, 2]) }],
       masks: [
-        { name: "A", color: [1, 1, 1], plane: 0, bit: 0, num_voxels: 2, bbox: [0, 0, 0, 1, 1, 2] },
-        { name: "B", color: [2, 2, 2], plane: 0, bit: 1, num_voxels: 2, bbox: [0, 0, 0, 1, 2, 2] },
+        { index: 0, name: "A", color: [1, 1, 1], plane: 0, bit: 0, num_voxels: 2, bbox: [0, 0, 0, 1, 1, 2] },
+        { index: 1, name: "B", color: [2, 2, 2], plane: 0, bit: 1, num_voxels: 2, bbox: [0, 0, 0, 1, 2, 2] },
       ],
     };
     expect(decodeMasks(bits).masks[1].storage).toMatchObject({ kind: "bits", bit: 1 });
-    const crops: CropMasks = { grid, encoding: "crops", masks: [{ name: "E", color: [0, 0, 0], num_voxels: 0, bbox: null, data: null }] };
+    const crops: CropMasks = { grid, encoding: "crops", masks: [{ index: 2, name: "E", color: [0, 0, 0], num_voxels: 0, bbox: null, data: null }] };
     expect(decodeMasks(crops).masks[0].storage).toMatchObject({ kind: "bits", bbox: null });
   });
 });
@@ -173,10 +173,11 @@ describe("result groups", () => {
   });
 
   it("chooses the Qt default checked VOIs", () => {
-    const s = (name: string, type: string, extra: Record<string, number> = {}) => ({ name, type, color: [0, 0, 0] as [number, number, number], visible: true, index: 0, ...extra });
-    expect([...defaultCheckedVois([s("BODY", "OAR", { num_voxels: 10 }), s("Core", "OAR", { num_voxels: 5 }), s("PTV", "TARGET", { num_voxels: 3 })])].sort()).toEqual(["BODY", "PTV"]);
-    expect([...defaultCheckedVois([s("A", "OAR", { num_objectives: 1, num_voxels: 1 }), s("B", "TARGET", { num_objectives: 0, num_voxels: 1 })])]).toEqual(["A"]);
-    expect([...defaultCheckedVois([s("Empty", "TARGET", { num_voxels: 0, num_objectives: 0 })])]).toEqual([]);
+    const s = (index: number, name: string, type: string, extra: Record<string, number> = {}) => ({ name, type, color: [0, 0, 0] as [number, number, number], visible: true, index, ...extra });
+    expect([...defaultCheckedVois([s(0, "BODY", "OAR", { num_voxels: 10 }), s(1, "Core", "OAR", { num_voxels: 5 }), s(2, "PTV", "TARGET", { num_voxels: 3 })])].sort()).toEqual([0, 2]);
+    expect([...defaultCheckedVois([s(0, "A", "OAR", { num_objectives: 1, num_voxels: 1 }), s(1, "B", "TARGET", { num_objectives: 0, num_voxels: 1 })])]).toEqual([0]);
+    expect([...defaultCheckedVois([s(0, "Empty", "TARGET", { num_voxels: 0, num_objectives: 0 })])]).toEqual([]);
+    expect([...defaultCheckedVois([s(0, "Twin", "OAR", { num_objectives: 1, num_voxels: 1 }), s(1, "Twin", "OAR", { num_objectives: 0, num_voxels: 1 })])]).toEqual([0]);
   });
 });
 
@@ -219,16 +220,16 @@ describe("analysis helpers", () => {
         { id: "V20Gy", label: "V20Gy [%]", kind: "vx" as const, parameter: 20, unit: "%" },
       ],
       rows: [
-        { name: "PTV", color: [255, 0, 0] as [number, number, number], values: { mean: 50.123, D95: 47.5, V20Gy: 100 } },
-        { name: "Empty", color: [0, 0, 0] as [number, number, number], values: { mean: null, D95: null, V20Gy: null } },
+        { index: 4, name: "PTV", color: [255, 0, 0] as [number, number, number], values: { mean: 50.123, D95: 47.5, V20Gy: 100 } },
+        { index: 5, name: "Empty", color: [0, 0, 0] as [number, number, number], values: { mean: null, D95: null, V20Gy: null } },
       ],
     };
-    const markers = qiMarkers(qi, ["PTV", "Empty"], {});
+    const markers = qiMarkers(qi, [4, 5], {});
     expect(markers.map((m) => [m.metric, m.kind, m.parameter, m.value])).toEqual([
       ["D95", "dx", 95, 47.5],
       ["V20Gy", "vx", 20, 100],
     ]);
-    const rows = qiTableRows(qi, ["PTV", "Empty"], ["mean", "D95"]);
+    const rows = qiTableRows(qi, [4, 5], ["mean", "D95"]);
     expect(rows).toEqual([
       ["Structure", "mean [Gy]", "D95 [Gy]"],
       ["PTV", "50.12", "47.50"],
@@ -334,25 +335,46 @@ describe("mock v1 viewer methods", () => {
     const target = dvh.sets![0].curves.find((c) => c.name === "OuterTarget")!;
     expect(target.dose.data.length).toBe(1000);
     expect(target.dose.data[999]).toBeCloseTo((target.stats!.max! * 1.05 * 999) / 1000, 2);
-    const qi = await backend.request("analysis.qi", { quantity: "physical_dose", names: ["OuterTarget"], ref_vols: [95] }, session);
+    const qi = await backend.request("analysis.qi", { quantity: "physical_dose", names: [1], ref_vols: [95] }, session);
     expect(qi.metrics.map((m) => m.id).slice(0, 5)).toEqual(["mean", "std", "max", "min", "D95"]);
     expect(qi.ref_doses.length).toBe(5);
     expect(qi.rows[0].values.D95).toBeGreaterThan(0);
     expect((await backend.request("analysis.compare_units", { a: "physical_dose", b: "physical_dose_beam 0" }, session)).shareable).toBe(true);
   });
 
-  it("updates structures and gates tissue errors", async () => {
+  it("updates structures addressed by position or name", async () => {
     const { backend, session } = await ready();
-    const r = await backend.request("cst.update_structure", { name: "Core", changes: { color: [1, 2, 3], overlap_priority: 7 } }, session);
-    expect(r.structure.color).toEqual([1, 2, 3]);
+    const r = await backend.request("cst.update_structure", { name: 0, changes: { color: [1, 2, 3], overlap_priority: 7 } }, session);
+    expect(r.structure).toMatchObject({ index: 0, name: "Core", color: [1, 2, 3] });
     expect(r.state.structures.find((s) => s.name === "Core")?.overlap_priority).toBe(7);
-    const bad = await backend
-      .request("cst.update_structure", { name: "Core", changes: { tissue: { model: "Generic", values: { alpha_x: -1, beta_x: 0.05 } } } }, session)
-      .catch((e: unknown) => e);
-    expect((bad as BackendError).code).toBe("tissue_errors");
-    const ok = await backend.request("cst.update_structure", { name: "Core", changes: { tissue: { model: "Generic", values: { alpha_x: -1, beta_x: 0.05 } } }, apply_anyway: true }, session);
-    expect(ok.structure.alpha_x).toBe(-1);
-    const detail = await backend.request("cst.get", { names: ["Core"] }, session);
+    const ok = await backend.request("cst.update_structure", { name: "Core" as unknown as number, changes: { tissue: { model: "Generic", values: { alpha_x: 0.2, beta_x: 0.05 } } } }, session);
+    expect(ok.structure.alpha_x).toBe(0.2);
+    const detail = await backend.request("cst.get", { names: [0] }, session);
+    expect(detail.structures).toHaveLength(1);
     expect(detail.structures[0].overlap_priority).toBe(7);
+    const missing = await backend.request("cst.update_structure", { name: 9, changes: {} }, session).catch((e: unknown) => e);
+    expect((missing as BackendError).type).toBe("KeyError");
+  });
+
+  it("answers per-structure views with positions and refuses ambiguous names", async () => {
+    const { backend, session } = await ready();
+    const masks = await backend.request("view.structure_masks", { names: [2, 1] }, session);
+    expect(masks.masks.map((m) => [m.index, m.name])).toEqual([
+      [1, "OuterTarget"],
+      [2, "BODY"],
+    ]);
+    const crops = (await backend.request("view.structure_masks", { encoding: "crops", names: [1] }, session)) as CropMasks;
+    expect(crops.masks.map((m) => m.index)).toEqual([1]);
+    const dvh = await backend.request("analysis.dvh", { keys: ["physical_dose"], names: [1], range: "per_structure" }, session);
+    expect(dvh.sets![0].curves.map((c) => [c.index, c.name])).toEqual([[1, "OuterTarget"]]);
+    const qi = await backend.request("analysis.qi", { quantity: "physical_dose", names: [1] }, session);
+    expect(qi.rows.map((r) => [r.index, r.name])).toEqual([[1, "OuterTarget"]]);
+    const phantom = (backend as unknown as { sessions: Map<string, { phantom: { structures: { name: string }[] } }> }).sessions.get(session)!.phantom;
+    phantom.structures[0].name = phantom.structures[1].name;
+    const ambiguous = await backend.request("cst.update_structure", { name: "OuterTarget" as unknown as number, changes: {} }, session).catch((e: unknown) => e);
+    expect((ambiguous as BackendError).message).toMatch(/ambiguous/);
+    const byPosition = await backend.request("cst.update_structure", { name: 0, changes: { color: [9, 9, 9] } }, session);
+    expect(byPosition.structure).toMatchObject({ index: 0, color: [9, 9, 9] });
+    expect((await backend.request("cst.get", {}, session)).structures.map((d) => d.index)).toEqual([0, 1, 2]);
   });
 });

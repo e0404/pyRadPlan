@@ -67,7 +67,7 @@ interface PointRequest {
   kind?: "dx" | "vx";
   replace?: string;
   replaceValue?: number;
-  structure?: string;
+  structure?: number;
 }
 
 /** Qt `QIPointDialog`: confirm a D_x / V_x point picked in the DVH plot. */
@@ -126,10 +126,10 @@ function QiPointDialog(props: { req: PointRequest; unit: string; onDone: (choice
 
 function StructureList(props: {
   structures: readonly StructureInfo[];
-  checked: Record<string, boolean>;
-  colors: Record<string, Vec3>;
-  onToggle: (name: string, value: boolean) => void;
-  onColor: (name: string, rgb: Vec3) => void;
+  checked: Record<number, boolean>;
+  colors: Record<number, Vec3>;
+  onToggle: (index: number, value: boolean) => void;
+  onColor: (index: number, rgb: Vec3) => void;
   onAll: (value: boolean) => void;
 }) {
   return (
@@ -142,9 +142,9 @@ function StructureList(props: {
             </div>
             <div className="voi-grid">
               {members.map((s) => {
-                const rgb = props.colors[s.name] ?? s.color;
+                const rgb = props.colors[s.index] ?? s.color;
                 return (
-                  <div className="voi-row" key={s.name} title={s.name}>
+                  <div className="voi-row" key={s.index} title={s.name}>
                     <label className="swatch swatch-button" style={{ background: `rgb(${rgb.join(",")})` }} title={`Pick color for ${s.name}`}>
                       <input
                         type="color"
@@ -152,15 +152,15 @@ function StructureList(props: {
                         value={`#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`}
                         onChange={(e) => {
                           const h = e.target.value;
-                          props.onColor(s.name, [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as Vec3);
+                          props.onColor(s.index, [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as Vec3);
                         }}
                       />
                     </label>
                     <label className="check">
                       <input
                         type="checkbox"
-                        checked={props.checked[s.name] ?? false}
-                        onChange={(e) => props.onToggle(s.name, e.target.checked)}
+                        checked={props.checked[s.index] ?? false}
+                        onChange={(e) => props.onToggle(s.index, e.target.checked)}
                         data-testid={`analysis-voi-${s.name}`}
                       />
                       {truncateName(s.name)}
@@ -197,11 +197,11 @@ export function AnalysisWindow(props: { onClose: () => void }) {
   const [primary, setPrimary] = useState<string | null>(initial.current.quantity ?? state?.results?.default ?? null);
   const [secondary, setSecondary] = useState<string | null>(null);
   const [allScenarios, setAllScenarios] = useState(false);
-  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+  const [checked, setChecked] = useState<Record<number, boolean>>(() => {
     const v = initial.current.visible;
-    return Object.fromEntries(structures.map((s) => [s.name, v[s.name] ?? false]));
+    return Object.fromEntries(structures.map((s) => [s.index, v[s.index] ?? false]));
   });
-  const [colors, setColors] = useState<Record<string, Vec3>>({});
+  const [colors, setColors] = useState<Record<number, Vec3>>({});
   const [refVolsText, setRefVolsText] = useState(DEFAULT_REF_VOLS);
   const [refDosesByQuantity, setRefDosesByQuantity] = useState<Record<string, string>>({});
   const [refDosesText, setRefDosesText] = useState("");
@@ -210,15 +210,15 @@ export function AnalysisWindow(props: { onClose: () => void }) {
   const [sets, setSets] = useState<DvhSet[]>([]);
   const [qi, setQi] = useState<QiResult | null>(null);
   const [shared, setShared] = useState<{ shareable: boolean; scale: number | null }>({ shareable: true, scale: 1 });
-  const [highlight, setHighlight] = useState<{ structure: string | null; metric: string | null }>({ structure: null, metric: null });
+  const [highlight, setHighlight] = useState<{ structure: number | null; metric: string | null }>({ structure: null, metric: null });
   const [pointRequest, setPointRequest] = useState<PointRequest | null>(null);
-  const [pendingHighlight, setPendingHighlight] = useState<{ structure: string | null; kind: "dx" | "vx"; parameter: number } | null>(null);
+  const [pendingHighlight, setPendingHighlight] = useState<{ structure: number | null; kind: "dx" | "vx"; parameter: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [plotMenu, setPlotMenu] = useState<{ x: number; y: number } | null>(null);
   const [pos, setPos] = useState({ x: Math.max(16, window.innerWidth / 2 - 500), y: 40 });
   const plotCanvas = useRef<HTMLCanvasElement | null>(null);
 
-  const selectedVois = structures.map((s) => s.name).filter((n) => checked[n]);
+  const selectedVois = structures.map((s) => s.index).filter((i) => checked[i]);
   const primaryGroup = locateKey(groups, primary)?.group;
   const scenarioKeys = primaryGroup?.components.filter((c) => c.kind === "scenario").map((c) => c.key) ?? [];
   const effectiveSecondary = secondary && secondary !== primary && locateKey(groups, secondary) ? secondary : null;
@@ -281,42 +281,43 @@ export function AnalysisWindow(props: { onClose: () => void }) {
     };
   }, [primary, selectedVois.join("|"), JSON.stringify(refVols), JSON.stringify(refDoses), state?.revisions?.workspace.result]);
 
-  const colorOf = (name: string, fallback: readonly number[]) => colors[name] ?? fallback;
+  const colorOf = (index: number, fallback: readonly number[]) => colors[index] ?? fallback;
   const primarySet = sets.find((s) => s.key === primary);
   const secondarySet = effectiveSecondary ? sets.find((s) => s.key === effectiveSecondary) : undefined;
   const curves: PlotCurve[] = [];
   for (const c of primarySet?.curves ?? []) {
-    if (!checked[c.name]) continue;
-    curves.push({ name: c.name, x: c.dose.data, y: c.volume.data, color: colorOf(c.name, c.color), style: "solid", secondaryAxis: false });
+    if (!checked[c.index]) continue;
+    curves.push({ index: c.index, name: c.name, x: c.dose.data, y: c.volume.data, color: colorOf(c.index, c.color), style: "solid", secondaryAxis: false });
   }
   for (const c of secondarySet?.curves ?? []) {
-    if (!checked[c.name]) continue;
+    if (!checked[c.index]) continue;
     const x = shared.shareable && shared.scale !== null && shared.scale !== 1 ? Float32Array.from(c.dose.data, (v) => v * shared.scale!) : c.dose.data;
-    curves.push({ name: c.name, x, y: c.volume.data, color: colorOf(c.name, c.color), style: "dashed", secondaryAxis: !shared.shareable });
+    curves.push({ index: c.index, name: c.name, x, y: c.volume.data, color: colorOf(c.index, c.color), style: "dashed", secondaryAxis: !shared.shareable });
   }
   const bands: PlotCurve[] = allScenarios
     ? sets
         .filter((s) => scenarioKeys.includes(s.key))
         .flatMap((s) =>
-          s.curves.filter((c) => checked[c.name]).map((c) => ({ name: c.name, x: c.dose.data, y: c.volume.data, color: colorOf(c.name, c.color), style: "solid" as const, secondaryAxis: false })),
+          s.curves.filter((c) => checked[c.index]).map((c) => ({ index: c.index, name: c.name, x: c.dose.data, y: c.volume.data, color: colorOf(c.index, c.color), style: "solid" as const, secondaryAxis: false })),
         )
     : [];
-  const names = [...new Set(curves.map((c) => c.name))];
-  const legend: LegendEntry[] = names.map((n) => ({ label: n, color: curves.find((c) => c.name === n)!.color, style: "solid" }));
+  const shown = [...new Map(curves.map((c) => [c.index, c])).values()];
+  const legend: LegendEntry[] = shown.map((c) => ({ label: c.name, color: c.color, style: "solid" }));
   const primaryName = primary ? keyLabel(groups, primary) : "";
   const secondaryName = effectiveSecondary ? keyLabel(groups, effectiveSecondary) : "";
-  if (secondarySet && names.length) {
+  if (secondarySet && shown.length) {
     legend.push({ label: primaryName || "Primary", color: null, style: "solid" });
     legend.push({ label: secondaryName || "Secondary", color: null, style: "dashed" });
   }
-  const colorMap = Object.fromEntries(structures.map((s) => [s.name, colorOf(s.name, s.color)]));
-  const markers = qiMarkers(qi, (primarySet?.curves ?? []).filter((c) => checked[c.name]).map((c) => c.name), colorMap);
+  const colorMap = Object.fromEntries(structures.map((s) => [s.index, colorOf(s.index, s.color)]));
+  const markers = qiMarkers(qi, (primarySet?.curves ?? []).filter((c) => checked[c.index]).map((c) => c.index), colorMap);
   const xLabel = axisLabel(primarySet?.label ?? primaryGroup?.meta_label ?? "", primarySet?.unit ?? primaryGroup?.unit ?? "");
   const secondaryXLabel = secondarySet && !shared.shareable ? axisLabel(secondarySet.label, secondarySet.unit) : null;
 
   const metricIds = qi?.metrics.map((m) => m.id) ?? [];
   const shownMetrics = metricIds.filter((id) => !FIXED_METRICS.includes(id) || (metricChecks[id] ?? true));
   const tableRows = qiTableRows(qi, selectedVois, shownMetrics);
+  const tableStructures = tableRows.length ? (qi?.rows ?? []).filter((r) => selectedVois.includes(r.index)).map((r) => r.index) : [];
 
   const applyPointChoice = (choice: { kind: "dx" | "vx"; parameter: number; replace: boolean }, req: PointRequest) => {
     const replaceValue = choice.replace ? req.replaceValue : undefined;
@@ -416,7 +417,7 @@ export function AnalysisWindow(props: { onClose: () => void }) {
                 colors={colors}
                 onToggle={(n, v) => setChecked((c) => ({ ...c, [n]: v }))}
                 onColor={(n, rgb) => setColors((c) => ({ ...c, [n]: rgb }))}
-                onAll={(v) => setChecked(Object.fromEntries(structures.map((s) => [s.name, v])))}
+                onAll={(v) => setChecked(Object.fromEntries(structures.map((s) => [s.index, v])))}
               />
             </fieldset>
             <fieldset className="qt-group" style={{ flex: 1 }}>
@@ -492,7 +493,7 @@ export function AnalysisWindow(props: { onClose: () => void }) {
               markers={markers}
               visibleKinds={showKinds}
               highlight={highlight}
-              onStructureClick={(n) => setHighlight({ structure: n || null, metric: null })}
+              onStructureClick={(n) => setHighlight({ structure: n, metric: null })}
               onMarkerClick={(s, m) => setHighlight({ structure: s, metric: m })}
               onPointRequested={(dose, volume) => setPointRequest({ dose, volume })}
               onParameterMoved={(structure, metric, parameter) => {
@@ -545,18 +546,18 @@ export function AnalysisWindow(props: { onClose: () => void }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {tableRows.slice(1).map((row) => (
-                    <tr key={row[0]}>
+                  {tableRows.slice(1).map((row, r) => (
+                    <tr key={tableStructures[r]}>
                       {row.map((cell, col) => {
                         const metric = col === 0 ? null : shownMetrics[col - 1];
-                        const selected = highlight.structure === row[0] && (col === 0 ? highlight.metric === null : highlight.metric === metric);
+                        const selected = highlight.structure === tableStructures[r] && (col === 0 ? highlight.metric === null : highlight.metric === metric);
                         return (
                           <td
                             key={col}
                             className={`${col ? "num" : ""} ${selected ? "selected" : ""}`}
-                            onClick={() => setHighlight({ structure: row[0], metric })}
+                            onClick={() => setHighlight({ structure: tableStructures[r], metric })}
                           >
-                            {col === 0 && <span className="swatch" style={{ background: `rgb(${(colorMap[row[0]] ?? [128, 128, 128]).join(",")})`, marginRight: 4 }} />}
+                            {col === 0 && <span className="swatch" style={{ background: `rgb(${(colorMap[tableStructures[r]] ?? [128, 128, 128]).join(",")})`, marginRight: 4 }} />}
                             {cell}
                           </td>
                         );

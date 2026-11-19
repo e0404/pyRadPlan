@@ -7,7 +7,7 @@ import type { AppInfo, FileResult, SessionState } from "../src/api/protocol";
 import type { LicenseDetail, LicenseRow, SettingsResult } from "../src/api/protocol/io";
 import { mockCapabilities } from "../src/api/mock/io";
 import { crc32, zip } from "../src/api/mock/zip";
-import { exportBlockedReason, feature, loadAccept, structureFormatOf } from "../src/components/io/capabilities";
+import { exportBlockedReason, feature, loadAccept, structureFormatOf, unavailableImport } from "../src/components/io/capabilities";
 import { describeDownload, downloadFile, safeFilename, type DownloadEnv } from "../src/components/io/download";
 import { buildMenus, canSave, findEntry, type MenuInput } from "../src/components/io/menuModel";
 import { baseNameOf, formatLogLine, sanitizeTag, splashPhase, statusWithSnapshots, visibleLogs } from "../src/components/io/models";
@@ -226,9 +226,19 @@ describe("menu model", () => {
 
 describe("capabilities helpers", () => {
   it("builds the load accept list from available import formats", () => {
-    expect(loadAccept(info(web))).toBe(".mat,.npz,.pkl,.pickle");
+    expect(loadAccept(info(web))).toBe(".mat,.npz");
     expect(loadAccept(info(native))).toContain(".nii.gz");
+    expect(loadAccept(info(native))).toContain(".pkl");
     expect(loadAccept(null)).toBe(".mat");
+  });
+
+  it("refuses a pickle where the backend cannot load it, with the backend's reason", () => {
+    expect(web.features.pickle_load).toMatchObject({ available: false });
+    expect(unavailableImport(info(web), "case.PKL")).toMatchObject({ format: "pickle", reason: web.features.pickle_load!.reason });
+    expect(unavailableImport(info(web), "case.pickle")?.format).toBe("pickle");
+    expect(unavailableImport(info(web), "case.mat")).toBeUndefined();
+    expect(unavailableImport(info(native), "case.pkl")).toBeUndefined();
+    expect(unavailableImport(null, "case.pkl")).toBeUndefined();
   });
 
   it("derives the structure format of the two DICOM entries", () => {
@@ -367,7 +377,8 @@ describe("mock handlers of package C", () => {
     await expect(backend.request("data.load_file", { filename: "ct.nii.gz", data }, session)).rejects.toMatchObject({ code: "not_available" });
     await expect(backend.request("data.load_file", { filename: "case.mat", data, kind: "dose" }, session)).rejects.toMatchObject({ code: "not_available" });
     await expect(backend.request("data.load_file", { filename: "notes.txt", data }, session)).rejects.toMatchObject({ type: "ValueError" });
-    const state = await backend.request("data.load_file", { filename: "case.pkl", data }, session);
+    await expect(backend.request("data.load_file", { filename: "case.pkl", data }, session)).rejects.toMatchObject({ type: "PreconditionError", code: "not_available" });
+    const state = await backend.request("data.load_file", { filename: "case.mat", data }, session);
     expect(state.has.ct).toBe(true);
   });
 

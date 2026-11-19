@@ -7,6 +7,8 @@ declare const __PYRADPLAN_ABOUT__: {
 };
 
 interface ImportMetaEnv {
+  /** `1` includes the mock backend in a production build (development builds always have it). */
+  readonly VITE_ENABLE_MOCK?: string;
   /** Deployment channel ("latest", "develop"), set by `web/scripts/assemble_pages.mjs`. */
   readonly VITE_PYRADPLAN_CHANNEL?: string;
   /** `git describe` of the sources the build was made from. */

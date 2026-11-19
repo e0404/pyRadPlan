@@ -70,7 +70,7 @@ describe("MockBackend", () => {
     expect(ct32.data.data).toBeInstanceOf(Float32Array);
     expect(ct.range[0]).toBe(-1000);
 
-    const masks = await backend.request("view.structure_masks", { names: ["Core"] }, session);
+    const masks = await backend.request("view.structure_masks", { names: [0] }, session);
     expect(masks.masks).toHaveLength(1);
     expect((masks.masks[0] as { data: { data: Uint8Array } }).data.data).toBeInstanceOf(Uint8Array);
   });
@@ -192,11 +192,9 @@ describe("MockBackend", () => {
     off();
 
     state = await backend.request("plan.set", { radiation_mode: "carbon" }, session);
-    expect(state.plan).toMatchObject({ machine: "Generic", engine: "HongPB", bio_model: "LEM" });
-    const err = await backend.request("workflow.calc_dose_influence", {}, session).catch((e: unknown) => e);
-    expect((err as BackendError).code).toBe("bio_model_unsupported");
-    state = await backend.request("workflow.calc_dose_influence", { physical_only: true }, session);
-    expect(state.plan?.bio_model).toBe("none");
+    expect(state.plan).toMatchObject({ machine: "Generic", engine: "HongPB", bio_model: "alpha_beta_kernels" });
+    state = await backend.request("workflow.calc_dose_influence", {}, session);
+    expect(state.plan?.bio_model).toBe("alpha_beta_kernels");
     expect(state.stages.dij).toBe("done");
     expect(state.busy).toBeNull();
   });

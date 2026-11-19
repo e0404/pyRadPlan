@@ -7,6 +7,7 @@ import {
   linearIndex,
   sliceLayout,
   sliceVoxel,
+  voxelToWorld,
   type Plane,
   type PlaneConvention,
   type SliceLayout,
@@ -27,6 +28,8 @@ export type MaskStorage =
   | { kind: "bits"; plane: ArrayLike<number>; bit: number; bbox?: MaskBBox | null };
 
 export interface MaskVolume {
+  /** Position of the structure in the cst; names may repeat. */
+  index: number;
   name: string;
   color: readonly [number, number, number];
   /** Full uint8 volume (shorthand for `storage: {kind: "full"}`). */
@@ -145,7 +148,7 @@ const EMPTY: Float32Array = new Float32Array(0);
 
 export class ContourCache {
   private masks: MaskVolume[] = [];
-  private bounds = new Map<string, Box3 | null>();
+  private bounds = new Map<number, Box3 | null>();
   private readonly cache = new LruCache<string, Float32Array>(4096);
   private geom: VolumeGeometry | null = null;
   convention: PlaneConvention = "pyradplan";
@@ -157,16 +160,16 @@ export class ContourCache {
     this.cache.clear();
   }
 
-  get names(): string[] {
-    return this.masks.map((m) => m.name);
+  get indices(): number[] {
+    return this.masks.map((m) => m.index);
   }
 
-  mask(name: string): MaskVolume | undefined {
-    return this.masks.find((m) => m.name === name);
+  mask(index: number): MaskVolume | undefined {
+    return this.masks.find((m) => m.index === index);
   }
 
   private boundsOf(mask: MaskVolume): Box3 | null {
-    if (!this.bounds.has(mask.name)) {
+    if (!this.bounds.has(mask.index)) {
       const storage = maskStorage(mask);
       let box: Box3 | null;
       if (storage.kind === "full") box = maskBounds(storage.data, this.geom!);
@@ -177,17 +180,17 @@ export class ContourCache {
         for (let i = 0; i < bits.length; i++) bits[i] = (storage.plane[i] >> storage.bit) & 1;
         box = maskBounds(bits, this.geom!);
       }
-      this.bounds.set(mask.name, box);
+      this.bounds.set(mask.index, box);
     }
-    return this.bounds.get(mask.name) ?? null;
+    return this.bounds.get(mask.index) ?? null;
   }
 
-  /** Segments `[u0, v0, u1, v1, ...]` of structure `name` on a slice (slice voxel units). */
-  contour(name: string, plane: Plane, index: number): Float32Array {
+  /** Segments `[u0, v0, u1, v1, ...]` of structure `structure` (index) on a slice (slice voxel units). */
+  contour(structure: number, plane: Plane, index: number): Float32Array {
     const geom = this.geom;
-    const mask = this.mask(name);
+    const mask = this.mask(structure);
     if (!geom || !mask) return EMPTY;
-    const key = `${name}|${plane}|${this.convention}|${index}`;
+    const key = `${structure}|${plane}|${this.convention}|${index}`;
     const hit = this.cache.get(key);
     if (hit) return hit;
     const layout = sliceLayout(geom, plane, this.convention);
@@ -254,7 +257,7 @@ export class IsolineCache {
   }
 }
 
-/** Centre of mass (mm, identity direction) of a mask, or null when empty. */
+/** Centre of mass (mm) of a mask, or null when empty. */
 export function maskCenterOfMass(mask: MaskVolume, geom: VolumeGeometry): [number, number, number] | null {
   const storage = maskStorage(mask);
   const [nz, ny, nx] = geom.shape;
@@ -275,5 +278,5 @@ export function maskCenterOfMass(mask: MaskVolume, geom: VolumeGeometry): [numbe
           n++;
         }
   if (!n) return null;
-  return [geom.origin[0] + (sx / n) * geom.spacing[0], geom.origin[1] + (sy / n) * geom.spacing[1], geom.origin[2] + (sz / n) * geom.spacing[2]];
+  return voxelToWorld(geom, [sx / n, sy / n, sz / n]);
 }

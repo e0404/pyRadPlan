@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { DEFAULT_VIEW, sliceLayout, worldToIndex, type Plane } from "../renderer/geometry";
+import { DEFAULT_VIEW, slicesThrough } from "../renderer/geometry";
 import { parseNumbers } from "../results/numbers";
 import { setViewer, useApp, type ViewerSettings } from "../store/appStore";
 import { displayIsocenter, resultGroups, selectQuantity } from "../store/revisions";
@@ -26,12 +26,7 @@ export function recenterToIsocenter(): void {
     setViewer({ view: DEFAULT_VIEW });
     return;
   }
-  const slices = {} as Record<Plane, number>;
-  for (const plane of ["axial", "sagittal", "coronal"] as Plane[]) {
-    const layout = sliceLayout(ct.grid, plane);
-    slices[plane] = worldToIndex(ct.grid, layout.axes.slice, iso[layout.axes.slice]);
-  }
-  setViewer({ slices, view: DEFAULT_VIEW });
+  setViewer({ slices: slicesThrough(ct.grid, iso), view: DEFAULT_VIEW });
 }
 
 /** Mirror of `VisualizationWidget`: overlay toggles, overlay quantity, isolines, DVH / QI. */

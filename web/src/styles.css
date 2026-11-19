@@ -53,6 +53,16 @@ textarea {
   height: 100%;
 }
 
+.mock-banner {
+  flex: none;
+  padding: 6px 12px;
+  background: #b00020;
+  color: #fff;
+  font-weight: bold;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
 .menubar {
   display: flex;
   gap: 0;

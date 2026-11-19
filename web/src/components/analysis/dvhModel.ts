@@ -8,6 +8,8 @@ import type { QiResult } from "../../api/protocol/viewer";
 export type LineStyle = "solid" | "dashed";
 
 export interface PlotCurve {
+  /** Position of the structure. */
+  index: number;
   name: string;
   x: ArrayLike<number>;
   y: ArrayLike<number>;
@@ -17,7 +19,9 @@ export interface PlotCurve {
 }
 
 export interface QiMarker {
-  structure: string;
+  /** Position of the structure. */
+  structure: number;
+  name: string;
   metric: string;
   kind: "dx" | "vx";
   /** D_x: reference volume (%); V_x: reference dose. */
@@ -78,23 +82,24 @@ export function interp(x: number, xs: ArrayLike<number>, ys: ArrayLike<number>):
 }
 
 /** `_qi_markers`: D_x / V_x points of the plotted structures (finite values only). */
-export function qiMarkers(qi: QiResult | null, structures: readonly string[], colors: Record<string, readonly number[]>): QiMarker[] {
+export function qiMarkers(qi: QiResult | null, structures: readonly number[], colors: Record<number, readonly number[]>): QiMarker[] {
   if (!qi) return [];
   const markers: QiMarker[] = [];
   const shown = new Set(structures);
   for (const row of qi.rows) {
-    if (!shown.has(row.name)) continue;
+    if (!shown.has(row.index)) continue;
     for (const metric of qi.metrics) {
       if ((metric.kind !== "dx" && metric.kind !== "vx") || metric.parameter === undefined) continue;
       const value = row.values[metric.id];
       if (value === null || value === undefined || !Number.isFinite(value)) continue;
       markers.push({
-        structure: row.name,
+        structure: row.index,
+        name: row.name,
         metric: metric.id,
         kind: metric.kind,
         parameter: metric.parameter,
         value,
-        color: colors[row.name] ?? row.color,
+        color: colors[row.index] ?? row.color,
         valueUnit: metric.kind === "dx" ? qi.unit_symbol : "%",
         parameterUnit: metric.kind === "dx" ? "%" : qi.unit_symbol,
       });
@@ -110,9 +115,9 @@ export function axisLabel(label: string, unit: string): string {
 }
 
 /** Table rows (header first) like `QITableWidget.to_rows`: "%.2f", "-" for missing. */
-export function qiTableRows(qi: QiResult | null, structures: readonly string[], metrics: readonly string[]): string[][] {
+export function qiTableRows(qi: QiResult | null, structures: readonly number[], metrics: readonly string[]): string[][] {
   if (!qi) return [];
-  const rows = qi.rows.filter((r) => structures.includes(r.name));
+  const rows = qi.rows.filter((r) => structures.includes(r.index));
   const shown = qi.metrics.filter((m) => metrics.includes(m.id));
   if (!rows.length || !shown.length) return [];
   return [

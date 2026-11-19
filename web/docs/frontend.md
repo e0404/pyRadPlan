@@ -26,6 +26,15 @@ detached afterwards (only `data.load_file` sends arrays).
 The mock produces real wire messages (results are encoded, then decoded by `BaseBackend`), so the
 codec path is exercised in tests and in the UI with `?backend=mock`.
 
+The mock's static catalogues (registries, plan options, configuration forms, tissue schema,
+objectives catalogue) are recordings of `pyRadPlan.app` in `src/api/mock/fixtures/`, which
+`scripts/gen_mock_fixtures.py` writes (`npm run fixtures`, run by npm pre-hooks before `dev`,
+`build`, `typecheck`, `test` and the `e2e*` scripts). They are generated, not committed, while the
+session API is still changing; building the frontend therefore needs a Python with pyRadPlan's
+dependencies (`PYTHON` selects the interpreter). Once the API is stable, committing them with a
+drift test in the Python test suite (regenerate and compare) lets the frontend build without
+Python.
+
 ## Pyodide worker
 
 `src/api/pyodide/pyodide.worker.ts` (module worker) boots in this order:
@@ -74,10 +83,13 @@ Alternatives, selectable by URL parameter:
 - `?pyrp=<url>`: other location of the pyRadPlan wheels + `manifest.json` (default `/pyrp/`).
 
 Outside the dev server (`import.meta.env.DEV`), `pyodide`, `packages` and `pyrp` are honoured only
-for URLs on the page's own origin, relative ones included, and for `pyodide=cdn`
+for URLs below the app's own directory (`BASE_URL`, relative ones included) and for `pyodide=cdn`
 (`trustedSource` / `backendSources` in `src/api/index.ts`): on a public deployment a crafted link must
-not make the app run code from another site. A deployment using a mirror serves it under its own
-origin.
+not make the app run code from another site, nor from another project on a shared origin (GitHub
+Pages) or the other channel. A deployment using a mirror serves it inside the app's directory.
+
+`?backend=mock` is honoured only in the dev server and in builds made with `VITE_ENABLE_MOCK=1`; the
+mock is loaded with a dynamic import that a production build drops, and an active mock shows a banner.
 
 ## COOP / COEP
 

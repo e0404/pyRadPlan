@@ -40,6 +40,7 @@ export type VolumeEncoding = "float32" | "auto";
 export type MaskEncoding = "uint8" | "bits" | "crops";
 
 export interface BitsMaskEntry {
+  index: number;
   name: string;
   color: Vec3;
   plane: number;
@@ -56,6 +57,7 @@ export interface BitsMasks {
 }
 
 export interface CropMaskEntry {
+  index: number;
   name: string;
   color: Vec3;
   num_voxels: number;
@@ -107,6 +109,7 @@ export interface UnitInfo {
 }
 
 export interface DvhCurveV1 {
+  index: number;
   name: string;
   color: Vec3;
   dose: NDArray;
@@ -149,24 +152,24 @@ export interface QiResult {
   ref_vols: number[];
   ref_doses: number[];
   metrics: QiMetric[];
-  rows: { name: string; color: Vec3; values: Record<string, number | null> }[];
+  rows: { index: number; name: string; color: Vec3; values: Record<string, number | null> }[];
 }
 
 export interface ViewerMethods {
   "view.volume": { params: { name: string; phase?: number; encoding?: VolumeEncoding }; result: Volume };
   "view.structure_masks": {
-    params: { names?: string[]; encoding?: MaskEncoding };
+    params: { names?: number[]; encoding?: MaskEncoding };
     result: StructureMasks | BitsMasks | CropMasks;
   };
   "view.beams": { params: { draft?: BeamDraft }; result: BeamsResult };
   "cst.update_structure": {
-    params: { name: string; changes: StructureChanges; apply_anyway?: boolean };
+    params: { name: number; changes: StructureChanges; apply_anyway?: boolean };
     result: { state: SessionState; structure: StructureDetail };
   };
   "analysis.dvh": {
     params: {
       quantity?: string;
-      names?: string[];
+      names?: number[];
       num_points?: number;
       keys?: string[];
       range?: "shared" | "per_structure";
@@ -174,7 +177,7 @@ export interface ViewerMethods {
     result: DvhResult & Partial<DvhSetsResult> & { label?: string; unit_info?: UnitInfo };
   };
   "analysis.qi": {
-    params: { quantity: string; names?: string[]; ref_vols?: number[]; ref_doses?: number[] };
+    params: { quantity: string; names?: number[]; ref_vols?: number[]; ref_doses?: number[] };
     result: QiResult;
   };
   "analysis.compare_units": { params: { a: string; b: string }; result: { shareable: boolean; scale: number | null } };

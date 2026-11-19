@@ -10,7 +10,8 @@ import "./io/io.css";
 export function Splash() {
   const boot = useApp((s) => s.boot);
   const kind = useApp((s) => s.backend?.kind);
-  const connected = useApp((s) => s.state !== null);
+  // The state event of session.create arrives before the response that sets the session.
+  const connected = useApp((s) => s.state !== null && s.session !== null);
   const info = useApp((s) => s.info);
   const patient = useRef(patientFromUrl()).current;
   const [patientState, setPatientState] = useState<"waiting" | "loading" | "done">(patient ? "waiting" : "done");

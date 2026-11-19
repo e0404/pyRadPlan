@@ -149,6 +149,7 @@ export interface Volume {
 }
 
 export interface StructureMask {
+  index: number;
   name: string;
   color: Vec3;
   data: NDArray<Uint8Array>;
@@ -160,6 +161,7 @@ export interface StructureMasks {
 }
 
 export interface DvhCurve {
+  index: number;
   name: string;
   color: Vec3;
   dose: NDArray;
@@ -201,8 +203,8 @@ export interface V0Methods {
     result: SessionState;
   };
   "view.volume": { params: { name: string; phase?: number }; result: Volume };
-  "view.structure_masks": { params: { names?: string[] }; result: StructureMasks };
-  "analysis.dvh": { params: { quantity?: string; names?: string[]; num_points?: number }; result: DvhResult };
+  "view.structure_masks": { params: { names?: number[] }; result: StructureMasks };
+  "analysis.dvh": { params: { quantity?: string; names?: number[]; num_points?: number }; result: DvhResult };
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +384,7 @@ export type FeatureId =
   | "image_file_io"
   | "dicom_import"
   | "dicom_export"
+  | "pickle_load"
   | "ai"
   | "ipopt"
   | "gpu"
@@ -404,6 +407,7 @@ export interface ImportFormat {
   objects: string[];
   available: boolean;
   reason: string | null;
+  note?: string;
 }
 
 export type ExportObject = "pln" | "dij" | "cst" | "result" | "workspace";
@@ -509,7 +513,7 @@ export interface SharedV1Methods {
     params: { since?: number };
     result: { log: LogHistoryEntry[]; optimization: OptimizationHistory | null };
   };
-  "cst.get": { params: { names?: string[] }; result: { structures: StructureDetail[] } };
+  "cst.get": { params: { names?: number[] }; result: { structures: StructureDetail[] } };
 }
 
 /**

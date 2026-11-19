@@ -26,6 +26,12 @@ export function importFormats(info: AppInfo | null | undefined): ImportFormat[] 
   return [{ format: "mat", label: "matRad MATLAB", extensions: [".mat"], objects: [], available: true, reason: null }];
 }
 
+/** The import format that reads a file name but is unavailable in this runtime (with the reason), if any. */
+export function unavailableImport(info: AppInfo | null | undefined, filename: string): ImportFormat | undefined {
+  const lower = filename.toLowerCase();
+  return importFormats(info).find((f) => !f.available && f.extensions.some((ext) => lower.endsWith(ext)));
+}
+
 export const IMAGE_EXTENSIONS = [".nii.gz", ".nii", ".nrrd", ".mha", ".mhd"] as const;
 
 export function isImageFile(name: string): boolean {

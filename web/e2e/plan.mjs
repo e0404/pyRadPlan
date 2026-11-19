@@ -106,16 +106,14 @@ try {
   expect((await tid("plan-gantry").inputValue()).split(" ").length === 7, "preset sets 7 gantry angles");
   expect((await tid("plan-apply").textContent()) === "Apply *", "Apply shows the pending marker");
 
-  // ---- dose engine "…": generic form with nested group, nullable number, validation
+  // ---- dose engine "…": generic form with nullable numbers, validation
   await tid("plan-engine-config").click();
   await tid("engine-dialog").waitFor();
-  await tid("engine-dialog-form-dij_sampling").locator(".cf-toggle").click();
   await fillSpin("engine-dialog-form-kernel_cutoff", "-5");
   const engineStatus = await tid("engine-dialog-status").textContent();
   expect(/kernel_cutoff: Input should be greater than 0/.test(engineStatus), `live validation: ${engineStatus}`);
   await shot("engine-dialog-invalid", tid("engine-dialog"));
   await fillSpin("engine-dialog-form-kernel_cutoff", "350");
-  await fillSpin("engine-dialog-form-dij_sampling.lat_cut_off", "25");
   await fillSpin("engine-dialog-form-force_penumbra", "4.5");
   await shot("engine-dialog", tid("engine-dialog"));
   await tid("engine-dialog-ok").click();
@@ -144,14 +142,11 @@ try {
   await tid("solver-combo-popup").waitFor();
   const ipopt = tid("solver-combo-popup").locator(".combo-item", { hasText: "Interior Point Optimizer" });
   expect((await ipopt.getAttribute("aria-disabled")) === "true", "IPOPT listed disabled");
-  expect(/not available in the browser/.test((await ipopt.getAttribute("title")) ?? ""), "IPOPT entry explains why");
+  expect(/ipyopt is not installed/.test((await ipopt.getAttribute("title")) ?? ""), "IPOPT entry explains why");
   await shot("solver-popup", tid("optimization-dialog"));
-  await tid("solver-combo-popup").locator(".combo-item", { hasText: "ipax" }).click();
-  await page.waitForFunction(() => document.querySelector('[data-testid="solver-label"]')?.textContent?.includes("ipax"));
-  await tid("solver-form").waitFor();
-  await tid("solver-form-options").locator(".cf-toggle").click();
+  await page.keyboard.press("Escape");
   await fillSpin("solver-form-max_iter", "120");
-  await shot("optimization-dialog-ipax", tid("optimization-dialog"));
+  await shot("optimization-dialog-scipy-edited", tid("optimization-dialog"));
   await tid("optimization-dialog-ok").click();
   expect((await tid("plan-problem-config").getAttribute("class")).includes("modified"), "problem … framed as modified");
 
@@ -169,8 +164,7 @@ try {
   // ---- carbon: bio models re-listed, tissue marker
   await pick("plan-mode", "carbon");
   await page.waitForFunction(() => /LEM/.test(document.querySelector('[data-testid="plan-bio"]')?.textContent ?? ""));
-  await tid("plan-tissue-marker").waitFor();
-  expect((await tid("plan-tissue-marker").getAttribute("data-marker")) === "error", "tissue marker ⚠ for LEM with generic tissues");
+  expect((await tid("plan-tissue-marker").count()) === 0, "no tissue marker: the recorded phantom has no issues with the bundled base data");
   await tid("plan-bio").click();
   await tid("plan-bio-popup").waitFor();
   await shot("bio-popup", tid("panel-plan"));
@@ -182,35 +176,16 @@ try {
   await tid("plan-apply").click();
   await page.waitForFunction(() => document.querySelector('[data-testid="plan-note"]')?.textContent === "Plan applied.");
 
-  // ---- tissue dialog: errors gate, picker, derive
+  // ---- tissue dialog: edit a value and apply (the base data checks are the app layer's, not mocked)
   await tid("plan-tissue").click();
   await tid("tissue-dialog").waitFor();
-  await page.waitForFunction(() => document.querySelector('[data-testid="tissue-name-Core"]')?.className.includes("issue-error"));
-  await shot("tissue-dialog-issues", tid("tissue-dialog"));
-  await pick("tissue-Core-model", "MKM");
-  await fillSpin("tissue-Core-r_domain", "0.3");
-  await fillSpin("tissue-Core-alpha_0", "0.15");
-  await fillSpin("tissue-Core-beta_0", "0.05");
-  // The Generic tissue's α_x / β_x are explicit, so the MKM row keeps them until derived.
-  await tid("tissue-name-Core").click();
-  await tid("tissue-derive").click();
-  await page.waitForFunction(() => document.querySelector('[data-testid="tissue-Core-alpha_x"]')?.value?.startsWith("0.153"));
-  expect(true, "Derive from model derives α_x of the selected MKM row");
-  await shot("tissue-dialog-mkm", tid("tissue-dialog"));
-  await tid("tissue-name-Core").click();
-  await tid("tissue-ok").click();
-  await tid("tissue-apply-anyway").waitFor();
-  await shot("tissue-apply-anyway");
-  await tid("msg-keep").click();
-  await pick("tissue-picker", "HIT · default");
-  await tid("tissue-pick-apply").click();
-  await page.waitForFunction(() => /Applied the base data class/.test(document.querySelector('[data-testid="tissue-status"]')?.textContent ?? ""));
-  await page.waitForFunction(() => !document.querySelector('[data-testid="tissue-name-Core"]')?.className.includes("issue-error"));
-  await shot("tissue-dialog-picked", tid("tissue-dialog"));
+  await tid("tissue-name-Core").waitFor();
+  await shot("tissue-dialog", tid("tissue-dialog"));
+  await fillSpin("tissue-Core-alpha_x", "0.12");
   await tid("tissue-ok").click();
   await tid("tissue-dialog").waitFor({ state: "detached" });
-  await page.waitForFunction(() => !document.querySelector('[data-testid="plan-tissue-marker"]'));
-  expect(true, "tissue marker cleared after applying base data tissues");
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().structureDetails[0]?.tissue.values.alpha_x === 0.12);
+  expect(true, "tissue values applied by structure position");
 
   // ---- objectives
   await shot("objectives", tid("objectives"));
@@ -219,17 +194,17 @@ try {
   await tid("obj-add").click();
   await page.waitForFunction((n) => Number(document.querySelector('[data-testid="obj-count"]')?.textContent?.split(" ")[0]) === n + 1, before);
   expect(true, "objective added");
-  const newKey = `Core-${2}`;
+  const newKey = "Core-1";
   await pick(`obj-${newKey}-type`, "Min DVH");
-  await tid(`obj-Core-2-v_min`).waitFor();
-  await fillSpin(`obj-Core-2-v_min`, "150");
+  await tid(`obj-Core-1-v_min`).waitFor();
+  await fillSpin(`obj-Core-1-v_min`, "150");
   expect((await tid("obj-status").textContent()).includes("Ignored invalid value"), "out-of-range parameter rejected client-side");
-  await fillSpin(`obj-Core-2-v_min`, "80");
+  await fillSpin(`obj-Core-1-v_min`, "80");
   await fillSpin(`obj-${newKey}-penalty`, "500");
-  await pick(`obj-${newKey}-robustness`, "Objective worst case");
-  await page.waitForFunction(() => document.querySelector('[data-testid="obj-Core-2-robustness"]')?.getAttribute("data-value") === "objective_worst_case");
+  await pick(`obj-${newKey}-robustness`, "Objective-wise worst case");
+  await page.waitForFunction(() => document.querySelector('[data-testid="obj-Core-1-robustness"]')?.getAttribute("data-value") === "objective_worst_case");
   await pick(`obj-${newKey}-quantity`, "RBExDose");
-  await page.waitForFunction(() => document.querySelector('[data-testid="obj-Core-2-quantity"]')?.getAttribute("data-value") === "rbe_x_dose");
+  await page.waitForFunction(() => document.querySelector('[data-testid="obj-Core-1-quantity"]')?.getAttribute("data-value") === "rbe_x_dose");
   await shot("objectives-edited", tid("objectives"));
   await tid("obj-all-quantities").click();
   await tid("obj-all-quantities-popup").waitFor();

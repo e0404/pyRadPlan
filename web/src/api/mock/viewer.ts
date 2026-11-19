@@ -20,7 +20,7 @@ import {
   splitComponentSuffix,
   splitIndex,
 } from "../../results/resultGroups";
-import { MethodError, precondition, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
+import { MethodError, precondition, resolveStructure, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
 import { fakeDose, type Phantom } from "./phantom";
 
 interface ViewerExt {
@@ -38,8 +38,8 @@ interface ViewerExt {
   tags: string[];
   /** Labels of the current result's `_scenario` components, by flat scenario index. */
   scenarioLabels: string[];
-  overlap: Record<string, number>;
-  tissue: Record<string, TissueDraft>;
+  overlap: Record<number, number>;
+  tissue: Record<number, TissueDraft>;
 }
 
 let clock = 0;
@@ -92,7 +92,7 @@ export function syncViewer(s: MockSession): ViewerExt {
     e.revCst = tick();
     e.overlap = {};
     e.tissue = {};
-    for (const st of s.phantom?.structures ?? []) e.overlap[st.name] = defaultOverlap(st.name, st.type);
+    (s.phantom?.structures ?? []).forEach((st, i) => (e.overlap[i] = defaultOverlap(st.name, st.type)));
   }
   if (s.computed.plan !== e.seenPlan || s.computed.stf !== e.seenStf) {
     e.seenPlan = s.computed.plan;
@@ -227,8 +227,8 @@ export function viewerStateExtension(s: MockSession, state: SessionState): Parti
     },
     structures: state.structures.map((st) => ({
       ...st,
-      overlap_priority: st.overlap_priority ?? e.overlap[st.name] ?? 0,
-      num_voxels: st.num_voxels ?? countVoxels(s, st.name),
+      overlap_priority: st.overlap_priority ?? e.overlap[st.index] ?? 0,
+      num_voxels: st.num_voxels ?? countVoxels(s, st.index),
       num_objectives: st.num_objectives ?? 0,
     })),
     actions: { ...state.actions, snapshot: state.actions.snapshot ?? state.has.result },
@@ -236,8 +236,8 @@ export function viewerStateExtension(s: MockSession, state: SessionState): Parti
 }
 
 const voxelCounts = new WeakMap<Uint8Array, number>();
-function countVoxels(s: MockSession, name: string): number {
-  const mask = s.phantom?.structures.find((st) => st.name === name)?.mask;
+function countVoxels(s: MockSession, index: number): number {
+  const mask = s.phantom?.structures[index]?.mask;
   if (!mask) return 0;
   let n = voxelCounts.get(mask);
   if (n === undefined) {
@@ -443,12 +443,11 @@ function labelOf(key: string): string {
   return quantityName(base);
 }
 
-function structureDetail(s: MockSession, e: ViewerExt, name: string): StructureDetail {
+function structureDetail(s: MockSession, e: ViewerExt, index: number): StructureDetail {
   const phantom = requirePhantom(s);
-  const index = phantom.structures.findIndex((st) => st.name === name);
-  if (index < 0) throw new MethodError("KeyError", `Unknown structure '${name}'`);
   const st = phantom.structures[index];
-  const tissue = e.tissue[name] ?? defaultTissue();
+  const { name } = st;
+  const tissue = e.tissue[index] ?? defaultTissue();
   const ax = Number(tissue.values.alpha_x ?? 0.1);
   const bx = Number(tissue.values.beta_x ?? 0.05);
   return {
@@ -457,8 +456,8 @@ function structureDetail(s: MockSession, e: ViewerExt, name: string): StructureD
     type: st.type,
     color: [...st.color] as Vec3,
     visible: true,
-    overlap_priority: e.overlap[name] ?? 0,
-    num_voxels: countVoxels(s, name),
+    overlap_priority: e.overlap[index] ?? 0,
+    num_voxels: countVoxels(s, index),
     num_scenarios: 1,
     center_of_mass: centerOfMass(phantom, st.mask),
     alpha_x: ax,
@@ -467,6 +466,12 @@ function structureDetail(s: MockSession, e: ViewerExt, name: string): StructureD
     tissue_summary: `Tissue model: ${tissue.model}; α_x = ${ax} Gy⁻¹, β_x = ${bx} Gy⁻²; α/β = ${bx ? +(ax / bx).toPrecision(4) : "∞"} Gy`,
     objectives: [],
   };
+}
+
+/** Positions of the structures a request's `names` (positions or names) select; all without it. */
+function selectedStructures(phantom: Phantom, names: unknown): Set<number> {
+  if (!Array.isArray(names)) return new Set(phantom.structures.map((_, i) => i));
+  return new Set(names.map((n) => resolveStructure(phantom.structures, n)));
 }
 
 function bboxOf(mask: Uint8Array, shape: readonly number[]): [number, number, number, number, number, number] | null {
@@ -506,18 +511,18 @@ export const viewerHandlers: MockHandlers = {
   async "view.structure_masks"(params, ctx) {
     const s = ctx.session();
     const phantom = requirePhantom(s);
-    const names = params.names as string[] | undefined;
+    const wanted = selectedStructures(phantom, params.names);
     const grid = phantom.grid;
-    const list = phantom.structures.filter((st) => !names || names.includes(st.name));
+    const list = phantom.structures.map((st, index) => ({ st, index })).filter(({ index }) => wanted.has(index));
     const encoding = (params.encoding as string | undefined) ?? "uint8";
     if (encoding === "uint8") return ctx.fallback();
     if (encoding === "crops") {
       return {
         grid,
         encoding: "crops",
-        masks: list.map((st) => {
+        masks: list.map(({ st, index }) => {
           const bbox = bboxOf(st.mask, grid.shape);
-          if (!bbox) return { name: st.name, color: st.color, num_voxels: 0, bbox: null, data: null };
+          if (!bbox) return { index, name: st.name, color: st.color, num_voxels: 0, bbox: null, data: null };
           const [z0, y0, x0, z1, y1, x1] = bbox;
           const [, ny, nx] = grid.shape;
           const crop = new Uint8Array((z1 - z0) * (y1 - y0) * (x1 - x0));
@@ -527,20 +532,20 @@ export const viewerHandlers: MockHandlers = {
               const row = (k * ny + j) * nx;
               for (let c = x0; c < x1; c++) crop[o++] = st.mask[row + c];
             }
-          return { name: st.name, color: st.color, num_voxels: countVoxels(s, st.name), bbox, data: ndarray(crop, [z1 - z0, y1 - y0, x1 - x0]) };
+          return { index, name: st.name, color: st.color, num_voxels: countVoxels(s, index), bbox, data: ndarray(crop, [z1 - z0, y1 - y0, x1 - x0]) };
         }),
       };
     }
     if (encoding === "bits") {
       const n = phantom.ct.length;
       const planes: Uint8Array[] = [];
-      const masks = list.map((st, i) => {
+      const masks = list.map(({ st, index }, i) => {
         const plane = Math.floor(i / 8);
         const bit = i % 8;
         if (!planes[plane]) planes[plane] = new Uint8Array(n);
         const p = planes[plane];
         for (let v = 0; v < n; v++) if (st.mask[v]) p[v] |= 1 << bit;
-        return { name: st.name, color: st.color, plane, bit, num_voxels: countVoxels(s, st.name), bbox: bboxOf(st.mask, grid.shape) };
+        return { index, name: st.name, color: st.color, plane, bit, num_voxels: countVoxels(s, index), bbox: bboxOf(st.mask, grid.shape) };
       });
       return { grid, encoding: "bits", planes: planes.map((p) => ndarray(p, grid.shape)), masks };
     }
@@ -562,8 +567,8 @@ export const viewerHandlers: MockHandlers = {
     const s = ctx.session();
     const e = syncViewer(s);
     const phantom = requirePhantom(s);
-    const names = (params.names as string[] | undefined) ?? phantom.structures.map((st) => st.name);
-    return { structures: names.map((n) => structureDetail(s, e, n)) };
+    const indices = Array.isArray(params.names) ? params.names.map((n) => resolveStructure(phantom.structures, n)) : phantom.structures.map((_, i) => i);
+    return { structures: indices.map((i) => structureDetail(s, e, i)) };
   },
 
   async "cst.update_structure"(params, ctx) {
@@ -571,9 +576,9 @@ export const viewerHandlers: MockHandlers = {
     if (ctx.isBusy()) throw precondition("A computation is still running", "busy");
     const e = syncViewer(s);
     const phantom = requirePhantom(s);
-    const name = String(params.name);
-    const st = phantom.structures.find((x) => x.name === name);
-    if (!st) throw new MethodError("KeyError", `Unknown structure '${name}'`);
+    const index = resolveStructure(phantom.structures, params.name);
+    const st = phantom.structures[index];
+    const { name } = st;
     const changes = (params.changes ?? {}) as { type?: string; color?: Vec3; overlap_priority?: number; tissue?: TissueDraft };
     if (changes.type !== undefined) {
       if (!["TARGET", "OAR", "EXTERNAL", "HELPER"].includes(changes.type)) {
@@ -587,23 +592,12 @@ export const viewerHandlers: MockHandlers = {
       if (!Number.isInteger(p) || p < 0 || p > 9999) {
         throw new MethodError("ValidationError", "Overlap priority must be 0..9999", "invalid", [{ field: "overlap_priority", message: "0..9999" }]);
       }
-      e.overlap[name] = p;
+      e.overlap[index] = p;
     }
-    if (changes.tissue !== undefined) {
-      const ax = Number(changes.tissue.values.alpha_x);
-      const bx = Number(changes.tissue.values.beta_x);
-      if (!(ax > 0) || !(bx >= 0)) {
-        if (!params.apply_anyway) {
-          throw precondition("The tissue cannot be evaluated: α_x must be positive", "tissue_errors", [
-            { structure: name, kind: "invalid_reference", severity: "error", message: "α_x must be positive" },
-          ]);
-        }
-      }
-      e.tissue[name] = changes.tissue;
-    }
+    if (changes.tissue !== undefined) e.tissue[index] = changes.tissue;
     e.revCst = tick();
     ctx.log(s, "info", `Structure ${name} updated`);
-    return { state: ctx.publish(s), structure: structureDetail(s, e, name) };
+    return { state: ctx.publish(s), structure: structureDetail(s, e, index) };
   },
 
   async "workflow.snapshot"(params, ctx) {
@@ -640,11 +634,11 @@ export const viewerHandlers: MockHandlers = {
     const s = ctx.session();
     const e = syncViewer(s);
     const phantom = requirePhantom(s);
-    const names = params.names as string[] | undefined;
+    const wanted = selectedStructures(phantom, params.names);
     const numPoints = Number(params.num_points ?? 500);
     const setFor = (key: string) => {
       const data = volumeOf(e, key);
-      const structures = phantom.structures.filter((st) => !names || names.includes(st.name));
+      const structures = phantom.structures.map((st, index) => ({ ...st, index })).filter((st) => wanted.has(st.index));
       let shared: number | undefined;
       if (rangeMode !== "per_structure") {
         let mx = 0;
@@ -655,6 +649,7 @@ export const viewerHandlers: MockHandlers = {
         .map((st) => ({ st, dvh: computeDvh(data, st.mask, numPoints, shared) }))
         .filter(({ dvh }) => dvh.count > 0)
         .map(({ st, dvh }) => ({
+          index: st.index,
           name: st.name,
           color: st.color,
           dose: ndarray(dvh.dose, [numPoints]),
@@ -676,7 +671,7 @@ export const viewerHandlers: MockHandlers = {
     const phantom = requirePhantom(s);
     const key = String(params.quantity);
     const data = volumeOf(e, key);
-    const names = params.names as string[] | undefined;
+    const wanted = selectedStructures(phantom, params.names);
     const validVols = (params.ref_vols as number[] | undefined)?.every((v) => Number.isFinite(v) && v >= 0 && v <= 100);
     const validDoses = (params.ref_doses as number[] | undefined)?.every((v) => Number.isFinite(v) && v >= 0);
     const refVols = validVols && (params.ref_vols as number[]).length ? (params.ref_vols as number[]) : [2, 5, 50, 95, 98];
@@ -688,8 +683,9 @@ export const viewerHandlers: MockHandlers = {
       ...refDoses.map((d) => ({ id: `V${fmt(d)}Gy`, label: `V${fmt(d)}${unit} [%]`, kind: "vx" as const, parameter: d, unit: "%" })),
     ];
     const rows = phantom.structures
-      .filter((st) => !names || names.includes(st.name))
-      .map((st) => ({ name: st.name, color: st.color, values: qiRow(data, st.mask, refVols, refDoses) }));
+      .map((st, index) => ({ st, index }))
+      .filter(({ index }) => wanted.has(index))
+      .map(({ st, index }) => ({ index, name: st.name, color: st.color, values: qiRow(data, st.mask, refVols, refDoses) }));
     return { quantity: key, label: labelOf(key), name: keyLabel(groupResultKeys([...e.results.keys()]), key), unit, unit_symbol: unit, ref_vols: refVols, ref_doses: refDoses, metrics, rows };
   },
 

@@ -41,11 +41,11 @@ export function groupByType(structures: readonly StructureInfo[]): [string, Stru
 }
 
 /** "By Overlap": one group per overlap priority, lowest (dominant) first. */
-export function groupByOverlap(structures: readonly StructureInfo[], details: Record<string, StructureDetail>): [string, StructureInfo[]][] {
+export function groupByOverlap(structures: readonly StructureInfo[], details: Record<number, StructureDetail>): [string, StructureInfo[]][] {
   const sorted = [...structures].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   const groups = new Map<number, StructureInfo[]>();
   for (const s of sorted) {
-    const p = details[s.name]?.overlap_priority ?? s.overlap_priority ?? 0;
+    const p = details[s.index]?.overlap_priority ?? s.overlap_priority ?? 0;
     groups.set(p, [...(groups.get(p) ?? []), s]);
   }
   return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([p, members]) => [`Overlap priority ${p}`, members]);
@@ -82,9 +82,9 @@ export function StructureVisibility() {
   const editVoi = useApp((s) => s.editVoi);
   const [mode, setMode] = useState<"type" | "overlap">("type");
   const colorInput = useRef<HTMLInputElement>(null);
-  const picking = useRef<string | null>(null);
+  const picking = useRef<number | null>(null);
   const setAll = (value: boolean) =>
-    setViewer({ visible: Object.fromEntries(structures.map((s) => [s.name, value && (s.num_voxels ?? 1) > 0])) });
+    setViewer({ visible: Object.fromEntries(structures.map((s) => [s.index, value && (s.num_voxels ?? 1) > 0])) });
   const groups = mode === "overlap" ? groupByOverlap(structures, details) : groupByType(structures);
 
   return (
@@ -98,7 +98,7 @@ export function StructureVisibility() {
             </div>
             <div className="voi-grid">
               {members.map((s) => (
-                <div className="voi-row" key={s.name} title={voiTooltip(s, details[s.name])}>
+                <div className="voi-row" key={s.index} title={voiTooltip(s, details[s.index])}>
                   <button
                     className="swatch swatch-button"
                     style={{ background: `rgb(${s.color.join(",")})` }}
@@ -106,7 +106,7 @@ export function StructureVisibility() {
                     disabled={busy !== null}
                     data-testid={`voi-color-${s.name}`}
                     onClick={() => {
-                      picking.current = s.name;
+                      picking.current = s.index;
                       const input = colorInput.current!;
                       input.value = toHex(s.color);
                       input.click();
@@ -114,13 +114,13 @@ export function StructureVisibility() {
                   />
                   <input
                     type="checkbox"
-                    checked={visible[s.name] ?? false}
-                    onChange={(e) => setViewer((v) => ({ visible: { ...v.visible, [s.name]: e.target.checked } }))}
+                    checked={visible[s.index] ?? false}
+                    onChange={(e) => setViewer((v) => ({ visible: { ...v.visible, [s.index]: e.target.checked } }))}
                     data-testid={`voi-${s.name}`}
                   />
                   <span
                     className="voi-name"
-                    onClick={() => busy === null && useApp.setState({ editVoi: s.name })}
+                    onClick={() => busy === null && useApp.setState({ editVoi: s.index })}
                     data-testid={`voi-name-${s.name}`}
                   >
                     {truncateName(s.name)}
@@ -155,12 +155,12 @@ export function StructureVisibility() {
         hidden
         data-testid="voi-color-input"
         onChange={(e) => {
-          const name = picking.current;
+          const index = picking.current;
           picking.current = null;
-          if (name) void updateStructure(name, { color: fromHex(e.target.value) });
+          if (index !== null) void updateStructure(index, { color: fromHex(e.target.value) });
         }}
       />
-      {editVoi && <EditVoiDialog name={editVoi} onClose={() => useApp.setState({ editVoi: null })} />}
+      {editVoi !== null && <EditVoiDialog index={editVoi} onClose={() => useApp.setState({ editVoi: null })} />}
     </div>
   );
 }

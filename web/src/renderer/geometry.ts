@@ -105,9 +105,11 @@ export function linearIndex(geom: VolumeGeometry, ijk: readonly [number, number,
   return (ijk[2] * ny + ijk[1]) * nx + ijk[0];
 }
 
-/** World position (mm) of the centre of voxel `[i, j, k]`. */
+const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1] as const;
+
+/** World position (mm) of the centre of voxel `[i, j, k]` (fractional indices give points between voxels). */
 export function voxelToWorld(geom: VolumeGeometry, ijk: readonly [number, number, number]): [number, number, number] {
-  const d = geom.direction ?? [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const d = geom.direction ?? IDENTITY;
   const s = [ijk[0] * geom.spacing[0], ijk[1] * geom.spacing[1], ijk[2] * geom.spacing[2]];
   return [
     geom.origin[0] + d[0] * s[0] + d[1] * s[1] + d[2] * s[2],
@@ -116,11 +118,33 @@ export function voxelToWorld(geom: VolumeGeometry, ijk: readonly [number, number
   ];
 }
 
-/** Nearest voxel index along world axis `a` for a world coordinate (identity direction). */
-export function worldToIndex(geom: VolumeGeometry, a: Axis, mm: number): number {
-  const n = dim(geom, a);
-  const idx = Math.round((mm - geom.origin[a]) / geom.spacing[a]);
-  return Math.min(n - 1, Math.max(0, idx));
+/**
+ * Fractional voxel index `[i, j, k]` of a world position (mm): the inverse of
+ * {@link voxelToWorld}. The direction matrix is orthonormal, so its inverse is its transpose.
+ */
+export function worldToVoxel(geom: VolumeGeometry, world: readonly number[]): [number, number, number] {
+  const d = geom.direction ?? IDENTITY;
+  const r = [world[0] - geom.origin[0], world[1] - geom.origin[1], world[2] - geom.origin[2]];
+  return [
+    (d[0] * r[0] + d[3] * r[1] + d[6] * r[2]) / geom.spacing[0],
+    (d[1] * r[0] + d[4] * r[1] + d[7] * r[2]) / geom.spacing[1],
+    (d[2] * r[0] + d[5] * r[1] + d[8] * r[2]) / geom.spacing[2],
+  ];
+}
+
+/** Voxel `[i, j, k]` nearest to a world position, clamped to the volume. */
+export function worldToIndex(geom: VolumeGeometry, world: readonly number[]): [number, number, number] {
+  const v = worldToVoxel(geom, world);
+  const clamp = (x: number, n: number) => Math.min(n - 1, Math.max(0, Math.round(x)));
+  return [clamp(v[0], dim(geom, 0)), clamp(v[1], dim(geom, 1)), clamp(v[2], dim(geom, 2))];
+}
+
+/** Slice index of every plane through a world position (the slices follow volume index axes, not world axes). */
+export function slicesThrough(geom: VolumeGeometry, world: readonly number[]): Record<Plane, number> {
+  const ijk = worldToIndex(geom, world);
+  const out = {} as Record<Plane, number>;
+  for (const plane of PLANES) out[plane] = ijk[planeAxes(plane).slice];
+  return out;
 }
 
 export interface SliceData<T extends ArrayLike<number> = Float32Array> {

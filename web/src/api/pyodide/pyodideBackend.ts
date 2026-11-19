@@ -1,3 +1,4 @@
+import { devDependencies } from "../../../package.json";
 import { BaseBackend } from "../backend";
 import type { WireRequest, WireResponse } from "../protocol";
 import type { MainToWorker, WorkerConfig, WorkerToMain } from "./messages";
@@ -11,8 +12,8 @@ export interface PyodideBackendOptions {
   pyrpBaseUrl?: string;
 }
 
-/** Pyodide version of the npm package; the CDN path for package wheels depends on it. */
-export const PYODIDE_VERSION = "314.0.8";
+/** Pyodide version of the npm package (`web/package.json`); the CDN path for package wheels depends on it. */
+export const PYODIDE_VERSION: string = devDependencies.pyodide;
 export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
 function absolute(url: string): string {
@@ -25,6 +26,8 @@ export class PyodideBackend extends BaseBackend {
 
   private readonly worker: Worker;
   private readonly pending = new Map<number, (response: WireResponse) => void>();
+  /** Why the worker is gone (it crashed or was disposed): every request fails with it. */
+  private lost: string | null = null;
   private readonly memoryWaiters: ((bytes: number | null) => void)[] = [];
   private readonly interrupt: Int32Array | null;
   private readonly booted: Promise<void>;
@@ -92,7 +95,9 @@ export class PyodideBackend extends BaseBackend {
       const message = ev.message || "Worker failed to start";
       this.setBoot({ phase: "failed", message, fraction: null });
       rejectReady(new Error(message));
+      this.failAll(`The Pyodide worker stopped: ${message}`);
     };
+    this.worker.onmessageerror = () => this.failAll("The Pyodide worker sent a message that could not be read");
     this.post({ type: "init", config });
   }
 
@@ -113,6 +118,10 @@ export class PyodideBackend extends BaseBackend {
 
   protected transmit(request: WireRequest, _transfer: ArrayBuffer[]): Promise<WireResponse> {
     return new Promise((resolve) => {
+      if (this.lost !== null) {
+        resolve(this.failure(request.id, this.lost));
+        return;
+      }
       this.pending.set(request.id, resolve);
       this.inFlight++;
       // Request buffers (uploads) are copied, not transferred: callers may send the same file
@@ -124,6 +133,10 @@ export class PyodideBackend extends BaseBackend {
   /** Size of the worker's wasm memory in bytes (the peak so far; answered between requests). */
   wasmMemory(): Promise<number | null> {
     return new Promise((resolve) => {
+      if (this.lost !== null) {
+        resolve(null);
+        return;
+      }
       this.memoryWaiters.push(resolve);
       this.post({ type: "memory" });
     });
@@ -133,12 +146,22 @@ export class PyodideBackend extends BaseBackend {
     this.worker.postMessage(message, transfer);
   }
 
+  private failure(id: number, message: string): WireResponse {
+    return { id, ok: false, error: { type: "RuntimeError", message } };
+  }
+
+  /** Fail every pending request and every later one: a dead worker never answers. */
+  private failAll(message: string): void {
+    this.lost ??= message;
+    for (const [id, resolve] of this.pending) resolve(this.failure(id, message));
+    this.pending.clear();
+    this.inFlight = 0;
+    for (const resolve of this.memoryWaiters.splice(0)) resolve(null);
+  }
+
   dispose(): void {
     super.dispose();
     this.worker.terminate();
-    for (const resolve of this.pending.values()) {
-      resolve({ id: -1, ok: false, error: { type: "RuntimeError", message: "Backend disposed" } });
-    }
-    this.pending.clear();
+    this.failAll("Backend disposed");
   }
 }

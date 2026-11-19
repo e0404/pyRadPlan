@@ -18,6 +18,7 @@ import type {
   WireResponse,
 } from "../protocol";
 import { MOCK_PHANTOMS, cumulativeDvh, fakeDose, makePhantom, type Phantom } from "./phantom";
+import { REGISTRY } from "./planData";
 import { planHandlers, planStateExtension } from "./plan";
 import { createIoHandlers, ioStateExtension, recordLogEvent } from "./io";
 import { viewerHandlers, viewerStateExtension } from "./viewer";
@@ -76,20 +77,6 @@ export interface MockOptions {
   bootMs?: number;
 }
 
-const MACHINES: Record<string, string[]> = {
-  photons: ["Generic"],
-  protons: ["Generic", "generic_MCsquare"],
-  helium: ["Generic"],
-  carbon: ["Generic"],
-};
-
-const ENGINES: Record<string, string[]> = {
-  photons: ["SVDPB", "FRED"],
-  protons: ["HongPB", "MCsquare"],
-  helium: ["HongPB"],
-  carbon: ["HongPB"],
-};
-
 class Cancelled extends Error {
   constructor() {
     super("Computation cancelled by the user");
@@ -111,18 +98,20 @@ export class MethodError extends Error {
 export const precondition = (message: string, code: string, details?: unknown) =>
   new MethodError("PreconditionError", message, code, details);
 
-const PLAN_FIELDS = new Set([
-  "radiation_mode",
-  "machine",
-  "num_of_fractions",
-  "gantry_angles",
-  "couch_angles",
-  "bixel_width",
-  "iso_center",
-  "dose_grid_resolution",
-  "engine",
-  "bio_model",
-]);
+/**
+ * Position of the structure a request addresses: a number is its position, a string its name
+ * (ambiguous when several structures share it, as in `pyRadPlan.app`).
+ */
+export function resolveStructure(structures: readonly { name: string }[], ref: unknown): number {
+  if (typeof ref === "number") {
+    if (!Number.isInteger(ref) || ref < 0 || ref >= structures.length) throw new MethodError("KeyError", `Unknown structure ${ref}`);
+    return ref;
+  }
+  const hits = structures.flatMap((st, i) => (st.name === ref ? [i] : []));
+  if (!hits.length) throw new MethodError("KeyError", `Unknown structure ${JSON.stringify(ref)}`);
+  if (hits.length > 1) throw new MethodError("KeyError", `Structure name ${JSON.stringify(ref)} is ambiguous (positions ${hits.join(", ")}); address it by position`);
+  return hits[0];
+}
 
 const METHODS = [
   "app.info",
@@ -175,7 +164,7 @@ export function defaultPlan(): PlanSummary {
     bixel_width: 5,
     iso_center: null,
     dose_grid_resolution: [3, 3, 3],
-    engine: "SVDPB",
+    engine: REGISTRY.engines.photons[0],
     bio_model: "none",
   };
 }
@@ -390,19 +379,6 @@ export class MockBackend extends BaseBackend {
     if (!s.plan) throw precondition("Configure a plan first", "no_data");
   }
 
-  /** Carbon plans stand in for a biological model the structures cannot evaluate. */
-  private checkBioModel(s: MockSession, physicalOnly: boolean): void {
-    if (s.plan?.radiation_mode !== "carbon" || s.plan.bio_model === "none") return;
-    if (!physicalOnly) {
-      throw precondition(
-        `The biological model ${s.plan.bio_model ?? "LEM"} cannot be evaluated: the structures lack tissue parameters`,
-        "bio_model_unsupported",
-      );
-    }
-    s.plan = { ...s.plan, bio_model: "none" };
-    this.touch(s, "plan");
-  }
-
   private async generateStf(s: MockSession): Promise<void> {
     this.requireReady(s);
     const n = s.plan.gantry_angles.length;
@@ -490,9 +466,10 @@ export class MockBackend extends BaseBackend {
           platform: "browser",
           backend: "mock",
           phantoms: [...MOCK_PHANTOMS],
-          machines: MACHINES,
-          solvers: ["scipy", "ipopt"],
-          engines: ENGINES,
+          machines: REGISTRY.machines,
+          solvers: REGISTRY.solvers,
+          engines: REGISTRY.engines,
+          quantities: REGISTRY.quantities,
           methods: [...new Set([...METHODS, ...FEATURE_HANDLERS.flatMap((h) => Object.keys(h))])],
         };
         return info;
@@ -540,38 +517,6 @@ export class MockBackend extends BaseBackend {
       }
       case "plan.get":
         return this.session(request).plan;
-      case "plan.set": {
-        const s = this.session(request);
-        if (!s.phantom) throw new MethodError("LookupError", "No CT / structures loaded");
-        const changes = params as Partial<PlanSummary>;
-        const unknown = Object.keys(changes).filter((k) => !PLAN_FIELDS.has(k));
-        if (unknown.length) throw new MethodError("ValueError", `Unknown plan field(s): ${unknown.join(", ")}`);
-        const base = s.plan ?? defaultPlan();
-        const next = { ...base, ...changes };
-        if (changes.radiation_mode && changes.radiation_mode !== base.radiation_mode) {
-          next.machine = changes.machine ?? MACHINES[changes.radiation_mode]?.[0] ?? "Generic";
-          next.engine = changes.engine ?? ENGINES[changes.radiation_mode]?.[0] ?? null;
-          next.bio_model = changes.bio_model ?? (changes.radiation_mode === "carbon" ? "LEM" : "none");
-        }
-        if (changes.gantry_angles && !changes.couch_angles) next.couch_angles = changes.gantry_angles.map(() => 0);
-        if (next.couch_angles.length === 1 && next.gantry_angles.length > 1) {
-          next.couch_angles = next.gantry_angles.map(() => next.couch_angles[0]);
-        }
-        if (!(next.radiation_mode in MACHINES)) {
-          throw new MethodError("ValueError", `Unknown radiation mode ${next.radiation_mode}`);
-        }
-        if (next.couch_angles.length !== next.gantry_angles.length) {
-          throw new MethodError(
-            "ValueError",
-            `${next.gantry_angles.length} gantry angles but ${next.couch_angles.length} couch angles`,
-          );
-        }
-        if (!(next.bixel_width > 0)) throw new MethodError("ValueError", "Bixel width must be positive");
-        s.plan = next;
-        this.touch(s, "plan");
-        this.log(s, "info", `Plan updated: ${next.radiation_mode}, ${next.gantry_angles.length} beam(s)`);
-        return this.publish(s);
-      }
       case "workflow.generate_stf": {
         const s = this.session(request);
         return this.run(s, "Generating STF", async () => {
@@ -582,7 +527,6 @@ export class MockBackend extends BaseBackend {
       case "workflow.calc_dose_influence": {
         const s = this.session(request);
         return this.run(s, "Dose influence calculation", async () => {
-          this.checkBioModel(s, Boolean(params.physical_only));
           await this.calcDij(s);
           return this.state(s);
         });
@@ -600,7 +544,6 @@ export class MockBackend extends BaseBackend {
         return this.run(s, "Dose recalculation", async () => {
           this.requireReady(s);
           if (!s.dose) throw precondition("No optimized weights to recalculate", "no_weights");
-          this.checkBioModel(s, Boolean(params.physical_only));
           this.progress(s, "Dose recalculation", null);
           await this.sleep(300);
           this.computeDose(s);
@@ -618,7 +561,6 @@ export class MockBackend extends BaseBackend {
             s.plan = defaultPlan();
             this.touch(s, "plan");
           }
-          this.checkBioModel(s, Boolean(params.physical_only));
           // Only the steps that are missing or stale.
           if (this.stage(s, "dij") !== "done") await this.calcDij(s);
           if (this.stage(s, "optimization") !== "done") await this.optimize(s, maxIter);
@@ -647,13 +589,15 @@ export class MockBackend extends BaseBackend {
       case "view.structure_masks": {
         const s = this.session(request);
         if (!s.phantom) throw new MethodError("ValueError", "No structures loaded");
-        const names = params.names as string[] | undefined;
-        const grid = s.phantom.grid;
+        const phantom = s.phantom;
+        const wanted = Array.isArray(params.names) ? new Set(params.names.map((n) => resolveStructure(phantom.structures, n))) : null;
+        const grid = phantom.grid;
         return {
           grid,
-          masks: s.phantom.structures
-            .filter((st) => !names || names.includes(st.name))
-            .map((st) => ({ name: st.name, color: st.color, data: ndarray(st.mask, grid.shape) })),
+          masks: phantom.structures
+            .map((st, index) => ({ st, index }))
+            .filter(({ index }) => !wanted || wanted.has(index))
+            .map(({ st, index }) => ({ index, name: st.name, color: st.color, data: ndarray(st.mask, grid.shape) })),
         };
       }
       case "analysis.dvh": {
@@ -664,9 +608,9 @@ export class MockBackend extends BaseBackend {
         return {
           quantity: "physical_dose",
           unit: "Gy",
-          curves: s.phantom.structures.map((st) => {
+          curves: s.phantom.structures.map((st, index) => {
             const dvh = cumulativeDvh(dose, st.mask, max);
-            return { name: st.name, color: st.color, dose: ndarray(dvh.dose, [dvh.dose.length]), volume: ndarray(dvh.volume, [dvh.volume.length]) };
+            return { index, name: st.name, color: st.color, dose: ndarray(dvh.dose, [dvh.dose.length]), volume: ndarray(dvh.volume, [dvh.volume.length]) };
           }),
         };
       }

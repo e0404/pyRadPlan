@@ -65,7 +65,8 @@ function CommitSpin(props: {
 }
 
 function ParameterEditors(props: {
-  structure: string;
+  structure: number;
+  structureName: string;
   objective: ObjectiveData;
   type: ObjectiveType | undefined;
   catalog: ObjectivesCatalog;
@@ -80,7 +81,7 @@ function ParameterEditors(props: {
     <div className="obj-params">
       {params.map((f) => {
         const value = objective.parameters[f.name];
-        const testId = `obj-${props.structure}-${objective.index}-${f.name}`;
+        const testId = `obj-${props.structureName}-${objective.index}-${f.name}`;
         let editor;
         if (f.type === "image_ref") {
           const { options, current } = referenceChoices(props.catalog, value);
@@ -152,7 +153,7 @@ export function ObjectivesPanel() {
   const info = useApp((s) => s.info);
   const catalog = usePlanStore((s) => s.catalog);
   const status = usePlanStore((s) => s.objectivesStatus);
-  const [voi, setVoi] = useState<string | null>(null);
+  const [voi, setVoi] = useState<number | null>(null);
 
   useEffect(() => {
     if (!hasCst) return;
@@ -165,7 +166,7 @@ export function ObjectivesPanel() {
     [details, hasCst],
   );
   useEffect(() => {
-    if (structures.length && (!voi || !structures.some((s) => s.name === voi))) setVoi(structures[0].name);
+    if (structures.length && (voi === null || !structures.some((s) => s.index === voi))) setVoi(structures[0].index);
     if (!structures.length) setVoi(null);
   }, [structures, voi]);
 
@@ -177,7 +178,7 @@ export function ObjectivesPanel() {
 
   const ai = feature(info, "ai");
   const aiTitle = !ai.available ? (ai.reason ?? "") : !hasCst ? "Load a structure set first" : !hasPln ? "Configure a plan first" : "Suggest objectives for all VOIs using an LLM";
-  const voiOptions: ComboOption[] = structures.map((s) => ({ key: s.name, label: `${s.name} (${s.type})` }));
+  const voiOptions: ComboOption[] = structures.map((s) => ({ key: String(s.index), label: `${s.name} (${s.type})` }));
   const objectiveOptions: ComboOption[] = (catalog?.objectives ?? []).map((o) => ({ key: o.name, label: o.name }));
   const quantityOptions: ComboOption[] = (catalog?.quantities ?? []).map((q) => ({ key: String(q.value), label: q.label, identifier: q.identifier ?? String(q.value) }));
 
@@ -185,8 +186,8 @@ export function ObjectivesPanel() {
     <div className="objectives-panel" data-testid="objectives">
       <div className="row obj-controls">
         <span>VOI:</span>
-        <Combo value={voi} options={voiOptions} onChange={setVoi} disabled={!structures.length || disabled} testId="obj-voi" />
-        <button className="btn" disabled={!voi || !catalog || disabled} onClick={() => voi && void objectiveActions.add(voi)} data-testid="obj-add">
+        <Combo value={voi === null ? null : String(voi)} options={voiOptions} onChange={(v) => setVoi(Number(v))} disabled={!structures.length || disabled} testId="obj-voi" />
+        <button className="btn" disabled={voi === null || !catalog || disabled} onClick={() => voi !== null && void objectiveActions.add(voi)} data-testid="obj-add">
           + Add objective
         </button>
         <span className="tip-wrap" title={aiTitle}>
@@ -230,7 +231,7 @@ export function ObjectivesPanel() {
                   ? quantityOptions
                   : [...quantityOptions, { key: objective.quantity, label: objective.quantity }];
                 return (
-                  <tr key={key} data-testid={`obj-row-${key}`}>
+                  <tr key={`${structure.index}-${objective.index}`} data-testid={`obj-row-${key}`}>
                     <td className={first ? "obj-voi bold" : "obj-voi"}>{first ? `${structure.name} (${structure.type})` : ""}</td>
                     <td>
                       <Combo
@@ -240,7 +241,7 @@ export function ObjectivesPanel() {
                         disabled={disabled}
                         title={objective.name}
                         testId={`obj-${key}-type`}
-                        onChange={(name) => void objectiveActions.changeType(structure.name, objective.index, name)}
+                        onChange={(name) => void objectiveActions.changeType(structure.index, objective.index, name)}
                       />
                     </td>
                     <td>
@@ -249,7 +250,7 @@ export function ObjectivesPanel() {
                         value={objective.priority}
                         disabled={disabled}
                         testId={`obj-${key}-penalty`}
-                        onCommit={(v) => void objectiveActions.update(structure.name, objective.index, { priority: v }, "penalty")}
+                        onCommit={(v) => void objectiveActions.update(structure.index, objective.index, { priority: v }, "penalty")}
                         onInvalid={(m) => setStatus(`Ignored invalid penalty: ${m}`)}
                       />
                     </td>
@@ -261,7 +262,7 @@ export function ObjectivesPanel() {
                         disabled={disabled}
                         title={q.find((o) => o.key === objective.quantity)?.label}
                         testId={`obj-${key}-quantity`}
-                        onChange={(quantity) => void objectiveActions.update(structure.name, objective.index, { quantity }, `quantity ${JSON.stringify(quantity)}`)}
+                        onChange={(quantity) => void objectiveActions.update(structure.index, objective.index, { quantity }, `quantity ${JSON.stringify(quantity)}`)}
                       />
                     </td>
                     <td>
@@ -273,13 +274,14 @@ export function ObjectivesPanel() {
                         title={ROBUSTNESS_TOOLTIP}
                         testId={`obj-${key}-robustness`}
                         onChange={(robustness) =>
-                          void objectiveActions.update(structure.name, objective.index, { robustness }, `robustness ${JSON.stringify(robustness)}`)
+                          void objectiveActions.update(structure.index, objective.index, { robustness }, `robustness ${JSON.stringify(robustness)}`)
                         }
                       />
                     </td>
                     <td>
                       <ParameterEditors
-                        structure={structure.name}
+                        structure={structure.index}
+                        structureName={structure.name}
                         objective={objective}
                         type={type}
                         catalog={catalog}
@@ -289,7 +291,7 @@ export function ObjectivesPanel() {
                       />
                     </td>
                     <td>
-                      <button className="btn" disabled={disabled} onClick={() => void objectiveActions.remove(structure.name, objective.index)} data-testid={`obj-${key}-remove`}>
+                      <button className="btn" disabled={disabled} onClick={() => void objectiveActions.remove(structure.index, objective.index)} data-testid={`obj-${key}-remove`}>
                         Remove
                       </button>
                     </td>

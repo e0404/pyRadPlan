@@ -115,7 +115,11 @@ export function decode<T = unknown>(value: unknown, buffers: readonly (ArrayBuff
     }
     if (isTypedArray(v)) return v;
     const out: Record<string, unknown> = {};
-    for (const [k, item] of Object.entries(v)) out[k] = walk(item);
+    for (const [k, item] of Object.entries(v)) {
+      // A plain assignment of "__proto__" (an own key of parsed JSON) would replace the prototype.
+      if (k === "__proto__") Object.defineProperty(out, k, { value: walk(item), enumerable: true, writable: true, configurable: true });
+      else out[k] = walk(item);
+    }
     return out;
   };
   return walk(value) as T;

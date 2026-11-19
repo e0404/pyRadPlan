@@ -13,7 +13,11 @@ cd web
 npm install
 ```
 
-On this machine Node is portable: `export PATH="/d/Python/pyRadPlan-web-tools/node:$PATH"`.
+Node 24 must be on `PATH`. The scripts that type-check, test, build or serve the mock backend first
+run `npm run fixtures`, which records the mock's catalogues from `pyRadPlan.app` (see below): that
+needs a Python with pyRadPlan's dependencies (`pip install -e .` in the repository root). `python`
+(`python3` on Linux and macOS) is used unless the `PYTHON` environment variable names another
+interpreter.
 
 ## Run
 
@@ -22,16 +26,22 @@ npm run dev            # http://localhost:5173/  (COOP/COEP headers set)
 ```
 
 - `http://localhost:5173/?backend=mock` — mock backend (synthetic phantoms, fake dose, simulated
-  progress), no Python needed. `&speed=0` makes computations instant, `&speed=3` slower.
+  progress), no Python at run time; a red banner says so. `&speed=0` makes computations instant, `&speed=3`
+  slower. Only the dev server (and a build made with `VITE_ENABLE_MOCK=1`) has it: a production build
+  contains no mock code and ignores `?backend=mock`. Its catalogues (engines, forms, tissue schema,
+  objectives, ...) are recordings of `pyRadPlan.app` in `src/api/mock/fixtures/`. They are generated, not committed
+  (git-ignored): `npm run fixtures` writes them from the pyRadPlan source of this checkout, and
+  npm pre-hooks run it before `dev`, `build`, `typecheck`, `test` and the `e2e*` scripts.
 - `http://localhost:5173/` or `?backend=pyodide` — the real backend: Pyodide + pyRadPlan in a worker.
   Needs the wheels and `manifest.json` in `public/pyrp/` (built by `web/pyodide/build.py`) and network
   access to the Pyodide CDN for numpy/scipy. The first start downloads ~40 MB.
 
 Other URL parameters: `pyodide=cdn|<url>` (Pyodide runtime location), `packages=<url>` (package wheel
 mirror), `pyrp=<url>` (pyRadPlan wheel directory), `sliceMode` (force the renderer's per-slice texture
-fallback). Outside the dev server, `pyodide`, `packages` and `pyrp` are honoured only for URLs on the
-page's own origin (and `pyodide=cdn`), so a crafted link cannot load code from elsewhere.
-`VITE_BACKEND=mock` changes the default backend at build time.
+fallback). Outside the dev server, `pyodide`, `packages` and `pyrp` are honoured only for URLs below the
+app's own directory (`BASE_URL`; and `pyodide=cdn`), so a crafted link cannot load code from elsewhere,
+not even from another site on the same origin. `VITE_BACKEND=mock` changes the default backend of a
+build that includes the mock (see above).
 
 ```sh
 npm run build          # type check + production build into dist/ (includes dist/pyodide-runtime/)
@@ -148,6 +158,8 @@ web/
   docs/renderer.md         renderer options, decision, verified limits
   docs/frontend.md         architecture, worker, Pyodide loading, protocol interpretations
   scripts/gen_colormaps.py regenerates src/renderer/colormapData.ts from matplotlib
+  scripts/gen_mock_fixtures.py  records src/api/mock/fixtures/*.json from pyRadPlan.app
+  scripts/mock_fixtures.mjs     runs it (`npm run fixtures`, before the scripts that need the files)
   scripts/thirdPartyNotices.ts  Vite plugin writing THIRD_PARTY_NOTICES.txt and LICENSE.txt
   scripts/assemble_pages.mjs    builds and assembles the GitHub Pages channels
   licenses/                fallback license texts (Pyodide, CPython, Emscripten, coi-serviceworker)

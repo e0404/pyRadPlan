@@ -184,21 +184,17 @@ try {
   await tid("edit-voi-dialog").waitFor({ state: "detached" });
   const core = await app(() => window.__pyrpApp.useApp.getState().state.structures.find((s) => s.name === "Core"));
   expect(core.type === "HELPER" && core.overlap_priority === 5, "Edit VOI wrote type and overlap priority");
-  // Tissue errors ask "Apply anyway".
+  // The mock does not simulate the base data checks behind "Apply anyway" (they are the app layer's).
   await tid("voi-name-OuterTarget").click();
   await tid("edit-voi-dialog").waitFor();
-  const alpha = page.getByTestId("edit-voi-alpha");
-  if (await alpha.count()) {
-    await alpha.fill("-1");
-    await tid("edit-voi-ok").click();
-    await tid("edit-voi-issues").waitFor();
-    await shot("edit-voi-tissue-errors");
-    await tid("edit-voi-apply-anyway").click();
-    await tid("edit-voi-dialog").waitFor({ state: "detached" });
-    expect(true, "tissue errors offered 'Apply anyway'");
-  } else {
-    await page.keyboard.press("Escape");
-  }
+  await tid("tissue-OuterTarget-alpha_x").fill("0.12");
+  await tid("tissue-OuterTarget-alpha_x").press("Tab");
+  // The row reports the edit after its (debounced) tissue.evaluate.
+  await page.waitForTimeout(800);
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-dialog").waitFor({ state: "detached" });
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().structureDetails[1]?.tissue.values.alpha_x === 0.12);
+  expect(true, "tissue α_x written through cst.update_structure");
 
   // Analysis window.
   await tid("btn-dvh").click();
@@ -243,7 +239,7 @@ try {
   await tid("plan-apply").click();
   await page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""));
   const robustKey = await page.evaluate(() => document.querySelector('[data-testid$="-robustness"]')?.getAttribute("data-testid"));
-  await pickItem(robustKey, "Objective worst case");
+  await pickItem(robustKey, "Objective-wise worst case");
   await page.waitForTimeout(300);
   await tid("btn-dij").click();
   await idle();

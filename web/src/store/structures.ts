@@ -15,16 +15,16 @@ export interface UpdateOutcome {
  * Write structure changes. Tissue errors (`PreconditionError` `tissue_errors`) are returned
  * so the caller can ask "Apply anyway / Keep editing" and retry with `applyAnyway`.
  */
-export async function updateStructure(name: string, changes: StructureChanges, applyAnyway = false): Promise<UpdateOutcome> {
+export async function updateStructure(index: number, changes: StructureChanges, applyAnyway = false): Promise<UpdateOutcome> {
   const { backend, session } = useApp.getState();
   if (!backend || !session) return { ok: false, error: "Backend not connected" };
   try {
     const { state, structure } = await backend.request(
       "cst.update_structure",
-      { name, changes, ...(applyAnyway ? { apply_anyway: true } : {}) },
+      { name: index, changes, ...(applyAnyway ? { apply_anyway: true } : {}) },
       session,
     );
-    useApp.setState((s) => ({ state, structureDetails: { ...s.structureDetails, [structure.name]: structure } }));
+    useApp.setState((s) => ({ state, structureDetails: { ...s.structureDetails, [structure.index]: structure } }));
     await syncViews();
     return { ok: true };
   } catch (err) {
@@ -33,7 +33,7 @@ export async function updateStructure(name: string, changes: StructureChanges, a
       return { ok: false, issues: Array.isArray(details) ? (details as Issue[]) : [], error: err.message };
     }
     const message = err instanceof Error ? err.message : String(err);
-    log("error", `Structure ${name}: ${message}`);
+    log("error", `Structure ${useApp.getState().state?.structures.find((s) => s.index === index)?.name ?? index}: ${message}`);
     return { ok: false, error: message };
   }
 }

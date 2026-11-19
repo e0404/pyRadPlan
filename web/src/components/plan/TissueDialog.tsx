@@ -39,6 +39,8 @@ const REFERENCE_COLUMNS = [REFERENCE_RADIATION, ...REFERENCE_FIELDS];
 const EVALUATE_DELAY_MS = 150;
 
 export interface TissueRow {
+  /** Position of the structure, which `tissue.apply` addresses it by. */
+  index: number;
   structure: string;
   type: string;
   tissue: TissueDraft;
@@ -305,6 +307,7 @@ export type TissueContext = PlanDraftContext;
 
 function rowsFrom(structures: StructureDetail[]): TissueRow[] {
   return structures.map((s) => ({
+    index: s.index,
     structure: s.name,
     type: s.type,
     tissue: JSON.parse(JSON.stringify(s.tissue)) as TissueDraft,
@@ -425,6 +428,7 @@ export function TissueDialog(props: { context?: TissueContext; onClose: () => vo
   const accept = async () => {
     if (!schema) return;
     const changed = payload(rows).filter((r) => JSON.stringify(r.tissue) !== initial.current[r.structure]);
+    const applyRows = changed.map((r) => ({ structure: rows.find((row) => row.structure === r.structure)!.index, tissue: r.tissue }));
     if (!changed.length) {
       props.onClose();
       return;
@@ -434,7 +438,7 @@ export function TissueDialog(props: { context?: TissueContext; onClose: () => vo
       let applyAnyway = false;
       for (;;) {
         try {
-          const { state } = await request("tissue.apply", { rows: changed, ...(applyAnyway ? { apply_anyway: true } : {}) });
+          const { state } = await request("tissue.apply", { rows: applyRows, ...(applyAnyway ? { apply_anyway: true } : {}) });
           if (state) useApp.setState({ state });
           break;
         } catch (err) {
@@ -463,7 +467,7 @@ export function TissueDialog(props: { context?: TissueContext; onClose: () => vo
       }
       try {
         const { structures } = await request("cst.get", {});
-        useApp.setState({ structureDetails: Object.fromEntries(structures.map((d) => [d.name, d])) });
+        useApp.setState({ structureDetails: Object.fromEntries(structures.map((d) => [d.index, d])) });
       } catch {
         /* the revision-driven sync refetches them */
       }
@@ -633,7 +637,7 @@ export interface TissueSingleRowProps {
  */
 export function TissueSingleRow(props: TissueSingleRowProps) {
   const [schema, setSchema] = useState<TissueSchema | null>(props.schema ?? null);
-  const [row, setRow] = useState<TissueRow>({ structure: props.structure, type: "", tissue: props.tissue, issues: [], comparison: null, sources: {} });
+  const [row, setRow] = useState<TissueRow>({ index: -1, structure: props.structure, type: "", tissue: props.tissue, issues: [], comparison: null, sources: {} });
   const editing = useRef<{ structure: string; field: string } | undefined>(undefined);
   const onChange = useRef(props.onChange);
   onChange.current = props.onChange;

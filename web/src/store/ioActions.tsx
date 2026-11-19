@@ -6,7 +6,7 @@
 import { BackendError, type ExportFormat, type ExportObject, type SessionState } from "../api";
 import { ndarray } from "../api/codec";
 import type { BaseDataKind, BaseDataAddResult, ExportSaveParams, LoadKind } from "../api/protocol/io";
-import { exportFormats, feature, isImageFile, loadAccept, structureFormatOf } from "../components/io/capabilities";
+import { exportFormats, feature, isImageFile, loadAccept, structureFormatOf, unavailableImport } from "../components/io/capabilities";
 import { describeDownload, downloadFile } from "../components/io/download";
 import { askImportImage } from "../components/io/ImportImageDialog";
 import { askYesNo, messageBox, promptText, showCritical, showInfo, showWarning } from "../components/io/messageBox";
@@ -79,6 +79,11 @@ async function fileBytes(file: File) {
 export async function loadFile(file: File): Promise<boolean> {
   const { info, state } = useApp.getState();
   let kind: LoadKind | undefined;
+  const blocked = unavailableImport(info, file.name);
+  if (blocked) {
+    await showWarning("Load", blocked.reason ?? `${blocked.label} files cannot be loaded by this backend.`);
+    return false;
+  }
   if (isImageFile(file.name)) {
     const io = feature(info, "image_file_io");
     if (!io.available) {

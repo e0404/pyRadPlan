@@ -12,7 +12,7 @@
 import { isoCenterPoint } from "../api/protocol";
 import type { Method, ParamsOf, ResultOf, SessionState, StructureMasks, Volume, Vec3 } from "../api/protocol";
 import type { BeamDraft, BitsMasks, CropMasks } from "../api/protocol/viewer";
-import { DEFAULT_VIEW, sliceLayout, worldToIndex, type Plane } from "../renderer/geometry";
+import { DEFAULT_VIEW, sliceLayout, slicesThrough, type Plane } from "../renderer/geometry";
 import { maskCenterOfMass, type MaskVolume } from "../renderer/contours";
 import { defaultQuantityKey, fullKeys, groupResultKeys } from "../results/resultGroups";
 import { useApp } from "./appStore";
@@ -53,6 +53,7 @@ export function decodeMasks(result: StructureMasks | BitsMasks | CropMasks): Mas
     return {
       grid: r.grid,
       masks: r.masks.map((m) => ({
+        index: m.index,
         name: m.name,
         color: m.color,
         storage: { kind: "bits", plane: r.planes[m.plane].data, bit: m.bit, bbox: m.bbox },
@@ -66,13 +67,13 @@ export function decodeMasks(result: StructureMasks | BitsMasks | CropMasks): Mas
       masks: r.masks.map(
         (m): MaskVolume =>
           m.bbox && m.data
-            ? { name: m.name, color: m.color, storage: { kind: "crop", data: m.data.data, bbox: m.bbox } }
-            : { name: m.name, color: m.color, storage: { kind: "bits", plane: new Uint8Array(0), bit: 0, bbox: null } },
+            ? { index: m.index, name: m.name, color: m.color, storage: { kind: "crop", data: m.data.data, bbox: m.bbox } }
+            : { index: m.index, name: m.name, color: m.color, storage: { kind: "bits", plane: new Uint8Array(0), bit: 0, bbox: null } },
       ),
     };
   }
   const r = result as StructureMasks;
-  return { grid: r.grid, masks: r.masks.map((m) => ({ name: m.name, color: m.color, data: m.data.data })) };
+  return { grid: r.grid, masks: r.masks.map((m) => ({ index: m.index, name: m.name, color: m.color, data: m.data.data })) };
 }
 
 // ---------------------------------------------------------------------------
@@ -122,11 +123,9 @@ export function scheduleViewSync(): void {
 }
 
 function homeSlices(ct: Volume, center: readonly number[] | null): Record<Plane, number> {
+  if (center) return slicesThrough(ct.grid, center);
   const out = {} as Record<Plane, number>;
-  for (const plane of ["axial", "sagittal", "coronal"] as Plane[]) {
-    const layout = sliceLayout(ct.grid, plane);
-    out[plane] = center ? worldToIndex(ct.grid, layout.axes.slice, center[layout.axes.slice]) : Math.floor(layout.count / 2);
-  }
+  for (const plane of ["axial", "sagittal", "coronal"] as Plane[]) out[plane] = Math.floor(sliceLayout(ct.grid, plane).count / 2);
   return out;
 }
 
@@ -137,7 +136,7 @@ export function displayIsocenter(): Vec3 | null {
   if (fromPlan) return fromPlan;
   if (beams?.iso_centers.length) return beams.iso_centers[0];
   const target = state?.structures.find((s) => s.type.toUpperCase() === "TARGET");
-  const mask = maskSet?.masks.find((m) => m.name === target?.name);
+  const mask = maskSet?.masks.find((m) => m.index === target?.index);
   return mask && maskSet ? maskCenterOfMass(mask, maskSet.grid) : null;
 }
 
@@ -182,11 +181,11 @@ async function doSync(force?: SyncForce): Promise<void> {
   }
 
   // Structure list -> default visibility (Qt default checked set) ---------
-  const names = state.structures.map((s) => s.name).join("\u0000");
+  const names = state.structures.map((s) => `${s.index}:${s.name}`).join("\u0000");
   if (names !== applied.structureNames || newCt) {
     const checked = defaultCheckedVois(state.structures);
-    const visible: Record<string, boolean> = {};
-    for (const st of state.structures) visible[st.name] = checked.has(st.name);
+    const visible: Record<number, boolean> = {};
+    for (const st of state.structures) visible[st.index] = checked.has(st.index);
     set((s) => ({ viewer: { ...s.viewer, visible } }));
     next.structureNames = names;
   }
@@ -195,7 +194,7 @@ async function doSync(force?: SyncForce): Promise<void> {
   if (v1 && state.has.cst && hasMethod("cst.get") && (rev.workspace.cst !== applied.cst || newCt)) {
     try {
       const { structures } = await req("cst.get", {});
-      set({ structureDetails: Object.fromEntries(structures.map((d) => [d.name, d])) });
+      set({ structureDetails: Object.fromEntries(structures.map((d) => [d.index, d])) });
       next.cst = rev.workspace.cst;
     } catch (err) {
       console.warn("cst.get failed", err);

@@ -61,9 +61,10 @@ function FallbackTissueEditor(props: TissueRowEditorProps) {
 }
 
 /** Qt `VOIMetadataDialog` ("Edit VOI: <name>"): type, tissue, overlap priority; OK recreates the VOI. */
-export function EditVoiDialog(props: { name: string; onClose: () => void }) {
-  const detail = useApp((s) => s.structureDetails[props.name]);
-  const info = useApp((s) => s.state?.structures.find((st) => st.name === props.name));
+export function EditVoiDialog(props: { index: number; onClose: () => void }) {
+  const detail = useApp((s) => s.structureDetails[props.index]);
+  const info = useApp((s) => s.state?.structures.find((st) => st.index === props.index));
+  const name = detail?.name ?? info?.name ?? "";
   const initialTissue = useMemo<TissueDraft>(() => detail?.tissue ?? { model: "Generic", values: {} }, [detail]);
   const [type, setType] = useState(detail?.type ?? info?.type ?? "OAR");
   const [priority, setPriority] = useState(detail?.overlap_priority ?? info?.overlap_priority ?? 0);
@@ -85,11 +86,11 @@ export function EditVoiDialog(props: { name: string; onClose: () => void }) {
     if (!sameTissue(tissue, initialTissue)) changes.tissue = tissue;
     if (!Object.keys(changes).length) return props.onClose();
     setSaving(true);
-    const outcome = await updateStructure(props.name, changes, applyAnyway);
+    const outcome = await updateStructure(props.index, changes, applyAnyway);
     setSaving(false);
     if (outcome.ok) return props.onClose();
     if (outcome.issues) {
-      setIssues(outcome.issues.length ? outcome.issues : [{ structure: props.name, kind: "error", severity: "error", message: outcome.error ?? "" }]);
+      setIssues(outcome.issues.length ? outcome.issues : [{ structure: name, kind: "error", severity: "error", message: outcome.error ?? "" }]);
       return;
     }
     setError(outcome.error ?? "Invalid value");
@@ -97,7 +98,7 @@ export function EditVoiDialog(props: { name: string; onClose: () => void }) {
 
   return (
     <Dialog
-      title={`Edit VOI: ${props.name}`}
+      title={`Edit VOI: ${name}`}
       onClose={props.onClose}
       testId="edit-voi-dialog"
       buttons={
@@ -113,7 +114,7 @@ export function EditVoiDialog(props: { name: string; onClose: () => void }) {
     >
       <div className="form-grid" style={{ gridTemplateColumns: "auto minmax(0, 1fr)" }}>
         <label>Name:</label>
-        <span data-testid="edit-voi-name">{props.name}</span>
+        <span data-testid="edit-voi-name">{name}</span>
         <label>Type:</label>
         <select value={type} onChange={(e) => setType(e.target.value)} data-testid="edit-voi-type">
           {types.map((t) => (
@@ -122,10 +123,10 @@ export function EditVoiDialog(props: { name: string; onClose: () => void }) {
         </select>
         {SingleRow ? (
           <div style={{ gridColumn: "1 / -1" }} data-testid="edit-voi-tissue">
-            <SingleRow structure={props.name} tissue={tissue} onChange={(t) => setTissue(t)} />
+            <SingleRow structure={name} tissue={tissue} onChange={(t) => setTissue(t)} />
           </div>
         ) : (
-          <FallbackTissueEditor structure={props.name} value={tissue} onChange={setTissue} />
+          <FallbackTissueEditor structure={name} value={tissue} onChange={setTissue} />
         )}
         <label>Overlap priority:</label>
         <input

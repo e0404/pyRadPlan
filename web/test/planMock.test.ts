@@ -39,25 +39,29 @@ describe("mock backend, package A methods", () => {
     expect(v0).not.toHaveProperty("dose_convention");
 
     const photons = await req("plan.options", {});
-    expect(photons.engines.find((e) => e.value === "TOPAS")).toMatchObject({ enabled: false });
+    expect(photons.engines.map((e) => e.value)).toEqual(["SVDPB"]);
     expect(photons.solvers.find((s) => s.value === "ipopt")).toMatchObject({ enabled: false });
     expect(photons.fields.find((f) => f.name === "num_of_fractions")).toMatchObject({ min: 1, max: 1000, advanced: true });
     const carbon = await req("plan.options", { radiation_mode: "carbon", machine: "Generic", engine: "HongPB" });
-    expect(carbon.bio_models.find((b) => b.value === "mMKM:NIRS")).toMatchObject({ enabled: false });
-    expect(carbon.default_bio_model).toBe("LEM:HIT");
+    expect(carbon.engines.find((e) => e.value === "TOPAS")).toMatchObject({ enabled: false });
+    expect(carbon.bio_models.find((b) => b.model === "LSM")).toMatchObject({ enabled: false });
+    expect(JSON.parse(carbon.default_bio_model).model).toBe("alpha_beta_kernels");
   });
 
   it("chooses the bio-model entry itself (bio_selection), the frontend only applies it", async () => {
     const { req } = await loaded();
     const restored = await req("plan.options", {});
-    expect(restored.bio_selection).toMatchObject({ option: "none", replaced: false, unsupported: null, note: null });
-    const followed = await req("plan.options", { radiation_mode: "carbon", current_bio: { radiation_mode: "photons", model: "none", option: "none" } });
-    expect(followed.bio_selection).toMatchObject({ option: "LEM:HIT", model: "LEM", replaced: true, note: null });
-    const kept = await req("plan.options", { radiation_mode: "carbon", machine: "HIT_APM", current_bio: { radiation_mode: "carbon", model: "mMKM", option: "mMKM:NIRS", label: "mMKM" } });
-    expect(kept.bio_selection).toMatchObject({ option: "mMKM:NIRS", replaced: false });
-    const replaced = await req("plan.options", { radiation_mode: "carbon", machine: "Generic", current_bio: { radiation_mode: "carbon", model: "mMKM", option: "mMKM:NIRS", label: "mMKM" } });
-    expect(replaced.bio_selection?.option).toBe("LEM:HIT");
-    expect(replaced.bio_selection?.note?.text).toBe("Biological model 'mMKM' is not available on machine 'Generic'; selected 'LEM · LEM IV (HIT)'.");
+    const none = String(restored.bio_models.find((b) => b.model === "none")!.value);
+    expect(restored.bio_selection).toMatchObject({ option: none, replaced: false, unsupported: null, note: null });
+    const kernels = String((await req("plan.options", { radiation_mode: "carbon" })).bio_models.find((b) => b.model === "alpha_beta_kernels")!.value);
+    const followed = await req("plan.options", { radiation_mode: "carbon", current_bio: { radiation_mode: "photons", model: "none", option: none } });
+    expect(followed.bio_selection).toMatchObject({ option: kernels, model: "alpha_beta_kernels", replaced: true, note: null });
+    const kept = await req("plan.options", { radiation_mode: "carbon", current_bio: { radiation_mode: "carbon", model: "alpha_beta_kernels", option: kernels } });
+    expect(kept.bio_selection).toMatchObject({ option: kernels, replaced: false });
+    const lsm = String((await req("plan.options", { radiation_mode: "carbon" })).bio_models.find((b) => b.model === "LSM")!.value);
+    const replaced = await req("plan.options", { radiation_mode: "carbon", current_bio: { radiation_mode: "carbon", model: "LSM", option: lsm, label: "LSM" } });
+    expect(replaced.bio_selection?.option).toBe(kernels);
+    expect(replaced.bio_selection?.note?.text).toMatch(/^Biological model 'LSM' is not available with the dose engine; selected '.+'\.$/);
   });
 
   it("keeps scenario model and problem settings on a mode change and problem entries the form does not show", async () => {
@@ -78,7 +82,10 @@ describe("mock backend, package A methods", () => {
     const { req } = await loaded();
     const engine = await req("plan.form", { kind: "engine", name: "SVDPB" });
     expect(engine.title).toBe("Configure SVD Pencil Beam");
-    expect(engine.fields.find((f) => f.name === "dij_sampling")?.fields?.[0].name).toBe("dij_sampling.rel_dose_threshold");
+    expect(engine.fields.find((f) => f.name === "kernel_cutoff")).toMatchObject({ type: "float", exclusive_min: 0 });
+    expect(engine.explicit).toEqual([]);
+    expect((await req("plan.form", { kind: "scenario", name: "wcScen" })).fields.find((f) => f.name === "setup")?.type).toBe("group");
+    expect(await failure(req("plan.form", { kind: "engine", name: "NoSuchEngine" }))).toMatchObject({ type: "ValueError" });
     await req("plan.set", { problem: { name: "nonlin_fluence", values: { max_iter: 42 } } });
     const solver = await req("plan.form", { kind: "solver", name: "scipy" });
     expect(solver.values.max_iter).toBe(42);
@@ -95,13 +102,13 @@ describe("mock backend, package A methods", () => {
       engine_config: { values: { kernel_cutoff: 300 } },
       dose_convention: "per_fraction",
       scenarios: { model: "wcScen", values: { setup: { sd: [3, 3, 3] } } },
-      solver: { name: "ipax", values: { max_iter: 20 } },
+      solver: { name: "scipy", values: { max_iter: 20 } },
     });
     expect(state.stages.plan).toBe("done");
     const detail = (await req("plan.get", { detail: true })) as PlanDetail;
     expect(detail.engine_config.values).toEqual({ kernel_cutoff: 300 });
     expect(detail.scenario.model).toBe("wcScen");
-    expect(detail.solver).toEqual({ name: "ipax", values: { max_iter: 20 } });
+    expect(detail.solver).toEqual({ name: "scipy", values: { max_iter: 20 } });
     const err = await failure(req("plan.set", { engine_config: { values: { kernel_cutoff: -1 } }, num_of_fractions: 0 }));
     expect(err.type).toBe("ValidationError");
     expect(err.code).toBe("invalid");
@@ -111,43 +118,34 @@ describe("mock backend, package A methods", () => {
         { field: "engine.kernel_cutoff", message: "Input should be greater than 0" },
       ]),
     );
-    const err2 = await failure(req("plan.set", { engine: "TOPAS" }));
-    expect(err2.code).toBe("not_available");
+    expect((await failure(req("plan.set", { engine: "TOPAS" }))).code).toBe("invalid");
+    await req("plan.set", { radiation_mode: "carbon" });
+    expect((await failure(req("plan.set", { engine: "TOPAS" }))).code).toBe("not_available");
   });
 
-  it("checks tissues, evaluates, derives and applies them behind the error gate", async () => {
+  it("serves the recorded tissue schema and evaluates rows without simulating the base data checks", async () => {
     const { req } = await loaded();
     await req("plan.set", { radiation_mode: "carbon" });
-    const check = await req("plan.tissue_check", {});
-    expect(check.marker).toBe("error");
-    const dij = await failure(req("workflow.calc_dose_influence", {}));
-    expect(dij.code).toBe("bio_model_unsupported");
+    expect(await req("plan.tissue_check", {})).toEqual({ marker: "", issues: [] });
 
     const schema = await req("tissue.schema", {});
     expect(schema.models.map((m) => m.label)).toEqual(["Generic", "LEM", "MKM", "mMKM"]);
-    expect(schema.picks[0]).toMatchObject({ kind: "base_data", exact: true });
-
-    const mkm = { model: "MKM" as const, values: { r_domain: 0.3, r_nucleus: 4, alpha_0: 0.15, beta_0: 0.05 } };
-    const live = await req("tissue.evaluate", { rows: [{ structure: "Core", tissue: mkm }], edited: { structure: "Core", field: "alpha_0" } });
-    expect(Number(live.rows[0].tissue.values.alpha_x)).toBeCloseTo(0.15 + 0.05 * (0.0058 / 0.09), 5);
-    expect(live.rows[0].tissue.sources?.alpha_x).toBe("derived");
-    expect(live.can_derive).toBe(true);
-    expect(live.rows[0].issues[0].severity).toBe("error");
-
-    const gate = await failure(req("tissue.apply", { rows: [{ structure: "Core", tissue: mkm }] }));
-    expect(gate.code).toBe("tissue_errors");
-    expect(Array.isArray(gate.details)).toBe(true);
+    expect(schema.picks[0]).toMatchObject({ kind: "base_data" });
 
     const structures = (await req("cst.get", {})).structures;
     const rows = structures.map((s) => ({ structure: s.name, tissue: s.tissue }));
-    const picked = await req("tissue.evaluate", { rows, op: "apply_pick", pick: schema.picks[0].id });
-    expect(picked.rows.every((r) => r.tissue.model === "LEM" && r.issues.length === 0)).toBe(true);
-    expect(picked.notes).toHaveLength(1);
-    await req("tissue.apply", { rows: picked.rows.map((r) => ({ structure: r.structure, tissue: r.tissue })) });
-    expect((await req("plan.tissue_check", {})).marker).toBe("");
-    const after = await req("workflow.calc_dose_influence", {});
-    expect(after.stages.dij).toBe("done");
-    expect(after.plan?.bio_model).toBe("LEM");
+    const live = await req("tissue.evaluate", { rows });
+    expect(live.rows.map((r) => r.structure)).toEqual(structures.map((s) => s.name));
+    expect(live.rows.every((r) => r.issues.length === 0 && r.comparison === null)).toBe(true);
+    expect(live.notes).toEqual([]);
+    expect((await req("tissue.evaluate", { rows, op: "derive" })).notes[0]).toMatch(/not simulated/);
+
+    const edited = { model: "Generic" as const, values: { alpha_x: 0.3, beta_x: 0.05 } };
+    await req("tissue.apply", { rows: [{ structure: 0, tissue: edited }] });
+    const after = (await req("cst.get", { names: [0] })).structures[0];
+    expect(after.tissue.values).toEqual(edited.values);
+    const missing = await failure(req("tissue.apply", { rows: [{ structure: 7, tissue: edited }] }));
+    expect(missing.type).toBe("KeyError");
   });
 
   it("edits objectives (add / update / change type / remove / set all) and validates parameters", async () => {
@@ -157,27 +155,27 @@ describe("mock backend, package A methods", () => {
     expect(catalog.objectives.find((o) => o.name === "Squared Mimicking")?.parameters[0].type).toBe("image_ref");
     expect(catalog.reference_images).toEqual([]);
 
-    let res = await req("objectives.add", { structure: "OuterTarget" });
+    let res = await req("objectives.add", { structure: 1 });
     const added = res.structure.objectives[res.structure.objectives.length - 1];
     expect(added).toMatchObject({ name: "Squared Deviation", quantity: "physical_dose" });
     expect(res.state.structures.find((s) => s.name === "OuterTarget")?.num_objectives).toBe(2);
 
-    res = await req("objectives.update", { structure: "OuterTarget", index: added.index, changes: { priority: 250, parameters: { d_ref: 55 } } });
+    res = await req("objectives.update", { structure: 1, index: added.index, changes: { priority: 250, parameters: { d_ref: 55 } } });
     expect(res.structure.objectives[added.index]).toMatchObject({ priority: 250, parameters: { d_ref: 55 } });
-    const bad = await failure(req("objectives.update", { structure: "OuterTarget", index: added.index, changes: { parameters: { d_ref: -3 } } }));
+    const bad = await failure(req("objectives.update", { structure: 1, index: added.index, changes: { parameters: { d_ref: -3 } } }));
     expect(bad.details).toEqual([{ field: "parameters.d_ref", message: "Input should be greater than or equal to 0" }]);
 
-    await req("objectives.update", { structure: "OuterTarget", index: added.index, changes: { robustness: "composite_worst_case" } });
-    res = await req("objectives.change_type", { structure: "OuterTarget", index: added.index, name: "Min DVH" });
+    await req("objectives.update", { structure: 1, index: added.index, changes: { robustness: "composite_worst_case" } });
+    res = await req("objectives.change_type", { structure: 1, index: added.index, name: "Min DVH" });
     expect(res.structure.objectives[added.index]).toMatchObject({ name: "Min DVH", priority: 250, robustness: "composite_worst_case", parameters: { d: 30, v_min: 95 } });
-    res = await req("objectives.change_type", { structure: "OuterTarget", index: added.index, name: "Variance" });
+    res = await req("objectives.change_type", { structure: 1, index: added.index, name: "Variance" });
     expect(res.structure.objectives[added.index].robustness).toBe("scenario_stack");
 
     await req("objectives.set_quantity_all", { quantity: "rbe_x_dose" });
     const all = (await req("cst.get", {})).structures.flatMap((s) => s.objectives.map((o) => o.quantity));
     expect(new Set(all)).toEqual(new Set(["rbe_x_dose"]));
 
-    res = await req("objectives.remove", { structure: "OuterTarget", index: added.index });
+    res = await req("objectives.remove", { structure: 1, index: added.index });
     expect(res.structure.objectives).toHaveLength(1);
   });
 

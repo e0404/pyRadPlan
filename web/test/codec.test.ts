@@ -55,6 +55,15 @@ describe("codec", () => {
     expect(() => decode({ $array: 0, dtype: "float32", shape: [4] }, [new ArrayBuffer(8)])).toThrow(/too small/);
   });
 
+  it("keeps a __proto__ key as data instead of replacing the prototype", () => {
+    const decoded = decode(JSON.parse('{"__proto__": {"polluted": true}, "a": 1}')) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+    expect(Object.keys(decoded)).toEqual(["__proto__", "a"]);
+    expect((decoded as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(decoded, "__proto__")?.value).toEqual({ polluted: true });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("checks shapes when building arrays", () => {
     expect(() => ndarray(new Float32Array(5), [2, 3])).toThrow(CodecError);
   });

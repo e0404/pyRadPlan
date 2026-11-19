@@ -21,7 +21,7 @@ import {
 import { ndarray } from "../api/codec";
 import { viewerSliceInitial, type ViewerSlice } from "./viewerSlice";
 import { scheduleViewSync, syncViews } from "./revisions";
-import { DEFAULT_VIEW, type Plane, type PlaneConvention, type ViewState } from "../renderer/geometry";
+import { DEFAULT_VIEW, voxelToWorld, type Plane, type PlaneConvention, type ViewState } from "../renderer/geometry";
 
 export interface LogEntry {
   id: number;
@@ -76,7 +76,8 @@ export interface ViewerSettings {
   /** Custom isoline levels; empty for the default 50/80/95 % of the maximum. */
   isolineLevels: number[];
   activeQuantity: string | null;
-  visible: Record<string, boolean>;
+  /** Visibility by structure position. */
+  visible: Record<number, boolean>;
   view: ViewState;
 }
 
@@ -287,7 +288,7 @@ function reloadQuantities(): Promise<void> {
 export function targetCenter(masks: StructureMasks | null, state: SessionState | null): [number, number, number] | null {
   if (!masks || !state) return null;
   const target = state.structures.find((s) => s.type.toUpperCase() === "TARGET");
-  const mask = masks.masks.find((m) => m.name === target?.name);
+  const mask = masks.masks.find((m) => m.index === target?.index);
   if (!mask) return null;
   const [nz, ny, nx] = masks.grid.shape;
   let sx = 0;
@@ -309,8 +310,7 @@ export function targetCenter(masks: StructureMasks | null, state: SessionState |
     }
   }
   if (!n) return null;
-  const g = masks.grid;
-  return [g.origin[0] + (sx / n) * g.spacing[0], g.origin[1] + (sy / n) * g.spacing[1], g.origin[2] + (sz / n) * g.spacing[2]];
+  return voxelToWorld(masks.grid, [sx / n, sy / n, sz / n]);
 }
 
 // ---------------------------------------------------------------------------

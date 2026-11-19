@@ -20,12 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: file dialogs take their formats from one table. NIfTI is the default format for result images, DICOM folders are loaded with Load Folder only, and a file name ending in another format's extension is refused instead of getting a second extension
 - GUI: a structure edited while a computation runs is updated when the computation ends
 - GUI: a dose-only `.npz` file can be loaded as a dose
+- GUI: structures are addressed by position, so a structure set with duplicate structure names can be edited; a structure edit queued during a computation is dropped if another structure set was loaded meanwhile
+- Web version: loading pickle files is disabled in the browser (unpickling runs code from the file); saving pickles still works
+- `pyRadPlan.app`: hosts can refuse pickle loading and process-wide settings changes (`SessionManager(allow_pickle=..., allow_global_settings=...)`)
+- Replacing a structure's mask marks the dose influence matrix as outdated
 
 ### Fixed
 
 - GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
 - GUI: changing the radiation mode of a plan with an explicit scenario set failed
 - GUI: the status line kept showing "Saving ..." after a save
+- Base data files could be removed outside the base data folder through a file name containing `..` or a path separator
+- Wrong masks and DVHs for structures sharing a name in the session layer
+- GUI: unexpected errors while preparing or committing a step were printed instead of shown
 
 ## [0.9.0] - 2026-11-18
 

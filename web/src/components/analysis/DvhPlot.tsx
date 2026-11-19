@@ -29,11 +29,11 @@ export interface DvhPlotProps {
   dashedName: string;
   markers: QiMarker[];
   visibleKinds: ReadonlySet<string>;
-  highlight: { structure: string | null; metric: string | null };
-  onStructureClick: (name: string) => void;
-  onMarkerClick: (structure: string, metric: string) => void;
+  highlight: { structure: number | null; metric: string | null };
+  onStructureClick: (structure: number | null) => void;
+  onMarkerClick: (structure: number, metric: string) => void;
   onPointRequested: (dose: number, volume: number) => void;
-  onParameterMoved: (structure: string, metric: string, parameter: number) => void;
+  onParameterMoved: (structure: number, metric: string, parameter: number) => void;
   canvasRef?: React.RefObject<HTMLCanvasElement | null>;
 }
 
@@ -158,7 +158,7 @@ export function DvhPlot(props: DvhPlotProps) {
     ctx.rect(frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top);
     ctx.clip();
     const hs = props.highlight.structure;
-    const alpha = (name: string) => (hs === null || hs === name ? 1 : FADED_ALPHA);
+    const alpha = (structure: number) => (hs === null || hs === structure ? 1 : FADED_ALPHA);
     const stroke = (c: PlotCurve, width: number, a: number) => {
       const tx = c.secondaryAxis ? X2 : X;
       ctx.strokeStyle = rgba(c.color, a);
@@ -174,8 +174,8 @@ export function DvhPlot(props: DvhPlotProps) {
       ctx.stroke();
     };
     for (const c of props.bands) stroke(c, 1, BAND_ALPHA);
-    const ordered = [...props.curves].sort((a, b) => Number(a.name === hs) - Number(b.name === hs));
-    for (const c of ordered) stroke(c, c.name === hs ? HIGHLIGHT_WIDTH : LINE_WIDTH, alpha(c.name));
+    const ordered = [...props.curves].sort((a, b) => Number(a.index === hs) - Number(b.index === hs));
+    for (const c of ordered) stroke(c, c.index === hs ? HIGHLIGHT_WIDTH : LINE_WIDTH, alpha(c.index));
     ctx.setLineDash([]);
 
     // Guide lines of the highlighted marker: solid at its value, dashed (draggable) at its parameter.
@@ -352,8 +352,8 @@ export function DvhPlot(props: DvhPlotProps) {
     return null;
   };
 
-  const curveAt = (px: number, py: number, frame: Frame): string | null => {
-    let best: string | null = null;
+  const curveAt = (px: number, py: number, frame: Frame): number | null => {
+    let best: number | null = null;
     let bestD = CURVE_CLICK;
     for (const c of props.curves) {
       for (let i = 1; i < c.x.length; i++) {
@@ -365,7 +365,7 @@ export function DvhPlot(props: DvhPlotProps) {
         const d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
         if (d < bestD) {
           bestD = d;
-          best = c.name;
+          best = c.index;
         }
       }
     }
@@ -379,7 +379,7 @@ export function DvhPlot(props: DvhPlotProps) {
   };
 
   const draggedPoint = (m: QiMarker, parameter: number) => {
-    const curve = props.curves.find((c) => c.name === m.structure && c.style === "solid");
+    const curve = props.curves.find((c) => c.index === m.structure && c.style === "solid");
     if (!curve) return null;
     if (m.kind === "dx") {
       const p = Math.min(100, Math.max(0, parameter));
@@ -417,7 +417,7 @@ export function DvhPlot(props: DvhPlotProps) {
     }
     const marker = markerAt(px, py, frame);
     if (marker) return props.onMarkerClick(marker.structure, marker.metric);
-    props.onStructureClick(curveAt(px, py, frame) ?? "");
+    props.onStructureClick(curveAt(px, py, frame));
   };
 
   return (
@@ -429,7 +429,7 @@ export function DvhPlot(props: DvhPlotProps) {
         const { x, inside, px, py, frame } = toData(e);
         setHoverX(inside ? Math.max(0, x) : null);
         const m = inside ? markerAt(px, py, frame) : null;
-        e.currentTarget.title = m ? `${m.structure}: ${m.metric} = ${formatMarkerValue(m.value, m.valueUnit)}` : highlighted && nearParameterLine(px, py, frame) ? `Drag to change ${highlighted.metric}` : "";
+        e.currentTarget.title = m ? `${m.name}: ${m.metric} = ${formatMarkerValue(m.value, m.valueUnit)}` : highlighted && nearParameterLine(px, py, frame) ? `Drag to change ${highlighted.metric}` : "";
         e.currentTarget.style.cursor = highlighted && nearParameterLine(px, py, frame) ? (highlighted.kind === "dx" ? "ns-resize" : "ew-resize") : "";
       }}
       onPointerLeave={() => setHoverX(null)}

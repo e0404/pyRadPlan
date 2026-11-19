@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatPick, sliceRange, toPrecision4, volumeRange } from "../src/renderer/analysis";
 import { COLORMAP_NAMES, colormapRGB, lutIndex, mapColor, normalize } from "../src/renderer/colormaps";
-import { ContourCache, LruCache, maskBounds } from "../src/renderer/contours";
+import { ContourCache, LruCache, maskBounds, maskCenterOfMass } from "../src/renderer/contours";
 import {
   canvasToSlice,
   extractSlice,
@@ -13,8 +13,10 @@ import {
   sliceVoxel,
   texelMapping,
   viewTransform,
+  slicesThrough,
   voxelToWorld,
   worldToIndex,
+  worldToVoxel,
   zoomAt,
   type VolumeGeometry,
 } from "../src/renderer/geometry";
@@ -36,6 +38,38 @@ describe("slice geometry", () => {
     expect(sliceLayout(geom, "sagittal")).toMatchObject({ nh: 2, nv: 3, sh: 3, sv: 2, count: 4 });
     expect(sliceLayout(geom, "coronal")).toMatchObject({ nh: 2, nv: 4, sh: 3, sv: 1, count: 3 });
     expect(sliceLayout(geom, "coronal", "radiological")).toMatchObject({ nh: 4, nv: 2, count: 3 });
+  });
+
+  it("maps between world and voxel indices through a non-identity direction (flipped z)", () => {
+    const flipped: VolumeGeometry = { ...geom, direction: [1, 0, 0, 0, 1, 0, 0, 0, -1] };
+    expect(voxelToWorld(flipped, [1, 1, 1])).toEqual([-9, 22, 2]);
+    expect(voxelToWorld(flipped, [0, 0, 1])).toEqual([-10, 20, 2]);
+    for (const ijk of [
+      [0, 0, 0],
+      [3, 2, 1],
+      [1, 2, 0],
+    ] as [number, number, number][]) {
+      expect(worldToVoxel(flipped, voxelToWorld(flipped, ijk)).map((v) => +v.toFixed(9))).toEqual(ijk);
+      expect(worldToIndex(flipped, voxelToWorld(flipped, ijk))).toEqual(ijk);
+    }
+    // World z = 2 is the second axial slice when z runs against the index, the first one for an identity direction.
+    expect(worldToIndex(flipped, [-9, 22, 2])[2]).toBe(1);
+    expect(worldToIndex(geom, [-9, 22, 2])[2]).toBe(0);
+
+    const rotated: VolumeGeometry = { ...geom, direction: [0, -1, 0, 1, 0, 0, 0, 0, 1] };
+    const world = voxelToWorld(rotated, [2, 1, 1]);
+    expect(worldToVoxel(rotated, world).map((v) => +v.toFixed(9))).toEqual([2, 1, 1]);
+  });
+
+  it("puts the slices through an isocentre on the voxel the world point falls in", () => {
+    const flipped: VolumeGeometry = { ...geom, direction: [1, 0, 0, 0, 1, 0, 0, 0, -1] };
+    // Voxel [2, 1, 1] centre.
+    const iso = voxelToWorld(flipped, [2, 1, 1]);
+    expect(slicesThrough(flipped, iso)).toEqual({ axial: 1, sagittal: 2, coronal: 1 });
+    expect(slicesThrough(geom, iso)).toEqual({ axial: 0, sagittal: 2, coronal: 1 });
+    const mask = new Uint8Array(24);
+    mask[(1 * 3 + 1) * 4 + 2] = 1;
+    expect(maskCenterOfMass({ index: 0, name: "m", color: [0, 0, 0], data: mask }, flipped)).toEqual(iso);
   });
 
   it("extracts slices in screen layout", () => {
@@ -62,8 +96,8 @@ describe("slice geometry", () => {
     expect(ijk).toEqual([3, 2, 1]);
     expect(volume[linearIndex(geom, ijk)]).toBe(123);
     expect(voxelToWorld(geom, [1, 1, 1])).toEqual([-9, 22, 8]);
-    expect(worldToIndex(geom, 2, 8.4)).toBe(1);
-    expect(worldToIndex(geom, 2, 1000)).toBe(1);
+    expect(worldToIndex(geom, [-9, 22, 8.4])).toEqual([1, 1, 1]);
+    expect(worldToIndex(geom, [1000, -1000, 1000])).toEqual([3, 0, 1]);
     const t = texelMapping(sliceLayout(geom, "sagittal", "radiological"), 2);
     expect(Array.from(t.origin)).toEqual([2, 0, 1]);
     expect(Array.from(t.dirH)).toEqual([0, 1, 0]);
@@ -201,13 +235,13 @@ describe("contour cache", () => {
   it("computes bounds and crops, matching an uncropped trace", () => {
     expect(maskBounds(mask, g)).toEqual({ lo: [3, 2, 1], hi: [6, 5, 2] });
     const cache = new ContourCache();
-    cache.setMasks([{ name: "A", color: [255, 0, 0], data: mask }], g);
-    const segs = cache.contour("A", "axial", 1);
+    cache.setMasks([{ index: 0, name: "A", color: [255, 0, 0], data: mask }], g);
+    const segs = cache.contour(0, "axial", 1);
     const full = marchingSquares(mask.subarray(64, 128), 8, 8, 0.5);
     expect(segmentsLength(segs)).toBeCloseTo(segmentsLength(full));
-    expect(cache.contour("A", "axial", 0)).toHaveLength(0);
-    expect(cache.contour("A", "sagittal", 4).length).toBeGreaterThan(0);
-    expect(cache.contour("missing", "axial", 1)).toHaveLength(0);
+    expect(cache.contour(0, "axial", 0)).toHaveLength(0);
+    expect(cache.contour(0, "sagittal", 4).length).toBeGreaterThan(0);
+    expect(cache.contour(9, "axial", 1)).toHaveLength(0);
   });
 
   it("evicts least recently used entries", () => {

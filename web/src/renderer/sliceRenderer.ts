@@ -59,7 +59,7 @@ export interface RenderSettings {
   isolineLevels: number[];
   /** Value mapped to the top of the colormap for isoline colours (volume max in Qt). */
   isolineColorMax: number;
-  visibleStructures: ReadonlySet<string>;
+  visibleStructures: ReadonlySet<number>;
   /** Isocenter in world mm, drawn as a cross on its slice. */
   isocenter: readonly [number, number, number] | null;
   /** Beams of `view.beams` (LPS mm), drawn when `showBeams`. */
@@ -465,10 +465,10 @@ export class SliceRenderer {
     }
 
     if (s.showContours) {
-      for (const name of this.contours.names) {
-        if (!s.visibleStructures.has(name)) continue;
-        const mask = this.contours.mask(name)!;
-        strokeSegments(this.contours.contour(name, s.plane, slice), cssColor(mask.color), 1.5);
+      for (const structure of this.contours.indices) {
+        if (!s.visibleStructures.has(structure)) continue;
+        const mask = this.contours.mask(structure)!;
+        strokeSegments(this.contours.contour(structure, s.plane, slice), cssColor(mask.color), 1.5);
       }
     }
 

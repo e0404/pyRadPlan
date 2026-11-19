@@ -105,7 +105,7 @@ export function SliceViewer() {
       showIsolines: viewer.showIsolines,
       isolineLevels: model.isolineLevels,
       isolineColorMax: model.quantityRange[1],
-      visibleStructures: new Set(Object.entries(viewer.visible).filter(([, v]) => v).map(([k]) => k)),
+      visibleStructures: new Set(Object.entries(viewer.visible).filter(([, v]) => v).map(([k]) => Number(k))),
       isocenter: viewer.showIsocenter ? isocenter : null,
       beams: beams?.beams ?? null,
       showBeams,
