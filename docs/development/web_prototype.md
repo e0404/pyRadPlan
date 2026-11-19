@@ -1,7 +1,9 @@
 # Web prototype: pyRadPlan in the browser (decision report)
 
-Status 2026-11-18, branch `dev/web-pyodide` (from `develop` at 66763c82). Exploratory prototype,
-not reviewed for merging.
+Status: decision record of the prototype rounds (2026-11-18 and 2026-11-19), kept as written
+unless a line says otherwise. The web version is now part of the repository (`web/`, CI in
+`.github/workflows/web.yml`, publishing in `web_publishing.md`) and the Qt GUI runs on
+`pyRadPlan.app` as well, see `app_layer.md`.
 
 ## Result
 
@@ -15,7 +17,7 @@ inside a web worker running Pyodide with the numpy backend.
 |---|---|---|
 | pyRadPlan on Pyodide | `web/pyodide/` (bootstrap, SimpleITK stand-in, headless harness), 4 small edits in `pyRadPlan/` | Photon and proton pipelines complete; agree with native to floating-point noise |
 | Frontend | `web/` (Vite, TypeScript, React) | Workflow, plan and viewer panels work against real Pyodide and against a mock |
-| Intermediate layer | `pyRadPlan/app/`, contract in `web/PROTOCOL.md` | Draft; 80 tests; used by the web frontend, not yet by the Qt GUI |
+| Intermediate layer | `pyRadPlan/app/`, contract in `web/PROTOCOL.md` | Used by the web frontend and, since the later rounds, by the Qt GUI |
 
 Numbers (TG119, this machine; details in `web/pyodide/FINDINGS.md`):
 
@@ -28,13 +30,13 @@ Numbers (TG119, this machine; details in `web/pyodide/FINDINGS.md`):
 ## How to run
 
 ```bash
-export PATH="/d/Python/pyRadPlan-web-tools/node:$PATH"     # portable Node 24, not installed system-wide
+# Node 24 on PATH; PYTHON is the Python of an environment with pyRadPlan's build requirements
 cd web/pyodide && npm install
-PYTHON=D:/Python/pyRadPlan/.venv/Scripts/python.exe npm run build   # wheels into web/public/pyrp/
+PYTHON=<path to your venv python> npm run build              # wheels into web/public/pyrp/
 cd .. && npm install && npm run dev                          # open the printed URL
 ```
 
-`?backend=mock` runs the UI without Python. `npm run e2e:pyodide` clicks through the real pipeline
+`?backend=mock` runs the UI without Python at run time (its fixtures are generated from `pyRadPlan.app` by `npm run fixtures`, which the other npm scripts run first and which needs pyRadPlan's dependencies in the active environment). `npm run e2e:pyodide` clicks through the real pipeline
 in headless Edge and writes screenshots to `web/e2e/screenshots/` (git-ignored).
 
 ## Architecture
@@ -110,8 +112,8 @@ responses, arrays as separate binary buffers, state/progress/log events. Design 
 
 The layer is Qt-free and thread-free. Each step is split into `prepare` (checks, captures inputs),
 `compute` (no workspace writes) and `commit`, so the Qt GUI can run `compute` on its `QThread` and
-commit on the GUI thread. The Qt GUI was deliberately not changed; the adoption path is sketched in
-the design notes. A parity test replays random workspace changes on the real `WorkflowWidget` and
+commit on the GUI thread. The prototype left the Qt GUI unchanged; later commits moved it onto the layer (see
+`app_layer.md`). A parity test replays random workspace changes on the real `WorkflowWidget` and
 on the extracted rules.
 
 State is sent as a full snapshot after each change rather than as diffs: simpler, and the state is
@@ -161,11 +163,12 @@ port to WebGPU later.
   waits were tightened and later runs passed (four in a row including mine), but the cause was not
   found.
 - **App layer is a draft:** no objective, scenario or algorithm-option editing; no persistence; no
-  per-session lock; helper logic is duplicated from the GUI until the GUI imports it from here.
+  per-session lock.
 - **Photon results differ between native and Pyodide as much as between two native random seeds**
   when dij sampling is on, because 1–3 ulp differences in `exp`/`log` flip sampling decisions. With
   sampling off the dij agrees to 1e-7–2e-6. Target statistics agree to 0.05 % either way.
-- No CHANGELOG entry and no CI job were added.
+- The prototype had neither a CHANGELOG entry nor a CI job; both exist now (`CHANGELOG.md`,
+  `.github/workflows/web.yml`).
 
 ## Suggested next steps
 
@@ -174,9 +177,8 @@ port to WebGPU later.
    and brings back numba, GPUs and IPOPT, and the frontend does not change.
 2. Split the phantom and machine data out of the wheel and fetch them on demand (first load drops
    from about 71 MB to about 43 MB).
-3. Let the Qt GUI adopt `pyRadPlan.app` (workspace and stage rules first), so both frontends share
-   one implementation.
-4. Add CI: stand-in comparison tests, a Pyodide smoke run, frontend unit tests.
+3. Done: the Qt GUI runs on `pyRadPlan.app`, so both frontends share one implementation.
+4. Done: `.github/workflows/web.yml` runs the stand-in tests, a Pyodide smoke run and the frontend tests.
 5. Browser file import: `.mat` first, then DICOM via itk-wasm or pydicom-only readers.
 
 ## Round 2: full mimic of the Qt GUI (2026-11-19)
@@ -237,6 +239,4 @@ Known problems:
   Large saves (a 335 MB workspace pickle at 5 beams) need that much again in the browser.
 - DVH plot has no mouse zoom/pan; one analysis window at a time; the objectives table can end up
   scrolled sideways after edits.
-- Helper code copied into the app layer from Qt modules (licenses, settings mirroring, beam
-  geometry) still exists twice until the Qt GUI imports it from the app layer.
 - Still only TG119, only headless Edge with software WebGL.

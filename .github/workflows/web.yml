@@ -3,7 +3,8 @@ name: Web
 # Tries the web version of pyRadPlan (web/: a Vite + React frontend that runs pyRadPlan.app in
 # Pyodide, see web/README.md and web/pyodide/README.md):
 #   - frontend: type check, unit tests, production build and the Playwright scripts against the
-#     mock backend (no Python involved)
+#     mock backend; the npm scripts generate the mock's fixtures from pyRadPlan.app first
+#     (web/scripts/mock_fixtures.mjs), which needs pyRadPlan's dependencies
 #   - pyodide: the wheels (pyRadPlan, the SimpleITK shim, the vendored pure wheels), the
 #     treatment-planning pipeline and the application layer under Pyodide in Node, and the
 #     tests of the shim against real SimpleITK
@@ -18,16 +19,24 @@ on:
       - develop
       - 'rc/**'
       - 'devops/**'
-    paths: &paths
+    paths:
       - 'web/**'
       - 'pyRadPlan/**'
       - 'pyproject.toml'
+      - 'LICENSE'
+      - 'README.md'
       - '.github/workflows/web.yml'
   pull_request:
     branches:
       - main
       - develop
-    paths: *paths
+    paths:
+      - 'web/**'
+      - 'pyRadPlan/app/**'
+      - 'pyproject.toml'
+      - 'LICENSE'
+      - 'README.md'
+      - '.github/workflows/web.yml'
   workflow_dispatch:
 
 concurrency:
@@ -52,12 +61,25 @@ jobs:
     steps:
         - uses: actions/checkout@v7
 
+        - name: Setup Python ${{ env.PYTHON_VERSION }}
+          uses: actions/setup-python@v7
+          with:
+            python-version: ${{ env.PYTHON_VERSION }}
+            cache: pip
+
         - name: Setup Node ${{ env.NODE_VERSION }}
           uses: actions/setup-node@v7
           with:
             node-version: ${{ env.NODE_VERSION }}
             cache: npm
             cache-dependency-path: web/package-lock.json
+
+        # The npm scripts record the mock backend's fixtures from pyRadPlan.app (npm run fixtures).
+        - name: Install pyRadPlan
+          working-directory: .
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .
 
         - name: Install dependencies
           run: |
@@ -73,7 +95,16 @@ jobs:
         - name: Production build
           run: npm run build
 
-        # The scripts start their own Vite server and exit with a failure if a check fails.
+        # ?backend=mock must not exist on a deployment: the production bundle has no mock code.
+        - name: The production bundle has no mock backend
+          run: |
+            if grep -rl "Mock backend ready" dist/assets; then
+              echo "the production build contains the mock backend" >&2
+              exit 1
+            fi
+
+        # The scripts start their own Vite dev server (which includes the mock backend, see
+        # web/README.md) and exit with a failure if a check fails.
         - name: End-to-end tests against the mock backend
           run: |
             npm run e2e
@@ -168,6 +199,7 @@ jobs:
           uses: actions/setup-python@v7
           with:
             python-version: ${{ env.PYTHON_VERSION }}
+            cache: pip
 
         - name: Setup Node ${{ env.NODE_VERSION }}
           uses: actions/setup-node@v7
@@ -177,6 +209,12 @@ jobs:
             cache-dependency-path: |
               web/package-lock.json
               web/pyodide/package-lock.json
+
+        # The mock backend's fixtures are recorded from pyRadPlan.app before the GUI is served.
+        - name: Install pyRadPlan
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .
 
         # The GUI installs the wheels from web/public/pyrp, which are built here: the browser
         # downloads the Pyodide runtime from the npm package and the packages from the CDN.

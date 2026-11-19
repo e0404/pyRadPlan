@@ -26,7 +26,8 @@ export const PYODIDE_PLOT_PACKAGES = ["matplotlib"];
 
 // Pure-Python dependencies that are not part of the Pyodide distribution. Installed with
 // micropip without dependency resolution; build.py vendors exactly these wheels next to the
-// pyRadPlan wheel. Keep in sync with pyproject.toml's bounds.
+// pyRadPlan wheel. Add the SHA-256 of a new pin to PURE_WHEEL_SHA256 in build.py;
+// tests/test_pure_wheel_pins.py checks the pins against pyproject.toml's bounds.
 export const PURE_WHEELS = [
   "array-api-compat==1.15.0",
   "array-api-extra==0.11.2",

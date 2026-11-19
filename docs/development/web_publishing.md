@@ -1,6 +1,6 @@
 # Publishing the web version (decision record)
 
-Status 2026-11-19, branch `internal/web-pyodide`. Question: can the browser version of pyRadPlan
+Status 2026-11-19. Question: can the browser version of pyRadPlan
 (`docs/development/web_prototype.md`) be hosted on GitHub Pages? Nothing was published, no
 repository or Pages setting was touched; everything below was tested locally against a static
 server that mimics Pages (see "What was tested").
@@ -178,7 +178,10 @@ leave the browser only through the user's own downloads ("Save"). Precisely:
 - Static links (GitHub, documentation) are plain anchors and only load on click.
 - **URL overrides.** `?pyodide=`, `?packages=` and `?pyrp=` accept any URL, so a crafted link could
   make the app run foreign code in a tab holding a user's data. Harmless on localhost; for a public
-  deployment they should be ignored unless same-origin or in a development build (patch below).
+  deployment they are ignored unless they point below the app's own directory (not merely the same
+  origin: GitHub Pages shares one origin among all projects of an organization) or the build is a
+  development build (`trustedSource` in `web/src/api/index.ts`). The mock backend (`?backend=mock`) is
+  left out of production builds altogether (`VITE_ENABLE_MOCK=1` adds it).
   Under COEP most foreign hosts would be refused anyway, but that is not a control.
 - **Disclaimer and privacy notice (done).** The text is the one the Qt About dialog already had,
   now in `pyRadPlan/app/about.json` (read by `pyRadPlan/app/_about.py` for Qt, embedded by
@@ -234,11 +237,20 @@ remain the ways to keep more versions).
 
 How a run works (two jobs, `build` and `deploy`):
 
-1. Triggers: push to `develop`, pull requests into `develop` or `main` (both with the path filter
-   of `web.yml`: `web/`, `pyRadPlan/`, `pyproject.toml`, the workflow), `release: published` and
-   `workflow_dispatch` from any branch. Deploying runs (develop, releases) share the concurrency
-   group `web-pages-deploy` without cancelling, so deployments never overlap; every other ref has
-   its own group, and a newer push to a pull request cancels the older build.
+1. Triggers: push to `develop` (paths `web/`, `pyRadPlan/`, `pyproject.toml`, `LICENSE`,
+   `README.md`, the workflow; the last two are copied into the wheel and `LICENSE.txt`), pull
+   requests into `develop` or `main` that touch `web/` or the workflow, `release: published` and
+   `workflow_dispatch` from any branch. The release workflow (`release.yml`) creates its release
+   with `GITHUB_TOKEN`, and events caused by that token start no other workflow, so after
+   creating the release it runs `gh workflow run web-pages.yml --ref develop` (job permission
+   `actions: write`; `workflow_dispatch` is exempt from that rule). That run finds the new tag
+   and rebuilds both channels. The `release: published` trigger stays for releases published by
+   hand. Deploying runs (develop, releases) share the concurrency group `web-pages-deploy`: a
+   running deployment is never cancelled, but GitHub replaces a run that is still pending when a
+   newer one queues, which is harmless because every run rebuilds both channels. Every other ref
+   has its own group, and a newer push to a pull request cancels the older build. `web.yml` runs
+   on pull requests that touch `web/`, `pyRadPlan/app/`, `pyproject.toml`, `LICENSE`, `README.md`
+   or the workflow, on pushes with the broad `pyRadPlan/**` filter, and on demand.
 2. The **"develop" channel** is checked out into `src/develop`: the `develop` branch for a
    release, otherwise the ref under test (the develop head on a push, the pull request's merge
    commit, the branch of a manual run), so the changes being tested are what gets built. All
@@ -251,7 +263,8 @@ How a run works (two jobs, `build` and `deploy`):
    sources of the tag, not develop's.
 3. `web/scripts/test_pages.mjs --install --latest src/latest --develop src/develop --prefix
    /<repo>/` runs `assemble_pages.mjs --build --coi`, which builds each checkout (`npm ci`, wheels,
-   `npm run build -- --base=./` with `PYRADPLAN_COI=1` and `VITE_PYRADPLAN_CHANNEL`,
+   `npm run build -- --base=./` (its `prebuild` hook generates the mock fixtures from that checkout's
+   pyRadPlan source, with the dependencies of the active Python) with `PYRADPLAN_COI=1` and `VITE_PYRADPLAN_CHANNEL`,
    `VITE_PYRADPLAN_VERSION` (`git describe --tags`), `VITE_PYRADPLAN_COMMIT`), copies each
    `web/dist` to `_site/<channel>/` and writes `_site/index.html` and `_site/channels.json`. The
    app shows "Web build: develop channel · v0.9.0-12-g… · commit …" in Help > About.

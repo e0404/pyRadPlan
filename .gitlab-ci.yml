@@ -175,29 +175,61 @@ tests-backends:
 
 # The web version (web/, see web/README.md): a Vite + React frontend running pyRadPlan.app in
 # Pyodide. The same three jobs as the "Web" GitHub workflow, only for the changes that can affect
-# it. The Node image brings its own Python (the wheel is pure Python and runs in Pyodide, the
-# native one only pickles a workspace and runs the shim tests); the browser is the Microsoft Edge
-# the e2e scripts launch, installed by Playwright, with WebGL on SwiftShader. The Pyodide packages
-# (numpy, scipy, ...) come from the jsDelivr CDN.
+# it: the jobs that duplicate the GitHub "Web" and "Web Pages" runs are on request on internal
+# branches (.on-request), the others run before a merge (.before-merge); the rules repeat those of
+# the two templates with the changes filter. The Node image brings its own Python (the wheel is
+# pure Python and runs in Pyodide, the native one only pickles a workspace and runs the shim
+# tests); the browser is the Microsoft Edge the e2e scripts launch, installed by Playwright,
+# with WebGL on SwiftShader. The Pyodide packages (numpy, scipy, ...) come from the jsDelivr CDN.
 .web:
     stage: test
     image: node:24-bookworm
-    rules:
-        - if: '$CI_COMMIT_BRANCH =~ /^(internal|devops)\//'
-          changes:
-              - web/**/*
-              - pyRadPlan/**/*
-              - pyproject.toml
-              - .gitlab-ci.yml
     variables:
         PYTHON: /opt/venv/bin/python
     before_script:
         - apt-get update && apt-get install -y --no-install-recommends python3-venv
         - python3 -m venv /opt/venv
 
-web-frontend:
+.web-before-merge:
     extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: &web-changes
+              - web/**/*
+              - pyRadPlan/app/**/*
+              - pyproject.toml
+              - LICENSE
+              - README.md
+              - .gitlab-ci.yml
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\// && $CI_OPEN_MERGE_REQUESTS'
+          changes: *web-changes
+
+.web-on-request:
+    extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: *web-changes
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\//'
+          changes: *web-changes
+          when: manual
+          allow_failure: true
+
+.web-pages-on-request:
+    extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: &web-pages-changes
+              - web/**/*
+              - .gitlab-ci.yml
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\//'
+          changes: *web-pages-changes
+          when: manual
+          allow_failure: true
+
+web-frontend:
+    extends: .web-before-merge
     script:
+        - $PYTHON -m pip install -e .
         - cd web
         - npm ci
         - npx playwright install --with-deps msedge
@@ -216,7 +248,7 @@ web-frontend:
         expire_in: 1 week
 
 web-pyodide:
-    extends: .web
+    extends: .web-before-merge
     script:
         - $PYTHON -m pip install -e . pytest
         - cd web/pyodide
@@ -237,8 +269,9 @@ web-pyodide:
 
 # The click-through of the whole GUI against the real Pyodide backend.
 web-pyodide-e2e:
-    extends: .web
+    extends: .web-on-request
     script:
+        - $PYTHON -m pip install -e .
         - (cd web/pyodide && npm ci && npm run build)
         - cd web
         - npm ci
@@ -256,11 +289,12 @@ web-pyodide-e2e:
 # no web/), this branch as /develop/. The assembled site is kept as the job artifact. A full clone
 # with the tags: the "latest" tag and setuptools-scm need them, and a shallow clone has neither.
 web-pages:
-    extends: .web
+    extends: .web-pages-on-request
     variables:
         GIT_DEPTH: "0"
     script:
         - git fetch --force --tags origin
+        - $PYTHON -m pip install -e .
         - (cd web && npm ci && npx playwright install --with-deps msedge)
         # Clones the newest vX.Y.Z tag into _pages/latest, builds both channels into _site, serves
         # it like GitHub Pages under /pyRadPlan/ and runs web/e2e/pages.mjs against /develop/.
