@@ -17,7 +17,7 @@ import SimpleITK as sitk
 from PySide6 import QtWidgets  # noqa: F401
 
 if find_spec("pyqtgraph") is None:
-    raise ImportError("No module named 'pyqtgraph'")
+    raise ModuleNotFoundError("No module named 'pyqtgraph'", name="pyqtgraph")
 
 if TYPE_CHECKING:
     from pyRadPlan.cst._cst import StructureSet

@@ -3,7 +3,8 @@
 Briefcase starts this module instead of the app and reads the result from the
 ``>>>>>>>>>> EXIT <code> <<<<<<<<<<`` line, so no test framework is needed in
 the bundle. The test exercises the pieces most likely to break when pyRadPlan
-runs from an installed, read-only bundle: importing the package, loading the
+runs from an installed, read-only bundle: on Windows, the C++ runtime shipped next to
+the executable being the one in use, importing the package, loading the
 bundled TG119 phantom, a small photon dose calculation, a short optimization,
 loading a phantom of matRad that the app ships (when the build downloaded them) and
 constructing the main window offscreen.
@@ -21,6 +22,30 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Briefcase streams the output through its own console; the Unicode progress
 # bars are noise there and crash it on a cp1252 Windows console.
 os.environ.setdefault("TQDM_DISABLE", "1")
+
+
+def _check_msvc_runtime():
+    # Runs first: SimpleITK links msvcp140.dll by name, which must resolve to the copy that
+    # scripts/run_briefcase.py places next to the executable, not to the system's.
+    if sys.platform != "win32":
+        print("not on Windows, skipped")
+        return
+    import ctypes
+    from pathlib import Path
+
+    import SimpleITK  # noqa: F401
+
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel32.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
+    handle = kernel32.GetModuleHandleW("msvcp140.dll")
+    assert handle, "msvcp140.dll not loaded by SimpleITK"
+    buf = ctypes.create_unicode_buffer(1024)
+    kernel32.GetModuleFileNameW(handle, buf, 1024)
+    loaded = Path(buf.value).resolve()
+    assert loaded.parent == Path(sys.executable).resolve().parent, loaded
+    print(f"msvcp140.dll from {loaded}")
 
 
 def _check_import():
@@ -122,6 +147,7 @@ def _check_main_window():
 def main() -> int:
     """Run each bundled check and return a failure status if any check raises."""
     checks = [
+        _check_msvc_runtime,
         _check_import,
         _check_dose_and_optimization,
         _check_matrad_phantoms,
