@@ -15,6 +15,7 @@ import json
 import logging
 import pickle
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -22,7 +23,7 @@ from typing import Any, Optional, Union
 logger = logging.getLogger(__name__)
 
 #: Predictor file names understood by this loader, in order of preference.
-_PREDICTOR_SUFFIXES = (".save", ".save", ".pkl", ".pickle", ".joblib")
+_PREDICTOR_SUFFIXES = (".save", ".sav", ".pkl", ".pickle", ".joblib")
 
 
 @dataclass(frozen=True)
@@ -59,21 +60,14 @@ class OutcomeModelSpec:
         ``"NTCP"`` or ``"TCP"``.
     features : list[OutcomeFeature]
         Model inputs, in the order the estimator expects them.
-    transform : bool
-        Whether pyanno4rt embedded the model with its SALU objective transform.
     model_dir : Path or None
         Directory the predictor was loaded from.
-    num_of_fractions : int
-        Number of fractions pyanno4rt multiplied the dose with before computing
-        the features (the model expects total-course dose).
     """
 
     label: str
     outcome_type: str = "NTCP"
     features: list[OutcomeFeature] = field(default_factory=list)
-    transform: bool = False
     model_dir: Optional[Path] = None
-    num_of_fractions: int = 30
 
 
 def _outcome_components(config: dict) -> list[tuple[str, dict]]:
@@ -221,6 +215,11 @@ def _find_predictor(model_dir: Path) -> Path:
 
 def _load_predictor(path: Path) -> Any:
     """Unpickle the estimator."""
+    if find_spec("sklearn") is None:
+        raise ImportError(
+            "Loading a pyanno4rt model needs scikit-learn, which pyRadPlan does not install: "
+            "pip install scikit-learn"
+        )
     if path.suffix == ".joblib":
         import joblib  # noqa: PLC0415
 
@@ -252,6 +251,8 @@ def load_pyanno4rt_model(
 
     Raises
     ------
+    ImportError
+        If scikit-learn is not installed.
     NotImplementedError
         If the snapshot carries a fitted pyanno4rt preprocessor (feature
         scaling), which this loader does not reproduce.
@@ -301,9 +302,7 @@ def load_pyanno4rt_model(
         label=model_cfg.get("label", name),
         outcome_type=params.get("outcome_type", "NTCP"),
         features=features,
-        transform=bool(params.get("transform", False)),
         model_dir=resolved_dir,
-        num_of_fractions=int(cfg.get("configuration", {}).get("number_of_fractions", 30)),
     )
 
     logger.info(

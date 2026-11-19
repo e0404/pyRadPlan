@@ -103,7 +103,6 @@ def _logistic(coefficients, intercept=0.05):
 
 
 def _objective(estimator, features, **kwargs):
-    kwargs.setdefault("num_of_fractions", 1)
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=features)
     objective = OutcomeLR(model=(estimator, spec), **kwargs)
@@ -136,7 +135,6 @@ def _write_snapshot(tmp_path, estimator, columns, data_path, model_path="lrNTCP"
                     "Logistic Regression Outcome": {
                         "segment": ["PAROTID_LT", "PAROTID_RT"],
                         "outcome_type": "NTCP",
-                        "transform": True,
                         "weight": 1000,
                         "model": {
                             "label": "lrNTCP",
@@ -193,7 +191,6 @@ def test_loader_orders_features_by_training_table(tmp_path):
         "right_dose",
         "right_volume",
     ]
-    assert spec.transform is True
     assert spec.model_dir == model_dir
 
 
@@ -447,7 +444,7 @@ def test_monitor_only_reports_but_does_not_steer():
     assert np.all(objective.compute_gradient(dose) == 0.0)
 
 
-def test_transform_switches_to_the_salu_branch():
+def test_transform_switches_to_the_linear_branch():
     """Above p = 0.5 the value becomes 0.25 * logit(p) + 0.5 with a matching gradient."""
     coefficients = [0.03, -1e-4, 0.06, -1e-4]
     plain, grid = _objective(_logistic(coefficients), _features())
@@ -502,6 +499,9 @@ def test_objective_serialises_without_runtime_handles():
     assert "estimator" not in dumped
     assert "extractor" not in dumped
 
+    with pytest.raises(ValueError, match="Cannot load outcome model"):
+        OutcomeLR.model_validate(dumped)
+
 
 def test_loader_needs_no_trust_setting_for_a_direct_path(tmp_path, monkeypatch):
     monkeypatch.setattr(settings.ai, "modelhub_trust_remote_code", False)
@@ -511,19 +511,19 @@ def test_loader_needs_no_trust_setting_for_a_direct_path(tmp_path, monkeypatch):
     assert estimator.n_features_in_ == 4
 
 
-def test_loader_reads_the_number_of_fractions(tmp_path):
-    config, _ = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
-    raw = json.loads(config.read_text(encoding="utf-8"))
-    raw["configuration"] = {"number_of_fractions": 35}
-    config.write_text(json.dumps(raw), encoding="utf-8")
+def test_loader_reminds_to_install_scikit_learn(tmp_path, monkeypatch):
+    from pyRadPlan.ai.modelhub import _pyanno4rt_loader  # noqa: PLC0415
 
-    _, spec = load_pyanno4rt_model(config.parent)
-    assert spec.num_of_fractions == 35
+    config, _ = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
+    monkeypatch.setattr(_pyanno4rt_loader, "find_spec", lambda name: None)
+
+    with pytest.raises(ImportError, match="pip install scikit-learn"):
+        load_pyanno4rt_model(config.parent)
 
 
 def test_loader_accepts_a_sav_predictor(tmp_path):
     config, model_dir = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
-    (model_dir / "predictor.save").rename(model_dir / "predictor.save")
+    (model_dir / "predictor.save").rename(model_dir / "predictor.sav")
 
     estimator, _ = load_pyanno4rt_model(config.parent)
     assert estimator.n_features_in_ == 4
@@ -562,14 +562,22 @@ def test_fractionated_gradient_matches_finite_differences():
         assert analytic[index] == pytest.approx(numeric, rel=1e-4, abs=1e-12)
 
 
-def test_fraction_count_defaults_to_the_spec():
-    spec = OutcomeModelSpec(label="test", features=_features(), num_of_fractions=30)
+def test_validation_keeps_defaults_and_input():
+    spec = OutcomeModelSpec(label="test", features=_features())
+    data = {"model": (_logistic([0.1] * 4), spec)}
 
-    from_spec = OutcomeLR(model=(_logistic([0.1] * 4), spec))
-    explicit = OutcomeLR(model=(_logistic([0.1] * 4), spec), num_of_fractions=25)
+    objective = OutcomeLR.model_validate(data)
 
-    assert from_spec.num_of_fractions == 30
-    assert explicit.num_of_fractions == 25
+    assert objective.transform is False
+    assert objective.num_of_fractions is None
+    assert sorted(data) == ["model"]
+
+
+def test_transform_survives_a_saturated_probability():
+    objective, _ = _objective(_logistic([0.1] * 4), _features(), transform=True)
+    value, slope = objective._transform(1.0)
+
+    assert np.isfinite(value) and np.isfinite(slope)
 
 
 def test_rejects_models_that_are_not_a_logistic_regression():
@@ -614,7 +622,6 @@ def test_rejects_a_voi_that_misses_part_of_a_segment():
 
 
 def _sklearn_objective(estimator, **kwargs):
-    kwargs.setdefault("num_of_fractions", 1)
     ct, cst, grid = _make_geometry()
     spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=_features())
     objective = OutcomeSklearn(model=(estimator, spec), **kwargs)

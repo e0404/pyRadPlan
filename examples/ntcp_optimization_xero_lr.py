@@ -84,8 +84,8 @@ stf = generate_stf(ct, cst, pln)
 # The model was trained on total-course dose, so the objective multiplies the
 # per-fraction dose of the optimizer by `num_of_fractions`.
 #
-# `transform=True` reproduces pyanno4rt's SALU transform, which keeps the gradient from
-# vanishing once the predicted probability saturates. `priority` is *not* directly
+# `transform=True` (off by default) keeps the gradient from vanishing once the predicted
+# probability saturates: above 50% the sigmoid is replaced by its tangent. `priority` is *not* directly
 # comparable to pyanno4rt's `weight`: pyanno4rt leaves the fraction factor out of the
 # gradient, this objective includes it.
 # %%

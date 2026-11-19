@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Outcome objectives: `OutcomeObjective` base class and `OutcomeModel`, which optimizes a torch outcome model (e.g. NTCP CNN) loaded from the model hub. Its preprocessor implements the new `pyRadPlan.ai.modelhub.OutcomePreprocessor`
-- Feature-based outcome objectives on dose and geometry features (`FeatureOutcomeObjective`): `OutcomeLR` (logistic regression, analytic gradient) and `OutcomeSklearn` (any scikit-learn classifier with `predict_proba`, finite-difference feature gradient). Optional SALU `transform` for all outcome objectives
-- `pyRadPlan.ai.modelhub.load_pyanno4rt_model`: loads a pyanno4rt outcome model snapshot as estimator and feature specification (`OutcomeModelSpec`). Adds `scikit-learn` as a dependency
+- Feature-based outcome objectives on dose and geometry features (`FeatureOutcomeObjective`): `OutcomeLR` (logistic regression, analytic gradient) and `OutcomeSklearn` (any scikit-learn classifier with `predict_proba`, finite-difference feature gradient). Optional `transform` for all outcome objectives, which keeps the gradient from vanishing as the probability saturates
+- `pyRadPlan.ai.modelhub.load_pyanno4rt_model`: loads a pyanno4rt outcome model snapshot as estimator and feature specification (`OutcomeModelSpec`). Needs `scikit-learn`, which is not installed with pyRadPlan
 - `Objective.setup(ct, cst)`: called by the planning problem with the CT and structures before optimization
 - `VOI.apply_overlap`: `False` keeps the VOI's voxels, `None` excludes it from overlap handling
 - `opt_info["objective_info"]`: auxiliary data reported by objectives (`Objective.report_info()`), e.g. the outcome history

@@ -34,8 +34,8 @@ class OutcomeObjective(Objective):
         For models trained on total-course dose: the per-fraction dose is multiplied by
         this before it reaches the model.
     transform : bool
-        Apply pyanno4rt's SALU transform: above ``p = 0.5`` the value becomes
-        ``0.25 * logit(p) + 0.5``, which keeps the gradient from vanishing.
+        Above ``p = 0.5``, replace ``p = sigmoid(z)`` by its tangent at ``z = 0``,
+        ``0.25 * logit(p) + 0.5``, so the gradient does not vanish as ``p`` saturates.
     """
 
     has_hessian: ClassVar[bool] = False
@@ -111,6 +111,7 @@ class OutcomeObjective(Objective):
         """Return the objective value and its derivative w.r.t. ``p``."""
         if not self.transform or p <= 0.5:
             return p, 1.0
+        p = min(p, 1.0 - 1e-6)  # float32 models saturate at exactly 1, where logit diverges
         return 0.25 * float(np.log(p / (1.0 - p))) + 0.5, 0.25 / (p - p**2)
 
     def _set_dose_grid(self, dose_grid) -> None:

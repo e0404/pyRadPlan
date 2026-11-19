@@ -12,8 +12,6 @@ from pyRadPlan.ai.modelhub import load_pyanno4rt_model
 from ._features import FeatureExtractor
 from ._outcome import OutcomeObjective
 
-_PROBABILITY_EPS = 1e-6
-
 
 class FeatureOutcomeObjective(OutcomeObjective):
     """Outcome objective whose model consumes scalar features of dose and segments.
@@ -38,8 +36,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     Notes
     -----
-    ``num_of_fractions`` defaults to the model's configuration, as pyanno4rt models
-    expect total-course dose.
+    pyanno4rt models expect total-course dose: pass the plan's ``num_of_fractions``.
     """
 
     model: str = Field(description="pyanno4rt snapshot folder, or preloaded objects.")
@@ -60,9 +57,13 @@ class FeatureOutcomeObjective(OutcomeObjective):
         if not isinstance(data, dict) or data.get("spec") is not None:
             return data
 
+        data = dict(data)
         model = data.get("model")
         if isinstance(model, str):
-            estimator, spec = load_pyanno4rt_model(model, component=data.get("component"))
+            try:
+                estimator, spec = load_pyanno4rt_model(model, component=data.get("component"))
+            except (OSError, ValueError) as exc:  # pydantic reports a ValueError as invalid input
+                raise ValueError(f"Cannot load outcome model {model!r}: {exc}") from exc
         else:
             estimator, spec = model
             data["model"] = "<preloaded>"
@@ -71,7 +72,6 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
         cls._check_estimator(estimator, data)
         data["estimator"], data["spec"] = estimator, spec
-        data.setdefault("num_of_fractions", spec.num_of_fractions)
         return data
 
     @classmethod
@@ -118,22 +118,18 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     def _predict(self, dose) -> float:
         xp = array_api_compat.array_namespace(dose)
-        return self._clipped_probability(self.extractor.compute_values(dose, xp))
+        return self._probability(self.extractor.compute_values(dose, xp))
 
     def _predict_with_gradient(self, dose) -> tuple[float, Any]:
         xp = array_api_compat.array_namespace(dose)
         features = self.extractor.compute_values(dose, xp)
-        p = self._clipped_probability(features)
+        p = self._probability(features)
         dp_dx = self._probability_gradient(features, p)
 
         grad = xp.zeros_like(dose)
         for position, indices, feature_grad in self.extractor.compute_dose_gradients(dose, xp):
             grad[indices] += float(dp_dx[position]) * feature_grad
         return p, grad
-
-    def _clipped_probability(self, features: np.ndarray) -> float:
-        p = self._probability(features)
-        return min(max(p, _PROBABILITY_EPS), 1.0 - _PROBABILITY_EPS)
 
     @abstractmethod
     def _probability(self, features: np.ndarray) -> float:

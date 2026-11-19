@@ -68,7 +68,6 @@ dependencies = [
     "jinja2",
     "huggingface_hub>=0.23",
     "safetensors",
-    "scikit-learn",
 #   "cudatoolkit",
 #   "Raytrace@git+https://github.com/ryanneph/raytrace.git@master#egg=raytrace"
 ]
