@@ -17,10 +17,20 @@ Version: `vX.Y.Z`
 - [ ] Patch (`X.Y.Z`) — backwards compatible bug fixes
 - [ ] Pre-release (e.g. `X.Y.Z-rc1`, not uploaded to PyPI)
 
-## Highlights
+## Release summary
 
-<!-- A few bullet points on the most important changes for users in this release.
-     Pull from the [Unreleased] section of CHANGELOG.md. -->
+<!-- Written for users, not developers: it becomes the annotation of the tag vX.Y.Z and the top
+     of the GitHub release, above the full changelog. Draft it from the [Unreleased] section of
+     CHANGELOG.md when opening this PR and keep it current through the review.
+     - First line: "pyRadPlan X.Y.Z: <the two or three most important changes>" (the tag subject).
+     - One or two sentences on what the release is about.
+     - **Highlights**: a few bullets in plain language, saying what changes for the user rather
+       than how it was implemented. Leave out internal fixes.
+     - **Before you upgrade**: changed results, things to recalculate, deprecations and removals.
+       Leave it out if there is nothing to watch.
+     - End with "The full list of changes follows below."
+     Use bold labels instead of "#" headings. -->
+
 
 ## Checklist
 
@@ -34,13 +44,14 @@ Version: `vX.Y.Z`
 - [ ] No outstanding deprecations are due to be removed in this version (or they have been removed).
 - [ ] The pre-commit hook has been run and all files are formatted (`ruff`).
 - [ ] Executed example notebooks up to date on `rc/X.Y.Z` once the review is addressed and CI is green (examples are never executed in CI or on Read the Docs). They stay tracked in `docs/tutorials/examples/` from the last release: for every example whose script or results changed, `python docs/execute_examples.py --release <name>` executes it without errors and stages it (`git add -f`, the folder is git-ignored; without a name it runs all runnable examples); commit them on `rc/X.Y.Z`. A local docs build shows their outputs and no "older than its script" warning.
+- [ ] The release summary above is final and covers the user-facing changes of `CHANGELOG.md`.
 - [ ] Last commit before merging, once the release code is final: version bumped in `pyproject.toml`, `CHANGELOG.md` `[Unreleased]` section renamed to `[X.Y.Z] - YYYY-MM-DD` with a fresh empty `[Unreleased]` section added on top, and `CITATION.cff` updated (version, date-released, authors if applicable).
 
 ## Post-Merge Actions
 
 <!-- Steps to perform after the PR is merged into `main`. -->
 
-- [ ] Tag the release commit on `main` with an annotated tag `vX.Y.Z` (the tag message becomes part of the release notes).
+- [ ] Tag the merge commit on `main` with an annotated tag whose message is the release summary: save the summary to a file and run `git tag -a vX.Y.Z --cleanup=verbatim -F <file>`. The workflow `release.yml` puts it above the changelog in the release notes.
 - [ ] Push the tag to GitHub to trigger the workflows `release.yml`, `publish.yml` (PyPI), `installers.yml` and `container.yml`.
 - [ ] Verify the release was published with the correct notes from `CHANGELOG.md` and the tag annotation.
 - [ ] Once the "Desktop installers" workflow of the tag has finished, verify the GitHub release carries the Windows (`.msi`), macOS (`.dmg`) and Linux (`.deb`) installers.

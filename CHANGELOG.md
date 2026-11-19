@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Experimental web version of the GUI in `web/`: pyRadPlan runs in the browser with Pyodide (numpy backend), without a server. It mirrors the desktop GUI (plan form, objectives, dose influence, optimization with scipy or ipax, slice viewer, DVH and quality indicators, workspace load and save) and uses a 5 mm dose grid by default. Not available in the browser: image and DICOM import, Monte Carlo engines, IPOPT, GPU backends and the AI features
+- `pyRadPlan.app`: a session layer without Qt (`Session`, `Workspace`, `dispatch`) that holds the workflow logic of the GUIs. The desktop GUI and the web version both run on it
+
+### Changed
+
+- GUI: replacing the CT marks the dose influence matrix and the result as outdated
+- GUI: the engine settings dialog no longer shows `dose_grid`, `mult_scen`, `bio_model`, `voxel_sub_ix` and `select_voxels_in_scenarios`; the plan form sets them
+- GUI: a plan that leaves the dose engine to its radiation mode keeps doing so when it is applied
+- GUI: file dialogs take their formats from one table. NIfTI is the default format for result images, DICOM folders are loaded with Load Folder only, and a file name ending in another format's extension is refused instead of getting a second extension
+- GUI: a structure edited while a computation runs is updated when the computation ends
+- GUI: a dose-only `.npz` file can be loaded as a dose
+
+### Fixed
+
+- GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
+- GUI: changing the radiation mode of a plan with an explicit scenario set failed
+- GUI: the status line kept showing "Saving ..." after a save
+
+## [0.9.0] - 2026-11-18
+
 ### Changed
 
 - numpy 2.4 and 2.5 are supported
@@ -21,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+- Dose influence matrices failed to validate ("Invalid shape!") with numpydantic 2.0 on Python 3.12.3, the system Python of Ubuntu 24.04, so no dose could be calculated there. This also broke the Linux desktop installer
 - Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
 - Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
 - Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
@@ -753,7 +776,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1
