@@ -24,6 +24,7 @@ jsDelivr CDN into `.cache/packages/`; later runs are offline.
 | `npm run pipeline -- [options]` | `run_pipeline.mjs`: boot Pyodide in Node, install via `bootstrap.js`, run `pipeline.py`; writes `results/pyodide_<mode>_<preset><tag>.{npz,json}` |
 | `npm run native -- [options] --out results/x.npz` | the same `pipeline.py` with the native Python (checkout on `PYTHONPATH`); `--sitk-shim` swaps in the shim |
 | `npm run compare -- a.npz b.npz` | relative differences of dose cubes, unit-weight dose, weights, dij column sums, stf geometry |
+| `npm run test:glue` | `glue_high_memory.mjs`: the worker bridge (`web/src/api/pyodide/glue.py`) round-trips buffers with the wasm heap above 2 GiB, where Pyodide's `to_js` / `to_bytes` copy from a wrong address or raise |
 | `npm run test:shim` | `tests/`: the shim against real SimpleITK, the native pipeline with shim vs. real SimpleITK, and pickles across both runtimes (needs SimpleITK and pytest in `PYTHON`) |
 | `npm run app-smoke` | rebuild the wheels (`--skip-pure`), pickle a TG119 workspace natively (`npm run native-pickle`), then `app_smoke.mjs`: drive `pyRadPlan.app.dispatch` under Pyodide through `app_smoke.table.js`, print ok/error and timing per entry, exit 1 if a v0 entry fails |
 | `npm run app-smoke:run -- [--strict] [--only v0\|v1] [--verbose]` | the smoke run alone on the current wheels; v1 failures are reported as pending unless `--strict` |

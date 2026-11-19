@@ -1124,7 +1124,7 @@ class VOI(PyRadPlanBaseModel, ABC):
             update={"mask": new_mask, "grid": Grid.from_sitk_image(new_ct.cube_hu)}
         )
 
-        if len(resampled_voi.indices) == 0:
+        if not sitk.GetArrayViewFromImage(new_mask).any():
             warnings.warn("Resampling created an empty structure")
 
         return resampled_voi
