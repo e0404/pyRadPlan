@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web version: loading pickle files is disabled in the browser (unpickling runs code from the file); saving pickles still works
 - `pyRadPlan.app`: hosts can refuse pickle loading and process-wide settings changes (`SessionManager(allow_pickle=..., allow_global_settings=...)`)
 - Replacing a structure's mask marks the dose influence matrix as outdated
+- Optimization starts faster: resampling the structure set onto the dose grid no longer computes the voxel indices and shape statistics of every structure on the CT grid first (about 4.7 s down to 1.4 s for one carbon beam on the LIVER phantom)
 
 ### Fixed
 
