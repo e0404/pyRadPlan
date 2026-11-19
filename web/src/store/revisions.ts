@@ -179,6 +179,17 @@ async function doSync(force?: SyncForce): Promise<void> {
   } else if (!state.has.cst && get().maskSet) {
     set({ maskSet: null });
   }
+  const held = get().maskSet;
+  if (held) {
+    const colors = new Map(state.structures.map((st) => [st.index, st.color]));
+    const outdated = held.masks.some((m) => {
+      const c = colors.get(m.index);
+      return c !== undefined && c.some((v, i) => v !== m.color[i]);
+    });
+    if (outdated) {
+      set({ maskSet: { ...held, masks: held.masks.map((m) => ({ ...m, color: colors.get(m.index) ?? m.color })) } });
+    }
+  }
 
   // Structure list -> default visibility (Qt default checked set) ---------
   const names = state.structures.map((s) => `${s.index}:${s.name}`).join("\u0000");
@@ -227,7 +238,10 @@ async function doSync(force?: SyncForce): Promise<void> {
   const full = fullKeys(groups);
   const resultChanged = v1 ? rev.workspace.result !== applied.result : force !== undefined;
   const quantities: Record<string, Volume> = {};
-  for (const [key, vol] of Object.entries(get().quantities)) if (allKeys.has(key) && !(forceData && !v1)) quantities[key] = vol;
+  for (const [key, vol] of Object.entries(get().quantities)) {
+    const outdated = v1 ? rev.volumes[key] !== applied.volumes[key] : resultChanged;
+    if (allKeys.has(key) && !(forceData && !v1) && !outdated) quantities[key] = vol;
+  }
   let active = get().viewer.activeQuantity;
   // Qt resets the shown quantity to the default after every result change (ambiguity 6).
   if (resultChanged || !active || !allKeys.has(active)) {
@@ -259,7 +273,8 @@ async function doSync(force?: SyncForce): Promise<void> {
 
 /** Show `key` (any component key), fetching it first when it is not held yet. */
 export async function selectQuantity(key: string | null): Promise<void> {
-  if (key && !get().quantities[key]) {
+  const current = get().state?.revisions?.volumes[key ?? ""];
+  if (key && (!get().quantities[key] || (current !== undefined && current !== get().appliedRevisions.volumes[key]))) {
     const vol = await req("view.volume", { name: key });
     const rev = get().state?.revisions?.volumes[key] ?? 0;
     set((s) => ({
