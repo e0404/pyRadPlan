@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Experimental web version of the GUI in `web/`: pyRadPlan runs in the browser with Pyodide (numpy backend), without a server. It mirrors the desktop GUI (plan form, objectives, dose influence, optimization with scipy or ipax, slice viewer, DVH and quality indicators, workspace load and save) and uses a 5 mm dose grid by default. Not available in the browser: image and DICOM import, Monte Carlo engines, IPOPT, GPU backends and the AI features
 - `pyRadPlan.app`: a session layer without Qt (`Session`, `Workspace`, `dispatch`) that holds the workflow logic of the GUIs. The desktop GUI and the web version both run on it
+- Documentation: a FAQ section on the Help and support page, starting with the GUI failing to start on Windows with an outdated Visual C++ Redistributable
 
 ### Changed
 
@@ -33,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Base data files could be removed outside the base data folder through a file name containing `..` or a path separator
 - Wrong masks and DVHs for structures sharing a name in the session layer
 - GUI: unexpected errors while preparing or committing a step were printed instead of shown
+- GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
+- A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
 
 ## [0.9.0] - 2026-11-18
 
