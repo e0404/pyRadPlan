@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Documentation: a FAQ section on the Help and support page, starting with the GUI failing to start on Windows with an outdated Visual C++ Redistributable
+
 ### Fixed
 
 - GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
