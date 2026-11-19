@@ -60,7 +60,7 @@ class OutcomeModel(OutcomeObjective):
         spec = data.get("model")
         try:
             nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
-        except OSError as exc:  # a ValueError lets pydantic report it as a validation error
+        except (OSError, ValueError) as exc:  # pydantic reports a ValueError as invalid input
             raise ValueError(f"Cannot load outcome model {spec!r}: {exc}") from exc
         nn_model.requires_grad_(False)
         if not isinstance(spec, str):
