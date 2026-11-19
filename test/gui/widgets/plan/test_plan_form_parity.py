@@ -23,7 +23,13 @@ from pyRadPlan.gui.widgets.plan import PlanWidget
 from pyRadPlan.gui.widgets.plan._optimization_dialog import OptimizationConfigDialog
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.io import load_tg119
+from pyRadPlan.optimization.solvers import get_available_solvers
 from pyRadPlan.scenarios import get_scenario_model_class
+
+
+skipif_no_ipopt = pytest.mark.skipif(
+    "ipopt" not in get_available_solvers(), reason="IPOPT is not installed on this system."
+)
 
 
 @pytest.fixture(scope="module")
@@ -449,7 +455,13 @@ def form_mismatches(tg119, steps) -> list[str]:
     return apply_mismatches(widget)
 
 
-@pytest.mark.parametrize("steps", [s for _, s in STATES], ids=[i for i, _ in STATES])
+@pytest.mark.parametrize(
+    "steps",
+    [
+        pytest.param(steps, id=name, marks=[skipif_no_ipopt] if "ipopt" in name else [])
+        for name, steps in STATES
+    ],
+)
 def test_apply_writes_the_plan_the_form_built(qapp, tg119, steps):
     assert form_mismatches(tg119, steps) == []
 

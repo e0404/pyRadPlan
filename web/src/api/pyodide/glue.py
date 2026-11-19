@@ -12,22 +12,15 @@ import json
 import math
 import traceback
 
+import numpy as np
 from pyodide.ffi import to_js
 
-_app = None
+from pyRadPlan import app
+from pyRadPlan.core import ProgressReporter
 
-
-def _get_app():
-    global _app
-    if _app is None:
-        from pyRadPlan import app
-        from pyRadPlan.core import ProgressReporter
-
-        # No console in a worker: tqdm bars would only flood stderr (and try to start a
-        # monitor thread); progress reaches the UI as protocol events instead.
-        ProgressReporter.console_progress = False
-        _app = app
-    return _app
+# No console in a worker: tqdm bars would only flood stderr (and try to start a monitor
+# thread); progress reaches the UI as protocol events instead.
+ProgressReporter.console_progress = False
 
 
 def _clean(obj):
@@ -55,15 +48,10 @@ def _dumps(obj):
 
 def _buffer_to_js(buf):
     """Copy a bytes-like object (or numpy array) into a new JS Uint8Array."""
-    try:
-        import numpy as np
-
-        if isinstance(buf, np.ndarray):
-            buf = np.ascontiguousarray(buf)
-            if buf.dtype.byteorder == ">":
-                buf = buf.astype(buf.dtype.newbyteorder("<"))
-    except ImportError:
-        pass
+    if isinstance(buf, np.ndarray):
+        buf = np.ascontiguousarray(buf)
+        if buf.dtype.byteorder == ">":
+            buf = buf.astype(buf.dtype.newbyteorder("<"))
     view = memoryview(buf)
     if view.ndim != 1 or view.format != "B":
         view = view.cast("B")
@@ -83,6 +71,17 @@ def _error_response(request_id, exc):
 
 
 async def web_dispatch(request_json, js_buffers, js_emit):
+    """Dispatch one protocol request and return ``[response_json, *buffers]`` as a JS array.
+
+    Parameters
+    ----------
+    request_json : str
+        The request without its binary buffers, as JSON.
+    js_buffers : list of JS Uint8Array
+        The request's binary buffers, in the order the request references them.
+    js_emit : JS function
+        Called with each progress/status event of the request as a JSON string.
+    """
     request = json.loads(request_json)
     request_id = request.get("id")
     request["buffers"] = [b.to_bytes() for b in js_buffers]
@@ -91,7 +90,7 @@ async def web_dispatch(request_json, js_buffers, js_emit):
         js_emit(_dumps(event))
 
     try:
-        response = _get_app().dispatch(request, emit)
+        response = app.dispatch(request, emit)
         if inspect.isawaitable(response):
             response = await response
     except BaseException as exc:  # noqa: BLE001 - KeyboardInterrupt from the interrupt buffer too

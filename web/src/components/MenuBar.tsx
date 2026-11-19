@@ -57,8 +57,10 @@ function EntryView(props: { entry: MenuEntry; run: (item: MenuItem) => void }) {
           title={entry.tooltip}
           data-testid={`menu-item-${entry.id}`}
           onClick={(e) => {
+            // Opens rather than toggles, like Qt: the hover before the click has usually
+            // opened it already, and a toggle would close it again.
             e.stopPropagation();
-            if (entry.enabled) setOpen(!open);
+            if (entry.enabled) setOpen(true);
           }}
         >
           {entry.label}

@@ -121,7 +121,6 @@ async function initialize(config: WorkerConfig): Promise<void> {
   progress("Importing pyRadPlan.app…", 0.93);
   const glue = py.toPy({});
   py.runPython(glueSource, { globals: glue });
-  glue.get("_get_app")();
   dispatchFn = glue.get("web_dispatch");
   boot({ phase: "ready", message: `pyRadPlan ${version} ready`, fraction: 1 });
 }

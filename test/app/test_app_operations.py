@@ -234,3 +234,32 @@ def test_an_interrupt_under_pyodide_stops_an_optimization_with_its_result(monkey
     stopping.keeps_partial_result = True
     assert session.execute(stopping) == "last iterate"
     assert session.history.optimization["outcome"] == "stopped"
+
+
+def test_an_interrupt_library_code_turns_into_another_error_still_stops(monkeypatch):
+    """An interrupt reported as another error still stops the operation.
+
+    numpy does this: an exception raised while it promotes the dtypes of a structured
+    comparison (Python code, run e.g. by ``np.unique(..., axis=...)``) becomes a TypeError.
+    """
+    import signal
+
+    monkeypatch.setattr("pyRadPlan.app._session.running_in_pyodide", lambda: True)
+
+    def compute():
+        try:
+            signal.raise_signal(signal.SIGINT)
+        except KeyboardInterrupt:
+            raise TypeError("Cannot compare structured arrays") from None
+
+    operation = Operation("dose_influence", "Dose influence", compute, lambda v: v)
+    with pytest.raises(KeyboardInterrupt) as raised:
+        Session().execute(operation)
+    assert isinstance(raised.value.__cause__, TypeError)
+
+    def fails():
+        raise TypeError("a genuine error")
+
+    failing = Operation("dose_influence", "Dose influence", fails, lambda v: v)
+    with pytest.raises(TypeError, match="genuine"):
+        Session().execute(failing)

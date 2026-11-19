@@ -170,6 +170,8 @@ try {
   expect(folderTip.includes("SimpleITK"), `Load Folder tooltip carries the capability reason: ${folderTip.split("\n").pop()}`);
   await tid("menu-item-phantoms").hover();
   await tid("submenu-phantoms").waitFor();
+  await tid("menu-item-phantoms").click();
+  expect((await tid("submenu-phantoms").count()) === 1, "clicking a submenu opened by hovering keeps it open");
   await shot("file-menu-empty");
   await page.keyboard.press("Escape");
 

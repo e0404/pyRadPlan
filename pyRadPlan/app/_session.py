@@ -133,18 +133,27 @@ def _interrupt_requests_stop(operation: Operation) -> Iterator[None]:
     operation keeping its partial result, the first interrupt requests a cooperative stop
     through its control instead (an optimization ends after the current iteration); a
     second one raises ``KeyboardInterrupt`` as before.
+
+    Library code can turn the ``KeyboardInterrupt`` into another error: numpy reports any
+    exception raised during the dtype promotion of a structured comparison (which runs
+    Python code, e.g. inside ``np.unique(..., axis=...)``) as a ``TypeError``. An error
+    escaping after the interrupt was raised is therefore re-raised as the interrupt.
     """
-    if not operation.keeps_partial_result or not running_in_pyodide():
+    if not running_in_pyodide():
         yield
         return
     import signal  # noqa: PLC0415
 
     control = operation.control
+    interrupted = False
 
     def handler(signum: int, frame: Any) -> None:
-        if control.stop_requested:
-            raise KeyboardInterrupt
-        control.request_stop()
+        nonlocal interrupted
+        if operation.keeps_partial_result and not control.stop_requested:
+            control.request_stop()
+            return
+        interrupted = True
+        raise KeyboardInterrupt
 
     try:
         previous = signal.signal(signal.SIGINT, handler)
@@ -153,6 +162,10 @@ def _interrupt_requests_stop(operation: Operation) -> Iterator[None]:
         return
     try:
         yield
+    except Exception as exc:
+        if interrupted and not isinstance(exc, ComputeCancelledError):
+            raise KeyboardInterrupt from exc
+        raise
     finally:
         signal.signal(signal.SIGINT, previous)
 
