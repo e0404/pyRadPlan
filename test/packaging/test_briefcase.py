@@ -1,6 +1,10 @@
-"""The desktop bundle must install the same GUI dependencies as the library's gui extra."""
+"""Checks of the Briefcase desktop bundle against the library."""
 
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 try:
     import tomllib
@@ -16,3 +20,21 @@ def test_bundle_requires_match_gui_extra():
     requires = bundle["tool"]["briefcase"]["app"]["pyradplan_app"]["requires"]
 
     assert set(root["project"]["optional-dependencies"]["gui"]) <= set(requires)
+
+
+def test_app_loads_qt_before_simpleitk(monkeypatch):
+    """The app imports Qt first, so on Windows Qt uses the C++ runtime PySide6 ships."""
+    pytest.importorskip("PySide6")
+    monkeypatch.delenv("PYRADPLAN_GUI_DISABLED", raising=False)
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import pyradplan_app.app; "
+        "mods = list(sys.modules); "
+        "print(mods.index('PySide6.QtCore') < mods.index('SimpleITK'))"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(ROOT / "packaging/briefcase/src")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "True"
