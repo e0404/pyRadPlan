@@ -18,6 +18,7 @@ from pydantic import (
     SerializationInfo,
     SerializerFunctionWrapHandler,
     ValidationError,
+    SerializeAsAny,
 )
 from numpydantic import NDArray, Shape
 from pyRadPlan.util.helpers import dl2ld, ld2dl
@@ -52,7 +53,9 @@ class Ray(PyRadPlanBaseModel):
         The beamlets in the ray.
     """
 
-    beamlets: list[Union[Beamlet, FieldShapeAsMask, FieldShapeAsBLD, FieldShapeComposite]]
+    beamlets: list[
+        SerializeAsAny[Union[Beamlet, FieldShapeAsMask, FieldShapeAsBLD, FieldShapeComposite]]
+    ]
 
     ray_pos_bev: NDArray[Shape["3"], np.float64] = Field(alias="rayPos_bev")
     ray_pos: NDArray[Shape["3"], np.float64]
@@ -78,6 +81,21 @@ class Ray(PyRadPlanBaseModel):
                 v = v.astype(float)
             v = v.reshape((3,))
         return handler(v)
+
+    @field_validator("beamlets", mode="before")
+    @classmethod
+    def _restore_field_shape_types(cls, v: Any) -> Any:
+        """Rebuild the field shape subclasses from dumped beamlets (identified by their fields)."""
+        if not isinstance(v, list):
+            return v
+        shape_types = {"bld": FieldShapeAsBLD, "shapes": FieldShapeComposite}
+        restored = []
+        for item in v:
+            shape_type = None
+            if isinstance(item, dict):
+                shape_type = next((t for key, t in shape_types.items() if key in item), None)
+            restored.append(item if shape_type is None else shape_type.model_validate(item))
+        return restored
 
     # Custom validator to convert list to np.ndarray
     @model_validator(mode="wrap")

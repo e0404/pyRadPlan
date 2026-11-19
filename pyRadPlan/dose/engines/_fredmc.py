@@ -238,6 +238,32 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         base_path = self._inp_dir if subfolder == "inp" else getattr(self, f"_{subfolder}_dir")
         return Path(os.path.join(base_path, filename))
 
+    def _input_only_settings(self, directory: Path) -> dict[str, Any]:
+        return {
+            "external_calculation": True,
+            "save_input": directory,
+            "save_output": False,
+            "use_output": False,
+        }
+
+    def _expected_input_files(self, directory: Path, stf: SteeringInformation) -> list[Path]:
+        inp = directory / self._input_foldername
+        patient = Path(self._patient_filename)
+        return [
+            inp / self._run_input_filename,
+            inp / self._plan_foldername / self._plan_filename,
+            inp / self._plan_foldername / self._plan_delivery_filename,
+            inp / self._regions_foldername / self._regions_filename,
+            inp / self._regions_foldername / self.HU_table_file,
+            inp / self._regions_foldername / patient,
+            inp / self._regions_foldername / patient.with_suffix(".raw"),
+        ]
+
+    def existing_input_files(self, directory: Union[str, os.PathLike]) -> list[Path]:
+        return [
+            path for path in self._expected_input_files(Path(directory), None) if path.exists()
+        ]
+
     def _write_run_file(self) -> None:
         """Write main run file for the FRED engine."""
         file_content = textwrap.dedent("""
@@ -694,9 +720,12 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         if self._use_output is not None:
             self.fred_order = self._generate_fred_order(dij, stf)
         if self.dose_cube is None:
+            columns = 1 if self._calc_dose_direct else stf.total_number_of_bixels
             dij["physical_dose"] = sparse.csc_array(
-                (dij["dose_grid"].num_voxels, stf.total_number_of_bixels), dtype=np.int8
+                (dij["dose_grid"].num_voxels, columns), dtype=np.int8
             )
+            if self._calc_dose_direct:
+                self._collapse_direct_dij(dij)
 
         else:
             # Fill dij
@@ -944,18 +973,7 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                     shape=(self.dose_grid.num_voxels, 1),
                 )
                 self._store_let_quantities(dij, let_dose)
-            dij_fields_to_override = [
-                "num_of_beams",
-                "total_number_of_bixels",
-                "total_number_of_rays",
-                "num_of_rays_per_beam",
-            ]
-            for field_name in dij_fields_to_override:
-                dij[field_name] = 1
-
-            dij["beam_num"] = 0
-            dij["bixel_num"] = 0
-            dij["ray_num"] = 0
+            self._collapse_direct_dij(dij)
         else:
             # Scorer-ij mode
             self.dose_cube = sparse.csc_array(self.dose_cube)
@@ -972,6 +990,21 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 self._store_let_quantities(dij, let_dose)
 
         return dij
+
+    @staticmethod
+    def _collapse_direct_dij(dij: dict) -> None:
+        """Describe the single column of a forward calculation in the dij bookkeeping."""
+        for field_name in (
+            "num_of_beams",
+            "total_number_of_bixels",
+            "total_number_of_rays",
+            "num_of_rays_per_beam",
+        ):
+            dij[field_name] = 1
+
+        dij["beam_num"] = 0
+        dij["bixel_num"] = 0
+        dij["ray_num"] = 0
 
     def _store_let_quantities(self, dij: dict[str, Any], let_dose: sparse.csc_array) -> None:
         """Store the LET matrix and any biological matrices derived from it."""

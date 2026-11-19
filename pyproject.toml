@@ -99,7 +99,7 @@ jax    = ["jax>=0.4.35,<0.13"]
 # Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
 profiling = ["line_profiler>=4.0,<6"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.18","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.18","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext","dicom-validator"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"

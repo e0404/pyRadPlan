@@ -4,7 +4,16 @@ from typing import TYPE_CHECKING
 
 from .._lazy import attach_lazy
 from ._exceptions import PyRadPlanError
-from .datamodel import PyRadPlanBaseModel
+from .datamodel import PyRadPlanBaseModel, decode_input
+from ._serialization import (
+    ARRAY_TAG,
+    decode_tree,
+    encode_tree,
+    is_array_leaf,
+    json_leaf_decoder,
+    json_leaf_encoder,
+    to_json_tree,
+)
 from ._configurable import (
     AlgorithmConfig,
     AlgorithmParameterMetadata,
@@ -56,6 +65,14 @@ from ._progress import (
 )
 
 __all__ = [
+    "ARRAY_TAG",
+    "decode_tree",
+    "encode_tree",
+    "is_array_leaf",
+    "json_leaf_decoder",
+    "json_leaf_encoder",
+    "to_json_tree",
+    "decode_input",
     "PyRadPlanBaseModel",
     "PyRadPlanError",
     "Grid",

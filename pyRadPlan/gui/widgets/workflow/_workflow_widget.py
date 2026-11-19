@@ -108,9 +108,22 @@ def _folder_has_images(directory: str) -> bool:
     return False
 
 
+_HDF5_WORKSPACE_EXTENSIONS = (".h5", ".hdf5")
+_PICKLE_WORKSPACE_EXTENSIONS = (".pkl", ".pickle")
+
+
 def _build_save_filter() -> str:
-    """Offer the format that preserves all workspace objects and result quantities."""
-    return "pyRadPlan workspace (*.pkl *.pickle)"
+    """Offer the formats that preserve all workspace objects and result quantities.
+
+    HDF5 comes first and is the default; pickle stays available for workspaces that
+    hold objects HDF5 cannot rebuild.
+    """
+    return ";;".join(
+        [
+            "pyRadPlan workspace, HDF5 (*.h5 *.hdf5)",
+            "pyRadPlan workspace, pickle (*.pkl *.pickle)",
+        ]
+    )
 
 
 def _image_formats() -> list[tuple[str, str]]:
@@ -133,6 +146,12 @@ def _image_formats() -> list[tuple[str, str]]:
             continue
         formats.append((fmt, exporter_cls.extensions[0]))
     return formats
+
+
+def _available_formats() -> set:
+    from pyRadPlan.io import get_available_formats  # noqa: PLC0415
+
+    return set(get_available_formats())
 
 
 def _build_image_save_filter() -> str:
@@ -732,7 +751,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._on_load_dij()
 
     def save_workspace(self) -> None:
-        """Save the complete workspace to a pickle file."""
+        """Save the complete workspace to an HDF5 (default) or pickle file."""
         self._on_save_workspace()
 
     def save_plan(self) -> None:
@@ -810,7 +829,7 @@ class WorkflowWidget(WorkspaceWidget):
             return
 
         # A bare image file carries no semantics (CT? mask? dose?); ask the user.
-        # Container formats (.mat/.npz/.pkl) and DICOM keep the direct load path.
+        # Container formats (.mat/.npz/.h5/.pkl) and DICOM keep the direct load path.
         from pyRadPlan.io.sitk_based._binary_import import IMAGE_EXTENSIONS  # noqa: PLC0415
 
         if filepath.lower().endswith(IMAGE_EXTENSIONS):
@@ -1493,22 +1512,36 @@ class WorkflowWidget(WorkspaceWidget):
             return
         if not self._resolve_pending_changes("Save Workspace"):
             return
-        filepath, _ = QFileDialog.getSaveFileName(self, "Save workspace", "", _build_save_filter())
+        filepath, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save workspace", "", _build_save_filter()
+        )
         if not filepath:
             return
         extension = os.path.splitext(filepath)[1].lower()
-        if extension and extension not in (".pkl", ".pickle"):
+        if extension and extension not in (
+            *_HDF5_WORKSPACE_EXTENSIONS,
+            *_PICKLE_WORKSPACE_EXTENSIONS,
+        ):
             QMessageBox.warning(
-                self, "Save Workspace", "Use .pkl or .pickle to save the complete workspace."
+                self,
+                "Save Workspace",
+                "Use .h5, .hdf5, .pkl or .pickle to save the complete workspace.",
             )
             return
+        if extension:
+            fmt = "pickle" if extension in _PICKLE_WORKSPACE_EXTENSIONS else "hdf5"
+        else:
+            fmt = "pickle" if "*.pkl" in (selected_filter or "") else "hdf5"
         objects = {key: getattr(ws, key) for key in ws.keys if ws.has(key)}
         objects["saved_result_tags"] = list(self._saved_tags)
+        exporter_options = {"strict": True} if fmt == "hdf5" else None
 
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            return save_data(file_name=filepath, format="pickle", **objects)
+            return save_data(
+                file_name=filepath, format=fmt, exporter_options=exporter_options, **objects
+            )
 
         self._run_save(_save, "Saving workspace…", "Save Workspace")
 
@@ -1537,26 +1570,35 @@ class WorkflowWidget(WorkspaceWidget):
         self._save_single_object("Save Dij", "dij", self._ws.dij)
 
     @staticmethod
-    def _cst_export_options() -> list[tuple[str, str, Optional[str], bool, bool]]:
-        """Return the CST export targets: (label, format, dicom_structure, is_dir, keeps_objectives).
+    def _cst_export_options() -> list[tuple[str, str, Optional[dict], bool, bool]]:
+        """Return the CST export targets: (label, format, exporter_options, is_dir, keeps_objectives).
 
         Only formats with a registered exporter are offered. Container formats
-        (mat/pickle/npz) write a single file; the image/DICOM backends write a
-        folder (a label map for the SimpleITK formats, a CT + RTSTRUCT/SEG series
-        for DICOM). Objectives only survive in mat/pickle.
+        (mat/hdf5/pickle/npz) write a single file; the image/DICOM backends write a
+        folder (a label map for the SimpleITK formats, or a Slicer segmentation that keeps
+        overlapping structures; a CT + RTSTRUCT/SEG series for DICOM). Objectives only
+        survive in mat/hdf5/pickle.
         """
         from pyRadPlan.io import get_available_formats  # noqa: PLC0415
 
         available = get_available_formats()
         candidates = [
             ("MATLAB (*.mat)", "mat", None, False, True),
+            ("HDF5 (*.h5)", "hdf5", None, False, True),
             ("Pickle (*.pkl)", "pickle", None, False, True),
             ("NumPy (*.npz)", "npz", None, False, False),
-            ("NIfTI label map (folder)", "nifti", None, True, False),
-            ("NRRD label map (folder)", "nrrd", None, True, False),
-            ("MetaImage label map (folder)", "meta", None, True, False),
-            ("DICOM RTSTRUCT (folder)", "dcm", "rtstruct", True, False),
-            ("DICOM SEG (folder)", "dcm", "seg", True, False),
+            ("NIfTI segmentation (folder)", "nifti", None, True, False),
+            ("NRRD segmentation (folder)", "nrrd", None, True, False),
+            ("MetaImage segmentation (folder)", "meta", None, True, False),
+            (
+                "Slicer segmentation (.seg.nrrd, keeps overlaps) (folder)",
+                "nrrd",
+                {"segmentation": "layers"},
+                True,
+                False,
+            ),
+            ("DICOM RTSTRUCT (folder)", "dcm", {"structure_format": "rtstruct"}, True, False),
+            ("DICOM SEG (folder)", "dcm", {"structure_format": "seg"}, True, False),
         ]
         return [c for c in candidates if c[1] in available]
 
@@ -1571,7 +1613,7 @@ class WorkflowWidget(WorkspaceWidget):
         choice, ok = QInputDialog.getItem(self, "Save CST", "Export format:", labels, 0, False)
         if not ok or not choice:
             return
-        _label, fmt, structure_format, is_dir, keeps_objectives = next(
+        _label, fmt, preset_options, is_dir, keeps_objectives = next(
             opt for opt in options if opt[0] == choice
         )
 
@@ -1602,18 +1644,74 @@ class WorkflowWidget(WorkspaceWidget):
         if not target:
             return
 
+        options = dict(preset_options) if preset_options else None
+        if fmt == "dcm":
+            from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
+
+            existing = find_dicom_files(target)
+            if existing:
+                answer = QMessageBox.question(
+                    self,
+                    "Save CST",
+                    f"The folder already contains {len(existing)} DICOM file(s):\n{target}\n\n"
+                    "Replace the existing DICOM files?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                options = {**(options or {}), "overwrite": True}
+
         def _save() -> Any:
             from pyRadPlan.io import save_data  # noqa: PLC0415
 
-            if structure_format == "seg":
-                # save_data has no structure_format hook; use the exporter directly.
-                from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
-
-                DicomExporter(target, structure_format="seg").save(cst=cst)
-                return target
-            return save_data(file_name=target, format=fmt, cst=cst)
+            return save_data(file_name=target, format=fmt, cst=cst, exporter_options=options)
 
         self._run_save(_save, "Saving CST…", "Save CST")
+
+    def _save_result_dicom(self, keys: list, result: dict) -> None:
+        """Export the selected result quantities as DICOM RTDOSE files into a folder."""
+        target = QFileDialog.getExistingDirectory(self, "Save Result — DICOM RTDOSE")
+        if not target:
+            return
+
+        options: dict[str, Any] = {}
+        from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
+
+        existing = find_dicom_files(target)
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                "Save Result",
+                f"The folder already contains {len(existing)} DICOM file(s):\n{target}\n\n"
+                "Replace the existing DICOM files?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            options["overwrite"] = True
+
+        selected = {key: self._quantity_to_image(result[key], self._ws.ct) for key in keys}
+        selected = {key: image for key, image in selected.items() if image is not None}
+        ct, pln, stf = self._ws.ct, self._ws.pln, self._ws.stf
+        weights = result.get("w")
+
+        def _save() -> Any:
+            from pyRadPlan.io import save_data  # noqa: PLC0415
+
+            return save_data(
+                file_name=target,
+                format="dcm",
+                ct=ct,
+                result=selected,
+                pln=pln,
+                stf=stf,
+                weights=weights,
+                exporter_options=options,
+            )
+
+        self._run_save(_save, "Saving result…", "Save Result")
 
     def _on_save_result_to_disk(self) -> None:  # noqa: PLR0911 - guard-heavy dialog flow
         import numpy as np  # noqa: PLC0415
@@ -1654,6 +1752,15 @@ class WorkflowWidget(WorkspaceWidget):
                 self, "Save Result", "Selected quantities could not be converted to images."
             )
             return
+
+        if "dcm" in _available_formats():
+            kinds = ["Image files", "DICOM CT + RTDOSE (+ ion RTPLAN) (folder)"]
+            kind, ok = QInputDialog.getItem(self, "Save Result", "Export as:", kinds, 0, False)
+            if not ok:
+                return
+            if kind == kinds[1]:
+                self._save_result_dicom(list(images), result)
+                return
 
         if len(images) == 1:
             ((key, image),) = images.items()
