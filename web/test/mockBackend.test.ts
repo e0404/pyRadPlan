@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BackendError } from "../src/api/backend";
 import { MockBackend } from "../src/api/mock/mockBackend";
+import { DEFAULT_SOLVER } from "../src/api/mock/planData";
 import type { BackendEvent } from "../src/api/protocol";
 
 async function newSession() {
@@ -179,7 +180,7 @@ describe("MockBackend", () => {
     const opt = await backend.request("workflow.calc_dose_influence", {}, session).then(() =>
       backend.request("workflow.optimize", { max_iter: 5 }, session),
     );
-    expect(opt.optimization).toMatchObject({ solver: "scipy", num_iter: 5 });
+    expect(opt.optimization).toMatchObject({ solver: DEFAULT_SOLVER, num_iter: 5 });
     expect(opt.actions.recalc).toBe(true);
     state = await backend.request("workflow.recalc", {}, session);
     expect(state.stages.optimization).toBe("done");

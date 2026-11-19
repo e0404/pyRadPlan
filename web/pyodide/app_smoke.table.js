@@ -154,10 +154,10 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
   {
     v: 1,
     method: "data.load_file",
-    note: "workspace pickled natively with real SimpleITK",
+    note: "loading a pickle is refused in the browser (unpickling runs code from the file)",
     needs: "results/tg119_native.pkl",
     params: { filename: "tg119_native.pkl", data: { $file: "results/tg119_native.pkl" } },
-    expect: (r) => (r.has.ct && r.has.cst) || "ct/cst missing",
+    expectError: { type: "PreconditionError", code: "not_available" },
   },
   { v: 1, method: "export.save", params: { object: "workspace", format: "pickle" } },
 

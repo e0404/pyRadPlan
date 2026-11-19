@@ -36,8 +36,14 @@ def _pin_environment() -> None:
 
 
 def _simulate_pyodide() -> None:
-    from pyRadPlan.app import _io, _profiles, _session, _session_editors, _settings
-    from pyRadPlan.optimization import solvers
+    from pyRadPlan.app import (  # noqa: PLC0415
+        _io,
+        _profiles,
+        _session,
+        _session_editors,
+        _settings,
+    )
+    from pyRadPlan.optimization import solvers  # noqa: PLC0415
 
     def in_pyodide() -> bool:
         return True
@@ -58,7 +64,7 @@ class Recorder:
     """Send requests to the application layer and return their results."""
 
     def __init__(self) -> None:
-        from pyRadPlan.app import SessionManager, dispatch
+        from pyRadPlan.app import SessionManager, dispatch  # noqa: PLC0415
 
         self._dispatch = dispatch
         self._manager = SessionManager()

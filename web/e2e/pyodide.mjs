@@ -400,12 +400,11 @@ try {
     const ws = saved["workspace.pickle"];
     expect(Boolean(ws), "workspace pickle saved");
     await tid("file-input").setInputFiles(ws);
-    await page.waitForTimeout(500);
-    await waitIdle();
-    if (await tid("error-dialog").count()) throw new Error(`workspace reload: ${await tid("error-dialog").textContent()}`);
-    if (await tid("run-warnings").count()) await tid("msg-ok").click();
-    const s = await state();
-    expect(s.has.ct && s.has.dij && s.has.result && s.results.tags.includes("five_beams"), "workspace pickle reloads ct, dij, result and snapshot tags");
+    await tid("message-box").waitFor({ timeout: 10000 });
+    const refusal = (await tid("message-box").textContent()) ?? "";
+    expect(/disabled in the browser/.test(refusal), "loading a workspace pickle is refused with the reason");
+    await tid("msg-ok").click();
+    await tid("message-box").waitFor({ state: "detached", timeout: 10000 });
     const mat = saved["pln.mat"];
     await tid("file-input").setInputFiles(mat);
     await page.waitForTimeout(500);
