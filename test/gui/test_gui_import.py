@@ -22,6 +22,12 @@ class _Fail(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, _Fail())
 """
 
+# Makes the given module behave as if it were not installed, for import and find_spec alike.
+MISSING = """
+import sys
+sys.modules[{module!r}] = None
+"""
+
 REPORT = """
 import warnings
 with warnings.catch_warnings(record=True) as caught:
@@ -90,7 +96,8 @@ def test_qt_runs_on_bundled_msvc_runtime(monkeypatch):
 @pytest.mark.parametrize("module", ["PySide6", "pyqtgraph"])
 def test_missing_dependency_suggests_extra(module, monkeypatch):
     """A missing GUI dependency asks to install the extra, without a warning."""
-    out = _run_with_failing_import(module, f"ModuleNotFoundError(name={module!r})", monkeypatch)
+    monkeypatch.delenv("PYRADPLAN_GUI_DISABLED", raising=False)
+    out = _run(MISSING.format(module=module) + REPORT)
     assert "AVAILABLE False" in out
     assert "WARNINGS []" in out
     assert "pip install 'pyRadPlan[gui]'" in out
