@@ -1,4 +1,7 @@
-"""Protocol v1 methods, part A (registered on import by :mod:`pyRadPlan.app._dispatch`)."""
+"""Methods of the plan editor, structures, tissues, objectives, results and history.
+
+Registered on import by :mod:`pyRadPlan.app._dispatch`.
+"""
 
 from __future__ import annotations
 

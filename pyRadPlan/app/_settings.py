@@ -15,7 +15,13 @@ from importlib import metadata
 from typing import Any, Callable, Mapping, Optional
 
 from ._forms import build_form, jsonable, validate_values
-from ._io import export_formats, import_formats, module_missing, sitk_missing
+from ._io import (
+    export_formats,
+    import_formats,
+    module_missing,
+    pickle_load_reason,
+    sitk_missing,
+)
 from ._profiles import default_profile, running_in_pyodide
 from ._session import PreconditionError
 
@@ -57,7 +63,7 @@ def _gpu_reason() -> Optional[str]:
     return f"No GPU array backend ({', '.join(BACKENDS.values())}) is installed"
 
 
-def feature_reasons() -> dict[str, Optional[str]]:
+def feature_reasons(allow_pickle: bool = True) -> dict[str, Optional[str]]:
     """Why each feature is unavailable in this runtime (``None``: available)."""
     from pyRadPlan.optimization.solvers import IPOPT_DISABLED_REASON  # noqa: PLC0415
 
@@ -71,6 +77,7 @@ def feature_reasons() -> dict[str, Optional[str]]:
         "ipopt": IPOPT_DISABLED_REASON,
         "gpu": _gpu_reason(),
         "numba": module_missing("numba"),
+        "pickle_load": pickle_load_reason(allow_pickle),
         "monte_carlo": "Monte Carlo engines run external programs, which the browser "
         "runtime cannot start"
         if pyodide
@@ -87,15 +94,15 @@ def feature_reasons() -> dict[str, Optional[str]]:
     }
 
 
-def capabilities() -> dict[str, Any]:
+def capabilities(allow_pickle: bool = True) -> dict[str, Any]:
     """Return the ``capabilities`` of ``app.info`` v1."""
     features = {
         name: {"available": reason is None, "reason": reason}
-        for name, reason in feature_reasons().items()
+        for name, reason in feature_reasons(allow_pickle).items()
     }
     return {
         "features": features,
-        "formats": {"import": import_formats(), "export": export_formats()},
+        "formats": {"import": import_formats(allow_pickle), "export": export_formats()},
     }
 
 
@@ -119,11 +126,11 @@ def quantity_list() -> list[dict[str, str]]:
     return rows
 
 
-def app_info_v1() -> dict[str, Any]:
+def runtime_info(allow_pickle: bool = True) -> dict[str, Any]:
     """Return the fields ``app.info`` v1 adds to the v0 ones."""
     return {
         "runtime": runtime(),
-        "capabilities": capabilities(),
+        "capabilities": capabilities(allow_pickle),
         "quantities": quantity_list(),
         "default_profile": default_profile(),
     }

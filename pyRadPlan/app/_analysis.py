@@ -25,7 +25,7 @@ def _require_entry(session: Any, key: str) -> None:
 def dvh_sets(
     session: Any,
     keys: Sequence[str],
-    names: Optional[Sequence[str]] = None,
+    names: Optional[Sequence[Any]] = None,
     num_points: int = 500,
     range_mode: str = "shared",
 ) -> dict[str, Any]:
@@ -35,11 +35,12 @@ def dvh_sets(
     result = session.workspace.result
     for key in keys:
         _require_entry(session, key)
-    vois = session.views._vois(names)
+    indices = session.views.structure_indices(names)
+    vois = [session.workspace.cst.vois[i] for i in indices]
     sets = []
     for key in keys:
         info = component_info(result, key)
-        curves = session.views.dvh_curves(key, vois, num_points, range_mode)
+        curves = session.views.dvh_curves(key, indices, num_points, range_mode)
         sets.append(
             {
                 "key": key,
@@ -48,8 +49,8 @@ def dvh_sets(
                 "unit": info["unit"],
                 "unit_info": unit_info(info["unit"]),
                 "curves": [
-                    {"name": voi.name, "color": list(voi.color), **curve}
-                    for voi, curve in zip(vois, curves)
+                    {"name": voi.name, "index": i, "color": list(voi.color), **curve}
+                    for i, voi, curve in zip(indices, vois, curves)
                     if curve["stats"]["mean"] is not None
                 ],
             }
@@ -83,7 +84,7 @@ def _value_unit(qi: Any) -> str:
 def quality_indicators(
     session: Any,
     quantity: str,
-    names: Optional[Sequence[str]] = None,
+    names: Optional[Sequence[Any]] = None,
     ref_vols: Optional[Sequence[float]] = None,
     ref_doses: Optional[Sequence[float]] = None,
 ) -> dict[str, Any]:
@@ -104,13 +105,15 @@ def quality_indicators(
 
     _require_entry(session, quantity)
     info = component_info(session.workspace.result, quantity)
-    vois = session.views._vois(names)
+    indices = session.views.structure_indices(names)
+    vois = [session.workspace.cst.vois[i] for i in indices]
     values = session.views.volume_array(quantity)
     used_vols = _valid_list(ref_vols, lambda v: 0.0 <= v <= 100.0) or list(DEFAULT_REF_VOLS)
     used_doses = _valid_list(ref_doses, lambda v: v >= 0.0)
     if used_doses is None:
         used_doses = QICollection.default_ref_doses(values)
-    masks = {voi.name: session.views.mask_array(voi) for voi in vois}
+    keys = [str(i) for i in indices]
+    masks = {key: session.views.mask_array(i) for key, i in zip(keys, indices)}
     qis = QICollection.from_masks(
         masks,
         values,
@@ -118,7 +121,7 @@ def quality_indicators(
         ref_doses=used_doses,
         dose_unit=safe_unit(info["unit"]),
     )
-    metric_ids = qis.metric_ids([voi.name for voi in vois])
+    metric_ids = qis.metric_ids(keys)
     metrics = []
     for metric in metric_ids:
         qi = next(s.metrics[metric] for s in qis if metric in s.metrics)
@@ -134,15 +137,15 @@ def quality_indicators(
             entry["parameter"] = float(qi.ref_dose)
         metrics.append(entry)
     rows = []
-    for voi in vois:
-        structure = qis[voi.name]
+    for key, i, voi in zip(keys, indices, vois):
+        structure = qis[key]
         row_values = {}
         for metric in metric_ids:
             qi = structure.metrics.get(metric)
             row_values[metric] = (
                 None if qi is None or not np.isfinite(qi.value) else float(qi.value)
             )
-        rows.append({"name": voi.name, "color": list(voi.color), "values": row_values})
+        rows.append({"name": voi.name, "index": i, "color": list(voi.color), "values": row_values})
     return {
         "quantity": quantity,
         "label": info["meta_label"],

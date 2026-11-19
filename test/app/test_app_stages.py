@@ -3,18 +3,17 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pyRadPlan.app import (
-    StageTracker,
-    Workspace,
+from pyRadPlan.app import StageTracker, Workspace
+from pyRadPlan.app._stages import (
     available_actions,
     merge_loaded_data,
     nested_fraction,
+    progress_detail,
     recalculation_angles_match,
     stage_status,
     status_text,
     tissue_signature,
 )
-from pyRadPlan.app._stages import progress_detail
 from pyRadPlan.app._workspace import WORKSPACE_KEYS
 
 
@@ -119,6 +118,42 @@ def test_renaming_a_structure_keeps_the_dose_influence():
     t = Tracked()
     _all_loaded(t, cst)
     cst.vois = [cst.vois[0].model_copy(update={"name": "Renamed"}), *cst.vois[1:]]
+    t.ws.cst = cst
+    assert not t.tracker.dij_stale
+
+
+def test_replacing_a_mask_outdates_the_dose_influence():
+    import SimpleITK as sitk
+
+    from pyRadPlan.cst import recreate_voi
+
+    _, cst = _tg119()
+    t = Tracked()
+    _all_loaded(t, cst)
+
+    voi = cst.vois[0]
+    shrunk = sitk.GetArrayFromImage(voi.mask).copy()
+    shrunk[shrunk.nonzero()[0][0], ...] = 0
+    mask = sitk.GetImageFromArray(shrunk)
+    mask.CopyInformation(voi.mask)
+    cst.vois = [recreate_voi(voi, mask=mask), *cst.vois[1:]]
+    t.ws.cst = cst
+    assert t.tracker.dij_stale and t.tracker.result_stale and not t.tracker.stf_stale
+
+
+def test_display_edits_keep_the_dose_influence():
+    from pyRadPlan.cst import recreate_voi
+
+    _, cst = _tg119()
+    t = Tracked()
+    _all_loaded(t, cst)
+
+    cst.vois[0].visible = not cst.vois[0].visible
+    t.ws.cst = cst
+    cst.vois = [
+        recreate_voi(cst.vois[0], color=(1, 2, 3), name="Renamed"),
+        *cst.vois[1:],
+    ]
     t.ws.cst = cst
     assert not t.tracker.dij_stale
 

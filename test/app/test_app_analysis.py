@@ -37,8 +37,7 @@ def test_per_structure_dvh_sets_match_dvh_compute(pipeline):
             v.name for v in session.workspace.cst.vois
         }
         for curve in dvh_set["curves"]:
-            voi = next(v for v in session.workspace.cst.vois if v.name == curve["name"])
-            mask = views.mask_array(voi)
+            mask = views.mask_array(curve["index"])
             expected = DVH.compute(values, mask, num_points=1000)
             dose, volume = _arrays(response, curve)
             np.testing.assert_allclose(dose, expected.bins.astype(np.float32))
@@ -65,8 +64,12 @@ def test_v0_dvh_keeps_its_shape_and_adds_labels(pipeline):
 def _qi_reference(session, names, ref_vols, ref_doses):
     views = session.views
     values = views.volume_array("physical_dose")
-    vois = [v for v in session.workspace.cst.vois if names is None or v.name in names]
-    masks = {voi.name: views.mask_array(voi) for voi in vois}
+    vois = list(session.workspace.cst.vois)
+    masks = {
+        voi.name: views.mask_array(i)
+        for i, voi in enumerate(vois)
+        if names is None or voi.name in names
+    }
     return QICollection.from_masks(
         masks, values, ref_vols=ref_vols, ref_doses=ref_doses, dose_unit=safe_unit("Gy")
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
@@ -25,7 +26,7 @@ from pyRadPlan.core import (
 from ._plan import DEFAULT_PLAN, build_plan, plan_summary
 from ._profiles import running_in_pyodide
 from ._results import carry_forward, is_tagged
-from ._session_v1 import SessionV1Mixin
+from ._session_editors import SessionEditorsMixin
 from ._stages import (
     SCENARIO_LABELS_KEY,
     SCENARIO_SUFFIX,
@@ -210,7 +211,7 @@ def _json_number(value: Any) -> Any:
     return None
 
 
-class Session(SessionV1Mixin):
+class Session(SessionEditorsMixin):
     """One planning session, independent of any GUI toolkit.
 
     Owns (or wraps) a :class:`Workspace` and offers the workflow operations of the Qt
@@ -249,6 +250,8 @@ class Session(SessionV1Mixin):
     capture_logs
         Forward the ``pyRadPlan`` log records emitted while an operation runs as ``log``
         events. A host with its own log handler (the Qt log panel) turns this off.
+    allow_pickle
+        Whether pickle files may be loaded (they run code); never under Pyodide.
     """
 
     def __init__(  # noqa: PLR0913 - keyword-only host options
@@ -264,8 +267,10 @@ class Session(SessionV1Mixin):
         profile: Optional[str] = None,
         options: Optional[Mapping[str, Any]] = None,
         capture_logs: bool = True,
+        allow_pickle: bool = True,
     ) -> None:
         self.id = session_id
+        self.allow_pickle = allow_pickle
         self._owns_workspace = workspace is None
         self.workspace = workspace if workspace is not None else Workspace()
         self.auto_plan = auto_plan
@@ -281,7 +286,8 @@ class Session(SessionV1Mixin):
         self._busy: Optional[Operation] = None
         self._idle_callbacks: list[Callable[[], Any]] = []
         self._logged: set[tuple[str, str]] = set()
-        self._init_v1(profile, options, explicit_default_plan=default_plan is not None)
+        self._logged_lock = threading.Lock()
+        self._init_editors(profile, options, explicit_default_plan=default_plan is not None)
         self._unsubscribe = self.workspace.subscribe(self._on_workspace_changed)
 
     # ------------------------------------------------------------------
@@ -335,11 +341,12 @@ class Session(SessionV1Mixin):
 
     def _log(self, level: str, message: str, logger_name: str, report: bool = False) -> None:
         # Algorithms both log a warning and report it; the log shows it once.
-        repeat = (level, message) in self._logged
-        if repeat and not report:
-            return
-        if self._busy is not None:
-            self._logged.add((level, message))
+        with self._logged_lock:
+            repeat = (level, message) in self._logged
+            if repeat and not report:
+                return
+            if self._busy is not None:
+                self._logged.add((level, message))
         event = {"event": "log", "level": level, "message": message, "logger": logger_name}
         if report:
             # A WarningReport: what the Qt workflow collects and shows after the run.
@@ -355,7 +362,7 @@ class Session(SessionV1Mixin):
         ws = self.workspace
         self._tracker = self._tracker.update(changed_keys, ws.present(), ws.cst)
         self.views.invalidate()
-        self._v1_workspace_changed(changed_keys)
+        self._editors_workspace_changed(changed_keys)
         # A running operation emits the state once it ends, after all of its writes.
         if self._busy is None:
             self._emit_state()
@@ -365,7 +372,7 @@ class Session(SessionV1Mixin):
             if isinstance(report, WarningReport):
                 self._warn(report.message)
             elif isinstance(report, ProgressReport):
-                if not report.levels:
+                if not report.levels or not self._listeners:
                     return
                 self._emit(
                     {
@@ -378,11 +385,13 @@ class Session(SessionV1Mixin):
             elif isinstance(report, StatusReport):
                 data = {key: _json_number(value) for key, value in report.data.items()}
                 data = {key: value for key, value in data.items() if value is not None}
+                self._editors_status(operation, data)
+                if not self._listeners:
+                    return
                 iteration = data.get("iteration")
                 fraction = None
                 if operation.max_iter and isinstance(iteration, (int, float)):
                     fraction = min(max(float(iteration) / operation.max_iter, 0.0), 1.0)
-                self._v1_status(operation, data)
                 detail = " · ".join(
                     f"{key} {value:.6g}" if isinstance(value, float) else f"{key} {value}"
                     for key, value in data.items()
@@ -481,7 +490,7 @@ class Session(SessionV1Mixin):
             "status": self._busy.label if self._busy else status_text(present, self._tracker),
             "busy": self._busy.label if self._busy else None,
         }
-        return self._v1_state(state)
+        return self._editors_state(state)
 
     # ------------------------------------------------------------------
     # Host-scheduled operations
@@ -501,8 +510,9 @@ class Session(SessionV1Mixin):
         if self._busy is not None:
             raise PreconditionError(f"{self._busy.label} is still running", "busy")
         self._busy = operation
-        self._logged.clear()
-        self._v1_begin(operation)
+        with self._logged_lock:
+            self._logged.clear()
+        self._editors_begin(operation)
         self._emit_state()
 
     def run(self, operation: Operation) -> Any:
@@ -535,7 +545,7 @@ class Session(SessionV1Mixin):
         except BaseException as exc:
             self.abort(operation, exc)
             raise
-        self._v1_end(operation, "stopped" if operation.control.stop_requested else "done")
+        self._editors_end(operation, "stopped" if operation.control.stop_requested else "done")
         self._emit({"event": "progress", "label": operation.label, "fraction": 1.0, "detail": ""})
         self._busy = None
         self._emit_state()
@@ -547,7 +557,7 @@ class Session(SessionV1Mixin):
         if self._busy is not operation:
             return
         cancelled = isinstance(exc, (ComputeCancelledError, KeyboardInterrupt))
-        self._v1_end(operation, "stopped" if cancelled else "failed")
+        self._editors_end(operation, "stopped" if cancelled else "failed")
         self._busy = None
         self._emit_state()
         self._run_idle_callbacks()
@@ -641,7 +651,7 @@ class Session(SessionV1Mixin):
                 message = f"Default plan not applied: {type(exc).__name__}: {exc}"
                 self._warn(message)
                 warnings.append(message)
-        self._v1_loaded(data, payload)
+        self._editors_loaded(data, payload)
         if payload:
             ws.set_many(**payload)
         return warnings
@@ -659,25 +669,19 @@ class Session(SessionV1Mixin):
     def _prepare_load_dij(self, path: Any, label: Optional[str] = None) -> Operation:
         name = os.path.basename(os.fspath(path))
 
-        def compute() -> dict:
-            from pyRadPlan.io import load_data  # noqa: PLC0415
+        from ._io import check_pickle_load, load_path_data, prepare_load_dij  # noqa: PLC0415
 
-            return dij_payload(load_data(path), name)
-
-        return Operation(
-            "load_dij",
-            label or f"Loading dose influence from {name}",
-            compute,
-            lambda found: self.workspace.set_many(**found),
-        )
+        check_pickle_load(path, self.allow_pickle)
+        return prepare_load_dij(self, name, lambda: load_path_data(path, self.allow_pickle), label)
 
     def _prepare_load_path(self, path: Any, label: Optional[str] = None) -> Operation:
-        from ._io import load_path_data  # noqa: PLC0415
+        from ._io import check_pickle_load, load_path_data  # noqa: PLC0415
 
+        check_pickle_load(path, self.allow_pickle)
         return Operation(
             "load_path",
             label or f"Loading {os.path.basename(os.fspath(path))}",
-            lambda: load_path_data(path),
+            lambda: load_path_data(path, self.allow_pickle),
             self._commit_loaded,
         )
 
@@ -713,17 +717,10 @@ class Session(SessionV1Mixin):
 
         return self._prepare_load_path(phantom_path(name), label=f"Loading {name}")
 
-    def _prepare_load_file(self, filename: str, data: Any) -> Operation:
-        from ._io import _load_upload, _payload_bytes, _upload_name  # noqa: PLC0415
+    def _prepare_load_file(self, filename: str, data: Any, kind: str = "auto") -> Operation:
+        from ._io import prepare_load_file  # noqa: PLC0415
 
-        basename = _upload_name(filename)
-        payload = _payload_bytes(data)
-        return Operation(
-            "load_file",
-            f"Loading {basename}",
-            lambda: _load_upload(basename, payload),
-            self._commit_loaded,
-        )
+        return prepare_load_file(self, filename, data, kind)
 
     def load_phantom(self, name: str) -> None:
         """Load a bundled phantom (see :func:`pyRadPlan.io.available_phantoms`)."""
@@ -733,9 +730,9 @@ class Session(SessionV1Mixin):
         """Load everything a file or DICOM folder holds, as the Qt "Load File" does."""
         self.execute(self.prepare("load_path", path=path))
 
-    def load_file(self, filename: str, data: Any) -> None:
+    def load_file(self, filename: str, data: Any, kind: str = "auto") -> None:
         """Load a file from its raw bytes; *filename* selects the importer by its ending."""
-        self.execute(self.prepare("load_file", filename=filename, data=data))
+        self.execute(self.prepare("load_file", filename=filename, data=data, kind=kind))
 
     # ------------------------------------------------------------------
     # Plan
@@ -749,7 +746,7 @@ class Session(SessionV1Mixin):
         """Apply a partial ``PlanSummary`` to the current (or the default) plan."""
         if self._busy is not None:
             raise PreconditionError(f"{self._busy.label} is still running", "busy")
-        self.workspace.pln = self._build_plan_v1(self.workspace.pln, changes)
+        self.workspace.pln = self._build_plan_checked(self.workspace.pln, changes)
 
     def _ensure_plan(self) -> None:
         if self.workspace.pln is None:
@@ -778,13 +775,16 @@ class Session(SessionV1Mixin):
             )
         return tissue_issues_quietly(machine, model, cst, plan_dose_engine(pln))
 
-    def _check_bio_model(self, step: str, physical_only: bool) -> list:
+    def _check_bio_model(self, step: str, physical_only: bool) -> tuple[list, Optional[Any]]:
         """Check the biological model as the Qt widget does, with the answer given up front.
 
         Invalid reference alpha_x / beta_x always block. Other errors block unless
-        *physical_only* is set, which switches the plan's model to ``none`` (written to the
-        workspace, as the Qt dialog does). Warnings are reported as ``log`` events and
-        returned, unless the model was switched off. The errors travel as
+        *physical_only* is set, which switches the plan's model to ``none``. Warnings are
+        reported as ``log`` events and returned, unless the model was switched off.
+
+        Returns the warnings and the physical-only plan (``None`` if the plan stays as it
+        is). Nothing is written to the workspace: the operation computes with that plan
+        and its commit writes it, as the Qt dialog does. The errors travel as
         ``PreconditionError.data``: ``issues`` (the ``TissueIssue`` errors) and ``model``
         (the plan's ``BiologicalModel``).
         """
@@ -795,7 +795,7 @@ class Session(SessionV1Mixin):
         for issue in warnings:
             self._warn(f"{step}: {issue}")
         if not errors:
-            return warnings
+            return warnings, None
         text = "\n".join(f"- {issue}" for issue in errors)
         model = ws.pln.bio_model
         data = {"issues": errors, "model": model}
@@ -820,8 +820,7 @@ class Session(SessionV1Mixin):
         pln = ws.pln
         fields = {name: deepcopy(getattr(pln, name)) for name in type(pln).model_fields}
         fields["bio_model"] = "none"
-        ws.pln = validate_pln(type(pln)(**fields))
-        return []
+        return [], validate_pln(type(pln)(**fields))
 
     def _check_objective_quantities(self) -> None:
         """Biological objectives need a dose influence computed with a biological model."""
@@ -874,9 +873,10 @@ class Session(SessionV1Mixin):
 
     def _prepare_calc_dose_influence(self, physical_only: bool = False) -> Operation:
         self._require("calc_dose_influence")
-        warnings = self._check_bio_model("Calculate dose influence", physical_only)
+        warnings, physical_pln = self._check_bio_model("Calculate dose influence", physical_only)
         ws = self.workspace
-        ct, cst, pln = ws.ct, ws.cst, ws.pln
+        ct, cst = ws.ct, ws.cst
+        pln = physical_pln if physical_pln is not None else ws.pln
 
         def compute() -> tuple:
             from pyRadPlan import calc_dose_influence, generate_stf  # noqa: PLC0415
@@ -886,7 +886,10 @@ class Session(SessionV1Mixin):
 
         def commit(value: tuple) -> None:
             stf, dij = value
-            ws.set_many(stf=stf, dij=dij)
+            written = {"stf": stf, "dij": dij}
+            if physical_pln is not None:
+                written["pln"] = physical_pln
+            ws.set_many(**written)
 
         return Operation(
             "calc_dose_influence",
@@ -980,8 +983,9 @@ class Session(SessionV1Mixin):
                 "recalculating dose.",
                 "beam_geometry_changed",
             )
-        warnings = self._check_bio_model("Recalculate dose", physical_only)
-        ct, cst, stf, pln = ws.ct, ws.cst, ws.stf, ws.pln
+        warnings, physical_pln = self._check_bio_model("Recalculate dose", physical_only)
+        ct, cst, stf = ws.ct, ws.cst, ws.stf
+        pln = physical_pln if physical_pln is not None else ws.pln
 
         def compute() -> tuple:
             from pyRadPlan import calc_dose_forward  # noqa: PLC0415
@@ -1009,10 +1013,12 @@ class Session(SessionV1Mixin):
                 or not (key.endswith(SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
             }
             result.update(new_result)
-            if recalc_stf is stf:
-                ws.result = result
-            else:
-                ws.set_many(stf=recalc_stf, result=result)
+            written: dict[str, Any] = {"result": result}
+            if recalc_stf is not stf:
+                written["stf"] = recalc_stf
+            if physical_pln is not None:
+                written["pln"] = physical_pln
+            ws.set_many(**written)
 
         return Operation("recalc", "Recalculating dose", compute, commit, warnings=warnings)
 

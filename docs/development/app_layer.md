@@ -122,7 +122,7 @@ an error response.
 | `WorkflowWidget._update_staleness`, `_tissue_classes_signature` | `StageTracker.update`, `tissue_signature` | Removed from the widget, which reads `session.tracker`. Two extensions over the old widget: `stf` is a stage of its own (stale on `ct`/`pln` changes) and a CT written without its products outdates them. `test_tracker_agrees_with_input_versions_over_random_changes` checks the tracker against a version-counter oracle. |
 | `_update_button_states` | `available_actions` | `generate_stf` is new (the Qt widget generates beams inside "Calc. Dose Influence"). Qt keeps "Load Dij" always enabled. |
 | `_update_status` | `status_text` | Qt appends its "· n saved snapshots" suffix. |
-| `_merge_loaded_data` | `merge_loaded_data` + `Session.merge_loaded` / `_commit_loaded` | Warnings are returned (and logged as events); Qt shows them after the write. |
+| (former `_merge_loaded_data`) | `merge_loaded_data` + `Session.merge_loaded` / `_commit_loaded` | Warnings are returned (and logged as events); Qt shows them after the write. |
 | `_recalculation_angles_match`, `_nested_fraction` | same names | The GUI imports them from here. |
 | `_on_calc_dose`, `_on_optimize`, `_on_recalc_dose`, loads, Load Dij, Snapshot Result | `Session._prepare_*`, `Session.snapshot` | The widget runs the session's operations (see below). Same result assembly (`compute_result_ct_grid` with the plan's dose factor, scenario labels, `w`, carry-forward of snapshots and `import_*` keys, iso-center move on recalc). |
 | `_check_bio_model`, `_check_objective_quantities` | `Session._check_bio_model`, `_check_objective_quantities` | The question dialog becomes an up-front `physical_only` flag and a `PreconditionError` with `code="bio_model_unsupported"`; Qt asks with its own dialog from `error.data` and prepares again with `physical_only=True`. The tissue check uses the Qt-free helpers of `pyRadPlan.biology._editing` (machine summary cache) for both frontends. |
@@ -181,8 +181,8 @@ optimization problem's default solver applies and the log panel has its own hand
 The workflow widget no longer keeps staleness, tags or status of its own. Its dots show
 `session.stages()`, its status line `status_text(present, session.tracker)` plus the snapshot
 count, its buttons `available_actions(present)` (the busy cycle disables them while a run is
-active, so they do not use the busy-gated `session.actions()`). `_dij_stale`, `_result_stale`
-and `_saved_tags` remain as properties delegating to the session.
+active, so they do not use the busy-gated `session.actions()`). The staleness and snapshot
+tags are read from `session.tracker` and `session.saved_tags`.
 
 Steps go through `_prepare(step, action)` and `_run_operation(op)`:
 
@@ -280,6 +280,41 @@ listeners (so no state snapshots are built). `run` executes on the GUI's `QThrea
 `begin` / `finish` / `abort` on the GUI thread, where the workspace is written and Qt signals
 fire; see [The Qt GUI on the session](#the-qt-gui-on-the-session).
 
+## Trust model and host flags
+
+The dispatch surface assumes **one trusted user per process**. The log capture of a running
+operation is a handler on the process-wide `pyRadPlan` logger, and the settings
+(`app.settings_set`), the user base data folders and the `PYRADPLAN_*` environment variables are
+process-wide, so concurrent sessions of different users would see and change each other's state.
+A server host therefore needs one process (or worker) per user until this changes.
+
+`SessionManager` takes two opt-in guards, set by the host and never by a request (the `options` of
+`session.create` cannot change them); the defaults keep the native behaviour:
+
+- `allow_pickle=False` makes every session refuse to load pickles (`data.load_file`,
+  `data.load_dij`, `Session.load_path`, `base_data.add` of a pickle phantom) with
+  `PreconditionError(code="not_available")`; `app.info` reports it as the unavailable
+  `pickle_load` feature and `pickle` import format.
+- `allow_global_settings=False` refuses `app.settings_set`, `base_data.add` and
+  `base_data.remove` (and with them the environment variable changes of the settings dialog).
+
+**Pickles in the browser.** Unpickling runs arbitrary code, which in the page could read the
+patient data and send it out despite the "nothing is uploaded" notice. Under Pyodide pickle
+*loading* is therefore always refused (`pyRadPlan.app._io.pickle_load_reason`), reported in
+`capabilities.features.pickle_load`; pickle *saving* stays available. The flags above are
+guards for a single-user host, not isolation between users.
+
+**Structures are addressed by position.** Structure names are not unique. View products (masks,
+DVHs), state entries, voxel counts and the editors identify a structure by its position in the
+structure set; requests may still name one while the name is unique (`resolve_structure` in
+`_views.py`).
+
+**Prepare has no effects.** `Session.prepare` validates and captures inputs; only `commit` writes
+the workspace. A biological model that cannot be evaluated and is switched off with
+`physical_only` yields the physical-only plan at prepare, but it is written by the commit together
+with the result, so dropping the operation leaves the plan alone. The history is locked, as the Qt
+host calls `history_since` from the GUI thread while the worker records.
+
 ## Design choices and alternatives
 
 **Command dispatch vs. exposing Python objects through Pyodide proxies.** Pyodide can hand the
@@ -334,6 +369,12 @@ notice in-place mutation of an image, which pyRadPlan code does not do to stored
 
 ## Known gaps and open problems (draft quality)
 
+- **Mock fixtures are generated.** The web frontend's mock backend replays recordings of this
+  layer's catalogues (`web/src/api/mock/fixtures/`, written by `web/scripts/gen_mock_fixtures.py`).
+  While the session API still changes they are generated on the fly (`npm run fixtures`, run by
+  npm pre-hooks) and not committed, so building the frontend needs Python with pyRadPlan's
+  dependencies. Once the API is stable, committing them together with a drift test (regenerate
+  and compare in the Python test suite) lets the frontend build without Python.
 - **Not run under Pyodide yet.** Everything is tested natively on CPython 3.11/Windows only.
   `tempfile`, `logging` and the synchronous design should be fine in Pyodide; the library
   underneath (SimpleITK, numba, h5py, scipy under wasm) is the porting work's concern.
@@ -358,9 +399,9 @@ notice in-place mutation of an image, which pyRadPlan code does not do to stored
 - `PlanSummary` covers only the fields the protocol names; objectives, scenario models, tissue
   parameters, engine and solver options have no methods yet (`cst` editing is the obvious next
   one).
-- No `Session` persistence beyond the workspace pickle, no per-session locking
-  (a second thread calling the same session while busy gets `PreconditionError(code="busy")`
-  only for steps; views are not guarded).
+- No `Session` persistence beyond the workspace pickle, no per-session locking beyond the
+  history (a second thread calling the same session while busy gets
+  `PreconditionError(code="busy")` only for steps; views are not guarded).
 - Commit does not re-check that the inputs captured at prepare time are still current (the Qt
   widget does not either).
 - Volumes are float32; a CT could go as int16 to halve transfers. Masks are one uint8 volume per

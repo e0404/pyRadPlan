@@ -29,6 +29,28 @@ _EXTRA_UNITS = {"physicalDose": "Gy", "RBExDose": "Gy (RBE)", "LET": "keV/µm"}
 BITS_PER_PLANE = 32
 
 
+def resolve_structure(vois: Sequence[Any], ref: Any) -> int:
+    """Return the position of the structure *ref* (a position or a unique name) in *vois*.
+
+    Names need not be unique; a name shared by several structures is refused, so a
+    frontend has to address those by position.
+    """
+    if isinstance(ref, bool) or not isinstance(ref, (int, str)):
+        raise TypeError(f"A structure is addressed by position or name, not {ref!r}")
+    if isinstance(ref, int):
+        if not 0 <= ref < len(vois):
+            raise KeyError(f"No structure at position {ref}")
+        return ref
+    matches = [i for i, voi in enumerate(vois) if voi.name == ref]
+    if not matches:
+        raise KeyError(f"Unknown structure {ref!r}")
+    if len(matches) > 1:
+        raise KeyError(
+            f"Structure name {ref!r} is ambiguous (positions {matches}); use a position"
+        )
+    return matches[0]
+
+
 def default_quantity(keys: Sequence[str]) -> Optional[str]:
     """Return the quantity to show first: RBE-weighted dose, else dose, else the first."""
     for candidate in DEFAULT_QUANTITY_KEYS:
@@ -407,21 +429,25 @@ class ViewCache:
         cst = self._get("cst")
         if cst is None:
             return None
-        masks = {voi.name: voi.mask for voi in cst.vois}
+        masks = [voi.mask for voi in cst.vois]
+
+        def selected(indices: tuple) -> Optional[list]:
+            if any(not 0 <= i < len(masks) for i in indices):
+                return None
+            return [masks[i] for i in indices]
+
         if kind in ("mask", "mask_info"):
-            mask = masks.get(key[1])
-            return None if mask is None else (ct, mask)
+            chosen = selected((key[1],))
+            return None if chosen is None else (ct, *chosen)
         if kind == "masks":
-            names = key[2]
-            if any(name not in masks for name in names):
-                return None
-            return (ct, *[masks[name] for name in names])
+            chosen = selected(key[2])
+            return None if chosen is None else (ct, *chosen)
         if kind in ("dvh", "dvh_curves"):
-            quantity, names = key[1], key[2]
-            source = result_entry(self._get("result"), quantity)
-            if source is None or any(name not in masks for name in names):
+            source = result_entry(self._get("result"), key[1])
+            chosen = selected(key[2])
+            if source is None or chosen is None:
                 return None
-            return (ct, source, *[masks[name] for name in names])
+            return (ct, source, *chosen)
         return None
 
     @staticmethod
@@ -520,11 +546,18 @@ class ViewCache:
             "range": _finite_range(data),
         }
 
-    def mask_array(self, voi: Any) -> np.ndarray:
-        """Return the uint8 ``(z, y, x)`` mask of a structure (nominal scenario), CT grid."""
+    def _voi(self, index: int) -> Any:
+        cst = self._get("cst")
+        if cst is None:
+            raise LookupError("No structure set loaded")
+        return cst.vois[index]
+
+    def mask_array(self, index: int) -> np.ndarray:
+        """Return the uint8 ``(z, y, x)`` mask of the structure at *index* (nominal), CT grid."""
         import SimpleITK as sitk  # noqa: PLC0415
 
         ct = self._require_ct()
+        voi = self._voi(index)
 
         def build() -> np.ndarray:
             mask = voi._nominal_mask_3d()
@@ -540,32 +573,29 @@ class ViewCache:
                 )
             return (sitk.GetArrayViewFromImage(mask) != 0).astype(np.uint8)
 
-        return self._cached(("mask", voi.name), build)
+        return self._cached(("mask", index), build)
 
-    def mask_info(self, voi: Any) -> dict[str, Any]:
+    def mask_info(self, index: int) -> dict[str, Any]:
         """``num_voxels`` and ``bbox`` (``[z0, y0, x0, z1, y1, x1]`` or ``None``) of a mask."""
-        mask = self.mask_array(voi)
+        mask = self.mask_array(index)
 
         def build() -> dict[str, Any]:
             return {"num_voxels": int(np.count_nonzero(mask)), "bbox": _bbox(mask)}
 
-        return self._cached(("mask_info", voi.name), build)
+        return self._cached(("mask_info", index), build)
 
-    def _vois(self, names: Optional[Sequence[str]]) -> list:
+    def structure_indices(self, refs: Optional[Sequence[Any]]) -> list[int]:
+        """Positions of the structures *refs* (positions or unique names; all when ``None``)."""
         cst = self._get("cst")
         if cst is None:
             raise LookupError("No structure set loaded")
         vois = list(cst.vois)
-        if names is None:
-            return vois
-        by_name = {voi.name: voi for voi in vois}
-        missing = [name for name in names if name not in by_name]
-        if missing:
-            raise KeyError(f"Unknown structure(s): {missing}")
-        return [by_name[name] for name in names]
+        if refs is None:
+            return list(range(len(vois)))
+        return [resolve_structure(vois, ref) for ref in refs]
 
     def structure_masks(
-        self, names: Optional[Sequence[str]] = None, encoding: str = "uint8"
+        self, names: Optional[Sequence[Any]] = None, encoding: str = "uint8"
     ) -> dict[str, Any]:
         """Masks of the structures (all when *names* is omitted) on the CT grid.
 
@@ -574,36 +604,44 @@ class ViewCache:
         mask cropped to its bounding box.
         """
         ct = self._require_ct()
-        vois = self._vois(names)
+        indices = self.structure_indices(names)
+        vois = [self._voi(i) for i in indices]
         grid = grid_info(ct)
         if encoding == "uint8":
             masks = [
-                {"name": voi.name, "color": list(voi.color), "data": self.mask_array(voi)}
-                for voi in vois
+                {
+                    "name": voi.name,
+                    "index": i,
+                    "color": list(voi.color),
+                    "data": self.mask_array(i),
+                }
+                for i, voi in zip(indices, vois)
             ]
             return {"grid": grid, "masks": masks}
         if encoding == "crops":
             masks = []
-            for voi in vois:
-                info = self.mask_info(voi)
+            for i, voi in zip(indices, vois):
+                info = self.mask_info(i)
                 bbox = info["bbox"]
                 data = None
                 if bbox is not None:
                     z0, y0, x0, z1, y1, x1 = bbox
-                    data = np.ascontiguousarray(self.mask_array(voi)[z0:z1, y0:y1, x0:x1])
-                masks.append({"name": voi.name, "color": list(voi.color), **info, "data": data})
+                    data = np.ascontiguousarray(self.mask_array(i)[z0:z1, y0:y1, x0:x1])
+                masks.append(
+                    {"name": voi.name, "index": i, "color": list(voi.color), **info, "data": data}
+                )
             return {"grid": grid, "encoding": "crops", "masks": masks}
         if encoding == "bits":
-            names_key = tuple(voi.name for voi in vois)
+            names_key = tuple(indices)
 
             def build() -> list[np.ndarray]:
                 planes = []
                 for start in range(0, len(vois), BITS_PER_PLANE):
-                    chunk = vois[start : start + BITS_PER_PLANE]
+                    chunk = indices[start : start + BITS_PER_PLANE]
                     dtype = _plane_dtype(len(chunk))
                     plane = np.zeros(grid["shape"], dtype=dtype)
-                    for bit, voi in enumerate(chunk):
-                        plane |= self.mask_array(voi).astype(dtype) << dtype.type(bit)
+                    for bit, i in enumerate(chunk):
+                        plane |= self.mask_array(i).astype(dtype) << dtype.type(bit)
                     planes.append(plane)
                 return planes
 
@@ -611,12 +649,13 @@ class ViewCache:
             masks = [
                 {
                     "name": voi.name,
+                    "index": index,
                     "color": list(voi.color),
-                    "plane": i // BITS_PER_PLANE,
-                    "bit": i % BITS_PER_PLANE,
-                    **self.mask_info(voi),
+                    "plane": n // BITS_PER_PLANE,
+                    "bit": n % BITS_PER_PLANE,
+                    **self.mask_info(index),
                 }
-                for i, voi in enumerate(vois)
+                for n, (index, voi) in enumerate(zip(indices, vois))
             ]
             return {"grid": grid, "encoding": "bits", "planes": planes, "masks": masks}
         raise ValueError(f"Unknown mask encoding {encoding!r}; use 'uint8', 'bits' or 'crops'")
@@ -624,7 +663,7 @@ class ViewCache:
     def dvh_curves(
         self,
         quantity: str,
-        vois: Sequence[Any],
+        indices: Sequence[int],
         num_points: int,
         range_mode: str = "shared",
     ) -> list[dict[str, Any]]:
@@ -640,7 +679,7 @@ class ViewCache:
 
         def build() -> list[dict[str, Any]]:
             values = self.volume_array(quantity)
-            masked = [values[self.mask_array(voi).astype(bool)] for voi in vois]
+            masked = [values[self.mask_array(i).astype(bool)] for i in indices]
             shared_max: Optional[float] = None
             if range_mode == "shared":
                 highest = max((float(v.max()) for v in masked if v.size), default=0.0)
@@ -662,7 +701,7 @@ class ViewCache:
                 )
             return curves
 
-        names = tuple(voi.name for voi in vois)
+        names = tuple(indices)
         if range_mode == "shared":
             key = ("dvh", quantity, names, int(num_points))
         else:
@@ -672,7 +711,7 @@ class ViewCache:
     def dvh(
         self,
         quantity: Optional[str] = None,
-        names: Optional[Sequence[str]] = None,
+        names: Optional[Sequence[Any]] = None,
         num_points: int = 500,
         range_mode: str = "shared",
     ) -> dict[str, Any]:
@@ -688,8 +727,9 @@ class ViewCache:
         quantity = quantity or default_quantity(keys)
         if quantity is None or result_entry(result, quantity) is None:
             raise KeyError(f"No volume quantity {quantity!r} in the result")
-        vois = self._vois(names)
-        curves = self.dvh_curves(quantity, vois, num_points, range_mode)
+        indices = self.structure_indices(names)
+        vois = [self._voi(i) for i in indices]
+        curves = self.dvh_curves(quantity, indices, num_points, range_mode)
         info = component_info(result, quantity)
         return {
             "quantity": quantity,
@@ -697,8 +737,8 @@ class ViewCache:
             "label": info["meta_label"],
             "unit_info": unit_info(info["unit"]),
             "curves": [
-                {"name": voi.name, "color": list(voi.color), **curve}
-                for voi, curve in zip(vois, curves)
+                {"name": voi.name, "index": i, "color": list(voi.color), **curve}
+                for i, voi, curve in zip(indices, vois, curves)
             ],
         }
 

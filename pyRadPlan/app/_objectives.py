@@ -338,7 +338,7 @@ def set_quantity_all(ws: Any, quantity: str) -> None:
     cst = ws.cst
     if cst is None:
         raise LookupError("No structure set loaded")
-    previous = {voi.name: list(voi.objectives or []) for voi in cst.vois}
+    previous = [list(voi.objectives or []) for voi in cst.vois]
     try:
         for voi in cst.vois:
             objectives = objectives_of(voi)
@@ -348,7 +348,7 @@ def set_quantity_all(ws: Any, quantity: str) -> None:
                 ]
         validate_cst(cst)
     except (ValidationError, FormValidationError, ValueError, TypeError):
-        for voi in cst.vois:
-            voi.objectives = previous[voi.name]
+        for voi, objectives in zip(cst.vois, previous):
+            voi.objectives = objectives
         raise
     ws.cst = cst

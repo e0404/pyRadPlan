@@ -195,6 +195,7 @@ def add(
     radiation_mode: Optional[str] = None,
     overwrite: bool = False,
     dry_run: bool = False,
+    allow_pickle: bool = True,
 ) -> dict[str, Any]:
     """Validate an uploaded base data file and add it to the user's folder.
 
@@ -211,9 +212,12 @@ def add(
         get_base_data_kind,
     )
 
+    from ._io import check_pickle_load  # noqa: PLC0415
+
     _check_kind(kind)
     label = get_base_data_kind(kind).label
     upload = os.path.basename(str(filename).replace("\\", "/")) or "upload.mat"
+    check_pickle_load(upload, allow_pickle)
     payload = data if isinstance(data, (bytes, bytearray)) else np.asarray(data).tobytes()
     directory = tempfile.mkdtemp(prefix="pyradplan-basedata-")
     try:
@@ -250,9 +254,14 @@ def add(
 
 def remove(kind: str, file: str) -> dict[str, Any]:
     """Delete a file the user added; shipped and shared files cannot be removed."""
-    from pyRadPlan.core import find_base_data, remove_base_data_file  # noqa: PLC0415
+    from pyRadPlan.core import (  # noqa: PLC0415
+        check_base_data_file_name,
+        find_base_data,
+        remove_base_data_file,
+    )
 
     _check_kind(kind)
+    check_base_data_file_name(kind, file)
     entry = find_base_data(kind, file)
     if entry is None:
         raise FileNotFoundError(f"No base data file {file!r} of kind {kind!r}")

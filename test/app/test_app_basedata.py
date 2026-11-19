@@ -134,3 +134,31 @@ def test_unreadable_files_are_refused(client, data_dir):
         response = _add(client, kind, "broken.mat", b"no matlab file")
         assert response["error"]["type"] == "ValueError", kind
     assert not (data_dir / "machines").exists()
+
+
+@pytest.mark.parametrize(
+    "name", ["../outside.mat", "..\\outside.mat", "sub/outside.mat", "/abs/outside.mat", ".."]
+)
+def test_remove_refuses_names_leaving_the_user_folder(client, data_dir, name):
+    victim = data_dir / "outside.mat"
+    victim.parent.mkdir(parents=True, exist_ok=True)
+    victim.write_bytes(b"keep")
+    (data_dir / "rbe_tables").mkdir(parents=True, exist_ok=True)
+    (data_dir / "rbe_tables" / "inside.mat").write_bytes(b"x")
+    response = client.call("base_data.remove", {"kind": "rbe_tables", "file": name}, session=False)
+    assert not response["ok"] and response["error"]["type"] == "ValueError"
+    assert victim.read_bytes() == b"keep"
+
+
+def test_core_lookups_reject_path_separators(data_dir):
+    from pyRadPlan.core import remove_base_data_file
+
+    victim = data_dir / "outside.mat"
+    victim.parent.mkdir(parents=True, exist_ok=True)
+    victim.write_bytes(b"keep")
+    for name in ("../outside.mat", "a/b.mat", "..", "a\\b.mat"):
+        with pytest.raises(ValueError):
+            find_base_data("rbe_tables", name)
+        with pytest.raises(ValueError):
+            remove_base_data_file("rbe_tables", name)
+    assert victim.read_bytes() == b"keep"

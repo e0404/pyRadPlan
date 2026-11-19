@@ -1,4 +1,4 @@
-"""Part B of protocol v1 against the Pyodide SimpleITK stand-in, natively in a subprocess."""
+"""File and base-data methods against the Pyodide SimpleITK stand-in, natively in a subprocess."""
 
 import json
 import os

@@ -9,6 +9,7 @@ value object.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
 import numpy as np
@@ -40,6 +41,25 @@ def tissue_signature(cst: Any) -> Optional[tuple]:
     return tuple(_tissue_json(voi) for voi in vois)
 
 
+def mask_identity(cst: Any) -> Optional[tuple]:
+    """Return the mask objects of the structures by position; ``None`` without a structure set.
+
+    The dose engines compute on the union of the structures' voxels, so a replaced mask
+    outdates the dose influence even if the tissues are unchanged. Display-only edits
+    (color, visibility, name) keep the mask objects.
+    """
+    vois = getattr(cst, "vois", None)
+    if vois is None:
+        return None
+    return tuple(getattr(voi, "mask", None) for voi in vois)
+
+
+def _same_objects(a: Optional[tuple], b: Optional[tuple]) -> bool:
+    return (
+        a is not None and b is not None and len(a) == len(b) and all(x is y for x, y in zip(a, b))
+    )
+
+
 def _tissue_json(voi: Any) -> Optional[str]:
     dump = getattr(getattr(voi, "tissue_properties", None), "model_dump_json", None)
     if not callable(dump):
@@ -63,6 +83,7 @@ class StageTracker:
     dij_stale: bool = False
     result_stale: bool = False
     tissue_signature: Optional[tuple] = None
+    mask_identity: Optional[tuple] = dataclass_field(default=None, compare=False)
 
     def update(
         self, changed_keys: Iterable[str], present: Iterable[str], cst: Any
@@ -79,8 +100,8 @@ class StageTracker:
             Keys holding a value after the change.
         cst
             The structure set after the change. Only a change of the structures' tissue
-            properties outdates the dose influence; objectives, colors and names only
-            outdate the result.
+            properties or masks outdates the dose influence; objectives, colors, names and
+            visibility only outdate the result.
 
         Notes
         -----
@@ -92,7 +113,11 @@ class StageTracker:
         keys = set(changed_keys)
         have = set(present)
         signature = tissue_signature(cst)
+        masks = mask_identity(cst)
         tissue_changed = self.tissue_signature is not None and signature != self.tissue_signature
+        masks_changed = self.mask_identity is not None and not _same_objects(
+            self.mask_identity, masks
+        )
 
         stf_stale = self.stf_stale
         if "stf" not in have or "stf" in keys:
@@ -103,7 +128,7 @@ class StageTracker:
         dij_stale = self.dij_stale
         if "dij" not in have or "dij" in keys:
             dij_stale = False
-        elif keys & {"ct", "pln", "stf"} or ("cst" in keys and tissue_changed):
+        elif keys & {"ct", "pln", "stf"} or ("cst" in keys and (tissue_changed or masks_changed)):
             dij_stale = True
 
         result_stale = self.result_stale
@@ -118,6 +143,7 @@ class StageTracker:
             dij_stale=dij_stale,
             result_stale=result_stale,
             tissue_signature=signature,
+            mask_identity=masks,
         )
 
 

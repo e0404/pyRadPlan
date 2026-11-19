@@ -263,3 +263,78 @@ def test_an_interrupt_library_code_turns_into_another_error_still_stops(monkeypa
     failing = Operation("dose_influence", "Dose influence", fails, lambda v: v)
     with pytest.raises(TypeError, match="genuine"):
         Session().execute(failing)
+
+
+class _BlockingIssue:
+    is_error = True
+    kind = "model_unavailable"
+
+    def __str__(self):
+        return "blocked"
+
+
+def _session_with_blocked_bio_model(coarse_plan, monkeypatch):
+    session = Session()
+    session.load_phantom("TG119")
+    session.set_plan(coarse_plan)
+    monkeypatch.setattr(session, "_tissue_issues", lambda pln, cst: [_BlockingIssue()])
+    return session
+
+
+def test_prepare_with_physical_only_leaves_the_plan_alone(coarse_plan, monkeypatch):
+    session = _session_with_blocked_bio_model(coarse_plan, monkeypatch)
+    plan = session.workspace.pln
+    operation = session.prepare("calc_dose_influence", physical_only=True)
+    assert session.workspace.pln is plan
+    del operation
+    assert session.workspace.pln is plan
+
+
+def test_physical_only_plan_is_written_by_the_commit(coarse_plan, monkeypatch):
+    session = _session_with_blocked_bio_model(coarse_plan, monkeypatch)
+    plan = session.workspace.pln
+    session.calc_dose_influence(physical_only=True)
+    ws = session.workspace
+    assert ws.pln is not plan and ws.pln.bio_model.model == "none"
+    assert ws.dij is not None and ws.stf is not None
+    assert session.stages()["dij"] == "done"
+
+
+def test_history_survives_concurrent_readers():
+    import threading
+
+    from pyRadPlan.app._history import SessionHistory
+
+    history = SessionHistory()
+    history.start_optimization("Optimizing")
+    errors = []
+    stop = threading.Event()
+
+    def read():
+        try:
+            while not stop.is_set():
+                history.as_dict(0)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    for i in range(5000):
+        history.number({"event": "log", "message": str(i)})
+        history.add_point({"iteration": i})
+    stop.set()
+    reader.join()
+    assert not errors
+    assert history.as_dict(4990)["log"][-1]["message"] == "4999"
+
+
+def test_progress_reports_without_listeners_still_record_history():
+    from pyRadPlan.core import StatusReport
+
+    session = Session()
+    operation = Operation("optimize", "Optimizing", lambda: None, lambda value: None)
+    session._editors_begin(operation)
+    observe = session._on_report(operation)
+    observe(StatusReport(message="it", data={"iteration": 1, "objective": 2.0}))
+    points = session.history_since(0)["optimization"]["points"]
+    assert points == [{"iteration": 1, "objective": 2.0}]

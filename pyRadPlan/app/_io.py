@@ -22,10 +22,11 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import numpy as np
 
+from ._profiles import running_in_pyodide
 from ._session import Operation, PreconditionError, dij_payload
 from ._results import result_components
 from ._views import result_entry, result_quantities
@@ -171,20 +172,40 @@ class ExportFormat:
             entry["keeps_objectives"] = self.keeps_objectives
         if self.structure_format is not None:
             entry["structure_format"] = self.structure_format
-        note = self.note
-        if self.object == "workspace" and _pickles_runtime_specific():
-            note = (
-                "Workspace pickles of this runtime do not load in native pyRadPlan and "
-                "vice versa (the SimpleITK stand-in pickles its images differently)"
-            )
-        if note:
-            entry["note"] = note
+        if self.note:
+            entry["note"] = self.note
         return entry
 
 
-def _pickles_runtime_specific() -> bool:
-    sitk = _sitk()
-    return is_sitk_shim() and getattr(sitk.Image, "__module__", "") != "SimpleITK.SimpleITK"
+#: File endings :func:`pyRadPlan.io.load_data` unpickles.
+PICKLE_EXTENSIONS = (".pkl", ".pickle")
+
+
+def pickle_load_reason(allow_pickle: bool = True) -> Optional[str]:
+    """Why pickles cannot be loaded here, ``None`` if they can.
+
+    Unpickling runs code from the file. In the browser that code could read and send out
+    the patient data in the page, so loading is disabled there (saving pickles is not).
+    """
+    if running_in_pyodide():
+        return (
+            "Loading a pickle runs code from the file, which could read the data in this "
+            "page; it is disabled in the browser. Use .mat or .npz instead"
+        )
+    if not allow_pickle:
+        return "This server does not load pickle files"
+    return None
+
+
+def check_pickle_load(name: Any, allow_pickle: bool = True) -> None:
+    """Raise ``PreconditionError("not_available")`` if *name* is a pickle that cannot load."""
+    if not os.fspath(name).lower().endswith(PICKLE_EXTENSIONS):
+        return
+    reason = pickle_load_reason(allow_pickle)
+    if reason:
+        raise PreconditionError(
+            f"Cannot load {os.path.basename(os.fspath(name))}: {reason}", "not_available"
+        )
 
 
 _WRITE = ("WriteImage",)
@@ -430,7 +451,7 @@ def load_filter() -> str:
     return dialog_filter(rows, both_cases=True, catch_all=True)
 
 
-def import_formats() -> list[dict[str, Any]]:
+def import_formats(allow_pickle: bool = True) -> list[dict[str, Any]]:
     """Return the import table (``capabilities.formats.import``)."""
     read = sitk_missing("ReadImage")
     entries = [
@@ -441,7 +462,7 @@ def import_formats() -> list[dict[str, Any]]:
             "pyRadPlan workspace (*.pkl)",
             [".pkl", ".pickle"],
             [*_ALL_OBJECTS, "dose"],
-            None,
+            pickle_load_reason(allow_pickle),
             "Unpickling runs code from the file: load only files you trust",
         ),
         (
@@ -523,14 +544,16 @@ def _payload_bytes(data: Any) -> bytes:
     return np.asarray(data).tobytes()
 
 
-def load_path_data(path: Any) -> dict:
+def load_path_data(path: Any, allow_pickle: bool = True) -> dict:
     """Read everything a file or folder holds (:func:`pyRadPlan.io.load_data`).
 
     The importers need a CT; a dose-only archive (Save Result as npz) is returned as a bare
-    ``dose`` instead, which merges onto the loaded patient.
+    ``dose`` instead, which merges onto the loaded patient. Pickles are refused (see
+    :func:`pickle_load_reason`).
     """
     from pyRadPlan.io import load_data  # noqa: PLC0415
 
+    check_pickle_load(path, allow_pickle)
     try:
         return load_data(path)
     except ValueError:
@@ -544,13 +567,14 @@ def load_path_data(path: Any) -> dict:
         return {"dose": dose}
 
 
-def _load_upload(filename: str, payload: bytes) -> dict:
+def _load_upload(filename: str, payload: bytes, allow_pickle: bool = True) -> dict:
+    check_pickle_load(filename, allow_pickle)
     directory = tempfile.mkdtemp(prefix="pyradplan-upload-")
     path = os.path.join(directory, filename)
     try:
         with open(path, "wb") as handle:
             handle.write(payload)
-        return load_path_data(path)
+        return load_path_data(path, allow_pickle)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
 
@@ -573,37 +597,58 @@ def _check_image_upload(basename: str, kind: str) -> None:
             raise PreconditionError(f"Cannot load {basename}: {reason}", "not_available")
 
 
+def prepare_load_file(session: Any, filename: str, data: Any, kind: str = "auto") -> Operation:
+    """Return the operation loading an uploaded file (Qt "Load File")."""
+    basename = _upload_name(filename)
+    _check_image_upload(basename, kind)
+    check_pickle_load(basename, session.allow_pickle)
+    payload = _payload_bytes(data)
+    allow_pickle = session.allow_pickle
+
+    def compute() -> dict:
+        return _load_upload(basename, payload, allow_pickle)
+
+    return Operation("load_file", f"Loading {basename}", compute, session._commit_loaded)
+
+
 def load_file(session: Any, filename: str, data: Any, kind: str = "auto") -> None:
     """Load an uploaded file into the session (Qt "Load File").
 
-    ``.mat``, ``.npz`` and ``.pkl`` / ``.pickle`` containers load directly; a workspace
-    pickle also restores its snapshot tags (``saved_result_tags``) when it carries a CT or
-    a result, as the Qt widget does.
+    ``.mat``, ``.npz`` and ``.pkl`` / ``.pickle`` containers load directly (pickles not in
+    the browser); a workspace pickle also restores its snapshot tags
+    (``saved_result_tags``) when it carries a CT or a result, as the Qt widget does.
     """
-    basename = _upload_name(filename)
-    _check_image_upload(basename, kind)
-    payload = _payload_bytes(data)
+    session.execute(prepare_load_file(session, filename, data, kind))
+
+
+def prepare_load_dij(
+    session: Any, name: str, load: Callable[[], dict], label: Optional[str] = None
+) -> Operation:
+    """Return the operation merging the steering information and dose influence *load* reads."""
 
     def compute() -> dict:
-        return _load_upload(basename, payload)
-
-    session.execute(Operation("load_file", f"Loading {basename}", compute, session._commit_loaded))
-
-
-def load_dij(session: Any, filename: str, data: Any) -> None:
-    """Merge the steering information and dose influence of a file (Qt "Load Dij")."""
-    basename = _upload_name(filename)
-    payload = _payload_bytes(data)
-
-    def compute() -> dict:
-        return dij_payload(_load_upload(basename, payload), basename)
+        return dij_payload(load(), name)
 
     def commit(found: dict) -> None:
         session.workspace.set_many(**found)
 
-    session.execute(
-        Operation("load_dij", f"Loading dose influence from {basename}", compute, commit)
+    return Operation("load_dij", label or f"Loading dose influence from {name}", compute, commit)
+
+
+def prepare_load_dij_upload(session: Any, filename: str, data: Any) -> Operation:
+    """Return the operation loading the dose influence of an uploaded file."""
+    basename = _upload_name(filename)
+    check_pickle_load(basename, session.allow_pickle)
+    payload = _payload_bytes(data)
+    allow_pickle = session.allow_pickle
+    return prepare_load_dij(
+        session, basename, lambda: _load_upload(basename, payload, allow_pickle)
     )
+
+
+def load_dij(session: Any, filename: str, data: Any) -> None:
+    """Merge the steering information and dose influence of a file (Qt "Load Dij")."""
+    session.execute(prepare_load_dij_upload(session, filename, data))
 
 
 # ----------------------------------------------------------------------

@@ -1,7 +1,7 @@
-"""Protocol v1 session features (part A): profiles, revisions, results, history, editors.
+"""Session features around the workflow core: profiles, revisions, results, history, editors.
 
 Mixed into :class:`pyRadPlan.app.Session`; kept in its own module so that the session
-core stays readable and the two v1 backend parts do not edit the same lines.
+core stays readable.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from . import _objectives, _planform, _results, _tissue
 from ._history import SessionHistory
 from ._profiles import resolve_profile, running_in_pyodide
 from ._revisions import Revisions
+from ._views import resolve_structure
 
 #: Structure changes that only affect how a structure is shown (``update_structure``).
 DISPLAY_CHANGES = frozenset({"color", "visible"})
@@ -35,14 +36,14 @@ def _tissue_errors(errors: list) -> Exception:
     )
 
 
-class SessionV1Mixin:
-    """Part A of protocol v1 on top of the session core."""
+class SessionEditorsMixin:
+    """Profiles, revisions, history and the structure, tissue, objective and result editors."""
 
     # ------------------------------------------------------------------
     # Setup and state
     # ------------------------------------------------------------------
 
-    def _init_v1(
+    def _init_editors(
         self,
         profile: Optional[str],
         options: Optional[Mapping[str, Any]],
@@ -56,14 +57,14 @@ class SessionV1Mixin:
         self.saved_tags: list[str] = []
         self.history = SessionHistory()
         self.revisions = Revisions(self.workspace.get)
-        self._voxel_counts: dict[str, tuple[Any, int]] = {}
+        self._voxel_counts: dict[int, tuple[Any, int]] = {}
 
-    def _v1_workspace_changed(self, changed_keys: list[str]) -> None:
+    def _editors_workspace_changed(self, changed_keys: list[str]) -> None:
         self.revisions.update(changed_keys)
         if not changed_keys or "result" in changed_keys:
             self.saved_tags = _results.prune_tags(self.workspace.result, self.saved_tags)
 
-    def _v1_loaded(self, data: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    def _editors_loaded(self, data: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
         # A new patient or a replacement result (also a bare dose) brings its own tags.
         if "ct" in payload or "result" in payload:
             tags = data.get("saved_result_tags")
@@ -78,8 +79,8 @@ class SessionV1Mixin:
         tags = [tag for tag in tags if isinstance(tag, str)]
         self.saved_tags = _results.prune_tags(self.workspace.result, tags)
 
-    def _num_voxels(self, voi: Any) -> int:
-        cached = self._voxel_counts.get(voi.name)
+    def _num_voxels(self, index: int, voi: Any) -> int:
+        cached = self._voxel_counts.get(index)
         if cached is not None and cached[0] is voi.mask:
             return cached[1]
         import numpy as np  # noqa: PLC0415
@@ -89,10 +90,10 @@ class SessionV1Mixin:
             count = int(np.count_nonzero(sitk.GetArrayViewFromImage(voi._nominal_mask_3d())))
         except Exception:  # noqa: BLE001 - a mask that cannot be read counts as empty
             count = 0
-        self._voxel_counts[voi.name] = (voi.mask, count)
+        self._voxel_counts[index] = (voi.mask, count)
         return count
 
-    def _v1_state(self, state: dict[str, Any]) -> dict[str, Any]:
+    def _editors_state(self, state: dict[str, Any]) -> dict[str, Any]:
         ws = self.workspace
         present = ws.present()
         idle = self._busy is None
@@ -118,29 +119,28 @@ class SessionV1Mixin:
             }
         )
         if state["structures"]:
-            by_name = {voi.name: voi for voi in ws.cst.vois}
+            vois = ws.cst.vois
             for entry in state["structures"]:
-                voi = by_name.get(entry["name"])
-                if voi is None:
-                    continue
+                index = entry["index"]
+                voi = vois[index]
                 entry["overlap_priority"] = int(voi.overlap_priority)
                 entry["num_objectives"] = len(voi.objectives or [])
-                entry["num_voxels"] = self._num_voxels(voi)
+                entry["num_voxels"] = self._num_voxels(index, voi)
         return state
 
     # ------------------------------------------------------------------
     # History and control
     # ------------------------------------------------------------------
 
-    def _v1_begin(self, operation: Any) -> None:
+    def _editors_begin(self, operation: Any) -> None:
         if operation.name == "optimize":
             self.history.start_optimization(operation.label)
 
-    def _v1_status(self, operation: Any, data: dict[str, Any]) -> None:
+    def _editors_status(self, operation: Any, data: dict[str, Any]) -> None:
         if operation.name == "optimize":
             self.history.add_point(data)
 
-    def _v1_end(self, operation: Any, outcome: str) -> None:
+    def _editors_end(self, operation: Any, outcome: str) -> None:
         if operation.name == "optimize":
             self.history.finish_optimization(outcome)
 
@@ -193,7 +193,7 @@ class SessionV1Mixin:
         """``plan.tissue_check``."""
         return _planform.tissue_check(self.workspace.pln, self.workspace.cst, draft)
 
-    def _build_plan_v1(self, current: Any, changes: Mapping[str, Any]) -> Any:
+    def _build_plan_checked(self, current: Any, changes: Mapping[str, Any]) -> Any:
         from ._plan import build_plan, plan_summary  # noqa: PLC0415
 
         locked = [name for name in changes if name in self.locked_fields]
@@ -213,35 +213,34 @@ class SessionV1Mixin:
     # Structures, tissues, objectives
     # ------------------------------------------------------------------
 
-    def cst_get(self, names: Optional[Sequence[str]] = None) -> dict[str, Any]:
-        """``cst.get``."""
+    def cst_get(self, names: Optional[Sequence[Any]] = None) -> dict[str, Any]:
+        """``cst.get``; *names* are positions or unique names, the result keeps cst order."""
         cst = self.workspace.cst
         if cst is None:
             raise LookupError("No structure set loaded")
         vois = list(cst.vois)
-        if names is not None:
-            missing = [n for n in names if n not in {v.name for v in vois}]
-            if missing:
-                raise KeyError(f"Unknown structure(s): {missing}")
+        wanted = None if names is None else {resolve_structure(vois, ref) for ref in names}
         details = []
         for index, voi in enumerate(vois):
-            if names is None or voi.name in names:
+            if wanted is None or index in wanted:
                 detail = _tissue.structure_detail(voi, index, self.workspace.result)
-                detail["num_voxels"] = self._num_voxels(voi)
+                detail["num_voxels"] = self._num_voxels(index, voi)
                 details.append(detail)
         return {"structures": details}
 
-    def _structure(self, name: str) -> dict[str, Any]:
-        return self.cst_get([name])["structures"][0]
+    def _structure(self, ref: Any) -> dict[str, Any]:
+        return self.cst_get([ref])["structures"][0]
 
     def update_structure(
         self,
-        name: str,
+        name: Any,
         changes: Mapping[str, Any],
         apply_anyway: bool = False,
         detail: bool = True,
     ) -> Optional[dict[str, Any]]:
         """Change a structure's type, colour, visibility, overlap priority or tissue.
+
+        *name* is the structure's position or its name, which must then be unique.
 
         Colour and visibility only change how the structure is shown. On their own they are
         set on the structure in place, outdate nothing and are accepted while an operation
@@ -265,9 +264,7 @@ class SessionV1Mixin:
         if cst is None:
             raise LookupError("No structure set loaded")
         vois = list(cst.vois)
-        index = next((i for i, v in enumerate(vois) if v.name == name), None)
-        if index is None:
-            raise KeyError(f"Unknown structure {name!r}")
+        index = resolve_structure(vois, name)
         voi = vois[index]
         update: dict[str, Any] = {}
         if "type" in changes:
@@ -283,14 +280,14 @@ class SessionV1Mixin:
                 self.revisions.update(["cst"])
                 if self._busy is None:
                     self._emit_state()
-            return self._structure(name) if detail else None
+            return self._structure(index) if detail else None
         if "overlap_priority" in changes:
             update["overlap_priority"] = int(changes["overlap_priority"])
         if changes.get("tissue") is not None:
             tissue = _tissue.tissue_of(changes["tissue"], voi.tissue_properties)
             if tissue != voi.tissue_properties:
                 if not apply_anyway:
-                    errors = _tissue.check_errors(ws.pln, cst, {name: tissue})
+                    errors = _tissue.check_errors(ws.pln, cst, {index: tissue})
                     if errors:
                         raise _tissue_errors(errors)
                 update["tissue_properties"] = tissue
@@ -298,7 +295,7 @@ class SessionV1Mixin:
             vois[index] = _tissue.recreate_voi(voi, **update)
             cst.vois = vois
             ws.cst = cst
-        return self._structure(name) if detail else None
+        return self._structure(index) if detail else None
 
     def tissue_schema(self, **context: Any) -> dict[str, Any]:
         """``tissue.schema``."""
@@ -313,9 +310,9 @@ class SessionV1Mixin:
     def tissue_apply(self, rows: Sequence[Mapping[str, Any]], apply_anyway: bool = False) -> None:
         """``tissue.apply``: write edited tissues (VOIs recreated as in the Qt dialog).
 
-        Rows are ``{"structure": name, "tissue": TissueDraft}``; an in-process frontend may
-        pass tissue properties and ``voi_index``, the structure's position, which also tells
-        apart structures of the same name.
+        Rows are ``{"structure": name or position, "tissue": TissueDraft}`` (a name must be
+        unique); an in-process frontend may pass tissue properties and ``voi_index``, the
+        structure's position, which also tells apart structures of the same name.
         """
         self._require_idle()
         ws = self.workspace
@@ -323,17 +320,14 @@ class SessionV1Mixin:
         if cst is None:
             raise LookupError("No structure set loaded")
         vois = list(cst.vois)
-        by_name = {voi.name: i for i, voi in enumerate(vois)}
         replaced: dict[int, Any] = {}
         for row in rows:
             name = row["structure"]
             index = row.get("voi_index")
             if index is None:
-                index = by_name.get(name)
+                index = resolve_structure(vois, name)
             elif not (0 <= index < len(vois) and vois[index].name == name):
                 raise KeyError(f"No structure {name!r} at position {index}")
-            if index is None:
-                raise KeyError(f"Unknown structure {name!r}")
             voi = vois[index]
             tissue = _tissue.tissue_of(row["tissue"], voi.tissue_properties)
             if tissue != voi.tissue_properties:
@@ -341,8 +335,7 @@ class SessionV1Mixin:
         if not replaced:
             return
         if not apply_anyway:
-            by_structure = {vois[i].name: tissue for i, tissue in replaced.items()}
-            errors = _tissue.check_errors(ws.pln, cst, by_structure)
+            errors = _tissue.check_errors(ws.pln, cst, replaced)
             if errors:
                 raise _tissue_errors(errors)
         _tissue.replace_tissues(cst, replaced)
@@ -353,21 +346,27 @@ class SessionV1Mixin:
         return _objectives.catalog(self.workspace.result, self.workspace.ct)
 
     def objectives_edit(
-        self, op: str, structure: Optional[str] = None, detail: bool = True, **params: Any
+        self, op: str, structure: Any = None, detail: bool = True, **params: Any
     ) -> Optional[dict]:
         """Run one objectives operation (``add``, ``update``, ``change_type``, ``remove``).
 
-        Returns the ``StructureDetail`` of *structure* afterwards (``None`` without
-        *detail*). An in-process frontend may pass ``voi_index``, the structure's position,
-        which also tells apart structures of the same name.
+        *structure* is the structure's position or its name, which must then be unique; an
+        in-process frontend may instead pass the name with ``voi_index``, the position.
+        Returns the ``StructureDetail`` of the structure afterwards (``None`` without
+        *detail*).
         """
         self._require_idle()
         if self.workspace.cst is None:
             raise LookupError("No structure set loaded")
         if op not in ("add", "update", "change_type", "remove"):
             raise ValueError(f"Unknown objectives operation {op!r}")
-        getattr(_objectives, op)(self.workspace, structure, **params)
-        return self._structure(structure) if detail else None
+        vois = list(self.workspace.cst.vois)
+        index = params.pop("voi_index", None)
+        if index is None:
+            index = resolve_structure(vois, structure)
+        name = vois[index].name if isinstance(structure, int) else structure
+        getattr(_objectives, op)(self.workspace, name, voi_index=index, **params)
+        return self._structure(index) if detail else None
 
     def objectives_set_quantity_all(self, quantity: str) -> None:
         """``objectives.set_quantity_all``."""

@@ -200,7 +200,8 @@ def test_importing_the_app_layer_does_not_import_qt():
 
 
 def test_the_app_layer_uses_no_qt_threads_or_processes():
-    forbidden = ("PySide6", "threading", "multiprocessing", "concurrent", "pyRadPlan.gui")
+    forbidden = ("PySide6", "multiprocessing", "concurrent", "pyRadPlan.gui")
+    starters = {"Thread", "Timer", "start_new_thread"}
     for path in Path(pyRadPlan.app.__file__).parent.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -209,6 +210,8 @@ def test_the_app_layer_uses_no_qt_threads_or_processes():
             elif isinstance(node, ast.ImportFrom):
                 names = [node.module or ""]
             else:
+                if isinstance(node, ast.Attribute):
+                    assert node.attr not in starters, f"{path.name} starts a thread"
                 continue
             for name in names:
                 assert not name.startswith(forbidden), f"{path.name} imports {name}"

@@ -267,6 +267,9 @@ def evaluate_tissues(
     from pyRadPlan.biology.tissues import REFERENCE_FIELDS  # noqa: PLC0415
 
     machine, model, engine = _context(pln, **context)
+    names = [voi.name for voi in getattr(cst, "vois", [])]
+    if len(set(names)) != len(names):
+        raise ValueError("tissue.evaluate needs unique structure names")
     vois = {voi.name: voi for voi in getattr(cst, "vois", [])}
     drafts: dict[str, dict] = {}
     for row in rows:
@@ -388,12 +391,18 @@ def replace_tissues(cst: Any, tissues: Mapping[int, Any]) -> None:
     cst.vois = vois
 
 
-def check_errors(pln: Any, cst: Any, replaced: Mapping[str, Any], **context: Any) -> list:
-    """Errors of the structures' tissues after replacing some of them."""
+def check_errors(pln: Any, cst: Any, replaced: Mapping[int, Any], **context: Any) -> list:
+    """Errors of the structures' tissues after replacing those at the positions *replaced*."""
     from pyRadPlan.biology._editing import tissue_issues_quietly  # noqa: PLC0415
 
     machine, model, engine = _context(pln, **context)
-    tissues = {voi.name: replaced.get(voi.name, voi.tissue_properties) for voi in cst.vois}
+    names = [voi.name for voi in cst.vois]
+    tissues = {
+        (f"{voi.name} (#{i})" if names.count(voi.name) > 1 else voi.name): replaced.get(
+            i, voi.tissue_properties
+        )
+        for i, voi in enumerate(cst.vois)
+    }
     issues = tissue_issues_quietly(machine, model, tissues, engine)
     return [issue for issue in issues if issue.is_error]
 

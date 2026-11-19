@@ -13,6 +13,7 @@ FEATURES = {
     "ipopt",
     "gpu",
     "numba",
+    "pickle_load",
     "monte_carlo",
     "pause",
     "open_folder",
@@ -35,7 +36,7 @@ def restore_settings(monkeypatch):
     settings.base_data_path = saved["base_data_path"]
 
 
-def test_app_info_v1(client):
+def test_runtime_info(client):
     info = client.ok("app.info", session=False)["result"]
     assert info["version"] and info["phantoms"]
     assert info["runtime"] == "native" and info["default_profile"] == "native"

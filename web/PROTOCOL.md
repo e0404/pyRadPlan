@@ -323,7 +323,7 @@ tagged before the index: `"physical_dose_<tag>"`, `"physical_dose_beam_<tag> 1"`
 | `app.info` (extended) | read | – | v0 fields + `runtime: "pyodide" \| "native"`, `capabilities` (below), `quantities: [{identifier, name, meta_label, unit}]`, `default_profile` |
 | `app.licenses` | read | `{name?}` | without `name`: `[{name, version, license}]` of the installed distributions; with `name`: `{name, version, license, text \| null}` |
 | `app.settings` | read | – | `{sections: [{id: "general" \| "xp" \| "ai" \| "gui", title, form: FormSchema}]}` (fields of `pyRadPlan.settings`; non-applicable ones `editable: false` with reason) |
-| `app.settings_set` | write | `{section, values}` | as `app.settings`; writes the settings singleton and the `PYRADPLAN_*` env vars like the Qt dialog; refused for non-editable fields |
+| `app.settings_set` | write | `{section, values}` | as `app.settings`; writes the settings singleton and the `PYRADPLAN_*` env vars like the Qt dialog; refused for non-editable fields; `PreconditionError(code="not_available")` when the host disallows global settings (see Trust model) |
 
 `capabilities`:
 
@@ -331,7 +331,8 @@ tagged before the index: `"physical_dose_<tag>"`, `"physical_dose_beam_<tag> 1"`
 {
   features: Record<FeatureId, {available: boolean; reason: string | null}>;
   // FeatureId: "image_file_io" | "dicom_import" | "dicom_export" | "ai" | "ipopt" | "gpu" | "numba"
-  //          | "monte_carlo" | "pause" | "open_folder" | "host_paths" | "base_data_persistence"
+  //          | "pickle_load" | "monte_carlo" | "pause" | "open_folder" | "host_paths"
+  //          | "base_data_persistence"
   formats: {
     import: [{format, label, extensions: string[], objects: string[], available, reason}];
     export: [{object: "pln" | "dij" | "cst" | "result" | "workspace", format, label,
@@ -353,7 +354,28 @@ Detection: `runtime` from `sys.platform == "emscripten"`; image IO and DICOM imp
 | dij | mat, pickle | – |
 | cst | mat (needs a CT on reload), pickle, npz (with CT), DICOM RTSTRUCT / SEG (zip, with CT series) | NIfTI / NRRD / MetaImage label maps (SimpleITK WriteImage) |
 | result | npz, mat (`resultGUI`), DICOM RTDOSE (zip); several quantities zipped | NIfTI / NRRD / MetaImage (SimpleITK WriteImage) |
-| workspace | pickle (`note`: not interchangeable with native pickles until the shim pickles like SimpleITK) | – |
+| workspace | pickle (saving only; loading pickles is disabled in the browser, see `pickle_load`) | – |
+
+`pickle_load` is unavailable under Pyodide (and when the host sets `allow_pickle=false`) with a
+`reason`; the `pickle` row of `formats.import` is then `available: false` with the same reason.
+Unpickling runs code from the file, which in the browser could read the page's patient data;
+saving pickles stays available. Frontends disable the `.pkl` / `.pickle` choices accordingly; a
+load that names one anyway fails with `PreconditionError(code="not_available")`.
+
+**Trust model.** The dispatch surface assumes one trusted user per process: the log capture is a
+handler on the process-wide `pyRadPlan` logger and the settings, base data and environment
+variables are process-wide. `SessionManager(allow_pickle=..., allow_global_settings=...)` lets a
+host narrow it: `allow_pickle=false` refuses pickle loading (`data.load_file`, `data.load_dij`,
+`base_data.add` of a pickle phantom), `allow_global_settings=false` refuses `app.settings_set`,
+`base_data.add` and `base_data.remove` with `PreconditionError(code="not_available")`. Both default
+to the native single-user behaviour. They are guards, not isolation between users. The flags are
+set by the host, never by a request (`session.create` `options` cannot change them).
+
+**Addressing structures.** Structure names need not be unique. Requests that name a structure take
+its position (`StructureSummary.index`, `StructureDetail.index`) or, as before, its name; a name that
+several structures share fails with `KeyError` ("ambiguous"), so a frontend addresses structures by
+position. Responses that list structures (`view.structure_masks`, `analysis.dvh`, `analysis.qi`) add
+`index` to every entry.
 
 ### Session
 
@@ -375,8 +397,8 @@ default is `"total"` (`parity.md`, ambiguity 1); the web profile adopts it once 
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `data.load_file` (extended) | long | `{filename, data, kind?: "auto"}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle`; restores snapshot tags from a workspace pickle (`saved_result_tags`). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO |
-| `data.load_dij` | long | `{filename, data}` | `SessionState`; merges `stf` + `dij` from the file; `PreconditionError(code="no_dij")` when it holds none |
+| `data.load_file` (extended) | long | `{filename, data, kind?: "auto"}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`); restores snapshot tags from a workspace pickle (`saved_result_tags`). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO |
+| `data.load_dij` | long | `{filename, data}` | `SessionState`; merges `stf` + `dij` from the file (`.pkl` not in the browser); `PreconditionError(code="no_dij")` when it holds none |
 | `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg", basename?}` | `FileResult`. `quantities` (component keys) for `object: "result"`, default all full quantities. Workspace pickles include `saved_result_tags` |
 
 Pending plan-form edits are resolved by the frontend before calling `export.save` (Qt asks for
@@ -388,7 +410,7 @@ Save Plan and Save Workspace).
 |---|---|---|---|
 | `base_data.list` | read | `{kind: "machines" \| "rbe_tables" \| "stopping_power_tables" \| "phantoms"}` | `{kind, folders: [{source: "bundled" \| "user" \| "shared", label, path}], rows: [{name, file, source, removable, radiation_mode?, model?, tissue_classes?, reference?, problem?}]}` (columns of the Qt Base Data dialog; `problem` = why a file is unreadable) |
 | `base_data.add` | write (validation may take seconds) | `{kind, filename, data, name?, radiation_mode?, overwrite?: boolean, dry_run?: boolean}` | `{row, suggested_name, radiation_mode, clash: {file, source} \| null}`; `dry_run` validates and reports without writing; a clash without `overwrite` fails with `PreconditionError(code="name_clash")` |
-| `base_data.remove` | write | `{kind, file}` | `{}`; user files only, else `PreconditionError(code="not_removable")` |
+| `base_data.remove` | write | `{kind, file}` | `{}`; user files only, else `PreconditionError(code="not_removable")`; `file` must be a plain file name of that kind (`ValueError` for path separators or `..`) |
 
 ### Plan
 
@@ -449,16 +471,16 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `cst.get` | read | `{names?}` | `{structures: StructureDetail[]}` |
-| `cst.update_structure` | write | `{name, changes: {type?, color?, visible?, overlap_priority?, tissue?: TissueDraft}, apply_anyway?: boolean}` | `{state, structure: StructureDetail}`; the VOI is recreated with `create_voi` as the Qt Edit VOI dialog does; tissue errors fail with `PreconditionError(code="tissue_errors")` and the issues in `error.details` unless `apply_anyway`. Changes of only `color` / `visible` are display settings: set in place, accepted while busy, outdating nothing (`revisions.workspace.cst` still counts them) |
+| `cst.get` | read | `{names?: (string \| number)[]}` | `{structures: StructureDetail[]}` |
+| `cst.update_structure` | write | `{name: string \| number, changes: {type?, color?, visible?, overlap_priority?, tissue?: TissueDraft}, apply_anyway?: boolean}` | `{state, structure: StructureDetail}`; the VOI is recreated with `create_voi` as the Qt Edit VOI dialog does; tissue errors fail with `PreconditionError(code="tissue_errors")` and the issues in `error.details` unless `apply_anyway`. Changes of only `color` / `visible` are display settings: set in place, accepted while busy, outdating nothing (`revisions.workspace.cst` still counts them) |
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
 | `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows |
-| `tissue.apply` | write | `{rows: [{structure, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
+| `tissue.apply` | write | `{rows: [{structure: string \| number, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
 | `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref` |
-| `objectives.add` | write | `{structure}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
-| `objectives.update` | write | `{structure, index, changes: {priority?, quantity?, robustness?, parameters?: Record<string, unknown>}}` | `{state, structure}` |
-| `objectives.change_type` | write | `{structure, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule) |
-| `objectives.remove` | write | `{structure, index}` | `{state, structure}` |
+| `objectives.add` | write | `{structure: string \| number}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
+| `objectives.update` | write | `{structure: string \| number, index, changes: {priority?, quantity?, robustness?, parameters?: Record<string, unknown>}}` | `{state, structure}` |
+| `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule) |
+| `objectives.remove` | write | `{structure: string \| number, index}` | `{state, structure}` |
 | `objectives.set_quantity_all` | write | `{quantity}` | `{state}` |
 
 ```ts
@@ -490,7 +512,7 @@ Optimization after a snapshot carries tagged keys forward and recalculation keep
 | Method | Cost | Params | Result |
 |---|---|---|---|
 | `view.volume` (extended) | read | `{name, phase?, encoding?: "float32" \| "auto"}` | v0 `Volume`; `name` may be any component key; `"auto"` sends the CT as int16 when all values are integral and within int16 (else float32); default `"float32"` (v0) |
-| `view.structure_masks` (extended) | read | `{names?, encoding?: "uint8" \| "bits" \| "crops"}` | `"uint8"`: v0. `"bits"`: `{grid, encoding: "bits", planes: ArrayRef[], masks: [{name, color, plane, bit, num_voxels, bbox}]}`, each plane a `(z, y, x)` uint8 / uint16 / uint32 volume holding up to 32 structures, bit `bit` of plane `plane` set inside the structure. `"crops"`: `{grid, encoding: "crops", masks: [{name, color, num_voxels, bbox: [z0, y0, x0, z1, y1, x1] \| null, data: ArrayRef \| null}]}`, the uint8 crop of shape `(z1-z0, y1-y0, x1-x0)` (ends exclusive) |
+| `view.structure_masks` (extended) | read | `{names?: (string \| number)[], encoding?: "uint8" \| "bits" \| "crops"}` | every mask entry carries `index` (the structure's position). `"uint8"`: v0 plus `index`. `"bits"`: `{grid, encoding: "bits", planes: ArrayRef[], masks: [{name, index, color, plane, bit, num_voxels, bbox}]}`, each plane a `(z, y, x)` uint8 / uint16 / uint32 volume holding up to 32 structures, bit `bit` of plane `plane` set inside the structure. `"crops"`: `{grid, encoding: "crops", masks: [{name, index, color, num_voxels, bbox: [z0, y0, x0, z1, y1, x1] \| null, data: ArrayRef \| null}]}`, the uint8 crop of shape `(z1-z0, y1-y0, x1-x0)` (ends exclusive) |
 | `view.beams` | read | `{draft?: {gantry_angles, couch_angles, iso_center?}}` | `{source: "stf" \| "plan" \| null, iso_centers: Vec3[], beams: [{index, name, label, gantry, couch, iso_center, source_direction, orbit_u?, orbit_w?, orbit_axis?, pending}]}` |
 
 `view.beams` mirrors `gui/widgets/_result_widget.py:_beam_geometry` in LPS millimetres instead of
@@ -506,8 +528,8 @@ renderer maps LPS to voxels with the CT direction matrix.
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `analysis.dvh` (extended) | read | v0 params + `{keys?: string[], range?: "shared" \| "per_structure"}` | without `keys`: v0 shape + `label`, `unit_info: {symbol, dimensionless}`. With `keys`: `{sets: [{key, label, unit, unit_info, curves: DvhCurve[]}]}` (one set per key; empty structures omitted). `range: "per_structure"` bins each structure from 0 to 1.05 × its own maximum (`DVH.compute`, Qt); default `"shared"` (v0). The analysis window sends `num_points: 1000, range: "per_structure"`; "All scenarios" sends every scenario key of the primary group |
-| `analysis.qi` | read | `{quantity, names?, ref_vols?: number[], ref_doses?: number[]}` | `{quantity, label, unit, unit_symbol, ref_vols, ref_doses, metrics: [{id, label, kind: "mean" \| "std" \| "max" \| "min" \| "dx" \| "vx", parameter?, unit}], rows: [{name, color, values: Record<string, number \| null>}]}`. Defaults: `DEFAULT_REF_VOLS` (2, 5, 50, 95, 98); `ref_doses` from `QICollection.default_ref_doses` over the full quantity; invalid lists fall back to the defaults (Qt); metric labels from `format_metric_label` ("D98 [Gy]") |
+| `analysis.dvh` (extended) | read | v0 params (`names` may hold positions) + `{keys?: string[], range?: "shared" \| "per_structure"}` | without `keys`: v0 shape + `label`, `unit_info: {symbol, dimensionless}`. With `keys`: `{sets: [{key, label, unit, unit_info, curves: DvhCurve[]}]}` (one set per key; empty structures omitted); every curve carries `index`, the structure's position. `range: "per_structure"` bins each structure from 0 to 1.05 × its own maximum (`DVH.compute`, Qt); default `"shared"` (v0). The analysis window sends `num_points: 1000, range: "per_structure"`; "All scenarios" sends every scenario key of the primary group |
+| `analysis.qi` | read | `{quantity, names?: (string \| number)[], ref_vols?: number[], ref_doses?: number[]}` | `{quantity, label, unit, unit_symbol, ref_vols, ref_doses, metrics: [{id, label, kind: "mean" \| "std" \| "max" \| "min" \| "dx" \| "vx", parameter?, unit}], rows: [{name, index, color, values: Record<string, number \| null>}]}`. Defaults: `DEFAULT_REF_VOLS` (2, 5, 50, 95, 98); `ref_doses` from `QICollection.default_ref_doses` over the full quantity; invalid lists fall back to the defaults (Qt); metric labels from `format_metric_label` ("D98 [Gy]") |
 | `analysis.compare_units` | read | `{a, b}` (component keys) | `{shareable: boolean, scale: number \| null}` (`pyRadPlan/analysis/_units.compare_units`): shareable units share one axis scaled by `scale`, else a second x axis |
 
 ## Not in v1 (stubs; see `web/docs/parity.md`)
@@ -647,3 +669,18 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     entries of the plan (same problem / same engine) when they are not sent, and accepts them
     when sent back with the plan's value; a changed value is still refused as an unknown field.
     A plan carrying `convert_dose_objectives` can therefore be edited from the web.
+23. 2026-11-19 (review fixes): **changed** structures are addressed by position: `cst.get` `names`,
+    `cst.update_structure` `name`, `tissue.apply` `rows[].structure`, `objectives.*` `structure`,
+    `view.structure_masks` `names`, `analysis.dvh` `names` and `analysis.qi` `names` accept a
+    number (the structure's `index`) wherever they took a name; a name shared by several structures
+    fails with `KeyError` ("ambiguous"), a position out of range with `KeyError`. **added**
+    `index` on every entry of `view.structure_masks` (all encodings), on `analysis.dvh` curves
+    (both shapes) and on `analysis.qi` rows. Masks, DVHs and counts of structures sharing a name are
+    no longer mixed up (they were cached by name). `tissue.evaluate` refuses a structure set with
+    duplicate names (`ValueError`); it still addresses rows by name. **added** feature
+    `pickle_load` and the unavailable `pickle` import format under Pyodide (and with
+    `allow_pickle=false`); pickle loads fail with `PreconditionError(code="not_available")`.
+    **changed** `base_data.remove` validates `file` like `base_data.add` (a path separator or `..`
+    is a `ValueError`). Added the host flags `allow_pickle` / `allow_global_settings` (see Trust
+    model). `workflow.calc_dose_influence` / `workflow.recalc` with `physical_only` no longer write
+    the physical-only plan when preparing; the plan is written together with the result.

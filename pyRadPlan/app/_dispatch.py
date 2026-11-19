@@ -36,13 +36,33 @@ class SessionManager:
         Called with the new session's id (and any options) to create a session.
     max_sessions
         Refuse to create more sessions than this (``None``: unlimited).
+    allow_pickle
+        Whether sessions may load pickle files, which run code (never under Pyodide).
+    allow_global_settings
+        Whether requests may change what is shared by the whole process: ``app.settings_set``
+        and ``base_data.add`` / ``base_data.remove``. A host serving several users turns
+        this off.
+
+    Notes
+    -----
+    The dispatch surface assumes one trusted user per process: the log capture is a handler
+    on the global ``pyRadPlan`` logger and the settings are process-wide, so the flags
+    only guard a single-user host against surprising requests; they are no isolation
+    between users.
     """
 
     def __init__(
-        self, factory: Callable[..., Session] = Session, max_sessions: Optional[int] = None
+        self,
+        factory: Callable[..., Session] = Session,
+        max_sessions: Optional[int] = None,
+        *,
+        allow_pickle: bool = True,
+        allow_global_settings: bool = True,
     ) -> None:
         self._factory = factory
         self._max_sessions = max_sessions
+        self.allow_pickle = allow_pickle
+        self.allow_global_settings = allow_global_settings
         self._sessions: dict[str, Session] = {}
         self._counter = itertools.count(1)
 
@@ -57,6 +77,7 @@ class SessionManager:
         elif session_id in self._sessions:
             raise ValueError(f"Session {session_id!r} exists already")
         session = self._factory(session_id, **options)
+        session.allow_pickle = session.allow_pickle and self.allow_pickle
         self._sessions[session_id] = session
         return session
 
@@ -133,8 +154,8 @@ def app_info() -> dict[str, Any]:
 
 
 @method("app.info", session=False)
-def _app_info(**_: Any) -> dict:
-    return {**app_info(), **_settings.app_info_v1()}
+def _app_info(manager: SessionManager) -> dict:
+    return {**app_info(), **_settings.runtime_info(manager.allow_pickle)}
 
 
 @method("session.create", session=False)
@@ -242,7 +263,15 @@ def _dvh(
     return session.views.dvh(quantity, names, num_points, range)
 
 
-# Protocol v1, part B: app, files, base data, views and analysis.
+# App, files, base data, views and analysis.
+
+
+def _require_global_settings(manager: SessionManager) -> None:
+    if not manager.allow_global_settings:
+        raise PreconditionError(
+            "This host does not allow changing settings or base data shared by all sessions",
+            "not_available",
+        )
 
 
 def _refuse_while_busy(manager: SessionManager) -> None:
@@ -263,6 +292,7 @@ def _app_settings() -> dict:
 
 @method("app.settings_set", session=False)
 def _app_settings_set(manager: SessionManager, section: str, values: dict) -> dict:
+    _require_global_settings(manager)
     _refuse_while_busy(manager)
     return _settings.settings_set(section, values)
 
@@ -320,12 +350,16 @@ def _base_data_add(
     dry_run: bool = False,
 ) -> dict:
     if not dry_run:
+        _require_global_settings(manager)
         _refuse_while_busy(manager)
-    return _basedata.add(kind, filename, data, name, radiation_mode, overwrite, dry_run)
+    return _basedata.add(
+        kind, filename, data, name, radiation_mode, overwrite, dry_run, manager.allow_pickle
+    )
 
 
 @method("base_data.remove", session=False)
 def _base_data_remove(manager: SessionManager, kind: str, file: str) -> dict:
+    _require_global_settings(manager)
     _refuse_while_busy(manager)
     return _basedata.remove(kind, file)
 
@@ -471,5 +505,4 @@ def _error_details(exc: BaseException) -> Optional[list]:
     return None
 
 
-# Protocol v1, part A: plan editor, structures, tissues, objectives, results, history.
-from . import _methods_a  # noqa: E402, F401
+from . import _methods_editors  # noqa: E402, F401
