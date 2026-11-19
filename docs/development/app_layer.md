@@ -145,7 +145,7 @@ The Qt modules import these instead of keeping copies (import direction gui -> a
 
 | Qt module | Imports |
 |---|---|
-| `menus/_help.py` | `DistributionInfo`, `installed_distributions`, `license_text` (`_settings.py`) |
+| `menus/_help.py` | `DistributionInfo`, `installed_distributions`, `license_text` (`_settings.py`); `DESCRIPTION`, `LICENSE_NOTE`, `DISCLAIMER_TITLE`, `DISCLAIMER` (`_about.py`, read from `about.json`, which the web build embeds as well) |
 | `menus/_settings.py`, `menus/_file.py` | `apply_settings_values`, `SECTION_TITLES` (`_settings.py`); the web writes `str(jsonable(value))` through `render`, Qt `str(value)` |
 | `widgets/ai` | `AI_MISSING`, `AI_NO_MODEL` (`_settings.py`) as `AI_MISSING_TIP`, `AI_NO_MODEL_TIP` |
 | `menus/_base_data.py` | `machine_identity`, `rbe_table_summary`, `mat_file_name` (`_basedata.py`) |

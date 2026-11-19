@@ -118,6 +118,39 @@ async function download(trigger) {
 }
 
 try {
+  // ------------------------------------------------------------------ first-visit notice (fresh profile)
+  await page.goto(`${base}?backend=mock&speed=0`);
+  await tid("notice-dialog").waitFor();
+  const noticeText = (await tid("notice-dialog").textContent()) ?? "";
+  expect(noticeText.includes("NOT FOR CLINICAL USE") && noticeText.includes("not a medical device"), "a fresh profile is shown the disclaimer");
+  expect(noticeText.includes("cdn.jsdelivr.net") && noticeText.includes("no telemetry") && noticeText.includes(new URL(base).origin), "the notice states where data and downloads go");
+  expect((await tid("notice-dialog").getByLabel("Close").count()) === 0, "the first-visit notice has no close button");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(100);
+  expect(await tid("notice-dialog").isVisible(), "Escape does not dismiss the first-visit notice");
+  expect((await page.evaluate(() => window.__pyrpApp.useApp.getState().backend)) === null, "the backend does not start before the acknowledgement");
+  expect(((await tid("splash-notice").textContent()) ?? "").includes("not for clinical use"), "the splash carries the disclaimer line");
+  await page.screenshot({ path: join(shots, "menus-notice-light.png") });
+  await tid("notice-accept").click();
+  await tid("notice-dialog").waitFor({ state: "detached" });
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+  await page.reload();
+  await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session);
+  expect((await tid("notice-dialog").count()) === 0, "the notice stays away after the acknowledgement (reload)");
+  {
+    const narrow = await browser.newContext({ viewport: { width: 390, height: 780 }, deviceScaleFactor: 1, colorScheme: "dark" });
+    const other = await narrow.newPage();
+    await other.goto(`${base}?backend=mock&speed=0`);
+    await other.getByTestId("notice-dialog").waitFor();
+    const box = await other.getByTestId("notice-dialog").boundingBox();
+    expect(box !== null && box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 780, `the notice fits a 390 x 780 window (${box?.width} x ${box?.height})`);
+    expect((await other.evaluate(() => document.documentElement.dataset.theme)) === "dark", "dark scheme on a dark platform");
+    await other.screenshot({ path: join(shots, "menus-notice-dark-narrow.png") });
+    await other.setViewportSize({ width: 1680, height: 960 });
+    await other.screenshot({ path: join(shots, "menus-notice-dark.png") });
+    await narrow.close();
+  }
+
   // ------------------------------------------------------------------ splash
   await page.goto(`${base}?backend=mock&speed=8`, { waitUntil: "commit" });
   await tid("boot-splash").waitFor();
@@ -350,16 +383,29 @@ try {
   await tid("licenses-filter").fill("py");
   await shot("licenses");
   expect((await tid("licenses-table").locator("tbody tr").count()) >= 3, "license filter narrows the table");
+  expect((await tid("licenses-notices-link").getAttribute("href")) === "/THIRD_PARTY_NOTICES.txt", "the licenses view links the JavaScript notices");
+  const notices = await page.request.get(`${base}THIRD_PARTY_NOTICES.txt`);
+  expect(notices.ok() && (await notices.text()).includes("production build"), "the dev server explains where the notices come from");
   await closeTopDialog();
   await clickItem("help", "about");
   await tid("about-dialog").waitFor();
-  expect(((await tid("about-dialog").textContent()) ?? "").includes("NOT FOR CLINICAL USE"), "About shows the disclaimer");
+  const aboutText = (await tid("about-dialog").textContent()) ?? "";
+  expect(aboutText.includes("NOT FOR CLINICAL USE") && aboutText.includes("must not be used for clinical treatment planning"), "About shows the disclaimer");
+  expect(((await tid("about-build").textContent()) ?? "").startsWith("Web build:"), "About shows the web build");
   await shot("about");
   await tid("about-licenses").click();
   await tid("licenses-dialog").waitFor();
   await closeTopDialog();
   expect((await tid("about-dialog").count()) === 1, "Escape closes only the topmost dialog");
+  await tid("about-notice").click();
+  await tid("notice-dialog").waitFor();
+  await closeTopDialog();
+  expect((await tid("notice-dialog").count()) === 0 && (await tid("about-dialog").count()) === 1, "About opens the notice, Escape closes it");
   await tid("about-close").click();
+  await tid("status-notice").click();
+  await tid("notice-close").waitFor();
+  expect((await tid("notice-accept").count()) === 0, "the status bar reopens the notice with a Close button");
+  await tid("notice-close").click();
 
   // ------------------------------------------------------------------ log console
   await tid("log-level").selectOption("warning");

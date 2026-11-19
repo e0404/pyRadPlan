@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import pyradplanLogo from "../assets/pyradplan_logo_full_landscape.svg";
 import { actions, useApp } from "../store/appStore";
 import { ProgressBar } from "./common";
+import { SHORT_NOTICE } from "./help/notice";
 import { patientFromUrl, splashPhase } from "./io/models";
 import "./io/io.css";
 
@@ -50,6 +51,9 @@ export function Splash() {
             </div>
           </>
         )}
+        <div className="splash-notice" data-testid="splash-notice">
+          {SHORT_NOTICE}
+        </div>
       </div>
     </div>
   );

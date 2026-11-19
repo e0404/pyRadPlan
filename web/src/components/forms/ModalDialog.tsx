@@ -19,12 +19,18 @@ export function ModalDialog(props: {
   isTop?: () => boolean;
   testId?: string;
   className?: string;
+  /** Extra class of the backdrop (stacking above the splash). */
+  backdropClassName?: string;
   style?: CSSProperties;
   width?: number | string;
   height?: number | string;
+  /** `false`: no title-bar close button and Escape does nothing; only the buttons close it. */
+  dismissible?: boolean;
 }) {
   const { onClose, isTop } = props;
+  const dismissible = props.dismissible ?? true;
   useEffect(() => {
+    if (!dismissible) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const top = isTop ? isTop() : !document.querySelector(".modal-backdrop:not(.qt-modal)");
@@ -32,10 +38,10 @@ export function ModalDialog(props: {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, isTop]);
+  }, [onClose, isTop, dismissible]);
   const sized = props.width !== undefined || props.height !== undefined;
   return (
-    <div className="modal-backdrop qt-modal">
+    <div className={`modal-backdrop qt-modal ${props.backdropClassName ?? ""}`}>
       <div
         className={`dialog qt-dialog ${sized ? "wide" : ""} ${props.className ?? ""}`}
         role="dialog"
@@ -45,9 +51,11 @@ export function ModalDialog(props: {
       >
         <div className="title">
           <span>{props.title}</span>
-          <button type="button" className="title-close" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          {dismissible && (
+            <button type="button" className="title-close" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          )}
         </div>
         <div className="body">{props.children}</div>
         {(props.buttons || props.leftButtons) && (

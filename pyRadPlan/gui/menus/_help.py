@@ -3,7 +3,8 @@
 Links to the online documentation and the source repository, a browser of the
 third-party licenses of the installed distributions (which is how a bundled
 desktop application ships its license notices) and the *About* dialog carrying
-the version, the license note and the non-clinical-use disclaimer.
+the version, the license note and the non-clinical-use disclaimer (texts from
+``pyRadPlan/app/about.json``, shared with the web GUI).
 """
 
 from __future__ import annotations
@@ -32,6 +33,12 @@ from PySide6.QtWidgets import (
 )
 
 import pyRadPlan
+from pyRadPlan.app._about import (
+    DESCRIPTION,
+    DISCLAIMER,
+    DISCLAIMER_TITLE,
+    LICENSE_NOTE,
+)
 from pyRadPlan.app._settings import (  # noqa: F401 - re-exported for the GUI
     DistributionInfo,
     installed_distributions,
@@ -41,13 +48,6 @@ from pyRadPlan.gui.assets import asset_path
 
 DOCUMENTATION_URL = "https://pyradplan.readthedocs.io"
 SOURCE_URL = "https://github.com/e0404/pyRadPlan"
-
-#: Shown prominently in the About dialog.
-DISCLAIMER = (
-    "pyRadPlan is intended for research and education. It is not a medical device "
-    "and must not be used for clinical treatment planning."
-)
-LICENSE_NOTE = "Released under the BSD 3-Clause License. Copyright (c) 2024-2026, DKFZ."
 
 NO_LICENSE_TEXT = "No license text found for this distribution."
 
@@ -173,9 +173,7 @@ class AboutDialog(QDialog):
         self._lbl_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         root.addWidget(self._lbl_title)
 
-        description = QLabel(
-            "Python radiotherapy treatment planning toolkit, interoperable with matRad."
-        )
+        description = QLabel(DESCRIPTION)
         description.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         description.setWordWrap(True)
         root.addWidget(description)
@@ -193,7 +191,7 @@ class AboutDialog(QDialog):
         self._lbl_license.setWordWrap(True)
         root.addWidget(self._lbl_license)
 
-        self._lbl_disclaimer = QLabel(f"<b>NOT FOR CLINICAL USE</b><br>{DISCLAIMER}")
+        self._lbl_disclaimer = QLabel(f"<b>{DISCLAIMER_TITLE}</b><br>{DISCLAIMER}")
         self._lbl_disclaimer.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self._lbl_disclaimer.setWordWrap(True)
         self._lbl_disclaimer.setStyleSheet(

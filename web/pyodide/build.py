@@ -27,6 +27,12 @@ REPO = HERE.parents[1]
 SHIM_DIR = HERE / "shims" / "SimpleITK"
 SHIM_DIST = "pyradplan_sitk_shim"
 SHIM_VERSION = "0.1.0"
+SHIM_NOTICE = (
+    "pyradplan-sitk-shim is part of pyRadPlan, not SimpleITK: a numpy/scipy stand-in for the "
+    "subset of the SimpleITK API that pyRadPlan uses, installed under the import name "
+    "SimpleITK in the browser runtime because SimpleITK has no WebAssembly build. It does not "
+    "include SimpleITK. It is distributed under pyRadPlan's license:\n\n"
+)
 
 
 def sha256(path: Path) -> str:
@@ -83,11 +89,16 @@ def build_shim(out: Path) -> Path:
         files[f"SimpleITK/{path.relative_to(SHIM_DIR).as_posix()}"] = path.read_bytes()
     info = f"{SHIM_DIST}-{SHIM_VERSION}.dist-info"
     files[f"{info}/METADATA"] = (
-        "Metadata-Version: 2.1\n"
+        "Metadata-Version: 2.4\n"
         f"Name: {SHIM_DIST.replace('_', '-')}\n"
         f"Version: {SHIM_VERSION}\n"
-        "Summary: numpy stand-in for the SimpleITK subset used by pyRadPlan (Pyodide only)\n"
+        "Summary: pyRadPlan's numpy stand-in for the SimpleITK subset it uses (Pyodide only)\n"
+        "License-Expression: BSD-3-Clause\n"
+        "License-File: LICENSE\n"
         "Requires-Dist: numpy\nRequires-Dist: scipy\n"
+    ).encode()
+    files[f"{info}/licenses/LICENSE"] = (
+        SHIM_NOTICE + (REPO / "LICENSE").read_text("utf-8")
     ).encode()
     files[f"{info}/WHEEL"] = (
         "Wheel-Version: 1.0\nGenerator: pyradplan-build\nRoot-Is-Purelib: true\n"

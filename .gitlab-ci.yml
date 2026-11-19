@@ -251,6 +251,27 @@ web-pyodide-e2e:
             - web/e2e/downloads/
         expire_in: 1 week
 
+# The GitHub Pages site of the "Web Pages" GitHub workflow, built and smoke-tested but not deployed
+# (no GitLab Pages): the newest release tag as /latest/ (a placeholder page while releases have
+# no web/), this branch as /develop/. The assembled site is kept as the job artifact. A full clone
+# with the tags: the "latest" tag and setuptools-scm need them, and a shallow clone has neither.
+web-pages:
+    extends: .web
+    variables:
+        GIT_DEPTH: "0"
+    script:
+        - git fetch --force --tags origin
+        - (cd web && npm ci && npx playwright install --with-deps msedge)
+        # Clones the newest vX.Y.Z tag into _pages/latest, builds both channels into _site, serves
+        # it like GitHub Pages under /pyRadPlan/ and runs web/e2e/pages.mjs against /develop/.
+        - node web/scripts/test_pages.mjs --install
+        - du -sh _site _site/*/
+    artifacts:
+        when: always
+        paths:
+            - _site/
+        expire_in: 1 week
+
 packaging:
     stage: package
     dependencies: []

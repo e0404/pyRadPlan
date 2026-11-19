@@ -1,68 +1,100 @@
 name: Web Pages
 
-# DRAFT, manual only (workflow_dispatch). Builds the browser version of pyRadPlan (web/) for a
-# static host and deploys it to GitHub Pages. Nothing runs from this file until it is merged and
-# started by hand, and the first deployment needs Settings > Pages > Source = "GitHub Actions".
-# Decision record, measurements and the open questions: docs/development/web_publishing.md.
+# Builds the GitHub Pages site of the browser version of pyRadPlan (web/) with two channels:
+#   /latest/   the newest release (vX.Y.Z, no pre-releases), built from that tag's sources
+#   /develop/  the develop branch
+# plus a landing page at the root, and deploys it. A Pages deployment replaces the whole site,
+# so every run builds and assembles both channels (web/scripts/assemble_pages.mjs). Releases
+# without web/ get a placeholder page under /latest/ that links to /develop/.
 #
-#   - A GitHub Pages site is a single artifact per repository, replaced as a whole by every
-#     deployment. This workflow therefore publishes ONE channel (the directory `channel`, default
-#     "latest") plus a landing page. Keeping older versions next to it needs a different scheme
-#     (see the document). If the repository's Pages site is ever used for something else (docs,
-#     a project page), put this build into a separate repository or a sub-directory of that
-#     site's artifact instead of running both.
-#   - The build uses a relative Vite base ("./"), so the same artifact works under
-#     https://<org>.github.io/<repo>/<channel>/ and under a custom domain or any other prefix.
-#   - GitHub Pages cannot set response headers. PYRADPLAN_COI=1 adds web/pages/coi-serviceworker.js,
-#     which makes the page cross-origin isolated (SharedArrayBuffer, the Stop button) after one
-#     automatic reload on the first visit.
+#   - build: every trigger, including pull requests and manual runs from any branch. For a ref
+#     other than develop (a pull request, a manual run from a branch) that ref is built as the
+#     "develop" channel, so the changes under test are what gets built. Runs the Pages smoke test
+#     and uploads the assembled site as the downloadable artifact "web-pages-site".
+#   - deploy: only for develop (push or manual run) and published releases, and only when the
+#     repository variable WEB_PAGES_ENABLED is 'true' (Settings > Pages > Source must be
+#     "GitHub Actions"). Decision record, how to test the build and the admin steps:
+#     docs/development/web_publishing.md.
+#
+# Relative Vite base ("./"): the same build works under /<repo>/<channel>/ and elsewhere. GitHub
+# Pages cannot set response headers: --coi adds web/pages/coi-serviceworker.js, which makes each
+# channel cross-origin isolated (SharedArrayBuffer, the Stop button) after one automatic reload
+# on the first visit; each channel's worker is scoped to its directory.
 
 on:
+  push:
+    branches:
+      - develop
+    paths: &paths
+      - 'web/**'
+      - 'pyRadPlan/**'
+      - 'pyproject.toml'
+      - '.github/workflows/web-pages.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths: *paths
+  release:
+    types: [published]
   workflow_dispatch:
-    inputs:
-      channel:
-        description: 'Directory name below the site root, e.g. "latest" or "v0.10"'
-        required: false
-        default: latest
-        type: string
 
 permissions:
   contents: read
 
+# Deployments (develop, releases) queue in one group and never overlap or cancel each other; other
+# refs get their own group, and a newer push to a pull request cancels its older build.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ (github.event_name == 'release' || github.ref == 'refs/heads/develop') && 'web-pages-deploy' || format('web-pages-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: "24"
   PYTHON_VERSION: "3.13"
+  DEPLOY: ${{ vars.WEB_PAGES_ENABLED == 'true' && (github.event_name == 'release' || (github.event_name != 'pull_request' && github.ref == 'refs/heads/develop')) }}
 
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       PYTHON: python
-      CHANNEL: ${{ inputs.channel }}
     steps:
-      - uses: actions/checkout@v7
+      # The "develop" channel: the develop branch for a release, else the ref under test. All
+      # history and tags: setuptools-scm, the channel labels and the "latest" tag need them.
+      - name: Check out the develop channel
+        uses: actions/checkout@v7
         with:
-          # setuptools-scm derives the wheel version from the tags
+          ref: ${{ github.event_name == 'release' && 'develop' || '' }}
+          path: src/develop
           fetch-depth: 0
+          fetch-tags: true
 
-      - name: Check the channel name
+      - name: Check out the newest release
+        working-directory: src/develop
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if ! [[ "$CHANNEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "::error::Invalid channel name '$CHANNEL'"
+          git fetch --force --tags origin
+          stable='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          tag=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          if ! [[ "$tag" =~ $stable ]]; then
+            tag=$(git tag --list 'v*' --sort=-v:refname | grep -E "$stable" | head -n 1 || true)
+          fi
+          if [ -z "$tag" ]; then
+            echo "::error::No release tag vX.Y.Z found"
             exit 1
           fi
+          echo "Newest release: $tag"
+          git worktree add --detach ../latest "$tag"
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: src/develop/pyproject.toml
 
       - name: Setup Node ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v7
@@ -70,52 +102,41 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: |
-            web/package-lock.json
-            web/pyodide/package-lock.json
+            src/*/web/package-lock.json
+            src/*/web/pyodide/package-lock.json
 
-      - name: Build the wheels (pyRadPlan, SimpleITK shim, vendored pure wheels)
-        working-directory: web/pyodide
+      - name: Install Microsoft Edge for the smoke test
+        working-directory: src/develop/web
         run: |
           npm ci
-          npm run build
-
-      - name: Build the frontend
-        working-directory: web
-        env:
-          PYRADPLAN_COI: "1"
-        run: |
-          npm ci
-          npm run build -- --base=./
-
-      - name: Assemble the site
-        run: |
-          mkdir -p "_site/$CHANNEL"
-          cp -r web/dist/. "_site/$CHANNEL/"
-          cat > _site/index.html <<EOF
-          <!doctype html>
-          <meta charset="utf-8">
-          <meta http-equiv="refresh" content="0; url=./$CHANNEL/">
-          <title>pyRadPlan in the browser (NOT FOR CLINICAL USE)</title>
-          <p><a href="./$CHANNEL/">pyRadPlan in the browser</a>. Research and education only, not a medical device.</p>
-          EOF
-          du -sh _site
-          find _site -type f -size +5M -exec ls -l {} +
-
-      # The site is served the way GitHub Pages does: no COOP/COEP headers, max-age caching, the
-      # same content types. Boots the real Pyodide backend, runs TG119, tests Stop and fails if
-      # the app contacts a host other than itself and cdn.jsdelivr.net.
-      - name: Smoke test
-        working-directory: web
-        run: |
           npx playwright install --with-deps msedge
-          node e2e/pages-server.mjs ../_site --prefix=/pyRadPlan/ --port=8080 &
-          sleep 2
-          node e2e/pages.mjs "http://localhost:8080/pyRadPlan/$CHANNEL/" --stop
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v6
+      # web/scripts/test_pages.mjs: assemble_pages.mjs builds both checkouts (wheels, frontend with
+      # the relative base and the channel labels) into _site; the site is then served the way
+      # GitHub Pages does (no COOP/COEP headers, max-age caching, the same content types) below the
+      # repository's sub-path, the landing page, the placeholder and the notices are fetched, and
+      # web/e2e/pages.mjs opens /develop/ in a fresh profile: first-visit notice, real Pyodide
+      # backend, TG119, Stop, and a failure if a host other than the site and cdn.jsdelivr.net
+      # is contacted.
+      - name: Build, assemble and smoke-test both channels
+        run: >-
+          node src/develop/web/scripts/test_pages.mjs --install --out _site
+          --latest src/latest --develop src/develop --prefix "/${{ github.event.repository.name }}/"
 
-      - name: Upload the site
+      - name: Site size
+        run: |
+          du -sh _site _site/*/
+          cat _site/channels.json
+
+      - name: Upload the site (download from the run's summary page)
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-pages-site
+          path: _site
+          retention-days: 7
+
+      - name: Upload the site for GitHub Pages
+        if: env.DEPLOY == 'true'
         uses: actions/upload-pages-artifact@v5
         with:
           path: _site
@@ -123,6 +144,7 @@ jobs:
   deploy:
     name: Deploy
     needs: build
+    if: vars.WEB_PAGES_ENABLED == 'true' && (github.event_name == 'release' || (github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -132,6 +154,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

@@ -27,12 +27,13 @@ if (typeof window === "undefined") {
 } else if (window.crossOriginIsolated) {
   // Isolated (by this worker or by the server): re-arm the one-reload guard for a later forced reload.
   try {
-    sessionStorage.removeItem("pyradplan-coi-reload");
+    sessionStorage.removeItem(`pyradplan-coi-reload:${new URL(".", document.currentScript.src).pathname}`);
   } catch {
     // storage blocked: nothing to re-arm
   }
 } else if (window.crossOriginIsolated === false && window.isSecureContext && navigator.serviceWorker) {
-  const KEY = "pyradplan-coi-reload";
+  // Per scope: deployments side by side on one origin (/latest/, /develop/) each get their reload.
+  const KEY = `pyradplan-coi-reload:${new URL(".", document.currentScript.src).pathname}`;
   const reload = () => {
     // One reload per tab session: if isolation still fails afterwards, run without it instead of looping.
     try {

@@ -1,7 +1,4 @@
 node_modules/
 dist/
-e2e/screenshots/failure.png
-e2e/screenshots/pyodide-failure.png
-e2e/screenshots/menus-failure.png
 e2e/downloads/
-e2e/screenshots/pyodide-prod-*
+e2e/screenshots/

@@ -56,12 +56,21 @@ try {
   const t0 = Date.now();
   const response = await page.goto(url);
   if (!response?.ok()) throw new Error(`${url} answered ${response?.status()}`);
+  // A fresh profile: the disclaimer comes first, and nothing is loaded from the CDN before it is acknowledged.
+  await tid("notice-dialog").waitFor({ timeout: 60000 });
+  await page.waitForTimeout(1000);
+  check(!hosts.has("cdn.jsdelivr.net"), "the first-visit notice shows before anything is loaded from cdn.jsdelivr.net");
+  await tid("notice-accept").click();
   await page.waitForFunction(() => window.__pyrpApp?.useApp.getState().session, null, { timeout: 5 * 60 * 1000 });
   console.log(`boot ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   const isolated = await page.evaluate(() => crossOriginIsolated);
   check(isolated === expectIsolated, `crossOriginIsolated is ${isolated}`);
   const info = await page.evaluate(() => window.__pyrpApp.useApp.getState().info);
   check(info.runtime === "pyodide", `runtime ${info.runtime}, pyRadPlan ${info.version}, Python ${info.python}`);
+  for (const [file, needle] of [["THIRD_PARTY_NOTICES.txt", "react-dom"], ["LICENSE.txt", "BSD 3-Clause"]]) {
+    const res = await context.request.get(new URL(file, url).href);
+    check(res.ok() && (await res.text()).includes(needle), `${file} is deployed`);
+  }
   check((await tid("btn-stop").isDisabled()) === true, "Stop is disabled while idle");
   if (!isolated) check(((await tid("btn-stop").getAttribute("title")) ?? "").includes("SharedArrayBuffer"), "Stop explains why it is unavailable");
 

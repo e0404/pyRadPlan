@@ -4,26 +4,30 @@ import { showDialog } from "../../store/dialogStore";
 import { DOCUMENTATION_URL, SOURCE_URL } from "../io/menuModel";
 import { ModalDialog } from "../forms/ModalDialog";
 import { openLicensesDialog } from "./LicensesDialog";
+import { ABOUT, buildLabel } from "./notice";
+import { openNoticeDialog } from "./NoticeDialog";
 
-export const DISCLAIMER =
-  "pyRadPlan is intended for research and education. It is not a medical device and must not be used for clinical treatment planning.";
-export const LICENSE_NOTE = "Released under the BSD 3-Clause License. Copyright (c) 2024-2026, DKFZ.";
-export const DESCRIPTION = "Python radiotherapy treatment planning toolkit, interoperable with matRad.";
-
-/** Qt `AboutDialog`: logo, version, description, links, license note, disclaimer. */
+/** Qt `AboutDialog`: logo, version, description, links, license note, disclaimer; plus the web build and privacy. */
 export function AboutDialog(props: { info: AppInfo | null; onClose: () => void; isTop?: () => boolean }) {
   const { info } = props;
+  const build = buildLabel();
   return (
     <ModalDialog
       title="About pyRadPlan"
       testId="about-dialog"
       width={460}
+      className="about-dialog"
       onClose={props.onClose}
       isTop={props.isTop}
       leftButtons={
-        <button className="btn" onClick={() => void openLicensesDialog()} data-testid="about-licenses">
-          Third-party Licenses…
-        </button>
+        <>
+          <button className="btn" onClick={() => void openLicensesDialog()} data-testid="about-licenses">
+            Third-party Licenses…
+          </button>
+          <button className="btn" onClick={() => void openNoticeDialog()} data-testid="about-notice">
+            Privacy…
+          </button>
+        </>
       }
       buttons={
         <button className="btn primary" onClick={props.onClose} autoFocus data-testid="about-close">
@@ -36,7 +40,7 @@ export function AboutDialog(props: { info: AppInfo | null; onClose: () => void; 
         <div data-testid="about-title">
           <b>pyRadPlan</b> {info?.version ?? ""} (Python {info?.python ?? "…"})
         </div>
-        <div>{DESCRIPTION}</div>
+        <div>{ABOUT.description}</div>
         <div>
           <a href={DOCUMENTATION_URL} target="_blank" rel="noreferrer">
             Documentation
@@ -46,11 +50,15 @@ export function AboutDialog(props: { info: AppInfo | null; onClose: () => void; 
             Source code
           </a>
         </div>
-        <div>{LICENSE_NOTE}</div>
+        <div>{ABOUT.license_note}</div>
         <div className="disclaimer-box">
-          <b>NOT FOR CLINICAL USE</b>
+          <b>{ABOUT.disclaimer_title}</b>
           <br />
-          {DISCLAIMER}
+          {ABOUT.disclaimer}
+        </div>
+        <div className="dim">All computation and data stay in this browser; no telemetry.</div>
+        <div className="dim" data-testid="about-build">
+          Web build: {build ?? "local build"}
         </div>
       </div>
     </ModalDialog>

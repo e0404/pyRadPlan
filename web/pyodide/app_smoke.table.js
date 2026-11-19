@@ -92,7 +92,40 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
     params: { profile: "web" },
     expect: (r) => has(r, "session", "options"),
   },
-  { v: 1, method: "app.licenses", session: false },
+  {
+    v: 1,
+    method: "app.licenses",
+    session: false,
+    note: "Pyodide distribution packages, vendored wheels and the shim are listed",
+    expect: (r) => {
+      const names = r.map((row) => row.name.toLowerCase());
+      const missing = ["pyradplan", "pyradplan-sitk-shim", "numpy", "scipy", "pydicom"].filter(
+        (n) => !names.includes(n),
+      );
+      const unknown = r.filter((row) => row.license === "unknown").map((row) => row.name);
+      return (!missing.length && !unknown.length) || `missing ${missing}, unknown license ${unknown}`;
+    },
+  },
+  {
+    v: 1,
+    method: "app.licenses",
+    session: false,
+    params: { name: "pyradplan-sitk-shim" },
+    note: "the SimpleITK shim is labelled as pyRadPlan's stand-in",
+    expect: (r) =>
+      (r.license === "BSD-3-Clause" &&
+        r.text.includes("part of pyRadPlan, not SimpleITK") &&
+        r.text.includes("Copyright (c) 2024-2026, DKFZ")) ||
+      JSON.stringify(r).slice(0, 160),
+  },
+  {
+    v: 1,
+    method: "app.licenses",
+    session: false,
+    params: { name: "scipy" },
+    note: "a Pyodide distribution package carries its license text",
+    expect: (r) => (r.text ?? "").includes("Copyright") || JSON.stringify(r).slice(0, 160),
+  },
   { v: 1, method: "app.settings", session: false, expect: (r) => has(r, "sections") },
   { v: 1, method: "session.history", expect: (r) => has(r, "log") },
   { v: 1, method: "session.log_level", params: { level: "info" } },

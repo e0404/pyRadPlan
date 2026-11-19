@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { build, createServer, preview } from "vite";
+import { acknowledgeNotice } from "./notice.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -34,6 +35,7 @@ const browser = await chromium.launch({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
 });
 const context = await browser.newContext({ viewport: { width: 1680, height: 960 }, acceptDownloads: true });
+await acknowledgeNotice(context, base);
 const page = await context.newPage();
 const problems = [];
 page.on("pageerror", (err) => problems.push(`pageerror: ${err.message}`));
@@ -453,6 +455,11 @@ try {
     await tid("license-row-numpy").click();
     await page.waitForFunction(() => (document.querySelector('[data-testid="license-text"]')?.value ?? "").length > 100, null, { timeout: 60000 });
     await shot("licenses", tid("licenses-dialog"));
+    expect(((await tid("license-row-pyradplan-sitk-shim").textContent()) ?? "").includes("BSD-3-Clause"), "the SimpleITK shim row carries pyRadPlan's license");
+    await tid("license-row-pyradplan-sitk-shim").click();
+    await page.waitForFunction(() => (document.querySelector('[data-testid="license-text"]')?.value ?? "").includes("part of pyRadPlan, not SimpleITK"), null, { timeout: 60000 });
+    expect(true, "the shim's license text says it is pyRadPlan's stand-in, not SimpleITK");
+    await shot("licenses-shim", tid("licenses-dialog"));
     await page.keyboard.press("Escape");
     await clickItem("help", "about");
     await tid("about-dialog").waitFor();

@@ -3,8 +3,52 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vitest/config";
+import { thirdPartyNotices } from "./scripts/thirdPartyNotices";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/** About texts shared with the Qt GUI; the disclaimer must show before the backend has started. */
+const about = JSON.parse(readFileSync(resolve(here, "../pyRadPlan/app/about.json"), "utf8"));
+
+const pyodideDir = resolve(here, "node_modules/pyodide");
+const notices = thirdPartyNotices({
+  overridesDir: resolve(here, "licenses"),
+  projectLicense: resolve(here, "../LICENSE"),
+  extras: () => {
+    const lock = JSON.parse(readFileSync(join(pyodideDir, "pyodide-lock.json"), "utf8")).info ?? {};
+    const runtime = "the Pyodide runtime in pyodide-runtime/";
+    return [
+      { name: "pyodide", packageDir: pyodideDir, usedIn: `pyodide-runtime/ (${PYODIDE_FILES.join(", ")})` },
+      {
+        name: "CPython",
+        version: lock.python,
+        license: "PSF-2.0",
+        homepage: "https://github.com/python/cpython",
+        usedIn: `${runtime} (interpreter in pyodide.asm.wasm, standard library in python_stdlib.zip)`,
+        textFile: resolve(here, "licenses/cpython.txt"),
+      },
+      {
+        name: "Emscripten",
+        version: String(lock.platform ?? "").replace(/^emscripten_/, "").replaceAll("_", "."),
+        license: "MIT OR NCSA",
+        homepage: "https://github.com/emscripten-core/emscripten",
+        usedIn: `${runtime} (JavaScript runtime and system libraries in pyodide.asm.mjs / .wasm)`,
+        textFile: resolve(here, "licenses/emscripten.txt"),
+      },
+      ...(process.env.PYRADPLAN_COI === "1"
+        ? [
+            {
+              name: "coi-serviceworker",
+              license: "MIT",
+              homepage: "https://github.com/gzuidhof/coi-serviceworker",
+              usedIn: "coi-serviceworker.js (pyRadPlan's rewrite, following its idea and structure)",
+              textFile: resolve(here, "licenses/coi-serviceworker.txt"),
+            },
+          ]
+        : []),
+    ];
+  },
+});
 
 /** Headers needed for SharedArrayBuffer (Pyodide interrupt buffer) in dev and preview. */
 const isolationHeaders = {
@@ -31,7 +75,7 @@ const MIME: Record<string, string> = {
 };
 
 function pyodideAssets(): Plugin {
-  const pkgDir = resolve(here, "node_modules/pyodide");
+  const pkgDir = pyodideDir;
   return {
     name: "pyradplan-pyodide-assets",
     configureServer(server) {
@@ -84,10 +128,11 @@ function coiServiceWorker(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), pyodideAssets(), coiServiceWorker()],
+  plugins: [react(), pyodideAssets(), coiServiceWorker(), notices.main],
+  define: { __PYRADPLAN_ABOUT__: JSON.stringify(about) },
   server: { headers: isolationHeaders, port: 5173 },
   preview: { headers: isolationHeaders, port: 4173 },
-  worker: { format: "es" },
+  worker: { format: "es", plugins: () => [notices.worker] },
   build: { target: "es2022", chunkSizeWarningLimit: 1500 },
   test: {
     include: ["test/**/*.test.ts"],

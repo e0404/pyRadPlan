@@ -9,7 +9,7 @@ pyRadPlan runs natively in the browser. A React frontend that mimics the Qt main
 TG119, generates the STF, calculates the dose influence matrix, optimizes and shows the dose, all
 inside a web worker running Pyodide with the numpy backend.
 
-![pyRadPlan in the browser](../../web/e2e/screenshots/pyodide-dose.png)
+![pyRadPlan in the browser](images/web_photon_dose.png)
 
 | Deliverable | Where | State |
 |---|---|---|
@@ -35,7 +35,7 @@ cd .. && npm install && npm run dev                          # open the printed 
 ```
 
 `?backend=mock` runs the UI without Python. `npm run e2e:pyodide` clicks through the real pipeline
-in headless Edge and writes screenshots to `web/e2e/screenshots/`.
+in headless Edge and writes screenshots to `web/e2e/screenshots/` (git-ignored).
 
 ## Architecture
 
@@ -185,7 +185,7 @@ The web GUI now covers the whole Qt GUI, element by element. `web/docs/parity.md
 element with its web status (verified on Pyodide / done against the mock / stub / n/a), and
 `web/PROTOCOL.md` has a v1 section for the methods behind it.
 
-![Proton plan in the browser](../../web/e2e/screenshots/pyodide-25-proton-dose.png)
+![Proton plan in the browser](images/web_proton_dose.png)
 
 What was added:
 

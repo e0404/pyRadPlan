@@ -76,6 +76,7 @@ Set a new bound above the newest release that CI tests. Do not add bounds to `de
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] Branch targets `develop` (not `main`)
 - [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
+- [ ] GUI changes: shared logic lives in `pyRadPlan/app`; both frontends (Qt, web) updated, or the gap noted in `web/docs/parity.md`
 
 ## Releases
 
@@ -111,6 +112,7 @@ The scripts in `examples/` are jupytext percent notebooks rendered in the docs "
 
 - Data models use **pydantic** for validation.
 - Geometry / image handling via **SimpleITK**.
+- Both GUIs (Qt in `pyRadPlan/gui/`, browser in `web/`) run on the Qt-free session layer `pyRadPlan/app` (`docs/development/app_layer.md`); frontends hold presentation only.
 - Dose engines are modality-specific; photon and proton engines live under `pyRadPlan/engines/`.
 - The Array API abstraction (`array_api_compat`) lets algorithms run on numpy, cupy, or torch without code changes — keep new numerical code array-backend-agnostic where possible.
 - DICOM I/O via **pydicom**; matRad interop via HDF5 (**h5py**).

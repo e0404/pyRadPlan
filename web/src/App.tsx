@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { GroupBox, Dialog } from "./components/common";
+import { ABOUT } from "./components/help/notice";
+import { NoticeGate, openNoticeDialog } from "./components/help/NoticeDialog";
 import { MenuBar } from "./components/MenuBar";
 import { InfoWidget, LogConsole, LogoBanner, ObjectivesPanel } from "./components/panels";
 import { PlanWidget } from "./components/PlanWidget";
@@ -114,12 +116,16 @@ export function App() {
       <div className="statusbar" data-testid="statusbar">
         <span>{statusMessage}</span>
         <span className="spacer" />
+        <button type="button" className="status-notice" onClick={() => void openNoticeDialog()} data-testid="status-notice" title="Disclaimer and privacy">
+          {ABOUT.disclaimer_title} · data stays in this browser
+        </button>
         <span>{kind === "mock" ? "mock backend" : kind === "pyodide" ? "Pyodide backend" : ""}</span>
         <span>{globalThis.crossOriginIsolated ? "cross-origin isolated" : "not isolated"}</span>
       </div>
       <Splash />
       <ConfirmDialog />
       <ErrorDialog />
+      <NoticeGate />
     </div>
   );
 }

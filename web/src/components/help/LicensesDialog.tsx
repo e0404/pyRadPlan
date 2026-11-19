@@ -5,6 +5,8 @@ import { storeInternals } from "../../store/appStore";
 import { ModalDialog } from "../forms/ModalDialog";
 
 export const NO_LICENSE_TEXT = "No license text found for this distribution.";
+/** Written into the build output by `scripts/thirdPartyNotices.ts`. */
+export const NOTICES_FILE = "THIRD_PARTY_NOTICES.txt";
 
 /** Qt `ThirdPartyLicensesDialog`: filter, package table, license text of the selection. */
 export function LicensesDialog(props: { onClose: () => void; isTop?: () => boolean }) {
@@ -60,6 +62,17 @@ export function LicensesDialog(props: { onClose: () => void; isTop?: () => boole
       }
     >
       <div>pyRadPlan builds on the following open-source packages. Select one to read its license.</div>
+      <div className="dim" data-testid="licenses-web-notices">
+        These are the Python packages. The JavaScript components and the Pyodide runtime of this web app are listed in the{" "}
+        <a href={`${import.meta.env.BASE_URL}${NOTICES_FILE}`} target="_blank" rel="noreferrer" data-testid="licenses-notices-link">
+          third-party notices
+        </a>
+        ; pyRadPlan's own license:{" "}
+        <a href={`${import.meta.env.BASE_URL}LICENSE.txt`} target="_blank" rel="noreferrer">
+          LICENSE.txt
+        </a>
+        .
+      </div>
       <div className="clearable">
         <input
           type="text"

@@ -1,9 +1,13 @@
 # Publishing the web version (decision record)
 
-Status 2026-11-18, branch `internal/web-pyodide`. Question: can the browser version of pyRadPlan
+Status 2026-11-19, branch `internal/web-pyodide`. Question: can the browser version of pyRadPlan
 (`docs/development/web_prototype.md`) be hosted on GitHub Pages? Nothing was published, no
 repository or Pages setting was touched; everything below was tested locally against a static
 server that mimics Pages (see "What was tested").
+
+**Decision (2026-11-19): two public channels**, `/latest/` (the newest release) and `/develop/`
+(the develop branch), assembled into one Pages site by `.github/workflows/web-pages.yml`; see
+"Two channels" below for how it works and what an administrator must do once.
 
 ## Result
 
@@ -65,8 +69,9 @@ relative base is preferable: the artifact does not know where it lives. Two deta
 
 There is no client-side routing (no `pushState`, no hash routes; state is in the page and URL query
 parameters), so the SPA-404 problem does not exist and no `404.html` trick is needed. The app uses
-no `localStorage`, cookies or IndexedDB, which matters because all project sites of one
-organization share the origin `<org>.github.io`.
+no cookies or IndexedDB and exactly one `localStorage` entry (the acknowledgement of the
+disclaimer, below), which matters because all project sites of one organization share the origin
+`<org>.github.io`; its key starts with `pyradplan.`.
 
 ### Cross-origin isolation
 
@@ -95,6 +100,8 @@ Details of (b), `web/pages/coi-serviceworker.js` (modelled on the MIT-licensed
 - **Reload loop guard.** The script reloads once per tab session after the worker takes control;
   if isolation still fails it stays unisolated instead of looping. The guard is re-armed when a
   page is isolated, so a forced reload (Shift+F5, which bypasses the worker) reloads once more.
+  The guard's `sessionStorage` key contains the worker's scope path, so `/latest/` and
+  `/develop/` opened in the same tab each get their reload.
 - First visit shows the splash, reloads after 0.2 s, and starts booting; the aborted first request
   is harmless (`net::ERR_ABORTED`, filtered in `e2e/pages.mjs`).
 - Build wiring: an additive plugin in `web/vite.config.ts`, active only with `PYRADPLAN_COI=1`
@@ -173,13 +180,32 @@ leave the browser only through the user's own downloads ("Save"). Precisely:
   make the app run foreign code in a tab holding a user's data. Harmless on localhost; for a public
   deployment they should be ignored unless same-origin or in a development build (patch below).
   Under COEP most foreign hosts would be refused anyway, but that is not a control.
-- The page already carries the disclaimer: title "(NOT FOR CLINICAL USE!)", a banner in the
-  header, and About ("not a medical device and must not be used for clinical treatment planning").
-  The splash has none; a first-visit acknowledgement would be cheap.
-- Licenses: Help > Licenses lists the installed packages' license files from inside Pyodide. The
-  JavaScript bundle (React, zustand) has no license file yet, and the Pyodide runtime (MPL-2.0)
-  and the pyRadPlan BSD-3 `LICENSE` are not shipped as files next to the app. A `NOTICE` /
-  third-party file generated at build time is needed before a public release.
+- **Disclaimer and privacy notice (done).** The text is the one the Qt About dialog already had,
+  now in `pyRadPlan/app/about.json` (read by `pyRadPlan/app/_about.py` for Qt, embedded by
+  `web/vite.config.ts` so the web shows it before the backend starts). On the first visit a modal
+  (`web/src/components/help/NoticeDialog.tsx`) shows the disclaimer and the privacy facts and must
+  be acknowledged; nothing (Pyodide, wheels, jsDelivr) is downloaded before that, which
+  `web/e2e/pages.mjs` checks. Afterwards it stays reachable from the status bar ("NOT FOR CLINICAL
+  USE · data stays in this browser"), Help > About (button "Privacy…") and a line on the splash.
+  The acknowledgement is one `localStorage` entry whose key contains a hash of all texts, so any
+  change of the text asks again; without storage (private windows, blocked site data) it is asked
+  on every visit.
+- **Licenses (done).** Help > Third-party Licenses lists the Python distributions from inside
+  Pyodide (checked for the installed wheels: the Pyodide distribution packages such as numpy,
+  scipy, h5py carry their texts; the SimpleITK stand-in is `pyradplan-sitk-shim`, BSD-3-Clause,
+  its text says it is part of pyRadPlan and not SimpleITK; `array-api-compat` 1.15.0 ships no
+  license file upstream and shows "No license text found"). The build writes
+  `THIRD_PARTY_NOTICES.txt` and pyRadPlan's `LICENSE.txt` next to the app
+  (`web/scripts/thirdPartyNotices.ts`, a Vite plugin): every npm package whose modules end up in a
+  bundle (react, react-dom, scheduler, zustand today), the Pyodide runtime with CPython and
+  Emscripten, and coi-serviceworker when the service worker is included, each with its license
+  file copied verbatim. A package without a license file falls back to `web/licenses/<name>.txt`
+  (Pyodide's npm package ships none; the texts there are copied from the upstream repositories at
+  the versions used: Pyodide 314.0.8, CPython 3.14.2, Emscripten 5.0.3, coi-serviceworker), and
+  the build fails when neither exists. The minifier drops the `@license` banners of React; the
+  notice file carries their full texts. The licenses view links both files. Not enumerated: the
+  system libraries Emscripten and Pyodide compile into `pyodide.asm.wasm` beyond CPython and
+  Emscripten's own (Pyodide publishes no list).
 
 ## Pages and the existing docs
 
@@ -197,33 +223,116 @@ the docs ever move to Pages, or a project page is wanted, the options are:
 
 Because the base is relative, the build is identical in all three.
 
-## Deployment workflow (draft)
+## Two channels
 
-`.github/workflows/web-pages.yml`, `workflow_dispatch` only, so merging it runs nothing. Steps:
-checkout with tags (for the wheel version), Python 3.13 and Node 24, wheels (`npm run build` in
-`web/pyodide`), frontend with `PYRADPLAN_COI=1 npm run build -- --base=./`, assembly of
-`_site/<channel>/` plus a landing page, a smoke test (`web/e2e/pages-server.mjs` serves the site as
-Pages does, `web/e2e/pages.mjs` boots the real backend, runs TG119, tests Stop and fails if any host
-besides the app and jsDelivr is contacted), `configure-pages`, `upload-pages-artifact`, and a
-deploy job with the `github-pages` environment (`pages: write`, `id-token: write`).
+Exactly two public deployments: `https://<org>.github.io/<repo>/latest/` (the newest release) and
+`.../develop/` (the head of `develop`), with a landing page at `.../` that links both, says which
+version and commit each is, and carries the disclaimer line. A Pages deployment replaces the
+whole site, so every run of `.github/workflows/web-pages.yml` builds and assembles both channels
+(option 2 of the earlier list, with N = 1 release; a release-asset scheme or a `gh-pages` branch
+remain the ways to keep more versions).
 
-- Pinned to the current majors: `actions/configure-pages@v6`, `upload-pages-artifact@v5`,
-  `deploy-pages@v5` (latest releases on 2026-11-18; the GitHub guide still shows v5/v4/v4). The
-  inputs used are the documented ones; the workflow itself was not run (needs a runner and the
-  Pages setting), only its YAML parsed and its commands run locally.
-- Needs once: Settings > Pages > Source "GitHub Actions". The `github-pages` environment, by default,
-  only allows the default branch to deploy; a tag or release branch needs an environment rule.
-- **One channel per deployment.** The artifact replaces the entire site, so a `/v0.10/` deployment
-  would delete `/latest/`. Ways to keep versions, from simple to complete:
-  1. One live version (`latest`), as drafted.
-  2. A build job that checks out the last N release tags and assembles all of them in one artifact
-     (N wheel builds, about 5 min each; the smoke test only on the newest).
-  3. Attach each version's built site as a release asset (a 43-50 MB zip) and let the deploy job
-     download the last N and the new one; old versions are never rebuilt. Not implemented, not
-     tested; the wheel and frontend are built from different dependency pins over time, so storing
-     the result is more reproducible than rebuilding.
-  4. Publish from a `gh-pages` branch: old folders persist, but the repository grows by about 40 MB
-     per version.
+How a run works (two jobs, `build` and `deploy`):
+
+1. Triggers: push to `develop`, pull requests into `develop` or `main` (both with the path filter
+   of `web.yml`: `web/`, `pyRadPlan/`, `pyproject.toml`, the workflow), `release: published` and
+   `workflow_dispatch` from any branch. Deploying runs (develop, releases) share the concurrency
+   group `web-pages-deploy` without cancelling, so deployments never overlap; every other ref has
+   its own group, and a newer push to a pull request cancels the older build.
+2. The **"develop" channel** is checked out into `src/develop`: the `develop` branch for a
+   release, otherwise the ref under test (the develop head on a push, the pull request's merge
+   commit, the branch of a manual run), so the changes being tested are what gets built. All
+   history and tags (`fetch-depth: 0`, `fetch-tags: true`, plus `git fetch --tags`), because
+   setuptools-scm, the labels and the release tag need them. The **newest release** is
+   `gh release view` (GitHub's "latest" release, which excludes drafts and pre-releases), or, if
+   that is not a `vX.Y.Z` tag, the highest `vX.Y.Z` tag; it is checked out with `git worktree add`
+   into `src/latest`. Each channel is built from its own checkout: its own wheels
+   (`web/pyodide/build.py` of that checkout) and its own frontend, so `/latest/` uses the web
+   sources of the tag, not develop's.
+3. `web/scripts/test_pages.mjs --install --latest src/latest --develop src/develop --prefix
+   /<repo>/` runs `assemble_pages.mjs --build --coi`, which builds each checkout (`npm ci`, wheels,
+   `npm run build -- --base=./` with `PYRADPLAN_COI=1` and `VITE_PYRADPLAN_CHANNEL`,
+   `VITE_PYRADPLAN_VERSION` (`git describe --tags`), `VITE_PYRADPLAN_COMMIT`), copies each
+   `web/dist` to `_site/<channel>/` and writes `_site/index.html` and `_site/channels.json`. The
+   app shows "Web build: develop channel · v0.9.0-12-g… · commit …" in Help > About.
+4. **Releases without `web/`** (all up to v0.9.0): `_site/latest/index.html` becomes a static page
+   saying that this release does not contain the browser version yet, that it is first included
+   in a later release, and linking to `/develop/`. The run does not fail.
+5. Smoke test, in the same script: `web/e2e/pages-server.mjs` serves `_site` as Pages does under
+   `/<repo>/`; `/`, `/latest/`, `/develop/`, the notices and `LICENSE.txt` are fetched;
+   `web/e2e/pages.mjs` opens `/develop/` in a fresh profile, checks the first-visit notice and
+   that nothing was loaded from jsDelivr before it was acknowledged, boots the real backend, runs
+   TG119, tests Stop and fails if any host besides the site and jsDelivr is contacted.
+6. The assembled site is uploaded as the artifact **`web-pages-site`** (7 days) on every run; on
+   deploying runs also with `upload-pages-artifact`. The `deploy` job (`configure-pages`,
+   `deploy-pages`, environment `github-pages`, `pages: write`, `id-token: write`) runs only for a
+   push or manual run on `develop` and for published releases, and only when the repository
+   variable `WEB_PAGES_ENABLED` is `'true'`. `configure-pages` sits in the deploy job because it
+   fails while Pages is disabled. Merging the workflow therefore deploys nothing until the
+   administrator steps below are done, while pull requests already get the build and smoke test.
+
+**What an administrator does once**, in this order:
+
+1. Settings > Pages > Build and deployment > Source: **GitHub Actions**.
+2. Settings > Environments > `github-pages` > Deployment branches and tags: allow the branch
+   `develop` and the tag pattern `v*` besides the default branch (a push to develop runs on
+   `refs/heads/develop`, a release on `refs/tags/vX.Y.Z`; by default only the default branch may
+   deploy).
+3. Settings > Secrets and variables > Actions > Variables: `WEB_PAGES_ENABLED` = `true`.
+4. Start the workflow by hand once on `develop` (Actions > Web Pages > Run workflow) or push to
+   develop.
+
+Both channels share one origin (`<org>.github.io`), checked and decided:
+
+- **Service workers.** Each channel's `coi-serviceworker.js` registers with its own URL, so its
+  scope is its directory (`/<repo>/latest/`, `/<repo>/develop/`); the landing page and the
+  placeholder register none. A worker only controls pages in its scope and only rewrites their
+  responses, so the two do not interfere; the reload guard is namespaced by scope (above).
+- **localStorage.** The only entry is the notice acknowledgement. It is **deliberately shared**
+  by both channels: the key contains a hash of the texts, so the same text needs one
+  acknowledgement, and a channel with a different text has a different key and asks on its own
+  (no ping-pong between the channels). Settings are not persisted in the browser at all (they live
+  in the Python session and are lost on reload), so there is nothing else to namespace.
+
+### Testing the page build
+
+All three run the same `web/scripts/test_pages.mjs` (assemble both channels, serve like Pages,
+fetch, browser smoke test); none of them deploys anything.
+
+- **Locally**, one command in `web/` (needs the tags locally, `npm install`, the installed
+  Microsoft Edge; without `--skip-wheels` also `PYTHON` with pip and network to rebuild the
+  wheels): `npm run pages:test -- --skip-wheels`. It clones the newest `vX.Y.Z` tag shallowly into
+  `<repo>/_pages/latest`, builds the working tree as `develop` into `<repo>/_site` (both
+  gitignored) and prints the result; open `http://localhost:8080/pyRadPlan/` while it runs, or
+  serve `_site` afterwards with `node e2e/pages-server.mjs ../_site --prefix=/pyRadPlan/` (in Git
+  Bash with `MSYS_NO_PATHCONV=1`, which otherwise rewrites `/pyRadPlan/` into a Windows path).
+- **On GitLab**: the job `web-pages` in `.gitlab-ci.yml` runs on `internal/*` and `devops/*`
+  branches with web-related changes (the rules of the other `web-*` jobs), with `GIT_DEPTH: "0"`
+  and an explicit `git fetch --tags` so the release tag exists, builds the branch as `develop`,
+  and keeps `_site/` as the job artifact for a week (Browse or Download on the job page). There is
+  no GitLab Pages deployment.
+- **On GitHub**: every pull request into `develop` or `main` that touches the web paths runs the
+  `build` job; a manual run (Actions > Web Pages > Run workflow, pick the branch) builds any
+  branch as `develop`. Download `web-pages-site` from the run's summary page and serve it locally
+  with `pages-server.mjs` as above. Neither deploys.
+- **A real deployment, safely**: in a scratch repository (a fork or a private copy under a
+  personal account; free accounts publish Pages only from public repositories), set Settings >
+  Pages > Source to "GitHub Actions", add `develop` to the `github-pages` environment rules, set
+  the variable `WEB_PAGES_ENABLED` to `true`, and push this branch there as `develop` (with the
+  tags, `git push --tags`). The site appears at `https://<account>.github.io/<scratch-repo>/` and
+  exercises the real github.io origin (service worker, caching, sub-path) without touching the
+  project's Pages. Delete the repository or switch Pages off afterwards.
+
+Local test done for this document (2026-11-19): `npm run pages:test -- --skip-wheels` with v0.9.0
+as `latest` (placeholder) and the working tree as `develop` passed: all five URLs 200, the notice
+came before any jsDelivr request, TG119 dose influence + optimization, Stop in 35-80 ms, only
+`localhost` and `cdn.jsdelivr.net` contacted, no browser errors.
+
+Pinned like the other workflows to the current majors: `actions/checkout@v7`,
+`setup-python@v7`, `setup-node@v7`, `upload-artifact@v7`, `configure-pages@v6`,
+`upload-pages-artifact@v5`, `deploy-pages@v5`. Neither CI job has run on a runner yet; `actionlint`
+passes for the workflow, both YAML files parse, and the commands were run locally.
+
 - Previews per pull request are not a Pages feature (none found in the documentation, assumed);
   options are a `pr-<n>/` folder in a `gh-pages` branch with a third-party action (not evaluated) or
   one of the hosts below.
@@ -246,18 +355,17 @@ needs more than the disclaimer (the research-use notice and a license page, abov
 
 ## Recommendation and next steps
 
-1. **Public demo on GitHub Pages is feasible now** at `https://e0404.github.io/pyRadPlan/latest/`,
-   built with the relative base and the service worker, packages on jsDelivr. Use the draft
-   workflow, started by hand from a release tag. Keep the service worker out of builds for hosts
-   that send headers.
-2. **Before it goes public**, in this order: (a) restrict the `pyodide`/`packages`/`pyrp` URL
-   overrides to development and same-origin; (b) third-party license/NOTICE file in the build and
-   the `LICENSE` next to the app; (c) a short first-visit acknowledgement of "research and
-   education only, not for clinical use"; (d) try Firefox and Safari on a real deployment of a
-   private test (or the preview server) and decide about the Stop fallback (c).
-3. **Versions.** Start with one live channel. If tagged versions are wanted, implement the release-asset
-   scheme (option 3) or move to Cloudflare Pages or an institute server where every deployment has
-   its own URL.
+1. **Public demo on GitHub Pages** at `https://e0404.github.io/pyRadPlan/latest/` and
+   `.../develop/`, built with the relative base and the service worker, packages on jsDelivr, by
+   the workflow above once the administrator steps are done. Keep the service worker out of builds
+   for hosts that send headers.
+2. **Before it goes public**: (a) URL overrides restricted to development and same-origin, done;
+   (b) third-party notices and `LICENSE.txt` in the build, done; (c) first-visit acknowledgement
+   of the disclaimer and privacy facts, done; (d) still open: try Firefox and Safari on a real
+   deployment of a private test (or the preview server) and decide about the Stop fallback (c).
+3. **Versions.** Two channels (decided). If tagged versions are wanted later, use the
+   release-asset scheme or move to Cloudflare Pages or an institute server where every deployment
+   has its own URL. `/latest/` shows a placeholder until the first release that contains `web/`.
 4. **Split the base data out of the wheel** (it is 31 of 50.7 MB, and it blocks Cloudflare Pages'
    25 MiB limit and every version copy).
 5. Decide with the user: org-level (`e0404`) public hosting at all, a custom domain, and whether an
@@ -271,23 +379,33 @@ not loop; the hosts contacted; sizes and gzip sizes; MIME types, gzip, cache hea
 COOP/COEP on live github.io sites; jsDelivr's CORS and CORP headers; GitHub, GitLab, Cloudflare and
 Netlify limits and header facts as read from their documentation on 2026-11-18; the repository and
 organization Pages state through the public API; action versions through the releases API; the
-workflow's YAML parses.
+workflow's YAML parses. 2026-11-19: the two-channel assembly with v0.9.0 (placeholder) and the
+working tree, served under `/pyRadPlan/`, with the smoke test (notice before any CDN request,
+TG119, Stop, hosts, notices deployed); `actionlint` on the workflow; the license rows under
+Pyodide.
 
 Assumed or not tested: Firefox, Safari, mobile and a real github.io origin; that Pages redirects a
 directory URL to the trailing slash; the stale-chunk problem after a deployment; that Pages has no
-per-PR previews; the workflow end to end (needs Pages enabled and a runner); GitLab per-project
+per-PR previews; the GitHub workflow and the GitLab job end to end (need runners, and Pages
+enabled for the deploy job); that the `github-pages` environment rules are as described; GitLab per-project
 `_headers` (not found, not proven absent); Netlify limits.
 
 ## Files
 
 - `docs/development/web_publishing.md`: this document.
-- `.github/workflows/web-pages.yml`: draft deployment, manual trigger only.
+- `.github/workflows/web-pages.yml`: the two-channel deployment.
+- `web/scripts/assemble_pages.mjs`: builds and assembles the channels, the landing page and the
+  placeholder; `web/scripts/test_pages.mjs` (`npm run pages:test`): assembly plus serving and smoke
+  test, used locally and by both CIs (`web-pages` job in `.gitlab-ci.yml`).
 - `web/pages/coi-serviceworker.js`: the service worker (not shipped unless `PYRADPLAN_COI=1`).
-- `web/vite.config.ts`: additive plugin `coiServiceWorker` and its entry in `plugins`; one import
-  extended with `readFileSync`.
+- `web/vite.config.ts`: plugins `coiServiceWorker`, `pyodideAssets` and the notices plugin; the
+  About texts as `__PYRADPLAN_ABOUT__`.
+- `web/scripts/thirdPartyNotices.ts`, `web/licenses/`: `THIRD_PARTY_NOTICES.txt` and its fallback
+  license texts.
+- `pyRadPlan/app/about.json`, `pyRadPlan/app/_about.py`: disclaimer, license note and description
+  for both GUIs; `web/src/components/help/notice.ts`, `NoticeDialog.tsx`: the first-visit notice.
 - `web/e2e/pages-server.mjs`, `web/e2e/pages.mjs`: Pages-like static server and the smoke test used
   above (`node e2e/pages.mjs <url> [--stop] [--no-isolation]`).
 
-Patch not applied (source owned by other work): in `web/src/api/index.ts`, `createBackend` should
-read `pyodide`, `packages` and `pyrp` only when `import.meta.env.DEV` or the URL's origin equals
-`location.origin`.
+The URL overrides `pyodide`, `packages` and `pyrp` are honoured only in development or for URLs on
+the page's own origin (`trustedSource` in `web/src/api/index.ts`).

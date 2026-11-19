@@ -145,7 +145,10 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Documentation (readthedocs) | `_help.py:331-332` | done (mock e2e) | frontend (link) | – |
 | Source Code (GitHub) | `_help.py:333-334` | done (mock e2e) | frontend (link) | – |
 | Third-party Licenses… (filter, Package / Version / License, license text) | `_help.py:154-243` | verified on Pyodide | impl (the packages of the Pyodide runtime) | `app.licenses` |
-| About pyRadPlan… (logo, version, Python, description, links, BSD note, NOT FOR CLINICAL USE box, Third-party Licenses button) | `_help.py:246-317` | verified on Pyodide | impl | `app.info` |
+| (web only) links to `THIRD_PARTY_NOTICES.txt` (JavaScript bundle, Pyodide runtime) and `LICENSE.txt` in the licenses view | – | done (mock e2e; files checked by `e2e/pages.mjs`) | frontend (build plugin) | – |
+| About pyRadPlan… (logo, version, Python, description, links, BSD note, NOT FOR CLINICAL USE box, Third-party Licenses button) | `_help.py:246-317` | verified on Pyodide | impl; texts from `pyRadPlan/app/about.json` in both | `app.info` |
+| (web only) About: "Privacy…" button, privacy line, web build (channel, version, commit) | – | done (mock e2e) | frontend | – |
+| (web only) First-visit disclaimer and privacy notice (must be acknowledged, backend starts afterwards), status-bar link, splash line | – | done (mock e2e, `e2e/pages.mjs`) | frontend | – |
 
 ## Splash (`windows/_splash_win.py`, `apps.py:33-168`)
 

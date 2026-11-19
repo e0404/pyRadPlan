@@ -16,6 +16,7 @@
     "e2e:viewer": "node e2e/viewer.mjs",
     "e2e:menus": "node e2e/menus.mjs",
     "e2e:plan": "node e2e/plan.mjs",
+    "pages:test": "node scripts/test_pages.mjs",
     "gen:colormaps": "python scripts/gen_colormaps.py"
   },
   "dependencies": {

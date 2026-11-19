@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { createServer } from "vite";
+import { acknowledgeNotice } from "./notice.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -23,7 +24,9 @@ const browser = await chromium.launch({
   headless: !headed,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
 });
-const page = await browser.newPage({ viewport: { width: 1680, height: 960 }, deviceScaleFactor: 1 });
+const context = await browser.newContext({ viewport: { width: 1680, height: 960 }, deviceScaleFactor: 1 });
+await acknowledgeNotice(context, base);
+const page = await context.newPage();
 const problems = [];
 page.on("pageerror", (err) => problems.push(`pageerror: ${err.message}`));
 page.on("console", (msg) => {

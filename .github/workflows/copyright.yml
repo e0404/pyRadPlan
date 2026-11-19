@@ -27,7 +27,7 @@ jobs:
         id: bump
         run: |
           year=$(date +%Y)
-          sed -E -i "s/(Copyright \(c\) [0-9]{4}-)[0-9]{4}/\1$year/" LICENSE pyRadPlan/gui/menus/_help.py
+          sed -E -i "s/(Copyright \(c\) [0-9]{4}-)[0-9]{4}/\1$year/" LICENSE pyRadPlan/app/about.json
           sed -E -i "s/^(copyright = \")[0-9]{4}/\1$year/" docs/conf.py
           echo "year=$year" >> "$GITHUB_OUTPUT"
           if git diff --quiet; then

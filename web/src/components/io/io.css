@@ -190,6 +190,53 @@ input.indented {
   padding: 8px;
 }
 
+.dialog.about-dialog,
+.dialog.notice-dialog {
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+}
+
+/* Disclaimer and privacy notice (first visit: above the splash and every other dialog) */
+
+.modal-backdrop.qt-modal.notice-backdrop {
+  z-index: 110;
+}
+
+.dialog.notice-dialog {
+  width: 560px;
+}
+
+.notice-dialog .notice-heading {
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.notice-dialog .notice-paragraph {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.splash-notice {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.statusbar .status-notice {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.statusbar .status-notice:hover {
+  text-decoration: underline;
+}
+
 /* Tabs (Base Data, Preferences) */
 
 .tabs {
