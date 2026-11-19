@@ -36,6 +36,7 @@ import array_api_compat
 import numpy as np
 import scipy.sparse as sp
 import SimpleITK as sitk
+from pydantic_core import to_jsonable_python
 
 ARRAY_TAG = "__array__"
 
@@ -186,7 +187,7 @@ def _floats_from_tokens(data: list) -> list:
 
 
 def _to_numpy(arr: Any) -> np.ndarray:
-    from .xp_utils import to_numpy
+    from .xp_utils import to_numpy  # noqa: PLC0415 - circular via _settings -> pyRadPlan.core
 
     return to_numpy(arr)
 
@@ -361,6 +362,4 @@ def to_json_tree(data: Any) -> Any:
         Tree of dicts, lists, strings, numbers, booleans and None. Enums, paths, dates and
         similar objects are converted like pydantic does in JSON mode.
     """
-    from pydantic_core import to_jsonable_python
-
     return to_jsonable_python(encode_tree(data), inf_nan_mode="constants")
