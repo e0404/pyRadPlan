@@ -76,7 +76,7 @@ from .._display_names import (
     select_identifier,
     show_identifiers_when_open,
 )
-from .._tissue_params import (
+from pyRadPlan.biology._editing import (
     SELECTION_PARAMETERS,
     bio_model_quietly,
     dose_engine_quietly,
@@ -101,8 +101,6 @@ _EXPLICIT = "explicit"
 _MODIFIED_COLOR = QColor("#e67e22")
 #: Persistent status note shown while the form has unapplied edits.
 _MODIFIED_NOTE = "Modified — not applied"
-#: Suffix of the model dropdown entry keeping a plan's model the machine cannot run.
-_UNSUPPORTED_SUFFIX = "(not supported by this machine)"
 #: Tissue marker while the structures' tissues fail the model's check.
 _TISSUE_ERROR_MARK = "⚠"
 _TISSUE_ERROR_STYLE = "color: #e67e22; font-weight: bold;"

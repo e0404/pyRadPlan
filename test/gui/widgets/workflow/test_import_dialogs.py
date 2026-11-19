@@ -232,6 +232,6 @@ def test_merge_loaded_data_wraps_dose_into_result(qapp):
     w = WorkflowWidget(ws)
     dose = sitk.GetImageFromArray(np.zeros((4, 8, 8), dtype=np.float32))
 
-    w._merge_loaded_data({"ct": object(), "dose": dose})
+    w.session.merge_loaded({"ct": object(), "dose": dose})
     assert ws.has("ct")
     assert isinstance(ws.result, dict) and "physical_dose" in ws.result

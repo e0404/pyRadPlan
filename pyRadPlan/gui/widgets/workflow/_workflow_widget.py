@@ -34,7 +34,7 @@ from pyRadPlan.app._io import (
     path_label,
     writes_folder,
 )
-from pyRadPlan.app._results import default_tag, is_tagged
+from pyRadPlan.app._results import default_tag
 from pyRadPlan.app._stages import available_actions, nested_fraction, progress_detail
 from pyRadPlan.app._stages import status_text
 from pyRadPlan.core import (
@@ -49,7 +49,7 @@ from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from .._base import WorkspaceWidget, Worker
 from .._display_names import bio_model_display_name, quantity_display_name
-from .._tissue_params import tissue_issues_text
+from pyRadPlan.biology._editing import tissue_issues_text
 
 logger = logging.getLogger(__name__)
 
@@ -262,23 +262,6 @@ class WorkflowWidget(WorkspaceWidget):
         """The workflow session of the workspace, whose rules and steps this widget uses."""
         return self._ws.session
 
-    @property
-    def _saved_tags(self) -> list[str]:
-        """The snapshot tags of the result (kept by the session)."""
-        return self.session.saved_tags
-
-    @_saved_tags.setter
-    def _saved_tags(self, tags: list[str]) -> None:
-        self.session.saved_tags = list(tags)
-
-    @property
-    def _dij_stale(self) -> bool:
-        return self.session.tracker.dij_stale
-
-    @property
-    def _result_stale(self) -> bool:
-        return self.session.tracker.result_stale
-
     def _do_update(self, changed_keys: list) -> None:
         # This widget has no editable fields, only buttons/labels derived from
         # which pipeline objects exist.  It therefore *intentionally* reacts to
@@ -288,10 +271,6 @@ class WorkflowWidget(WorkspaceWidget):
         self._update_status()
         self._update_button_states()
         self._update_indicators()
-
-    def _is_tagged(self, key: str) -> bool:
-        """Whether *key* is a snapshot key created by :meth:`_on_save_result`."""
-        return is_tagged(key, self._saved_tags)
 
     def _update_indicators(self) -> None:
         stages = self.session.stages()
@@ -318,7 +297,7 @@ class WorkflowWidget(WorkspaceWidget):
 
     def _update_status(self) -> None:
         text = status_text(self._ws.present(), self.session.tracker)
-        n = len(self._saved_tags)
+        n = len(self.session.saved_tags)
         if n and text == _RESULT_AVAILABLE:
             text += f" · {n} saved snapshot{'s' if n != 1 else ''}"
         self._lbl_status.setText(text)
@@ -427,7 +406,12 @@ class WorkflowWidget(WorkspaceWidget):
         session.begin(operation)
 
         def finished(value: Any) -> None:
-            committed = session.finish(operation, value)
+            try:
+                committed = session.finish(operation, value)
+            except Exception as exc:  # noqa: BLE001 - the session has aborted the operation
+                self._update_status()
+                self._show_error(exc, operation.label)
+                return
             # A step writing nothing (a save) leaves no workspace change to refresh it.
             self._update_status()
             if on_done is not None:
@@ -466,6 +450,9 @@ class WorkflowWidget(WorkspaceWidget):
             name = bio_model_display_name(exc.data["model"])
             if self._ask_physical_dose_only(step, name, exc.data["issues"]) != "physical":
                 return None
+        except Exception as exc:  # noqa: BLE001 - surface, never crash
+            self._show_error(exc, step)
+            return None
         try:
             return self.session.prepare(action, physical_only=True, **params)
         except Exception as exc:  # noqa: BLE001 - surface, never crash
@@ -672,23 +659,11 @@ class WorkflowWidget(WorkspaceWidget):
 
         Runs :func:`pyRadPlan.io.load_data` in the worker thread; on success the
         recognized pipeline objects are merged into the workspace by the session (see
-        :meth:`_merge_loaded_data`). *label* is shown while it runs.
+        :meth:`~pyRadPlan.app.Session.merge_loaded`). *label* is shown while it runs.
         """
         operation = self._prepare("Load", "load_path", path=path, label=label)
         if operation is not None:
             self._run_operation(operation, on_done=self._show_load_warnings)
-
-    def _merge_loaded_data(self, data: dict) -> None:
-        """Merge recognized pipeline objects from a load into the workspace.
-
-        A supplied CT replaces the patient and clears objects absent from the import.
-        Imports without a CT keep existing objects, allowing a plan to be loaded
-        onto the current patient. A structure set requires a CT;
-        otherwise it is skipped with a warning. A bare ``dose`` image (formats
-        without a matRad ``result``) is wrapped into a result dict for the viewer.
-        A new patient or replacement result also replaces the snapshot tags.
-        """
-        self._show_load_warnings(self.session.merge_loaded(data))
 
     def _show_load_warnings(self, warnings: Optional[list[str]]) -> None:
         for warning in warnings or []:

@@ -29,7 +29,7 @@ from pyRadPlan.gui.workspace import WorkspaceManager
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
-from ._tissue_params import load_machine_quietly, plan_dose_engine
+from pyRadPlan.biology._editing import load_machine_quietly, plan_dose_engine
 from .result.quantity_widget import QuantityWidget
 from .result.visualization_widget import VisualizationWidget
 from .result.viewer_options_widget import ViewerOptionsWidget
@@ -547,50 +547,63 @@ class ViewingWidget(WorkspaceWidget):
         self.voi_toggled.emit(name, checked)
         # selection_changed is emitted by vois_widget directly
 
-    def _on_voi_replaced(self, name: str, new_voi) -> None:
+    def _on_voi_replaced(self, old_voi, new_voi) -> None:
         """Write the metadata edited in the VOI editor to the workspace ``cst``.
 
         The edited type, overlap priority and tissue go through
         :meth:`~pyRadPlan.app.Session.update_structure` (the editor has already asked
-        about tissue errors), which recreates the VOI in the structure set; the stored VOI
-        then replaces the editor's in the VOI list. While a calculation runs, the session
-        refuses structure edits, so the edit is applied once the calculation has ended.
+        about tissue errors), addressing the structure by its position, which recreates
+        the VOI in the structure set; the stored VOI then replaces the editor's in the VOI
+        list. While a calculation runs, the session refuses structure edits, so the edit is
+        applied once the calculation has ended, unless another structure set has been
+        loaded meanwhile.
         The write is wrapped in :meth:`hold_updates` so this widget does not rebuild (and
         reset the VOI selection) from its own change, while peer widgets refresh.
         """
-        self._vois = [new_voi if v.name == name else v for v in self._vois]
+        name = old_voi.name
+        position = next((i for i, v in enumerate(self._vois) if v is old_voi), None)
+        self._vois = [new_voi if v is old_voi else v for v in self._vois]
         changes = {
             "type": new_voi.voi_type,
             "overlap_priority": new_voi.overlap_priority,
             "tissue": new_voi.tissue_properties,
         }
+        queued_cst = self._ws.cst
 
         def apply() -> None:
-            if self._ws.cst is None:
+            cst = self._ws.cst
+            if cst is None or cst is not queued_cst or position is None:
+                logger.warning("Dropped the edit of structure %r: the structure set changed", name)
+                return
+            if not 0 <= position < len(cst.vois) or cst.vois[position].name != name:
+                logger.warning("Dropped the edit of structure %r: it is no longer there", name)
                 return
             try:
                 with self.hold_updates():
                     self._ws.session.update_structure(
-                        name, changes, apply_anyway=True, detail=False
+                        position, changes, apply_anyway=True, detail=False
                     )
             except (PreconditionError, LookupError, ValueError, TypeError):
                 logger.exception("Rejected VOI type change for %r", name)
                 return
-            stored = next((v for v in self._ws.cst.vois if v.name == name), None)
-            if stored is not None:
-                self._vois = [stored if v.name == name else v for v in self._vois]
-                self.vois_widget.replace_voi(name, stored)
+            stored = cst.vois[position]
+            self._vois = [stored if v is new_voi else v for v in self._vois]
+            self.vois_widget.replace_voi(name, stored)
 
         self._ws.session.call_when_idle(apply)
 
-    def _write_voi_color(self, name: str, rgb: tuple) -> None:
+    def _write_voi_color(self, voi: VOI, rgb: tuple) -> None:
         """Set a picked colour through the session (a display edit, also during a run)."""
         cst = self._ws.cst
-        if cst is not None and any(voi.name == name for voi in cst.vois):
-            self._ws.session.update_structure(name, {"color": rgb}, detail=False)
-            return
-        voi = next((v for v in self._vois if v.name == name), None)
-        if voi is not None:
+        position = next((i for i, v in enumerate(self._vois) if v is voi), None)
+        if (
+            cst is not None
+            and position is not None
+            and position < len(cst.vois)
+            and cst.vois[position].name == voi.name
+        ):
+            self._ws.session.update_structure(position, {"color": rgb}, detail=False)
+        else:
             voi.color = rgb
 
     def _on_voi_color_changed(self, name: str, rgb: tuple) -> None:

@@ -33,7 +33,9 @@ def _form_plan(widget):
     from pyRadPlan.app._planform import changes_from_form
 
     ws = widget.workspace
-    return ws.session._build_plan_v1(ws.pln, changes_from_form(ws.pln, widget._form_changes()))
+    return ws.session._build_plan_checked(
+        ws.pln, changes_from_form(ws.pln, widget._form_changes())
+    )
 
 
 def _answer_message_boxes(monkeypatch, button_text=None):
@@ -478,7 +480,7 @@ def test_tissue_indicator_follows_the_engine(qapp, tg119):
 
 def test_tissue_editor_follows_the_engine(qapp, test_data_protons):
     from pyRadPlan.dose.engines import ParticleTOPASMCEngine
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -1088,7 +1090,7 @@ def test_tissue_dialog_edit_marks_dose_influence_stale(qapp, test_data_protons):
     widget = PlanWidget(workspace=ws)
     workflow = WorkflowWidget(ws)
     ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    assert not workflow._dij_stale
+    assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
         self.set_values(0, 0.42, 0.04)
@@ -1100,7 +1102,7 @@ def test_tissue_dialog_edit_marks_dose_influence_stale(qapp, test_data_protons):
         widget._on_tissue_parameters()
 
     assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.42)
-    assert workflow._dij_stale
+    assert workflow.session.tracker.dij_stale
     assert "recalculate" in workflow._lbl_status.text().lower()
 
 
@@ -1871,7 +1873,7 @@ def test_voi_editor_accept_keeps_unapplied_plan_edits(qapp, test_data_protons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        viewing.vois_widget._edit_voi(cst.vois[0].name)
+        viewing.vois_widget._edit_voi(cst.vois[0])
 
     assert ws.cst.vois[0].alpha_x == pytest.approx(0.42)
     assert widget._bio_model_name() == chosen
@@ -1910,7 +1912,7 @@ def test_tissue_dialog_unchanged_ok_keeps_exact_values(qapp, test_data_protons):
     assert changes == []
     assert cst.vois[0].alpha_x == 0.123456
     assert cst.vois[0].beta_x == 0.054321
-    assert not workflow._dij_stale and not workflow._result_stale
+    assert not workflow.session.tracker.dij_stale and not workflow.session.tracker.result_stale
 
 
 def test_tissue_dialog_drops_the_cell_line_after_a_model_switch(qapp, test_data_protons):
@@ -2231,7 +2233,7 @@ def test_tissue_indicator_follows_the_structures(qapp, tg119):
 
 
 def test_tissue_editor_ranks_the_provenance_of_the_selected_model_first(qapp, test_data_protons):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
     from pyRadPlan.biology.tissues import CELL_LINE_PRESETS
 
@@ -2270,7 +2272,7 @@ def test_tissue_editor_asks_before_applying_failing_tissues(
 ):
     from PySide6.QtWidgets import QDialog
 
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import ISSUE_BRUSH, TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -2294,7 +2296,7 @@ def test_tissue_editor_asks_before_applying_failing_tissues(
 def test_tissue_editor_accepts_matching_tissues_without_asking(
     qapp, monkeypatch, test_data_protons
 ):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -2316,7 +2318,7 @@ def test_tissue_editor_accepts_matching_tissues_without_asking(
 
 
 def _oxygen_dialog(cst, bio_model="zstar_kernels"):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     return TissueParametersDialog(cst, load_machine_quietly("oxygen", "Generic"), bio_model)

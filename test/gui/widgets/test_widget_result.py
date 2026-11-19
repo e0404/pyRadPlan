@@ -134,14 +134,14 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     new_voi = create_voi(data)
 
     selected_before = widget.vois_widget.selected_vois()
-    widget.vois_widget.voi_replaced.emit(voi.name, new_voi)
+    widget.vois_widget.voi_replaced.emit(voi, new_voi)
 
     # The session recreates the VOI from the edited fields; the list holds the stored one.
     stored = ws.cst.vois[0]
     assert stored.voi_type == new_type and stored.name == voi.name
     assert widget.vois_widget._voi_by_name[voi.name] is stored
     # The viewer must not rebuild (and reset the selection) from its own write
-    assert widget.vois_widget.selected_vois() == selected_before
+    assert set(widget.vois_widget.selected_vois()) == set(selected_before)
 
 
 def test_structure_edits_during_a_run(qapp, test_data_photons, monkeypatch):
@@ -164,9 +164,9 @@ def test_structure_edits_during_a_run(qapp, test_data_photons, monkeypatch):
     changes = []
     ws.workspace_changed.connect(changes.append)
 
-    widget.vois_widget._pick_color(voi.name)
+    widget.vois_widget._pick_color(voi)
     new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
-    widget.vois_widget.voi_replaced.emit(voi.name, recreate_voi(voi, voi_type=new_type))
+    widget.vois_widget.voi_replaced.emit(voi, recreate_voi(voi, voi_type=new_type))
 
     assert tuple(ws.cst.vois[0].color) == (1, 2, 3)
     assert ws.cst.vois[0] is voi and changes == []
@@ -187,7 +187,7 @@ def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
     widget = ViewingWidget(ws)
     workflow = WorkflowWidget(ws)
     ws.set_many(pln=object(), stf=object(), dij=object(), result={})
-    assert not workflow._dij_stale
+    assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
         self.alpha_spin.setValue(0.42)
@@ -196,10 +196,10 @@ def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget.vois_widget._edit_voi(ws.cst.vois[0].name)
+        widget.vois_widget._edit_voi(ws.cst.vois[0])
 
     assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.42)
-    assert workflow._dij_stale
+    assert workflow.session.tracker.dij_stale
     assert "recalculate" in workflow._lbl_status.text().lower()
 
 
@@ -825,3 +825,63 @@ def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photon
     }
     assert combo.itemText(2) == "scenario 1: from result 1"
     assert "scenario_labels" not in widget.quantity_widget.get_available_quantities()
+
+
+def _duplicate_named_workspace(test_data_photons):
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    cst.vois = [
+        recreate_voi(voi, name=cst.vois[0].name) if i == 1 else voi
+        for i, voi in enumerate(cst.vois)
+    ]
+    ws = _make_workspace(ct, cst)
+    return ws, ViewingWidget(ws)
+
+
+def test_structure_edits_address_structures_sharing_a_name(qapp, test_data_photons, monkeypatch):
+    from pyRadPlan.cst import recreate_voi
+
+    ws, widget = _duplicate_named_workspace(test_data_photons)
+    first, second = ws.cst.vois[0], ws.cst.vois[1]
+    assert first.name == second.name
+    first_before = (first.voi_type, tuple(first.color))
+    new_type = next(t for t in ("TARGET", "OAR") if t != second.voi_type)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.result.vois_widget.QColorDialog.getColor",
+        lambda *a: QColor(4, 5, 6),
+    )
+
+    widget.vois_widget._pick_color(second)
+    widget.vois_widget.voi_replaced.emit(second, recreate_voi(second, voi_type=new_type))
+
+    assert tuple(ws.cst.vois[1].color) == (4, 5, 6)
+    assert ws.cst.vois[1].voi_type == new_type
+    assert (ws.cst.vois[0].voi_type, tuple(ws.cst.vois[0].color)) == first_before
+
+
+def test_deferred_structure_edit_is_dropped_when_the_structure_set_changed(
+    qapp, test_data_photons
+):
+    import copy
+
+    from pyRadPlan.app import Operation
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    ws = _make_workspace(ct, cst)
+    widget = ViewingWidget(ws)
+    session = ws.session
+    operation = Operation("calc", "Calculating", lambda: None, lambda value: None)
+    session.begin(operation)
+    voi = ws.cst.vois[0]
+    new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
+    widget.vois_widget.voi_replaced.emit(voi, recreate_voi(voi, voi_type=new_type))
+
+    other = copy.deepcopy(cst)
+    original_type = other.vois[0].voi_type
+    ws.set_many(cst=other)
+    session.finish(operation, None)
+
+    assert ws.cst is other
+    assert ws.cst.vois[0].voi_type == original_type

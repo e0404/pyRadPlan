@@ -1,5 +1,6 @@
 import pytest
 
+from pyRadPlan.app._results import is_tagged
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
@@ -49,7 +50,7 @@ def test_busy_text_shown_in_status(qapp):
 def test_status_returns_after_a_save(qapp, tmp_path, monkeypatch):
     from unittest.mock import Mock
 
-    from pyRadPlan.app import status_text
+    from pyRadPlan.app._stages import status_text
     from pyRadPlan.plan import PhotonPlan
 
     ws = WorkspaceManager()
@@ -119,31 +120,31 @@ def test_plan_change_marks_downstream_stale(qapp):
 
     # Loading everything at once leaves the products current, not stale.
     ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result={})
-    assert not w._dij_stale and not w._result_stale
+    assert not w.session.tracker.dij_stale and not w.session.tracker.result_stale
 
     # Changing the plan invalidates the dose influence and the result.
     ws.pln = object()
-    assert w._dij_stale and w._result_stale
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
 
     # Recomputing the dose influence clears its flag (and the result stays stale).
     ws.set_many(stf=object(), dij=object())
-    assert not w._dij_stale and w._result_stale
+    assert not w.session.tracker.dij_stale and w.session.tracker.result_stale
 
     # Re-optimizing clears the result flag.
     ws.result = {"w": 1}
-    assert not w._result_stale
+    assert not w.session.tracker.result_stale
 
     # Moved beams (stf without dij) outdate the dose influence as well.
     ws.set_many(stf=object(), dij=object())
     ws.stf = object()
-    assert w._dij_stale and w._result_stale
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
 
 
 def test_indicators_status_and_buttons_follow_the_session(qapp):
     import numpy as np
 
-    from pyRadPlan.app import available_actions, status_text
+    from pyRadPlan.app._stages import available_actions, status_text
 
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
@@ -172,7 +173,7 @@ def test_a_replaced_ct_outdates_the_dose_influence(qapp):
     w = WorkflowWidget(ws)
     ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result={})
     ws.ct = object()
-    assert w._dij_stale and w._result_stale
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
     assert w._lbl_status.text() == "Dose influence outdated — recalculate"
 
@@ -187,13 +188,13 @@ def test_tissue_parameter_change_marks_dij_stale(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
     ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    assert not w._dij_stale and not w._result_stale
+    assert not w.session.tracker.dij_stale and not w.session.tracker.result_stale
 
     # Other structure set edits leave the dose influence valid, only the result stale
     cst.vois[0].objectives = []
     ws.cst = cst
-    assert not w._dij_stale
-    assert w._result_stale
+    assert not w.session.tracker.dij_stale
+    assert w.session.tracker.result_stale
 
     # Changing a structure's tissue properties invalidates the dose influence as well
     voi = cst.vois[0]
@@ -203,7 +204,7 @@ def test_tissue_parameter_change_marks_dij_stale(qapp):
     cst.vois = [create_voi(data), *cst.vois[1:]]
     ws.cst = cst
 
-    assert w._dij_stale
+    assert w.session.tracker.dij_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
     assert "recalculate" in w._lbl_status.text().lower()
 
@@ -296,17 +297,17 @@ def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     old_ct = validate_ct(cube_hu=sitk.Image([5, 5, 5], sitk.sitkFloat32))
     new_ct = validate_ct(cube_hu=sitk.Image([5 if same_grid else 7, 5, 5], sitk.sitkFloat32))
     ws.set_many(ct=old_ct, cst=object(), pln=object(), stf=object(), dij=object(), result={})
-    w._saved_tags = ["old"]
+    w.session.saved_tags = ["old"]
     states = []
     ws.workspace_changed.connect(lambda keys: states.append({k: getattr(ws, k) for k in ws.keys}))
 
-    w._merge_loaded_data({"ct": new_ct})
+    w.session.merge_loaded({"ct": new_ct})
 
     assert len(states) == 1
     assert states[0]["ct"] is new_ct
     assert all(states[0][key] is None for key in ws.keys if key != "ct")
     assert not w._btn_optimize.isEnabled()
-    assert w._saved_tags == []
+    assert w.session.saved_tags == []
 
 
 def test_import_without_ct_keeps_current_patient(qapp):
@@ -314,7 +315,7 @@ def test_import_without_ct_keeps_current_patient(qapp):
     w = WorkflowWidget(ws)
     ct, cst, new_plan = object(), object(), object()
     ws.set_many(ct=ct, cst=cst)
-    w._merge_loaded_data({"pln": new_plan})
+    w.session.merge_loaded({"pln": new_plan})
     assert ws.ct is ct and ws.cst is cst and ws.pln is new_plan
 
 
@@ -375,7 +376,7 @@ def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, pr
     assert ws.stf is not old_stf
     assert np.allclose([beam.iso_center for beam in ws.stf.beams], isos)
     assert np.allclose([beam.iso_center for beam in old_stf.beams], 0.0)
-    assert w._dij_stale and not w._result_stale
+    assert w.session.tracker.dij_stale and not w.session.tracker.result_stale
     assert ws.result["physical_dose"] is fresh_dose
     assert ws.result["w"] is weights
     assert ws.result["physical_dose_saved"] is snapshot
@@ -392,7 +393,7 @@ def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
 
     forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result["w"])
     assert ws.stf is stf
-    assert not w._dij_stale
+    assert not w.session.tracker.dij_stale
 
 
 def test_failed_recalculation_leaves_the_stf_untouched(qapp, monkeypatch):
@@ -443,7 +444,7 @@ def test_recalculate_rejects_changed_beam_geometry(qapp, monkeypatch, angles):
     warning.assert_called_once()
     assert "Calculate Dose Influence" in warning.call_args.args[2]
     assert ws.stf is original_stf and ws.result is original_result
-    assert w._result_stale and w._dij_stale
+    assert w.session.tracker.result_stale and w.session.tracker.dij_stale
 
 
 @pytest.mark.parametrize("couch", [None, [], [0], [0, 360]])
@@ -489,7 +490,7 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
             "w_saved": weights.copy(),
         },
     )
-    w._saved_tags = ["saved"]
+    w.session.saved_tags = ["saved"]
     path = tmp_path / ("workspace" + suffix)
     filters = []
 
@@ -506,7 +507,7 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
     data = load_data(path if suffix else path.with_suffix(".pkl"))
     restored_ws = WorkspaceManager()
     restored = WorkflowWidget(restored_ws)
-    restored._merge_loaded_data(data)
+    restored.session.merge_loaded(data)
 
     assert "*.pkl" in filters[0] and "*.mat" not in filters[0] and "*.npz" not in filters[0]
     assert restored_ws.pln.prop_opt == {"solver": "scipy"}
@@ -518,7 +519,7 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
         sitk.GetArrayFromImage(restored_ws.result["physical_dose"]), sitk.GetArrayFromImage(dose)
     )
     assert restored_ws.result["physical_dose"].GetOrigin() == dose.GetOrigin()
-    assert restored._is_tagged("physical_dose_saved")
+    assert is_tagged("physical_dose_saved", restored.session.saved_tags)
 
 
 @pytest.mark.parametrize("suffix", [".mat", ".npz"])
@@ -727,7 +728,7 @@ def test_renaming_a_structure_keeps_the_dose_influence(qapp):
     cst.vois = [cst.vois[0].model_copy(update={"name": "renamed"}), *cst.vois[1:]]
     ws.cst = cst
 
-    assert not w._dij_stale
+    assert not w.session.tracker.dij_stale
 
 
 # ----------------------------------------------------------------------
@@ -783,6 +784,23 @@ def _bio_workflow(monkeypatch, bio_model, cst=None, prop_dose_calc=None):
     return ws, w, runs
 
 
+def _spy_on_operations(ws, monkeypatch):
+    prepared = []
+    prepare = ws.session.prepare
+
+    def spy(*args, **kwargs):
+        prepared.append(prepare(*args, **kwargs))
+        return prepared[-1]
+
+    monkeypatch.setattr(ws.session, "prepare", spy)
+    return prepared
+
+
+def _commit(ws, operation):
+    stf = ws.stf
+    operation.commit((stf, object()) if operation.name == "calc_dose_influence" else (stf, {}))
+
+
 @pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
 def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler):
     from pyRadPlan.gui.widgets.plan import PlanWidget
@@ -791,10 +809,14 @@ def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler
     plan_widget = PlanWidget(workspace=ws)
     assert plan_widget._cmb_bio_model.currentText() == "z* kernels · mMKM"
     shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+    prepared = _spy_on_operations(ws, monkeypatch)
 
     getattr(w, handler)()
 
     assert len(shown) == 1 and "No matching tissue class" in shown[0]
+    assert ws.pln.bio_model.model == "zstar_kernels"
+    (operation,) = prepared
+    _commit(ws, operation)
     assert ws.pln.bio_model.model == "none"
     assert ws.pln.radiation_mode == "oxygen" and ws.pln.prop_stf["gantry_angles"] == [0.0]
     assert len(runs) == 1
@@ -833,12 +855,14 @@ def test_the_check_uses_the_dose_engine_of_the_plan(qapp, monkeypatch):
         monkeypatch, "alpha_beta_kernels", prop_dose_calc={"engine": "TOPAS"}
     )
     shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+    prepared = _spy_on_operations(ws, monkeypatch)
 
     w._on_calc_dose()
 
     assert len(shown) == 1
     assert "TOPAS does not use the machine's α/β kernels" in shown[0]
     assert "dose engine" in shown[0]
+    _commit(ws, prepared[0])
     assert ws.pln.bio_model.model == "none"
     assert ws.pln.prop_dose_calc["engine"] == "TOPAS"
     assert runs == ["Calculating dose influence…"]
@@ -1042,7 +1066,7 @@ def test_recalculate_drops_stale_results_per_scenario(qapp, monkeypatch):
 
     forward = Mock(return_value={"physical_dose": object()})
     ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
-    w._saved_tags = ["saved"]
+    w.session.saved_tags = ["saved"]
     snapshot = [object(), object()]
     ws.result = {
         **ws.result,
@@ -1076,8 +1100,8 @@ def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
 
     w._on_save_result()
     assert ws.result["physical_dose_scenario_robust"] is scenario_doses
-    assert w._is_tagged("physical_dose_scenario_robust")
-    assert not w._is_tagged("physical_dose_scenario")
+    assert is_tagged("physical_dose_scenario_robust", w.session.saved_tags)
+    assert not is_tagged("physical_dose_scenario", w.session.saved_tags)
 
     flattened = [
         f"{key} {i}" if isinstance(value, list) else key
@@ -1252,3 +1276,129 @@ def test_image_import_runs_the_session_operation(qapp, tmp_path, monkeypatch):
     w._open_image_import_dialog(str(path))
 
     assert ws.present() == {"ct"} and ws.ct.cube_hu.GetSize() == (5, 4, 3)
+
+
+def _wait_until(qapp, predicate, timeout_ms=5000):
+    from PySide6.QtCore import QDeadlineTimer
+
+    deadline = QDeadlineTimer(timeout_ms)
+    while not predicate() and not deadline.hasExpired():
+        qapp.processEvents()
+    assert predicate()
+
+
+def _threaded_operation(compute, commit=lambda value: value, **kwargs):
+    from pyRadPlan.app import Operation
+
+    return Operation("test", "Testing", compute, commit, **kwargs)
+
+
+def test_failing_computation_aborts_the_session_and_shows_the_error(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    deferred = []
+
+    def boom():
+        raise RuntimeError("boom")
+
+    w._run_operation(_threaded_operation(boom))
+    assert session.busy
+    session.call_when_idle(lambda: deferred.append("edit"))
+    _wait_until(qapp, lambda: critical.called)
+
+    assert not session.busy
+    assert deferred == ["edit"]
+    assert "boom" in critical.call_args.args[2]
+    assert not w.is_busy
+
+
+def test_failing_commit_shows_the_error_and_frees_the_session(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+
+    def commit(value):
+        raise ValueError("cannot commit")
+
+    w._run_operation(_threaded_operation(lambda: 1, commit))
+    _wait_until(qapp, lambda: critical.called)
+
+    assert not w.session.busy
+    assert "cannot commit" in critical.call_args.args[2]
+
+
+def test_stop_keeps_the_partial_result_of_an_optimization(qapp):
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    committed = []
+    started = []
+
+    def compute():
+        started.append(True)
+        w._control.pause()
+        w._control.wait_if_paused(5)
+        return "partial"
+
+    operation = _threaded_operation(
+        compute, lambda value: committed.append(value), keeps_partial_result=True
+    )
+    w._run_operation(operation)
+    _wait_until(qapp, lambda: started)
+    w._on_stop()
+    _wait_until(qapp, lambda: not session.busy)
+
+    assert committed == ["partial"]
+    assert operation.control.stop_requested
+    assert not w.is_busy
+    assert w._lbl_status.text() != "Stopping…"
+
+
+def test_stop_of_a_discarded_computation_shows_stopped(qapp):
+    from pyRadPlan.core import ComputeCancelledError
+
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    started = []
+
+    def compute():
+        started.append(True)
+        w._control.pause()
+        w._control.wait_if_paused(5)
+        raise ComputeCancelledError("stopped")
+
+    w._run_operation(_threaded_operation(compute))
+    _wait_until(qapp, lambda: started)
+    w._on_stop()
+    _wait_until(qapp, lambda: not session.busy)
+
+    assert w._lbl_status.text() == "Stopped"
+    assert not w.is_busy
+
+
+def test_unexpected_prepare_error_is_shown(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+
+    def prepare(action, **params):
+        raise FileNotFoundError("no such phantom")
+
+    monkeypatch.setattr(w.session, "prepare", prepare)
+
+    assert w._prepare("Load", "load_phantom", name="x") is None
+    critical.assert_called_once()
+    assert "no such phantom" in critical.call_args.args[2]

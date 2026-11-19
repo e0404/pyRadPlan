@@ -37,6 +37,25 @@ from pyRadPlan.cst import VOI, recreate_voi
 from pyRadPlan.biology.tissues import TissueProperties
 
 from .._tissue_params import (
+    apply_derived_reference,
+    ask_tissue_issues,
+    combo_value,
+    current_pick,
+    fill_tissue_picker,
+    make_derive_button,
+    make_param_combo,
+    make_param_spin,
+    make_reference_radiation_combo,
+    param_source,
+    reference_radiation_value,
+    reference_source_of,
+    set_base_tooltip,
+    set_editor_mismatch,
+    show_comparison,
+    spin_value,
+    write_tissue,
+)
+from pyRadPlan.biology._editing import (
     APPLY_ANYWAY,
     DERIVE_REFERENCE_TOOLTIP,
     MATCH_BASE_DATA_TEXT,
@@ -49,42 +68,26 @@ from .._tissue_params import (
     TISSUE_MODELS,
     adopt_preset,
     apply_base_data_class,
-    apply_derived_reference,
-    ask_tissue_issues,
     available_tissue_classes,
     bio_model_quietly,
     build_tissue_properties,
     cell_line_presets,
-    combo_value,
     compare_tissues_quietly,
     comparison_row_note,
-    current_pick,
     derives_reference_params,
-    fill_tissue_picker,
     machine_summary,
-    make_derive_button,
-    make_param_combo,
-    make_param_spin,
-    make_reference_radiation_combo,
     model_label_name,
     model_param_fields,
     param_field,
     param_label,
-    param_source,
     picker_title,
     ranked_tissue_picks,
     reference_group_note,
     reference_param_fields,
     reference_radiation_fields,
-    reference_radiation_value,
-    reference_source_of,
     reference_sources,
     relabel_issues,
     relabel_text,
-    set_base_tooltip,
-    set_editor_mismatch,
-    show_comparison,
-    spin_value,
     target_provenance,
     tissue_choice_fields,
     tissue_class,
@@ -93,7 +96,6 @@ from .._tissue_params import (
     tissue_issue_text,
     tissue_issues_quietly,
     tissue_model_label,
-    write_tissue,
 )
 from ._labels import TruncatedCheckBox
 
@@ -729,7 +731,7 @@ class VOIsWidget(QWidget):
     selection_changed = Signal(list)  # list[str] of selected VOIs
     color_changed = Signal(str, tuple)  # voi name, new RGB tuple
     metadata_changed = Signal(str)  # voi name whose metadata was edited
-    voi_replaced = Signal(str, object)  # voi name, new VOI instance (after a type change)
+    voi_replaced = Signal(object, object)  # edited VOI, new VOI instance (after a type change)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -743,7 +745,7 @@ class VOIsWidget(QWidget):
         self._machine_provider: Optional[Callable[[], object]] = None
         self._bio_model_provider: Optional[Callable[[], object]] = None
         self._engine_provider: Optional[Callable[[], object]] = None
-        self._color_writer: Optional[Callable[[str, tuple[int, int, int]], None]] = None
+        self._color_writer: Optional[Callable[[VOI, tuple[int, int, int]], None]] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -805,20 +807,21 @@ class VOIsWidget(QWidget):
         self._engine_provider = provider
 
     def set_color_writer(
-        self, writer: Optional[Callable[[str, tuple[int, int, int]], None]]
+        self, writer: Optional[Callable[[VOI, tuple[int, int, int]], None]]
     ) -> None:
         """
-        Set a callable writing a picked colour to the VOI of that name, e.g. through a session.
+        Set a callable writing a picked colour to the listed VOI, e.g. through a session.
 
         Without one, the picked colour is set on the listed VOI itself.
         """
         self._color_writer = writer
 
     def replace_voi(self, name: str, voi: VOI) -> None:
-        """Hold *voi* as the VOI named *name* (e.g. the one stored after an edit), unrendered."""
+        """Hold *voi* as the VOI named *name* (e.g. the one stored after an edit)."""
         old = self._voi_by_name.get(name)
         self._vois = [voi if v is old else v for v in self._vois]
         self._voi_by_name[name] = voi
+        self._render(set(self.selected_vois()))
 
     def set_vois(self, vois: list[VOI], checked: Optional[Iterable[str]] = None) -> None:
         """Populate the VOIs section with a variable number of checkboxes."""
@@ -996,7 +999,7 @@ class VOIsWidget(QWidget):
         cb.setChecked(voi.name in checked_set)
         cb.setToolTip(self._voi_tooltip(voi))
         cb.stateChanged.connect(lambda s, n=voi.name: self._on_voi_toggled(n, bool(s)))
-        cb.label_clicked.connect(lambda n=voi.name: self._edit_voi(n))
+        cb.label_clicked.connect(lambda v=voi: self._edit_voi(v))
 
         rgb = tuple(int(c) for c in voi.color)
         self._voi_colors[voi.name] = rgb
@@ -1008,7 +1011,7 @@ class VOIsWidget(QWidget):
             f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border: 1px solid #444;"
         )
         swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-        swatch.clicked.connect(lambda _, n=voi.name: self._pick_color(n))
+        swatch.clicked.connect(lambda _, v=voi, s=swatch: self._pick_color(v, s))
         self._voi_color_swatches[voi.name] = swatch
 
         row = QWidget()
@@ -1048,11 +1051,9 @@ class VOIsWidget(QWidget):
         lines.append("<i>Click the name to edit</i>")
         return "<br/>".join(lines)
 
-    def _edit_voi(self, name: str) -> None:
+    def _edit_voi(self, voi: VOI) -> None:
         """Open the metadata editor popup for the given VOI."""
-        voi = self._voi_by_name.get(name)
-        if voi is None:
-            return
+        name = voi.name
         machine = self._machine_provider() if self._machine_provider is not None else None
         bio_model = self._bio_model_provider() if self._bio_model_provider is not None else None
         engine = self._engine_provider() if self._engine_provider is not None else None
@@ -1065,22 +1066,22 @@ class VOIsWidget(QWidget):
             self._voi_by_name[name] = new_voi
         self._render(set(self.selected_vois()))
         if new_voi is not voi:
-            self.voi_replaced.emit(name, new_voi)
+            self.voi_replaced.emit(voi, new_voi)
         self.metadata_changed.emit(name)
 
-    def _pick_color(self, name: str) -> None:
+    def _pick_color(self, voi: VOI, swatch: Optional[QPushButton] = None) -> None:
         """Open a color dialog for the given VOI and apply the result."""
-        current = self._voi_colors.get(name, (128, 128, 128))
+        name = voi.name
+        current = tuple(int(c) for c in voi.color)
         color = QColorDialog.getColor(QColor(*current), self, f"Pick color for {name}")
         if color.isValid():
             rgb = (color.red(), color.green(), color.blue())
             self._voi_colors[name] = rgb
-            voi = self._voi_by_name.get(name)
             if self._color_writer is not None:
-                self._color_writer(name, rgb)
-            elif voi is not None:
+                self._color_writer(voi, rgb)
+            else:
                 voi.color = rgb
-            swatch = self._voi_color_swatches[name]
+            swatch = swatch or self._voi_color_swatches[name]
             swatch.setStyleSheet(
                 f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border: 1px solid #444;"
             )

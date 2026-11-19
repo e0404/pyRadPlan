@@ -177,7 +177,7 @@ def test_voi_metadata_dialog_switches_to_mkm_tissue(qapp, test_data_photons):
 
 
 def test_voi_metadata_dialog_groups_model_and_reference_params(qapp, test_data_photons):
-    from pyRadPlan.gui.widgets._tissue_params import MODEL_GROUP_TITLE, REFERENCE_GROUP_TITLE
+    from pyRadPlan.biology._editing import MODEL_GROUP_TITLE, REFERENCE_GROUP_TITLE
 
     _ct, cst, _result = test_data_photons
     dialog = VOIMetadataDialog(cst.vois[0])
@@ -466,7 +466,7 @@ def test_vois_widget_passes_machine_to_editor(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget._edit_voi(cst.vois[0].name)
+        widget._edit_voi(cst.vois[0])
 
     assert len(captured) == 1
     assert len(captured[0]) == 2
@@ -487,7 +487,7 @@ def test_vois_widget_passes_the_dose_engine_to_editor(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget._edit_voi(cst.vois[0].name)
+        widget._edit_voi(cst.vois[0])
 
     assert captured == [ParticleTOPASMCEngine]
 
@@ -550,7 +550,7 @@ def test_vois_widget_edit_emits_metadata_changed(qapp, test_data_photons, monkey
     widget.metadata_changed.connect(received.append)
 
     name = cst.vois[0].name
-    widget._edit_voi(name)
+    widget._edit_voi(cst.vois[0])
 
     assert received == [name]
     assert len(widget._voi_checkboxes) == len(cst.vois)
@@ -595,13 +595,13 @@ def test_vois_widget_type_change_emits_voi_replaced(qapp, test_data_photons, mon
     monkeypatch.setattr(VOIMetadataDialog, "exec", fake_exec)
 
     replaced = []
-    widget.voi_replaced.connect(lambda n, v: replaced.append((n, v)))
+    widget.voi_replaced.connect(lambda o, v: replaced.append((o, v)))
 
-    widget._edit_voi(voi.name)
+    widget._edit_voi(voi)
 
     assert len(replaced) == 1
-    name, new_voi = replaced[0]
-    assert name == voi.name
+    old, new_voi = replaced[0]
+    assert old is voi
     assert new_voi is not voi
     assert new_voi.voi_type == new_type
     assert widget._voi_by_name[voi.name] is new_voi
@@ -699,7 +699,7 @@ def test_voi_editor_unchanged_ok_leaves_the_workspace_untouched(qapp, test_data_
     workflow = WorkflowWidget(ws)
     viewing = ViewingWidget(ws)
     ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    assert not workflow._result_stale
+    assert not workflow.session.tracker.result_stale
 
     changes = []
     ws.workspace_changed.connect(changes.append)
@@ -710,11 +710,11 @@ def test_voi_editor_unchanged_ok_leaves_the_workspace_untouched(qapp, test_data_
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        viewing.vois_widget._edit_voi(cst.vois[0].name)
+        viewing.vois_widget._edit_voi(cst.vois[0])
 
     assert changes == []
-    assert not workflow._result_stale
-    assert not workflow._dij_stale
+    assert not workflow.session.tracker.result_stale
+    assert not workflow.session.tracker.dij_stale
 
 
 def _answer_message_boxes(monkeypatch, button_text=None):
@@ -734,7 +734,7 @@ def _answer_message_boxes(monkeypatch, button_text=None):
 
 
 def _oxygen_machine():
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
 
     return load_machine_quietly("oxygen", "Generic")
 
@@ -787,7 +787,7 @@ def test_voi_metadata_dialog_asks_before_applying_a_failing_tissue(
 def test_voi_metadata_dialog_checks_with_the_edited_voi_substituted(
     qapp, monkeypatch, test_data_photons
 ):
-    from pyRadPlan.gui.widgets._tissue_params import tissue_issues_quietly
+    from pyRadPlan.biology._editing import tissue_issues_quietly
     from pyRadPlan.gui.widgets.result import vois_widget
 
     ct, cst, result = test_data_photons
