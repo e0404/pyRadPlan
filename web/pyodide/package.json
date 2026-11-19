@@ -9,7 +9,8 @@
     "pipeline": "node run_pipeline.mjs",
     "native": "node tools/run_python.mjs pipeline.py",
     "compare": "node tools/run_python.mjs compare.py",
-    "test:shim": "node tools/run_python.mjs -m pytest -p no:cacheprovider tests -q",
+    "test:glue": "node glue_high_memory.mjs",
+    "test:shim":"node tools/run_python.mjs -m pytest -p no:cacheprovider tests -q",
     "native-pickle": "node tools/run_python.mjs tests/_pickle_worker.py real save-tg119 results/tg119_native.pkl",
     "app-smoke": "npm run build -- --skip-pure && npm run native-pickle && node app_smoke.mjs",
     "app-smoke:run": "node app_smoke.mjs"

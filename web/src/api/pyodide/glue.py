@@ -12,8 +12,9 @@ import json
 import math
 import traceback
 
+import js
 import numpy as np
-from pyodide.ffi import to_js
+from pyodide.ffi import create_proxy, to_js
 
 from pyRadPlan import app
 from pyRadPlan.core import ProgressReporter
@@ -46,6 +47,21 @@ def _dumps(obj):
     return json.dumps(_clean(obj), allow_nan=False, separators=(",", ":"))
 
 
+def _heap_view(obj):
+    """``(proxy, PyBuffer)`` whose ``.data`` is a JS Uint8Array on the wasm memory of *obj*.
+
+    The only buffer route that is correct for memory above 2 GiB: there Pyodide 314.0.8's
+    ``to_js`` and ``JsBuffer.assign`` read from a wrong address (the copy silently holds
+    unrelated heap memory) and ``to_bytes`` / ``assign_to`` raise a ``RangeError``.
+    """
+    proxy = create_proxy(obj)
+    try:
+        return proxy, proxy.getBuffer("u8")
+    except BaseException:
+        proxy.destroy()
+        raise
+
+
 def _buffer_to_js(buf):
     """Copy a bytes-like object (or numpy array) into a new JS Uint8Array."""
     if isinstance(buf, np.ndarray):
@@ -55,7 +71,27 @@ def _buffer_to_js(buf):
     view = memoryview(buf)
     if view.ndim != 1 or view.format != "B":
         view = view.cast("B")
-    return to_js(view)
+    if view.nbytes == 0:
+        return js.Uint8Array.new(0)
+    proxy, heap = _heap_view(view)
+    try:
+        return heap.data.slice()
+    finally:
+        heap.release()
+        proxy.destroy()
+
+
+def _buffer_from_js(js_buffer):
+    """Copy a JS Uint8Array into a new ``bytearray``."""
+    target = bytearray(js_buffer.length)
+    if target:
+        proxy, heap = _heap_view(target)
+        try:
+            heap.data.set(js_buffer)
+        finally:
+            heap.release()
+            proxy.destroy()
+    return target
 
 
 def _error_response(request_id, exc):
@@ -84,7 +120,7 @@ async def web_dispatch(request_json, js_buffers, js_emit):
     """
     request = json.loads(request_json)
     request_id = request.get("id")
-    request["buffers"] = [b.to_bytes() for b in js_buffers]
+    request["buffers"] = [_buffer_from_js(b) for b in js_buffers]
 
     def emit(event):
         js_emit(_dumps(event))
