@@ -388,6 +388,28 @@ def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     assert ws.results == {}
 
 
+def test_results_loaded_without_ct_join_the_workspace(qapp):
+    """Only a new patient replaces the results; a loaded plan result the active one."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=object(), result=_result())
+    ws.add_result("saved", _result())
+    ws.add_result("imported", _result())
+    kept = ws.results
+    events = []
+    ws.workspace_changed.connect(events.append)
+
+    w._merge_loaded_data({"dose": _dose_image(2.0)})
+    assert list(ws.results) == ["current", "saved", "imported", "imported_2"]
+    assert all(ws.results[name] is kept[name] for name in kept)
+    assert events == [["result"]]
+
+    w._merge_loaded_data({"result": {"physical_dose": _dose_image(3.0)}})
+    assert list(ws.results) == ["current", "saved", "imported", "imported_2"]
+    assert ws.result is not kept["current"]
+    assert ws.results["saved"] is kept["saved"]
+
+
 def test_import_without_ct_keeps_current_patient(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
@@ -1075,20 +1097,20 @@ def _optimize_setup(monkeypatch, scenarios, calls, objectives=()):
 
     from pyRadPlan.plan import PhotonPlan
 
-    def compute_result_ct_grid(weights, **kwargs):
-        calls.append(kwargs)
-        return create_result(
-            {
-                "physical_dose": _dose_image(),
-                "physical_dose_scenario": [_dose_image(), _dose_image()],
-                "scenario_labels": ("a", "b"),
-            },
-            fluence=weights,
-        )
-
     optimized = create_result(
-        {"physical_dose": _dose_image()}, fluence=np.ones(2), info={"status": "done"}
+        {
+            "physical_dose": _dose_image(),
+            "physical_dose_scenario": [_dose_image(), _dose_image()],
+            "scenario_labels": ("a", "b"),
+        },
+        fluence=np.ones(2),
+        info={"status": "done"},
     )
+
+    def fluence_optimization(*args, **kwargs):
+        calls.append(kwargs)
+        return optimized
+
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
     voi = SimpleNamespace(name="t", objectives=list(objectives))
@@ -1099,10 +1121,9 @@ def _optimize_setup(monkeypatch, scenarios, calls, objectives=()):
             bio_model=object(),
             alpha_dose=None,
             scenarios=None if scenarios is None else list(range(scenarios)),
-            compute_result_ct_grid=compute_result_ct_grid,
         ),
     )
-    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: optimized)
+    monkeypatch.setattr("pyRadPlan.fluence_optimization", fluence_optimization)
     monkeypatch.setattr(
         WorkflowWidget,
         "_run_in_thread",
@@ -1112,19 +1133,15 @@ def _optimize_setup(monkeypatch, scenarios, calls, objectives=()):
     return ws, w, optimized
 
 
-@pytest.mark.parametrize(("scenarios", "expected"), [(None, False), (1, False), (3, True)])
-def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, expected):
+def test_optimize_requests_results_per_scenario(qapp, monkeypatch):
     calls = []
-    ws, w, optimized = _optimize_setup(monkeypatch, scenarios, calls)
+    ws, w, optimized = _optimize_setup(monkeypatch, 3, calls)
 
     w._on_optimize()
 
-    assert bool(calls) is expected
-    if expected:
-        assert calls[0]["scenarios"] is True
-        assert ws.result.stored_scenario_quantities == ["physical_dose"]
-    assert ws.result.info == optimized.info
-    assert "physical_dose" in ws.result
+    # The optimization reports the scenarios itself; the result is not computed again
+    assert calls == [{"scenarios": True}]
+    assert ws.result is optimized
 
 
 def test_recalculate_replaces_the_active_result_only(qapp, monkeypatch):
@@ -1192,7 +1209,7 @@ def test_optimize_keeps_every_result_per_scenario_with_their_labels(qapp, monkey
     w._on_optimize()
 
     # Also the RBE dose the viewer shows first, though the objectives are on physical dose
-    assert calls[0].get("scenario_quantities") is None
+    assert calls == [{"scenarios": True}]
     assert ws.result.scenario_labels == ("a", "b")
 
 

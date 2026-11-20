@@ -38,6 +38,25 @@ def test_total_dose_convention_scales_the_result(small_proton_case):
     )
 
 
+def test_scenarios_are_reported_on_request(small_proton_case):
+    """The result holds the quantities of the requested scenarios."""
+    pln, ct, cst, stf, dij = small_proton_case
+    pln.prop_opt = {"solver": "scipy", "display": False, "max_iter": 2}
+
+    assert fluence_optimization(ct, cst, stf, dij, pln).scenario_quantities == {}
+    # A dij with a single scenario has no further scenarios to report
+    assert fluence_optimization(ct, cst, stf, dij, pln, scenarios=True).scenario_quantities == {}
+
+    result = fluence_optimization(ct, cst, stf, dij, pln, scenarios=[0])
+
+    assert len(result.scenario.physical_dose) == 1
+    np.testing.assert_allclose(
+        sitk.GetArrayFromImage(result.scenario.physical_dose[0].values),
+        sitk.GetArrayFromImage(result.physical_dose.values),
+        rtol=1e-6,
+    )
+
+
 def test_solver_info_is_reduced_to_scalars():
     """Arrays and solver objects of the raw solver output are not kept on the result."""
     from scipy.optimize import minimize

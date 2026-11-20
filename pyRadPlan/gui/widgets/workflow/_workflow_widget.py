@@ -34,7 +34,12 @@ from pyRadPlan.core import (
     StatusReport,
     WarningReport,
 )
-from pyRadPlan.gui.workspace import WorkspaceManager, loaded_results, unique_result_name
+from pyRadPlan.gui.workspace import (
+    DEFAULT_RESULT_NAME,
+    WorkspaceManager,
+    loaded_results,
+    unique_result_name,
+)
 from pyRadPlan.gui.widgets.optimization import OptimizationStatusWidget
 from pyRadPlan.gui.widgets.optimization._status_window import DEFAULT_METRICS
 from pyRadPlan.plan import validate_pln
@@ -766,8 +771,10 @@ class WorkflowWidget(WorkspaceWidget):
         A supplied CT replaces the patient and clears objects absent from the import.
         Imports without a CT keep existing objects, allowing a plan to be loaded
         onto the current patient. A structure set requires a CT;
-        otherwise it is skipped with a warning. Loaded results replace those of the
-        workspace (see :func:`~pyRadPlan.gui.workspace.loaded_results`).
+        otherwise it is skipped with a warning. Results loaded with a CT replace those
+        of the workspace; without one, a plan result replaces the active result and
+        other results (e.g. a dose) are added (see
+        :func:`~pyRadPlan.gui.workspace.loaded_results`).
         """
         payload = {k: data[k] for k in self._ws.keys if k != "result" and data.get(k) is not None}
         if "cst" in payload and "ct" not in payload and not self._ws.has("ct"):
@@ -782,8 +789,17 @@ class WorkflowWidget(WorkspaceWidget):
             # Publish one complete patient state; observers must never see a new CT
             # paired with the previous patient's structures or calculated data.
             payload = {**dict.fromkeys(self._ws.keys[:-1]), **payload}
-        if results or "ct" in payload:
             payload.update(results=results, active_result=active)
+        elif results:
+            # Same patient: a plan result replaces the active one, anything else is added.
+            merged = self._ws.results
+            for name, result in results.items():
+                if name == DEFAULT_RESULT_NAME:
+                    merged[self._ws.active_result] = result
+                else:
+                    taken = {*merged, self._ws.active_result}
+                    merged[unique_result_name(name, taken)] = result
+            payload.update(results=merged, active_result=self._ws.active_result)
         if payload:
             self._ws.set_many(**payload)
 
@@ -1251,18 +1267,8 @@ class WorkflowWidget(WorkspaceWidget):
             # Deferred: only needed inside the worker thread, not at widget construction.
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
-            # ``fluence_optimization`` already computes the CT-grid result and
-            # returns a PlanResult (with the beamlet weights in ``result.fluence``).
-            result = fluence_optimization(ct, cst, stf, dij, pln)
-            if dij.scenarios is None or len(dij.scenarios) <= 1:
-                return result
-            # The optimization reports the nominal scenario only; add every scenario.
-            with_scenarios = dij.compute_result_ct_grid(
-                result.fluence, num_of_fractions=pln.result_dose_factor, scenarios=True
-            )
-            return with_scenarios.model_copy(
-                update={"info": result.info, "used_optimizer": result.used_optimizer}
-            )
+            # Returns the result on the CT grid, with every scenario of a robust plan.
+            return fluence_optimization(ct, cst, stf, dij, pln, scenarios=True)
 
         def _on_success(result: PlanResult) -> None:
             # Replaces the active result only; snapshots and imported doses are their own.

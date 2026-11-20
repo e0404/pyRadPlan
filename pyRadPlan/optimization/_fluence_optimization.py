@@ -1,6 +1,6 @@
 import logging
-from collections.abc import Mapping
-from typing import Any, Optional, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional, TypedDict, Union
 
 import numpy as np
 
@@ -68,6 +68,7 @@ def fluence_optimization(  # noqa: PLR0913
     pln: Plan,
     *,
     opt_info: Optional[OptInfo] = None,
+    scenarios: Union[bool, Sequence[int]] = False,
 ) -> PlanResult:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
@@ -87,6 +88,11 @@ def fluence_optimization(  # noqa: PLR0913
     opt_info : OptInfo, optional
         If provided (e.g. as an empty ``{}``), it will be populated with
         ``obj_history``, ``num_iter`` and ``result_info`` after optimization.
+    scenarios : bool or sequence of int, default False
+        Scenarios to also report the optimized quantities for, as
+        ``result.scenario_quantities`` (see :meth:`Dij.compute_result_ct_grid`).
+        ``True`` selects every scenario of a dij with several scenarios; by default
+        only the nominal scenario is reported.
 
     Returns
     -------
@@ -133,7 +139,9 @@ def fluence_optimization(  # noqa: PLR0913
         if isinstance(result_info, dict) and "num_iter" in result_info:
             opt_info["num_iter"] = int(result_info["num_iter"])
 
-    result = _dij.compute_result_ct_grid(fluence, num_of_fractions=_pln.result_dose_factor)
+    result = _dij.compute_result_ct_grid(
+        fluence, num_of_fractions=_pln.result_dose_factor, scenarios=scenarios
+    )
     result.info = _summarize_solver_info(result_info)
     # solve() resolves the solver from its identifier, so read it back afterwards.
     solver = getattr(planning_prob, "solver", None)
