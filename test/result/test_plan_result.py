@@ -346,6 +346,70 @@ def test_accessors_follow_a_copy(sample_image):
     assert "physical_dose" not in copy.beam and "physical_dose" not in copy.scenario
 
 
+def test_copy_does_not_share_its_containers(sample_image):
+    result = create_result(
+        {
+            "physical_dose": sample_image,
+            "physical_dose_beam": [sample_image],
+            "physical_dose_scenario": [sample_image],
+        }
+    )
+    copy = result.model_copy()
+    other = sitk.Image(sample_image)
+
+    result.add_quantity("let", sample_image)
+    result.add_quantity("physical_dose", other)
+    result.beam_quantities["physical_dose"][0] = None
+    result.scenario_quantities["physical_dose"][0] = None
+    result.info["status"] = "changed"
+
+    assert copy.stored_quantities == ["physical_dose"]
+    assert copy["physical_dose"].values is sample_image
+    assert copy.beam.physical_dose[0].values is sample_image
+    assert copy.scenario.physical_dose[0].values is sample_image
+    assert copy.info == {}
+
+
+def _matrad_sequencing(num_beams):
+    beams = [
+        {
+            "shapes": np.ones((3, 4)),
+            "shapesWeight": 1.0,
+            "bixelIx": np.array([1.0, 2.0, 3.0]) + 3 * ix,
+            "fluence": np.full((3, 4), 0.5),
+        }
+        for ix in range(num_beams)
+    ]
+    if num_beams == 1:
+        return {"beam": beams[0]}
+    return {"beam": {key: [beam[key] for beam in beams] for key in beams[0]}}
+
+
+@pytest.mark.parametrize("num_beams", [0, 1, 2])
+def test_matrad_result_survives_a_mat_file(tmp_path, num_beams):
+    from pyRadPlan.io import load_data, save_data
+
+    data = {"physicalDose": np.ones((5, 6, 4)), "w": np.ones(3)}
+    if num_beams:
+        data["sequencing"] = _matrad_sequencing(num_beams)
+    result = PlanResult.from_matrad(data)
+    assert (result.sequence is None) == (num_beams == 0)
+
+    path = tmp_path / "result.mat"
+    save_data(file_name=path, result=result)
+    loaded = load_data(path)["result"]
+
+    assert loaded.stored_quantities == ["physical_dose"]
+    np.testing.assert_array_equal(loaded.fluence, np.ones(3))
+    if num_beams:
+        assert [beam.bixel_ix for beam in loaded.sequence.beam] == [
+            beam.bixel_ix for beam in result.sequence.beam
+        ]
+        assert loaded.sequence.beam[0].bixel_ix == [0, 1, 2]
+    else:
+        assert loaded.sequence is None
+
+
 def test_to_matrad_leaves_out_scenario_quantities(sample_image):
     result = create_result(
         {

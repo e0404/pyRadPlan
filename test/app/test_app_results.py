@@ -351,6 +351,41 @@ def test_workspace_file_of_version_0_9_loads(tmp_path):
     np.testing.assert_array_equal(session.workspace.results["a"].fluence, np.ones(3))
 
 
+def test_imported_dose_of_version_0_9_without_snapshots_is_a_result_of_its_own(tmp_path):
+    import pickle
+
+    from pyRadPlan.io import load_data
+
+    path = tmp_path / "workspace.pkl"
+    legacy = {
+        "result": {"physical_dose": _image(1.0), "w": np.ones(3), "import_plan": _image(2.0)}
+    }
+    path.write_bytes(pickle.dumps(legacy))
+
+    session = Session(auto_plan=False)
+    session.merge_loaded(load_data(path))
+    ws = session.workspace
+
+    assert list(ws.results) == ["current", "plan"]
+    ws.result = create_result({"physical_dose": _image(3.0)})
+    assert ws.results["plan"].stored_quantities == ["physical_dose"]
+
+
+def test_snapshot_does_not_follow_changes_of_the_active_result():
+    session = Session(auto_plan=False)
+    ws = session.workspace
+    dose = _image(1.0)
+    ws.result = create_result({"physical_dose": dose})
+
+    session.snapshot("baseline")
+    ws.result.add_quantity("let", _image(2.0))
+    ws.result.add_quantity("physical_dose", _image(3.0))
+
+    baseline = ws.results["baseline"]
+    assert baseline.stored_quantities == ["physical_dose"]
+    assert baseline["physical_dose"].values is dose
+
+
 def test_loading_without_a_ct_keeps_the_other_results_and_a_ct_replaces_them():
     session = Session(auto_plan=False)
     ws = session.workspace

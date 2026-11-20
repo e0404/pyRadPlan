@@ -68,6 +68,15 @@ def _is_matrad_cube(value: Any) -> bool:
     return isinstance(value, np.ndarray) and (value.dtype == object or value.ndim in (3, 4))
 
 
+def _without_none(value: Any) -> Any:
+    """Drop the ``None`` entries of (nested) dictionaries."""
+    if isinstance(value, dict):
+        return {k: _without_none(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_without_none(v) for v in value]
+    return value
+
+
 def looks_like_matrad(data: Mapping) -> bool:
     """Whether a result dictionary uses matRad's field names."""
     return any(
@@ -272,7 +281,8 @@ class PlanResult(PyRadPlanBaseModel):
         for key, group in beam_groups.items():
             out[key] = [value for _, value in sorted(group, key=lambda entry: entry[0])]
 
-        out["sequence"] = sequence
+        if sequence:
+            out["sequence"] = sequence
         return out
 
     @model_validator(mode="before")
@@ -468,6 +478,24 @@ class PlanResult(PyRadPlanBaseModel):
                             entry.values.CopyInformation(reference_image)
         return result
 
+    def model_copy(self, *, update: Optional[Mapping[str, Any]] = None, deep: bool = False):
+        """Copy the result; a shallow copy shares the images but not the containers.
+
+        Adding or replacing a quantity of the copy therefore leaves the original as it is.
+        """
+        copy = super().model_copy(update=update, deep=deep)
+        if deep:
+            return copy
+        for name in (*_CONTAINERS, "info"):
+            if update is not None and name in update:
+                continue
+            entries = {
+                key: list(value) if isinstance(value, list) else value
+                for key, value in getattr(self, name).items()
+            }
+            copy.__dict__[name] = entries
+        return copy
+
     def __getattr__(self, item):
         # Stored quantities are reachable as attributes (result.physical_dose).
         # Everything else falls back to pydantic, which resolves private
@@ -650,15 +678,15 @@ class PlanResult(PyRadPlanBaseModel):
             The serialized dictionary representation of the PlanResult object.
         """
         export = super().to_matrad(context=context)
+        if self.sequence is None or not self.sequence.model_fields_set:
+            export.pop("sequencing", None)
         # removing Quantities and beamQuantities key from dict and passing content to top layer
         if "quantities" in export and isinstance(export["quantities"], dict):
             export.update(export.pop("quantities"))
         if "beamQuantities" in export and isinstance(export["beamQuantities"], dict):
             export.update(export.pop("beamQuantities"))
-        # Remove keys with None values from the export dictionary
-        # (savemat can't handle "None")
-        export = {key: value for key, value in export.items() if value is not None}
-        return export
+        # savemat cannot handle None, neither at the top level nor in nested structs
+        return _without_none(export)
 
 
 def create_result(

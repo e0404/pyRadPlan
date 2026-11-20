@@ -80,7 +80,11 @@ class PickleImporter(BaseImporter):
         data = dict(self.data)
         # A workspace saved up to version 0.9 keeps snapshots and imported doses in one
         # result dict, which the session layer splits into separate results.
-        legacy = isinstance(data.get("result"), dict) and bool(data.get("saved_result_tags"))
+        result = data.get("result")
+        legacy = isinstance(result, dict) and (
+            bool(data.get("saved_result_tags"))
+            or any(isinstance(key, str) and key.startswith("import_") for key in result)
+        )
         if data.get("result") is not None and not legacy:
             data["result"] = validate_result(data["result"])
         return data
