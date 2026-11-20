@@ -45,6 +45,7 @@ const MARKER_SIZE = 9;
 const HIGHLIGHT_MARKER_SIZE = 14;
 const CURVE_CLICK = 8;
 const LEGEND_W = 150;
+const Y_LABEL = "Volume [%]";
 
 interface Frame {
   left: number;
@@ -61,7 +62,7 @@ interface Frame {
 export function DvhPlot(props: DvhPlotProps) {
   const ownRef = useRef<HTMLCanvasElement>(null);
   const ref = props.canvasRef ?? ownRef;
-  const [hoverX, setHoverX] = useState<number | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const [dragged, setDragged] = useState<{ parameter: number; value: number } | null>(null);
   const frameRef = useRef<Frame | null>(null);
   const dark = useTheme((s) => s.dark);
@@ -144,7 +145,7 @@ export function DvhPlot(props: DvhPlotProps) {
     ctx.translate(14, (frame.top + frame.bottom) / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textBaseline = "middle";
-    ctx.fillText("Volume [%]", 0, 0);
+    ctx.fillText(Y_LABEL, 0, 0);
     ctx.restore();
     if (props.secondaryXLabel) {
       ctx.textBaseline = "bottom";
@@ -245,24 +246,27 @@ export function DvhPlot(props: DvhPlotProps) {
     }
 
     // Data cursor.
-    if (hoverX !== null && props.curves.length) {
-      const x = hoverX;
+    if (hover !== null && props.curves.length) {
+      const { x, y } = hover;
       ctx.setLineDash([2, 3]);
       ctx.strokeStyle = fg;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(X(x) + 0.5, frame.top);
       ctx.lineTo(X(x) + 0.5, frame.bottom);
+      ctx.moveTo(frame.left, Y(y) + 0.5);
+      ctx.lineTo(frame.right, Y(y) + 0.5);
       ctx.stroke();
       ctx.setLineDash([]);
     }
     ctx.restore();
 
-    if (hoverX !== null && props.curves.length) {
-      const x = hoverX;
-      const x2 = props.secondaryXLabel ? (hoverX / frame.xMax) * frame.x2Max : null;
+    if (hover !== null && props.curves.length) {
+      const { x, y } = hover;
+      const x2 = props.secondaryXLabel ? (x / frame.xMax) * frame.x2Max : null;
       const rows: { text: string; color: readonly number[] | null; symbol: string }[] = [{ text: `${props.xLabel}: ${x.toFixed(2)}`, color: null, symbol: "" }];
       if (x2 !== null) rows.push({ text: `${props.secondaryXLabel}: ${x2.toFixed(2)}`, color: null, symbol: "" });
+      rows.push({ text: `${Y_LABEL}: ${y.toFixed(1)}`, color: null, symbol: "" });
       for (const c of props.curves) {
         const at = c.secondaryAxis && x2 !== null ? x2 : x;
         const v = interp(at, c.x, c.y);
@@ -320,7 +324,7 @@ export function DvhPlot(props: DvhPlotProps) {
         ly += 16;
       }
     }
-  }, [props, size, hoverX, dragged, highlighted, ref, dark]);
+  }, [props, size, hover, dragged, highlighted, ref, dark]);
 
   // -------------------------------------------------------------------------
   // Interaction
@@ -426,13 +430,13 @@ export function DvhPlot(props: DvhPlotProps) {
       className="dvh-canvas"
       data-testid="dvh-plot"
       onPointerMove={(e) => {
-        const { x, inside, px, py, frame } = toData(e);
-        setHoverX(inside ? Math.max(0, x) : null);
+        const { x, y, inside, px, py, frame } = toData(e);
+        setHover(inside ? { x: Math.max(0, x), y } : null);
         const m = inside ? markerAt(px, py, frame) : null;
         e.currentTarget.title = m ? `${m.name}: ${m.metric} = ${formatMarkerValue(m.value, m.valueUnit)}` : highlighted && nearParameterLine(px, py, frame) ? `Drag to change ${highlighted.metric}` : "";
         e.currentTarget.style.cursor = highlighted && nearParameterLine(px, py, frame) ? (highlighted.kind === "dx" ? "ns-resize" : "ew-resize") : "";
       }}
-      onPointerLeave={() => setHoverX(null)}
+      onPointerLeave={() => setHover(null)}
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => {
         const { x, y, inside } = toData(e);

@@ -436,7 +436,7 @@ Qt has no context menu here; editing goes through the click on the name.
 | Metric checkboxes mean / std / max / min, All / None | `_analysis_widget.py:279-382` | verified on Pyodide | frontend | – |
 | DVH plot: per-structure curves (1000 bins, range per structure), legend, grid, axis "<label> [<unit>]", "Volume [%]" | `analysis/_dvh.py:93-288`, `pyRadPlan/analysis/_dvh_plot.py:116-287` | verified on Pyodide | impl | `analysis.dvh {range:"per_structure", num_points:1000}` |
 | DVH plot and analysis window follow light / dark mode, also when switched while open (figure `--window`, axes `--base`, text / ticks / axes / cursor `--text`, grid blended; legend, hover box, marker labels on the axes colour; QI table, tabs, title bar from the theme variables) | `widgets/_plot_theme.py`, `analysis/_dvh.py:507-528` | done (mock e2e) | frontend | – |
-| Hover cursor: dotted line + readout of every curve's volume | `analysis/_dvh.py:449-501` | verified on Pyodide | frontend | – |
+| Hover cursor: dotted crosshair (vertical and horizontal line) + readout of the pointer's dose and volume and of every curve's volume | `analysis/_dvh.py:452-509` | done (mock e2e screenshot) | frontend | – |
 | Highlight (from table, curve click, marker click; empty click clears) | `analysis/_dvh.py:305-314,425-447` | done (mock e2e) | frontend | – |
 | QI markers (D_x circles, V_x squares), guide lines, draggable parameter line, release → QI point dialog | `analysis/_dvh.py:318-414` | done (mock e2e) | frontend (math on the returned curve arrays) | `analysis.qi` |
 | Double-click → add QI point | `analysis/_dvh.py:441-443` | done (mock e2e) | frontend | `analysis.qi` |
