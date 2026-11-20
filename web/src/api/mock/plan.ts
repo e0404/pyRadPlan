@@ -557,18 +557,25 @@ function resolveBio(spec: PlanSetParams["bio_model"], mode: string, details: Val
 /**
  * Rows come back as sent, without issues or derived values: how tissues are checked against
  * base data (and derived, matched, relabelled) is the app layer's, and the recorded phantom
- * has no issues with the bundled data.
+ * has no issues with the bundled data. Only `apply_pick` is simulated (the pick's model and
+ * values replace the tissue), and a row names the pick whose model and values it holds.
  */
 function tissueEvaluate(p: TissueEvaluateParams): TissueEvaluateResult {
   const op = p.op ?? "none";
+  const pick = op === "apply_pick" ? TISSUE_SCHEMA.picks.find((x) => x.id === p.pick) : undefined;
+  const targets = p.targets?.length ? p.targets : p.rows.map((r) => r.structure);
+  const sameValues = (a: Record<string, unknown>, b: Record<string, unknown>) => Object.keys(b).every((k) => (a[k] ?? null) === (b[k] ?? null));
   return {
-    rows: p.rows.map((r) => ({
-      structure: r.structure,
-      tissue: { ...structuredClone(r.tissue), sources: structuredClone(r.tissue.sources ?? {}) },
-      issues: [],
-      comparison: null,
-    })),
-    notes: op === "none" ? [] : [`Mock backend: the tissue operation "${op}" is not simulated`],
+    rows: p.rows.map((r) => {
+      const applied = pick && targets.includes(r.structure);
+      const tissue: TissueDraft = applied
+        ? { model: pick.model, values: structuredClone(pick.values), sources: {}, cell_line: pick.cell_line ?? null, cell_line_source: pick.cell_line_source ?? null }
+        : { ...structuredClone(r.tissue), sources: structuredClone(r.tissue.sources ?? {}) };
+      const equal = TISSUE_SCHEMA.picks.filter((x) => x.model === tissue.model && sameValues(tissue.values, x.values));
+      const held = (tissue.cell_line_source ? equal.find((x) => x.cell_line === tissue.cell_line && x.cell_line_source === tissue.cell_line_source) : undefined) ?? equal[0];
+      return { structure: r.structure, tissue, issues: [], comparison: null, pick: (applied ? pick.id : held?.id) ?? null };
+    }),
+    notes: op === "none" || pick ? [] : [`Mock backend: the tissue operation "${op}" is not simulated`],
     can_match: false,
     can_relabel: [],
     can_derive: false,

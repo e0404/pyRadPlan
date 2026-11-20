@@ -196,6 +196,53 @@ try {
   await page.waitForFunction(() => window.__pyrpApp.useApp.getState().structureDetails[1]?.tissue.values.alpha_x === 0.12);
   expect(true, "tissue α_x written through cst.update_structure");
 
+  // Tissue picker of the Edit VOI dialog: nothing preselected for a tissue matching no pick,
+  // OK with an unapplied selection asks, Apply fills the tissue.
+  await tid("voi-name-OuterTarget").click();
+  await tid("edit-voi-dialog").waitFor();
+  await tid("tissue-picker").waitFor();
+  expect((await tid("tissue-picker").getAttribute("data-value")) === "", "Edit VOI: no pick preselected for a tissue matching none");
+  await tid("tissue-picker").click();
+  await page.locator('[data-testid="tissue-picker-popup"] [role="option"]').first().click();
+  const picked = await tid("tissue-picker").getAttribute("data-value");
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-unapplied-pick").waitFor();
+  await tid("msg-keep").click();
+  expect((await tid("edit-voi-dialog").count()) === 1, "Edit VOI: OK with an unapplied pick asks and can keep editing");
+  // A parameter edited just before must not survive the applied pick.
+  await tid("tissue-OuterTarget-alpha_x").fill("0.77");
+  await tid("tissue-OuterTarget-alpha_x").press("Tab");
+  await tid("tissue-pick-apply").click();
+  await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, picked);
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-dialog").waitFor({ state: "detached" });
+  expect((await tid("edit-voi-unapplied-pick").count()) === 0, "Edit VOI: an applied pick is not asked about");
+  const appliedAlpha = await app(() => window.__pyrpApp.useApp.getState().structureDetails[1]?.tissue.values.alpha_x);
+  expect(appliedAlpha !== 0.77, "Edit VOI: an applied pick replaces a parameter edited before");
+  await tid("voi-name-OuterTarget").click();
+  await tid("edit-voi-dialog").waitFor();
+  await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, picked);
+  expect(true, "Edit VOI: the applied pick is preselected on reopening");
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-dialog").waitFor({ state: "detached" });
+  expect((await tid("edit-voi-unapplied-pick").count()) === 0, "Edit VOI: opening and pressing OK never asks");
+  // A cell line preset keeps its identity through OK and reopening, so the same preset is shown.
+  await tid("voi-name-OuterTarget").click();
+  await tid("edit-voi-dialog").waitFor();
+  await tid("tissue-picker").click();
+  await page.locator('[data-testid="tissue-picker-popup"] [role="option"]').last().click();
+  const preset = await tid("tissue-picker").getAttribute("data-value");
+  await tid("tissue-pick-apply").click();
+  await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, preset);
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-dialog").waitFor({ state: "detached" });
+  await tid("voi-name-OuterTarget").click();
+  await tid("edit-voi-dialog").waitFor();
+  await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, preset);
+  expect(true, "Edit VOI: an applied cell line preset is preselected on reopening");
+  await tid("edit-voi-ok").click();
+  await tid("edit-voi-dialog").waitFor({ state: "detached" });
+
   // Analysis window.
   await tid("btn-dvh").click();
   await tid("analysis-window").waitFor();

@@ -146,6 +146,9 @@ export interface TissuePick {
   exact: boolean;
   model: TissueModelLabel;
   values: Record<string, number | string | null>;
+  /** Identity of the tissue applying the pick gives (amendment 25); null for a base data class without one. */
+  cell_line?: string | null;
+  cell_line_source?: string | null;
   description: string;
   /** v1 amendment 13: listed first (Qt: presets of the base data's provenance). */
   preferred?: boolean;
@@ -172,6 +175,8 @@ export interface TissueEvalRow {
   tissue: TissueDraft;
   issues: Issue[];
   comparison: TissueComparison | null;
+  /** Id of the `tissue.schema` pick the tissue corresponds to (the class it matches exactly or the preset it was applied from), null if none. */
+  pick?: string | null;
   /** Not sent since v1 amendment 13 (the sources are in `tissue.sources`). */
   sources?: Record<string, TissueSource>;
 }

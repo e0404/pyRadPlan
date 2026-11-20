@@ -405,9 +405,12 @@ Qt has no context menu here; editing goes through the click on the name.
 | Click on the name → "Edit VOI: <name>" dialog | `:125-144` | verified on Pyodide | impl | – |
 | Edit VOI: Name (read-only) | `:216-219` | verified on Pyodide | impl | `cst.get` |
 | Edit VOI: Type TARGET / OAR / EXTERNAL / HELPER | `:221-226` | verified on Pyodide | impl | `cst.update_structure {type}` |
-| Edit VOI: Tissue model, tissue picker + Apply, parameter groups, reference radiation, Derive from model, base data row (Match base data / Relabel), status | `:228-305,332-684` | verified on Pyodide | impl (same backend as the tissue dialog, one row) | `tissue.schema`, `tissue.evaluate`, `tissue.apply` |
+| Edit VOI: Tissue model, parameter groups (model and reference parameters in one row), reference radiation, live derivation of α_x / β_x | `:228-305,332-684` | verified on Pyodide | impl (same backend as the tissue dialog, one row) | `tissue.schema`, `tissue.evaluate` |
+| Edit VOI: tissue picker + Apply, preselecting the pick the structure's tissue corresponds to (matching base data class or applied preset, neutral "No matching tissue" otherwise; follows Apply / Match base data / Relabel) | `:239-249,334-377` | done (mock e2e); not yet verified on Pyodide. The row held no picker, Match base data, Relabel or Derive before 2026-11-20 although this table said so | impl (`tissue.evaluate` rows return `pick`, amendment 24; drafts carry the cell line, amendment 25) | `tissue.schema`, `tissue.evaluate {op: "apply_pick", pick}` |
+| Edit VOI: base data row (Match base data / Relabel as …), Derive from model, status | `:332-684` | done (mock e2e, mock does not simulate them); not yet verified on Pyodide | impl | `tissue.evaluate {op: "match" \| "relabel" \| "derive"}` |
 | Edit VOI: Overlap priority 0..9999 | `:307-311` | verified on Pyodide | impl | `cst.update_structure {overlap_priority}` |
 | Edit VOI: OK (tissue errors ask "apply anyway") / Cancel | `:313-318,686-733` | verified on Pyodide | impl | `cst.update_structure`, `tissue.apply` |
+| Edit VOI: OK with a picker selection that was not applied asks "Apply and continue / Discard selection and continue / Keep editing" | `:688-710` | done (mock e2e); not yet verified on Pyodide | impl | `tissue.evaluate {op: "apply_pick"}` |
 
 ### Save result dialog (`result/_save_result_dialog.py`)
 

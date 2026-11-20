@@ -107,6 +107,137 @@ def test_tissue_calls_use_the_unapplied_plan_form(loaded):
     assert "LEM" in with_draft["comparison"]["closest_class"]
 
 
+def test_tissue_evaluate_names_the_pick_a_tissue_corresponds_to(loaded):
+    draft = {"radiation_mode": "carbon", "machine": "Generic", "bio_model": "LEM"}
+    schema = loaded.ok("tissue.schema", {"draft": draft})["result"]
+    tissue = loaded.ok("cst.get", {"names": ["Core"]})["result"]["structures"][0]["tissue"]
+    rows = [{"structure": "Core", "tissue": tissue}]
+
+    def evaluate(rows, **params):
+        result = loaded.ok("tissue.evaluate", {"rows": rows, "draft": draft, **params})
+        return result["result"]["rows"][0]
+
+    # The default tissue (0.1 / 0.05) matches the LEM IV class of those reference parameters
+    assert evaluate(rows)["comparison"]["matched"]
+    assert evaluate(rows)["pick"] == "class:0"
+    other = {"model": "Generic", "values": {"alpha_x": 0.3, "beta_x": 0.05}}
+    assert evaluate([{"structure": "Core", "tissue": other}])["pick"] is None
+
+    class_id = next(p["id"] for p in schema["picks"] if p["kind"] == "base_data")
+    applied = evaluate(rows, op="apply_pick", pick=class_id)
+    assert applied["pick"] == class_id
+    edited = {**applied["tissue"], "values": {**applied["tissue"]["values"], "alpha_x": 0.123}}
+    assert evaluate([{"structure": "Core", "tissue": edited}])["pick"] is None
+
+    preset_id = next(p["id"] for p in schema["picks"] if p["kind"] == "preset")
+    applied = evaluate(rows, op="apply_pick", pick=preset_id)
+    assert applied["pick"] == preset_id
+    # A tissue draft carries no cell line, so the preset is found again by its parameters
+    again = evaluate([{"structure": "Core", "tissue": applied["tissue"]}])
+    assert again["pick"] == preset_id
+
+
+PICK_CONTEXTS = [
+    {"radiation_mode": "carbon", "machine": "Generic", "bio_model": "LEM"},
+    {"radiation_mode": "carbon", "machine": "Generic", "bio_model": "alpha_beta_kernels"},
+    {"radiation_mode": "protons", "machine": "Generic", "bio_model": "MCN"},
+    {"radiation_mode": "oxygen", "machine": "Generic", "bio_model": "zstar_kernels"},
+]
+
+
+@pytest.mark.parametrize("draft", PICK_CONTEXTS, ids=lambda d: d["bio_model"])
+def test_every_pick_round_trips_through_its_draft(loaded, draft):
+    """Applying a pick and evaluating the returned draft again names the same pick."""
+    schema = loaded.ok("tissue.schema", {"draft": draft})["result"]
+    assert schema["picks"]
+    tissue = loaded.ok("cst.get", {"names": ["Core"]})["result"]["structures"][0]["tissue"]
+    rows = [{"structure": "Core", "tissue": tissue}]
+    ambiguous = []
+    for pick in schema["picks"]:
+        applied = loaded.ok(
+            "tissue.evaluate",
+            {"rows": rows, "draft": draft, "op": "apply_pick", "pick": pick["id"]},
+        )["result"]["rows"][0]
+        assert applied["pick"] == pick["id"]
+        assert applied["tissue"]["cell_line"] == pick["cell_line"] or pick["kind"] == "base_data"
+        again = loaded.ok(
+            "tissue.evaluate",
+            {"rows": [{"structure": "Core", "tissue": applied["tissue"]}], "draft": draft},
+        )["result"]["rows"][0]
+        if again["pick"] != pick["id"]:
+            # Presets whose applied tissues are identical (e.g. LEM I and LEM II presets of a
+            # cell line adopted by MKM base data keep only the same reference parameters)
+            # cannot be told apart by the tissue; the pick named must give the same tissue.
+            other = loaded.ok(
+                "tissue.evaluate",
+                {"rows": rows, "draft": draft, "op": "apply_pick", "pick": again["pick"]},
+            )["result"]["rows"][0]
+            assert other["tissue"] == applied["tissue"], pick["label"]
+            ambiguous.append(pick["id"])
+    assert len(ambiguous) < len(schema["picks"]) / 2
+
+
+def test_identity_survives_writing_and_reopening(loaded):
+    draft = {"radiation_mode": "carbon", "machine": "Generic", "bio_model": "LEM"}
+    schema = loaded.ok("tissue.schema", {"draft": draft})["result"]
+    preset = next(p for p in schema["picks"] if p["kind"] == "preset" and p["cell_line"])
+    rows = [{"structure": "Core", "tissue": {"model": "Generic", "values": {}}}]
+    applied = loaded.ok(
+        "tissue.evaluate", {"rows": rows, "draft": draft, "op": "apply_pick", "pick": preset["id"]}
+    )["result"]["rows"][0]["tissue"]
+    assert applied["cell_line"] == preset["cell_line"] and applied["cell_line_source"]
+    session = loaded.manager.get(loaded.session)
+
+    for write in ("update_structure", "tissue.apply"):
+        loaded.ok(
+            "cst.update_structure",
+            {"name": "Core", "changes": {"tissue": {"model": "Generic", "values": {}}}},
+        )
+        if write == "update_structure":
+            loaded.ok("cst.update_structure", {"name": "Core", "changes": {"tissue": applied}})
+        else:
+            loaded.ok("tissue.apply", {"rows": [{"structure": "Core", "tissue": applied}]})
+        stored = session.workspace.cst.vois[0].tissue_properties
+        assert stored.cell_line == preset["cell_line"]
+        assert stored.cell_line_source == applied["cell_line_source"]
+        reopened = loaded.ok("cst.get", {"names": ["Core"]})["result"]["structures"][0]["tissue"]
+        assert reopened["cell_line"] == preset["cell_line"]
+        row = loaded.ok(
+            "tissue.evaluate",
+            {"rows": [{"structure": "Core", "tissue": reopened}], "draft": draft},
+        )["result"]["rows"][0]
+        assert row["pick"] == preset["id"]
+
+
+def test_identity_is_dropped_when_parameters_change(loaded):
+    draft = {"radiation_mode": "carbon", "machine": "Generic", "bio_model": "LEM"}
+    schema = loaded.ok("tissue.schema", {"draft": draft})["result"]
+    preset = next(p for p in schema["picks"] if p["kind"] == "preset" and p["cell_line"])
+    rows = [{"structure": "Core", "tissue": {"model": "Generic", "values": {}}}]
+    applied = loaded.ok(
+        "tissue.evaluate", {"rows": rows, "draft": draft, "op": "apply_pick", "pick": preset["id"]}
+    )["result"]["rows"][0]["tissue"]
+    field = next(name for name, value in applied["values"].items() if isinstance(value, float))
+    edited = {**applied, "values": {**applied["values"], field: applied["values"][field] + 0.01}}
+    row = loaded.ok(
+        "tissue.evaluate",
+        {
+            "rows": [{"structure": "Core", "tissue": edited}],
+            "draft": draft,
+            "edited": {"structure": "Core", "field": field},
+        },
+    )["result"]["rows"][0]
+    assert row["tissue"]["cell_line"] is None and row["tissue"]["cell_line_source"] is None
+
+
+def test_draft_without_identity_keeps_the_cell_line_of_the_structure(loaded):
+    session = loaded.manager.get(loaded.session)
+    tissue = session.workspace.cst.vois[0].tissue_properties
+    legacy = {"model": "Generic", "values": {"alpha_x": tissue.alpha_x, "beta_x": tissue.beta_x}}
+    loaded.ok("tissue.apply", {"rows": [{"structure": "Core", "tissue": legacy}]})
+    assert session.workspace.cst.vois[0].tissue_properties.cell_line == tissue.cell_line
+
+
 def test_display_edits_outdate_nothing_and_are_accepted_while_busy():
     from pyRadPlan.app import Operation, PreconditionError, Session
 

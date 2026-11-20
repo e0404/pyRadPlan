@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI: unexpected errors while preparing or committing a step were printed instead of shown
 - GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
 - A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
+- GUI: the Edit VOI dialog now shows the predefined tissue (base data class or cell line preset) a structure already has in its tissue picker, also after Apply and Match base data. Pressing OK with a tissue selected in the picker but not applied now asks whether to apply it, discard the selection or keep editing, instead of silently dropping it
+- Web version: the Edit VOI dialog now offers the tissue picker with Apply, Match base data, Relabel and Derive from model, with the same preselection and the same warning for an unapplied selection as the desktop GUI. The tissue editor of that dialog had no picker before
 
 ## [0.9.0] - 2026-11-18
 
