@@ -449,6 +449,10 @@ export interface TissueDraft {
   values: Record<string, number | string | null>;
   /** reference_sources. */
   sources?: Record<string, string>;
+  /** Cell line the parameters describe; the backend sends it (null if none), a draft without it keeps the structure's. */
+  cell_line?: string | null;
+  /** Where the parameters of the cell line come from (a preset's citation). */
+  cell_line_source?: string | null;
 }
 
 export interface ObjectiveData {

@@ -474,7 +474,7 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 | `cst.get` | read | `{names?: (string \| number)[]}` | `{structures: StructureDetail[]}` |
 | `cst.update_structure` | write | `{name: string \| number, changes: {type?, color?, visible?, overlap_priority?, tissue?: TissueDraft}, apply_anyway?: boolean}` | `{state, structure: StructureDetail}`; the VOI is recreated with `create_voi` as the Qt Edit VOI dialog does; tissue errors fail with `PreconditionError(code="tissue_errors")` and the issues in `error.details` unless `apply_anyway`. Changes of only `color` / `visible` are display settings: set in place, accepted while busy, outdating nothing (`revisions.workspace.cst` still counts them) |
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
-| `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows |
+| `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, pick: string \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows ; `pick` is the id of the `tissue.schema` pick the row's tissue corresponds to (null if none), see amendment 24 |
 | `tissue.apply` | write | `{rows: [{structure: string \| number, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
 | `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref` |
 | `objectives.add` | write | `{structure: string \| number}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
@@ -486,7 +486,9 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 ```ts
 type TissueDraft = {model: "Generic" | "LEM" | "MKM" | "mMKM";
                     values: Record<string, number | string | null>; // NaN-default parameters as null
-                    sources?: Record<string, string>};              // reference_sources
+                    sources?: Record<string, string>;               // reference_sources
+                    cell_line?: string | null;                      // identity, amendment 25
+                    cell_line_source?: string | null};
 type ObjectiveData = {index: number; name: string; priority: number; quantity: string;
                       robustness: string; parameters: Record<string, unknown>};
 // image references: {"$result": "<component key>"} or {"$custom": "<summary>"} (kept as is)
@@ -684,3 +686,27 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     is a `ValueError`). Added the host flags `allow_pickle` / `allow_global_settings` (see Trust
     model). `workflow.calc_dose_influence` / `workflow.recalc` with `physical_only` no longer write
     the physical-only plan when preparing; the plan is written together with the result.
+24. 2026-11-20 (tissue picker): **added** `tissue.evaluate` rows return `pick`: the id
+    (`"class:<i>"` / `"preset:<i>"`) of the `tissue.schema` pick the row's tissue corresponds to,
+    `null` if it corresponds to none. In this order: the preset of the tissue's own cell line and
+    source whose applied parameters it still holds; the base data class its comparison reports as
+    matched (the "✓" classes); any preset whose applied parameters it holds (a `TissueDraft`
+    carries no cell line, so equal parameters identify a preset then). After `op: "apply_pick"`,
+    the rows it was applied to name the pick applied. The Edit VOI dialog preselects it, so a
+    frontend sends no extra request. It is returned for every evaluation, but frontends only adopt
+    it on opening and after `apply_pick`, `match` and `relabel` (as Qt does), so a selection of
+    the user stays.
+25. 2026-11-20 (tissue identity): **added** `TissueDraft.cell_line` / `cell_line_source` (the
+    cell line a tissue describes and the source of its parameters, `null` if none) and the same
+    two fields on `tissue.schema.picks[]`. Everything the Qt dialogs keep of the tissue applied
+    besides its parameters (`_tissue_identity`; the model name is the draft's `model`). Backends
+    send them with every draft (`cst.get`, `tissue.evaluate`, `tissue.schema`); they are written
+    by `tissue.apply` and `cst.update_structure`, so a reopened dialog preselects the same pick.
+    A draft without them (older frontends) is converted as before: the structure's cell line is
+    kept while every parameter matches it. A draft with them gets exactly that identity (also
+    `null`). The frontend passes them through; `tissue.evaluate` clears them from a row with
+    `edited` and from rows whose values `op: "derive"` changes, and the frontend clears them when
+    it edits a value or switches to a model of another parameter class (MKM <-> mMKM keeps them),
+    as Qt keeps the cell line only while the parameters still match the tissue applied. Presets
+    whose applied tissues are identical (e.g. the LEM I and LEM II presets of a cell line under
+    MKM base data) cannot be told apart afterwards; one of them is named.

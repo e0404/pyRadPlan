@@ -140,6 +140,23 @@ describe("mock backend, package A methods", () => {
     expect(live.notes).toEqual([]);
     expect((await req("tissue.evaluate", { rows, op: "derive" })).notes[0]).toMatch(/not simulated/);
 
+    const pick = schema.picks[0];
+    const applied = await req("tissue.evaluate", { rows, op: "apply_pick", pick: pick.id, targets: [rows[0].structure] });
+    expect(applied.rows[0]).toMatchObject({ pick: pick.id, tissue: { model: pick.model, values: pick.values } });
+    expect(applied.rows[1].tissue.values).toEqual(rows[1].tissue.values);
+    expect(applied.notes).toEqual([]);
+    expect(applied.rows[0].tissue).toMatchObject({ cell_line: pick.cell_line ?? null, cell_line_source: pick.cell_line_source ?? null });
+    const preset = schema.picks.find((p) => p.kind === "preset" && p.cell_line);
+    if (preset) {
+      const named = await req("tissue.evaluate", { rows, op: "apply_pick", pick: preset.id, targets: [rows[0].structure] });
+      expect(named.rows[0].tissue).toMatchObject({ cell_line: preset.cell_line, cell_line_source: preset.cell_line_source });
+      await req("tissue.apply", { rows: [{ structure: 0, tissue: named.rows[0].tissue }] });
+      const stored = (await req("cst.get", { names: [0] })).structures[0].tissue;
+      expect(stored.cell_line).toBe(preset.cell_line);
+    }
+    const perturbed = { ...applied.rows[0].tissue, values: { ...applied.rows[0].tissue.values, alpha_x: 0.987 } };
+    expect((await req("tissue.evaluate", { rows: [{ structure: rows[0].structure, tissue: perturbed }] })).rows[0].pick).toBeNull();
+
     const edited = { model: "Generic" as const, values: { alpha_x: 0.3, beta_x: 0.05 } };
     await req("tissue.apply", { rows: [{ structure: 0, tissue: edited }] });
     const after = (await req("cst.get", { names: [0] })).structures[0];

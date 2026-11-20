@@ -791,6 +791,32 @@ APPLY_ANYWAY = "apply"
 KEEP_EDITING = "keep"
 
 
+#: Question and buttons of the dialog asking what to do with a picked tissue that was not
+#: applied (see :func:`ask_unapplied_pick` of the editors), answered by
+#: :data:`APPLY_PICK`, :data:`DISCARD_PICK` or :data:`KEEP_EDITING`.
+UNAPPLIED_PICK_TEXT = "The selected tissue has not been applied:"
+
+
+APPLY_PICK_TEXT = "Apply and continue"
+
+
+DISCARD_PICK_TEXT = "Discard selection and continue"
+
+
+APPLY_PICK = "apply_pick"
+
+
+DISCARD_PICK = "discard_pick"
+
+
+def unapplied_pick_info(label: str) -> str:
+    """Explanation of the question on an unapplied picked tissue named `label`."""
+    return (
+        f"{label}\n\nApplying it replaces the tissue parameters of the structure; discarding "
+        "the selection keeps the parameters as they are."
+    )
+
+
 #: Label and tooltip of the button matching tissues to their closest base data class.
 MATCH_BASE_DATA_TEXT = "Match base data"
 
@@ -1016,6 +1042,98 @@ def ranked_tissue_picks(
         (picks if preferred else others).append(pick)
     others.sort(key=lambda pick: _provenance_rank(pick.provenance))
     return picks + others
+
+
+def _preset_pick_position(
+    picks: list[TissuePick],
+    tissue: TissueProperties,
+    provenance: Optional[str],
+    named: bool,
+) -> Optional[int]:
+    """
+    Position of the preset pick whose applied (adopted) form `tissue` holds, if any.
+
+    With `named`, only presets of the tissue's own cell line and source are considered, which
+    tells presets of equal values apart; without, any preset is.
+    """
+    candidates = [
+        position
+        for position, pick in enumerate(picks)
+        if pick.kind == "preset"
+        and (
+            not named
+            or (
+                pick.tissue.cell_line == tissue.cell_line
+                and pick.tissue.cell_line_source == tissue.cell_line_source
+            )
+        )
+    ]
+    if named and not (tissue.cell_line and tissue.cell_line_source):
+        return None
+    own = tissue_provenance(tissue)
+    candidates.sort(key=lambda position: picks[position].provenance != own)
+    for position in candidates:
+        adopted, _ = adopt_preset(picks[position].tissue, provenance)
+        if type(adopted) is not type(tissue):
+            continue
+        fields = [
+            name
+            for name in tissue_edit_fields(type(adopted))
+            if name != "model" and name in type(tissue).model_fields
+        ]
+        if tissue.matches(adopted, fields=fields):
+            return position
+    return None
+
+
+def current_pick_position(
+    picks: list[TissuePick],
+    tissue: TissueProperties,
+    comparison: Optional[TissueComparison] = None,
+    provenance: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Position in `picks` of the pick a tissue corresponds to, None if it matches none.
+
+    In this order, the tissue corresponds to
+
+    1. the cell line preset of its own cell line and source that it still holds the
+       parameters of (the parameters applying the preset yields, `provenance` being that of
+       the base data, see :func:`adopt_preset`),
+    2. the tissue class of the base data it matches exactly, the one `comparison` (see
+       :func:`compare_tissues_quietly`) reports as matched; without a comparison, a class is
+       matched the way :func:`ranked_tissue_picks` marks the picks exact, ignoring undeclared
+       parameters,
+    3. any other cell line preset it holds the parameters of: the cell line and source are no
+       parameters and do not survive every route (a tissue draft of the web version carries
+       neither), so equal parameters are what identifies a preset then.
+    """
+    position = _preset_pick_position(picks, tissue, provenance, named=True)
+    if position is not None:
+        return position
+    classes = [(position, pick) for position, pick in enumerate(picks) if pick.kind == "class"]
+    if comparison is not None and comparison.kernel_set is not None:
+        matched = comparison.matched and comparison.tissue_class is not None
+        position = next(
+            (
+                position
+                for position, pick in classes
+                if matched and pick.tissue == comparison.tissue_class
+            ),
+            None,
+        )
+    else:
+        position = next(
+            (
+                position
+                for position, pick in classes
+                if tissue.matches(pick.tissue, ignore_undeclared=True)
+            ),
+            None,
+        )
+    if position is not None:
+        return position
+    return _preset_pick_position(picks, tissue, provenance, named=False)
 
 
 def picker_title(machine: Any, bio_model: Any, engine: Any = None) -> str:

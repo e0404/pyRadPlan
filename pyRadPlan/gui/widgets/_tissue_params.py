@@ -59,6 +59,12 @@ from pyRadPlan.biology._editing import (
     KEEP_EDITING_TEXT,
     APPLY_ANYWAY,
     KEEP_EDITING,
+    APPLY_PICK_TEXT,
+    DISCARD_PICK_TEXT,
+    APPLY_PICK,
+    DISCARD_PICK,
+    UNAPPLIED_PICK_TEXT,
+    unapplied_pick_info,
     TissuePick,
     DEFAULT_NOTE,
     derived_note,
@@ -176,6 +182,30 @@ def ask_tissue_issues(parent: Optional[QWidget], issues: list[TissueIssue]) -> s
     return APPLY_ANYWAY if box.clickedButton() is apply_button else KEEP_EDITING
 
 
+def ask_unapplied_pick(parent: Optional[QWidget], pick: TissuePick) -> str:
+    """
+    Ask what to do with a tissue picked in a tissue picker but not applied.
+
+    Returns :data:`APPLY_PICK` to apply it and continue, :data:`DISCARD_PICK` to continue
+    without it and :data:`KEEP_EDITING`, the default, to go back to the dialog.
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Tissue not applied")
+    box.setText(UNAPPLIED_PICK_TEXT)
+    box.setInformativeText(unapplied_pick_info(pick.label))
+    apply_button = box.addButton(APPLY_PICK_TEXT, QMessageBox.ButtonRole.AcceptRole)
+    discard_button = box.addButton(DISCARD_PICK_TEXT, QMessageBox.ButtonRole.DestructiveRole)
+    keep_button = box.addButton(KEEP_EDITING_TEXT, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(keep_button)
+    box.setEscapeButton(keep_button)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is apply_button:
+        return APPLY_PICK
+    return DISCARD_PICK if clicked is discard_button else KEEP_EDITING
+
+
 def _add_picker_header(combo: QComboBox, text: str) -> None:
     combo.addItem(text)
     item = combo.model().item(combo.count() - 1)
@@ -225,6 +255,17 @@ def fill_tissue_picker(combo: QComboBox, picks: list[TissuePick], title: str = "
 
     first = next((i for i in range(combo.count()) if isinstance(combo.itemData(i), int)), -1)
     combo.setCurrentIndex(first)
+
+
+def select_pick(combo: QComboBox, position: Optional[int]) -> None:
+    """
+    Show the pick at `position` of the picks a picker was filled with.
+
+    See :func:`fill_tissue_picker`; None selects nothing and shows a neutral placeholder.
+    """
+    combo.setPlaceholderText("No matching tissue")
+    index = next((i for i in range(combo.count()) if combo.itemData(i) == position), -1)
+    combo.setCurrentIndex(index if position is not None else -1)
 
 
 def current_pick(combo: QComboBox, picks: list[TissuePick]) -> Optional[TissuePick]:

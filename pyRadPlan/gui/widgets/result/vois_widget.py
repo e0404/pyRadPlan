@@ -39,6 +39,7 @@ from pyRadPlan.biology.tissues import TissueProperties
 from .._tissue_params import (
     apply_derived_reference,
     ask_tissue_issues,
+    ask_unapplied_pick,
     combo_value,
     current_pick,
     fill_tissue_picker,
@@ -49,6 +50,7 @@ from .._tissue_params import (
     param_source,
     reference_radiation_value,
     reference_source_of,
+    select_pick,
     set_base_tooltip,
     set_editor_mismatch,
     show_comparison,
@@ -57,7 +59,11 @@ from .._tissue_params import (
 )
 from pyRadPlan.biology._editing import (
     APPLY_ANYWAY,
+    APPLY_PICK,
     DERIVE_REFERENCE_TOOLTIP,
+    KEEP_EDITING,
+    TissuePick,
+    current_pick_position,
     MATCH_BASE_DATA_TEXT,
     MODEL_GROUP_TITLE,
     REFERENCE_GROUP_TITLE,
@@ -233,17 +239,7 @@ class VOIMetadataDialog(QDialog):
         self.tissue_combo.setCurrentText(tissue_model_label(voi.tissue_properties))
         form.addRow("Tissue model:", self.tissue_combo)
 
-        self._target_provenance = target_provenance(machine, self._bio_model, engine)
-        self._presets = cell_line_presets()
-        self._machine_tissues = available_tissue_classes(machine, self._bio_model, engine)
-        self._picks = ranked_tissue_picks(
-            self._machine_tissues, self._presets, self._target_provenance
-        )
-        self.preset_combo: QComboBox | None = None
-        if self._picks:
-            form.addRow(
-                "Tissue:", self._build_picker(picker_title(machine, self._bio_model, engine))
-            )
+        self._add_picker_row(form, machine, engine)
 
         # Tissue the cell line and model name of the edited properties are taken from,
         # replaced by a preset or tissue class when one is applied.
@@ -320,6 +316,7 @@ class VOIMetadataDialog(QDialog):
         form.addRow(buttons)
 
         self.refresh_comparison()
+        self._sync_picker()
 
     @property
     def alpha_spin(self) -> QDoubleSpinBox:
@@ -330,6 +327,24 @@ class VOIMetadataDialog(QDialog):
     def beta_spin(self) -> QDoubleSpinBox:
         """Spin box for ``beta_x``, present for every tissue model."""
         return self._tissue_spins["beta_x"]
+
+    def _add_picker_row(self, form: QFormLayout, machine: object, engine: object) -> None:
+        """Add the tissue picker if the base data and the presets offer picks."""
+        self._target_provenance = target_provenance(machine, self._bio_model, engine)
+        self._presets = cell_line_presets()
+        self._machine_tissues = available_tissue_classes(machine, self._bio_model, engine)
+        self._picks = ranked_tissue_picks(
+            self._machine_tissues, self._presets, self._target_provenance
+        )
+        self.preset_combo: QComboBox | None = None
+        # Position (in _picks) of the pick the tissue was last known to correspond to: the one
+        # preselected on opening or last applied, None for none. A different selection of the
+        # picker is one not applied yet.
+        self._applied_pick: int | None = None
+        if self._picks:
+            form.addRow(
+                "Tissue:", self._build_picker(picker_title(machine, self._bio_model, engine))
+            )
 
     def _build_picker(self, title: str) -> QWidget:
         """Build the row picking a tissue class of the base data or a cell line preset."""
@@ -353,6 +368,36 @@ class VOIMetadataDialog(QDialog):
 
         return _picker_row(self.preset_combo, apply_button)
 
+    def _show_applied_pick(self, kind: str, index: int) -> None:
+        """Show the pick of the given kind and index as the applied one."""
+        if self.preset_combo is None:
+            return
+        position = next(
+            (i for i, pick in enumerate(self._picks) if (pick.kind, pick.index) == (kind, index)),
+            None,
+        )
+        select_pick(self.preset_combo, position)
+        self._applied_pick = position
+
+    def _sync_picker(self) -> None:
+        """Select the pick the tissue of the form corresponds to, none if it matches none."""
+        if self.preset_combo is None:
+            return
+        position = current_pick_position(
+            self._picks, self._current_tissue(), self._comparison, self._target_provenance
+        )
+        select_pick(self.preset_combo, position)
+        self._applied_pick = position
+
+    def _unapplied_pick(self) -> TissuePick | None:
+        """Pick selected in the picker that differs from the applied one, None if none."""
+        if self.preset_combo is None:
+            return None
+        position = self.preset_combo.currentData()
+        if not isinstance(position, int) or position == self._applied_pick:
+            return None
+        return self._picks[position]
+
     def _on_apply_pick(self) -> None:
         pick = current_pick(self.preset_combo, self._picks) if self.preset_combo else None
         if pick is None:
@@ -373,6 +418,7 @@ class VOIMetadataDialog(QDialog):
         """
         tissue, note = adopt_preset(self._presets[index][1], self._target_provenance)
         self._write_tissue(tissue)
+        self._show_applied_pick("preset", index)
         self.status_label.setText(note)
         return note
 
@@ -388,6 +434,7 @@ class VOIMetadataDialog(QDialog):
         tissue_class = self._machine_tissues[index]
         tissue, class_name = apply_base_data_class(self._current_tissue(), tissue_class)
         self._write_tissue(tissue, class_name)
+        self._show_applied_pick("class", index)
         self.status_label.setText(
             f"Applied the base data class {tissue_class.cell_line or tissue_class.display_name}"
         )
@@ -402,6 +449,7 @@ class VOIMetadataDialog(QDialog):
         self._write_tissue(tissue, class_name)
         self.status_label.setText("Matched the closest base data class")
         self.refresh_comparison()
+        self._sync_picker()
         return True
 
     def _current_tissue(self) -> TissueProperties:
@@ -683,6 +731,7 @@ class VOIMetadataDialog(QDialog):
         self._write_tissue(fixed)
         self.status_label.setText(f"Relabelled as the base data's model ({fixed.display_name})")
         self.refresh_comparison()
+        self._sync_picker()
         return True
 
     def accept(self) -> None:
@@ -691,12 +740,23 @@ class VOIMetadataDialog(QDialog):
         An edited VOI is recreated rather than mutated: it mirrors ``alpha_x`` /
         ``beta_x`` of its tissue properties and rejects any assignment that leaves the
         two inconsistent, so tissue edits cannot be applied field by field. Without any
-        edit, :attr:`updated_voi` stays the input VOI itself. An edited tissue the
+        edit, :attr:`updated_voi` stays the input VOI itself. A tissue selected in the picker
+        but not applied is asked about first: it is applied, discarded or the dialog kept
+        open. An edited tissue the
         biological model cannot be evaluated for (errors) is only taken over if the user
         chooses to apply it anyway; otherwise the dialog stays open for editing. Warnings,
         e.g. a model label differing from the base data's, never ask.
         """
         new_type = self.type_combo.currentText()
+        unapplied = self._unapplied_pick()
+        if unapplied is not None:
+            answer = ask_unapplied_pick(self, unapplied)
+            if answer == KEEP_EDITING:
+                return
+            if answer == APPLY_PICK:
+                self._on_apply_pick()
+            else:
+                select_pick(self.preset_combo, self._applied_pick)
         try:
             tissue = self.tissue_properties()
             if tissue != self._voi.tissue_properties:

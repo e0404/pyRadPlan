@@ -1145,3 +1145,133 @@ def test_voi_metadata_dialog_labels_presets_without_a_confirmed_source(qapp, tes
     assert labels[index].startswith("TestCells · MKM (unverified)")
     tooltip = dialog.preset_combo.itemData(index, Qt.ItemDataRole.ToolTipRole)
     assert "Source: Unverified" in tooltip and "Origin unknown." in tooltip
+
+
+def _shown_pick(dialog):
+    """Pick the tissue picker shows, None for its neutral state."""
+    pick = dialog.preset_combo.currentData()
+    return None if pick is None else dialog._picks[pick]
+
+
+def _pick_position(dialog, kind, predicate=lambda pick: True):
+    return next(i for i, pick in enumerate(dialog._picks) if pick.kind == kind and predicate(pick))
+
+
+def _select_pick(dialog, position):
+    combo = dialog.preset_combo
+    combo.setCurrentIndex(combo.findData(position))
+    assert combo.currentData() == position
+
+
+def _zstar_dialog(voi, cst):
+    return VOIMetadataDialog(voi, _oxygen_machine(), "zstar_kernels", cst=cst.vois)
+
+
+def test_voi_metadata_dialog_preselects_the_tissue_class_of_the_structure(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+
+    dialog = _zstar_dialog(cst.vois[0], cst)
+    assert _shown_pick(dialog) is None
+    assert dialog.preset_combo.currentIndex() == -1
+
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], model="mMKM"), cst)
+    pick = _shown_pick(dialog)
+    assert pick is not None and pick.kind == "class" and pick.exact
+
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], model="mMKM", r_domain=0.3), cst)
+    assert _shown_pick(dialog) is None
+
+
+def test_voi_metadata_dialog_preselects_the_cell_line_preset_of_the_structure(
+    qapp, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    dialog = _zstar_dialog(cst.vois[0], cst)
+    position = _pick_position(
+        dialog, "preset", lambda pick: pick.tissue.cell_line == "HSG" and pick.preferred
+    )
+    dialog.apply_cell_line_preset(dialog._picks[position].index)
+    assert dialog.preset_combo.currentData() == position
+    dialog.accept()
+
+    reopened = _zstar_dialog(dialog.updated_voi, cst)
+    assert reopened.preset_combo.currentData() == position
+
+    # Changing a parameter of the preset leaves a tissue that is no longer that preset
+    edited = _zstar_dialog(
+        _with_tissue(
+            dialog.updated_voi,
+            dialog.updated_voi.tissue_properties.model_copy(update={"r_domain": 0.5}),
+        ),
+        cst,
+    )
+    assert _shown_pick(edited) is None
+
+
+def test_voi_metadata_dialog_picker_follows_match_base_data(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], r_domain=0.3), cst)
+    assert _shown_pick(dialog) is None
+
+    dialog.match_button.click()
+
+    pick = _shown_pick(dialog)
+    assert pick is not None and pick.kind == "class"
+
+
+def test_voi_metadata_dialog_ok_without_changes_never_warns_about_the_picker(
+    qapp, monkeypatch, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    _answer_message_boxes(monkeypatch)  # fails if a box is shown
+    for voi in (cst.vois[0], _mkm_voi(cst.vois[0], model="mMKM")):
+        dialog = _zstar_dialog(voi, cst)
+        dialog.accept()
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.updated_voi is voi
+
+
+@pytest.mark.parametrize(
+    ("answer", "closed", "applied"),
+    [
+        ("Keep editing", False, False),
+        ("Discard selection and continue", True, False),
+        ("Apply and continue", True, True),
+    ],
+)
+def test_voi_metadata_dialog_asks_about_an_unapplied_picker_selection(
+    qapp, monkeypatch, test_data_photons, answer, closed, applied
+):
+    ct, cst, result = test_data_photons
+    voi = cst.vois[0]
+    dialog = VOIMetadataDialog(voi)
+    position = _pick_position(dialog, "preset", lambda pick: pick.tissue.cell_line == "CHO")
+    _select_pick(dialog, position)
+    shown = _answer_message_boxes(monkeypatch, answer)
+
+    dialog.accept()
+
+    assert len(shown) == 1 and "has not been applied" in shown[0]
+    assert dialog._picks[position].label in shown[0]
+    assert (dialog.result() == QDialog.DialogCode.Accepted) == closed
+    if closed:
+        tissue = dialog.updated_voi.tissue_properties
+        assert (tissue.cell_line == "CHO") == applied
+        assert applied or dialog.updated_voi is voi
+    if answer.startswith("Discard"):
+        assert dialog.preset_combo.currentIndex() == -1
+
+
+def test_voi_metadata_dialog_applied_pick_is_not_asked_about_again(
+    qapp, monkeypatch, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    dialog = VOIMetadataDialog(cst.vois[0])
+    position = _pick_position(dialog, "preset", lambda pick: pick.tissue.cell_line == "CHO")
+    _select_pick(dialog, position)
+    dialog._on_apply_pick()
+    _answer_message_boxes(monkeypatch)  # fails if a box is shown
+
+    dialog.accept()
+
+    assert dialog.updated_voi.tissue_properties.cell_line == "CHO"
