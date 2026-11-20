@@ -230,6 +230,12 @@ def _recalc(session: Session, physical_only: bool = False) -> dict:
     return session.state()
 
 
+@method("workflow.sequence")
+def _sequence(session: Session) -> dict:
+    session.sequence()
+    return session.state()
+
+
 @method("workflow.run_all")
 def _run_all(
     session: Session,

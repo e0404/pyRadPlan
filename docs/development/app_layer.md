@@ -375,6 +375,11 @@ notice in-place mutation of an image, which pyRadPlan code does not do to stored
   npm pre-hooks) and not committed, so building the frontend needs Python with pyRadPlan's
   dependencies. Once the API is stable, committing them together with a drift test (regenerate
   and compare in the Python test suite) lets the frontend build without Python.
+- **Sequencing is desktop-only in the frontends.** The session serves it
+  (`Session.sequence`, `workflow.sequence`, the `sequencing` param of `plan.set`,
+  `state.sequencing`), the Qt GUI uses it; the web frontend still shows its sequencing
+  controls disabled and has no sequence viewer, for which the session has no view method
+  yet (`web/docs/parity.md`).
 - **Not run under Pyodide yet.** Everything is tested natively on CPython 3.11/Windows only.
   `tempfile`, `logging` and the synchronous design should be fine in Pyodide; the library
   underneath (SimpleITK, numba, h5py, scipy under wasm) is the porting work's concern.

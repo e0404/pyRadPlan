@@ -207,6 +207,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Calc. Dose Influence (pending-edit check, bio-model check dialog, always generates the stf again; v1 amendment 20) | `:291,1199-1220` | verified on Pyodide | done | `workflow.calc_dose_influence` |
 | Load Dij (stf + dij from .mat; warns when the file has no dij) | `:292,1014-1035` | verified on Pyodide | impl | `data.load_dij` |
 | Optimize (pending-edit check, biological-objective check, opens the status window) | `:293,1268-1316` | verified on Pyodide | impl (status window) | `workflow.optimize`, `progress` events |
+| Run Sequencing (photon plan with sequencing enabled, dose influence and a current result; tooltip gives the reason while disabled; replaces the active result, adding the sequence and the `_sequenced` doses) | `_on_sequence`, `_update_button_states` | **gap**: no button | impl (backend ready, frontend open) | `workflow.sequence`, `state.sequencing` |
 | Recalculate Dose (weights, angle match, bio check, moves beams to iso) | `:294,1333-1402` | done (mock e2e) | done | `workflow.recalc` |
 | Snapshot Result (name prompt, default "<mode>_<n>fx", sanitized; a result of its own, the name of the active result is refused) | `:295-300,1408-1442` | verified on Pyodide | impl | `workflow.snapshot` |
 | Warnings collected during a run, shown once afterwards | `:699-702` | verified on Pyodide | frontend: dialog with the run's `log` warnings | `log` events |
@@ -252,7 +253,8 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Tissue marker ⚠ (error) / ℹ (warning) with issue tooltips | `:528-531,1165-1205` | done (mock e2e) | impl (evaluated for the unapplied form model) | `plan.tissue_check` |
 | Dose grid res. x/y/z 0.1..50 (Qt 3.0; web default 5.0, possibly locked) | `:594-614,669-674` | verified on Pyodide | impl: default from the session profile, `editable:false` when locked | `state.options`, `plan.options` descriptors |
 | Use CT grid | `:598-599,1602-1611` | done (mock e2e) | done (disabled when locked) | `state.ct` |
-| Sequencing: Run sequencing / Levels / Run DAO / 3D conformal (all disabled) `[adv]` | `:567-592` | stub (as Qt; reason from the real capabilities) | mirror-off | – |
+| Sequencing: Run sequencing + sequencer combo + "…" → config form (photon plans; the settings do not outdate the dose influence or the result) `[adv]` | `_build_sequencing_row`, `_form_sequencing`, `_on_sequencer_config` | **gap**: shown disabled ("Run sequencing" / "Levels"), not wired | impl (backend ready, frontend open) | `plan.options.sequencers`, `plan.form {kind:"sequencer"}`, `plan.set {sequencing}` |
+| Run DAO / 3D conformal (disabled) `[adv]` | `_build_sequencing_row` | stub (as Qt; reason from the real capabilities) | mirror-off | – |
 | Optimization problem combo `[adv]` | `:548-550,1312-1325` | verified on Pyodide | impl | `plan.options`, `plan.set {problem}` |
 | Problem "…" → Optimization dialog `[adv]` | `:1327-1338` | verified on Pyodide | impl (see below) | `plan.form {kind:"problem"}`, `plan.form {kind:"solver"}` |
 | Status label (applied / default applied / discarded / CT grid / errors in red / "Modified — not applied") | `:297,1871-2008` | verified on Pyodide | frontend | – |
@@ -386,6 +388,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | Overlay quantity selector (two combos: quantity group incl. the groups of further results, component full / beam i / scenario i: label of the group's own result; scenario components after a robust optimization verified on Pyodide with a worst-case grid plan) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
 | Set isolines dialog (OK / Cancel / Reset; says "(Gy)") | `:130-132,167-199` | done (mock e2e) | done | – |
 | Recenter | `:134-136` | done (mock e2e) | done | – |
+| Show Sequence → sequence window (per beam: MLC shapes of the delivered segments, playback, fluence delivered / optimized / difference, overlays) | `result/visualization_widget.py`, `result/aperture_widget.py`, `windows/_sequence_win.py` | **gap**: not available (no view method for sequences yet) | impl (backend and frontend open) | – |
 | Show DVH / QI → analysis window | `:145-149`, `_result_widget.py:861-887` | verified on Pyodide | impl (see Analysis) | `analysis.*` |
 | Default quantity after each result change (rbe_x_dose > physical_dose > first) | `_result_widget.py:62-74,553-556` | verified on Pyodide | done | `state.results.default` |
 

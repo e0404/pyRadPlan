@@ -501,6 +501,9 @@ class Session(SessionEditorsMixin):
             "status": self._busy.label if self._busy else status_text(present, self._tracker),
             "busy": self._busy.label if self._busy else None,
         }
+        blocker = self._busy.label + " is still running" if self._busy else None
+        blocker = blocker or _derived(self.sequencing_blocker, "Sequencing is not available.")
+        state["sequencing"] = {"available": blocker is None, "reason": blocker}
         return self._editors_state(state)
 
     # ------------------------------------------------------------------

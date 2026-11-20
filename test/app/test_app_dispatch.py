@@ -25,6 +25,7 @@ def test_protocol_methods_are_registered():
         "workflow.calc_dose_influence",
         "workflow.optimize",
         "workflow.recalc",
+        "workflow.sequence",
         "workflow.run_all",
         "view.volume",
         "view.structure_masks",
@@ -228,3 +229,23 @@ def test_warning_reports_are_marked_and_repeated_once(client):
         ("already logged", True, True),
         ("only reported", True, False),
     ]
+
+
+def test_sequencing_is_served_by_the_protocol(client):
+    state = client.ok("data.load_phantom", {"name": "TG119"})["result"]
+    assert state["sequencing"]["available"] is False
+    assert "dose influence" in state["sequencing"]["reason"]
+    error = client.call("workflow.sequence")["error"]
+    assert error["type"] == "PreconditionError" and "dose influence" in error["message"]
+
+    options = client.ok("plan.options")["result"]
+    assert "xia" in [choice["value"] for choice in options["sequencers"]]
+    assert client.ok("plan.options", {"radiation_mode": "protons"})["result"]["sequencers"] == []
+    form = client.ok("plan.form", {"kind": "sequencer", "name": "xia"})["result"]
+    assert "num_of_levels" in [field["name"] for field in form["fields"]]
+
+    sequencing = {"run": True, "sequencer": "xia", "values": {"num_of_levels": 4}}
+    client.ok("plan.set", {"sequencing": sequencing})
+    assert client.ok("plan.get", {"detail": True})["result"]["sequencing"] == sequencing
+    form = client.ok("plan.form", {"kind": "sequencer", "name": "xia"})["result"]
+    assert form["values"]["num_of_levels"] == 4

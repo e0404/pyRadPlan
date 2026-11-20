@@ -542,10 +542,8 @@ def _prop_seq(pln: Any, mode: str, same_mode: bool, sequencing: Mapping[str, Any
     if name not in sequencers:
         raise invalid(f"sequencer {name!r} is not available for {mode}")
     values = dict(sequencing.get("values") or {})
-    try:
-        sequencers[name].config_model()(**values)
-    except ValueError as exc:
-        raise invalid(f"invalid settings of sequencer {name!r}: {exc}") from exc
+    if values:
+        values = _check_form("sequencer", name, mode, values)
     prop_seq.update(run_sequencing=True, sequencer=name, **values)
     return prop_seq
 
@@ -714,6 +712,7 @@ def plan_detail(pln: Any, cst: Any) -> Optional[dict[str, Any]]:
         },
         "problem": {"name": problem, "values": jsonable(problem_values)},
         "solver": {"name": solver, "values": jsonable(solver_values)},
+        "sequencing": jsonable(sequencing_change(pln)),
     }
 
 
@@ -835,6 +834,16 @@ def engine_choices(radiation_mode: str) -> list[dict]:
             )  # fmt: skip
         )
     return engines
+
+
+def sequencer_choices(radiation_mode: str) -> list[dict]:
+    """Sequencers of a radiation mode (none for the modes without sequencing)."""
+    from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+    return [
+        _choice(name, getattr(cls, "name", name) or name, name)
+        for name, cls in get_available_sequencers(radiation_mode).items()
+    ]
 
 
 def scenario_choices(explicit: bool = False) -> list[dict]:
@@ -960,6 +969,7 @@ def plan_options(
         "scenario_models": scenario_choices(explicit),
         "problems": problem_choices(mode),
         "solvers": solver_choices(),
+        "sequencers": sequencer_choices(mode),
         "default_solver": default_solver(first_problem) if first_problem else None,
         "beam_presets": presets,
         "fields": _plan_fields(locked, default_plan),
@@ -1115,6 +1125,13 @@ def form_model(kind: str, name: str, mode: str) -> tuple[type, str, frozenset, d
         if cls is None:
             raise ValueError(f"Solver {name!r} is not available")
         return cls.config_model(), f"Configure {cls.name}", frozenset(), _solver_defaults(cls)
+    if kind == "sequencer":
+        from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+        cls = get_available_sequencers(mode).get(name)
+        if cls is None:
+            raise ValueError(f"No sequencer {name!r} for {mode}")
+        return cls.config_model(), f"Configure {cls.name}", frozenset(), {}
     raise ValueError(f"Unknown form kind {kind!r}")
 
 
@@ -1176,6 +1193,9 @@ def _plan_values(pln: Any, kind: str, name: str, mode: str) -> dict[str, Any]:
         if getattr(pln.scenarios, "short_name", None) != name:
             return {}
         return _scenario_overrides(pln.scenarios)
+    if kind == "sequencer":
+        _, sequencer, sequencer_values = sequencing_settings(pln)
+        return dict(sequencer_values) if sequencer == name else {}
     problem, values = _problem_of(pln, mode)
     if kind == "problem":
         values.pop("solver", None)

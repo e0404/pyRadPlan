@@ -188,6 +188,38 @@ def test_staleness_run_all_and_recalc(client, coarse_plan):
     assert session.workspace.results["before"] is snapshot
 
 
+def test_sequencing_adds_the_delivered_dose_to_the_active_result(client, coarse_plan):
+    client.ok("data.load_phantom", {"name": "TG119"})
+    client.ok("plan.set", coarse_plan)
+    client.ok("workflow.run_all", {"solver": "scipy", "max_iter": 10})
+    session = client.manager.get(client.session)
+    assert session.workspace.pln.result_dose_factor > 1
+    client.ok("workflow.snapshot", {"tag": "before"})
+
+    # The sequencing settings leave the optimized result current
+    sequencing = {"run": True, "sequencer": "siochi", "values": {"num_of_levels": 9}}
+    state = client.ok("plan.set", {"sequencing": sequencing})["result"]
+    assert set(state["stages"].values()) == {"done"}
+    assert state["sequencing"] == {"available": True, "reason": None}
+
+    state = client.ok("workflow.sequence")["result"]
+
+    assert set(state["stages"].values()) == {"done"}
+    result = session.workspace.result
+    assert result.sequence.sequencer == "siochi" and result.sequence.num_of_levels == 9
+    assert list(session.workspace.results) == ["current", "before"]
+    groups = {group["base"]: group for group in state["results"]["groups"] if not group["tag"]}
+    delivered, optimized = groups["physical_dose_sequenced"], groups["physical_dose"]
+    assert (delivered["meta_label"], delivered["unit"]) == (optimized["meta_label"], "Gy")
+    assert delivered["label"] == optimized["label"] + " (sequenced)"
+    # The delivered dose is reported in the plan's dose convention, like the optimized one
+    doses = [
+        sitk.GetArrayFromImage(result[key].values)
+        for key in ("physical_dose", "physical_dose_sequenced")
+    ]
+    assert doses[1].max() == pytest.approx(doses[0].max(), rel=0.3)
+
+
 def test_prepared_operations_touch_the_workspace_only_on_commit(coarse_plan):
     session = Session()
     session.load_phantom("TG119")

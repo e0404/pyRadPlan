@@ -438,7 +438,7 @@ Save Plan and Save Workspace).
 |---|---|---|---|
 | `plan.get` (extended) | read | `{detail?: boolean}` | without `detail`: v0 `PlanSummary`; with: `PlanDetail` |
 | `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?, current_bio?}` (default: the plan's, else the default plan's; `current_bio`: amendment 22) | `PlanOptions` (+ `bio_selection`, amendment 22) |
-| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver", name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
+| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver" \| "sequencer" (amendment 27), name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
 | `plan.set` (extended) | write | partial `PlanSummary` plus the v1 fields below | `SessionState` |
 | `plan.tissue_check` | read, may load base data | `{draft?: {radiation_mode, machine, engine, bio_model}}` (the unapplied form; default: the plan) | `{marker: "error" \| "warning" \| "", issues: Issue[]}` (the ⚠ / ℹ marker) |
 
@@ -475,7 +475,8 @@ type PlanOptions = {
 `engine_config: {values}` (replaces the engine-specific entries of `prop_dose_calc`);
 `bio_model: string | {model, option?, values?}` (the v0 string is still accepted; `option`
 selects the base-data option, `values` the model parameters); `scenarios: {model, values}`;
-`problem: {name, values}`; `solver: string | {name, values}`. Semantics follow
+`problem: {name, values}`; `solver: string | {name, values}`;
+`sequencing: {run, sequencer, values}` (amendment 27). Semantics follow
 `PlanWidget._build_plan` (see `parity.md`): `prop_opt` is rebuilt from problem + solver,
 `prop_seq` and the other `prop_stf` keys survive only within the same radiation mode, an unchanged
 scenario model keeps the plan's instance.
@@ -530,6 +531,7 @@ type StructureDetail = {
 
 Optimize and Recalculate replace only the active result; every other result (snapshots, imported
 doses) is kept. A recalculation keeps nothing of the previous doses of the active result.
+`workflow.sequence` (amendment 27) adds the sequence and the delivered doses to the active result.
 
 ### Views
 
@@ -769,3 +771,25 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
       keys, and `{"$result": key}` accepts any component key.
     - `revisions.volumes` is keyed by the same component keys; a snapshot's keys have the
       revisions of the images they share (amendment 14).
+27. 2026-11-20 (sequencing): **added** photon leaf sequencing on the session layer, as the Qt GUI
+    runs it. The frontend of the web version does not use it yet (see `web/docs/parity.md`).
+    - `plan.set {sequencing: {run: boolean, sequencer: string | null, values?: object}}` writes
+      the plan's `prop_seq` (`run_sequencing`, `sequencer` and the sequencer's settings);
+      `run: false` removes them. Other `prop_seq` entries are kept. An unknown sequencer or
+      invalid settings fail with `FormValidationError` (`field: "sequencing"` /
+      `"sequencer.<name>"`). `plan.get {detail}` returns `sequencing` in the same shape.
+    - `plan.options` adds `sequencers: Choice[]` (empty for radiation modes without sequencing);
+      `plan.form` accepts `kind: "sequencer"`.
+    - New method `workflow.sequence` `{}` -> `SessionState` (cost: compute). It sequences the
+      fluence of the active result with the plan's sequencer and replaces only the active result:
+      the result gains its `sequence` and, recomputed from the sequenced fluence in the plan's
+      dose convention, the quantities `"<identifier>_sequenced"` (full and per beam) next to the
+      optimized ones. Quantities of an earlier sequencing are replaced. It fails with
+      `PreconditionError` while `sequencing.available` is false.
+    - `SessionState` adds `sequencing: {available: boolean, reason: string | null}`: sequencing
+      needs a photon plan with `sequencing.run`, steering information, a dose influence matrix
+      and a result that is not outdated; `reason` says what is missing. It is not part of
+      `actions`.
+    - A `plan.set` that changes only `sequencing` outdates no stage.
+    - `"<identifier>_sequenced"` groups in `results.groups` carry the `meta_label` and `unit` of
+      their quantity, and the label `"<name> (sequenced)"`.

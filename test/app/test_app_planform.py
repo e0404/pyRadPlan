@@ -388,7 +388,7 @@ def test_sequencing_settings_are_a_plan_change():
 
     with pytest.raises(FormValidationError, match="not available"):
         session.set_plan({"sequencing": {"run": True, "sequencer": "nope"}})
-    with pytest.raises(FormValidationError, match="invalid settings"):
+    with pytest.raises(FormValidationError, match="num_of_levels"):
         session.set_plan({"sequencing": {**sequencing, "values": {"num_of_levels": "many"}}})
     # Another radiation mode starts without the sequencing of the photon plan
     session.set_plan({"sequencing": sequencing})
