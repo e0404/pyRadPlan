@@ -41,6 +41,18 @@ BEAM_COMPONENT = "beam"
 SCENARIO_COMPONENT = "scenario"
 
 
+#: Suffix of the quantities recomputed from a sequenced (deliverable) fluence, e.g.
+#: ``"physical_dose_sequenced"``; they are quantities of their own next to the optimized ones.
+SEQUENCED_SUFFIX = "_sequenced"
+
+
+def split_sequenced(identifier: str) -> tuple[str, bool]:
+    """Split ``"<quantity>_sequenced"`` into the quantity and whether it is a sequenced one."""
+    if identifier.endswith(SEQUENCED_SUFFIX) and len(identifier) > len(SEQUENCED_SUFFIX):
+        return identifier.removesuffix(SEQUENCED_SUFFIX), True
+    return identifier, False
+
+
 #: Component suffixes of result keys (``"<identifier><suffix>"``) and their component kind.
 _COMPONENT_SUFFIXES = {_BEAM_SUFFIX: BEAM_COMPONENT, _SCENARIO_SUFFIX: SCENARIO_COMPONENT}
 
@@ -73,16 +85,20 @@ def quantity_display_name(key: str) -> str:
     Registered quantity identifiers map to :attr:`RTQuantity.name`, including
     per-beam and per-scenario result keys (``"<identifier>_beam"``,
     ``"<identifier>_scenario"`` and their flattened ``"<identifier>_beam <i>"``
-    entries).  Any other key (``alpha``, imported doses, matRad names) is
+    entries), and the quantities of a sequenced fluence (``"<identifier>_sequenced"``).
+    Any other key (``alpha``, imported doses, matRad names) is
     returned unchanged; use :func:`group_result_keys` to also name the result
     a key belongs to.
     """
     stem, sep, index = key.partition(" ")
     base, kind = _split_component_suffix(stem)
+    base, sequenced = split_sequenced(base)
     quantity = get_available_quantities().get(base)
     if quantity is None:
         return key
-    name = f"{quantity.name} {kind}" if kind else quantity.name
+    name = f"{quantity.name} (sequenced)" if sequenced else quantity.name
+    if kind:
+        name = f"{name} {kind}"
     return f"{name}{sep}{index}"
 
 

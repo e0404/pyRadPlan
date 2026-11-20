@@ -73,10 +73,16 @@ def quantity_unit(key: str) -> str:
     if key == "ct":
         return "HU"
     from pyRadPlan.quantities import get_available_quantities  # noqa: PLC0415
-    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import (  # noqa: PLC0415
+        split_result_key,
+        split_sequenced,
+    )
 
     key = split_result_key(key)[1]
-    quantity = get_available_quantities().get(key)
+    quantities = get_available_quantities()
+    if key not in quantities and key not in _EXTRA_UNITS:
+        key = split_sequenced(key)[0]
+    quantity = quantities.get(key)
     if quantity is None:
         return _EXTRA_UNITS.get(key, "")
     try:

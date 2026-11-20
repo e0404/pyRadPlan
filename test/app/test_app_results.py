@@ -409,3 +409,37 @@ def test_loading_without_a_ct_keeps_the_other_results_and_a_ct_replaces_them():
     session.merge_loaded({"ct": object()})
     assert ws.results == {} and ws.active_result == "current"
     assert not session.state()["has"]["result"]
+
+
+def test_sequenced_quantities_have_the_label_and_unit_of_their_quantity():
+    from pyRadPlan.app import Session
+    from pyRadPlan.analysis._units import compare_units
+    from pyRadPlan.app._results import quantity_meta
+    from pyRadPlan.app._views import component_info, quantity_unit
+    from pyRadPlan.quantities._display_names import quantity_display_name
+
+    assert quantity_meta("physical_dose_sequenced") == quantity_meta("physical_dose")
+    assert quantity_meta("saved/rbe_x_dose_sequenced_beam") == quantity_meta("rbe_x_dose")
+    assert quantity_unit("physical_dose_sequenced") == quantity_unit("physical_dose") != ""
+    assert quantity_display_name("physical_dose_sequenced") == (
+        quantity_display_name("physical_dose") + " (sequenced)"
+    )
+    assert quantity_display_name("physical_dose_sequenced_beam 1") == (
+        quantity_display_name("physical_dose") + " (sequenced) beam 1"
+    )
+    assert quantity_display_name("not_sequenced") == "not_sequenced"
+
+    session = Session(auto_plan=False)
+    image = sitk.Image([4, 4, 2], sitk.sitkFloat32)
+    session.workspace.result = {
+        "physical_dose": image,
+        "physical_dose_sequenced": image,
+        "physical_dose_sequenced_beam": [image],
+    }
+    entries = session.workspace.result_entries()
+    for key in ("physical_dose_sequenced", "physical_dose_sequenced_beam 0"):
+        info = component_info(entries, key)
+        assert (info["meta_label"], info["unit"]) == quantity_meta("physical_dose")
+    # ... so the optimized and the sequenced dose share a DVH axis
+    units = [component_info(entries, key)["unit"] for key in ("physical_dose", key)]
+    assert compare_units(*units) == (True, 1.0)
