@@ -61,6 +61,7 @@ def _check_import():
 
 def _check_dose_and_optimization():
     import numpy as np
+    import SimpleITK as sitk
     from pyRadPlan import (
         PhotonPlan,
         calc_dose_influence,
@@ -84,8 +85,8 @@ def _check_dose_and_optimization():
     print(f"dij: {dij.num_of_voxels} voxels x {dij.total_num_of_bixels} bixels")
 
     opt_info = {}
-    weights = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
-    dose = np.asarray(dij.compute_result_ct_grid(weights)["physical_dose"])
+    result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+    dose = sitk.GetArrayFromImage(result["physical_dose"].values)
     assert np.isfinite(dose).all() and dose.max() > 0
     print(f"optimized {opt_info.get('num_iter')} iterations: max dose {dose.max():.3g} Gy")
 

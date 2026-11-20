@@ -1046,14 +1046,22 @@ def matrad_field(key: str) -> str:
     return f"{field}_{_safe_name(tag)}" if tag else field
 
 
-def _write_result(entry: ExportFormat, images: dict[str, Any], target: str) -> list[str]:
+def _write_result(
+    entry: ExportFormat, images: dict[str, Any], target: str, ct: Any = None
+) -> list[str]:
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
     if entry.format == "mat":
+        from pyRadPlan.app._views import _quantity_on_ct_grid  # noqa: PLC0415
+
         sitk = _sitk()
         result_gui = {}
         for key, image in images.items():
-            result_gui[matrad_field(key)] = np.transpose(sitk.GetArrayFromImage(image), (1, 2, 0))
+            # matRad cubes carry no geometry and are read on the CT grid
+            array = (
+                sitk.GetArrayFromImage(image) if ct is None else _quantity_on_ct_grid(image, ct)
+            )
+            result_gui[matrad_field(key)] = np.transpose(array, (1, 2, 0))
         save_data(file_name=target, format="mat", resultGUI=result_gui)
         return [target]
     if entry.format == "dcm":
@@ -1081,12 +1089,13 @@ def write_export(entry: ExportFormat, objects: Mapping[str, Any], ct: Any, targe
     """Write *objects* as *entry* to *target* and return the paths written.
 
     *target* is a file, or a folder where :func:`writes_folder` says so. For a result,
-    *objects* are the images to write by quantity key; each is written on its own grid.
+    *objects* are the images to write by quantity key; each is written on its own grid,
+    except for matRad, whose cubes are resampled onto the grid of *ct*.
     """
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
     if entry.object == "result":
-        return _write_result(entry, dict(objects), target)
+        return _write_result(entry, dict(objects), target, ct)
     if entry.archive and entry.format == "dcm":
         from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
 

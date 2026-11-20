@@ -189,6 +189,32 @@ def test_result_mat_holds_every_selected_quantity_in_result_gui(pipeline, tmp_pa
     np.testing.assert_allclose(gui["physical_dose_beam_0"], np.transpose(beam, (1, 2, 0)))
 
 
+def test_result_mat_holds_a_dose_of_another_grid_on_the_ct_grid(tmp_path):
+    from types import SimpleNamespace
+
+    from pyRadPlan.app._io import _export_format, write_export
+    from pyRadPlan.io.matlab import _matfile
+
+    cube = sitk.GetImageFromArray(np.zeros((6, 8, 10), dtype=np.float32))
+    cube.SetSpacing((2.0, 2.0, 2.0))
+    cube.SetOrigin((-10.0, -8.0, -6.0))
+    on_ct = sitk.Cast(cube, sitk.sitkFloat64) + 1.0
+    coarse = sitk.GetImageFromArray(np.full((3, 4, 5), 2.0))
+    coarse.SetSpacing((4.0, 4.0, 4.0))
+    coarse.SetOrigin((-9.0, -7.0, -5.0))
+
+    path = tmp_path / "result.mat"
+    images = {"physical_dose": on_ct, "imported/physical_dose": coarse}
+    entry = _export_format("result", "mat", None)
+    write_export(entry, images, SimpleNamespace(cube_hu=cube), str(path))
+
+    gui = _matfile.load(path)["resultGUI"]
+    assert gui["physicalDose"].shape == (8, 10, 6)
+    assert gui["physicalDose_imported"].shape == (8, 10, 6)
+    np.testing.assert_allclose(gui["physicalDose"], 1.0)
+    np.testing.assert_allclose(gui["physicalDose_imported"][2:6, 2:8, 2:4], 2.0)
+
+
 def test_result_dicom_zip_holds_one_rtdose_per_quantity(pipeline, tmp_path):
     import pydicom
 

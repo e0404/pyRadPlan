@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox
@@ -94,6 +94,20 @@ class QuantityWindow(QMainWindow):
         raise ValueError(f"Unsupported file extension: {ext}")
 
 
+def _on_ct_grid(value: Any, ct: CT) -> Any:
+    """Give bare arrays of the size of the CT its geometry; images keep their own."""
+    if isinstance(value, (list, tuple)):
+        return [_on_ct_grid(entry, ct) for entry in value]
+    reference = ct.cube_hu
+    if not isinstance(value, np.ndarray) or value.ndim != 3 or reference.GetDimension() != 3:
+        return value
+    image = sitk.GetImageFromArray(value, False)
+    if image.GetSize() != reference.GetSize():
+        return value
+    image.CopyInformation(reference)
+    return image
+
+
 def _launch_result_window(ct: CT, cst: StructureSet, result: dict | None = None) -> None:
     """Launch the Qt viewer with the given CT, CST and quantity result.
 
@@ -113,6 +127,8 @@ def _launch_result_window(ct: CT, cst: StructureSet, result: dict | None = None)
 
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct)
+    if isinstance(result, dict):
+        result = {key: _on_ct_grid(value, ct) for key, value in result.items()}
     result = validate_result(result) if result is not None else None
 
     workspace = WorkspaceManager()
