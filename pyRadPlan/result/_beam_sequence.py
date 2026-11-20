@@ -77,9 +77,9 @@ class BeamSequence(PyRadPlanBaseModel):
         return v
 
     @field_serializer("bixel_ix")
-    def _bixel_ix_to_matrad(self, v: list[int], info: SerializationInfo) -> Any:
+    def _bixel_ix_to_matrad(self, v: Optional[list[int]], info: SerializationInfo) -> Any:
         """Count the bixels from 1 for matRad."""
-        if info.context and info.context.get("matRad") == "mat-file":
+        if v is not None and info.context and info.context.get("matRad") == "mat-file":
             return np.asarray(v, dtype=float) + 1
         return v
 
