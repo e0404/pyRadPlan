@@ -1,6 +1,6 @@
 import pytest
 
-from pyRadPlan.app._results import quantity_meta, result_components, sanitize_tag
+from pyRadPlan.app._results import quantity_meta, result_components, result_keys_meta, sanitize_tag
 
 TINY_PLAN = {"gantry_angles": [0.0, 180.0], "bixel_width": 10.0, "dose_grid_resolution": [8, 8, 8]}
 
@@ -94,6 +94,24 @@ def test_quantity_meta_resolves_component_keys(key, meta, beam_only):
     """One table serves the viewers (any component key) and the save dialog (per beam)."""
     assert quantity_meta(key) == meta
     assert quantity_meta(key, ("", ""), suffixes=("_beam",)) == beam_only
+
+
+def test_result_keys_meta_resolves_snapshot_tags():
+    keys = [
+        "rbe_x_dose",
+        "physical_dose",
+        "rbe_x_dose_carbon",
+        "physical_dose_carbon",
+        "let_carbon",
+        "rbe_x_dose_beam_carbon",
+        "mystery",
+    ]
+    meta = result_keys_meta(keys)
+    assert meta["rbe_x_dose"] == meta["rbe_x_dose_carbon"] == ("RBE-weighted Dose", "Gy (RBE)")
+    assert meta["rbe_x_dose_beam_carbon"] == meta["rbe_x_dose"]
+    assert meta["physical_dose_carbon"] == ("Dose", "Gy")
+    assert meta["let_carbon"] == ("LET", "keV/μm")
+    assert meta["mystery"] == ("Quantity", "")
 
 
 def test_snapshot_tags_survive_a_workspace_pickle(optimized):

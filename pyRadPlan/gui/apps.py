@@ -252,7 +252,7 @@ def analysis_viewer(
     # Deferred: keeps the Qt stack out of package import time, as in gui().
     from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
-    from pyRadPlan.app._results import quantity_meta  # noqa: PLC0415
+    from pyRadPlan.app._results import result_keys_meta  # noqa: PLC0415
     from pyRadPlan.app._views import default_quantity  # noqa: PLC0415
     from pyRadPlan.gui.windows._analysis_win import show_analysis  # noqa: PLC0415
     from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
@@ -284,13 +284,14 @@ def analysis_viewer(
             continue
         if array.ndim != 3:
             continue
-        label, unit = quantity_meta(key, (key, ""), suffixes=("_beam",))
         quantities[key] = array
-        overlay_labels[key] = label
-        overlay_units[key] = unit
 
     if not quantities:
         raise ValueError("Result contains no 3D quantity to analyze.")
+
+    for key, (label, unit) in result_keys_meta(quantities, ("", "")).items():
+        overlay_labels[key] = label or key
+        overlay_units[key] = unit
 
     app = QApplication.instance() or QApplication(sys.argv)
 

@@ -9,6 +9,10 @@ from pyRadPlan.analysis._units import UNIT_ALIASES, compare_units, safe_unit
     [
         ("Gy", "cGy", (True, 0.01)),
         ("Gy", "Gy (RBE)", (True, 1.0)),
+        ("Gy (RBE)", "Gy (RBE)", (True, 1.0)),
+        ("Gy (RBE)", "cGy", (True, 0.01)),
+        ("Gy (RBE)", "keV/µm", (False, 1.0)),
+        ("Gy (RBE)", "", (False, 1.0)),
         ("Gy", "keV/µm", (False, 1.0)),
         ("", "", (True, 1.0)),
         ("Gy", "", (False, 1.0)),
