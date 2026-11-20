@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyRadPlan.app import PreconditionError
-from pyRadPlan.app._results import quantity_meta, scenario_labels
+from pyRadPlan.app._results import result_keys_meta, scenario_labels
 from pyRadPlan.app._views import beam_geometry, plan_beam_angles, plan_iso_centers
 from pyRadPlan.app._views import default_quantity as default_quantity_key
 from pyRadPlan.cst import VOI
@@ -105,16 +105,14 @@ def _build_overlay_meta(
     overlay_units: dict[str, str] = {}
     overlay_labels: dict[str, str] = {}
     if isinstance(quantity_data, dict):
-        for k, v in quantity_data.items():
-            qname, unit = quantity_meta(k.split()[0] if " " in k else k)
-            if isinstance(v, list):
-                for i in range(len(v)):
-                    expanded = f"{k} {i}"
-                    overlay_units[expanded] = unit
-                    overlay_labels[expanded] = qname
-            else:
-                overlay_units[k] = unit
-                overlay_labels[k] = qname
+        expanded_keys = [
+            f"{k} {i}" if isinstance(v, list) else k
+            for k, v in quantity_data.items()
+            for i in (range(len(v)) if isinstance(v, list) else [None])
+        ]
+        for expanded, (qname, unit) in result_keys_meta(expanded_keys).items():
+            overlay_units[expanded] = unit
+            overlay_labels[expanded] = qname
     else:
         overlay_units = {"Physical quantity": "Gy"}
         overlay_labels = {"Physical quantity": "Dose"}
