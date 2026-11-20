@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GUI: comparing saved results in the DVH view no longer puts RBE-weighted doses of two plans (e.g. proton and carbon) on separate x axes; saved results now keep the unit and label of their quantity
 - GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
 - GUI: changing the radiation mode of a plan with an explicit scenario set failed
 - GUI: the status line kept showing "Saving ..." after a save
