@@ -127,13 +127,13 @@ def run_pipeline(  # noqa: PLR0913, PLR0915
 
     stf = tick("generate_stf", generate_stf, ct, cst, pln)
     dij = tick("calc_dose_influence", calc_dose_influence, ct, cst, stf, pln)
-    weights = tick("fluence_optimization", fluence_optimization, ct, cst, stf, dij, pln)
-    weights = np.asarray(weights)
+    optimized = tick("fluence_optimization", fluence_optimization, ct, cst, stf, dij, pln)
+    weights = np.asarray(optimized.fluence)
     result = tick("compute_result_ct_grid", dij.compute_result_ct_grid, weights)
     unit = dij.compute_result_ct_grid(np.ones_like(weights))
 
-    dose = _array(result["physical_dose"]).astype(np.float64)
-    unit_dose = _array(unit["physical_dose"]).astype(np.float64)
+    dose = _array(result["physical_dose"].values).astype(np.float64)
+    unit_dose = _array(unit["physical_dose"].values).astype(np.float64)
 
     target = None
     for voi in cst.vois:
