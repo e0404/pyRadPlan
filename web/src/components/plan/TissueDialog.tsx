@@ -676,12 +676,12 @@ export function TissueSingleRow(props: TissueSingleRowProps) {
   const [flags, setFlags] = useState({ can_match: false, can_relabel: [] as string[], can_derive: false });
   const [statusText, setStatusText] = useState("");
   const onResult = useCallback((result: TissueEvaluateResult, params: TissueEvaluateParams) => {
-    const [merged] = mergeResult([rowRef.current], result, editing.current);
+    const op = params.op ?? "none";
+    const [merged] = mergeResult([rowRef.current], result, op === "none" ? editing.current : undefined);
     rowRef.current = merged;
     setRow(merged);
     setFlags({ can_match: result.can_match, can_relabel: result.can_relabel, can_derive: result.can_derive });
     if (result.notes.length) setStatusText([...new Set(result.notes)].join("; "));
-    const op = params.op ?? "none";
     if (!picks.current.started || op === "apply_pick" || op === "match" || op === "relabel") {
       picks.current.started = true;
       const pick = result.rows[0]?.pick ?? null;
@@ -698,13 +698,15 @@ export function TissueSingleRow(props: TissueSingleRowProps) {
   structureRef.current = props.structure;
   const schemaRef = useRef(schema);
   schemaRef.current = schema;
-  const evaluateOp = (kind: TissueOp, pick?: string) =>
-    run({
+  const evaluateOp = (kind: TissueOp, pick?: string) => {
+    editing.current = undefined;
+    return run({
       rows: [{ structure: structureRef.current, tissue: tissueForModel(schemaRef.current, rowRef.current.tissue) }],
       op: kind,
       targets: [structureRef.current],
       ...(pick ? { pick } : {}),
     });
+  };
   const selectPick = (id: string | null) => {
     picks.current.selected = id;
     setSelectedPick(id);

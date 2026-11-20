@@ -209,11 +209,16 @@ try {
   await tid("edit-voi-unapplied-pick").waitFor();
   await tid("msg-keep").click();
   expect((await tid("edit-voi-dialog").count()) === 1, "Edit VOI: OK with an unapplied pick asks and can keep editing");
+  // A parameter edited just before must not survive the applied pick.
+  await tid("tissue-OuterTarget-alpha_x").fill("0.77");
+  await tid("tissue-OuterTarget-alpha_x").press("Tab");
   await tid("tissue-pick-apply").click();
   await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, picked);
   await tid("edit-voi-ok").click();
   await tid("edit-voi-dialog").waitFor({ state: "detached" });
   expect((await tid("edit-voi-unapplied-pick").count()) === 0, "Edit VOI: an applied pick is not asked about");
+  const appliedAlpha = await app(() => window.__pyrpApp.useApp.getState().structureDetails[1]?.tissue.values.alpha_x);
+  expect(appliedAlpha !== 0.77, "Edit VOI: an applied pick replaces a parameter edited before");
   await tid("voi-name-OuterTarget").click();
   await tid("edit-voi-dialog").waitFor();
   await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, picked);
