@@ -96,7 +96,7 @@ def _diff_slice_max_abs(
     return float(np.max(np.abs(diff_arr[tuple(indexer)]))) or 1.0
 
 
-def _draw_dose_comparison_panels(
+def _draw_dose_comparison_panels(  # noqa: PLR0913
     axes: list[plt.Axes],
     before: sitk.Image,
     after: sitk.Image,
@@ -161,7 +161,7 @@ def _draw_dose_comparison_panels(
     axes[2].set_title(title_diff, fontsize=9)
 
 
-def plot_dose_comparison(
+def plot_dose_comparison(  # noqa: PLR0913
     before: PlanResult,
     after: PlanResult,
     *,

@@ -148,7 +148,7 @@ class BeamApertureWidget(QWidget):
         self._draw_shape(0)
 
     def _beam_geometry(self):
-        """The steering-information beam for this tab, if the context supplies one."""
+        """Return the steering-information beam for this tab, if the context supplies one."""
         stf = getattr(self.context, "stf", None)
         if stf is None or self.beam_ix >= len(stf.beams):
             return None
@@ -231,7 +231,7 @@ class BeamApertureWidget(QWidget):
         self._draw_shape(self.shape_slider.value())
 
     def _target_points_for_axis(self, index: int) -> Optional[np.ndarray]:
-        """The projected target on whichever vertical axis is currently shown."""
+        """Return the projected target on whichever vertical axis is currently shown."""
         if self._target_points is None:
             return None
         if self.leaf_coordinate == "physical":

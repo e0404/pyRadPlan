@@ -401,7 +401,7 @@ def _beam_dose(result: PlanResult, role: str, quantity: str, beam_ix: int):
     return doses[beam_ix].values
 
 
-def _add_dose_comparison_row(
+def _add_dose_comparison_row(  # noqa: PLR0913
     fig: Figure,
     gs: GridSpec,
     row: int,
@@ -474,7 +474,7 @@ def _draw_shape_grid(
     return created_axes
 
 
-def _draw_comparison_content(
+def _draw_comparison_content(  # noqa: PLR0913
     fig: Figure,
     beam_ix: int,
     beam: BeamSequence,
@@ -536,7 +536,7 @@ def _draw_comparison_content(
     return created_axes
 
 
-def plot_aperture_info(
+def plot_aperture_info(  # noqa: PLR0913
     result: Union[PlanResult, Sequence],
     *,
     stf: Optional[SteeringInformation] = None,

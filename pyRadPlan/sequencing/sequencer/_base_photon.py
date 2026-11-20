@@ -185,8 +185,9 @@ class PhotonSequencer(Sequencer):
         stack_ray_pos: np.ndarray,
         travel_ind_pos: np.ndarray,
     ) -> np.ndarray:
-        """Interpolate a ``(dim_stack_leaf, dim_travel)`` matrix at each ray's own
-        (stack position, travel column).
+        """Interpolate a ``(dim_stack_leaf, dim_travel)`` matrix at each ray.
+
+        Each ray is evaluated at its own (stack position, travel column).
         """
         result = np.empty(len(stack_ray_pos))
         for col in np.unique(travel_ind_pos):
@@ -386,7 +387,7 @@ class PhotonSequencer(Sequencer):
 
     @staticmethod
     def _build_jaw_pair(mlc_window: list[float], travel_axis: int) -> list[Jaw]:
-        """Static X/Y jaw pair bounding the beam's overall field window.
+        """Build the static X/Y jaw pair bounding the beam's overall field window.
 
         Jaws don't move between segments in step-and-shoot delivery, so the
         same pair is reused for every shape of the beam.
