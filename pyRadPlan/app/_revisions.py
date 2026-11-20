@@ -33,6 +33,7 @@ class Revisions:
     """
 
     def __init__(self, get: Callable[[str], Any]) -> None:
+        #: Returns a workspace object by key, and the result entries under "results".
         self._get = get
         self.workspace: dict[str, int] = dict.fromkeys(WORKSPACE_KEYS, 0)
         self.volumes: dict[str, int] = {}
@@ -48,7 +49,7 @@ class Revisions:
         cube = getattr(self._get("ct"), "cube_hu", None)
         if cube is not None:
             sources["ct"] = cube
-        sources.update(result_components(self._get("result")))
+        sources.update(result_components(self._get("results")))
         return sources
 
     def update(self, changed_keys: Iterable[str], initial: bool = False) -> None:
@@ -62,7 +63,7 @@ class Revisions:
             known = {id(src): self.volumes[n] for n, src in self._volume_sources.items()}
             volumes = {}
             for name, source in sources.items():
-                # A snapshot copies the same object under a new key: same revision.
+                # A snapshot shares the images of the active result: same revision.
                 volumes[name] = known.get(id(source)) or next(self._counter)
             self.volumes = volumes
             self._volume_sources = sources

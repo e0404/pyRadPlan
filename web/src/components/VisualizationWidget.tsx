@@ -33,12 +33,13 @@ export function recenterToIsocenter(): void {
 export function VisualizationWidget() {
   const viewer = useApp((s) => s.viewer);
   const state = useApp((s) => s.state);
-  const hasResult = useApp((s) => Boolean(s.state?.has.result));
   const beams = useApp((s) => s.beams);
   const showBeams = useApp((s) => s.showBeams);
   const [isoDialog, setIsoDialog] = useState(false);
   const [isoText, setIsoText] = useState("");
   const groups = resultGroups(state);
+  // Any result counts, also without an active one (an imported dose).
+  const hasResult = Boolean(state?.has.result) || groups.length > 0;
   const beamsAvailable = Boolean(beams?.beams.length);
   const analysisOpen = useApp((s) => s.analysisOpen);
 
@@ -84,7 +85,6 @@ export function VisualizationWidget() {
         <QuantitySelector
           groups={groups}
           value={viewer.activeQuantity}
-          scenarioLabels={state?.results?.scenario_labels}
           onChange={(key) => void selectQuantity(key)}
           testId="quantity-select"
         />

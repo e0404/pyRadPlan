@@ -7,12 +7,14 @@ Moved out of ``pyRadPlan.gui.widgets._display_names`` so that GUI-independent fr
 from __future__ import annotations
 
 import re
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from pyRadPlan.optimization.robustness import get_robustness_operator_class
 from pyRadPlan.quantities import get_available_quantities
+
+#: Separates the result name from the quantity in the keys results are listed by.
+RESULT_KEY_SEPARATOR = "/"
 
 #: Component label of the total (all beams) entry of a result group.
 FULL_COMPONENT = "full"
@@ -51,6 +53,20 @@ def _split_component_suffix(stem: str) -> tuple[str, str]:
     return stem, ""
 
 
+def result_key(tag: str, key: str) -> str:
+    """Key listing the entry *key* of the result *tag* (``""`` for the active result).
+
+    See :meth:`pyRadPlan.app.Workspace.result_entries`.
+    """
+    return f"{tag}{RESULT_KEY_SEPARATOR}{key}" if tag else key
+
+
+def split_result_key(key: str) -> tuple[str, str]:
+    """Split a key built by :func:`result_key` into the result tag and the entry key."""
+    tag, separator, entry = key.partition(RESULT_KEY_SEPARATOR)
+    return (tag, entry) if separator and tag and entry else ("", key)
+
+
 def quantity_display_name(key: str) -> str:
     """Return the display name of a quantity identifier or result key.
 
@@ -58,8 +74,8 @@ def quantity_display_name(key: str) -> str:
     per-beam and per-scenario result keys (``"<identifier>_beam"``,
     ``"<identifier>_scenario"`` and their flattened ``"<identifier>_beam <i>"``
     entries).  Any other key (``alpha``, imported doses, matRad names) is
-    returned unchanged; use :func:`group_result_keys` to also resolve snapshot
-    tags.
+    returned unchanged; use :func:`group_result_keys` to also name the result
+    a key belongs to.
     """
     stem, sep, index = key.partition(" ")
     base, kind = _split_component_suffix(stem)
@@ -86,14 +102,14 @@ def robustness_display_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class ResultGroup:
-    """Result entries belonging to one quantity of one (saved) result.
+    """Result entries belonging to one quantity of one result.
 
     Attributes
     ----------
     base:
         Quantity identifier or, for unregistered entries, the key stem.
     tag:
-        Snapshot tag of a saved result; empty for the current result.
+        Name of the result; empty for the active result.
     label:
         Display label, e.g. ``"RBExDose"`` or ``"dose (protons_30fx)"``.
     components:
@@ -126,7 +142,7 @@ class ResultGroup:
         for label, key in self.components:
             if label == FULL_COMPONENT:
                 return key
-        return f"{self.base}_{self.tag}" if self.tag else self.base
+        return result_key(self.tag, self.base)
 
 
 def _split_index(key: str) -> tuple[str, int | None]:
@@ -136,66 +152,20 @@ def _split_index(key: str) -> tuple[str, int | None]:
     return match["stem"], int(match["index"])
 
 
-def _snapshot_tags(stems: set[str]) -> list[str]:
-    """Deduce snapshot tags (``"<key>_<tag>"``) from the key suffixes.
-
-    A candidate is the remainder after a registered quantity identifier (and
-    an optional ``_beam`` / ``_scenario``); it counts as a tag only when at
-    least two keys carry it, which tells a saved result (every key is copied)
-    apart from a single suffixed entry such as ``physical_dose_var``.
-    """
-    identifiers = sorted(get_available_quantities(), key=len, reverse=True)
-    canonical = {
-        stem
-        for name in identifiers
-        for stem in (name, *(name + suffix for suffix in _COMPONENT_SUFFIXES))
-    }
-    # A tag such as "dose" must not count the live physical_dose/rbe_x_dose
-    # entries as evidence of a snapshot, or rename those entries later.
-    stems = stems - canonical
-    candidates: set[str] = set()
-    for stem in stems:
-        for identifier in identifiers:
-            if stem == identifier:
-                break
-            if stem.startswith(identifier + "_"):
-                rest = stem[len(identifier) + 1 :]
-                for kind in _COMPONENT_SUFFIXES.values():
-                    if rest.startswith(kind + "_"):
-                        rest = rest[len(kind) + 1 :]
-                        break
-                if rest and rest not in _COMPONENT_SUFFIXES.values():
-                    candidates.add(rest)
-                break
-    counts = Counter(tag for tag in candidates for stem in stems if stem.endswith("_" + tag))
-    return sorted((tag for tag, n in counts.items() if n >= 2), key=len, reverse=True)
-
-
 def group_result_keys(keys: Iterable[str]) -> list[ResultGroup]:
-    """Group result keys by quantity and saved result, deduced from their suffixes.
+    """Group result keys by result and quantity.
 
-    ``"<base>[_beam|_scenario][_<tag>][ <i>]"`` keys are grouped by
-    ``(base, tag)``: the per-beam and per-scenario entries join the total of
-    their quantity (beams first, then scenarios), and snapshot tags (see the
-    workflow's *Save Result*) are split off.  Groups keep the order of first
-    appearance.
+    ``"[<result>/]<base>[_beam|_scenario][ <i>]"`` keys (see :func:`result_key`)
+    are grouped by ``(base, result)``: the per-beam and per-scenario entries join
+    the total of their quantity (beams first, then scenarios).  Groups keep the
+    order of first appearance.
     """
-    keys = list(keys)
-    tags = _snapshot_tags({_split_index(key)[0] for key in keys})
-    quantities = get_available_quantities()
     ranks = {FULL_COMPONENT: 0, BEAM_COMPONENT: 1, "": 1, SCENARIO_COMPONENT: 2}
 
     entries: dict[tuple[str, str], list[tuple[tuple[int, int], str, str, str]]] = {}
     for key in keys:
-        stem, index = _split_index(key)
-        tag = ""
-        if _split_component_suffix(stem)[0] not in quantities:
-            tag = next(
-                (t for t in tags if stem.endswith("_" + t) and len(stem) > len(t) + 1),
-                "",
-            )
-        if tag:
-            stem = stem[: -len(tag) - 1]
+        tag, entry = split_result_key(key)
+        stem, index = _split_index(entry)
         stem, kind = _split_component_suffix(stem)
         if kind:
             label = kind if index is None else f"{kind} {index}"

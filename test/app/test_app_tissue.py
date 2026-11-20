@@ -243,7 +243,7 @@ def test_display_edits_outdate_nothing_and_are_accepted_while_busy():
 
     session = Session(auto_plan=False)
     session.load_phantom("TG119")
-    session.workspace.result = {"physical_dose": object()}
+    session.workspace.result = {"physical_dose": session.workspace.ct.cube_hu}
     name = session.workspace.cst.vois[0].name
     events = []
     session.add_listener(events.append)

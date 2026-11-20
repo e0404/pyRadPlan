@@ -44,11 +44,14 @@ export function patientFromUrl(search: string = globalThis.location?.search ?? "
 
 // ---- workflow status ------------------------------------------------------
 
-/** Qt `_update_status`: the "· N saved snapshots" suffix of the result status. */
-export function statusWithSnapshots(status: string, tags: readonly string[] | undefined): string {
-  const n = tags?.length ?? 0;
-  if (!n || !status.startsWith("Optimization result available") || /snapshot/.test(status)) return status;
-  return `${status} · ${n} saved snapshot${n === 1 ? "" : "s"}`;
+/**
+ * Qt `_update_status`: the "· N further results" suffix of the result status, counting the
+ * results besides the active one (snapshots, imported doses; `state.results.tags`).
+ */
+export function statusWithFurtherResults(status: string, others: readonly string[] | undefined): string {
+  const n = others?.length ?? 0;
+  if (!n || !status.startsWith("Optimization result available") || /further result/.test(status)) return status;
+  return `${status} · ${n} further result${n === 1 ? "" : "s"}`;
 }
 
 // ---- snapshots ------------------------------------------------------------
@@ -57,8 +60,6 @@ export function statusWithSnapshots(status: string, tags: readonly string[] | un
 export function sanitizeTag(tag: string): string {
   return tag.trim().replace(/[^\p{L}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, "");
 }
-
-export const RESERVED_TAGS = ["beam", "scenario"] as const;
 
 // ---- log console ----------------------------------------------------------
 

@@ -14,6 +14,9 @@ from typing import Any, Iterable, Literal, Mapping, Optional
 
 import numpy as np
 
+from ._results import loaded_results
+from ._workspace import DEFAULT_RESULT_NAME, unique_result_name
+
 StageStatus = Literal["missing", "done", "stale"]
 
 #: Stage names of :func:`stage_status`, in workflow order.
@@ -21,11 +24,6 @@ STAGES: tuple[str, ...] = ("data", "plan", "stf", "dij", "optimization")
 
 #: Action names of :func:`available_actions`.
 ACTIONS: tuple[str, ...] = ("generate_stf", "calc_dose_influence", "optimize", "recalc")
-
-#: Result entry naming the scenarios of the result's ``"<key>_scenario"`` lists.
-SCENARIO_LABELS_KEY = "scenario_labels"
-#: Suffix of the per-scenario result lists (see ``Dij.compute_result_ct_grid``).
-SCENARIO_SUFFIX = "_scenario"
 
 
 def tissue_signature(cst: Any) -> Optional[tuple]:
@@ -95,7 +93,9 @@ class StageTracker:
         changed_keys
             Keys written in this change. A product written in the same change as its
             upstream (e.g. a ``.mat`` carrying both ``pln`` and ``dij``) is fresh; only an
-            upstream-only change marks it stale.
+            upstream-only change marks it stale. ``"result"`` stands for a replaced active
+            result: the caller leaves it out when only other results changed (a snapshot,
+            an imported dose), which do not make an outdated active result current.
         present
             Keys holding a value after the change.
         cst
@@ -202,15 +202,22 @@ def status_text(present: Iterable[str], tracker: StageTracker) -> str:
 
 
 def merge_loaded_data(
-    data: Mapping[str, Any], has_ct: bool, keys: Iterable[str]
+    data: Mapping[str, Any],
+    has_ct: bool,
+    keys: Iterable[str],
+    results: Optional[Mapping[str, Any]] = None,
+    active_result: str = DEFAULT_RESULT_NAME,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Decide which loaded objects go into the workspace (Qt ``_merge_loaded_data``).
+    """Decide which loaded objects go into the workspace.
 
-    A supplied CT starts a new patient: every key absent from the import is cleared, so
-    observers never see a new CT with the previous patient's structures or products.
-    Imports without a CT update the current patient. A structure set needs a CT, in the
-    file or already loaded; otherwise it is skipped with a warning. A bare ``dose`` image
-    (formats without a matRad ``result``) becomes ``{"physical_dose": dose}``.
+    A supplied CT starts a new patient: every key absent from the import is cleared and
+    the results are replaced by those of the file, so observers never see a new CT with
+    the previous patient's structures or products. Imports without a CT update the current
+    patient: a loaded plan result replaces the active result, any other loaded result
+    (e.g. a bare dose) is added under a free name, and the existing results are kept. A
+    structure set needs a CT, in the file or already loaded; otherwise it is skipped with
+    a warning. See :func:`~pyRadPlan.app._results.loaded_results` for the results a file
+    brings.
 
     Parameters
     ----------
@@ -220,22 +227,35 @@ def merge_loaded_data(
         Whether the workspace already holds a CT.
     keys
         The workspace keys.
+    results
+        The results of the workspace by name (:attr:`Workspace.results`).
+    active_result
+        Name of the active result of the workspace.
 
     Returns
     -------
     payload, warnings
-        Keyword arguments for :meth:`Workspace.set_many` and user-facing warnings.
+        Keyword arguments for :meth:`Workspace.set_many` and user-facing warnings. The
+        results are passed as ``results`` and ``active_result``, never as ``result``.
     """
-    keys = tuple(keys)
+    keys = tuple(k for k in keys if k != "result")
     warnings: list[str] = []
     payload = {k: data[k] for k in keys if data.get(k) is not None}
     if "cst" in payload and "ct" not in payload and not has_ct:
         warnings.append("Load a CT before loading a structure set; the structures were skipped.")
         payload.pop("cst")
-    if "result" not in payload and data.get("dose") is not None:
-        payload["result"] = {"physical_dose": data["dose"]}
+    loaded, loaded_active = loaded_results(data)
     if "ct" in payload:
         payload = {**dict.fromkeys(keys), **payload}
+        payload.update(results=loaded, active_result=loaded_active)
+    elif loaded:
+        merged = dict(results or {})
+        for name, result in loaded.items():
+            if name == DEFAULT_RESULT_NAME:
+                merged[active_result] = result
+            else:
+                merged[unique_result_name(name, {*merged, active_result})] = result
+        payload.update(results=merged, active_result=active_result)
     return payload, warnings
 
 

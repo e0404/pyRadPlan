@@ -139,7 +139,7 @@ try {
   const tip = await tid("viewer-canvas").getAttribute("title");
   expect(/Beam #0: gantry/.test(tip ?? "") && /Drag the source marker/.test(tip ?? ""), `beam tooltip (${(tip ?? "").replace(/\n/g, " | ")})`);
 
-  // Quantity selector: beam component, then a snapshot group.
+  // Quantity selector: beam component, then the group of a snapshot (a result of its own).
   await tid("quantity-select-component").selectOption("physical_dose_beam 1");
   await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "physical_dose_beam 1");
   await page.mouse.move(canvas.x + canvas.width * 0.5, canvas.y + canvas.height * 0.62);
@@ -152,13 +152,13 @@ try {
     await window.__pyrpApp.syncViews();
     return r.tag;
   });
-  expect(snap === "plan_A", "snapshot tag sanitized to plan_A");
+  expect(snap === "plan_A", "snapshot name sanitized to plan_A");
   const groupLabels = await tid("quantity-select-group").locator("option").allTextContents();
   expect(groupLabels.includes("dose (plan_A)"), `snapshot group listed (${groupLabels.join(", ")})`);
   await tid("quantity-select-group").selectOption({ label: "dose (plan_A)" });
-  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "physical_dose_beam_plan_A 1");
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "plan_A/physical_dose_beam 1");
   expect(true, "component kept (beam 1) when switching to the snapshot group");
-  await tid("quantity-select-component").selectOption("physical_dose_plan_A");
+  await tid("quantity-select-component").selectOption("plan_A/physical_dose");
 
   // VOI list: overlap grouping, colour pick, Edit VOI.
   await tid("voi-group-mode").selectOption("overlap");

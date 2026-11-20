@@ -7,6 +7,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 
 from ._forms import FormValidationError, jsonable, validation_details
+from ._results import full_quantities, result_components
 
 #: Objective added to a new row per VOI type (Qt ``_DEFAULT_OBJECTIVE_BY_TYPE``).
 DEFAULT_BY_TYPE = {"TARGET": "Squared Deviation", "*": "Squared Overdosing"}
@@ -37,46 +38,43 @@ def _image_label(value: Any) -> str:
     return "Custom value"
 
 
-def reference_values(result: Any, ct: Any) -> list[tuple[str, str, Any]]:
-    """Return ``(key, label, value)`` of the result entries usable as an image reference.
+def reference_values(results: Any) -> list[tuple[str, str, Any]]:
+    """Return ``(key, label, image)`` of the quantities usable as an image reference.
 
-    Images are used as they are; 3-D arrays (imported matRad cubes) are paired with the CT
-    grid, so they need a CT. Weights and per-beam lists are skipped.
+    These are the whole-volume quantities of all results (*results* as
+    :meth:`Workspace.result_entries` returns them), by their key
+    ``"[<result>/]<quantity>"``; per-beam and per-scenario lists are skipped.
     """
     from pyRadPlan.quantities._display_names import result_key_labels  # noqa: PLC0415
 
-    if not isinstance(result, Mapping):
-        return []
-    values = {}
-    for key, value in result.items():
-        if callable(getattr(value, "GetSize", None)):
-            values[key] = value
-        elif isinstance(value, np.ndarray) and value.ndim == 3 and ct is not None:
-            values[key] = (value, ct.grid)
+    values = full_quantities(results)
     labels = result_key_labels(values)
     return [(key, labels.get(key, key), value) for key, value in values.items()]
 
 
-def reference_images(result: Any, ct: Any) -> list[dict[str, Any]]:
-    """Return the result entries a Squared Mimicking reference can use, as choices."""
+def reference_images(results: Any) -> list[dict[str, Any]]:
+    """Return the quantities a Squared Mimicking reference can use, as choices."""
     return [
-        {"value": {"$result": key}, "label": label}
-        for key, label, _ in reference_values(result, ct)
+        {"value": {"$result": key}, "label": label} for key, label, _ in reference_values(results)
     ]
 
 
-def _encode_parameter(value: Any, result: Any) -> Any:
-    if isinstance(result, Mapping):
-        for key, entry in result.items():
-            if entry is value or (isinstance(value, tuple) and value and value[0] is entry):
-                return {"$result": key}
+def _encode_parameter(value: Any, quantities: Mapping[str, Any]) -> Any:
+    for key, image in quantities.items():
+        if image is value:
+            return {"$result": key}
     if callable(getattr(value, "GetSize", None)) or isinstance(value, tuple):
         return {"$custom": _image_label(value)}
     return jsonable(value)
 
 
-def objective_data(objective: Any, index: int, result: Any = None) -> dict[str, Any]:
-    """``ObjectiveData`` of an objective."""
+def objective_data(objective: Any, index: int, results: Any = None) -> dict[str, Any]:
+    """``ObjectiveData`` of an objective.
+
+    An image parameter that is a quantity of one of *results* is given as
+    ``{"$result": key}``.
+    """
+    quantities = result_components(results)
     return {
         "index": index,
         "name": objective.name,
@@ -84,7 +82,7 @@ def objective_data(objective: Any, index: int, result: Any = None) -> dict[str, 
         "quantity": objective.quantity,
         "robustness": objective.robustness,
         "parameters": {
-            name: _encode_parameter(getattr(objective, name), result)
+            name: _encode_parameter(getattr(objective, name), quantities)
             for name in objective._parameter_names()
         },
     }
@@ -129,13 +127,13 @@ def _robustness_choices(names: list[str]) -> list[dict[str, Any]]:
     return [{"value": n, "label": robustness_display_name(n), "identifier": n} for n in names]
 
 
-def catalog(result: Any = None, ct: Any = None) -> dict[str, Any]:
-    """``objectives.catalog``."""
+def catalog(results: Any = None) -> dict[str, Any]:
+    """``objectives.catalog``; *results* as :meth:`Workspace.result_entries` returns them."""
     from pyRadPlan.optimization.objectives import get_available_objectives  # noqa: PLC0415
     from pyRadPlan.optimization.robustness import available_robustness  # noqa: PLC0415
     from pyRadPlan.quantities import get_available_quantities  # noqa: PLC0415
 
-    references = reference_images(result, ct)
+    references = reference_images(results)
     objectives = []
     for name, cls in get_available_objectives().items():
         objectives.append(
@@ -197,15 +195,13 @@ def objectives_of(voi: Any) -> list:
     return objectives
 
 
-def _resolve_parameter(value: Any, result: Any, ct: Any, current: Any) -> Any:
+def _resolve_parameter(value: Any, results: Any, current: Any) -> Any:
     if isinstance(value, Mapping) and "$result" in value:
         key = value["$result"]
-        if not isinstance(result, Mapping) or key not in result:
-            raise ValueError(f"No result entry {key!r} to use as reference")
-        entry = result[key]
-        if isinstance(entry, np.ndarray):
-            return (entry, ct.grid)
-        return entry
+        quantities = result_components(results)
+        if key not in quantities:
+            raise ValueError(f"No result quantity {key!r} to use as reference")
+        return quantities[key]
     if isinstance(value, Mapping) and "$custom" in value:
         return current
     return value
@@ -283,9 +279,9 @@ def update(
 ) -> None:
     """Change priority, quantity, robustness or parameters of one objective.
 
-    A parameter value is a number, ``{"$result": key}`` for a result entry used as an image
-    reference, ``{"$custom": ...}`` to keep the current one, or (in-process) the value
-    itself.
+    A parameter value is a number, ``{"$result": key}`` for the volume of a component key
+    (see ``result_components``) used as an image reference, ``{"$custom": ...}`` to keep
+    the current one, or (in-process) the value itself.
     """
     voi = _voi(ws.cst, structure, voi_index)
     objectives, objective = _at(voi, index)
@@ -300,7 +296,7 @@ def update(
     if bad:
         raise ValueError(f"{objective.name} has no parameter(s) {sorted(bad)}")
     for name, value in parameters.items():
-        flat[name] = _resolve_parameter(value, ws.result, ws.ct, getattr(objective, name))
+        flat[name] = _resolve_parameter(value, ws.result_entries(), getattr(objective, name))
     objectives[int(index)] = _validated(objective, flat, "parameters.")
     _write(ws, voi, objectives)
 

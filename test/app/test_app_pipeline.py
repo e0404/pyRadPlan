@@ -101,7 +101,7 @@ def test_dose_volume_is_on_the_ct_grid_and_cached(tg119_pipeline):
     assert volume["range"][0] >= 0 and volume["range"][1] > 0
 
     session = client.manager.get(client.session)
-    image = session.workspace.result["physical_dose"]
+    image = session.workspace.result["physical_dose"].values
     np.testing.assert_allclose(volume["data"], sitk.GetArrayFromImage(image), rtol=1e-6)
     assert session.volume("physical_dose")["data"] is session.volume("physical_dose")["data"]
 
@@ -136,7 +136,8 @@ def test_dvh_matches_the_analysis_package(tg119_pipeline):
     assert [c["name"] for c in dvh["curves"]] == ["Core", "OuterTarget", "BODY"]
 
     session = client.manager.get(client.session)
-    dose = sitk.GetArrayFromImage(session.workspace.result["physical_dose"]).astype(np.float32)
+    dose = sitk.GetArrayFromImage(session.workspace.result["physical_dose"].values)
+    dose = dose.astype(np.float32)
     max_value = None
     for curve in dvh["curves"]:
         assert curve["dose"].shape == curve["volume"].shape == (200,)
@@ -157,20 +158,34 @@ def test_staleness_run_all_and_recalc(client, coarse_plan):
     state = client.ok("workflow.run_all", {"solver": "scipy", "max_iter": 10})["result"]
     assert set(state["stages"].values()) == {"done"}
     session = client.manager.get(client.session)
-    dij, weights = session.workspace.dij, session.workspace.result["w"]
+    dij, optimized = session.workspace.dij, session.workspace.result
+    weights = optimized.fluence
+    assert optimized.stored_beam_quantities == ["physical_dose"]
 
     state = client.ok("plan.set", {"num_of_fractions": 5})["result"]
     assert state["stages"]["stf"] == "stale" and state["stages"]["dij"] == "stale"
     assert state["stages"]["optimization"] == "stale"
     assert state["actions"]["optimize"] and "outdated" in state["status"]
 
+    state = client.ok("workflow.snapshot", {"tag": "before"})["result"]["state"]
+    assert state["stages"]["optimization"] == "stale"
+    snapshot = session.workspace.results["before"]
+
     state = client.ok("workflow.recalc")["result"]
     assert state["stages"]["optimization"] == "done" and state["stages"]["dij"] == "stale"
-    assert session.workspace.result["w"] is weights
+    recalculated = session.workspace.result
+    assert recalculated is not optimized
+    np.testing.assert_array_equal(recalculated.fluence, weights)
+    assert list(session.workspace.results) == ["current", "before"]
+    assert session.workspace.results["before"] is snapshot
+    assert snapshot["physical_dose"].values is optimized["physical_dose"].values
+    assert recalculated["physical_dose"].values is not optimized["physical_dose"].values
 
     state = client.ok("workflow.run_all", {"solver": "scipy", "max_iter": 10})["result"]
     assert set(state["stages"].values()) == {"done"}
     assert session.workspace.dij is not dij
+    assert session.workspace.result is not recalculated
+    assert session.workspace.results["before"] is snapshot
 
 
 def test_prepared_operations_touch_the_workspace_only_on_commit(coarse_plan):

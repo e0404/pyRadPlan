@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 import numpy as np
 
-from ._results import _is_volume, result_components
+from ._results import full_quantities, result_components
 
 #: Result keys preferred as the initially shown quantity (Qt ``default_quantity_key``).
 DEFAULT_QUANTITY_KEYS: tuple[str, ...] = (
@@ -52,11 +52,20 @@ def resolve_structure(vois: Sequence[Any], ref: Any) -> int:
 
 
 def default_quantity(keys: Sequence[str]) -> Optional[str]:
-    """Return the quantity to show first: RBE-weighted dose, else dose, else the first."""
+    """Return the quantity to show first: RBE-weighted dose, else dose, else the first.
+
+    Only the keys of the first result among *keys* are considered, which is the active
+    result if there is one.
+    """
+    from pyRadPlan.quantities._display_names import result_key, split_result_key  # noqa: PLC0415
+
+    if not keys:
+        return None
+    tag = split_result_key(keys[0])[0]
     for candidate in DEFAULT_QUANTITY_KEYS:
-        if candidate in keys:
-            return candidate
-    return keys[0] if keys else None
+        if result_key(tag, candidate) in keys:
+            return result_key(tag, candidate)
+    return keys[0]
 
 
 def quantity_unit(key: str) -> str:
@@ -64,7 +73,9 @@ def quantity_unit(key: str) -> str:
     if key == "ct":
         return "HU"
     from pyRadPlan.quantities import get_available_quantities  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
 
+    key = split_result_key(key)[1]
     quantity = get_available_quantities().get(key)
     if quantity is None:
         return _EXTRA_UNITS.get(key, "")
@@ -74,19 +85,20 @@ def quantity_unit(key: str) -> str:
         return str(quantity.unit)
 
 
-def component_info(result: Any, key: str) -> dict[str, Any]:
-    """Quantity, snapshot tag, component kind and labels of a result component key.
+def component_info(results: Any, key: str) -> dict[str, Any]:
+    """Quantity, result name, component kind and labels of a result component key.
 
-    Grouped as the result catalog groups (``gui/widgets/_display_names.py``
-    ``group_result_keys``), so the labels match ``state.results``: ``label`` is the Qt
-    selector label (``"dose (tag), beam 0"``), ``meta_label`` / ``unit`` the colorbar and
-    DVH axis label and unit (Qt ``QUANTITY_META``, ``"Quantity"`` / ``""`` if unknown).
+    Grouped as the result catalog groups (``group_result_keys``), so the labels match
+    ``state.results``: ``tag`` is the name of the result (``""`` for the active one),
+    ``label`` the selector label (``"dose (name), beam 0"``), ``meta_label`` / ``unit``
+    the colorbar and DVH axis label and unit (``QUANTITY_META``, ``"Quantity"`` / ``""``
+    if unknown). *results* are the entries of :meth:`Workspace.result_entries`.
     """
     from pyRadPlan.quantities._display_names import group_result_keys  # noqa: PLC0415
 
     from ._results import quantity_meta  # noqa: PLC0415
 
-    keys = list(result_components(result))
+    keys = list(result_components(results))
     if key not in keys:
         keys.append(key)
     for group in group_result_keys(keys):
@@ -104,7 +116,7 @@ def component_info(result: Any, key: str) -> dict[str, Any]:
                 "meta_label": meta_label,
                 "unit": unit,
             }
-    raise KeyError(f"No volume quantity {key!r} in the result")
+    raise KeyError(f"No volume quantity {key!r} in the results")
 
 
 def _image_3d(image: Any, phase: int = 0) -> Any:
@@ -129,16 +141,14 @@ def grid_info(ct: Any) -> dict[str, Any]:
     }
 
 
-def result_quantities(result: Any) -> list[str]:
-    """Return the result keys holding one 3-D volume (no beam/scenario lists, no weights)."""
-    if not isinstance(result, dict):
-        return []
-    return [key for key, value in result.items() if _is_volume(value)]
+def result_quantities(results: Any) -> list[str]:
+    """Return the keys of the whole-volume quantities of all results (no beam/scenario lists)."""
+    return list(full_quantities(results))
 
 
-def result_entry(result: Any, key: str) -> Any:
+def result_entry(results: Any, key: str) -> Any:
     """Return the 3-D volume of a full or component key, ``None`` if there is none."""
-    return result_components(result).get(key)
+    return result_components(results).get(key)
 
 
 def _quantity_on_ct_grid(value: Any, ct: Any) -> np.ndarray:
@@ -396,7 +406,7 @@ class ViewCache:
     """Cached view products of one workspace.
 
     Every product is stored with the identities of the workspace objects it was derived
-    from (the CT, a result entry, a structure mask, ...). A lookup rebuilds it when one of
+    from (the CT, a quantity of a result, a structure mask, ...). A lookup rebuilds it when one of
     them was replaced; :meth:`invalidate` drops products whose sources were replaced, so
     no stale arrays are kept alive. Products survive changes that do not touch their
     sources, e.g. an objective edit keeps every mask and an optimization keeps the CT.
@@ -404,7 +414,8 @@ class ViewCache:
     Parameters
     ----------
     get
-        Returns the workspace object stored under a key.
+        Returns the workspace object stored under a key, and the entries of
+        :meth:`Workspace.result_entries` under ``"results"``.
     """
 
     def __init__(self, get: Callable[[str], Any]) -> None:
@@ -421,7 +432,7 @@ class ViewCache:
             name = key[1]
             if name == "ct":
                 return (ct, ct.cube_hu)
-            source = result_entry(self._get("result"), name)
+            source = result_entry(self._get("results"), name)
             return None if source is None else (ct, source)
         cst = self._get("cst")
         if cst is None:
@@ -440,7 +451,7 @@ class ViewCache:
             chosen = selected(key[2])
             return None if chosen is None else (ct, *chosen)
         if kind in ("dvh", "dvh_curves"):
-            source = result_entry(self._get("result"), key[1])
+            source = result_entry(self._get("results"), key[1])
             chosen = selected(key[2])
             if source is None or chosen is None:
                 return None
@@ -492,9 +503,9 @@ class ViewCache:
                 return sitk.GetArrayFromImage(image).astype(np.float32, copy=False)
 
         else:
-            source = result_entry(self._get("result"), name)
+            source = result_entry(self._get("results"), name)
             if source is None:
-                raise KeyError(f"No volume quantity {name!r} in the result")
+                raise KeyError(f"No volume quantity {name!r} in the results")
 
             def build() -> np.ndarray:
                 array = _quantity_on_ct_grid(source, ct)
@@ -534,7 +545,7 @@ class ViewCache:
                 payload = compact
         unit = quantity_unit(name)
         if unit == "":
-            unit = component_info(self._get("result"), name)["unit"]
+            unit = component_info(self._get("results"), name)["unit"]
         return {
             "name": name,
             "unit": unit,
@@ -719,11 +730,11 @@ class ViewCache:
         *range_mode* is ``"per_structure"``.
         """
         self._require_ct()
-        result = self._get("result")
+        result = self._get("results")
         keys = result_quantities(result)
         quantity = quantity or default_quantity(keys)
         if quantity is None or result_entry(result, quantity) is None:
-            raise KeyError(f"No volume quantity {quantity!r} in the result")
+            raise KeyError(f"No volume quantity {quantity!r} in the results")
         indices = self.structure_indices(names)
         vois = [self._voi(i) for i in indices]
         curves = self.dvh_curves(quantity, indices, num_points, range_mode)

@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Mapping, Optional, Union
 
 import numpy as np
 import SimpleITK as sitk
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from pyRadPlan.ct._ct import CT
     from pyRadPlan.gui.windows._splash_win import StartupSplash
     from pyRadPlan.gui.workspace import WorkspaceManager
+    from pyRadPlan.result import PlanResult
 
 logger = logging.getLogger(__name__)
 
@@ -187,19 +188,15 @@ def _load_patient(path: str) -> WorkspaceManager:
     from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
     from pyRadPlan.io import load_data  # noqa: PLC0415
 
-    data = load_data(path)
     workspace = WorkspaceManager.instance()
-    payload = {k: data[k] for k in workspace.keys if data.get(k) is not None}
-    if "result" not in payload and data.get("dose") is not None:
-        payload["result"] = {"physical_dose": data["dose"]}
-    workspace.set_many(**payload)
+    workspace.session.merge_loaded(load_data(path))
     return workspace
 
 
 def launch_viewer(
     ct: CT,
     cst: StructureSet = None,
-    result: Optional[Union[dict, Union[np.ndarray, sitk.Image]]] = None,
+    result: Optional[Union[PlanResult, Mapping]] = None,
 ) -> None:
     """Launch the quantity viewer with optional CT background and VOI contours.
 
@@ -210,7 +207,8 @@ def launch_viewer(
     cst:
         StructureSet object providing VOIs for contour display.
     result:
-        Dict or single image/array.
+        A :class:`~pyRadPlan.result.PlanResult`, a mapping of named quantities or
+        a single image/array.
     """
 
     # TODO: Maybe remove this fallback if imports are possible
@@ -219,7 +217,6 @@ def launch_viewer(
             "Launching viewer without CT, CST, and result is not supported yet."
         )
 
-    # TODO: Overhaul needed once result is implemented properly
     if isinstance(result, (np.ndarray, sitk.Image)):
         # Wrap single array/image into dict
         result = {"quantity": result}
@@ -231,7 +228,7 @@ def launch_viewer(
 
 def analysis_viewer(
     cst: Optional[StructureSet] = None,
-    result: Optional[Union[dict, np.ndarray, sitk.Image]] = None,
+    result: Optional[Union[PlanResult, Mapping, np.ndarray, sitk.Image]] = None,
 ) -> None:
     """Launch the standalone DVH and QI analysis application.
 
@@ -241,8 +238,9 @@ def analysis_viewer(
         StructureSet providing the VOI masks to analyze. When ``None``, the
         structure set held by the shared :class:`WorkspaceManager` is used.
     result:
-        Quantity result mapping (e.g. ``{"physical_dose": ...}``) or a single
-        image/array. When ``None``, the workspace ``result`` is used.
+        A :class:`~pyRadPlan.result.PlanResult`, a quantity mapping (e.g.
+        ``{"physical_dose": ...}``) or a single image/array. When ``None``, the
+        workspace ``result`` is used.
 
     Raises
     ------
@@ -269,6 +267,8 @@ def analysis_viewer(
 
     if isinstance(result, (np.ndarray, sitk.Image)):
         result = {"quantity": result}
+    elif not isinstance(result, Mapping):
+        result = {name: qd.values for name, qd in result.quantities.items()}
 
     # Native array order for quantities and masks alike: QIs and DVHs are
     # order-invariant voxel reductions, but a quantity and its mask must agree.

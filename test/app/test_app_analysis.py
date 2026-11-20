@@ -146,20 +146,17 @@ def test_compare_units_of_rbe_weighted_doses_of_two_saved_results(client):
     client.ok("data.load_phantom", {"name": "TG119"})
     session = client.manager.get(client.session)
     image = sitk.Image(session.workspace.ct.cube_hu)
-    session.workspace.result = {
-        "physical_dose_protons": image,
-        "rbe_x_dose_protons": image,
-        "physical_dose_carbon": image,
-        "rbe_x_dose_carbon": image,
-        "effect_carbon": image,
-        "effect_protons": image,
-    }
+    quantities = {"physical_dose": image, "rbe_x_dose": image, "effect": image}
+    session.workspace.set_many(results={"protons": quantities, "carbon": dict(quantities)})
 
     def compare(a, b):
         return client.ok("analysis.compare_units", {"a": a, "b": b})["result"]
 
-    assert compare("rbe_x_dose_protons", "rbe_x_dose_carbon") == {"shareable": True, "scale": 1.0}
-    assert compare("physical_dose_protons", "rbe_x_dose_carbon")["shareable"] is True
-    assert compare("rbe_x_dose_protons", "effect_carbon")["shareable"] is False
-    dvh = client.ok("analysis.dvh", {"quantity": "rbe_x_dose_carbon"})["result"]
-    assert dvh["unit"] == "Gy (RBE)"
+    assert compare("protons/rbe_x_dose", "carbon/rbe_x_dose") == {"shareable": True, "scale": 1.0}
+    assert compare("protons/physical_dose", "carbon/rbe_x_dose")["shareable"] is True
+    assert compare("protons/rbe_x_dose", "carbon/effect")["shareable"] is False
+    dvh = client.ok("analysis.dvh", {"quantity": "carbon/rbe_x_dose"})["result"]
+    assert dvh["unit"] == "Gy" and dvh["unit_info"]["symbol"] == "Gy"
+    assert dvh["label"] == "RBE-weighted Dose"
+    sets = client.ok("analysis.dvh", {"keys": ["protons/effect"]})["result"]["sets"]
+    assert sets[0]["name"] == "Effect (protons)"

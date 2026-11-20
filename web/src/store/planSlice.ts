@@ -414,6 +414,8 @@ useApp.subscribe((s, prev) => {
     s.state?.has.cst !== prev.state?.has.cst ||
     s.state?.revisions?.workspace.ct !== prev.state?.revisions?.workspace.ct ||
     (s.state?.has.result ?? false) !== (prev.state?.has.result ?? false) ||
+    // Snapshots and imported doses add reference images without touching the active result.
+    (s.state?.results?.names ?? []).join("/") !== (prev.state?.results?.names ?? []).join("/") ||
     s.state?.revisions?.workspace.result !== prev.state?.revisions?.workspace.result;
   if (cstChanged && s.state?.has.cst) void refreshCatalog();
   if (!s.state?.has.cst && getPlan().catalog) setPlan({ catalog: null });

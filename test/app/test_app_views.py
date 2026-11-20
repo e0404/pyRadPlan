@@ -23,7 +23,7 @@ def test_volume_of_a_component_key(pipeline):
     response = client.ok("view.volume", {"name": "physical_dose_beam 1"})
     assert response["result"]["name"] == "physical_dose_beam 1"
     assert response["result"]["unit"] == "Gy"
-    expected = sitk.GetArrayFromImage(session.workspace.result["physical_dose_beam"][1])
+    expected = sitk.GetArrayFromImage(session.workspace.result.beam.physical_dose[1].values)
     np.testing.assert_allclose(_array(response), expected.astype(np.float32))
     assert response["result"]["range"] == [float(expected.min()), pytest.approx(expected.max())]
     response = client.call("view.volume", {"name": "physical_dose_beam 7"})
@@ -228,17 +228,17 @@ def test_cubic_matrad_result_keeps_its_voxel_positions(tmp_path):
     session = Session(auto_plan=False)
     session.load_path(path)
 
-    dose = session.workspace.result["physicalDose"]
+    dose = session.workspace.result["physical_dose"].values
     assert isinstance(dose, sitk.Image)
     assert dose.GetSize() == (4, 4, 4)
     assert dose.GetSpacing() == session.workspace.ct.cube_hu.GetSpacing()
 
-    volume = session.volume("physicalDose")["data"]
+    volume = session.volume("physical_dose")["data"]
     assert volume[3, 1, 2] == 5.0
     assert volume[3, 1, 1] == 3.0
     assert np.count_nonzero(volume) == 2
 
-    curves = session.dvh("physicalDose", names=["Target"])
+    curves = session.dvh("physical_dose", names=["Target"])
     assert curves["curves"][0]["stats"] == {"mean": 4.0, "min": 3.0, "max": 5.0}
 
 

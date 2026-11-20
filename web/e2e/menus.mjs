@@ -304,10 +304,10 @@ try {
   await tid("prompt-dialog").waitFor();
   expect((await tid("prompt-input").inputValue()) === "photons_30fx", "Snapshot name defaults to <mode>_<n>fx");
   await shot("snapshot-prompt");
-  await tid("prompt-input").fill("beam");
+  await tid("prompt-input").fill("current");
   await tid("prompt-ok").click();
   await tid("message-box").waitFor();
-  expect(((await tid("message-box").textContent()) ?? "").includes("cannot be used as a snapshot name"), "reserved snapshot names are refused");
+  expect(((await tid("message-box").textContent()) ?? "").includes("cannot be used as a snapshot name"), "the name of the active result is refused as a snapshot name");
   await tid("msg-ok").click();
   await tid("btn-snapshot").click();
   await tid("prompt-input").fill("my snap");
@@ -483,11 +483,21 @@ try {
   await tid("import-dose").check();
   await tid("import-dose-name").fill("my dose");
   await tid("import-ok").click();
-  await tid("error-dialog").waitFor();
-  expect(((await tid("error-dialog").textContent()) ?? "").includes("not available through the protocol yet"), "image import kinds are refused by the v1 protocol and reported");
-  await shot("native-import-image-refused");
-  await page.keyboard.press("Escape");
+  // The dose becomes a result of its own, next to the (still missing) active result.
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().state.results?.names.includes("my_dose"));
   await waitIdle();
+  const imported = await page.evaluate(() => {
+    const { state, viewer } = window.__pyrpApp.useApp.getState();
+    return { has: state.has.result, tags: state.results.tags, snapshot: state.actions.snapshot, save: state.actions.save_result, shown: viewer.activeQuantity };
+  });
+  expect(!imported.has && imported.tags.join() === "my_dose", "an imported dose is a result named after the given name, without an active result");
+  expect(!imported.snapshot && imported.save, "an imported dose alone can be saved but not snapshotted");
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "my_dose/physical_dose");
+  const importedGroups = await tid("quantity-select-group").locator("option").allTextContents();
+  expect(importedGroups.join() === "dose (my_dose)", `the imported dose is listed in the quantity selector (${importedGroups.join(", ")})`);
+  expect(await tid("btn-snapshot").isDisabled(), "Snapshot Result needs the active result");
+  expect(!(await tid("btn-dvh").isDisabled()), "the analysis window is available for an imported dose");
+  await shot("native-import-dose-result");
   await openMenu("file");
   await tid("menu-item-phantoms").hover();
   expect(!(await disabled("menu-item-open_phantom_folder")), "Open Phantom Folder is available on the native runtime");

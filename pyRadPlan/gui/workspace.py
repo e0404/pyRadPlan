@@ -1,7 +1,7 @@
 """Centralised data store for a pyRadPlan GUI session.
 
-Replaces MATLAB's base workspace: all six pipeline objects (ct, cst, pln, stf,
-dij, result) live here and interested widgets subscribe to *workspace_changed*.
+Replaces MATLAB's base workspace: the pipeline objects (ct, cst, pln, stf, dij)
+and the results live here and interested widgets subscribe to *workspace_changed*.
 The objects are held by a Qt-free :class:`pyRadPlan.app.Workspace`, which the
 manager's :class:`pyRadPlan.app.Session` (stage tracking, workflow operations)
 shares with the web frontend's code.
@@ -9,19 +9,28 @@ shares with the web frontend's code.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from pyRadPlan.app import WORKSPACE_KEYS, Session, Workspace
 
+if TYPE_CHECKING:
+    from pyRadPlan.result import PlanResult
+
 
 class WorkspaceManager(QObject):
     """Central data store for the pyRadPlan GUI.
 
-    Holds the six treatment-planning pipeline objects and notifies listeners
-    via *workspace_changed* (carrying a list of the changed key names) whenever
-    any object is replaced or cleared.
+    Holds the treatment-planning pipeline objects and notifies listeners via
+    *workspace_changed* (carrying a list of the changed key names) whenever any
+    object is replaced or cleared.
+
+    Results are kept as a collection of named
+    :class:`~pyRadPlan.result.PlanResult` objects, one per computation: the
+    *active* result is the one optimization and recalculation write to and that
+    :attr:`result` returns; snapshots and imported doses are further entries.
+    Any change of the collection is announced as ``"result"``.
 
     The objects live in :attr:`store`, observed first by :attr:`session`, so the
     session's stage flags are current when *workspace_changed* reaches the widgets.
@@ -65,11 +74,18 @@ class WorkspaceManager(QObject):
     # ------------------------------------------------------------------
 
     def set_many(self, **kwargs: Any) -> None:
-        """Set multiple pipeline objects and emit a single *workspace_changed*."""
+        """Set multiple pipeline objects and emit a single *workspace_changed*.
+
+        Besides the pipeline objects, ``results`` replaces the whole collection of
+        results (``active_result`` names the active one among them).
+        """
         self.store.set_many(**kwargs)
 
     def clear(self, keys: Optional[list[str]] = None) -> None:
-        """Set *keys* to *None* (or all keys when *keys* is omitted)."""
+        """Set *keys* to *None* (or all keys when *keys* is omitted).
+
+        Clearing ``result`` drops every result, not only the active one.
+        """
         self.store.clear(keys)
 
     def has(self, *keys: str) -> bool:
@@ -88,6 +104,36 @@ class WorkspaceManager(QObject):
     def keys(self) -> tuple[str, ...]:
         """The names of the pipeline objects managed by the workspace."""
         return self._KEYS
+
+    # ------------------------------------------------------------------
+    # Results
+    # ------------------------------------------------------------------
+
+    @property
+    def results(self) -> dict[str, PlanResult]:
+        """All results by name (a copy; use :meth:`add_result` to change them)."""
+        return self.store.results
+
+    @property
+    def active_result(self) -> str:
+        """Name of the result that :attr:`result` reads and writes."""
+        return self.store.active_result
+
+    @active_result.setter
+    def active_result(self, name: str) -> None:
+        self.store.active_result = name
+
+    def add_result(self, name: str, result: Any) -> None:
+        """Store *result* under *name*, replacing a result of that name."""
+        self.store.add_result(name, result)
+
+    def remove_result(self, name: str) -> None:
+        """Drop the result *name*; unknown names are ignored."""
+        self.store.remove_result(name)
+
+    def result_entries(self) -> list[tuple[str, PlanResult]]:
+        """``(tag, result)`` of every result, the active one first with the tag ``""``."""
+        return self.store.result_entries()
 
     # ------------------------------------------------------------------
     # Typed properties — one per pyRadPlan pipeline object
@@ -140,7 +186,12 @@ class WorkspaceManager(QObject):
 
     @property
     def result(self):
-        """The optimization/forward-dose result dict, or ``None``."""
+        """The active result as a ``PlanResult``, or ``None``.
+
+        Assigning a dict of named quantities is allowed; it is validated into a
+        ``PlanResult`` on the way in.  Assigning ``None`` drops the active result
+        and keeps the others (see :meth:`clear` to drop all).
+        """
         return self.store.get("result")
 
     @result.setter

@@ -22,13 +22,16 @@ from pyRadPlan.app._results import result_keys_meta, scenario_labels
 from pyRadPlan.app._views import beam_geometry, plan_beam_angles, plan_iso_centers
 from pyRadPlan.app._views import default_quantity as default_quantity_key
 from pyRadPlan.cst import VOI
+from pyRadPlan.core.resample import resample_image
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.windows._analysis_win import show_analysis
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import PlanResult
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
+from ._display_names import result_key
 from pyRadPlan.biology._editing import load_machine_quietly, plan_dose_engine
 from .result.quantity_widget import QuantityWidget
 from .result.visualization_widget import VisualizationWidget
@@ -41,60 +44,44 @@ logger = logging.getLogger(__name__)
 # --- Data derivation helpers (workspace objects -> viewer-ready arrays) -------
 
 
-def _process_result(result: dict | np.ndarray | sitk.Image | None) -> dict | np.ndarray | None:
-    """Convert a workspace ``result`` into viewer-ready (transposed) arrays."""
-    if result is None:
-        return None
-    if isinstance(result, dict):
-        return _process_dict_result(result)
-    return _process_raw_result(result)
+def _on_grid(image: sitk.Image, reference: Optional[sitk.Image]) -> sitk.Image:
+    """Return *image* on the grid of *reference*, resampling it if the grids differ."""
+    if reference is None or image is reference:
+        return image
+
+    def geometry(img: sitk.Image) -> np.ndarray:
+        return np.concatenate([img.GetSpacing(), img.GetOrigin(), img.GetDirection()])
+
+    if image.GetSize() == reference.GetSize() and np.allclose(
+        geometry(image), geometry(reference), rtol=0.0, atol=1e-4
+    ):
+        return image
+    return resample_image(
+        image, interpolator=sitk.sitkLinear, target_image=reference, extrapolate=0
+    )
 
 
-def _process_dict_result(result_dict: dict) -> dict:
-    """Convert each 3-D value in a result dict into a transposed array (or list)."""
-    quantities_dict: dict = {}
-    for k, v in result_dict.items():
-        if isinstance(v, sitk.Image):
-            arr = sitk.GetArrayFromImage(v)
-            if arr.ndim == 3:
-                quantities_dict[k] = np.transpose(arr, (0, 2, 1))
-        elif isinstance(v, np.ndarray) and v.ndim == 3:
-            quantities_dict[k] = np.transpose(v, (0, 2, 1))
-        elif isinstance(v, list):
-            processed = _process_list_quantity(v)
-            if processed:
-                quantities_dict[k] = processed
-    return quantities_dict
+def _display_array(
+    images: sitk.Image | tuple[Optional[sitk.Image], ...] | None,
+    reference: Optional[sitk.Image] = None,
+) -> np.ndarray | list | None:
+    """Transpose an image (or each per-beam/per-scenario image) into the viewer's axis order.
 
-
-def _process_list_quantity(items: list) -> list:
-    """Transpose each 3-D array in a list of images/arrays.
-
-    Other entries (e.g. ``None`` for scenarios without a result) become ``None``, so that
-    list positions keep their meaning (beam or flat scenario index).  A list without any
-    3-D entry yields ``[]``.
+    Images on another grid than *reference* (the CT) are resampled onto it first.
+    ``None`` entries (scenarios without a result) stay ``None``, so that list positions keep
+    their meaning (beam or flat scenario index).
     """
-    processed = []
-    for item in items:
-        if isinstance(item, sitk.Image):
-            arr = sitk.GetArrayFromImage(item)
-        elif isinstance(item, np.ndarray):
-            arr = item
-        else:
-            arr = None
-        processed.append(
-            np.transpose(arr, (0, 2, 1)) if arr is not None and arr.ndim == 3 else None
-        )
-    return processed if any(p is not None for p in processed) else []
+    if images is None:
+        return None
+    if isinstance(images, tuple):
+        return [_display_array(image, reference) for image in images]
+    return np.transpose(sitk.GetArrayFromImage(_on_grid(images, reference)), (0, 2, 1))
 
 
-def _process_raw_result(result: object) -> np.ndarray:
-    """Convert a single raw image or array to a transposed numpy array."""
-    if isinstance(result, sitk.Image):
-        result_arr = sitk.GetArrayFromImage(result)
-    else:
-        result_arr = np.asarray(result)
-    return np.transpose(result_arr, (0, 2, 1))
+def _same_images(a: object, b: object) -> bool:
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(x is y for x, y in zip(a, b))
+    return a is b
 
 
 def _build_overlay_meta(
@@ -223,8 +210,8 @@ class ViewingWidget(WorkspaceWidget):
         #: Beam angles edited in a plan form but not applied yet (see set_beam_editor).
         self._edited_angles: Optional[tuple[list[float], list[float]]] = None
         self._beam_editor: Optional[Callable[[int, float], None]] = None
-        #: Labels of the workspace dij's scenarios, by flat scenario index.
-        self._scenario_labels: list[str] = []
+        #: Scenario labels of each result by its tag, by flat scenario index.
+        self._scenario_labels: dict[str, list[str]] = {}
 
         # Create and wire the four sub-widgets.  Whether they are arranged here
         # (standalone use) or placed individually by a host window (e.g. the
@@ -311,7 +298,7 @@ class ViewingWidget(WorkspaceWidget):
         ws = self.workspace
         full = not changed_keys
         if full or "dij" in changed_keys or "result" in changed_keys:
-            self._apply_scenario_labels(ws.dij, ws.result)
+            self._apply_scenario_labels(ws.dij, ws.result_entries())
         ct = ws.ct
         if ct is None:
             # Workspace was cleared: drop the previous patient's display state
@@ -326,7 +313,7 @@ class ViewingWidget(WorkspaceWidget):
         beams_changed = cst_changed or "pln" in changed_keys or "stf" in changed_keys
 
         if data_changed:
-            self._apply_ct_and_result(ct, ws.cst, ws.result)
+            self._apply_ct_and_result(ct, ws.cst, ws.result_entries())
             self._has_data = True
 
         if cst_changed:
@@ -335,8 +322,15 @@ class ViewingWidget(WorkspaceWidget):
         if data_changed or beams_changed:
             self._apply_beams(ct, ws.cst, ws.pln, ws.stf)
 
-    def _apply_scenario_labels(self, dij, result=None) -> None:
-        labels = scenario_labels(result, dij)
+    def _apply_scenario_labels(self, dij, entries=()) -> None:
+        # Each result's own labels: it can stem from another scenario set than the current dij
+        labels = {
+            tag: scenario_labels(result)
+            for tag, result in entries
+            if result.scenario_labels is not None
+        }
+        if "" not in labels and hasattr(dij, "scenario_labels"):
+            labels[""] = scenario_labels(None, dij)
         self._scenario_labels = labels
         self.vis_widget.set_scenario_labels(labels)
 
@@ -359,33 +353,64 @@ class ViewingWidget(WorkspaceWidget):
         self._ct_cache = (ct.cube_hu, ct_arr)
         return ct_arr
 
-    def _process_result_cached(self, result) -> dict | np.ndarray | None:
-        """Like :func:`_process_result`, reusing per-key conversions by identity.
+    def _display_arrays(
+        self,
+        results: PlanResult | Sequence[tuple[str, PlanResult]] | None,
+        reference: Optional[sitk.Image] = None,
+    ) -> dict | None:
+        """Viewer-ready arrays of the *results*, reusing per-quantity conversions by identity.
 
-        Result dicts routinely share value objects across updates (snapshots,
-        carried-forward keys), so unchanged cubes are not converted again.
+        *results* are ``(tag, result)`` pairs (see
+        :meth:`~pyRadPlan.gui.workspace.WorkspaceManager.result_entries`) or a single
+        result; their quantities are listed under
+        :func:`~pyRadPlan.gui.widgets._display_names.result_key`.  Quantities on another
+        grid than *reference* (the CT) are resampled onto it.
+
+        A stored :class:`~pyRadPlan.result.PlanResult` is replaced (not mutated) on
+        every optimization/recalculation, and a snapshot shares the images of the
+        result it copies, so unchanged cubes are not converted again.
         """
-        if not isinstance(result, dict):
+        if isinstance(results, PlanResult):
+            results = [("", results)]
+        if not results:
             self._quantity_cache.clear()
-            return _process_result(result)
+            return None
         cache: dict[str, tuple[object, object]] = {}
         processed: dict = {}
-        for key, value in result.items():
+        entries: list[tuple[str, object]] = []
+        for tag, result in results:
+            entries += [
+                (result_key(tag, name), qd.values) for name, qd in result.quantities.items()
+            ]
+            entries += [
+                (result_key(tag, f"{name}_beam"), tuple(qd.values for qd in qds))
+                for name, qds in result.beam_quantities.items()
+            ]
+            entries += [
+                (
+                    result_key(tag, f"{name}_scenario"),
+                    tuple(None if qd is None else qd.values for qd in qds),
+                )
+                for name, qds in result.scenario_quantities.items()
+                if any(qd is not None for qd in qds)
+            ]
+        for key, images in entries:
             cached = self._quantity_cache.get(key)
-            if cached is not None and cached[0] is value:
-                cache[key] = cached
-            else:
-                single = _process_dict_result({key: value})
-                if key not in single:
-                    continue
-                cache[key] = (value, single[key])
+            if cached is None or not _same_images(cached[0], images):
+                # A snapshot lists the images of the result it copies under its own keys.
+                known = (*cache.values(), *self._quantity_cache.values())
+                cached = next((c for c in known if _same_images(c[0], images)), None)
+            cache[key] = cached or (images, _display_array(images, reference))
             processed[key] = cache[key][1]
         self._quantity_cache = cache
         return processed
 
-    def _apply_ct_and_result(self, ct: CT, cst, result) -> None:
+    def _apply_ct_and_result(self, ct: CT, cst, results) -> None:
+        if self._ct_cache is None or self._ct_cache[0] is not ct.cube_hu:
+            # Quantities on another grid were resampled onto the previous CT.
+            self._quantity_cache.clear()
         ct_arr = self._ct_array(ct)
-        quantity_data = self._process_result_cached(result)
+        quantity_data = self._display_arrays(results, ct.cube_hu)
         overlay_units, overlay_labels = _build_overlay_meta(quantity_data)
         isocenter_vox = _isocenter_vox(ct, plan_iso_centers(self.workspace.pln, cst))
 

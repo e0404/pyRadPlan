@@ -5,6 +5,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.gui.widgets._result_widget import ViewingWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import create_result
 
 
 def _beam_labels(quantity_widget):
@@ -33,6 +34,11 @@ def _make_workspace(ct, cst, result=None):
     return ws
 
 
+def _result_for(ct):
+    """A minimal validated PlanResult on the CT grid for viewer tests."""
+    return create_result({"physical_dose": sitk.Cast(ct.cube_hu, sitk.sitkFloat32)})
+
+
 def test_viewing_widget_init(qapp):
     widget = ViewingWidget()
     assert widget is not None
@@ -45,7 +51,8 @@ def test_viewing_widget_init(qapp):
 def test_viewing_widget_reacts_to_workspace(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    # The result overlay is not asserted here; only CT/VOIs/colours are checked.
+    ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
 
     # CT was derived from the workspace and pushed to the renderer
@@ -91,21 +98,78 @@ def test_viewing_widget_set_plane(qapp, test_data_photons):
     assert widget.quantity_widget._plane == "Sagittal"
 
 
-def test_viewing_widget_raw_array_result(qapp, test_data_photons):
+def test_viewing_widget_single_quantity_result(qapp, test_data_photons):
     ct, cst, _ = test_data_photons
-    raw = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
 
-    ws = _make_workspace(ct, cst, raw)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
 
     assert widget.quantity_widget._active_quantity_name is not None
     assert widget.quantity_widget.get_available_quantities()
 
 
+def test_viewing_widget_reuses_unchanged_quantities(qapp, test_data_photons):
+    """Unchanged images (also those a snapshot shares) are not converted again."""
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst, _result_for(ct))
+    widget = ViewingWidget(ws)
+    before = widget._display_arrays(ws.result_entries(), ct.cube_hu)["physical_dose"]
+
+    ws.add_result("saved", ws.result.model_copy())
+
+    arrays = widget._display_arrays(ws.result_entries(), ct.cube_hu)
+    assert list(arrays) == ["physical_dose", "saved/physical_dose"]
+    assert arrays["physical_dose"] is before
+    assert arrays["saved/physical_dose"] is before
+    assert list(widget.quantity_widget._quantities) == list(arrays)
+
+
+def test_viewing_widget_shows_results_of_other_grids_and_scenarios(qapp, test_data_photons):
+    """Each result is listed with its own scenario labels, resampled onto the CT."""
+    ct, cst, _ = test_data_photons
+    dose = _result_for(ct).physical_dose.values
+    ws = _make_workspace(ct, cst, None)
+    ws.result = {
+        "physical_dose": dose,
+        "physical_dose_scenario": [dose, dose],
+        "scenario_labels": ("nominal", "shifted"),
+    }
+    coarse = sitk.Image([s // 2 for s in dose.GetSize()], sitk.sitkFloat32)
+    coarse.SetSpacing([2.0 * s for s in dose.GetSpacing()])
+    coarse.SetOrigin(dose.GetOrigin())
+    coarse.SetDirection(dose.GetDirection())
+    ws.add_result(
+        "measured",
+        {
+            "physical_dose": coarse + 1.0,
+            "physical_dose_scenario": [coarse, coarse, coarse],
+            "scenario_labels": ("a", "b", "c"),
+        },
+    )
+    widget = ViewingWidget(ws)
+
+    quantities = widget.quantity_widget._quantities
+    assert "measured/physical_dose" in quantities
+    assert "measured/physical_dose_scenario 2" in quantities
+    assert quantities["measured/physical_dose"].shape == quantities["physical_dose"].shape
+    assert quantities["measured/physical_dose"].max() == pytest.approx(1.0)
+
+    selector = widget.vis_widget.quantity_selector
+    texts = {}
+    for key in ("physical_dose_scenario 1", "measured/physical_dose_scenario 1"):
+        assert selector.set_current_key(key)
+        texts[key] = selector.component_combo.currentText()
+    assert texts == {
+        "physical_dose_scenario 1": "scenario 1: shifted",
+        "measured/physical_dose_scenario 1": "scenario 1: b",
+    }
+    assert selector.quantity_combo.currentText() == "dose (measured)"
+
+
 def test_viewing_widget_clears_on_workspace_clear(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
     assert widget.quantity_widget._ct is not None
     assert len(widget.vois_widget._voi_checkboxes) == len(cst.vois)
@@ -152,7 +216,7 @@ def test_structure_edits_during_a_run(qapp, test_data_photons, monkeypatch):
     ct, cst, result = test_data_photons
     ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
-    ws.set_many(result={"physical_dose": object()})
+    ws.set_many(result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
     session = ws.session
     operation = Operation("calc", "Calculating", lambda: None, lambda value: None)
     session.begin(operation)
@@ -186,7 +250,12 @@ def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
     ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
     assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
@@ -762,25 +831,26 @@ def test_overlay_meta_covers_per_scenario_lists():
     assert labels["physical_dose_beam 0"] == "Dose"
 
 
-def test_overlay_meta_resolves_snapshot_tags_and_shares_rbe_axis():
+def test_overlay_meta_resolves_other_results_and_shares_rbe_axis():
     from pyRadPlan.analysis._units import compare_units
     from pyRadPlan.gui.widgets._result_widget import _build_overlay_meta
 
     arr = np.zeros((2, 2, 2))
     units, labels = _build_overlay_meta(
         {
-            "rbe_x_dose_protons": arr,
-            "physical_dose_protons": arr,
-            "rbe_x_dose_carbon": arr,
-            "physical_dose_carbon": arr,
-            "effect_carbon": arr,
-            "effect_protons": arr,
+            "rbe_x_dose": arr,
+            "physical_dose": arr,
+            "carbon/rbe_x_dose": arr,
+            "carbon/physical_dose": arr,
+            "carbon/effect": arr,
+            "carbon/rbe_x_dose_beam": [arr],
+            "effect": arr,
         }
     )
-    assert units["rbe_x_dose_carbon"] == units["rbe_x_dose_protons"] == "Gy (RBE)"
-    assert labels["rbe_x_dose_carbon"] == "RBE-weighted Dose"
-    assert compare_units(units["rbe_x_dose_protons"], units["rbe_x_dose_carbon"]) == (True, 1.0)
-    assert compare_units(units["rbe_x_dose_protons"], units["effect_carbon"])[0] is False
+    assert units["carbon/rbe_x_dose"] == units["rbe_x_dose"] == "Gy (RBE)"
+    assert labels["carbon/rbe_x_dose"] == labels["carbon/rbe_x_dose_beam 0"] == "RBE-weighted Dose"
+    assert compare_units(units["rbe_x_dose"], units["carbon/rbe_x_dose"]) == (True, 1.0)
+    assert compare_units(units["rbe_x_dose"], units["carbon/effect"])[0] is False
 
 
 def test_beam_axes_are_mapped_to_the_viewer_voxel_space():

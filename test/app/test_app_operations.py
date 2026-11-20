@@ -9,6 +9,7 @@ import pytest
 
 from pyRadPlan.app import Operation, PreconditionError, Session, Workspace
 from pyRadPlan.core import ProgressReporter
+from pyRadPlan.result import create_result
 
 
 def _reporting_operation(session, commit=None):
@@ -182,15 +183,11 @@ def test_an_empty_solver_preference_keeps_the_plan(monkeypatch, preference, solv
 
     def optimize(ct, cst, stf, dij, pln, **kwargs):
         received.append(pln)
-        return np.ones(2)
+        assert kwargs["scenarios"] is True
+        return create_result({"w": np.ones(2)})
 
     monkeypatch.setattr("pyRadPlan.fluence_optimization", optimize)
-    dij = SimpleNamespace(
-        bio_model=None,
-        alpha_dose=None,
-        scenarios=None,
-        compute_result_ct_grid=lambda weights, **kw: {"physical_dose": weights},
-    )
+    dij = SimpleNamespace(bio_model=None, alpha_dose=None, scenarios=None)
     pln = PhotonPlan()
     session = Session(auto_plan=False, solver_preference=preference)
     session.workspace.set_many(ct=object(), cst=object(), pln=pln, stf=object(), dij=dij)
@@ -198,6 +195,7 @@ def test_an_empty_solver_preference_keeps_the_plan(monkeypatch, preference, solv
     assert (received[0] is pln) is (solver is None)
     assert (received[0].prop_opt or {}).get("solver") == solver
     assert summary["solver"] == solver
+    np.testing.assert_array_equal(session.workspace.result.fluence, np.ones(2))
 
 
 @pytest.mark.parametrize("keeps", [True, False])

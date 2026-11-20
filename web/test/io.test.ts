@@ -10,7 +10,7 @@ import { crc32, zip } from "../src/api/mock/zip";
 import { exportBlockedReason, feature, loadAccept, structureFormatOf, unavailableImport } from "../src/components/io/capabilities";
 import { describeDownload, downloadFile, safeFilename, type DownloadEnv } from "../src/components/io/download";
 import { buildMenus, canSave, findEntry, type MenuInput } from "../src/components/io/menuModel";
-import { baseNameOf, formatLogLine, sanitizeTag, splashPhase, statusWithSnapshots, visibleLogs } from "../src/components/io/models";
+import { baseNameOf, formatLogLine, sanitizeTag, splashPhase, statusWithFurtherResults, visibleLogs } from "../src/components/io/models";
 import { orderSections } from "../src/components/settings/model";
 import { lockedByUiMode } from "../src/store/uiMode";
 
@@ -263,11 +263,12 @@ describe("small helpers", () => {
     expect(sanitizeTag("  ")).toBe("");
   });
 
-  it("appends the snapshot count to the result status", () => {
-    expect(statusWithSnapshots("Optimization result available", ["a"])).toBe("Optimization result available · 1 saved snapshot");
-    expect(statusWithSnapshots("Optimization result available", ["a", "b"])).toBe("Optimization result available · 2 saved snapshots");
-    expect(statusWithSnapshots("Ready for optimization", ["a"])).toBe("Ready for optimization");
-    expect(statusWithSnapshots("Optimization result available", [])).toBe("Optimization result available");
+  it("appends the number of further results to the result status", () => {
+    expect(statusWithFurtherResults("Optimization result available", ["a"])).toBe("Optimization result available · 1 further result");
+    expect(statusWithFurtherResults("Optimization result available", ["a", "b"])).toBe("Optimization result available · 2 further results");
+    expect(statusWithFurtherResults("Ready for optimization", ["a"])).toBe("Ready for optimization");
+    expect(statusWithFurtherResults("Optimization result available", [])).toBe("Optimization result available");
+    expect(statusWithFurtherResults("Optimization result available · 1 further result", ["a"])).toBe("Optimization result available · 1 further result");
   });
 
   it("locks advanced fields only in the educational mode", () => {
@@ -449,13 +450,47 @@ describe("mock handlers of package C", () => {
     await expect(backend.request("session.log_level", { level: "loud" as never }, session)).rejects.toMatchObject({ type: "ValueError" });
   });
 
-  it("snapshots a result with a sanitized tag and refuses reserved ones", async () => {
+  it("snapshots the active result under a sanitized name and refuses the name of the active result", async () => {
     const { backend, session } = await newSession();
     await backend.request("data.load_phantom", { name: "TG119" }, session);
     await expect(backend.request("workflow.snapshot", { tag: "x" }, session)).rejects.toBeInstanceOf(BackendError);
     await backend.request("workflow.run_all", {}, session);
     const out = await backend.request("workflow.snapshot", { tag: " my snap " }, session);
     expect(out.tag).toBe("my_snap");
-    await expect(backend.request("workflow.snapshot", { tag: "beam" }, session)).rejects.toMatchObject({ type: "ValueError" });
+    expect(out.state.results?.tags).toEqual(["my_snap"]);
+    await expect(backend.request("workflow.snapshot", { tag: "current" }, session)).rejects.toMatchObject({ type: "ValueError" });
+    expect((await backend.request("workflow.snapshot", { tag: "scenario" }, session)).tag).toBe("scenario");
+  });
+
+  it("adds a loaded dose as a result of its own, without an active result", async () => {
+    const { backend, session } = await newSession();
+    const data = { dtype: "uint8" as const, shape: [4], data: new Uint8Array([1, 2, 3, 4]) };
+    await backend.request("data.load_phantom", { name: "TG119" }, session);
+    let state = await backend.request("data.load_file", { filename: "reference dose.npz", data }, session);
+    // The patient stays; the dose is a result next to the (missing) active one.
+    expect(state.has).toMatchObject({ ct: true, result: false });
+    expect(state.results).toMatchObject({ names: ["reference_dose"], active: "current", tags: ["reference_dose"], default: "reference_dose/physical_dose" });
+    expect(state.results?.groups.map((g) => [g.label, g.tag])).toEqual([["dose (reference_dose)", "reference_dose"]]);
+    expect(state.actions).toMatchObject({ snapshot: false, recalc: false, save_result: true });
+    await expect(backend.request("workflow.snapshot", { tag: "x" }, session)).rejects.toMatchObject({ type: "PreconditionError" });
+    const volume = await backend.request("view.volume", { name: "reference_dose/physical_dose" }, session);
+    expect(volume.unit).toBe("Gy");
+    // The name is made unique.
+    state = await backend.request("data.load_file", { filename: "reference dose.npz", data }, session);
+    expect(state.results?.names).toEqual(["reference_dose", "reference_dose_2"]);
+    // Export offers the full quantities of all results by their keys.
+    const saved = await backend.request("export.save", { object: "result", format: "npz" }, session);
+    expect(saved.files).toEqual(["reference_dose_physical_dose.npz", "reference_dose_2_physical_dose.npz"]);
+    // Optimizing adds the active result and keeps the imported doses.
+    state = await backend.request("workflow.run_all", {}, session);
+    expect(state.results).toMatchObject({ names: ["reference_dose", "reference_dose_2", "current"], tags: ["reference_dose", "reference_dose_2"], default: "physical_dose" });
+    expect(state.results?.groups[0].tag).toBe("");
+    expect(state.actions).toMatchObject({ snapshot: true, save_result: true });
+    // The doses of all results can be referenced by objectives.
+    const catalog = await backend.request("objectives.catalog", {}, session);
+    expect(catalog.reference_images.map((c) => c.value)).toEqual(["physical_dose", "reference_dose/physical_dose", "reference_dose_2/physical_dose"]);
+    // A new patient replaces all results.
+    state = await backend.request("data.load_phantom", { name: "TG119" }, session);
+    expect(state.results).toMatchObject({ names: [], tags: [], groups: [], default: null });
   });
 });

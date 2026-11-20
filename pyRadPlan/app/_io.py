@@ -28,8 +28,8 @@ import numpy as np
 
 from ._profiles import running_in_pyodide
 from ._session import Operation, PreconditionError, dij_payload
-from ._results import result_components
-from ._views import result_entry, result_quantities
+from ._results import full_quantities, result_components
+from ._workspace import unique_result_name
 
 MIME_MAT = "application/x-matlab-data"
 MIME_BINARY = "application/octet-stream"
@@ -615,8 +615,7 @@ def load_file(session: Any, filename: str, data: Any, kind: str = "auto") -> Non
     """Load an uploaded file into the session (Qt "Load File").
 
     ``.mat``, ``.npz`` and ``.pkl`` / ``.pickle`` containers load directly (pickles not in
-    the browser); a workspace pickle also restores its snapshot tags
-    (``saved_result_tags``) when it carries a CT or a result, as the Qt widget does.
+    the browser); a workspace pickle brings all of its named results.
     """
     session.execute(prepare_load_file(session, filename, data, kind))
 
@@ -688,7 +687,7 @@ def _require_sitk_io(*names: str) -> None:
 
 
 def default_dose_name(path: Any) -> str:
-    """Return the result key of a dose image file: its sanitized file name."""
+    """Return the result name of a dose image file: its sanitized file name."""
     from pyRadPlan.io.sitk_based._binary_import import _file_stem  # noqa: PLC0415
 
     return re.sub(r"\W+", "_", _file_stem(os.fspath(path))).strip("_") or "imported_dose"
@@ -738,9 +737,10 @@ def prepare_import_image(
     ``ct_new`` starts a new patient; ``ct_replace`` swaps the CT and, if the grid differs,
     clears the structures, dose influence and results built on the old one; ``structures``
     adds the mask or every label of a label map to the structure set (clashing names get a
-    numeric suffix); ``dose`` adds the image, resampled to the CT grid, to the result under
-    *name* (default: the file name), suffixed if taken. The commit of ``dose`` returns the
-    key used.
+    numeric suffix); ``dose`` adds the image as a result of its own, with the image as
+    its ``physical_dose`` on the grid of the file, named *name* (default: the file name),
+    suffixed if taken. The commit of ``dose`` returns the name of that result; its
+    quantity is listed as ``"<name>/physical_dose"``.
     """
     path = os.fspath(path)
     _require_sitk_io("ReadImage")
@@ -767,7 +767,7 @@ def prepare_import_image(
             elif matches:
                 ws.ct = new_ct
             else:
-                ws.set_many(ct=new_ct, cst=None, dij=None, result=None)
+                ws.set_many(ct=new_ct, cst=None, dij=None, results={})
 
         return Operation("import_image", f"Importing CT from {basename}", compute_ct, commit_ct)
 
@@ -798,22 +798,12 @@ def prepare_import_image(
     key_name = name or default_dose_name(path)
 
     def compute_dose() -> Any:
-        from pyRadPlan.core.resample import resample_image  # noqa: PLC0415
-
-        sitk = _sitk()
-        image = sitk.ReadImage(path)
-        if not same_grid(image, ct.cube_hu):
-            image = resample_image(
-                image, interpolator=sitk.sitkLinear, target_image=ct.cube_hu, extrapolate=0
-            )
-        return image
+        return _sitk().ReadImage(path)
 
     def commit_dose(image: Any) -> str:
-        result = dict(ws.result or {})
-        key = unique_name(key_name, set(result))
-        result[key] = image
-        ws.result = result
-        return key
+        result_name = unique_result_name(key_name, {*ws.results, ws.active_result})
+        ws.add_result(result_name, {"physical_dose": image})
+        return result_name
 
     return Operation("import_image", f"Importing dose from {basename}", compute_dose, commit_dose)
 
@@ -959,34 +949,14 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^\w.-]+", "_", name).strip("._") or "export"
 
 
-def quantity_to_image(value: Any, ct: Any) -> Optional[Any]:
-    """Convert a result quantity into a CT-aligned ``sitk.Image``.
+def image_keys(results: Any) -> list[str]:
+    """Keys of the quantities that can be saved as images.
 
-    Images are returned as they are; 3-D arrays are taken as ``(z, y, x)``; ``None`` for
-    anything else.
+    These are the whole-volume quantities of all results (the entries of
+    :meth:`Workspace.result_entries`), ``"[<result>/]<quantity>"``; per-beam and
+    per-scenario lists are not offered.
     """
-    sitk = _sitk()
-    if isinstance(value, sitk.Image):
-        return value
-    array = np.asarray(value)
-    if array.ndim != 3:
-        return None
-    image = sitk.GetImageFromArray(array)
-    if ct is not None and image.GetSize() == ct.cube_hu.GetSize():
-        image.CopyInformation(ct.cube_hu)
-    return image
-
-
-def image_keys(result: Any) -> list[str]:
-    """Top-level result keys holding an image or a 3-D array (not weights or lists)."""
-    if not isinstance(result, Mapping):
-        return []
-    return [
-        key
-        for key, value in result.items()
-        if callable(getattr(value, "GetSize", None))
-        or (isinstance(value, np.ndarray) and value.ndim == 3)
-    ]
+    return list(full_quantities(results))
 
 
 def _zip_folder(folder: str) -> tuple[bytes, list[str]]:
@@ -1009,23 +979,28 @@ def _file_result(filename: str, mime: str, data: bytes, files=None) -> dict[str,
     return result
 
 
-def _result_keys(session: Any, quantities: Optional[Sequence[str]]) -> list[str]:
-    result = session.workspace.result
+def _result_images(session: Any, quantities: Optional[Sequence[str]]) -> dict[str, Any]:
+    """Return the images to save by key.
+
+    Without *quantities* these are the whole-volume quantities of all results; a chosen
+    key may also name a per-beam or per-scenario component.
+    """
+    entries = session.workspace.result_entries()
+    available = result_components(entries)
     if quantities is None:
-        keys = result_quantities(result)
+        keys = list(full_quantities(entries))
     else:
         if isinstance(quantities, str):
             raise TypeError("quantities must be a list of component keys")
         keys = list(dict.fromkeys(quantities))
-        unknown = [key for key in keys if result_entry(result, key) is None]
+        unknown = [key for key in keys if key not in available]
         if unknown:
             raise KeyError(
-                f"No volume quantity {unknown} in the result; available: "
-                f"{list(result_components(result))}"
+                f"No volume quantity {unknown} in the results; available: {list(available)}"
             )
     if not keys:
-        raise PreconditionError("The result has no exportable image quantities", "no_data")
-    return keys
+        raise PreconditionError("The results have no exportable image quantities", "no_data")
+    return {key: available[key] for key in keys}
 
 
 def _require(obj: Any, what: str) -> None:
@@ -1049,10 +1024,10 @@ def _save_inputs(
     if obj == "workspace":
         _require(ws.ct, "CT (a workspace needs one)")
         objects = {key: value for key, value in ws.snapshot().items() if value is not None}
-        objects["saved_result_tags"] = session.snapshot_tags()
+        # ``result`` is the active one of ``results``, for readers of a single result.
+        objects.update(results=ws.results, active_result=ws.active_result)
     elif obj == "result":
-        result = ws.result
-        objects = {key: result_entry(result, key) for key in _result_keys(session, quantities)}
+        objects = _result_images(session, quantities)
     else:
         _require(
             getattr(ws, obj),
@@ -1062,15 +1037,31 @@ def _save_inputs(
     return entry, objects, ws.ct
 
 
-def _write_result(entry: ExportFormat, images: dict[str, Any], target: str) -> list[str]:
+def matrad_field(key: str) -> str:
+    """``resultGUI`` field of a quantity key: matRad's name, ``<name>_<result>`` for other results."""
+    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+
+    tag, quantity = split_result_key(key)
+    field = MATRAD_RESULT_NAMES.get(quantity) or re.sub(r"\W+", "_", quantity).strip("_")
+    return f"{field}_{_safe_name(tag)}" if tag else field
+
+
+def _write_result(
+    entry: ExportFormat, images: dict[str, Any], target: str, ct: Any = None
+) -> list[str]:
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
     if entry.format == "mat":
+        from pyRadPlan.app._views import _quantity_on_ct_grid  # noqa: PLC0415
+
         sitk = _sitk()
         result_gui = {}
         for key, image in images.items():
-            field = MATRAD_RESULT_NAMES.get(key) or re.sub(r"\W+", "_", key).strip("_")
-            result_gui[field] = np.transpose(sitk.GetArrayFromImage(image), (1, 2, 0))
+            # matRad cubes carry no geometry and are read on the CT grid
+            array = (
+                sitk.GetArrayFromImage(image) if ct is None else _quantity_on_ct_grid(image, ct)
+            )
+            result_gui[matrad_field(key)] = np.transpose(array, (1, 2, 0))
         save_data(file_name=target, format="mat", resultGUI=result_gui)
         return [target]
     if entry.format == "dcm":
@@ -1097,19 +1088,14 @@ def _write_result(entry: ExportFormat, images: dict[str, Any], target: str) -> l
 def write_export(entry: ExportFormat, objects: Mapping[str, Any], ct: Any, target: str) -> list:
     """Write *objects* as *entry* to *target* and return the paths written.
 
-    *target* is a file, or a folder where :func:`writes_folder` says so; result quantities
-    are converted to CT-aligned images first.
+    *target* is a file, or a folder where :func:`writes_folder` says so. For a result,
+    *objects* are the images to write by quantity key; each is written on its own grid,
+    except for matRad, whose cubes are resampled onto the grid of *ct*.
     """
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
     if entry.object == "result":
-        images = {key: quantity_to_image(value, ct) for key, value in objects.items()}
-        images = {key: image for key, image in images.items() if image is not None}
-        if not images:
-            raise PreconditionError(
-                "The selected quantities could not be converted to images", "no_data"
-            )
-        return _write_result(entry, images, target)
+        return _write_result(entry, dict(objects), target, ct)
     if entry.archive and entry.format == "dcm":
         from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
 

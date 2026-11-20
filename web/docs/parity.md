@@ -99,7 +99,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Save Dij… (.mat) | `_file.py:85-86` → `_workflow_widget.py:1536-1537` | verified on Pyodide | impl (mat, pickle) | `export.save {object:"dij"}` |
 | Save CST… format choice + "cannot store objectives" warning | `_file.py:87-89` → `_workflow_widget.py:1540-1616` | verified on Pyodide | impl: mat, pickle, npz, DICOM RTSTRUCT / SEG (zip); label maps NIfTI/NRRD/MetaImage: stub (SimpleITK WriteImage) | `export.save {object:"cst"}`, `app.info.capabilities.formats` |
 | Save Result… (Save Result dialog, then image files) | `_file.py:90-91` → `_workflow_widget.py:1618-1701` | verified on Pyodide | impl with the browser-capable formats (npz, mat `resultGUI`, DICOM RTDOSE; one file or zip); NIfTI/NRRD/MetaImage: stub (WriteImage) | `export.save {object:"result"}` |
-| Save Workspace… (pickle incl. snapshot tags; requires CT; pending-edit check) | `_file.py:94-95` → `_workflow_widget.py:1489-1513` | verified on Pyodide | impl (pickle; cross-runtime compatibility depends on the shim fix) | `export.save {object:"workspace"}` |
+| Save Workspace… (pickle incl. all results and the active name; requires CT; pending-edit check) | `_file.py:94-95` → `_workflow_widget.py:1489-1513` | verified on Pyodide | impl (pickle; cross-runtime compatibility depends on the shim fix) | `export.save {object:"workspace"}` |
 | UI Mode ▸ Default / Educational (exclusive, tooltips) | `_file.py:98-110,159-161` | verified on Pyodide | impl (frontend setting; plan form locks `advanced` fields) | `app.settings` (optional), descriptors `advanced` |
 | Exit | `_file.py:113-114` | n/a | n/a (closing the tab) | – |
 | Enable rules (pln / dij / cst / result / ct present) | `_file.py:122-128` | done (mock e2e) | impl | `state.actions` (v1 entries `save_*`) |
@@ -194,7 +194,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 
 | Element | Qt | Web | Target | Methods |
 |---|---|---|---|---|
-| Status label (texts of `_update_status`) | `:479-497` | verified on Pyodide | impl: add the " · N saved snapshots" suffix | `state.status`, `state.results.tags` |
+| Status label (texts of `_update_status`) | `:479-497` | verified on Pyodide | impl: add the " · N further results" suffix (results besides the active one) | `state.status`, `state.results.tags` |
 | Refresh | `:262-264,1040-1041` | verified on Pyodide | done | `session.state` |
 | Stop (cooperative; optimization keeps last iterate: under Pyodide the first interrupt requests the cooperative stop of an optimization, a second one discards it) | `:265-272,613-619` | verified on Pyodide | done | interrupt buffer / `session.cancel` (native) |
 | Busy bar (indeterminate → determinate nested fraction) | `:276-282,636-684` | verified on Pyodide | done | `progress` events |
@@ -208,7 +208,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Load Dij (stf + dij from .mat; warns when the file has no dij) | `:292,1014-1035` | verified on Pyodide | impl | `data.load_dij` |
 | Optimize (pending-edit check, biological-objective check, opens the status window) | `:293,1268-1316` | verified on Pyodide | impl (status window) | `workflow.optimize`, `progress` events |
 | Recalculate Dose (weights, angle match, bio check, moves beams to iso) | `:294,1333-1402` | done (mock e2e) | done | `workflow.recalc` |
-| Snapshot Result (name prompt, default "<mode>_<n>fx", sanitized, reserved "beam"/"scenario") | `:295-300,1408-1442` | verified on Pyodide | impl | `workflow.snapshot` |
+| Snapshot Result (name prompt, default "<mode>_<n>fx", sanitized; a result of its own, the name of the active result is refused) | `:295-300,1408-1442` | verified on Pyodide | impl | `workflow.snapshot` |
 | Warnings collected during a run, shown once afterwards | `:699-702` | verified on Pyodide | frontend: dialog with the run's `log` warnings | `log` events |
 | Error dialog "<Type>: <message>" | `:704-705` | verified on Pyodide | done | error responses |
 | "Physical dose only?" question for a failing bio model; "invalid α_x/β_x" blocker | `:1107-1182` | done (mock e2e) | done | `PreconditionError` codes |
@@ -383,7 +383,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | CT / CST / Quantity / Isolines / Isocenter checkboxes | `:63-87` | verified on Pyodide | done | – |
 | Beams checkbox (disabled until beam angles exist) | `:89-92,151-157` | verified on Pyodide | impl | `view.beams` |
 | Orientation checkbox | `:94-102` | verified on Pyodide | done | – |
-| Overlay quantity selector (two combos: quantity group incl. snapshot groups, component full / beam i / scenario i: label; scenario components after a robust optimization verified on Pyodide with a worst-case grid plan) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
+| Overlay quantity selector (two combos: quantity group incl. the groups of further results, component full / beam i / scenario i: label of the group's own result; scenario components after a robust optimization verified on Pyodide with a worst-case grid plan) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
 | Set isolines dialog (OK / Cancel / Reset; says "(Gy)") | `:130-132,167-199` | done (mock e2e) | done | – |
 | Recenter | `:134-136` | done (mock e2e) | done | – |
 | Show DVH / QI → analysis window | `:145-149`, `_result_widget.py:861-887` | verified on Pyodide | impl (see Analysis) | `analysis.*` |
@@ -510,9 +510,8 @@ Qt has no context menu here; editing goes through the click on the name.
     base-data edits wait (they are cheap methods, but the worker is single-threaded).
 13. A cst-only `.mat` cannot be loaded at all (`load_data` raises `KeyError: 'ct'`), although the
     Qt merge rule handles "structures without CT in the file" (`_workflow_widget.py:783-789`).
-14. Snapshot tags are only recognized when at least two result stems carry them
-    (`widgets/_display_names.py:146-178`), so a snapshot of a result with one quantity is not
-    grouped as a snapshot.
+14. Resolved by the result collection (PROTOCOL.md v1 amendment 26): snapshots are results of
+    their own with keys `"<result>/<key>"`; no tags are guessed from key endings any more.
 15. The isoline dialog always says "(Gy)" (`result/visualization_widget.py:172`); the Save Result
     and VOI labels are truncated to 12 characters.
 16. The AI tooltip calls `pydantic-ai` optional while it is a core dependency in `pyproject.toml`.

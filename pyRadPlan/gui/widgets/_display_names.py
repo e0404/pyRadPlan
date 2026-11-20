@@ -40,9 +40,10 @@ from pyRadPlan.quantities._display_names import (  # noqa: F401 - re-exported fo
     robustness_display_name,
     ResultGroup,
     _split_index,
-    _snapshot_tags,
     group_result_keys,
+    result_key,
     result_key_labels,
+    split_result_key,
 )
 
 #: Item data role holding the identifier shown next to an item in an open popup.

@@ -4,7 +4,7 @@ import { actions, useApp, type Progress } from "../store/appStore";
 import { chooseAndLoadDij, loadFile, snapshotResult } from "../store/ioActions";
 import { resolvePendingChanges } from "../store/pendingChanges";
 import { loadAccept } from "./io/capabilities";
-import { statusWithSnapshots } from "./io/models";
+import { statusWithFurtherResults } from "./io/models";
 import { ProgressBar } from "./common";
 
 const DOT_TOOLTIP: Record<StageStatus, string> = {
@@ -62,7 +62,7 @@ export function WorkflowWidget() {
   const dijStage: StageStatus = stages ? (stages.dij === "missing" ? "missing" : worst(stages.stf, stages.dij)) : "missing";
   const resultStage: StageStatus = stages ? stages.optimization : "missing";
 
-  const statusText = busy ? busyStatusText(busy, progress) : statusWithSnapshots(state?.status ?? "Connecting…", state?.results?.tags);
+  const statusText = busy ? busyStatusText(busy, progress) : statusWithFurtherResults(state?.status ?? "Connecting…", state?.results?.tags);
 
   const dicom = featureStatus(info, "dicom_import");
   const imageIo = featureStatus(info, "image_file_io");

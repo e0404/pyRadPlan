@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt
@@ -56,8 +57,13 @@ logger = logging.getLogger(__name__)
 #: Status dot of each column header -> the session stage it shows.
 _INDICATOR_STAGES = {"load": "data", "dij": "dij", "result": "optimization"}
 
-#: Status line of a current result, followed by the number of saved snapshots.
+#: Status line of a current result, followed by the number of further results.
 _RESULT_AVAILABLE = "Optimization result available"
+
+
+def _file_stem(key: str) -> str:
+    """File name stem for the result key *key* (``"<result>/<quantity>"``)."""
+    return re.sub(r"[^\w.-]+", "_", key)
 
 
 class WorkflowWidget(WorkspaceWidget):
@@ -297,9 +303,9 @@ class WorkflowWidget(WorkspaceWidget):
 
     def _update_status(self) -> None:
         text = status_text(self._ws.present(), self.session.tracker)
-        n = len(self.session.saved_tags)
-        if n and text == _RESULT_AVAILABLE:
-            text += f" · {n} saved snapshot{'s' if n != 1 else ''}"
+        n = len(self._ws.results) - 1
+        if n > 0 and text == _RESULT_AVAILABLE:
+            text += f" · {n} further result{'s' if n != 1 else ''}"
         self._lbl_status.setText(text)
 
     def _update_button_states(self) -> None:
@@ -953,7 +959,7 @@ class WorkflowWidget(WorkspaceWidget):
 
     def _on_recalc_dose(self) -> None:
         # The beams follow the plan's isocenter (moved on a copy, which outdates the dij);
-        # snapshots are kept, per-scenario results of the previous optimization replaced.
+        # only the active result is replaced, snapshots and imported doses are kept.
         if not self._resolve_pending_changes("Recalculate Dose", outdates_input=True):
             return
         self._run_calculation("Recalculate Dose", "recalc")
@@ -969,8 +975,7 @@ class WorkflowWidget(WorkspaceWidget):
         )
         if not ok or not tag.strip():
             return
-        # Snapshot the current active quantities: every key that is not itself
-        # a snapshot from an earlier save (reusing a tag overwrites it).
+        # A result of its own that shares the images; reusing a name overwrites it.
         try:
             self.session.snapshot(tag)
         except (ValueError, PreconditionError) as exc:
@@ -1077,13 +1082,13 @@ class WorkflowWidget(WorkspaceWidget):
             )
 
     def _on_save_result_to_disk(self) -> None:
-        result = self._ws.result
-        if not isinstance(result, dict) or not result:
+        results = self._ws.result_entries()
+        if not results:
             QMessageBox.warning(self, "Save Result", "No result available to save.")
             return
 
-        # Offer only scalar image quantities (skip beamlet weights and per-beam lists).
-        keys = image_keys(result)
+        # Offer only whole-volume quantities (skip beamlet weights and per-beam lists).
+        keys = image_keys(results)
         if not keys:
             QMessageBox.warning(
                 self, "Save Result", "The result has no exportable image quantities."
@@ -1098,15 +1103,13 @@ class WorkflowWidget(WorkspaceWidget):
             return
         selected = dialog.selected_quantities()
         if not selected:
-            QMessageBox.warning(
-                self, "Save Result", "Selected quantities could not be converted to images."
-            )
+            QMessageBox.warning(self, "Save Result", "No quantities were selected.")
             return
 
         entries = export_entries("result", ("nifti", "nrrd", "meta"))
         if len(selected) == 1:
             filepath, chosen = QFileDialog.getSaveFileName(
-                self, "Save quantity", selected[0], export_filter(entries)
+                self, "Save quantity", _file_stem(selected[0]), export_filter(entries)
             )
             if filepath:
                 entry = entry_for_filter(chosen, entries)

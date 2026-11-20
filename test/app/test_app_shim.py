@@ -65,7 +65,10 @@ for key in ("workspace:pickle", "cst:npz", "result:npz", "pln:mat"):
     filename, data = saved[key]
     response = call("data.load_file", {"filename": filename, "data": {"$array": 0}}, target,
                     [data])
-    out[f"load {key}"] = response["result"]["has"] if response["ok"] else response["error"]
+    state = response.get("result")
+    out[f"load {key}"] = (
+        {**state["has"], "results": state["results"]["names"]} if response["ok"] else response["error"]
+    )
 response = call("data.load_file", {"filename": "ct.nii", "data": {"$array": 0}}, target, [b"x"])
 out["load nii"] = response["error"].get("code")
 print("RESULT" + json.dumps(out))
@@ -134,5 +137,5 @@ def test_files_saved_with_the_stand_in_load_back(shim_run):
     workspace = shim_run["load workspace:pickle"]
     assert workspace["ct"] and workspace["cst"] and workspace["pln"] and workspace["result"]
     assert shim_run["load cst:npz"]["cst"]
-    assert shim_run["load result:npz"]["result"]
+    assert shim_run["load result:npz"]["results"] == ["imported"]
     assert shim_run["load pln:mat"]["pln"]

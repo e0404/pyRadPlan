@@ -30,6 +30,7 @@ import type {
 } from "../protocol/plan";
 import { checkValue } from "../../components/forms/formModel";
 import { BROWSER_REASONS } from "./io";
+import { mockReferenceImages, mockResultKeys } from "./viewer";
 import { MethodError, precondition, resolveStructure, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
 import {
   DEFAULT_SOLVER,
@@ -738,7 +739,7 @@ export const planHandlers: MockHandlers = {
     const s = ctx.session();
     return {
       ...OBJECTIVES,
-      reference_images: s.dose ? [{ value: "physical_dose", label: "dose", identifier: "physical_dose" }] : [],
+      reference_images: mockReferenceImages(s),
     };
   },
 
@@ -777,7 +778,7 @@ export const planHandlers: MockHandlers = {
       if (!f) details.push({ field: `parameters.${name}`, message: `${obj.name} has no parameter ${name}` });
       else if (f.type === "image_ref") {
         const key = (value as { $result?: string } | null)?.$result;
-        if (!key || (key !== "physical_dose" && !key.startsWith("physical_dose")) || !s.dose) {
+        if (!key || !mockResultKeys(s).includes(key)) {
           details.push({ field: `parameters.${name}`, message: `No result image ${JSON.stringify(key)}` });
         }
       } else {

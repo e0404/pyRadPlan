@@ -120,19 +120,24 @@ def test_reference_values_pair_cubes_with_the_ct_grid():
 
     from pyRadPlan.app._objectives import reference_images, reference_values
 
-    class _Ct:
-        grid = "grid"
+    from pyRadPlan.result import create_result
 
     image = sitk.Image([2, 2, 2], sitk.sitkFloat32)
-    cube = np.zeros((2, 2, 2))
-    result = {"physical_dose": image, "let": cube, "w": np.ones(3), "physical_dose_beam": [image]}
-    values = reference_values(result, _Ct())
+    let = sitk.Image([2, 2, 2], sitk.sitkFloat32)
+    result = create_result(
+        {"physical_dose": image, "let": let, "w": np.ones(3), "physical_dose_beam": [image]}
+    )
+    measured = sitk.Image([3, 3, 3], sitk.sitkFloat32)
+    entries = [("", result), ("measured", create_result({"physical_dose": measured}))]
+    values = reference_values(entries)
     assert [(key, label) for key, label, _ in values] == [
         ("physical_dose", "dose"),
         ("let", "LETd"),
+        ("measured/physical_dose", "dose (measured)"),
     ]
-    assert values[0][2] is image and values[1][2][0] is cube and values[1][2][1] == "grid"
-    assert [key for key, *_ in reference_values(result, None)] == ["physical_dose"]
-    assert reference_images(result, None) == [
-        {"value": {"$result": "physical_dose"}, "label": "dose"}
+    assert values[0][2] is image and values[1][2] is let and values[2][2] is measured
+    assert reference_values(None) == []
+    assert reference_images(result) == [
+        {"value": {"$result": "physical_dose"}, "label": "dose"},
+        {"value": {"$result": "let"}, "label": "LETd"},
     ]

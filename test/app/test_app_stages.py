@@ -32,9 +32,23 @@ class Tracked:
         return stage_status(self.ws.present(), self.tracker)
 
 
+def _result(value=1.0):
+    import SimpleITK as sitk
+
+    from pyRadPlan.result import create_result
+
+    image = sitk.GetImageFromArray(np.full((2, 2, 2), value, dtype=np.float32))
+    return create_result({"physical_dose": image})
+
+
 def _all_loaded(tracked, cst=None):
     tracked.ws.set_many(
-        ct=object(), cst=cst or object(), pln=object(), stf=object(), dij=object(), result={}
+        ct=object(),
+        cst=cst or object(),
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result=_result(),
     )
 
 
@@ -55,7 +69,7 @@ def test_plan_change_marks_downstream_stale_and_recomputing_clears_it():
     t.ws.set_many(stf=object(), dij=object())
     assert not t.tracker.stf_stale and not t.tracker.dij_stale and t.tracker.result_stale
 
-    t.ws.result = {"w": 1}
+    t.ws.result = _result()
     assert t.stages()["optimization"] == "done"
 
 
@@ -102,7 +116,7 @@ def test_only_tissue_changes_of_the_structures_outdate_the_dose_influence():
     t.ws.cst = cst
     assert not t.tracker.dij_stale and t.tracker.result_stale
 
-    t.ws.set_many(dij=object(), result={})
+    t.ws.set_many(dij=object(), result=_result())
     voi = cst.vois[0]
     tissue = MKMTissueProperties(alpha_x=0.2, beta_x=0.04, r_nucleus=3.9, r_domain=0.32)
     data = dict(voi)
@@ -188,9 +202,56 @@ def test_status_text(present, tracker, text):
 
 
 def test_new_ct_replaces_the_whole_patient():
-    payload, warnings = merge_loaded_data({"ct": 1, "cst": 2}, True, WORKSPACE_KEYS)
-    assert payload == {"ct": 1, "cst": 2, "pln": None, "stf": None, "dij": None, "result": None}
+    payload, warnings = merge_loaded_data(
+        {"ct": 1, "cst": 2}, True, WORKSPACE_KEYS, {"current": "old", "kept": "old"}
+    )
+    assert payload == {
+        "ct": 1,
+        "cst": 2,
+        "pln": None,
+        "stf": None,
+        "dij": None,
+        "results": {},
+        "active_result": None,
+    }
     assert not warnings
+
+
+def test_new_ct_brings_the_results_of_its_file():
+    result, snapshot = _result(), _result(2.0)
+    data = {"ct": 1, "results": {"plan": result, "first": snapshot}, "active_result": "plan"}
+    payload, _ = merge_loaded_data(data, True, WORKSPACE_KEYS, {"current": _result()})
+    assert payload["results"] == {"plan": result, "first": snapshot}
+    assert payload["active_result"] == "plan"
+    assert "result" not in payload
+
+    ws = Workspace()
+    ws.set_many(**{key: value for key, value in payload.items() if key != "ct"})
+    assert ws.active_result == "plan" and ws.result is result
+    assert ws.result_entries() == [("", result), ("first", snapshot)]
+
+
+def test_plan_result_without_ct_replaces_only_the_active_result():
+    active, snapshot, loaded = _result(), _result(2.0), _result(3.0)
+    existing = {"plan": active, "first": snapshot}
+    payload, _ = merge_loaded_data({"result": loaded}, True, WORKSPACE_KEYS, existing, "plan")
+    assert payload == {"results": {"plan": loaded, "first": snapshot}, "active_result": "plan"}
+    assert payload["results"]["first"] is snapshot
+
+
+def test_other_results_without_ct_are_added_under_free_names():
+    active, imported = _result(), _result(2.0)
+    existing = {"current": active, "imported": imported}
+    payload, _ = merge_loaded_data({"dose": "image"}, True, WORKSPACE_KEYS, existing)
+    assert list(payload["results"]) == ["current", "imported", "imported_2"]
+    assert payload["results"]["imported_2"] == {"physical_dose": "image"}
+    assert payload["results"]["current"] is active and payload["results"]["imported"] is imported
+
+    session_file = {"results": {"current": _result(4.0), "first": _result(5.0)}}
+    payload, _ = merge_loaded_data(session_file, True, WORKSPACE_KEYS, {"first": active}, "plan")
+    assert list(payload["results"]) == ["first", "plan", "first_2"]
+    assert payload["results"]["first"] is active
+    assert payload["active_result"] == "plan"
 
 
 def test_import_without_ct_keeps_the_patient():
@@ -205,9 +266,25 @@ def test_structures_need_a_ct():
     assert payload == {"cst": 2} and not warnings
 
 
-def test_bare_dose_becomes_a_result():
+def test_bare_dose_becomes_a_result_of_its_own():
     payload, _ = merge_loaded_data({"dose": "image"}, True, WORKSPACE_KEYS)
-    assert payload == {"result": {"physical_dose": "image"}}
+    assert payload == {
+        "results": {"imported": {"physical_dose": "image"}},
+        "active_result": "current",
+    }
+
+
+def test_snapshots_and_imported_doses_notify_without_replacing_the_active_result():
+    """What lets a session keep an outdated active result outdated (see Session)."""
+    t = Tracked()
+    _all_loaded(t)
+    active = t.ws.result
+    seen = []
+    t.ws.subscribe(seen.append)
+    t.ws.add_result("first", active.model_copy())
+    t.ws.add_result("dose", _result(2.0))
+    assert seen == [["result"], ["result"]]
+    assert t.ws.result is active
 
 
 def _stf(*angles):
@@ -309,7 +386,7 @@ def test_tracker_agrees_with_input_versions_over_random_changes():
         "pln": object,
         "stf": object,
         "dij": object,
-        "result": dict,
+        "result": _result,
     }
     apply(list(WORKSPACE_KEYS))
     for _ in range(300):

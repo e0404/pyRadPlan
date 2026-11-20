@@ -18,7 +18,8 @@ Qt GUI    <-- direct Python calls ------------------------------------------->  
 
 - `Workspace`: observable store of the six pipeline objects `ct, cst, pln, stf, dij, result`
   (same keys and semantics as `pyRadPlan.gui.workspace.WorkspaceManager`, but plain Python with
-  `subscribe(callback) -> unsubscribe`). `result` is the dict the Qt GUI already stores.
+  `subscribe(callback) -> unsubscribe`). `result` is the active one of a collection of named
+  results (v1 amendment 26).
 - `Session`: one planning session. Owns a `Workspace`, runs workflow steps, tracks stage status
   (missing / done / stale), exposes JSON-able state and view data, emits events.
 - `SessionManager`: creates / looks up / closes sessions by id.
@@ -283,27 +284,46 @@ revisions: {
   beams: number;      // +1 when pln, stf or cst (automatic isocenter) changes
   base_data: number;  // process-wide, +1 per base_data.add / remove
 };
-results: {
-  groups: [{
-    base: string; tag: string;           // tag "" = current result
-    label: string;                       // selector label: RTQuantity.name (+ " (<tag>)")
+results: {                    // the collection of named results (amendment 26)
+  groups: [{                   // one per quantity of each result; the active result's groups first
+    base: string; tag: string;           // tag: name of the group's result, "" = the active result
+    label: string;                       // selector label: RTQuantity.name (+ " (<result name>)")
     meta_label: string; unit: string;    // colorbar / save-dialog label and unit (QUANTITY_META)
     components: [{key: string; label: string; kind: "full" | "beam" | "scenario" | "other"}];
+    scenario_labels: string[];           // scenario labels of the group's own result (flat index)
   }];
-  scenario_labels: string[];   // result["scenario_labels"], else dij.scenario_labels()
+  scenario_labels: string[];   // of the active result (kept for compatibility; use the group's list)
   default: string | null;      // rbe_x_dose > physical_dose > first (Qt default_quantity_key)
-  tags: string[];              // saved snapshot tags
-  default_tag: string;         // "<radiation_mode>_<n>fx"
+  names: string[];             // names of all results, in workspace order
+  active: string;              // name of the active result (default "current"); it may not exist yet
+  tags: string[];              // names of the results other than the active one
+  default_tag: string;         // suggested snapshot name, "<radiation_mode>_<n>fx"
 };
 options: {profile: "native" | "web"; default_plan: Partial<PlanSummary>; locked_fields: string[]};
 actions: {…v0, snapshot: boolean, load_dij: boolean, save_pln: boolean, save_dij: boolean,
           save_cst: boolean, save_result: boolean, save_workspace: boolean};
 ```
 
-Component keys (accepted by `view.volume` and `analysis.*`): `"<identifier>"`,
-`"<identifier>_beam <i>"`, `"<identifier>_scenario <i>"` (flat scenario index), each optionally
-tagged before the index: `"physical_dose_<tag>"`, `"physical_dose_beam_<tag> 1"`. Grouping follows
-`gui/widgets/_display_names.py:group_result_keys`. v0 `quantities` stays the list of full keys.
+**Results.** The workspace keeps a collection of named results, one per computation. One of them is
+the *active* result (`results.active`, default `"current"`): Optimize and Recalculate replace it,
+Snapshot copies it, and `has.result` tells whether it exists. Snapshots and imported doses are
+further results with their own grid, beams, scenarios and scenario labels. Result names contain no
+whitespace and no `/`.
+
+Component keys (opaque strings accepted by `view.volume`, `analysis.*`, `export.save` and `$result`
+references): `"[<result>/]<identifier>[_beam|_scenario][ <i>]"`, i.e. `"<identifier>"`,
+`"<identifier>_beam <i>"`, `"<identifier>_scenario <i>"` (flat scenario index into the labels of
+that result). Keys of the active result have no prefix (`"physical_dose"`, `"physical_dose_beam 0"`);
+keys of any other result are prefixed with its name and `/` (`"protons_30fx/physical_dose"`,
+`"protons_30fx/physical_dose_scenario 2"`). The result name is what precedes the first `/`;
+nothing is guessed from the rest of a key. Grouping follows
+`pyRadPlan/quantities/_display_names.py:group_result_keys`: `group.tag` is the result name, labels
+of other results read `"dose (protons_30fx)"`, and the scenario components of a group are labelled
+with that group's `scenario_labels`. v0 `quantities` stays the list of full keys (of all results,
+prefixed like every component key); frontends that read `results` do not use it.
+
+`actions.snapshot` needs the active result; `actions.save_result` is true when any result exists
+(also with only an imported dose, where `has.result` is false and `actions.recalc` stays false).
 
 `structures[]` (v0) adds `overlap_priority`, `num_objectives`, `num_voxels`.
 
@@ -397,9 +417,9 @@ default is `"total"` (`parity.md`, ambiguity 1); the web profile adopts it once 
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `data.load_file` (extended) | long | `{filename, data, kind?: "auto"}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`); restores snapshot tags from a workspace pickle (`saved_result_tags`). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO |
+| `data.load_file` (extended) | long | `{filename, data, kind?: "auto", name?}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`). A file with a CT replaces all results (a workspace pickle restores all of its results and the active name; older files with `saved_result_tags` are migrated); without a CT a loaded plan result replaces only the active result and a loaded dose is added as a further result (amendment 26). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO; `name?` names the result of a `"dose"` import (default: the file stem) |
 | `data.load_dij` | long | `{filename, data}` | `SessionState`; merges `stf` + `dij` from the file (`.pkl` not in the browser); `PreconditionError(code="no_dij")` when it holds none |
-| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg", basename?}` | `FileResult`. `quantities` (component keys) for `object: "result"`, default all full quantities. Workspace pickles include `saved_result_tags` |
+| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg", basename?}` | `FileResult`. `quantities` (component keys of any result) for `object: "result"`, default the full quantities of all results. Workspace pickles store all results and the active name |
 
 Pending plan-form edits are resolved by the frontend before calling `export.save` (Qt asks for
 Save Plan and Save Workspace).
@@ -476,7 +496,7 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
 | `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, pick: string \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows ; `pick` is the id of the `tissue.schema` pick the row's tissue corresponds to (null if none), see amendment 24 |
 | `tissue.apply` | write | `{rows: [{structure: string \| number, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
-| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref` |
+| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref`; `reference_images` are the full quantities of all results by their component keys |
 | `objectives.add` | write | `{structure: string \| number}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
 | `objectives.update` | write | `{structure: string \| number, index, changes: {priority?, quantity?, robustness?, parameters?: Record<string, unknown>}}` | `{state, structure}` |
 | `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule) |
@@ -491,7 +511,8 @@ type TissueDraft = {model: "Generic" | "LEM" | "MKM" | "mMKM";
                     cell_line_source?: string | null};
 type ObjectiveData = {index: number; name: string; priority: number; quantity: string;
                       robustness: string; parameters: Record<string, unknown>};
-// image references: {"$result": "<component key>"} or {"$custom": "<summary>"} (kept as is)
+// image references: {"$result": "<component key>"} (of any result: "physical_dose" of the active
+// one, "protons_30fx/physical_dose" of another) or {"$custom": "<summary>"} (kept as is)
 type StructureDetail = {
   name: string; index: number; type: string; color: [number, number, number]; visible: boolean;
   overlap_priority: number; num_voxels: number; num_scenarios: number;
@@ -505,9 +526,10 @@ type StructureDetail = {
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `workflow.snapshot` | write | `{tag?}` (default `results.default_tag`) | `{state, tag}`; tag sanitized `\W+` → `_`; `"beam"` / `"scenario"` fail with `ValueError`; reusing a tag overwrites; copies every untagged key `K` to `K_<tag>` (Qt `_on_save_result`) |
+| `workflow.snapshot` | write | `{tag?}` (default `results.default_tag`) | `{state, tag}`; stores a copy of the active result as a result of its own, named by the tag sanitized `\W+` → `_` (returned as `tag`); its keys are `"<tag>/<key>"`. Fails with `PreconditionError` when there is no active result and with `ValueError` when the name is empty or equals the active result's name; `"beam"` and `"scenario"` are ordinary names; reusing a name overwrites that result (Qt `_on_save_result`) |
 
-Optimization after a snapshot carries tagged keys forward and recalculation keeps them (Qt rules).
+Optimize and Recalculate replace only the active result; every other result (snapshots, imported
+doses) is kept. A recalculation keeps nothing of the previous doses of the active result.
 
 ### Views
 
@@ -559,8 +581,9 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
    (in a folder per key when several). Default `filename`: `<object><ext>`, a single result
    quantity `<key><ext>`, several `result.zip`; `basename` replaces the stem. Missing objects
    fail with `PreconditionError(code="no_data")`, unavailable formats with `not_available`.
-4. 2026-11-18 (B): `data.load_file`: a dose-only `.npz` (Save Result as npz) loads as
-   `result.physical_dose` of the current patient (the npz importer alone needs a CT). With
+4. 2026-11-18 (B): `data.load_file`: a dose-only `.npz` (Save Result as npz) loads as a dose of
+   the current patient (the npz importer alone needs a CT); since amendment 26 as a result of its
+   own, it was `result.physical_dose` before. With
    `kind: "auto"`, a bare image file fails with `not_available` when the runtime has no image
    IO; the reserved `kind`s fail with `not_available` in every runtime in v1.
 5. 2026-11-18 (B): `analysis.dvh` sets and `analysis.qi` add `name` (the selector label,
@@ -599,8 +622,8 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     `structure`, `tissue`, `issues`, `comparison`; reference-value sources are in
     `tissue.sources` (TissueDraft). `cst.update_structure` accepts `type` in any case.
 14. 2026-11-18 (A): `revisions.volumes`: a key whose source object is the same as another key's
-    (a snapshot copies the arrays under `<key>_<tag>`) gets the same revision, so a frontend can
-    reuse what it already fetched. `revisions.base_data` is bumped by `base_data.add/remove`.
+    (a snapshot shares the arrays of the result it copies, listed as `<tag>/<key>`) gets the same
+    revision, so a frontend can reuse what it already fetched. `revisions.base_data` is bumped by `base_data.add/remove`.
 15. 2026-11-18 (A): `session.pause` / `session.resume` also fail with `not_available` when
     nothing is running. An objective parameter sent back as `{"$custom": …}` keeps its current
     value.
@@ -625,8 +648,9 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     configuration dict before. Clarification, no new field: after an optimization with a
     multi-scenario dose influence, `state.results.groups[].components` list one
     `"<identifier>_scenario <i>"` component per scenario (`kind: "scenario"`, flat index into
-    `results.scenario_labels`), served by `view.volume`, `analysis.dvh {keys}` and `analysis.qi`
-    like any other component key and carried into snapshots (`"<identifier>_scenario_<tag> <i>"`);
+    the group's `scenario_labels`), served by `view.volume`, `analysis.dvh {keys}` and `analysis.qi`
+    like any other component key and carried into snapshots (`"<tag>/<identifier>_scenario <i>"`,
+    with the snapshot's own labels);
     they are not in v0 `quantities`. Verified natively and under Pyodide (`test/app/test_app_scenarios.py`,
     `e2e:pyodide` stage `robust`).
 20. 2026-11-18 (stf): **changed** `workflow.calc_dose_influence` (and `workflow.run_all` when it
@@ -710,3 +734,38 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     as Qt keeps the cell line only while the parameters still match the tissue applied. Presets
     whose applied tissues are identical (e.g. the LEM I and LEM II presets of a cell line under
     MKM base data) cannot be told apart afterwards; one of them is named.
+26. 2026-11-20 (result collection): **changed** the results of a session are a collection of
+    named results instead of one result dict whose snapshots were copies under `"<key>_<tag>"`
+    and whose imported doses were entries `"import_<name>"`. The sections above describe the new
+    model (`state.results`, "Results" and the component keys, `workflow.snapshot`,
+    `data.load_file`, `export.save`); this entry lists what changed for a frontend.
+    - Component keys of a result other than the active one are `"<result>/<key>"` (the name ends
+      at the first `/`); the tag-suffixed keys (`"physical_dose_<tag>"`,
+      `"physical_dose_beam_<tag> 1"`) are gone, and with them the guessing of tags from key
+      endings. Keys of the active result are unchanged.
+    - `state.results` adds `names`, `active` and `groups[].scenario_labels`; `tags` are the names
+      of all results but the active one (snapshots and imported doses alike), `group.tag` is the
+      result name. The top-level `scenario_labels` describe the active result only: a snapshot of
+      a robust result keeps its own labels when the active result is replaced by a nominal one.
+    - `workflow.snapshot` accepts `"beam"` and `"scenario"`, and refuses the name of the active
+      result (`ValueError`) and a missing active result (`PreconditionError`).
+    - Loading: a file with a CT replaces all results; without a CT a plan result of the file
+      replaces only the active result and a dose is added as a further result. A dose becomes a
+      result of its own with the quantity `physical_dose`, named after the given name (`name` of
+      `data.load_file` for a `"dose"` import, else the file stem; whitespace and `/` become `_`)
+      and made unique with `_2`, `_3`, ...; it stays on its own grid and is resampled for display
+      only. A dose loaded together with a patient but without a plan result becomes the result
+      `imported`: there is then no active result (`has.result` false), so `actions.recalc` and
+      `actions.snapshot` stay false while `actions.save_result` is true.
+    - `workflow.optimize` / `workflow.recalc` replace only the active result. They carried the
+      tagged keys forward inside the one result before; a recalculation keeps nothing of the
+      previous doses of the active result.
+    - Saved workspaces store all results and the active name; `saved_result_tags` is gone and
+      older files are migrated on load.
+    - `export.save {object: "result"}` offers the full quantities of all results by their keys.
+      In the file names of amendment 3 the `/` of a key is written as `_`
+      (`protons_30fx_physical_dose.npz`).
+    - `objectives.catalog.reference_images` list the full quantities of all results by their
+      keys, and `{"$result": key}` accepts any component key.
+    - `revisions.volumes` is keyed by the same component keys; a snapshot's keys have the
+      revisions of the images they share (amendment 14).

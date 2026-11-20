@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import SimpleITK as sitk
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QGroupBox
@@ -698,7 +699,14 @@ def test_voi_editor_unchanged_ok_leaves_the_workspace_untouched(qapp, test_data_
     ws = WorkspaceManager()
     workflow = WorkflowWidget(ws)
     viewing = ViewingWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        ct=ct,
+        cst=cst,
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
     assert not workflow.session.tracker.result_stale
 
     changes = []

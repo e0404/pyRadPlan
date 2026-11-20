@@ -28,6 +28,7 @@ import type {
   SettingsSectionId,
 } from "../protocol/io";
 import { MethodError, precondition, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
+import { addMockDoseResult } from "./viewer";
 import { zip } from "./zip";
 
 export type MockRuntime = "pyodide" | "native";
@@ -179,15 +180,18 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
   return { features, formats: { import: imports, export: exports } };
 }
 
-/** The `actions` entries of package C for the objects present in a session. */
-export function ioActionFlags(has: SessionState["has"], hasQuantities: boolean): Record<string, boolean> {
+/**
+ * The `actions` entries of package C for the objects present in a session. `has.result` is the
+ * active result, which a snapshot copies; `anyResult` also counts snapshots and imported doses.
+ */
+export function ioActionFlags(has: SessionState["has"], hasQuantities: boolean, anyResult: boolean = has.result): Record<string, boolean> {
   return {
     load_dij: true,
     snapshot: has.result && hasQuantities,
     save_pln: has.pln,
     save_dij: has.dij,
     save_cst: has.cst,
-    save_result: has.result,
+    save_result: anyResult,
     save_workspace: has.ct,
   };
 }
@@ -481,6 +485,9 @@ function dicomFile(note: string): Uint8Array {
 
 const EXPORT_SIZE = 64;
 
+/** File name stem of a component key: the `/` after a result name is no file name character. */
+const fileStem = (key: string) => key.replace(/\//g, "_");
+
 function exportPayload(
   object: string,
   format: string,
@@ -495,21 +502,21 @@ function exportPayload(
   const note = `mock ${object} (${format})`;
   if (object === "result") {
     if (format === "dcm") {
-      const files = quantities.map((q) => `${q}/RD.${q}.dcm`);
+      const files = quantities.map((q) => `${fileStem(q)}/RD.${fileStem(q)}.dcm`);
       const data = zip(quantities.map((q, i) => ({ name: files[i], data: dicomFile(`RTDOSE ${q}`) })));
       return { filename: `${basename ?? "result"}_rtdose.zip`, mime: "application/zip", data, files };
     }
     if (format === "mat") {
-      const name = basename ?? (quantities.length === 1 ? quantities[0] : "result");
+      const name = basename ?? (quantities.length === 1 ? fileStem(quantities[0]) : "result");
       return { filename: `${name}${extension}`, mime, data: matFile(`resultGUI ${quantities.join(", ")}`) };
     }
     const one = (q: string): { name: string; data: Uint8Array } => ({
-      name: `${q}${extension}`,
-      data: zip([{ name: `${q}.npy`, data: npy(values) }]),
+      name: `${fileStem(q)}${extension}`,
+      data: zip([{ name: `${fileStem(q)}.npy`, data: npy(values) }]),
     });
     if (quantities.length === 1) {
       const entry = one(quantities[0]);
-      return { filename: `${basename ?? quantities[0]}${extension}`, mime, data: entry.data };
+      return { filename: `${basename ?? fileStem(quantities[0])}${extension}`, mime, data: entry.data };
     }
     const entries = quantities.map(one);
     return { filename: `${basename ?? "result"}.zip`, mime: "application/zip", data: zip(entries), files: entries.map((e) => e.name) };
@@ -588,6 +595,21 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
     "data.load_file": (params, ctx) => {
       const filename = String(params.filename ?? "");
       const kind = String(params.kind ?? "auto");
+      const s = ctx.session();
+      // A dose image (with image IO) or a dose-only `.npz` (recognized by its name; the mock reads
+      // no files) joins the patient as a result of its own; everything else is a new patient.
+      const doseImage = kind === "dose" && !web;
+      const doseNpz = kind === "auto" && /\.npz$/i.test(filename) && /dose/i.test(filename) && s.phantom !== null;
+      if (doseImage || doseNpz) {
+        if (!s.phantom) throw precondition("Load a CT before importing a dose.", "no_data");
+        return ctx.run(s, `Loading ${filename}`, async () => {
+          ctx.progress(s, `Reading ${filename}`, null);
+          await ctx.sleep(150);
+          const name = addMockDoseResult(s, params.name === undefined || params.name === null ? stem(filename) : String(params.name));
+          ctx.log(s, "info", `Imported the dose of ${filename} as the result '${name}'`);
+          return ctx.publish(s);
+        });
+      }
       if (kind !== "auto") {
         throw precondition(
           web && IMAGE_EXTENSIONS.test(filename)
@@ -635,7 +657,10 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
       if (!entry) throw new MethodError("ValueError", `Cannot export ${object} as ${format}`);
       if (!entry.available) throw precondition(entry.reason ?? "This format is not available", "not_available");
       const hasKey = ({ pln: "pln", dij: "dij", cst: "cst", result: "result", workspace: "ct" } as const)[entry.object];
-      if (!state.has[hasKey]) throw precondition(`No ${object} available to save.`, "no_data");
+      // Any result can be exported, also without an active one.
+      const present = object === "result" ? Boolean(state.actions.save_result) : state.has[hasKey];
+      if (!present) throw precondition(`No ${object} available to save.`, "no_data");
+      // Default: the full quantities of all results, by their component keys.
       const quantities = (params.quantities as string[] | undefined) ?? state.quantities;
       if (object === "result" && quantities.length === 0) throw precondition("The result has no exportable image quantities.", "no_data");
       return ctx.run(s, `Saving ${object}`, async () => {
@@ -661,13 +686,10 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
       }
       const s = ctx.session();
       const state = ctx.state(s);
-      if (!state.has.result) throw precondition("No result available", "no_data");
+      if (!state.has.result) throw precondition("No active result available", "no_data");
       const raw = params.tag === undefined ? "result" : String(params.tag);
       const tag = raw.trim().replace(/\W+/g, "_").replace(/^_+|_+$/g, "");
       if (!tag) throw new MethodError("ValueError", "The snapshot needs a name");
-      if (tag === "beam" || tag === "scenario") {
-        throw new MethodError("ValueError", `'${tag}' names per-${tag} results and cannot be used as a snapshot name.`);
-      }
       ctx.log(s, "info", `Saved result snapshot '${tag}'`);
       return { state: ctx.publish(s), tag };
     },
@@ -809,7 +831,7 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
 /** Additions of package C to every SessionState (`actions`). */
 export function ioStateExtension(_s: MockSession, state: SessionState): Partial<SessionState> {
   return {
-    actions: { ...state.actions, ...ioActionFlags(state.has, state.quantities.length > 0) },
+    actions: { ...state.actions, ...ioActionFlags(state.has, state.quantities.length > 0, state.has.result || (state.results?.names.length ?? 0) > 0) },
     ...(state.revisions ? { revisions: { ...state.revisions, base_data: baseDataRevision } } : {}),
   };
 }

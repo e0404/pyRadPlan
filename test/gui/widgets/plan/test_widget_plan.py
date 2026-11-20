@@ -3,6 +3,7 @@ from typing import get_args
 
 import numpy as np
 import pytest
+import SimpleITK as sitk
 
 pytest.importorskip("PySide6")
 
@@ -1089,7 +1090,14 @@ def test_tissue_dialog_edit_marks_dose_influence_stale(qapp, test_data_protons):
     ws = WorkspaceManager()
     widget = PlanWidget(workspace=ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        ct=ct,
+        cst=cst,
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
     assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
@@ -1897,7 +1905,14 @@ def test_tissue_dialog_unchanged_ok_keeps_exact_values(qapp, test_data_protons):
     ws = WorkspaceManager()
     widget = PlanWidget(workspace=ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        ct=ct,
+        cst=cst,
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
     changes = []
     ws.workspace_changed.connect(changes.append)
 

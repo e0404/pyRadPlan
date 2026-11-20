@@ -19,10 +19,10 @@ import { ContourCache, maskCenterOfMass } from "../src/renderer/contours";
 import { sliceLayout, type VolumeGeometry } from "../src/renderer/geometry";
 import { marchingSquares, segmentsLength } from "../src/renderer/marchingSquares";
 import { directionLetter, projectMannequin, screenAxesLps } from "../src/renderer/orientation";
-import { groupResultKeys, keyLabel, sanitizeTag, snapshotTags } from "../src/results/resultGroups";
+import { groupResultKeys, keyLabel, resultKey, sanitizeTag, splitResultKey } from "../src/results/resultGroups";
 import { applyPoint, doseAtVolume, parseRefVols, qiMarkers, qiTableRows, toCsv } from "../src/components/analysis/dvhModel";
 import { defaultCheckedVois } from "../src/store/viewerSlice";
-import { decodeMasks } from "../src/store/revisions";
+import { decodeMasks, resultGroups } from "../src/store/revisions";
 
 const geom: VolumeGeometry = { shape: [20, 30, 40], spacing: [2, 2, 3], origin: [-40, -30, -30] };
 
@@ -160,15 +160,47 @@ describe("compact masks", () => {
 });
 
 describe("result groups", () => {
-  it("groups components and snapshot tags like group_result_keys", () => {
-    const keys = ["physical_dose", "physical_dose_beam 0", "physical_dose_beam 1", "physical_dose_A", "physical_dose_beam_A 0", "physical_dose_beam_A 1", "physical_dose_var"];
-    expect(snapshotTags(new Set(keys.map((k) => k.replace(/ \d+$/, ""))), new Set(["physical_dose"]))).toEqual(["A"]);
-    const groups = groupResultKeys(keys);
-    expect(groups.map((g) => g.label)).toEqual(["dose", "dose (A)", "physical_dose_var"]);
-    expect(groups[0].components.map((c) => c.label)).toEqual(["full", "beam 0", "beam 1"]);
-    expect(groups[1].components.map((c) => c.key)).toEqual(["physical_dose_A", "physical_dose_beam_A 0", "physical_dose_beam_A 1"]);
+  it("splits the result name off a component key at the first slash", () => {
+    expect(splitResultKey("physical_dose_beam 0")).toEqual(["", "physical_dose_beam 0"]);
+    expect(splitResultKey("protons_30fx/physical_dose_scenario 2")).toEqual(["protons_30fx", "physical_dose_scenario 2"]);
+    expect(splitResultKey("A/b/c")).toEqual(["A", "b/c"]);
+    expect(splitResultKey("/physical_dose")).toEqual(["", "/physical_dose"]);
+    expect(splitResultKey("A/")).toEqual(["", "A/"]);
+    expect(resultKey("", "physical_dose")).toBe("physical_dose");
+    expect(resultKey("A", "physical_dose_beam 1")).toBe("A/physical_dose_beam 1");
+  });
+
+  it("groups components by result and quantity like group_result_keys", () => {
+    const keys = [
+      "physical_dose",
+      "physical_dose_beam 0",
+      "physical_dose_beam 1",
+      "physical_dose_scenario 0",
+      "A/physical_dose",
+      "A/physical_dose_beam 0",
+      "A/physical_dose_beam 1",
+      "A/physical_dose_scenario 0",
+      "beam/physical_dose",
+      "physical_dose_var",
+    ];
+    const groups = groupResultKeys(keys, { "": ["nominal"], A: ["shifted"] });
+    expect(groups.map((g) => g.label)).toEqual(["dose", "dose (A)", "dose (beam)", "physical_dose_var"]);
+    expect(groups.map((g) => g.tag)).toEqual(["", "A", "beam", ""]);
+    expect(groups[0].components.map((c) => c.label)).toEqual(["full", "beam 0", "beam 1", "scenario 0"]);
+    expect(groups[1].components.map((c) => c.key)).toEqual(["A/physical_dose", "A/physical_dose_beam 0", "A/physical_dose_beam 1", "A/physical_dose_scenario 0"]);
+    expect(groups[1].components.map((c) => c.kind)).toEqual(["full", "beam", "beam", "scenario"]);
     expect(groups[0].meta_label).toBe("Dose");
-    expect(keyLabel(groups, "physical_dose_beam_A 1")).toBe("dose (A), beam 1");
+    expect(groups[1].unit).toBe("Gy");
+    // Every group carries the scenario labels of its own result.
+    expect(groups[0].scenario_labels).toEqual(["nominal"]);
+    expect(groups[1].scenario_labels).toEqual(["shifted"]);
+    expect(groups[2].scenario_labels).toEqual([]);
+    // A key that merely ends like a result name belongs to no other result: nothing is guessed.
+    expect(groupResultKeys(["physical_dose_A", "physical_dose_beam_A 0"]).map((g) => [g.base, g.tag])).toEqual([
+      ["physical_dose_A", ""],
+      ["physical_dose_beam_A", ""],
+    ]);
+    expect(keyLabel(groups, "A/physical_dose_beam 1")).toBe("dose (A), beam 1");
     expect(sanitizeTag("  plan A/2 ")).toBe("plan_A_2");
   });
 
@@ -267,18 +299,74 @@ describe("mock v1 viewer methods", () => {
     expect(s3.revisions!.beams).not.toBe(s2.revisions!.beams);
   });
 
-  it("snapshots results with sanitized tags and keeps them across optimizations", async () => {
+  it("snapshots the active result as a result of its own and keeps it across optimizations", async () => {
     const { backend, session } = await ready();
+    const before = await backend.request("session.state", {}, session);
+    expect(before.results).toMatchObject({ names: ["current"], active: "current", tags: [] });
     const { tag, state } = await backend.request("workflow.snapshot", { tag: "first try" }, session);
     expect(tag).toBe("first_try");
-    expect(state.results?.tags).toEqual(["first_try"]);
-    expect(state.results?.groups.map((g) => g.label)).toEqual(["dose", "dose (first_try)"]);
-    await expect(backend.request("workflow.snapshot", { tag: "beam" }, session)).rejects.toThrow(/per-beam/);
+    expect(state.results).toMatchObject({ names: ["current", "first_try"], active: "current", tags: ["first_try"] });
+    expect(state.results?.groups.map((g) => [g.label, g.tag])).toEqual([
+      ["dose", ""],
+      ["dose (first_try)", "first_try"],
+    ]);
+    expect(state.results?.groups[1].components.map((c) => c.key)).toEqual([
+      "first_try/physical_dose",
+      "first_try/physical_dose_beam 0",
+      "first_try/physical_dose_beam 1",
+      "first_try/physical_dose_beam 2",
+    ]);
+    // The copy shares the images of the active result, and so their revisions (amendment 14).
+    expect(state.revisions!.volumes["first_try/physical_dose"]).toBe(state.revisions!.volumes.physical_dose);
+    // "beam" and "scenario" are ordinary names now; only the name of the active result is refused.
+    const beam = await backend.request("workflow.snapshot", { tag: "beam" }, session);
+    expect(beam.state.results?.tags).toEqual(["first_try", "beam"]);
+    await expect(backend.request("workflow.snapshot", { tag: "current" }, session)).rejects.toMatchObject({ type: "ValueError" });
+    // Reusing a name overwrites that result.
+    const again = await backend.request("workflow.snapshot", { tag: "first try" }, session);
+    expect(again.state.results?.names).toEqual(["current", "first_try", "beam"]);
+    // Optimize replaces only the active result.
     await backend.request("workflow.optimize", { max_iter: 3 }, session);
     const after = await backend.request("session.state", {}, session);
-    expect(after.quantities).toContain("physical_dose_first_try");
-    const beamVol = await backend.request("view.volume", { name: "physical_dose_beam_first_try 1" }, session);
+    expect(after.results?.names).toEqual(["current", "first_try", "beam"]);
+    expect(after.quantities).toContain("first_try/physical_dose");
+    expect(after.revisions!.volumes.physical_dose).not.toBe(state.revisions!.volumes.physical_dose);
+    expect(after.revisions!.volumes["first_try/physical_dose"]).toBe(state.revisions!.volumes["first_try/physical_dose"]);
+    const beamVol = await backend.request("view.volume", { name: "first_try/physical_dose_beam 1" }, session);
     expect(beamVol.data.shape).toEqual([129, 167, 167]);
+    const dvh = await backend.request("analysis.dvh", { keys: ["first_try/physical_dose_beam 1"], num_points: 50, range: "per_structure" }, session);
+    expect(dvh.sets?.[0]).toMatchObject({ name: "dose (first_try), beam 1", unit: "Gy" });
+    await expect(backend.request("view.volume", { name: "physical_dose_first_try" }, session)).rejects.toMatchObject({ type: "KeyError" });
+    // A recalculation keeps the further results too.
+    await backend.request("workflow.recalc", {}, session);
+    expect((await backend.request("session.state", {}, session)).results?.tags).toEqual(["first_try", "beam"]);
+  });
+
+  it("keeps the scenario labels of every result with its groups", async () => {
+    const backend = new MockBackend({ speed: 0 });
+    const { session } = await backend.request("session.create", {});
+    await backend.request("data.load_phantom", { name: "TG119" }, session);
+    await backend.request("plan.set", { scenarios: { model: "wcScen", values: {} } }, session);
+    await backend.request("workflow.calc_dose_influence", {}, session);
+    await backend.request("workflow.optimize", { max_iter: 3 }, session);
+    await backend.request("workflow.snapshot", { tag: "robust" }, session);
+    await backend.request("plan.set", { scenarios: { model: "nomScen", values: {} } }, session);
+    const state = await backend.request("workflow.run_all", { max_iter: 3 }, session);
+    const group = (tag: string) => state.results!.groups.find((g) => g.base === "physical_dose" && g.tag === tag)!;
+    // The nominal active result has no scenarios; the snapshot keeps its own.
+    expect(state.results!.scenario_labels).toEqual([]);
+    expect(group("").scenario_labels).toEqual([]);
+    expect(group("").components.some((c) => c.kind === "scenario")).toBe(false);
+    expect(group("robust").scenario_labels).toHaveLength(7);
+    expect(group("robust").scenario_labels[1]).toBe("setup (-2.25, 0.0, 0.0) mm");
+    expect(group("robust").components.filter((c) => c.kind === "scenario").map((c) => c.key)[2]).toBe("robust/physical_dose_scenario 2");
+    expect(resultGroups(state)).toBe(state.results!.groups);
+    // A backend without labels per group only describes those of the active result.
+    const legacy = {
+      ...state,
+      results: { ...state.results!, scenario_labels: ["nominal"], groups: state.results!.groups.map(({ scenario_labels: _labels, ...g }) => g) },
+    } as unknown as typeof state;
+    expect(resultGroups(legacy).map((g) => g.scenario_labels)).toEqual([["nominal"], []]);
   });
 
   it("offers the scenario components of a robust plan, labelled, in the viewer and the analysis", async () => {
@@ -293,6 +381,7 @@ describe("mock v1 viewer methods", () => {
     expect(scenarios.map((c) => c.key)).toEqual(Array.from({ length: 7 }, (_, i) => `physical_dose_scenario ${i}`));
     expect(state.results!.scenario_labels[0]).toBe("nominal");
     expect(state.results!.scenario_labels[1]).toBe("setup (-2.25, 0.0, 0.0) mm");
+    expect(dose.scenario_labels).toEqual(state.results!.scenario_labels);
     expect(state.quantities).toEqual(["physical_dose"]);
     const full = await backend.request("view.volume", { name: "physical_dose" }, session);
     const nominal = await backend.request("view.volume", { name: "physical_dose_scenario 0" }, session);

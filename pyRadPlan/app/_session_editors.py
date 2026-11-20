@@ -54,30 +54,12 @@ class SessionEditorsMixin:
         if not explicit_default_plan:
             self.default_plan = dict(resolved["default_plan"])
         self.locked_fields: list[str] = list(resolved.get("locked_fields") or [])
-        self.saved_tags: list[str] = []
         self.history = SessionHistory()
         self.revisions = Revisions(self.workspace.get)
         self._voxel_counts: dict[int, tuple[Any, int]] = {}
 
     def _editors_workspace_changed(self, changed_keys: list[str]) -> None:
         self.revisions.update(changed_keys)
-        if not changed_keys or "result" in changed_keys:
-            self.saved_tags = _results.prune_tags(self.workspace.result, self.saved_tags)
-
-    def _editors_loaded(self, data: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
-        # A new patient or a replacement result (also a bare dose) brings its own tags.
-        if "ct" in payload or "result" in payload:
-            tags = data.get("saved_result_tags")
-            self.saved_tags = [t for t in (tags or []) if isinstance(t, str)]
-
-    def snapshot_tags(self) -> list[str]:
-        """Return the saved snapshot tags (``results.tags``)."""
-        return list(self.saved_tags)
-
-    def set_snapshot_tags(self, tags: Sequence[str]) -> None:
-        """Replace the snapshot tags, e.g. from a workspace pickle; unknown ones are dropped."""
-        tags = [tag for tag in tags if isinstance(tag, str)]
-        self.saved_tags = _results.prune_tags(self.workspace.result, tags)
 
     def _num_voxels(self, index: int, voi: Any) -> int:
         cached = self._voxel_counts.get(index)
@@ -99,9 +81,11 @@ class SessionEditorsMixin:
         idle = self._busy is None
         state["revisions"] = self.revisions.as_dict()
         try:
-            state["results"] = _results.result_catalog(ws.result, ws.dij, ws.pln, self.saved_tags)
+            state["results"] = _results.result_catalog(
+                ws.result_entries(), ws.dij, ws.pln, list(ws.results), ws.active_result
+            )
         except Exception:  # noqa: BLE001 - placeholders a host stored have no catalog
-            state["results"] = _results.result_catalog(None, None, None, [])
+            state["results"] = _results.result_catalog()
         state["options"] = {
             "profile": self.profile,
             "default_plan": dict(self.default_plan),
@@ -114,7 +98,7 @@ class SessionEditorsMixin:
                 "save_pln": idle and "pln" in present,
                 "save_dij": idle and "dij" in present,
                 "save_cst": idle and "cst" in present,
-                "save_result": idle and "result" in present,
+                "save_result": idle and bool(ws.results),
                 "save_workspace": idle and "ct" in present,
             }
         )
@@ -223,7 +207,7 @@ class SessionEditorsMixin:
         details = []
         for index, voi in enumerate(vois):
             if wanted is None or index in wanted:
-                detail = _tissue.structure_detail(voi, index, self.workspace.result)
+                detail = _tissue.structure_detail(voi, index, self.workspace.result_entries())
                 detail["num_voxels"] = self._num_voxels(index, voi)
                 details.append(detail)
         return {"structures": details}
@@ -343,7 +327,7 @@ class SessionEditorsMixin:
 
     def objectives_catalog(self) -> dict[str, Any]:
         """``objectives.catalog``."""
-        return _objectives.catalog(self.workspace.result, self.workspace.ct)
+        return _objectives.catalog(self.workspace.result_entries())
 
     def objectives_edit(
         self, op: str, structure: Any = None, detail: bool = True, **params: Any
@@ -378,23 +362,26 @@ class SessionEditorsMixin:
     # ------------------------------------------------------------------
 
     def snapshot(self, tag: Optional[str] = None) -> str:
-        """Keep a copy of the current result under *tag* (Qt "Snapshot Result").
+        """Keep the active result as a result of its own named *tag*.
 
-        Returns the stored tag (sanitized, the plan's default tag when omitted).
+        The snapshot shares the images of the active result; a result of that name is
+        overwritten. Returns the name used (sanitized, the plan's default tag when
+        omitted).
 
         Raises
         ------
         ValueError
-            If the tag is empty after sanitizing or names the per-beam / per-scenario
-            results.
+            If the tag is empty after sanitizing or names the active result.
         """
         self._require_idle()
         ws = self.workspace
-        if ws.result is None:
+        result = ws.result
+        if result is None:
             raise _precondition("There is no result to snapshot", "not_available")
         tag = _results.sanitize_tag(tag or _results.default_tag(ws.pln))
-        result = _results.snapshot(ws.result, tag, self.saved_tags)
-        if tag not in self.saved_tags:
-            self.saved_tags.append(tag)
-        ws.result = result
+        if tag == ws.active_result:
+            raise ValueError(
+                f"'{tag}' names the result being worked on; choose another snapshot name."
+            )
+        ws.add_result(tag, result.model_copy())
         return tag

@@ -370,7 +370,7 @@ class OptimizationWidget(WorkspaceWidget):
             cmb.insertItem(0, self._summarize_image_reference(value), value)
             current = 0
         cmb.setCurrentIndex(current)
-        if cmb.count() == 1 and current == 0 and self._ws.result is None:
+        if cmb.count() == 1 and current == 0 and not self._ws.results:
             cmb.setToolTip("No result doses available yet — compute or import a dose first")
         else:
             cmb.setToolTip("Reference dose image (picked from the workspace results)")
@@ -382,15 +382,15 @@ class OptimizationWidget(WorkspaceWidget):
         return cmb
 
     def _reference_dose_options(self) -> list[tuple[str, Any, str]]:
-        """Workspace result entries usable as an image-reference value.
+        """Workspace result quantities usable as an image-reference value.
 
         ``(label, value, key)`` triples of
-        :func:`pyRadPlan.app._objectives.reference_values`: result images as they are,
-        imported cubes (numpy arrays on the CT grid) paired with the CT grid.
+        :func:`pyRadPlan.app._objectives.reference_values`: each whole-volume quantity
+        of every workspace result (the active one, imported doses and snapshots).
         """
         return [
             (label, value, key)
-            for key, label, value in reference_values(self._ws.result, self._ws.ct)
+            for key, label, value in reference_values(self._ws.result_entries())
         ]
 
     @staticmethod

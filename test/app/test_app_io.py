@@ -158,8 +158,8 @@ def test_structure_set_label_map_zip_loads_back(pipeline, tmp_path, fmt):
     assert _names(loaded["cst"]) == _names(source.workspace.cst)
 
 
-def _dose_array(session, key="physical_dose"):
-    return sitk.GetArrayFromImage(session.workspace.result[key])
+def _dose_array(session, key="physical_dose", result="current"):
+    return sitk.GetArrayFromImage(session.workspace.results[result][key].values)
 
 
 def test_result_npz_round_trip(pipeline, client):
@@ -169,7 +169,9 @@ def test_result_npz_round_trip(pipeline, client):
     session = _patient_client(client)
     response = _load(client, "data.load_file", result["filename"], data)
     assert response["ok"], response.get("error")
-    np.testing.assert_allclose(_dose_array(session), _dose_array(source))
+    assert list(session.workspace.results) == ["imported"]
+    assert not session.workspace.has("result")
+    np.testing.assert_allclose(_dose_array(session, result="imported"), _dose_array(source))
 
 
 def test_result_mat_holds_every_selected_quantity_in_result_gui(pipeline, tmp_path):
@@ -183,8 +185,34 @@ def test_result_mat_holds_every_selected_quantity_in_result_gui(pipeline, tmp_pa
     gui = _matfile.load(path)["resultGUI"]
     expected = np.transpose(_dose_array(source), (1, 2, 0))
     np.testing.assert_allclose(gui["physicalDose"], expected)
-    beam = sitk.GetArrayFromImage(source.workspace.result["physical_dose_beam"][0])
+    beam = sitk.GetArrayFromImage(source.workspace.result.beam.physical_dose[0].values)
     np.testing.assert_allclose(gui["physical_dose_beam_0"], np.transpose(beam, (1, 2, 0)))
+
+
+def test_result_mat_holds_a_dose_of_another_grid_on_the_ct_grid(tmp_path):
+    from types import SimpleNamespace
+
+    from pyRadPlan.app._io import _export_format, write_export
+    from pyRadPlan.io.matlab import _matfile
+
+    cube = sitk.GetImageFromArray(np.zeros((6, 8, 10), dtype=np.float32))
+    cube.SetSpacing((2.0, 2.0, 2.0))
+    cube.SetOrigin((-10.0, -8.0, -6.0))
+    on_ct = sitk.Cast(cube, sitk.sitkFloat64) + 1.0
+    coarse = sitk.GetImageFromArray(np.full((3, 4, 5), 2.0))
+    coarse.SetSpacing((4.0, 4.0, 4.0))
+    coarse.SetOrigin((-9.0, -7.0, -5.0))
+
+    path = tmp_path / "result.mat"
+    images = {"physical_dose": on_ct, "imported/physical_dose": coarse}
+    entry = _export_format("result", "mat", None)
+    write_export(entry, images, SimpleNamespace(cube_hu=cube), str(path))
+
+    gui = _matfile.load(path)["resultGUI"]
+    assert gui["physicalDose"].shape == (8, 10, 6)
+    assert gui["physicalDose_imported"].shape == (8, 10, 6)
+    np.testing.assert_allclose(gui["physicalDose"], 1.0)
+    np.testing.assert_allclose(gui["physicalDose_imported"][2:6, 2:8, 2:4], 2.0)
 
 
 def test_result_dicom_zip_holds_one_rtdose_per_quantity(pipeline, tmp_path):
@@ -215,17 +243,19 @@ def test_result_image_files(pipeline, tmp_path, fmt):
     assert several["filename"] == "result.zip" and len(several["files"]) == 2
 
 
-def test_workspace_pickle_round_trip_restores_snapshot_tags(client):
+def test_workspace_pickle_round_trip_restores_every_result(client):
     session = _patient_client(client)
     dose = sitk.Image(session.workspace.ct.cube_hu)
-    session.workspace.result = {
-        "physical_dose": dose,
-        "physical_dose_plan1": dose,
-        "rbe_x_dose": dose,
-        "rbe_x_dose_plan1": dose,
-    }
-    session.set_snapshot_tags(["plan1"])
-    assert session.snapshot_tags() == ["plan1"]
+    coarse = sitk.Image([4, 4, 4], sitk.sitkFloat32)
+    coarse.SetSpacing((20.0, 20.0, 20.0))
+    session.workspace.set_many(
+        results={
+            "plan1": {"physical_dose": dose, "rbe_x_dose": dose},
+            "plan2": {"physical_dose": dose, "w": np.ones(3)},
+            "measured": {"physical_dose": coarse},
+        },
+        active_result="plan2",
+    )
     result, data = _save(client, {"object": "workspace", "format": "pickle"})
     assert result["filename"] == "workspace.pkl"
 
@@ -240,8 +270,14 @@ def test_workspace_pickle_round_trip_restores_snapshot_tags(client):
             "pln": True,
             "result": True,
         }
-        assert other.manager.get(other.session).snapshot_tags() == ["plan1"]
-        assert response["result"]["results"]["tags"] == ["plan1"]
+        loaded = other.manager.get(other.session).workspace
+        assert list(loaded.results) == ["plan1", "plan2", "measured"]
+        assert loaded.active_result == "plan2"
+        np.testing.assert_array_equal(loaded.result.fluence, np.ones(3))
+        assert loaded.results["measured"]["physical_dose"].values.GetSize() == (4, 4, 4)
+        assert response["result"]["results"]["names"] == ["plan1", "plan2", "measured"]
+        assert response["result"]["results"]["active"] == "plan2"
+        assert response["result"]["results"]["tags"] == ["plan1", "measured"]
     finally:
         other.manager.close_all()
 
@@ -390,6 +426,9 @@ def image_files(tmp_path):
         "mask": _image(tmp_path / "PTV.nrrd", mask),
         "labels": _image(tmp_path / "labels.nrrd", labels),
         "dose": _image(tmp_path / "plan dose.mha", np.full((4, 8, 8), 1.5, dtype=np.float32)),
+        "coarse_dose": _image(
+            tmp_path / "coarse.mha", np.full((2, 4, 4), 2.5, dtype=np.float32), (4.0, 4.0, 6.0)
+        ),
     }
 
 
@@ -415,14 +454,55 @@ def test_image_files_import_as_ct_structures_and_dose(image_files):
     assert inspect_image(image_files["dose"]).default_name == "plan_dose"
     assert _import(session, image_files["dose"], "dose") == "plan_dose"
     assert _import(session, image_files["dose"], "dose") == "plan_dose_2"
-    result = session.workspace.result
-    assert sitk.GetArrayFromImage(result["plan_dose"]).max() == pytest.approx(1.5)
-    assert result["plan_dose"].GetSize() == ct.cube_hu.GetSize()
+    assert (
+        _import(session, image_files["coarse_dose"], "dose", name="coarse dose") == "coarse_dose"
+    )
+    ws = session.workspace
+    assert list(ws.results) == ["plan_dose", "plan_dose_2", "coarse_dose"]
+    assert not ws.has("result") and ws.active_result == "current"
+    image = ws.results["plan_dose"]["physical_dose"].values
+    assert sitk.GetArrayFromImage(image).max() == pytest.approx(1.5)
+    assert image.GetSize() == ct.cube_hu.GetSize()
+    coarse = ws.results["coarse_dose"]["physical_dose"].values
+    assert coarse.GetSize() == (4, 4, 2) and coarse.GetSpacing() == (4.0, 4.0, 6.0)
+    state = session.state()
+    assert state["quantities"] == [
+        "plan_dose/physical_dose",
+        "plan_dose_2/physical_dose",
+        "coarse_dose/physical_dose",
+    ]
+    assert state["actions"]["save_result"] and not state["actions"]["snapshot"]
+    volume = session.volume("coarse_dose/physical_dose")
+    assert volume["data"].shape == (4, 8, 8) and volume["unit"] == "Gy"
+    assert volume["data"].max() == pytest.approx(2.5)
 
     _import(session, image_files["ct"], "ct_replace")
-    assert session.workspace.has("cst", "result") and session.workspace.ct is not ct
+    assert session.workspace.has("cst") and session.workspace.ct is not ct
+    assert len(session.workspace.results) == 3
     _import(session, image_files["other_ct"], "ct_replace")
-    assert session.workspace.present() == {"ct"}
+    assert session.workspace.present() == {"ct"} and session.workspace.results == {}
+
+
+def test_imported_dose_leaves_the_active_result_and_its_staleness(image_files):
+    from pyRadPlan.app import Session
+
+    session = Session(auto_plan=False)
+    _import(session, image_files["ct"], "ct_new")
+    dose = sitk.Cast(session.workspace.ct.cube_hu, sitk.sitkFloat32)
+    session.workspace.result = {"physical_dose": dose}
+    active = session.workspace.result
+    session.workspace.pln = object()
+    assert session.tracker.result_stale
+
+    assert _import(session, image_files["coarse_dose"], "dose", name="current") == "current_2"
+    assert session.snapshot("kept") == "kept"
+    assert session.workspace.result is active
+    assert session.tracker.result_stale and session.stages()["optimization"] == "stale"
+    assert list(session.workspace.results) == ["current", "current_2", "kept"]
+
+    session.workspace.result = {"physical_dose": dose}
+    assert not session.tracker.result_stale
+    assert list(session.workspace.results) == ["current", "current_2", "kept"]
 
 
 def test_image_imports_need_a_ct_and_sitk_file_io(image_files, monkeypatch):

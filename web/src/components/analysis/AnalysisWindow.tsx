@@ -387,7 +387,6 @@ export function AnalysisWindow(props: { onClose: () => void }) {
                   groups={groups}
                   value={primary}
                   onChange={setPrimary}
-                  scenarioLabels={state?.results?.scenario_labels}
                   testId="analysis-primary"
                   title="Quantity shown in the DVH plot (solid) and the QI table"
                 />
@@ -397,7 +396,6 @@ export function AnalysisWindow(props: { onClose: () => void }) {
                   value={secondary}
                   onChange={setSecondary}
                   noneLabel={NONE_LABEL}
-                  scenarioLabels={state?.results?.scenario_labels}
                   testId="analysis-compare"
                   title="Optional second quantity plotted as dashed DVH curves; incompatible units get a second x axis"
                 />

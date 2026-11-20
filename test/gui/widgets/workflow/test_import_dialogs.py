@@ -11,6 +11,7 @@ from pyRadPlan.gui.widgets.workflow._dicom_import_dialog import DicomImportDialo
 from pyRadPlan.app._io import folder_has_images as _folder_has_images
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import PlanResult
 
 DICOM_DIR = Path(__file__).parents[4] / "test" / "data" / "dicom"
 
@@ -227,11 +228,14 @@ def test_unique_name_suffixes():
     assert _unique_name("Heart", {"Heart", "Heart_2"}) == "Heart_3"
 
 
-def test_merge_loaded_data_wraps_dose_into_result(qapp):
+def test_merge_loaded_data_keeps_dose_as_imported_result(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
     dose = sitk.GetImageFromArray(np.zeros((4, 8, 8), dtype=np.float32))
 
     w.session.merge_loaded({"ct": object(), "dose": dose})
     assert ws.has("ct")
-    assert isinstance(ws.result, dict) and "physical_dose" in ws.result
+    # A dose without weights is no result to recalculate or optimize from
+    assert ws.result is None
+    assert isinstance(ws.results["imported"], PlanResult)
+    assert "physical_dose" in ws.results["imported"]

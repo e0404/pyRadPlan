@@ -140,7 +140,8 @@ production host must send the same headers (or use a service-worker shim such as
 (`revisions.volumes.ct`, `encoding: "auto"`), masks (`revisions.masks`, `encoding: "crops"`),
 structure details (`revisions.workspace.cst` → `cst.get`), beams (`revisions.beams` → `view.beams`
 with the plan form's draft), and the shown quantity plus every full quantity
-(`revisions.volumes[key]`; snapshot keys sharing a revision reuse the held array). After a result
+(`revisions.volumes[key]`, also the `"<result>/<key>"` keys of snapshots and imported doses;
+snapshot keys sharing a revision reuse the held array). After a result
 change the shown quantity is reset to `results.default` (Qt ambiguity 6). Without `revisions`
 (v0 backend) the caller's hint decides, as before (`run(..., "data" | "result")`). Other packages
 call `syncViews` / `scheduleViewSync` / `selectQuantity` / `setDraftBeams` /

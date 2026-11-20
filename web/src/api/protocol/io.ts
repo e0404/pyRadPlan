@@ -59,6 +59,8 @@ export interface LoadFileParams {
   filename: string;
   data: NDArray<Uint8Array>;
   kind?: LoadKind;
+  /** Result name of a dose import (`kind: "dose"`); default: the file stem. */
+  name?: string;
 }
 
 // ---------------------------------------------------------------------------

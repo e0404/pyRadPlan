@@ -18,8 +18,8 @@ from ._views import component_info, result_entry, unit_info
 
 def _require_entry(session: Any, key: str) -> None:
     session.views._require_ct()
-    if result_entry(session.workspace.result, key) is None:
-        raise KeyError(f"No volume quantity {key!r} in the result")
+    if result_entry(session.workspace.result_entries(), key) is None:
+        raise KeyError(f"No volume quantity {key!r} in the results")
 
 
 def dvh_sets(
@@ -32,7 +32,7 @@ def dvh_sets(
     """One DVH set per component key; structures without voxels are omitted."""
     if isinstance(keys, str) or not keys:
         raise TypeError("keys must be a non-empty list of component keys")
-    result = session.workspace.result
+    result = session.workspace.result_entries()
     for key in keys:
         _require_entry(session, key)
     indices = session.views.structure_indices(names)
@@ -104,7 +104,7 @@ def quality_indicators(
     from pyRadPlan.analysis._units import safe_unit  # noqa: PLC0415
 
     _require_entry(session, quantity)
-    info = component_info(session.workspace.result, quantity)
+    info = component_info(session.workspace.result_entries(), quantity)
     indices = session.views.structure_indices(names)
     vois = [session.workspace.cst.vois[i] for i in indices]
     values = session.views.volume_array(quantity)
@@ -163,7 +163,7 @@ def compare_quantity_units(session: Any, a: str, b: str) -> dict[str, Any]:
     """Whether *b* can share *a*'s DVH axis, and the factor taking *b* into *a*'s unit."""
     from pyRadPlan.analysis._units import compare_units  # noqa: PLC0415
 
-    result = session.workspace.result
+    result = session.workspace.result_entries()
     for key in (a, b):
         _require_entry(session, key)
     shareable, scale = compare_units(

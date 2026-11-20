@@ -343,24 +343,31 @@ export interface ResultComponent {
 
 export interface ResultGroup {
   base: string;
-  /** "" = current result. */
+  /** Name of the result the group belongs to; "" = the active result. */
   tag: string;
-  /** Selector label: RTQuantity.name (+ " (<tag>)"). */
+  /** Selector label: RTQuantity.name (+ " (<result name>)"). */
   label: string;
   /** Colorbar / save-dialog label and unit (QUANTITY_META). */
   meta_label: string;
   unit: string;
   components: ResultComponent[];
+  /** Scenario labels of the group's own result, by flat scenario index. */
+  scenario_labels: string[];
 }
 
 export interface ResultsInfo {
   groups: ResultGroup[];
+  /** Scenario labels of the active result (compatibility; use the group's own list). */
   scenario_labels: string[];
   /** rbe_x_dose > physical_dose > first (Qt default_quantity_key). */
   default: string | null;
-  /** Saved snapshot tags. */
+  /** Names of all results, in workspace order. */
+  names: string[];
+  /** Name of the active result (default "current"); it need not exist yet. */
+  active: string;
+  /** Names of the results other than the active one (snapshots, imported doses). */
   tags: string[];
-  /** "<radiation_mode>_<n>fx". */
+  /** Suggested snapshot name, "<radiation_mode>_<n>fx". */
   default_tag: string;
 }
 

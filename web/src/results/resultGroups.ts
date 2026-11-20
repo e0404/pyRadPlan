@@ -1,6 +1,7 @@
 /**
- * Result key grouping and display names, ported from `gui/widgets/_display_names.py`
- * (`group_result_keys`) and `_result_widget.py` (`QUANTITY_META`, `default_quantity_key`).
+ * Component keys of the result collection, their grouping and display names, ported from
+ * `pyRadPlan/quantities/_display_names.py` (`result_key`, `group_result_keys`) and
+ * `_result_widget.py` (`QUANTITY_META`, `default_quantity_key`).
  * A v1 backend sends the groups in `state.results`; this is the fallback for v0 backends
  * (and what the mock uses to build `state.results`).
  */
@@ -52,57 +53,38 @@ export function splitIndex(key: string): [string, number | null] {
   return m ? [m[1], Number(m[2])] : [key, null];
 }
 
+/** Separator between the result name and the entry key of a component key. */
+export const RESULT_KEY_SEPARATOR = "/";
+
+/** Component key of the entry `key` of the result `tag` ("" = the active result). */
+export function resultKey(tag: string, key: string): string {
+  return tag ? `${tag}${RESULT_KEY_SEPARATOR}${key}` : key;
+}
+
 /**
- * Snapshot tags (`pyRadPlan/quantities/_display_names.py:_snapshot_tags`): the remainder after
- * a quantity identifier (and an optional `_beam` / `_scenario`), counted as a tag only when at
- * least two stems carry it (Qt ambiguity 15).
+ * Split a component key into the result name ("" = the active result) and the entry key
+ * (`pyRadPlan/quantities/_display_names.py:split_result_key`): the first `/` separates them.
  */
-export function snapshotTags(allStems: Set<string>, quantities: Set<string>): string[] {
-  const identifiers = [...quantities].sort((a, b) => b.length - a.length);
-  const canonical = new Set(identifiers.flatMap((n) => [n, `${n}_beam`, `${n}_scenario`]));
-  const stems = [...allStems].filter((s) => !canonical.has(s));
-  const candidates = new Set<string>();
-  for (const stem of stems) {
-    for (const id of identifiers) {
-      if (stem === id) break;
-      if (stem.startsWith(id + "_")) {
-        let rest = stem.slice(id.length + 1);
-        for (const kind of ["beam", "scenario"]) {
-          if (rest.startsWith(kind + "_")) {
-            rest = rest.slice(kind.length + 1);
-            break;
-          }
-        }
-        if (rest && rest !== "beam" && rest !== "scenario") candidates.add(rest);
-        break;
-      }
-    }
-  }
-  const counts = new Map<string, number>();
-  for (const tag of candidates) for (const stem of stems) if (stem.endsWith("_" + tag)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-  return [...counts.entries()]
-    .filter(([, n]) => n >= 2)
-    .map(([t]) => t)
-    .sort((a, b) => b.length - a.length);
+export function splitResultKey(key: string): [string, string] {
+  const at = key.indexOf(RESULT_KEY_SEPARATOR);
+  return at > 0 && at < key.length - 1 ? [key.slice(0, at), key.slice(at + 1)] : ["", key];
 }
 
 export function quantityName(base: string): string {
   return QUANTITY_NAMES[base] ?? base;
 }
 
-/** Group result keys by `(base, tag)` like `group_result_keys`. */
-export function groupResultKeys(keys: readonly string[], known: readonly string[] = Object.keys(QUANTITY_META)): ResultGroup[] {
-  const quantities = new Set(known);
-  const tags = snapshotTags(new Set(keys.map((k) => splitIndex(k)[0])), quantities);
+/**
+ * Group component keys `"[<result>/]<base>[_beam|_scenario][ <i>]"` by `(base, result)` like
+ * `group_result_keys`. `scenarioLabels` gives the scenario labels per result name ("" = the
+ * active result); groups of results it does not name get none.
+ */
+export function groupResultKeys(keys: readonly string[], scenarioLabels: Readonly<Record<string, readonly string[]>> = {}): ResultGroup[] {
   const ranks: Record<string, number> = { full: 0, beam: 1, other: 1, scenario: 2 };
   const entries = new Map<string, { base: string; tag: string; items: { order: [number, number]; label: string; key: string; kind: ComponentKind }[] }>();
   for (const key of keys) {
-    let [stem, index] = splitIndex(key);
-    let tag = "";
-    if (!quantities.has(splitComponentSuffix(stem)[0])) {
-      tag = tags.find((t) => stem.endsWith("_" + t) && stem.length > t.length + 1) ?? "";
-    }
-    if (tag) stem = stem.slice(0, -tag.length - 1);
+    const [tag, entry] = splitResultKey(key);
+    const [stem, index] = splitIndex(entry);
     const [base, suffixKind] = splitComponentSuffix(stem);
     let kind: ComponentKind;
     let label: string;
@@ -131,6 +113,7 @@ export function groupResultKeys(keys: readonly string[], known: readonly string[
       meta_label: meta,
       unit,
       components: items.map(({ label, key, kind }) => ({ key, label, kind })),
+      scenario_labels: [...(scenarioLabels[tag] ?? [])],
     });
   }
   return groups;
@@ -170,9 +153,7 @@ export function fullKeys(groups: readonly ResultGroup[]): string[] {
   return groups.flatMap((g) => g.components.filter((c) => c.kind === "full").map((c) => c.key));
 }
 
-/** Snapshot tag rule of the Qt workflow widget (`_on_save_result`). */
+/** Result name of a snapshot tag (`re.sub(r"\W+", "_", tag.strip()).strip("_")`). */
 export function sanitizeTag(tag: string): string {
   return tag.trim().replace(/\W+/g, "_").replace(/^_+|_+$/g, "");
 }
-
-export const RESERVED_TAGS = ["beam", "scenario"];

@@ -2,15 +2,15 @@ import type { ResultGroup } from "../api/protocol";
 import { componentText, locateKey } from "../results/resultGroups";
 
 /**
- * Two-level result quantity selector (Qt `QuantitySelector`): quantity group (incl. snapshot
- * groups "dose (photons_30fx)"), then component full / beam i / scenario i: label. Keeps the
- * component label ("beam 1") when switching to a group that has it.
+ * Two-level result quantity selector (Qt `QuantitySelector`): quantity group (incl. the groups
+ * of further results, "dose (photons_30fx)"), then component full / beam i / scenario i: label,
+ * the scenario labels being those of the group's own result. Keeps the component label
+ * ("beam 1") when switching to a group that has it.
  */
 export function QuantitySelector(props: {
   groups: readonly ResultGroup[];
   value: string | null;
   onChange: (key: string | null) => void;
-  scenarioLabels?: readonly string[];
   /** Adds a first entry selecting nothing (the compare selector's "— None —"). */
   noneLabel?: string;
   disabled?: boolean;
@@ -22,7 +22,8 @@ export function QuantitySelector(props: {
   const groupIndex = located ? groups.indexOf(located.group) : noneLabel !== undefined ? -1 : groups.length ? 0 : -1;
   const group = groupIndex >= 0 ? groups[groupIndex] : null;
   const component = located?.component ?? group?.components[0] ?? null;
-  const componentTitle = component ? componentText(component.label, component.kind, props.scenarioLabels ?? []) : "";
+  const scenarioLabels = group?.scenario_labels ?? [];
+  const componentTitle = component ? componentText(component.label, component.kind, scenarioLabels) : "";
 
   return (
     <span className="row fill quantity-selector" data-testid={props.testId} title={props.title}>
@@ -58,7 +59,7 @@ Shown: ${componentTitle}` : ""}`}
       >
         {(group?.components ?? []).map((c) => (
           <option key={c.key} value={c.key} title={c.key}>
-            {componentText(c.label, c.kind, props.scenarioLabels ?? [])}
+            {componentText(c.label, c.kind, scenarioLabels)}
           </option>
         ))}
         {!group && <option value="">full</option>}

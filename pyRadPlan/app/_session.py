@@ -25,11 +25,8 @@ from pyRadPlan.core import (
 
 from ._plan import DEFAULT_PLAN, build_plan, plan_summary
 from ._profiles import running_in_pyodide
-from ._results import carry_forward, is_tagged
 from ._session_editors import SessionEditorsMixin
 from ._stages import (
-    SCENARIO_LABELS_KEY,
-    SCENARIO_SUFFIX,
     StageTracker,
     available_actions,
     merge_loaded_data,
@@ -282,6 +279,8 @@ class Session(SessionEditorsMixin):
 
         self._listeners: list[EventListener] = []
         self._tracker = StageTracker().update([], self.workspace.present(), self.workspace.cst)
+        #: Active result the staleness refers to; changes of other results keep it.
+        self._active_result = self.workspace.result
         self.views = ViewCache(self.workspace.get)
         self._busy: Optional[Operation] = None
         self._idle_callbacks: list[Callable[[], Any]] = []
@@ -360,7 +359,12 @@ class Session(SessionEditorsMixin):
 
     def _on_workspace_changed(self, changed_keys: list[str]) -> None:
         ws = self.workspace
-        self._tracker = self._tracker.update(changed_keys, ws.present(), ws.cst)
+        result = ws.result
+        # A snapshot or an imported dose is announced as "result" too, but only a
+        # replaced active result is a fresh one.
+        tracked = [k for k in changed_keys if k != "result" or result is not self._active_result]
+        self._active_result = result
+        self._tracker = self._tracker.update(tracked, ws.present(), ws.cst)
         self.views.invalidate()
         self._editors_workspace_changed(changed_keys)
         # A running operation emits the state once it ends, after all of its writes.
@@ -485,7 +489,7 @@ class Session(SessionEditorsMixin):
             "actions": self.actions(),
             "ct": _derived(ct_info, None),
             "plan": _derived(lambda: plan_summary(ws.pln), None),
-            "quantities": result_quantities(ws.result),
+            "quantities": result_quantities(ws.result_entries()),
             "structures": _derived(structures, []),
             "status": self._busy.label if self._busy else status_text(present, self._tracker),
             "busy": self._busy.label if self._busy else None,
@@ -635,7 +639,9 @@ class Session(SessionEditorsMixin):
 
     def _commit_loaded(self, data: Mapping[str, Any]) -> list[str]:
         ws = self.workspace
-        payload, warnings = merge_loaded_data(data, ws.has("ct"), WORKSPACE_KEYS)
+        payload, warnings = merge_loaded_data(
+            data, ws.has("ct"), WORKSPACE_KEYS, ws.results, ws.active_result
+        )
         for message in warnings:
             self._warn(message)
         after = {**ws.snapshot(), **payload}
@@ -651,7 +657,6 @@ class Session(SessionEditorsMixin):
                 message = f"Default plan not applied: {type(exc).__name__}: {exc}"
                 self._warn(message)
                 warnings.append(message)
-        self._editors_loaded(data, payload)
         if payload:
             ws.set_many(**payload)
         return warnings
@@ -659,9 +664,10 @@ class Session(SessionEditorsMixin):
     def merge_loaded(self, data: Mapping[str, Any]) -> list[str]:
         """Merge objects a host loaded itself into the workspace, as a load does.
 
-        A CT starts a new patient (see :func:`merge_loaded_data`); snapshot tags travel with
-        a CT or result (``saved_result_tags``). Returns the user-facing warnings, which are
-        also reported as ``log`` events.
+        A CT starts a new patient and replaces all results; without one, a loaded plan
+        result replaces the active result and other loaded results are added (see
+        :func:`merge_loaded_data`). Returns the user-facing warnings, which are also
+        reported as ``log`` events.
         """
         self._require_idle()
         return self._commit_loaded(data)
@@ -928,25 +934,18 @@ class Session(SessionEditorsMixin):
         prop_opt = self._prop_opt(pln, solver, max_iter)
         unchanged = prop_opt == dict(pln.prop_opt or {})
         opt_pln = pln if unchanged else pln.model_copy(update={"prop_opt": prop_opt})
-        previous = dict(ws.result or {})
 
         def compute() -> tuple:
             from pyRadPlan import fluence_optimization  # noqa: PLC0415
 
             info: dict = {}
-            weights = fluence_optimization(ct, cst, stf, dij, opt_pln, opt_info=info)
-            scenarios = dij.scenarios is not None and len(dij.scenarios) > 1
-            result = dij.compute_result_ct_grid(
-                weights, num_of_fractions=pln.result_dose_factor, scenarios=scenarios
+            result = fluence_optimization(
+                ct, cst, stf, dij, opt_pln, opt_info=info, scenarios=True
             )
-            if scenarios:
-                result[SCENARIO_LABELS_KEY] = tuple(dij.scenario_labels())
-            return weights, result, info
+            return result, info
 
         def commit(value: tuple) -> dict:
-            weights, result, info = value
-            result["w"] = weights
-            carry_forward(previous, result, self.saved_tags)
+            result, info = value
             ws.result = result
             history = info.get("obj_history") or []
             solver_config = prop_opt.get("solver")
@@ -972,8 +971,7 @@ class Session(SessionEditorsMixin):
     def _prepare_recalc(self, physical_only: bool = False) -> Operation:
         self._require("recalc")
         ws = self.workspace
-        previous = dict(ws.result or {})
-        weights = previous.get("w")
+        weights = ws.result.fluence
         if weights is None:
             raise PreconditionError("No beamlet weights found in the current result", "no_weights")
         if not recalculation_angles_match(ws.pln, ws.stf):
@@ -999,20 +997,13 @@ class Session(SessionEditorsMixin):
                 recalc_stf = deepcopy(stf)
                 for beam, iso_center in zip(recalc_stf.beams, iso_centers):
                     beam.iso_center = iso_center
-            new_result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
-            if any(key.endswith(SCENARIO_SUFFIX) for key in new_result):
-                new_result[SCENARIO_LABELS_KEY] = tuple(pln.scenarios.scenarios().labels())
-            return recalc_stf, new_result
+            result = calc_dose_forward(ct, cst, recalc_stf, pln, weights)
+            if result.fluence is None:
+                result = result.model_copy(update={"fluence": weights})
+            return recalc_stf, result
 
         def commit(value: tuple) -> None:
-            recalc_stf, new_result = value
-            result = {
-                key: val
-                for key, val in previous.items()
-                if is_tagged(key, self.saved_tags)
-                or not (key.endswith(SCENARIO_SUFFIX) or key == SCENARIO_LABELS_KEY)
-            }
-            result.update(new_result)
+            recalc_stf, result = value
             written: dict[str, Any] = {"result": result}
             if recalc_stf is not stf:
                 written["stf"] = recalc_stf
@@ -1031,7 +1022,9 @@ class Session(SessionEditorsMixin):
         self.execute(self.prepare("calc_dose_influence", physical_only=physical_only))
 
     def optimize(self, solver: Optional[str] = None, max_iter: Optional[int] = None) -> dict:
-        """Optimize the fluence and store the result on the CT grid.
+        """Optimize the fluence and store the result as the active result.
+
+        Other results (snapshots, imported doses) are kept.
 
         Returns the solver used, the iteration count and the final objective value.
         """
@@ -1040,7 +1033,10 @@ class Session(SessionEditorsMixin):
         return summary
 
     def recalc(self, physical_only: bool = False) -> None:
-        """Recalculate the dose of the current weights with the current plan."""
+        """Recalculate the dose of the active result's weights with the current plan.
+
+        The forward result replaces the active result; other results are kept.
+        """
         self.execute(self.prepare("recalc", physical_only=physical_only))
 
     def run_all(

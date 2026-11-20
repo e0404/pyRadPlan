@@ -471,7 +471,7 @@ def check_errors(pln: Any, cst: Any, replaced: Mapping[int, Any], **context: Any
     return [issue for issue in issues if issue.is_error]
 
 
-def structure_detail(voi: Any, index: int, result: Any = None) -> dict[str, Any]:
+def structure_detail(voi: Any, index: int, results: Any = None) -> dict[str, Any]:
     """``StructureDetail`` of a VOI (objectives as ``ObjectiveData``; ``num_voxels`` 0)."""
     from pyRadPlan.biology._editing import tissue_summary  # noqa: PLC0415
 
@@ -482,7 +482,7 @@ def structure_detail(voi: Any, index: int, result: Any = None) -> dict[str, Any]
     except Exception:  # noqa: BLE001 - an empty or unreadable mask has no centre
         center = None
     objectives = [
-        objective_data(objective, i, result)
+        objective_data(objective, i, results)
         for i, objective in enumerate(getattr(voi, "objectives", None) or [])
     ]
     return {

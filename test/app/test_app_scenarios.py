@@ -88,4 +88,6 @@ def test_snapshot_keeps_scenario_components(robust):
     tagged = next(g for g in state["results"]["groups"] if g["tag"] == "robust")
     kinds = [c["kind"] for c in tagged["components"]]
     assert kinds.count("scenario") == len(state["results"]["scenario_labels"])
-    assert client.ok("view.volume", {"name": "physical_dose_scenario_robust 1"})["ok"]
+    assert tagged["scenario_labels"] == state["results"]["scenario_labels"]
+    assert tagged["scenario_labels"] == _dose_group(state)["scenario_labels"]
+    assert client.ok("view.volume", {"name": "robust/physical_dose_scenario 1"})["ok"]

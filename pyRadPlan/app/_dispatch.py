@@ -184,7 +184,11 @@ def _load_phantom(session: Session, name: str) -> dict:
 
 
 @method("data.load_file")
-def _load_file(session: Session, filename: str, data: Any, kind: str = "auto") -> dict:
+def _load_file(
+    session: Session, filename: str, data: Any, kind: str = "auto", name: Optional[str] = None
+) -> dict:
+    # *name* names the result of a dose image; the image kinds are not served here yet.
+    del name
     _io.load_file(session, filename, data, kind)
     return session.state()
 

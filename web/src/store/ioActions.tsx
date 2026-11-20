@@ -9,8 +9,9 @@ import type { BaseDataKind, BaseDataAddResult, ExportSaveParams, LoadKind } from
 import { exportFormats, feature, isImageFile, loadAccept, structureFormatOf, unavailableImport } from "../components/io/capabilities";
 import { describeDownload, downloadFile } from "../components/io/download";
 import { askImportImage } from "../components/io/ImportImageDialog";
+import { canSave } from "../components/io/menuModel";
 import { askYesNo, messageBox, promptText, showCritical, showInfo, showWarning } from "../components/io/messageBox";
-import { RESERVED_TAGS, sanitizeTag } from "../components/io/models";
+import { sanitizeTag } from "../components/io/models";
 import { askSaveFile, askSaveResult, type QuantityChoice } from "../components/io/SaveDialogs";
 import { log, storeInternals, useApp, type LogEntry } from "./appStore";
 import { bumpBaseData, useIo, type LogThreshold } from "./ioStore";
@@ -79,6 +80,7 @@ async function fileBytes(file: File) {
 export async function loadFile(file: File): Promise<boolean> {
   const { info, state } = useApp.getState();
   let kind: LoadKind | undefined;
+  let name: string | undefined;
   const blocked = unavailableImport(info, file.name);
   if (blocked) {
     await showWarning("Load", blocked.reason ?? `${blocked.label} files cannot be loaded by this backend.`);
@@ -92,15 +94,16 @@ export async function loadFile(file: File): Promise<boolean> {
     }
     const choice = await askImportImage(file.name, Boolean(state?.has.ct));
     if (!choice) return false;
-    // The result name of a dose import has no protocol parameter yet (`data.load_file` takes `kind` only).
     kind = choice.kind;
+    // A dose becomes a result of its own, named by the dialog (the backend makes the name unique).
+    name = choice.name;
   }
   const data = await fileBytes(file);
   log("info", `Uploading ${file.name} (${(data.data.length / 1024).toFixed(0)} KiB)`);
   return storeInternals.run(
     `Loading ${file.name}`,
     "data.load_file",
-    { filename: file.name, data, ...(kind ? { kind } : {}) },
+    { filename: file.name, data, ...(kind ? { kind } : {}), ...(kind === "dose" && name ? { name } : {}) },
     "data",
   );
 }
@@ -209,7 +212,10 @@ export async function saveCst(): Promise<boolean> {
   });
 }
 
-/** Exportable quantities of the result: "<label> (<key>)" like Qt's Save Result checklist. */
+/**
+ * Exportable quantities: the full quantities of every result by their component keys,
+ * "<label> (<key>)" like Qt's Save Result checklist.
+ */
 export function resultQuantityChoices(state: SessionState | null): QuantityChoice[] {
   if (!state) return [];
   const groups = state.results?.groups;
@@ -233,7 +239,8 @@ function resultArchiveNote(format: ExportFormat): string {
 export async function saveResult(): Promise<boolean> {
   const title = "Save Result";
   const state = useApp.getState().state;
-  if (!state?.has.result) {
+  // Any result can be saved, also without an active one (`actions.save_result`).
+  if (!state || !canSave(state, "save_result", "result")) {
     await showWarning(title, "No result available to save.");
     return false;
   }
@@ -247,7 +254,7 @@ export async function saveResult(): Promise<boolean> {
   const choice = await askSaveFile({
     title,
     formats: formatsFor("result"),
-    basename: keys.length === 1 ? keys[0] : "result",
+    basename: keys.length === 1 ? keys[0].replace(/\//g, "_") : "result",
     note: keys.length > 1 ? resultArchiveNote : undefined,
   });
   return choice
@@ -283,8 +290,9 @@ export async function snapshotResult(): Promise<boolean> {
   if (text === null) return false;
   const tag = sanitizeTag(text);
   if (!tag) return false;
-  if ((RESERVED_TAGS as readonly string[]).includes(tag)) {
-    await showWarning(title, `'${tag}' names per-${tag} results and cannot be used as a snapshot name.`);
+  // A snapshot is a result of its own; the active result cannot be snapshotted onto itself.
+  if (state?.results && tag === state.results.active) {
+    await showWarning(title, `'${tag}' is the name of the active result and cannot be used as a snapshot name.`);
     return false;
   }
   const out = await runIo(title, () => call("workflow.snapshot", { tag }));
