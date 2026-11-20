@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type Ref } from "react";
 import type { Issue, TissueDraft } from "../../api";
 import { useApp } from "../../store/appStore";
 import { updateStructure } from "../../store/structures";
 import { Dialog } from "../common";
+import { ModalDialog } from "../forms/ModalDialog";
+import { messageBox } from "../io/messageBox";
+import type { TissueSingleRowHandle } from "../plan/TissueDialog";
+import { withoutIdentity } from "../plan/tissueDraft";
 
 const VOI_TYPES = ["TARGET", "OAR", "EXTERNAL", "HELPER"];
 const TISSUE_MODELS: TissueDraft["model"][] = ["Generic", "LEM", "MKM", "mMKM"];
@@ -11,7 +15,12 @@ const TISSUE_MODELS: TissueDraft["model"][] = ["Generic", "LEM", "MKM", "mMKM"];
  * Package A's tissue editor in single-row mode (`components/plan/TissueDialog.tsx`,
  * `TissueSingleRow`), loaded lazily so the dialog degrades to a minimal editor without it.
  */
-type SingleRowProps = { structure: string; tissue: TissueDraft; onChange: (tissue: TissueDraft, issues: Issue[]) => void };
+type SingleRowProps = {
+  structure: string;
+  tissue: TissueDraft;
+  onChange: (tissue: TissueDraft, issues: Issue[]) => void;
+  handle?: Ref<TissueSingleRowHandle>;
+};
 type TissueRowEditorProps = { structure: string; value: TissueDraft; onChange: (value: TissueDraft) => void };
 const tissueModules = import.meta.glob<{ TissueSingleRow?: ComponentType<SingleRowProps> }>("../plan/TissueDialog.tsx");
 
@@ -33,7 +42,12 @@ function useTissueSingleRow(): ComponentType<SingleRowProps> | null {
   return component;
 }
 
-const sameTissue = (a: TissueDraft, b: TissueDraft) => a.model === b.model && JSON.stringify(a.values) === JSON.stringify(b.values);
+/** Model, parameters and cell line identity (a preset of equal values but another cell line is a change). */
+export const sameTissue = (a: TissueDraft, b: TissueDraft) =>
+  a.model === b.model &&
+  JSON.stringify(a.values) === JSON.stringify(b.values) &&
+  (a.cell_line ?? null) === (b.cell_line ?? null) &&
+  (a.cell_line_source ?? null) === (b.cell_line_source ?? null);
 
 /** Minimal tissue editor used until package A's single-row tissue editor is available. */
 function FallbackTissueEditor(props: TissueRowEditorProps) {
@@ -43,11 +57,11 @@ function FallbackTissueEditor(props: TissueRowEditorProps) {
     return v === null || v === undefined ? "" : String(v);
   };
   const setValue = (key: string, text: string) =>
-    onChange({ ...value, values: { ...value.values, [key]: text.trim() === "" ? null : Number(text) } });
+    onChange(withoutIdentity({ ...value, values: { ...value.values, [key]: text.trim() === "" ? null : Number(text) } }));
   return (
     <>
       <label>Tissue model:</label>
-      <select value={value.model} onChange={(e) => onChange({ ...value, model: e.target.value as TissueDraft["model"] })} data-testid="edit-voi-model">
+      <select value={value.model} onChange={(e) => onChange(withoutIdentity({ ...value, model: e.target.value as TissueDraft["model"] }))} data-testid="edit-voi-model">
         {TISSUE_MODELS.map((m) => (
           <option key={m}>{m}</option>
         ))}
@@ -74,16 +88,39 @@ export function EditVoiDialog(props: { index: number; onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const types = VOI_TYPES.includes(type) ? VOI_TYPES : [...VOI_TYPES, type];
   const SingleRow = useTissueSingleRow();
+  const rowHandle = useRef<TissueSingleRowHandle>(null);
 
   const submit = async (applyAnyway = false) => {
     if (!Number.isInteger(priority) || priority < 0 || priority > 9999) {
       setError("Overlap priority must be an integer from 0 to 9999");
       return;
     }
+    let edited = tissue;
+    const unapplied = rowHandle.current?.unappliedPick();
+    if (unapplied) {
+      const choice = await messageBox({
+        title: "Tissue not applied",
+        icon: "warning",
+        text: "The selected tissue has not been applied:",
+        informativeText: `${unapplied.label}\n\nApplying it replaces the tissue parameters of the structure; discarding the selection keeps the parameters as they are.`,
+        buttons: [
+          { id: "apply", label: "Apply and continue" },
+          { id: "discard", label: "Discard selection and continue" },
+          { id: "keep", label: "Keep editing", primary: true, reject: true },
+        ],
+        testId: "edit-voi-unapplied-pick",
+      });
+      if (choice === "keep") return;
+      if (choice === "apply") {
+        const applied = await rowHandle.current?.applyPick();
+        if (!applied) return;
+        edited = applied;
+      } else rowHandle.current?.discardPick();
+    }
     const changes: Parameters<typeof updateStructure>[1] = {};
     if (type !== (detail?.type ?? info?.type)) changes.type = type;
     if (priority !== (detail?.overlap_priority ?? info?.overlap_priority)) changes.overlap_priority = priority;
-    if (!sameTissue(tissue, initialTissue)) changes.tissue = tissue;
+    if (!sameTissue(edited, initialTissue)) changes.tissue = edited;
     if (!Object.keys(changes).length) return props.onClose();
     setSaving(true);
     const outcome = await updateStructure(props.index, changes, applyAnyway);
@@ -97,7 +134,7 @@ export function EditVoiDialog(props: { index: number; onClose: () => void }) {
   };
 
   return (
-    <Dialog
+    <ModalDialog
       title={`Edit VOI: ${name}`}
       onClose={props.onClose}
       testId="edit-voi-dialog"
@@ -123,7 +160,7 @@ export function EditVoiDialog(props: { index: number; onClose: () => void }) {
         </select>
         {SingleRow ? (
           <div style={{ gridColumn: "1 / -1" }} data-testid="edit-voi-tissue">
-            <SingleRow structure={name} tissue={tissue} onChange={(t) => setTissue(t)} />
+            <SingleRow structure={name} tissue={tissue} onChange={(t) => setTissue(t)} handle={rowHandle} />
           </div>
         ) : (
           <FallbackTissueEditor structure={name} value={tissue} onChange={setTissue} />
@@ -175,6 +212,6 @@ export function EditVoiDialog(props: { index: number; onClose: () => void }) {
           </ul>
         </Dialog>
       )}
-    </Dialog>
+    </ModalDialog>
   );
 }

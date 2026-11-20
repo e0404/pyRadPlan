@@ -13,6 +13,10 @@ import {
   planSetParams,
   syncedCouch,
 } from "../src/components/plan/planModel";
+import { isUnappliedPick, pickComboOptions, tissueForModel } from "../src/components/plan/TissueDialog";
+import { withModel, withoutIdentity } from "../src/components/plan/tissueDraft";
+import { sameTissue } from "../src/components/vois/EditVoiDialog";
+import type { TissueDraft } from "../src/api/protocol";
 import { formatSummary, logAxis, pyExp } from "../src/components/optimization/StatusWindow";
 
 const plan: PlanSummary = {
@@ -222,5 +226,72 @@ describe("status window", () => {
     expect(axis.min).toBe(0);
     expect(axis.max).toBe(4);
     expect(axis.ticks.filter((t) => t.major).map((t) => t.label)).toEqual(["1", "10", "100", "1000", "10000"]);
+  });
+});
+
+describe("tissue picker", () => {
+  it("treats only a selection differing from the corresponding pick as unapplied", () => {
+    expect(isUnappliedPick(null, null)).toBe(false);
+    expect(isUnappliedPick(null, "class:0")).toBe(false);
+    expect(isUnappliedPick("class:0", "class:0")).toBe(false);
+    expect(isUnappliedPick("preset:3", "class:0")).toBe(true);
+    expect(isUnappliedPick("preset:3", null)).toBe(true);
+  });
+
+  it("groups the picks with headers and a separator after the preferred ones", () => {
+    const pick = (id: string, group: string, preferred: boolean, exact = false) => ({
+      id,
+      kind: "preset" as const,
+      label: id,
+      group,
+      exact,
+      preferred,
+      model: "LEM" as const,
+      values: {},
+      description: "",
+    });
+    const options = pickComboOptions({
+      models: [],
+      reference_radiations: [],
+      option_label: "",
+      picks: [pick("class:0", "Base data", true, true), pick("preset:0", "LEM I", true), pick("preset:1", "MKM", false)],
+    });
+    expect(options.map((o) => (o.separator ? "---" : o.header ? `# ${o.label}` : o.label))).toEqual(["# Base data", "class:0", "# LEM I", "preset:0", "---", "# MKM", "preset:1"]);
+    expect(options.find((o) => o.key === "class:0")?.bold).toBe(true);
+  });
+});
+
+describe("tissue draft identity", () => {
+  const schema = {
+    models: [
+      { label: "Generic" as const, fields: [{ name: "alpha_x" }, { name: "beta_x" }] },
+      { label: "MKM" as const, fields: [{ name: "r_domain" }, { name: "alpha_x" }] },
+      { label: "mMKM" as const, fields: [{ name: "r_domain" }, { name: "alpha_x" }] },
+    ],
+    reference_radiations: [],
+    picks: [],
+    option_label: "",
+  } as unknown as Parameters<typeof tissueForModel>[0] & object;
+  const hsg: TissueDraft = { model: "MKM", values: { r_domain: 0.2, alpha_x: 0.3 }, cell_line: "HSG", cell_line_source: "Inaniwa 2010" };
+
+  it("is sent with the draft, also when null, and absent for drafts without it", () => {
+    expect(tissueForModel(schema, hsg)).toMatchObject({ cell_line: "HSG", cell_line_source: "Inaniwa 2010" });
+    expect(tissueForModel(schema, { ...hsg, cell_line: null, cell_line_source: null })).toMatchObject({ cell_line: null, cell_line_source: null });
+    const plain = tissueForModel(schema, { model: "MKM", values: { r_domain: 0.2 } });
+    expect("cell_line" in plain).toBe(false);
+  });
+
+  it("is dropped when the parameters or the parameter class change, kept for MKM <-> mMKM", () => {
+    expect(withoutIdentity(hsg)).toMatchObject({ cell_line: null, cell_line_source: null });
+    expect(withoutIdentity({ model: "MKM", values: {} })).toEqual({ model: "MKM", values: {} });
+    expect(withModel(schema, hsg, "mMKM")).toMatchObject({ model: "mMKM", cell_line: "HSG" });
+    expect(withModel(schema, hsg, "Generic")).toMatchObject({ model: "Generic", cell_line: null });
+  });
+
+  it("makes a preset of equal values but another cell line a change", () => {
+    expect(sameTissue(hsg, { ...hsg })).toBe(true);
+    expect(sameTissue(hsg, { ...hsg, cell_line: "CHO" })).toBe(false);
+    expect(sameTissue(hsg, { model: "MKM", values: hsg.values })).toBe(false);
+    expect(sameTissue({ model: "MKM", values: {} }, { model: "MKM", values: {}, cell_line: null, cell_line_source: null })).toBe(true);
   });
 });

@@ -7,7 +7,7 @@
  *
  * `TissueSingleRow` is the single-row mode embedded by the Edit VOI dialog (package B).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { BackendError } from "../../api/backend";
 import type { FieldDescriptor, Issue, StructureDetail, TissueDraft } from "../../api/protocol";
 import type { PlanDraftContext, TissueComparison, TissueEvaluateParams, TissueEvaluateResult, TissueOp, TissueSchema, TissueSource } from "../../api/protocol/plan";
@@ -17,6 +17,7 @@ import { Combo, type ComboOption } from "../forms/Combo";
 import { SpinInput } from "../forms/ConfigForm";
 import { ModalDialog } from "../forms/ModalDialog";
 import { messageBox } from "../io/messageBox";
+import { identityOf, withModel, withoutIdentity } from "./tissueDraft";
 import "./plan.css";
 
 const TABLE_NOTE =
@@ -33,6 +34,10 @@ const PICKER_TOOLTIP =
   "Tissue classes of the base data and the cell line presets of its model first (✓: matches the base data exactly), then the presets of other models. A preset of another model is converted to the base data's, keeping the parameters both share.";
 const PICK_APPLY_TOOLTIP =
   "Fill the selected structures, or all structures if none are selected. A preset describes a whole tissue and sets all parameters of its model; a tissue class of the base data sets its model and the parameters identifying it, keeping the others (e.g. alpha_0 / beta_0 of MKM).";
+const PICK_APPLY_TOOLTIP_SINGLE =
+  "Fill the tissue parameters of this structure. A preset describes a whole tissue and sets all parameters of its model; a tissue class of the base data sets its model and the parameters identifying it, keeping the others (e.g. alpha_0 / beta_0 of MKM).";
+const MATCH_TOOLTIP_SINGLE =
+  "Apply the closest tissue class of the selected model's base data: its model and the parameters identifying it. The parameters describing the tissue itself (e.g. α_0 / β_0 of MKM) and explicitly set reference parameters keep their value.";
 const REFERENCE_FIELDS = ["alpha_x", "beta_x"];
 const REFERENCE_RADIATION = "reference_radiation";
 const REFERENCE_COLUMNS = [REFERENCE_RADIATION, ...REFERENCE_FIELDS];
@@ -61,6 +66,8 @@ export function tissueColumns(schema: TissueSchema): FieldDescriptor[] {
   return [...choice, ...model, ...radiation, ...reference];
 }
 
+export { withModel, withoutIdentity };
+
 export function modelFieldNames(schema: TissueSchema, model: string): string[] {
   return schema.models.find((m) => m.label === model)?.fields.map((f) => f.name) ?? [];
 }
@@ -76,7 +83,7 @@ export function tissueForModel(schema: TissueSchema | null, tissue: TissueDraft)
   const names = new Set(modelFieldNames(schema, tissue.model));
   const values = Object.fromEntries(Object.entries(tissue.values).filter(([k]) => names.has(k)));
   const sources = tissue.sources ? Object.fromEntries(Object.entries(tissue.sources).filter(([k]) => names.has(k))) : undefined;
-  return { model: tissue.model, values, ...(sources ? { sources } : {}) };
+  return { model: tissue.model, values, ...(sources ? { sources } : {}), ...identityOf(tissue) };
 }
 
 function issueClass(issues: Issue[], comparison: TissueComparison | null): string {
@@ -280,10 +287,34 @@ export function TissueTable(props: {
   );
 }
 
+/** Entries of the tissue picker: the picks with their groups, a separator after the preferred ones. */
+export function pickComboOptions(schema: TissueSchema): ComboOption[] {
+  const out: ComboOption[] = [];
+  let group: string | null = null;
+  let preferred: boolean | null = null;
+  for (const p of schema.picks) {
+    const isPreferred = p.preferred ?? !p.group.startsWith("Other");
+    if (preferred === true && !isPreferred) out.push({ key: `sep:${p.id}`, label: "", separator: true });
+    preferred = isPreferred;
+    if (p.group !== group) {
+      group = p.group;
+      if (p.group) out.push({ key: `h:${p.group}`, label: p.group, header: true });
+    }
+    out.push({ key: p.id, label: p.label, bold: p.exact, title: p.description });
+  }
+  return out;
+}
+
+/** Whether a picker selection differs from the pick the tissue corresponds to, i.e. was not applied. */
+export function isUnappliedPick(selected: string | null, applied: string | null): boolean {
+  return selected !== null && selected !== applied;
+}
+
 function applyEdit(row: TissueRow, field: string, value: number | string | null): TissueRow {
   const sources = { ...(row.tissue.sources ?? {}) };
   if (REFERENCE_FIELDS.includes(field)) sources[field] = "explicit";
-  return { ...row, tissue: { ...row.tissue, values: { ...row.tissue.values, [field]: value }, sources } };
+  const edited = { ...row.tissue, values: { ...row.tissue.values, [field]: value }, sources };
+  return { ...row, tissue: (row.tissue.values[field] ?? null) === value ? edited : withoutIdentity(edited) };
 }
 
 function mergeResult(rows: TissueRow[], result: TissueEvaluateResult, editing?: { structure: string; field: string }): TissueRow[] {
@@ -372,7 +403,7 @@ export function TissueDialog(props: { context?: TissueContext; onClose: () => vo
     schedule({ rows: payload(next), op: "none", edited: { structure, field } });
   };
   const setModel = (structure: string, model: TissueDraft["model"]) => {
-    const next = rows.map((r) => (r.structure === structure ? { ...r, tissue: { ...r.tissue, model } } : r));
+    const next = rows.map((r) => (r.structure === structure ? { ...r, tissue: withModel(schema, r.tissue, model) } : r));
     setRows(next);
     editing.current = undefined;
     schedule({ rows: payload(next), op: "none" });
@@ -480,23 +511,7 @@ export function TissueDialog(props: { context?: TissueContext; onClose: () => vo
     }
   };
 
-  const pickOptions: ComboOption[] = useMemo(() => {
-    if (!schema) return [];
-    const out: ComboOption[] = [];
-    let group: string | null = null;
-    let preferred: boolean | null = null;
-    for (const p of schema.picks) {
-      const isPreferred = p.preferred ?? !p.group.startsWith("Other");
-      if (preferred === true && !isPreferred) out.push({ key: `sep:${p.id}`, label: "", separator: true });
-      preferred = isPreferred;
-      if (p.group !== group) {
-        group = p.group;
-        if (p.group) out.push({ key: `h:${p.group}`, label: p.group, header: true });
-      }
-      out.push({ key: p.id, label: p.label, bold: p.exact, title: p.description });
-    }
-    return out;
-  }, [schema]);
+  const pickOptions = useMemo(() => (schema ? pickComboOptions(schema) : []), [schema]);
 
   const relabelText = flags.can_relabel.length ? `Relabel as ${flags.can_relabel.join(" / ")}` : null;
   const disabled = saving || busy !== null;
@@ -628,6 +643,18 @@ export interface TissueSingleRowProps {
   /** A schema already loaded by the host; otherwise `tissue.schema` is requested. */
   schema?: TissueSchema;
   disabled?: boolean;
+  /** Lets the host ask what to do with a pick selected but not applied when it is closed. */
+  handle?: Ref<TissueSingleRowHandle>;
+}
+
+/** What the host of a single row may ask of its tissue picker. */
+export interface TissueSingleRowHandle {
+  /** The pick selected in the picker that differs from the one the tissue corresponds to, null if none. */
+  unappliedPick(): { id: string; label: string } | null;
+  /** Applies the selected pick like the Apply button; the new tissue, null if it failed. */
+  applyPick(): Promise<TissueDraft | null>;
+  /** Shows the pick the tissue corresponds to again. */
+  discardPick(): void;
 }
 
 /**
@@ -643,13 +670,61 @@ export function TissueSingleRow(props: TissueSingleRowProps) {
   onChange.current = props.onChange;
   const rowRef = useRef(row);
   rowRef.current = row;
-  const onResult = useCallback((result: TissueEvaluateResult) => {
+  const [selectedPick, setSelectedPick] = useState<string | null>(null);
+  const [appliedPick, setAppliedPick] = useState<string | null>(null);
+  const picks = useRef({ selected: selectedPick, applied: appliedPick, started: false });
+  const [flags, setFlags] = useState({ can_match: false, can_relabel: [] as string[], can_derive: false });
+  const [statusText, setStatusText] = useState("");
+  const onResult = useCallback((result: TissueEvaluateResult, params: TissueEvaluateParams) => {
     const [merged] = mergeResult([rowRef.current], result, editing.current);
     rowRef.current = merged;
     setRow(merged);
+    setFlags({ can_match: result.can_match, can_relabel: result.can_relabel, can_derive: result.can_derive });
+    if (result.notes.length) setStatusText([...new Set(result.notes)].join("; "));
+    const op = params.op ?? "none";
+    if (!picks.current.started || op === "apply_pick" || op === "match" || op === "relabel") {
+      picks.current.started = true;
+      const pick = result.rows[0]?.pick ?? null;
+      picks.current.selected = pick;
+      picks.current.applied = pick;
+      setSelectedPick(pick);
+      setAppliedPick(pick);
+    }
     onChange.current(merged.tissue, merged.issues);
   }, []);
   const { run, schedule } = useTissueEvaluate(onResult);
+  const pickOptions = useMemo(() => (schema ? pickComboOptions(schema) : []), [schema]);
+  const structureRef = useRef(props.structure);
+  structureRef.current = props.structure;
+  const schemaRef = useRef(schema);
+  schemaRef.current = schema;
+  const evaluateOp = (kind: TissueOp, pick?: string) =>
+    run({
+      rows: [{ structure: structureRef.current, tissue: tissueForModel(schemaRef.current, rowRef.current.tissue) }],
+      op: kind,
+      targets: [structureRef.current],
+      ...(pick ? { pick } : {}),
+    });
+  const selectPick = (id: string | null) => {
+    picks.current.selected = id;
+    setSelectedPick(id);
+  };
+  useImperativeHandle(props.handle, () => ({
+    unappliedPick() {
+      const { selected, applied } = picks.current;
+      const pick = schemaRef.current?.picks.find((p) => p.id === selected);
+      return pick && isUnappliedPick(selected, applied) ? { id: pick.id, label: pick.label } : null;
+    },
+    async applyPick() {
+      const id = picks.current.selected;
+      if (!id) return null;
+      const result = await evaluateOp("apply_pick", id);
+      return result ? rowRef.current.tissue : null;
+    },
+    discardPick() {
+      selectPick(picks.current.applied);
+    },
+  }));
 
   useEffect(() => {
     if (props.schema) return;
@@ -678,17 +753,65 @@ export function TissueSingleRow(props: TissueSingleRowProps) {
     props.onChange(next.tissue, next.issues);
     schedule({ rows: [{ structure: next.structure, tissue: tissueForModel(schema, next.tissue) }], op: "none", ...(edited ? { edited } : {}) });
   };
+  const relabelText = flags.can_relabel.length ? `Relabel as ${flags.can_relabel.join(" / ")}` : null;
   return (
     <div className="tissue-single" data-testid="tissue-single-row">
+      {schema.picks.length > 0 && (
+        <div className="row">
+          <span>Tissue:</span>
+          <Combo
+            value={selectedPick}
+            options={pickOptions}
+            className="fill"
+            placeholder="No matching tissue"
+            title={PICKER_TOOLTIP}
+            testId="tissue-picker"
+            onChange={selectPick}
+            disabled={props.disabled}
+          />
+          <button
+            className="btn"
+            title={PICK_APPLY_TOOLTIP_SINGLE}
+            disabled={!selectedPick || props.disabled}
+            onClick={() => selectedPick && void evaluateOp("apply_pick", selectedPick)}
+            data-testid="tissue-pick-apply"
+          >
+            Apply
+          </button>
+        </div>
+      )}
       <TissueTable
         schema={schema}
         rows={[row]}
         columns={columns}
         showStructure={false}
         disabled={props.disabled}
-        onModel={(_s, model) => commit({ ...row, tissue: { ...row.tissue, model } })}
+        onModel={(_s, model) => commit({ ...row, tissue: withModel(schema, row.tissue, model) })}
         onValue={(structure, field, value) => commit(applyEdit(row, field, value), { structure, field })}
       />
+      <div className="tissue-status" data-testid="tissue-status">
+        {statusText}
+      </div>
+      <div className="row">
+        <button className="btn" disabled={!flags.can_match || props.disabled} title={MATCH_TOOLTIP_SINGLE} onClick={() => void evaluateOp("match")} data-testid="tissue-match">
+          Match base data
+        </button>
+        {relabelText && (
+          <button className="btn" title={RELABEL_TOOLTIP} disabled={props.disabled} onClick={() => void evaluateOp("relabel")} data-testid="tissue-relabel">
+            {relabelText}
+          </button>
+        )}
+        <span className="fill" />
+        <button
+          className="btn"
+          disabled={!flags.can_derive || props.disabled}
+          title={flags.can_derive ? DERIVE_TOOLTIP : DERIVE_DISABLED_TOOLTIP}
+          onClick={() => void evaluateOp("derive")}
+          data-testid="tissue-derive"
+        >
+          Derive from model
+        </button>
+      </div>
       {row.issues.length > 0 && (
         <div className={`tissue-issues ${row.issues.some((i) => i.severity === "error") ? "error" : "warning"}`} data-testid="tissue-single-issues">
           {row.issues.map((i) => (

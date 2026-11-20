@@ -22,7 +22,11 @@ def _value(value: Any) -> Any:
 
 
 def draft_of(tissue: Any) -> dict[str, Any]:
-    """``TissueDraft`` of tissue properties."""
+    """``TissueDraft`` of tissue properties.
+
+    Besides the model and parameters it carries the tissue's identity, its cell line and the
+    source of that (see :func:`tissue_of`).
+    """
     from pyRadPlan.biology._editing import (  # noqa: PLC0415
         reference_radiation_fields,
         tissue_edit_fields,
@@ -35,13 +39,26 @@ def draft_of(tissue: Any) -> dict[str, Any]:
         "model": tissue_model_label(tissue),
         "values": {name: _value(getattr(tissue, name, float("nan"))) for name in names},
         "sources": dict(getattr(tissue, "reference_sources", {}) or {}),
+        "cell_line": getattr(tissue, "cell_line", None),
+        "cell_line_source": getattr(tissue, "cell_line_source", None),
     }
 
 
-def tissue_of(draft: Any, current: Any = None) -> Any:
-    """Tissue properties of a draft, keeping the cell line of *current* while it matches.
+def _drop_identity(draft: dict[str, Any]) -> None:
+    """Forget the cell line of a draft whose parameters no longer describe it."""
+    draft["cell_line"] = None
+    draft["cell_line_source"] = None
 
-    Tissue properties (from an in-process frontend) are returned as they are.
+
+def tissue_of(draft: Any, current: Any = None) -> Any:
+    """Tissue properties of a draft, with the cell line the draft carries.
+
+    A draft with ``cell_line`` / ``cell_line_source`` (also ``None``) gets exactly that
+    identity, as the Qt dialogs keep the identity of the tissue last applied; the operations
+    changing parameters drop it from the draft. A draft without them keeps the cell line of
+    *current* while every parameter still matches it, see
+    :func:`~pyRadPlan.biology._editing.build_tissue_properties`. Tissue properties (from an
+    in-process frontend) are returned as they are.
     """
     from pyRadPlan.biology._editing import (  # noqa: PLC0415
         build_tissue_properties,
@@ -63,13 +80,38 @@ def tissue_of(draft: Any, current: Any = None) -> Any:
         for name, source in dict(draft.get("sources") or {}).items()
         if name in REFERENCE_FIELDS
     }
-    return build_tissue_properties(
+    tissue = build_tissue_properties(
         cls, values, current, sources or None, model_label_name(label, current)
     )
+    if "cell_line" in draft or "cell_line_source" in draft:
+        tissue = tissue.model_copy(
+            update={
+                "cell_line": draft.get("cell_line"),
+                "cell_line_source": draft.get("cell_line_source"),
+            }
+        )
+    return tissue
 
 
-def _derive(draft: dict[str, Any], force: bool) -> None:
-    """Derive α_x / β_x of an MKM draft from its model parameters (Qt live derivation)."""
+def _copy_draft(tissue: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy of a draft as sent, with its identity if it names one."""
+    draft: dict[str, Any] = {
+        "model": tissue.get("model", "Generic"),
+        "values": dict(tissue.get("values") or {}),
+        "sources": dict(tissue.get("sources") or {}),
+    }
+    for key in ("cell_line", "cell_line_source"):
+        if key in tissue:
+            draft[key] = tissue[key]
+    return draft
+
+
+def _derive(draft: dict[str, Any], force: bool, keep_identity: bool = True) -> None:
+    """Derive α_x / β_x of an MKM draft from its model parameters (Qt live derivation).
+
+    Without `keep_identity`, a draft whose values changed forgets its cell line (the Qt
+    "Derive" button changes values the preset no longer describes).
+    """
     from pyRadPlan.biology._editing import derives_reference_params, tissue_class  # noqa: PLC0415
     from pyRadPlan.biology.tissues import (  # noqa: PLC0415
         DEFAULT_ALPHA_X,
@@ -89,6 +131,7 @@ def _derive(draft: dict[str, Any], force: bool) -> None:
     ]
     if not names:
         return
+    before = dict(draft["values"])
     values = {k: (float("nan") if v is None else v) for k, v in dict(draft["values"]).items()}
     values["model"] = draft["model"]
     derived = cls.derive_reference(values)
@@ -100,6 +143,8 @@ def _derive(draft: dict[str, Any], force: bool) -> None:
         elif sources.get(name) == "estimated":
             draft["values"][name] = defaults[name]
             sources[name] = "default"
+    if not keep_identity and draft["values"] != before:
+        _drop_identity(draft)
 
 
 def _context(
@@ -203,6 +248,8 @@ def tissue_schema(pln: Any, cst: Any, **context: Any) -> dict[str, Any]:
                 "preferred": bool(pick.preferred),
                 "model": draft["model"],
                 "values": draft["values"],
+                "cell_line": draft["cell_line"],
+                "cell_line_source": draft["cell_line_source"],
                 "description": getattr(pick, "tooltip", "") or "",
             }
         )
@@ -249,15 +296,24 @@ def evaluate_tissues(
     edited: Optional[Mapping[str, Any]] = None,
     **context: Any,
 ) -> dict[str, Any]:
-    """``tissue.evaluate``: apply a dialog operation to drafts and check them."""
+    """``tissue.evaluate``: apply a dialog operation to drafts and check them.
+
+    Every row also names the picker entry its tissue corresponds to (``pick``, an id of
+    :func:`tissue_schema`; None if it matches none), see
+    :func:`~pyRadPlan.biology._editing.current_pick_position`. After ``apply_pick``, the
+    rows it was applied to name the pick applied (a preset giving the values of a class is
+    still the preset the user chose).
+    """
     from pyRadPlan.biology._editing import (  # noqa: PLC0415
         adopt_preset,
         apply_base_data_class,
         available_tissue_classes,
         cell_line_presets,
         compare_tissues_quietly,
+        current_pick_position,
         derives_reference_params,
         provenance_fixes,
+        ranked_tissue_picks,
         relabel_issues,
         target_provenance,
         tissue_class,
@@ -267,6 +323,7 @@ def evaluate_tissues(
     from pyRadPlan.biology.tissues import REFERENCE_FIELDS  # noqa: PLC0415
 
     machine, model, engine = _context(pln, **context)
+    provenance = target_provenance(machine, model, engine)
     names = [voi.name for voi in getattr(cst, "vois", [])]
     if len(set(names)) != len(names):
         raise ValueError("tissue.evaluate needs unique structure names")
@@ -276,18 +333,14 @@ def evaluate_tissues(
         name = row["structure"]
         if name not in vois:
             raise KeyError(f"Unknown structure {name!r}")
-        tissue = dict(row["tissue"])
-        drafts[name] = {
-            "model": tissue.get("model", "Generic"),
-            "values": dict(tissue.get("values") or {}),
-            "sources": dict(tissue.get("sources") or {}),
-        }
+        drafts[name] = _copy_draft(row["tissue"])
     target_names = list(targets) if targets else list(drafts)
     notes: list[str] = []
 
     if edited and edited.get("structure") in drafts:
         draft = drafts[edited["structure"]]
         field = edited.get("field")
+        _drop_identity(draft)
         if field in REFERENCE_FIELDS:
             draft["sources"][field] = "explicit"
         else:
@@ -296,7 +349,7 @@ def evaluate_tissues(
         derivable = [n for n in target_names if derives_reference_params(
             tissue_class(drafts[n]["model"]))]  # fmt: skip
         for name in derivable:
-            _derive(drafts[name], force=True)
+            _derive(drafts[name], force=True, keep_identity=False)
         notes.append(
             "Nothing to derive from"
             if not derivable
@@ -311,6 +364,7 @@ def evaluate_tissues(
             for name, voi in vois.items()
         }
 
+    applied_picks: set[str] = set()
     if op == "apply_pick" and pick:
         kind, _, index = pick.partition(":")
         classes = available_tissue_classes(machine, model, engine)
@@ -320,10 +374,9 @@ def evaluate_tissues(
                 tissue, _ = apply_base_data_class(tissues()[name], classes[int(index)])
                 note = "Applied the base data class"
             else:
-                tissue, note = adopt_preset(
-                    presets[int(index)][1], target_provenance(machine, model, engine)
-                )
+                tissue, note = adopt_preset(presets[int(index)][1], provenance)
             drafts[name] = draft_of(tissue)
+            applied_picks.add(name)
             notes.append(note)
     current = tissues()
     comparisons = compare_tissues_quietly(machine, model, list(current.items()), engine)
@@ -350,6 +403,16 @@ def evaluate_tissues(
         comparisons = compare_tissues_quietly(machine, model, list(current.items()), engine)
         by_name = dict(zip(current, comparisons)) if len(comparisons) == len(current) else {}
 
+    picks = ranked_tissue_picks(
+        available_tissue_classes(machine, model, engine), cell_line_presets(), provenance
+    )
+
+    def pick_of(name: str) -> Optional[str]:
+        if name in applied_picks:
+            return pick
+        position = current_pick_position(picks, current[name], by_name.get(name), provenance)
+        return None if position is None else f"{picks[position].kind}:{picks[position].index}"
+
     issues_by_name: dict[str, list] = {}
     for issue in tissue_issues_quietly(machine, model, dict(current), engine):
         issues_by_name.setdefault(getattr(issue, "structure", None), []).append(issue)
@@ -361,6 +424,7 @@ def evaluate_tissues(
                 "tissue": drafts[name],
                 "issues": [issue_dict(i) for i in issues_by_name.get(name, [])],
                 "comparison": _comparison_dict(by_name.get(name)),
+                "pick": pick_of(name),
             }
             for name in drafts
         ],
