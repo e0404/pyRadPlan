@@ -730,7 +730,7 @@ class ViewCache:
         info = component_info(result, quantity)
         return {
             "quantity": quantity,
-            "unit": quantity_unit(quantity),
+            "unit": quantity_unit(quantity) or info["unit"],
             "label": info["meta_label"],
             "unit_info": unit_info(info["unit"]),
             "curves": [

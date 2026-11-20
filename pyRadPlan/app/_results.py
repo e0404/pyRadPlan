@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 
@@ -45,6 +45,26 @@ def quantity_meta(
         if base not in QUANTITY_META and base.endswith(suffix):
             base = base.removesuffix(suffix)
     return QUANTITY_META.get(base, default)
+
+
+def result_keys_meta(
+    keys: Iterable[str], default: tuple[str, str] = ("Quantity", "")
+) -> dict[str, tuple[str, str]]:
+    """Label and unit of each result key, resolving snapshot tags of saved results.
+
+    Unlike :func:`quantity_meta`, the keys are grouped as the result catalog groups them
+    (``group_result_keys``), so ``"rbe_x_dose_<tag>"`` of a saved result carries the
+    label and unit of ``"rbe_x_dose"``. Keys of unknown quantities get *default*.
+    """
+    from pyRadPlan.quantities._display_names import group_result_keys  # noqa: PLC0415
+
+    keys = list(keys)
+    meta: dict[str, tuple[str, str]] = {}
+    for group in group_result_keys(keys):
+        group_meta = quantity_meta(group.base, default)
+        for _, member in group.components:
+            meta[member] = group_meta
+    return {key: meta.get(key, quantity_meta(key, default)) for key in keys}
 
 
 def _is_volume(value: Any) -> bool:

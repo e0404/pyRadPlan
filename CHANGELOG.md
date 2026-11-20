@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `Grid.resample` now centers the resampled grid on the original one (issue #32). The origin is the center of the first voxel, but the grid was centered as if it were the voxel corner, so every grid coarser than the CT, including the default dose grid of the dose engines, was shifted by half the resolution difference per axis (e.g. 1.5 mm for a 5 mm dose grid on a 2 mm CT). Doses were always placed at the correct world positions, but structures resampled onto the dose grid were represented asymmetrically. This changes numerical results: dose grid voxel positions, structure voxels on the dose grid, and therefore dose influence matrices and optimized plans differ slightly from earlier versions
+- GUI: comparing saved results in the DVH view no longer puts RBE-weighted doses of two plans (e.g. proton and carbon) on separate x axes; saved results now keep the unit and label of their quantity
 - GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
 - GUI: changing the radiation mode of a plan with an explicit scenario set failed
 - GUI: the status line kept showing "Saving ..." after a save

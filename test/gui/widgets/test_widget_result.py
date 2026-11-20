@@ -762,6 +762,27 @@ def test_overlay_meta_covers_per_scenario_lists():
     assert labels["physical_dose_beam 0"] == "Dose"
 
 
+def test_overlay_meta_resolves_snapshot_tags_and_shares_rbe_axis():
+    from pyRadPlan.analysis._units import compare_units
+    from pyRadPlan.gui.widgets._result_widget import _build_overlay_meta
+
+    arr = np.zeros((2, 2, 2))
+    units, labels = _build_overlay_meta(
+        {
+            "rbe_x_dose_protons": arr,
+            "physical_dose_protons": arr,
+            "rbe_x_dose_carbon": arr,
+            "physical_dose_carbon": arr,
+            "effect_carbon": arr,
+            "effect_protons": arr,
+        }
+    )
+    assert units["rbe_x_dose_carbon"] == units["rbe_x_dose_protons"] == "Gy (RBE)"
+    assert labels["rbe_x_dose_carbon"] == "RBE-weighted Dose"
+    assert compare_units(units["rbe_x_dose_protons"], units["rbe_x_dose_carbon"]) == (True, 1.0)
+    assert compare_units(units["rbe_x_dose_protons"], units["effect_carbon"])[0] is False
+
+
 def test_beam_axes_are_mapped_to_the_viewer_voxel_space():
     """The shared LPS beam geometry, in the viewer's anisotropic (z, x, y) voxel space."""
     from types import SimpleNamespace
