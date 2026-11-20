@@ -178,7 +178,7 @@ def test_voi_metadata_dialog_switches_to_mkm_tissue(qapp, test_data_photons):
 
 
 def test_voi_metadata_dialog_groups_model_and_reference_params(qapp, test_data_photons):
-    from pyRadPlan.gui.widgets._tissue_params import MODEL_GROUP_TITLE, REFERENCE_GROUP_TITLE
+    from pyRadPlan.biology._editing import MODEL_GROUP_TITLE, REFERENCE_GROUP_TITLE
 
     _ct, cst, _result = test_data_photons
     dialog = VOIMetadataDialog(cst.vois[0])
@@ -467,7 +467,7 @@ def test_vois_widget_passes_machine_to_editor(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget._edit_voi(cst.vois[0].name)
+        widget._edit_voi(cst.vois[0])
 
     assert len(captured) == 1
     assert len(captured[0]) == 2
@@ -488,7 +488,7 @@ def test_vois_widget_passes_the_dose_engine_to_editor(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget._edit_voi(cst.vois[0].name)
+        widget._edit_voi(cst.vois[0])
 
     assert captured == [ParticleTOPASMCEngine]
 
@@ -551,7 +551,7 @@ def test_vois_widget_edit_emits_metadata_changed(qapp, test_data_photons, monkey
     widget.metadata_changed.connect(received.append)
 
     name = cst.vois[0].name
-    widget._edit_voi(name)
+    widget._edit_voi(cst.vois[0])
 
     assert received == [name]
     assert len(widget._voi_checkboxes) == len(cst.vois)
@@ -596,13 +596,13 @@ def test_vois_widget_type_change_emits_voi_replaced(qapp, test_data_photons, mon
     monkeypatch.setattr(VOIMetadataDialog, "exec", fake_exec)
 
     replaced = []
-    widget.voi_replaced.connect(lambda n, v: replaced.append((n, v)))
+    widget.voi_replaced.connect(lambda o, v: replaced.append((o, v)))
 
-    widget._edit_voi(voi.name)
+    widget._edit_voi(voi)
 
     assert len(replaced) == 1
-    name, new_voi = replaced[0]
-    assert name == voi.name
+    old, new_voi = replaced[0]
+    assert old is voi
     assert new_voi is not voi
     assert new_voi.voi_type == new_type
     assert widget._voi_by_name[voi.name] is new_voi
@@ -707,7 +707,7 @@ def test_voi_editor_unchanged_ok_leaves_the_workspace_untouched(qapp, test_data_
         dij=object(),
         result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
     )
-    assert not workflow._result_stale
+    assert not workflow.session.tracker.result_stale
 
     changes = []
     ws.workspace_changed.connect(changes.append)
@@ -718,11 +718,11 @@ def test_voi_editor_unchanged_ok_leaves_the_workspace_untouched(qapp, test_data_
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        viewing.vois_widget._edit_voi(cst.vois[0].name)
+        viewing.vois_widget._edit_voi(cst.vois[0])
 
     assert changes == []
-    assert not workflow._result_stale
-    assert not workflow._dij_stale
+    assert not workflow.session.tracker.result_stale
+    assert not workflow.session.tracker.dij_stale
 
 
 def _answer_message_boxes(monkeypatch, button_text=None):
@@ -742,7 +742,7 @@ def _answer_message_boxes(monkeypatch, button_text=None):
 
 
 def _oxygen_machine():
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
 
     return load_machine_quietly("oxygen", "Generic")
 
@@ -795,7 +795,7 @@ def test_voi_metadata_dialog_asks_before_applying_a_failing_tissue(
 def test_voi_metadata_dialog_checks_with_the_edited_voi_substituted(
     qapp, monkeypatch, test_data_photons
 ):
-    from pyRadPlan.gui.widgets._tissue_params import tissue_issues_quietly
+    from pyRadPlan.biology._editing import tissue_issues_quietly
     from pyRadPlan.gui.widgets.result import vois_widget
 
     ct, cst, result = test_data_photons
@@ -1153,3 +1153,133 @@ def test_voi_metadata_dialog_labels_presets_without_a_confirmed_source(qapp, tes
     assert labels[index].startswith("TestCells · MKM (unverified)")
     tooltip = dialog.preset_combo.itemData(index, Qt.ItemDataRole.ToolTipRole)
     assert "Source: Unverified" in tooltip and "Origin unknown." in tooltip
+
+
+def _shown_pick(dialog):
+    """Pick the tissue picker shows, None for its neutral state."""
+    pick = dialog.preset_combo.currentData()
+    return None if pick is None else dialog._picks[pick]
+
+
+def _pick_position(dialog, kind, predicate=lambda pick: True):
+    return next(i for i, pick in enumerate(dialog._picks) if pick.kind == kind and predicate(pick))
+
+
+def _select_pick(dialog, position):
+    combo = dialog.preset_combo
+    combo.setCurrentIndex(combo.findData(position))
+    assert combo.currentData() == position
+
+
+def _zstar_dialog(voi, cst):
+    return VOIMetadataDialog(voi, _oxygen_machine(), "zstar_kernels", cst=cst.vois)
+
+
+def test_voi_metadata_dialog_preselects_the_tissue_class_of_the_structure(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+
+    dialog = _zstar_dialog(cst.vois[0], cst)
+    assert _shown_pick(dialog) is None
+    assert dialog.preset_combo.currentIndex() == -1
+
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], model="mMKM"), cst)
+    pick = _shown_pick(dialog)
+    assert pick is not None and pick.kind == "class" and pick.exact
+
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], model="mMKM", r_domain=0.3), cst)
+    assert _shown_pick(dialog) is None
+
+
+def test_voi_metadata_dialog_preselects_the_cell_line_preset_of_the_structure(
+    qapp, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    dialog = _zstar_dialog(cst.vois[0], cst)
+    position = _pick_position(
+        dialog, "preset", lambda pick: pick.tissue.cell_line == "HSG" and pick.preferred
+    )
+    dialog.apply_cell_line_preset(dialog._picks[position].index)
+    assert dialog.preset_combo.currentData() == position
+    dialog.accept()
+
+    reopened = _zstar_dialog(dialog.updated_voi, cst)
+    assert reopened.preset_combo.currentData() == position
+
+    # Changing a parameter of the preset leaves a tissue that is no longer that preset
+    edited = _zstar_dialog(
+        _with_tissue(
+            dialog.updated_voi,
+            dialog.updated_voi.tissue_properties.model_copy(update={"r_domain": 0.5}),
+        ),
+        cst,
+    )
+    assert _shown_pick(edited) is None
+
+
+def test_voi_metadata_dialog_picker_follows_match_base_data(qapp, test_data_photons):
+    ct, cst, result = test_data_photons
+    dialog = _zstar_dialog(_mkm_voi(cst.vois[0], r_domain=0.3), cst)
+    assert _shown_pick(dialog) is None
+
+    dialog.match_button.click()
+
+    pick = _shown_pick(dialog)
+    assert pick is not None and pick.kind == "class"
+
+
+def test_voi_metadata_dialog_ok_without_changes_never_warns_about_the_picker(
+    qapp, monkeypatch, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    _answer_message_boxes(monkeypatch)  # fails if a box is shown
+    for voi in (cst.vois[0], _mkm_voi(cst.vois[0], model="mMKM")):
+        dialog = _zstar_dialog(voi, cst)
+        dialog.accept()
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.updated_voi is voi
+
+
+@pytest.mark.parametrize(
+    ("answer", "closed", "applied"),
+    [
+        ("Keep editing", False, False),
+        ("Discard selection and continue", True, False),
+        ("Apply and continue", True, True),
+    ],
+)
+def test_voi_metadata_dialog_asks_about_an_unapplied_picker_selection(
+    qapp, monkeypatch, test_data_photons, answer, closed, applied
+):
+    ct, cst, result = test_data_photons
+    voi = cst.vois[0]
+    dialog = VOIMetadataDialog(voi)
+    position = _pick_position(dialog, "preset", lambda pick: pick.tissue.cell_line == "CHO")
+    _select_pick(dialog, position)
+    shown = _answer_message_boxes(monkeypatch, answer)
+
+    dialog.accept()
+
+    assert len(shown) == 1 and "has not been applied" in shown[0]
+    assert dialog._picks[position].label in shown[0]
+    assert (dialog.result() == QDialog.DialogCode.Accepted) == closed
+    if closed:
+        tissue = dialog.updated_voi.tissue_properties
+        assert (tissue.cell_line == "CHO") == applied
+        assert applied or dialog.updated_voi is voi
+    if answer.startswith("Discard"):
+        assert dialog.preset_combo.currentIndex() == -1
+
+
+def test_voi_metadata_dialog_applied_pick_is_not_asked_about_again(
+    qapp, monkeypatch, test_data_photons
+):
+    ct, cst, result = test_data_photons
+    dialog = VOIMetadataDialog(cst.vois[0])
+    position = _pick_position(dialog, "preset", lambda pick: pick.tissue.cell_line == "CHO")
+    _select_pick(dialog, position)
+    dialog._on_apply_pick()
+    _answer_message_boxes(monkeypatch)  # fails if a box is shown
+
+    dialog.accept()
+
+    assert dialog.updated_voi.tissue_properties.cell_line == "CHO"

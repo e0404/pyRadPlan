@@ -12,7 +12,6 @@ from numpydantic import NDArray, Shape
 import pint
 import numpy as np
 import SimpleITK as sitk
-import matplotlib.pyplot as plt
 
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core._units import ureg
@@ -360,6 +359,8 @@ class DVH(PyRadPlanBaseModel):
             matplotlib.axes.Axes: The axes containing the plot
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots()
 
         # Plot with or without legend
@@ -444,6 +445,8 @@ class DVHCollection(PyRadPlanBaseModel):
             matplotlib.axes.Axes: The axes containing the plot
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots()
 
         # Filter DVHs based on structure names if provided

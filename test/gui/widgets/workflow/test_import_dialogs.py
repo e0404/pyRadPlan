@@ -8,7 +8,7 @@ import pytest
 
 from pyRadPlan.gui.widgets.workflow._binary_import_dialog import BinaryImportDialog
 from pyRadPlan.gui.widgets.workflow._dicom_import_dialog import DicomImportDialog
-from pyRadPlan.gui.widgets.workflow._workflow_widget import _folder_has_images
+from pyRadPlan.app._io import folder_has_images as _folder_has_images
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.result import PlanResult
@@ -221,7 +221,7 @@ def test_image_import_dialog_preselects_from_dtype(qapp, binary_folder, tmp_path
 
 
 def test_unique_name_suffixes():
-    from pyRadPlan.gui.widgets.workflow._workflow_widget import _unique_name
+    from pyRadPlan.app._io import unique_name as _unique_name
 
     assert _unique_name("Heart", set()) == "Heart"
     assert _unique_name("Heart", {"Heart"}) == "Heart_2"
@@ -233,7 +233,7 @@ def test_merge_loaded_data_keeps_dose_as_imported_result(qapp):
     w = WorkflowWidget(ws)
     dose = sitk.GetImageFromArray(np.zeros((4, 8, 8), dtype=np.float32))
 
-    w._merge_loaded_data({"ct": object(), "dose": dose})
+    w.session.merge_loaded({"ct": object(), "dose": dose})
     assert ws.has("ct")
     # A dose without weights is no result to recalculate or optimize from
     assert ws.result is None

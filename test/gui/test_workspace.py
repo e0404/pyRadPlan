@@ -144,17 +144,16 @@ def test_set_many_replaces_all_results_and_clear_drops_them(qapp):
     assert ws.active_result == "current"
 
 
-def test_loaded_results():
-    from pyRadPlan.gui.workspace import loaded_results
+def test_the_session_tracks_a_change_before_the_widgets_hear_of_it(qapp):
+    ws = WorkspaceManager()
+    session = ws.session
+    assert session.workspace is ws.store and session.profile == "native"
+    assert not session.auto_plan and session.solver_preference == ()
+    ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object())
+    flags = []
+    ws.workspace_changed.connect(lambda keys: flags.append(session.tracker.dij_stale))
 
-    dose = _dose()
-    assert loaded_results({"ct": object()}) == ({}, None)
+    ws.pln = object()
 
-    results, active = loaded_results({"dose": dose})
-    assert list(results) == ["imported"] and active is None
-
-    results, active = loaded_results({"result": {"physical_dose": dose}, "dose": dose})
-    assert list(results) == ["current"]
-
-    session = {"results": {"a": object(), "b": object()}, "active_result": "b", "result": 1}
-    assert loaded_results(session) == (session["results"], "b")
+    assert flags == [True]
+    assert ws.store.pln is ws.pln and ws.present() == ws.store.present()

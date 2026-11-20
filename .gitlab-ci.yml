@@ -173,6 +173,139 @@ tests-backends:
         - uv pip install torch --index-url https://download.pytorch.org/whl/cpu
         - pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q --timeout=300
 
+# The web version (web/, see web/README.md): a Vite + React frontend running pyRadPlan.app in
+# Pyodide. The same three jobs as the "Web" GitHub workflow, only for the changes that can affect
+# it: the jobs that duplicate the GitHub "Web" and "Web Pages" runs are on request on internal
+# branches (.on-request), the others run before a merge (.before-merge); the rules repeat those of
+# the two templates with the changes filter. The Node image brings its own Python (the wheel is
+# pure Python and runs in Pyodide, the native one only pickles a workspace and runs the shim
+# tests); the browser is the Microsoft Edge the e2e scripts launch, installed by Playwright,
+# with WebGL on SwiftShader. The Pyodide packages (numpy, scipy, ...) come from the jsDelivr CDN.
+.web:
+    stage: test
+    image: node:24-bookworm
+    variables:
+        PYTHON: /opt/venv/bin/python
+    before_script:
+        - apt-get update && apt-get install -y --no-install-recommends python3-venv
+        - python3 -m venv /opt/venv
+
+.web-before-merge:
+    extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: &web-changes
+              - web/**/*
+              - pyRadPlan/app/**/*
+              - pyproject.toml
+              - LICENSE
+              - README.md
+              - .gitlab-ci.yml
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\// && $CI_OPEN_MERGE_REQUESTS'
+          changes: *web-changes
+
+.web-on-request:
+    extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: *web-changes
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\//'
+          changes: *web-changes
+          when: manual
+          allow_failure: true
+
+.web-pages-on-request:
+    extends: .web
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^devops\//'
+          changes: &web-pages-changes
+              - web/**/*
+              - .gitlab-ci.yml
+        - if: '$CI_COMMIT_BRANCH =~ /^internal\//'
+          changes: *web-pages-changes
+          when: manual
+          allow_failure: true
+
+web-frontend:
+    extends: .web-before-merge
+    script:
+        - $PYTHON -m pip install -e .
+        - cd web
+        - npm ci
+        - npx playwright install --with-deps msedge
+        - npm run typecheck
+        - npm test
+        - npm run build
+        # The scripts start their own Vite server and exit with a failure if a check fails.
+        - npm run e2e
+        - npm run e2e:viewer
+        - npm run e2e:plan
+        - npm run e2e:menus
+    artifacts:
+        when: on_failure
+        paths:
+            - web/e2e/screenshots/
+        expire_in: 1 week
+
+web-pyodide:
+    extends: .web-before-merge
+    script:
+        - $PYTHON -m pip install -e . pytest
+        - cd web/pyodide
+        - npm ci
+        - npm run build
+        - npm run pipeline -- --mode photons --preset fast
+        - >
+            node -e 'const i = JSON.parse(require("fs").readFileSync("results/pyodide_photons_fast.json")).info;
+            console.log("target D95", i.target_d95);
+            if (!(i.target_d95 > 20 && i.target_d95 < 70)) { console.error("implausible target D95"); process.exit(1); }'
+        - npm run app-smoke -- --strict
+        - npm run test:shim
+    artifacts:
+        when: on_failure
+        paths:
+            - web/pyodide/results/*.json
+        expire_in: 1 week
+
+# The click-through of the whole GUI against the real Pyodide backend.
+web-pyodide-e2e:
+    extends: .web-on-request
+    script:
+        - $PYTHON -m pip install -e .
+        - (cd web/pyodide && npm ci && npm run build)
+        - cd web
+        - npm ci
+        - npx playwright install --with-deps msedge
+        - npm run e2e:pyodide
+    artifacts:
+        when: on_failure
+        paths:
+            - web/e2e/screenshots/pyodide-*
+            - web/e2e/downloads/
+        expire_in: 1 week
+
+# The GitHub Pages site of the "Web Pages" GitHub workflow, built and smoke-tested but not deployed
+# (no GitLab Pages): the newest release tag as /latest/ (a placeholder page while releases have
+# no web/), this branch as /develop/. The assembled site is kept as the job artifact. A full clone
+# with the tags: the "latest" tag and setuptools-scm need them, and a shallow clone has neither.
+web-pages:
+    extends: .web-pages-on-request
+    variables:
+        GIT_DEPTH: "0"
+    script:
+        - git fetch --force --tags origin
+        - $PYTHON -m pip install -e .
+        - (cd web && npm ci && npx playwright install --with-deps msedge)
+        # Clones the newest vX.Y.Z tag into _pages/latest, builds both channels into _site, serves
+        # it like GitHub Pages under /pyRadPlan/ and runs web/e2e/pages.mjs against /develop/.
+        - node web/scripts/test_pages.mjs --install
+        - du -sh _site _site/*/
+    artifacts:
+        when: always
+        paths:
+            - _site/
+        expire_in: 1 week
+
 packaging:
     stage: package
     dependencies: []

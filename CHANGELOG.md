@@ -10,17 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `pyRadPlan.result`: `PlanResult` holds the quantities of a plan on the CT grid as `QuantityDistribution`s (`result.physical_dose.values` is a `sitk.Image`), the per-beam quantities (`result.beam.physical_dose[i]`), the per-scenario quantities with their labels (`result.scenario.physical_dose[i]`, `result.scenario_labels`), the fluence and a summary of the solver information. All quantities of a result share one grid and agree in their number of beams and scenarios. It is saved and loaded by the IO backends and is the result the GUI works with. A matRad `resultGUI` is read with `PlanResult.from_matrad` (as the `.mat` importer does), which translates the matRad field names (e.g. `RBExDose` to `rbe_x_dose`) and places the cubes on the CT grid
+- Experimental web version of the GUI in `web/`: pyRadPlan runs in the browser with Pyodide (numpy backend), without a server. It mirrors the desktop GUI (plan form, objectives, dose influence, optimization with scipy or ipax, slice viewer, DVH and quality indicators, workspace load and save) and uses a 5 mm dose grid by default. Not available in the browser: image and DICOM import, Monte Carlo engines, IPOPT, GPU backends and the AI features
+- `pyRadPlan.app`: a session layer without Qt (`Session`, `Workspace`, `dispatch`) that holds the workflow logic of the GUIs. The desktop GUI and the web version both run on it
+- Documentation: a FAQ section on the Help and support page, starting with the GUI failing to start on Windows with an outdated Visual C++ Redistributable
 
 ### Changed
 
 - **Breaking:** `fluence_optimization` returns a `PlanResult` instead of the fluence vector, which is available as `result.fluence`. `Dij.compute_result_ct_grid`, `Dij.compute_result_dose_grid` and `calc_dose_forward` return a `PlanResult` instead of a dictionary of images; their `"<quantity>_scenario"` lists are `result.scenario_quantities`
-- `fluence_optimization(..., scenarios=True)` also reports the optimized quantities of every scenario (`result.scenario_quantities`); the GUI uses it for robust plans instead of computing the result a second time
-- GUI: the workspace keeps every result on its own. A snapshot, an imported dose and the result being worked on are separate results (`WorkspaceManager.results`, `add_result`, `remove_result`, `active_result`; `workspace.result` is the active one), each with its own beams, scenarios and scenario labels. Optimizing or recalculating replaces only the active result, and a recalculation no longer leaves quantities of the previous doses behind. The viewer, the analysis window and the reference dose of an objective list the quantities of all results, e.g. `dose (protons_30fx)`. An imported dose keeps its own grid, is shown resampled onto the CT, and a dose loaded together with a patient is listed as `dose (imported)`. Save Result exports the quantities of all results. Saved workspaces store all results; workspaces saved with earlier versions are split into their results when loaded. Any name can be used for a snapshot, including `beam` and `scenario`. Loading a result or a dose without a CT adds it to the results of the current patient instead of replacing them
+- `fluence_optimization(..., scenarios=True)` also reports the optimized quantities of every scenario (`result.scenario_quantities`)
+- GUI and web version: the workspace keeps every result on its own. A snapshot, an imported dose and the result being worked on are separate results (`Workspace.results`, `add_result`, `remove_result`, `active_result` in `pyRadPlan.app`, also on the desktop GUI's `WorkspaceManager`; `workspace.result` is the active one), each with its own beams, scenarios and scenario labels. Optimizing or recalculating replaces only the active result, and a recalculation no longer leaves quantities of the previous doses behind. The viewer, the analysis window and the reference dose of an objective list the quantities of all results, e.g. `dose (protons_30fx)`. An imported dose keeps its own grid, is shown resampled onto the CT, and a dose loaded together with a patient is listed as `dose (imported)`. Save Result exports the quantities of all results. Saved workspaces store all results; workspaces saved with earlier versions are split into their results when loaded. Any name can be used for a snapshot, including `beam` and `scenario`. Loading a result or a dose without a CT adds it to the results of the current patient instead of replacing them
+- GUI: replacing the CT marks the dose influence matrix and the result as outdated
+- GUI: the engine settings dialog no longer shows `dose_grid`, `mult_scen`, `bio_model`, `voxel_sub_ix` and `select_voxels_in_scenarios`; the plan form sets them
+- GUI: a plan that leaves the dose engine to its radiation mode keeps doing so when it is applied
+- GUI: file dialogs take their formats from one table. NIfTI is the default format for result images, DICOM folders are loaded with Load Folder only, and a file name ending in another format's extension is refused instead of getting a second extension
+- GUI: a structure edited while a computation runs is updated when the computation ends
+- GUI: a dose-only `.npz` file can be loaded as a dose
+- GUI: structures are addressed by position, so a structure set with duplicate structure names can be edited; a structure edit queued during a computation is dropped if another structure set was loaded meanwhile
+- Web version: loading pickle files is disabled in the browser (unpickling runs code from the file); saving pickles still works
+- `pyRadPlan.app`: hosts can refuse pickle loading and process-wide settings changes (`SessionManager(allow_pickle=..., allow_global_settings=...)`)
+- Replacing a structure's mask marks the dose influence matrix as outdated
+- Optimization starts faster: resampling the structure set onto the dose grid no longer computes the voxel indices and shape statistics of every structure on the CT grid first (about 4.7 s down to 1.4 s for one carbon beam on the LIVER phantom)
 
 ### Fixed
 
 - `plot_slice` / `plot_multiple_slices` failed for a dimensionless `overlay_unit` such as `"1"` (e.g. in the carbon example)
 - `calculate_machine_scale` read the forward dose as a dictionary and failed
+- `Grid.resample` now centers the resampled grid on the original one (issue #32). The origin is the center of the first voxel, but the grid was centered as if it were the voxel corner, so every grid coarser than the CT, including the default dose grid of the dose engines, was shifted by half the resolution difference per axis (e.g. 1.5 mm for a 5 mm dose grid on a 2 mm CT). Doses were always placed at the correct world positions, but structures resampled onto the dose grid were represented asymmetrically. This changes numerical results: dose grid voxel positions, structure voxels on the dose grid, and therefore dose influence matrices and optimized plans differ slightly from earlier versions
+- GUI: comparing saved results in the DVH view no longer puts RBE-weighted doses of two plans (e.g. proton and carbon) on separate x axes; saved results now keep the unit and label of their quantity
+- GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
+- GUI: changing the radiation mode of a plan with an explicit scenario set failed
+- GUI: the status line kept showing "Saving ..." after a save
+- Base data files could be removed outside the base data folder through a file name containing `..` or a path separator
+- Wrong masks and DVHs for structures sharing a name in the session layer
+- GUI: unexpected errors while preparing or committing a step were printed instead of shown
+- GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
+- A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
+- GUI: the Edit VOI dialog now shows the predefined tissue (base data class or cell line preset) a structure already has in its tissue picker, also after Apply and Match base data. Pressing OK with a tissue selected in the picker but not applied now asks whether to apply it, discard the selection or keep editing, instead of silently dropping it
+- Web version: the Edit VOI dialog now offers the tissue picker with Apply, Match base data, Relabel and Derive from model, with the same preselection and the same warning for an unapplied selection as the desktop GUI. The tissue editor of that dialog had no picker before
 
 ## [0.9.0] - 2026-11-18
 

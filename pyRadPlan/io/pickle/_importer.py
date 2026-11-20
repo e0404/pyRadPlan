@@ -78,6 +78,9 @@ class PickleImporter(BaseImporter):
     def load_data(self) -> dict:
         # Return the full unpickled mapping (passes through extras like pln/stf).
         data = dict(self.data)
-        if data.get("result") is not None:
+        # A workspace saved up to version 0.9 keeps snapshots and imported doses in one
+        # result dict, which the session layer splits into separate results.
+        legacy = isinstance(data.get("result"), dict) and bool(data.get("saved_result_tags"))
+        if data.get("result") is not None and not legacy:
             data["result"] = validate_result(data["result"])
         return data

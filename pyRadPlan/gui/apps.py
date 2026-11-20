@@ -17,7 +17,7 @@ import SimpleITK as sitk
 from PySide6 import QtWidgets  # noqa: F401
 
 if find_spec("pyqtgraph") is None:
-    raise ImportError("No module named 'pyqtgraph'")
+    raise ModuleNotFoundError("No module named 'pyqtgraph'", name="pyqtgraph")
 
 if TYPE_CHECKING:
     from pyRadPlan.cst._cst import StructureSet
@@ -185,14 +185,11 @@ def _resolve_patient(patient: str) -> str:
 
 def _load_patient(path: str) -> WorkspaceManager:
     """Load the patient dataset at *path* into the shared workspace and return it."""
-    from pyRadPlan.gui.workspace import WorkspaceManager, loaded_results  # noqa: PLC0415
+    from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
     from pyRadPlan.io import load_data  # noqa: PLC0415
 
-    data = load_data(path)
     workspace = WorkspaceManager.instance()
-    payload = {k: data[k] for k in workspace.keys if k != "result" and data.get(k) is not None}
-    results, active = loaded_results(data)
-    workspace.set_many(**payload, results=results, active_result=active)
+    workspace.session.merge_loaded(load_data(path))
     return workspace
 
 
@@ -253,10 +250,8 @@ def analysis_viewer(
     # Deferred: keeps the Qt stack out of package import time, as in gui().
     from PySide6.QtWidgets import QApplication  # noqa: PLC0415
 
-    from pyRadPlan.gui.widgets._result_widget import (  # noqa: PLC0415
-        QUANTITY_META,
-        default_quantity_key,
-    )
+    from pyRadPlan.app._results import result_keys_meta  # noqa: PLC0415
+    from pyRadPlan.app._views import default_quantity  # noqa: PLC0415
     from pyRadPlan.gui.windows._analysis_win import show_analysis  # noqa: PLC0415
     from pyRadPlan.gui.workspace import WorkspaceManager  # noqa: PLC0415
 
@@ -289,13 +284,14 @@ def analysis_viewer(
             continue
         if array.ndim != 3:
             continue
-        label, unit = QUANTITY_META.get(key, (key, ""))
         quantities[key] = array
-        overlay_labels[key] = label
-        overlay_units[key] = unit
 
     if not quantities:
         raise ValueError("Result contains no 3D quantity to analyze.")
+
+    for key, (label, unit) in result_keys_meta(quantities, ("", "")).items():
+        overlay_labels[key] = label or key
+        overlay_units[key] = unit
 
     app = QApplication.instance() or QApplication(sys.argv)
 
@@ -306,7 +302,7 @@ def analysis_viewer(
         overlay={"voi_colors": _voi_colors(cst)},
         overlay_units=overlay_units,
         overlay_labels=overlay_labels,
-        initial_quantity=default_quantity_key(list(quantities)),
+        initial_quantity=default_quantity(list(quantities)),
         voi_types={voi.name: getattr(voi, "voi_type", "") for voi in cst.vois},
     )
     if window is None:

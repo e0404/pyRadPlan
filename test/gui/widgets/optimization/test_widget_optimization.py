@@ -571,3 +571,39 @@ def test_robustness_change_guards_and_rejections(qapp, tg119):
 
     assert _objectives(ws.cst.vois[voi_idx])[0].robustness == before
     assert "Rejected robustness" in widget._lbl_status.text()
+
+
+def test_edits_reach_the_row_of_a_structure_named_like_another(qapp, tg119):
+    """Rows are bound to positions: a second structure of the same name keeps its own."""
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst = tg119
+    vois = list(cst.vois)
+    vois[1] = recreate_voi(vois[1], name=vois[0].name)
+    cst.vois = vois
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    first_before = [o.priority for o in _objectives(ws.cst.vois[0])]
+
+    widget._cmb_voi.setCurrentIndex(widget._cmb_voi.findData(1))
+    widget._on_add_objective()
+    added = len(_objectives(ws.cst.vois[1])) - 1
+    widget._on_penalty_changed(1, added, 42.0)
+
+    assert [o.priority for o in _objectives(ws.cst.vois[0])] == first_before
+    assert _objectives(ws.cst.vois[1])[added].priority == 42.0
+
+
+def test_a_rejected_edit_is_shown_and_leaves_the_objective(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    voi = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    before = _objectives(ws.cst.vois[voi])[0].priority
+
+    widget._on_penalty_changed(voi, 0, -1.0)
+
+    assert widget._lbl_status.text().startswith("Ignored invalid penalty -1.0: ")
+    assert _objectives(ws.cst.vois[voi])[0].priority == before

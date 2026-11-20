@@ -3,6 +3,7 @@
 import logging
 from typing import Any, ClassVar, Optional
 
+import numpy as np
 import SimpleITK as sitk
 
 from pyRadPlan.ct import validate_ct, CT
@@ -88,9 +89,28 @@ def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = T
 
 
 def _validate_matrad_result(result: Any, ct: Optional[CT] = None) -> PlanResult:
-    """Validate a matRad resultGUI, placing its cubes on the grid of the CT (if any)."""
+    """Validate a matRad resultGUI, placing its cubes on the grid of the CT (if any).
+
+    Cubes that do not match the CT grid are dropped, as their order cannot be verified.
+    """
+    if ct is None:
+        return PlanResult.from_matrad(result)
     # matRad stores its result cubes on the CT grid, but without any geometry.
-    return PlanResult.from_matrad(result, reference_image=None if ct is None else ct.cube_hu)
+    reference = ct.cube_hu
+    if reference.GetDimension() == 4:
+        reference = reference[:, :, :, 0]
+    if isinstance(result, dict):
+        # matRad cubes are (y, x, z)
+        nx, ny, nz = reference.GetSize()
+        mismatching = [
+            key
+            for key, value in result.items()
+            if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape != (ny, nx, nz)
+        ]
+        if mismatching:
+            logger.warning("resultGUI fields %s do not match the CT grid, ignored.", mismatching)
+            result = {key: value for key, value in result.items() if key not in mismatching}
+    return PlanResult.from_matrad(result, reference_image=reference)
 
 
 def _result_dose_to_sitk(result: Optional[PlanResult]) -> Optional[sitk.Image]:
