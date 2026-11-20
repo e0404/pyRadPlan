@@ -137,13 +137,21 @@ class MLC(BeamLimitingDevice):
             increasing towards negative stack coordinates. Fractional (``k + 0.5``)
             when isocenter falls on the boundary between pairs ``k`` and ``k + 1``.
         """
-        # Leaf pairs are indexed by their centre, while leaf_position_boundaries
-        # are the rows' lower edges
-        centers = self.leaf_position_boundaries + self.leaf_width / 2.0
-        idx = np.rint(central_leaf_pair - 1 - centers / self.leaf_width).astype(int)
+        idx = self._device_leaf_indices(central_leaf_pair)
         is_active_leaf_pair = np.zeros(self.number_of_elements)
         is_active_leaf_pair[idx[(idx >= 0) & (idx < self.number_of_elements)]] = 1
         return is_active_leaf_pair
+
+    def _device_leaf_indices(self, central_leaf_pair: float) -> np.ndarray:
+        """0-based index in the full device of each leaf row, in the order of the rows.
+
+        The rows are stored by ascending stack coordinate, the device counts its leaf
+        pairs towards negative stack coordinates, so the indices descend.
+        """
+        # Leaf pairs are indexed by their centre, while leaf_position_boundaries
+        # are the rows' lower edges
+        centers = self.leaf_position_boundaries + self.leaf_width / 2.0
+        return np.rint(central_leaf_pair - 1 - centers / self.leaf_width).astype(int)
 
     def full_leaf_positions(self, central_leaf_pair: float) -> np.ndarray:
         """Leaf positions across the full physical device.
@@ -157,6 +165,7 @@ class MLC(BeamLimitingDevice):
         central_leaf_pair : float
             Index of the central leaf pair in the full MLC.
         """
+        idx = self._device_leaf_indices(central_leaf_pair)
         is_active = self.is_active_leaf_pair(central_leaf_pair).astype(bool)
         if is_active.sum() != len(self.leaf_positions):
             raise ValueError(
@@ -167,7 +176,7 @@ class MLC(BeamLimitingDevice):
                 "The field does not fit within the physical collimator at this alignment."
             )
         full = np.zeros((self.number_of_elements, 2))
-        full[is_active] = self.leaf_positions
+        full[idx] = self.leaf_positions
         return full
 
     @field_validator("leaf_position_boundaries", "leaf_positions", mode="before")

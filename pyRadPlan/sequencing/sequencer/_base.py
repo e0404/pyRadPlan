@@ -37,6 +37,8 @@ class Sequencer(ConfigurableAlgorithm, ABC):
         self.resultGUI: PlanResult
         self.aperture_info = None
         self.run_sequencing = True
+        #: Factor of the plan's dose convention (see ``Plan.result_dose_factor``).
+        self._result_dose_factor = 1
 
         if pln is not None:
             self.assign_properties_from_pln(pln, True)
@@ -85,6 +87,7 @@ class Sequencer(ConfigurableAlgorithm, ABC):
         """
 
         pln = validate_pln(pln)
+        self._result_dose_factor = pln.result_dose_factor
 
         # Set Scenario Model
         if hasattr(pln, "mult_scen"):
@@ -96,7 +99,8 @@ class Sequencer(ConfigurableAlgorithm, ABC):
         # Overwrite default properties within the engine
         # with the ones given in the prop_seq dict
         if pln.prop_seq is not None:
-            prop_dict = pln.prop_seq
+            # A copy: the entries consumed below stay in the plan
+            prop_dict = dict(pln.prop_seq)
             if (
                 "sequencer" in prop_dict
                 and prop_dict["sequencer"]

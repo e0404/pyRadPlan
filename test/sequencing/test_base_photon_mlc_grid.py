@@ -317,3 +317,14 @@ def test_field_taller_than_mlc_leaf_bank_raises(test_data_xia):
     sequencer = XiaLeafSequencer(pln_mlc)
     with pytest.raises(ValueError, match="does not fit within the physical collimator"):
         sequencer.sequence(deepcopy(result_mat), stf_mat, dij_mat)
+
+
+def test_sequence_reports_the_leaf_pairs_of_the_machine(test_data_xia):
+    pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
+    bixel_width = stf_mat.beams[0].bixel_width
+    pln_mlc = _pln_with_mlc(pln_mat, leaf_width=bixel_width, number_of_elements=40)
+
+    result_seq = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
+
+    assert result_seq.sequence.num_of_mlc_leaf_pairs == 40
+    assert result_seq.sequence.beam[0].mlc_sequence[0].number_of_elements == 40

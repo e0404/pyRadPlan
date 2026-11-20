@@ -11,13 +11,14 @@ from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.result import PlanResult, ApertureInfo, validate_result
 from pyRadPlan.stf import SteeringInformation, Beam
 from pyRadPlan.machines import MLC, Jaw, load_from_name, validate_machine
+from pyRadPlan.quantities._display_names import SEQUENCED_SUFFIX
 from ._base import Sequencer
 
 logger = logging.getLogger(__name__)
 
 
 class PhotonSequencer(Sequencer):
-    SEQUENCED_SUFFIX = "_sequenced"
+    SEQUENCED_SUFFIX = SEQUENCED_SUFFIX
 
     def __init__(self, pln: Union[Plan, dict] = None):
         self.num_of_mlc_leaf_pairs = 80
@@ -725,7 +726,7 @@ class PhotonSequencer(Sequencer):
 
         # Global aperture information
         aperture_info["bixel_width"] = bixel_width
-        aperture_info["num_of_MLC_leaf_pairs"] = self.num_of_mlc_leaf_pairs
+        aperture_info["num_of_mlc_leaf_pairs"] = self.num_of_mlc_leaf_pairs
         aperture_info["total_num_of_bixels"] = total_num_of_bixels
         aperture_info["total_num_of_shapes"] = total_num_of_shapes
         total_leaf_pairs = sum(
@@ -747,6 +748,9 @@ class PhotonSequencer(Sequencer):
     ) -> PlanResult:
         """Validate *result_data*, adding quantities recomputed from *fluence*.
 
+        Sequenced quantities of an earlier sequencing are removed first: they describe
+        another delivery. The new ones follow the dose convention of the plan.
+
         Parameters
         ----------
         result_data : dict
@@ -761,10 +765,20 @@ class PhotonSequencer(Sequencer):
         PlanResult
             The validated result.
         """
+        for field in ("quantities", "beam_quantities", "scenario_quantities"):
+            if result_data.get(field):
+                result_data[field] = {
+                    name: value
+                    for name, value in result_data[field].items()
+                    if not name.endswith(self.SEQUENCED_SUFFIX)
+                }
+
         if dij is None:
             return validate_result(result_data)
 
-        sequenced = dij.compute_result_ct_grid(fluence).model_dump()
+        sequenced = dij.compute_result_ct_grid(
+            fluence, num_of_fractions=self._result_dose_factor
+        ).model_dump()
         for field in ("quantities", "beam_quantities"):
             delivered = {
                 f"{name}{self.SEQUENCED_SUFFIX}": value

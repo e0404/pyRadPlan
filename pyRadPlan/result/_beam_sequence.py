@@ -1,5 +1,6 @@
 """Sequenced beam object."""
 
+from collections.abc import Mapping
 from typing import Any, Optional
 from numpy.typing import NDArray
 import logging
@@ -13,11 +14,29 @@ from pydantic import (
     SerializationInfo,
     ValidationInfo,
     computed_field,
+    SerializeAsAny,
 )
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.machines import MLC, BeamLimitingDevice
+from pyRadPlan.machines import MLC, BeamLimitingDevice, Jaw
 
 logger = logging.getLogger(__name__)
+
+
+def _as_list(devices: Any) -> list:
+    if isinstance(devices, np.ndarray):
+        return devices.tolist()
+    return [devices] if isinstance(devices, (Mapping, BeamLimitingDevice)) else list(devices)
+
+
+def _concrete_bld(device: Any) -> Any:
+    """Validate a dumped beam limiting device as an MLC or a jaw, told apart by its fields."""
+    if not isinstance(device, Mapping):
+        return device
+    if "leaf_positions" in device or "leafPositions" in device:
+        return MLC.model_validate(device)
+    if "positions" in device:
+        return Jaw.model_validate(device)
+    return device
 
 
 class BeamSequence(PyRadPlanBaseModel):
@@ -121,7 +140,7 @@ class BeamSequence(PyRadPlanBaseModel):
     vector_offset: Optional[list[int]] = Field(default=None)
     num_of_active_leaf_pairs: Optional[int] = Field(default=None)
     mlc_sequence: Optional[list[MLC]] = Field(default=None)
-    extra_blds: Optional[list[list[BeamLimitingDevice]]] = Field(default=None)
+    extra_blds: Optional[list[list[SerializeAsAny[BeamLimitingDevice]]]] = Field(default=None)
 
     @computed_field
     @property
@@ -228,6 +247,20 @@ class BeamSequence(PyRadPlanBaseModel):
             data = cls._process_matrad_data(data, info)
 
         return data
+
+    # The devices are stored by their base class: their own fields are serialized
+    # (SerializeAsAny) and a dumped device is validated as the class its fields describe.
+    @field_validator("extra_blds", mode="before")
+    @classmethod
+    def _concrete_blds(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, np.ndarray):
+            v = v.tolist()
+        # A single shape is read from a .mat file without its list of shapes
+        if len(v) > 0 and all(isinstance(d, (Mapping, BeamLimitingDevice)) for d in v):
+            v = [v]
+        return [[_concrete_bld(device) for device in _as_list(devices)] for devices in v]
 
     # shapes are binary aperture masks, so uint8 is lossless and compact
     @field_validator("shapes", mode="before")

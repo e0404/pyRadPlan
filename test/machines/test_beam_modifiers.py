@@ -408,3 +408,22 @@ def test_transmission_mask_grid_covers_every_leaf_row(j_start, j_end, orientatio
     # integrate exactly, so the mask sums to the open area in pixels.
     expected_area = n_rows * (mlc.leaf_width / resolution) * (open_width / resolution)
     assert mask.sum() == pytest.approx(expected_area, rel=1e-3)
+
+
+def test_full_leaf_positions_follow_the_device_leaf_order():
+    """The device counts its leaf pairs towards negative stack coordinates."""
+    openings = np.array([[-5.0, 1.0], [-4.0, 2.0], [-3.0, 3.0]])
+    mlc = MLC(
+        device_type="MLCX",
+        number_of_elements=6,
+        leaf_width=10.0,
+        leaf_position_boundaries=np.array([-10.0, 0.0, 10.0]),
+        leaf_positions=openings,
+    )
+
+    full = mlc.full_leaf_positions(3.5)
+
+    # Rows at -10, 0 and 10 mm are the device's leaf pairs 4, 3 and 2 (1-based)
+    np.testing.assert_array_equal(np.flatnonzero(mlc.is_active_leaf_pair(3.5)), [1, 2, 3])
+    np.testing.assert_array_equal(full[[3, 2, 1]], openings)
+    np.testing.assert_array_equal(full[[0, 4, 5]], np.zeros((3, 2)))
