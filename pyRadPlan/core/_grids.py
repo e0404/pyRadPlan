@@ -346,6 +346,10 @@ class Grid(PyRadPlanBaseModel):
         """
         Create a resampled grid covering the original grid in new resolution.
 
+        The number of voxels per dimension is rounded up, and the centers of the new voxels are
+        centered on the centers of the original voxels (the geometric center of the grid is
+        preserved).
+
         Parameters
         ----------
         target_resolution : Union[dict[str, float], np.ndarray, tuple, list]
@@ -383,18 +387,12 @@ class Grid(PyRadPlanBaseModel):
             np.array(self.dimensions) * self.resolution_vector / target_resolution
         ).astype(int)
 
-        # Now calculate the width of the grid in the new resolution
-        old_grid_size = np.array(self.dimensions) * self.resolution_vector
-        new_grid_size = new_dimensions * target_resolution
-        diff_size = new_grid_size - old_grid_size
-
-        # find the origin of the new image such that it is centered above the old image. The origin
-        # is in the center of the first voxel
-        origin_shift = diff_size / 2.0
-
-        # now we need to respect the origin and direction to correctly shift the new grid into
-        # position
-        origin_shift = np.matmul(self.direction, origin_shift)
+        # The origin is the center of the first voxel, so the centers of the new voxels are
+        # centered on the centers of the old voxels by shifting the extent between first and last
+        # voxel center, expressed in the grid's direction.
+        old_center_extent = (np.array(self.dimensions) - 1) * self.resolution_vector
+        new_center_extent = (new_dimensions - 1) * target_resolution
+        origin_shift = np.matmul(self.direction, (new_center_extent - old_center_extent) / 2.0)
         new_origin = self.origin - origin_shift
 
         return Grid(
