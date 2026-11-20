@@ -6,7 +6,6 @@ from typing_extensions import Self
 import numpy as np
 import pint
 import SimpleITK as sitk
-import matplotlib.pyplot as plt
 from numpydantic import NDArray
 from pydantic import Field, field_serializer, field_validator
 
@@ -681,6 +680,8 @@ class QICollection(PyRadPlanBaseModel):
             Forwarded to ``ax.table``.
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots(figsize=(12, 6))
 
         selected = self._select_structures(structures)

@@ -178,26 +178,16 @@ class StfGeneratorExternalBeamRayBixel(StfGeneratorExternalBeam):
         max_ct_resolution = max(
             [self._ct.resolution["x"], self._ct.resolution["y"], self._ct.resolution["z"]]
         )
-        if self.bixel_width < max_ct_resolution:
+        if bw < max_ct_resolution:
             orig_ray_pos = ray_pos.copy()
-            for j in range(
-                -math.floor(max_ct_resolution / self.bixel_width),
-                math.floor(max_ct_resolution / self.bixel_width),
-            ):
-                for k in range(
-                    -math.floor(max_ct_resolution / self.bixel_width),
-                    math.floor(max_ct_resolution / self.bixel_width),
-                ):
+            # Pad symmetrically by n bixels (matRad's inclusive -n:n)
+            n_pad = math.floor(max_ct_resolution / bw)
+            for j in range(-n_pad, n_pad + 1):
+                for k in range(-n_pad, n_pad + 1):
                     if abs(j) + abs(k) == 0:
                         continue
                     ray_pos = np.hstack(
-                        (
-                            ray_pos,
-                            orig_ray_pos
-                            + np.array((j * self.bixel_width, 0.0, k * self.bixel_width)).reshape(
-                                (3, 1)
-                            ),
-                        )
+                        (ray_pos, orig_ray_pos + np.array((j * bw, 0.0, k * bw)).reshape((3, 1)))
                     )
 
         # TODO: for DAO, there is a filling of empty bixels in matRad

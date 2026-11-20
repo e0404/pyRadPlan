@@ -30,6 +30,8 @@ class QuantityDistribution(PyRadPlanBaseModel):
             data = {"values": data}
         if not isinstance(data, dict):
             raise ValueError(f"Invalid type for quantity values input: {type(data).__name__}")
+        # Copy so that the caller's dictionary survives validation unchanged.
+        data = dict(data)
 
         if "cube" in data:
             values = data.get("cube")
@@ -107,6 +109,13 @@ class QuantityDistribution(PyRadPlanBaseModel):
         # Determine if data needs axis permutation (matRad format)
         should_permute = cls._should_permute_axes(data, info)
 
+        # SimpleITK fails with an unspecific RuntimeError on anything else.
+        if values.dtype != object and values.ndim not in (3, 4):
+            raise ValueError(
+                f"A quantity distribution needs a 3D (or 4D) array, got {values.ndim}D "
+                f"with shape {values.shape}."
+            )
+
         # Handle multiple scenarios (object array)
         if values.dtype == object:
             return cls._convert_multiple_scenarios(values, should_permute)
@@ -149,6 +158,12 @@ class QuantityDistribution(PyRadPlanBaseModel):
         """Apply origin, direction, and spacing properties to the SimpleITK image."""
         is4d = values.GetDimension() == 4
 
+        # A grid carries the whole geometry and wins over the individual properties.
+        grid = data.pop("grid", None)
+        if grid is not None:
+            cls._apply_grid(data, grid, is4d)
+            return
+
         # Apply origin (with two different strategies)
         cls._apply_origin(data, is4d)
 
@@ -158,6 +173,21 @@ class QuantityDistribution(PyRadPlanBaseModel):
 
         # Apply spacing from resolution
         cls._apply_spacing(data, is4d)
+
+    @classmethod
+    def _apply_grid(cls, data: dict, grid: Grid, is4d: bool) -> None:
+        """Apply the geometry of a grid to the SimpleITK image."""
+        image = data["values"]
+        if is4d:
+            raise ValueError("A grid can only be applied to a 3D quantity distribution.")
+        if tuple(image.GetSize()) != tuple(int(n) for n in grid.dimensions):
+            raise ValueError(
+                f"Quantity values of size {image.GetSize()} do not fit the grid of "
+                f"size {tuple(grid.dimensions)}."
+            )
+        image.SetOrigin([float(v) for v in grid.origin])
+        image.SetSpacing([float(v) for v in grid.resolution_vector])
+        image.SetDirection([float(v) for v in np.asarray(grid.direction).ravel()])
 
     @classmethod
     def _apply_origin(cls, data: dict, is4d: bool) -> None:

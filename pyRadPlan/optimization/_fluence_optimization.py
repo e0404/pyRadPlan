@@ -1,5 +1,8 @@
 import logging
-from typing import Optional, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional, TypedDict, Union
+
+import numpy as np
 
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_cst
@@ -10,6 +13,27 @@ from pyRadPlan.result import PlanResult
 from .problems import get_problem_from_pln
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_solver_info(solver_info: Any) -> dict[str, Any]:
+    """
+    Reduce the raw solver output to its scalar entries.
+
+    Solvers also report arrays and solver objects (the solution, gradients, Hessian
+    approximations) that are either stored on the result already or cannot be saved.
+    """
+    if not isinstance(solver_info, Mapping):
+        return {}
+    summary: dict[str, Any] = {}
+    for key, raw in solver_info.items():
+        value = raw
+        if isinstance(raw, np.generic) or (isinstance(raw, np.ndarray) and raw.ndim == 0):
+            value = raw.item()
+        elif isinstance(raw, bytes):
+            value = raw.decode(errors="replace")
+        if isinstance(value, (bool, int, float, str)):
+            summary[str(key)] = value
+    return summary
 
 
 class OptInfo(TypedDict, total=False):
@@ -44,6 +68,7 @@ def fluence_optimization(  # noqa: PLR0913
     pln: Plan,
     *,
     opt_info: Optional[OptInfo] = None,
+    scenarios: Union[bool, Sequence[int]] = False,
 ) -> PlanResult:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
@@ -63,6 +88,11 @@ def fluence_optimization(  # noqa: PLR0913
     opt_info : OptInfo, optional
         If provided (e.g. as an empty ``{}``), it will be populated with
         ``obj_history``, ``num_iter`` and ``result_info`` after optimization.
+    scenarios : bool or sequence of int, default False
+        Scenarios to also report the optimized quantities for, as
+        ``result.scenario_quantities`` (see :meth:`Dij.compute_result_ct_grid`).
+        ``True`` selects every scenario of a dij with several scenarios; by default
+        only the nominal scenario is reported.
 
     Returns
     -------
@@ -109,8 +139,10 @@ def fluence_optimization(  # noqa: PLR0913
         if isinstance(result_info, dict) and "num_iter" in result_info:
             opt_info["num_iter"] = int(result_info["num_iter"])
 
-    result = _dij.compute_result_ct_grid(fluence, num_of_fractions=_pln.result_dose_factor)
-    result.info = result_info
+    result = _dij.compute_result_ct_grid(
+        fluence, num_of_fractions=_pln.result_dose_factor, scenarios=scenarios
+    )
+    result.info = _summarize_solver_info(result_info)
     # solve() resolves the solver from its identifier, so read it back afterwards.
     solver = getattr(planning_prob, "solver", None)
     if solver is not None:

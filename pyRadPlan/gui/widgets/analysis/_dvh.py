@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from pyRadPlan.analysis._dvh import DVH
 
 _LINE_WIDTH = 2
+#: Width and opacity (0-255) of the band curves (e.g. one per uncertainty scenario).
+_BAND_WIDTH = 1
+_BAND_ALPHA = 70
 _HIGHLIGHT_WIDTH = 4
 _GUIDE_WIDTH = 2
 #: Stacking above the curves (the highlighted curve is at 1): guide lines with their
@@ -61,7 +64,8 @@ class DVHPlotWidget(QWidget):
 
     Interaction:
 
-    - Hovering shows a data cursor listing every curve's volume at the mouse position.
+    - Hovering shows a data cursor: a crosshair at the mouse position and a readout listing
+      every curve's volume at its dose.
     - Clicking a curve emits :attr:`structure_clicked`; clicking empty plot area emits
       it with an empty name.
     - Clicking a D_x / V_x marker emits :attr:`marker_clicked`.  Markers are shown with
@@ -105,6 +109,8 @@ class DVHPlotWidget(QWidget):
         self._legend_samples: list[tuple[LegendEntry, pg.PlotDataItem]] = []
         #: The drawn curves, with the description each was drawn from.
         self.curve_items: list[tuple[DVHCurve, pg.PlotDataItem]] = []
+        #: The drawn band curves (see :attr:`DVHPlot.band_curves`).
+        self.band_items: list[tuple[DVHCurve, pg.PlotDataItem]] = []
 
         #: Marker kinds (``"dx"``, ``"vx"``) shown in the plot.
         self._visible_marker_kinds: set[str] = set()
@@ -121,6 +127,8 @@ class DVHPlotWidget(QWidget):
 
         self.cursor_line = pg.InfiniteLine(angle=90, movable=False)
         self.cursor_line.setZValue(_CURSOR_Z)
+        self.cursor_hline = pg.InfiniteLine(angle=0, movable=False)
+        self.cursor_hline.setZValue(_CURSOR_Z)
         self.cursor_text = pg.TextItem(anchor=(0, 0))
         self.cursor_text.setZValue(_READOUT_Z)
         scene = self.plot_item.scene()
@@ -133,7 +141,7 @@ class DVHPlotWidget(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def plot(
+    def plot(  # noqa: PLR0913
         self,
         dvhs: list[DVH],
         voi_colors: dict[str, tuple[int, int, int]] | None = None,
@@ -145,12 +153,15 @@ class DVHPlotWidget(QWidget):
         primary_name: str = "",
         secondary_name: str = "",
         qis: QICollection | None = None,
+        *,
+        band_dvhs: list[DVH] | None = None,
     ) -> None:
         """Plot primary DVH curves solid and optional secondary curves dashed.
 
         See :func:`~pyRadPlan.analysis._dvh_plot.build_dvh_plot` for how the
         curves, axes, legend and D_x / V_x markers (from *qis*) are chosen;
-        *overlay_unit* and *overlay_label* are its ``unit`` and ``label``.  A
+        *overlay_unit* and *overlay_label* are its ``unit`` and ``label``.
+        *band_dvhs* are drawn thin and semi-transparent behind the curves.  A
         highlight survives as long as its structure and metric are still shown.
         """
         self._draw(
@@ -165,6 +176,7 @@ class DVHPlotWidget(QWidget):
                 primary_name=primary_name,
                 secondary_name=secondary_name,
                 qis=qis,
+                band_dvhs=band_dvhs,
             )
         )
 
@@ -199,6 +211,13 @@ class DVHPlotWidget(QWidget):
         self._clear()
         self.shown_plot = plot
         item = self.plot_item
+        for curve in plot.band_curves:
+            band = pg.PlotDataItem(
+                curve.x, curve.y, pen=_pen(curve.color, curve.line_style, _BAND_WIDTH, _BAND_ALPHA)
+            )
+            band.setZValue(-1)
+            item.addItem(band)
+            self.band_items.append((curve, band))
         for curve in plot.curves:
             data = pg.PlotDataItem(curve.x, curve.y)
             data.setCurveClickable(True, width=_CURVE_CLICK_WIDTH)
@@ -223,7 +242,7 @@ class DVHPlotWidget(QWidget):
         self.legend.setVisible(bool(plot.legend))
 
         item.addItem(self.marker_item)
-        for overlay in (self.cursor_line, self.cursor_text):
+        for overlay in (self.cursor_line, self.cursor_hline, self.cursor_text):
             overlay.hide()
             item.addItem(overlay, ignoreBounds=True)
 
@@ -236,6 +255,7 @@ class DVHPlotWidget(QWidget):
         self.legend.clear()
         self._legend_samples = []
         self.curve_items = []
+        self.band_items = []
         self.value_line = self.parameter_line = None
         self._dragged = None
         if self.secondary_view is not None:
@@ -430,32 +450,35 @@ class DVHPlotWidget(QWidget):
             self.structure_clicked.emit("")
 
     def _on_mouse_moved(self, scene_pos: QPointF) -> None:
-        """Move the data cursor to the mouse and list each curve's volume there."""
+        """Move the data cursor to the mouse and list each curve's volume at its dose."""
         plot = self.shown_plot
         view = self.plot_item.vb
         if not plot.curves or not view.sceneBoundingRect().contains(scene_pos):
             self._hide_cursor()
             return
-        x = view.mapSceneToView(scene_pos).x()
+        pos = view.mapSceneToView(scene_pos)
+        x, y = pos.x(), pos.y()
         secondary_x = (
             self.secondary_view.mapSceneToView(scene_pos).x()
             if self.secondary_view is not None
             else None
         )
         colors = plot_colors(self)
-        self.cursor_text.setHtml(self._cursor_html(plot, x, secondary_x, colors))
+        self.cursor_text.setHtml(self._cursor_html(plot, x, y, secondary_x, colors))
 
         self.cursor_line.setValue(x)
+        self.cursor_hline.setValue(y)
         (x_min, x_max), (_, y_max) = view.viewRange()
         # Keep the readout on the side of the cursor with more room.
         self.cursor_text.setAnchor((0, 0) if x < (x_min + x_max) / 2 else (1, 0))
         self.cursor_text.setPos(x, y_max)
         self.cursor_line.show()
+        self.cursor_hline.show()
         self.cursor_text.show()
 
     @staticmethod
     def _cursor_html(
-        plot: DVHPlot, x: float, secondary_x: Optional[float], colors: PlotColors
+        plot: DVHPlot, x: float, y: float, secondary_x: Optional[float], colors: PlotColors
     ) -> str:
         dashed_name = next(
             (e.label for e in plot.legend if e.color is None and e.line_style == "dashed"), ""
@@ -463,6 +486,7 @@ class DVHPlotWidget(QWidget):
         rows = [f"{escape(plot.x_label)}: {x:.2f}"]
         if secondary_x is not None and plot.secondary_x_label is not None:
             rows.append(f"{escape(plot.secondary_x_label)}: {secondary_x:.2f}")
+        rows.append(f"{escape(plot.y_label)}: {y:.1f}")
         for curve in plot.curves:
             at = secondary_x if curve.secondary_axis else x
             volume = float(np.interp(at, curve.x, curve.y))
@@ -476,6 +500,7 @@ class DVHPlotWidget(QWidget):
 
     def _hide_cursor(self) -> None:
         self.cursor_line.hide()
+        self.cursor_hline.hide()
         self.cursor_text.hide()
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override name
@@ -500,7 +525,8 @@ class DVHPlotWidget(QWidget):
             sample.setPen(_pen(entry.color or colors.foreground, entry.line_style))
         self.legend.update()
 
-        self.cursor_line.setPen(pg.mkPen(colors.foreground, style=Qt.PenStyle.DotLine))
+        for line in (self.cursor_line, self.cursor_hline):
+            line.setPen(pg.mkPen(colors.foreground, style=Qt.PenStyle.DotLine))
         self.cursor_text.fill = pg.mkBrush(_qcolor(colors.axes, 220))
         self.cursor_text.border = pg.mkPen(colors.grid)
         self._refresh_highlight()

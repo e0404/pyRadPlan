@@ -165,7 +165,7 @@ class FieldShape(Beamlet):
     @staticmethod
     def _resolve_field_width(field_width: Optional[float], grid: Optional[np.ndarray]) -> float:
         if field_width is None and grid is None:
-            raise ValueError("Either resolution or grid must be provided")
+            raise ValueError("Either field_width or grid must be provided")
         if grid is not None:
             grid_resolution = np.unique(np.round(np.diff(grid), decimals=10))
             if len(grid_resolution) != 1:
@@ -192,18 +192,19 @@ class FieldShape(Beamlet):
     # TODO: Is the padding included in the grid?
     @staticmethod
     def _validate_mask_array(v: np.ndarray) -> np.ndarray:
+        v = np.asarray(v)
         if len(v.shape) != 2:
             raise ValueError("Mask must be 2D")
         if v.shape[0] != v.shape[1]:
             raise ValueError("Mask must be quadratic")
         if v.shape[0] % 2 == 0:
             logger.warning(
-                f"Mask size {v.shape[0]} is even. Padding with zeros to make it odd. "
+                "Mask size %d is even. Padding with zeros to make it odd. "
                 "This may slightly affect convolution results.",
-                UserWarning,
+                v.shape[0],
             )
             v = np.pad(v, ((0, 1), (0, 1)), mode="constant", constant_values=0)
-        return np.array(v) if not isinstance(v, np.ndarray) else v
+        return v
 
     @model_validator(mode="after")
     def validate_spatial_consistency(self) -> "FieldShape":

@@ -5,23 +5,26 @@ Available spezialized Plan classes are PhotonPlan and IonPlan.
 """
 
 from abc import ABC
+import warnings
 from typing import Dict, Any, List, Union, ClassVar, Optional, Literal
 from copy import deepcopy
 
 from pydantic import (
+    AliasChoices,
     Field,
     field_validator,
     field_serializer,
+    SerializeAsAny,
     SerializationInfo,
     SerializerFunctionWrapHandler,
-    ValidationError,
     model_validator,
 )
-from pydantic.alias_generators import to_snake
+from pydantic.alias_generators import to_camel, to_snake
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
 from pyRadPlan.biology.models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
-from pyRadPlan.machines import Machine
+from pyRadPlan.machines import Machine, validate_machine
+from pyRadPlan.machines.base import get_machine
 
 default_bio_models: dict[str, str] = {
     "photons": "none",
@@ -55,8 +58,10 @@ class Plan(PyRadPlanBaseModel, ABC):
     dose_convention : {"per_fraction", "total"}
         Whether objective dose parameters and reported result doses refer to one fraction
         or to the total course. The dose influence matrix is always per fraction; with
-        ``"total"`` objectives are scaled by ``1/num_of_fractions`` for optimization and
-        results by ``num_of_fractions``.
+        ``"total"`` objective references are converted to one fraction for optimization and
+        results to the total course, each following its quantity's fraction scaling
+        (``RTQuantity.total_course_factor``: doses and effects ``num_of_fractions``,
+        ``sqrt_beta_dose`` its square root, LET none).
     prescribed_dose : float
         Prescribed dose for the plan. Serves mainly as normalization value.
     radiation_mode : str
@@ -76,7 +81,13 @@ class Plan(PyRadPlanBaseModel, ABC):
     )
     machine: Union[Machine, Dict, str] = Field(default="Generic")
     prescribed_dose: float = Field(default=60.0, gt=0.0)
-    mult_scen: ScenarioModel = Field(default_factory=create_scenario_model)
+    scenarios: SerializeAsAny[ScenarioModel] = Field(
+        default_factory=create_scenario_model,
+        validation_alias=AliasChoices("scenarios", "mult_scen", "multScen"),
+        serialization_alias="multScen",
+        description="Uncertainty scenario model (name, {'model': name, **parameters}, model "
+        "instance or ScenarioSet). ``mult_scen`` / ``multScen`` are accepted as aliases.",
+    )
     bio_model: Optional[Any] = Field(
         default=None,
         description="Biological model: name, {'model': name, **parameters} or instance. "
@@ -131,44 +142,75 @@ class Plan(PyRadPlanBaseModel, ABC):
             return value.to_matrad()
         return value.to_dict()
 
+    @field_validator("machine", mode="before")
+    @classmethod
+    def _validate_machine(cls, v: Any) -> Any:
+        """Rebuild a dumped machine as its registered class, chosen by its radiation mode."""
+        if isinstance(v, dict) and "meta" not in v:
+            radiation_mode = v.get("radiation_mode") or v.get("radiationMode")
+            if isinstance(radiation_mode, str) and get_machine(radiation_mode) is not None:
+                return validate_machine(v)
+        return v
+
     @field_serializer("machine", mode="wrap")
     def _serialize_machine(
         self, value: Any, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> Any:
-        if isinstance(value, Machine) and (info.context or {}).get("matRad"):
+        if not isinstance(value, Machine):
+            return handler(value)
+        if (info.context or {}).get("matRad"):
             return value.name  # matRad's pln.machine names the base data file
-        return handler(value)
+        # The field's Machine schema would drop the subclass fields (kernels, energies, ...).
+        # Only the explicitly set fields are kept so that validation restores the same
+        # fields_set, which e.g. decides whether tissue classes are derived from the kernels.
+        # The radiation mode is always kept, as validation picks the machine class by it.
+        dumped = value.model_dump(
+            mode=info.mode,
+            by_alias=info.by_alias,
+            exclude_unset=True,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+            round_trip=info.round_trip,
+            context=info.context,
+        )
+        mode_field = type(value).model_fields["radiation_mode"]
+        mode_key = (mode_field.serialization_alias or mode_field.alias) if info.by_alias else None
+        dumped.setdefault(mode_key or "radiation_mode", value.radiation_mode)
+        return dumped
 
-    @field_validator("mult_scen", mode="before")
+    @field_validator("scenarios", mode="before")
     @classmethod
-    def _validate_mult_scen(
-        cls, v: Union[Union[Dict[str, Any], ScenarioModel], str]
-    ) -> ScenarioModel:
+    def _validate_scenarios(cls, v: Any) -> ScenarioModel:
         """
-        Validate the mult_scen attribute.
-
-        Parameters
-        ----------
-        v : Union[Dict[str, Any], ScenarioModel]
-            The mult_scen attribute to be validated.
-
-        Returns
-        -------
-        ScenarioModel
-            The validated mult_scen attribute.
+        Validate the scenario model (name, dictionary, model instance or ScenarioSet).
 
         Raises
         ------
         ValueError
-            If the mult_scen attribute is not a valid ScenarioModel object.
+            If the value is not a valid scenario model definition.
         """
-
         try:
             return validate_scenario_model(v)
         except ValueError as exc:
-            raise ValidationError(
-                "mult_scen must be a ScenarioModel object or respective dictionary"
+            raise ValueError(
+                "scenarios must be a ScenarioModel, a ScenarioSet, a model name or a model "
+                "dictionary"
             ) from exc
+
+    @property
+    def mult_scen(self) -> ScenarioModel:
+        """Deprecated alias of :attr:`scenarios` (matRad name), kept for one release."""
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
+        return self.scenarios
+
+    @mult_scen.setter
+    def mult_scen(self, value: Any) -> None:
+        warnings.warn(
+            "Plan.mult_scen is deprecated; use Plan.scenarios.", DeprecationWarning, stacklevel=2
+        )
+        self.scenarios = value
 
     @field_validator("prop_stf", "prop_opt", "prop_dose_calc", "prop_seq", mode="before")
     @classmethod
@@ -224,6 +266,8 @@ class Plan(PyRadPlanBaseModel, ABC):
 
         pln_dict = super().to_matrad(context=context)
         pln_dict["numOfFractions"] = float(pln_dict["numOfFractions"])
+        for key in ("propStf", "propOpt", "propDoseCalc", "propSeq"):
+            pln_dict[key] = {to_camel(k): v for k, v in pln_dict[key].items()}
         if isinstance(self.bio_model, BiologicalModel) and self.bio_model.parameters:
             # Keep matRad's established string-valued bioModel field while retaining
             # pyRadPlan's model configuration for a lossless .mat round trip.
@@ -373,7 +417,8 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
                 data["bio_model"] = {"model": bio_model, **bio_model_parameters}
             elif isinstance(bio_model, dict):
                 data["bio_model"] = {**bio_model, **bio_model_parameters}
-        data["bio_model"] = data.get("bio_model") or default_bio_models.get(radiation_mode, "none")
+        # None lets the plan pick the default of its (possibly defaulted) radiation mode
+        data["bio_model"] = data.get("bio_model") or None
 
         if radiation_mode == "photons":
             return PhotonPlan.model_validate(data)
@@ -383,7 +428,7 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
     radiation_mode = kwargs.get("radiation_mode", "")
     if radiation_mode == "photons":
         return PhotonPlan(**kwargs)
-    if radiation_mode in ["protons", "helium", "carbon", "oxygen"]:
+    if radiation_mode in IonPlan.available_radiation_modes:
         return IonPlan(**kwargs)
     raise ValueError(f"Unknown radiation mode: {radiation_mode}")
 

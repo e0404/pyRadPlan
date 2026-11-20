@@ -26,6 +26,22 @@ _MATRAD_APERTURE_KEYS = (
 )
 
 
+def _beam_structs(beams: Any) -> list[dict]:
+    """Split a matRad struct array of beams into one dictionary per beam.
+
+    A struct array is read as one list per field. A single beam is read as a plain
+    struct whose fields hold the values themselves.
+    """
+    if isinstance(beams, (list, tuple)):
+        return [dict(beam) for beam in beams]
+    values = list(beams.values())
+    if not values:
+        return []
+    if all(isinstance(v, list) for v in values) and len({len(v) for v in values}) == 1:
+        return [{key: beams[key][ix] for key in beams} for ix in range(len(values[0]))]
+    return [dict(beams)]
+
+
 class Sequence(PyRadPlanBaseModel):
     """A class representing the sequencing information of a plan."""
 
@@ -74,15 +90,11 @@ class Sequence(PyRadPlanBaseModel):
         beam_list = []
 
         if "beam" in data:
-            beams = dict(data["beam"])
-            # convert bixelix from 1-based to 0-based indexing
-            if "bixelIx" in beams:
-                # handle case where bixelIx is a list of arrays
-                beams["bixelIx"] = [np.asarray(arr, dtype=int) - 1 for arr in beams["bixelIx"]]
-
-            first_key = next(iter(beams))
-            for beam_ix in range(len(beams[first_key])):
-                beam_list.append({to_snake(k): beams[k][beam_ix] for k in beams})
+            for beam in _beam_structs(data["beam"]):
+                if "bixelIx" in beam:
+                    # matRad counts the bixels from 1
+                    beam["bixelIx"] = np.asarray(beam["bixelIx"], dtype=int).reshape(-1) - 1
+                beam_list.append({to_snake(k): v for k, v in beam.items()})
 
             data["beam"] = beam_list
 
@@ -92,12 +104,10 @@ class Sequence(PyRadPlanBaseModel):
 
             for key in list(aperture_info.keys()):
                 if key == "beam":
-                    beam_apertures = aperture_info[key]
-                    first_key = next(iter(beam_apertures))
-                    for beam_ix in range(len(beam_apertures[first_key])):
-                        beam_aperture_list.append(
-                            {to_snake(k): beam_apertures[k][beam_ix] for k in beam_apertures}
-                        )
+                    beam_aperture_list = [
+                        {to_snake(k): v for k, v in beam.items()}
+                        for beam in _beam_structs(aperture_info[key])
+                    ]
                 elif key in _MATRAD_APERTURE_KEYS:
                     data[key] = aperture_info[key]
 

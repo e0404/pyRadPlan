@@ -65,7 +65,9 @@ base_topas_folder : pathlib.Path
     Base directory containing TOPAS template and configuration files.
 
 simu_dir : str
-    Output directory for simulation runs, typically date-stamped.
+    Output directory for simulation runs, typically date-stamped. Defaults to
+    ``<data_dir>/topas/<date>`` (see :func:`pyRadPlan.core.get_data_dir`), so the
+    installed package directory is never written to.
 
 
 """
@@ -74,17 +76,17 @@ import logging
 import os
 from datetime import datetime
 import sys
-from typing import Any, Literal, Union
+from typing import Any, ClassVar, Literal, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
 
 from pyRadPlan.biology.models import bio_influence_from_let
+from pyRadPlan.core import get_data_dir
 from pyRadPlan.ct import CT, resample_ct, default_hlut
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
-from pyRadPlan.machines._load import load_from_name
 from pyRadPlan.stf import SteeringInformation
 from ._base_montecarlo import MonteCarloEngineAbstract, ScoredLETBioMixin
 
@@ -118,6 +120,14 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     bio_scored_radiation_modes = ("protons",)
 
     available_source_models = ["biGaussian"]
+
+    # scaling_factor is multiplied by the sum of the weights in every calculation, and a
+    # LET-based biological model adds the LET scorer
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *MonteCarloEngineAbstract._per_calculation_settings,
+        "scaling_factor",
+        "scorer",
+    )
 
     radiation_mode: str
 
@@ -208,7 +218,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             ]
         }
 
-        self.simu_dir: str = self.base_topas_folder.joinpath(datetime.now().strftime("%Y-%m-%d"))
+        self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
         self._computed_quantities = []
@@ -522,8 +532,10 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         )
 
         if self.external_calculation is True:
+            # The weights are replaced by history counts below; keep the caller's stf as it is
+            stf = stf.model_copy(deep=True)
             os.makedirs(self.simu_dir, exist_ok=True)
-            tmp_machine = load_from_name(stf.beams[0].radiation_mode, stf.beams[0].machine)
+            tmp_machine = self._machine
             sad = tmp_machine.sad / 10
             beams_topas = []
 
@@ -625,7 +637,7 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
                 dij["ray_num"][b] = b
                 dij["bixel_num"][b] = b
 
-            self._write_patient_file(ct)
+            self._write_patient_file(self._scenario_ct(ct))
         else:
             dij = self._read_external(dij)
             # set dose outside of the patient to 0
@@ -742,15 +754,13 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         for q_name in names:
             container_names = [q_name, q_name + "_var"] if with_variance else [q_name]
             for name in container_names:
-                dij[name] = np.empty(self.mult_scen.scen_mask.shape, dtype=object)
+                dij[name] = np.empty((len(self._scenarios),), dtype=object)
 
                 # Loop over all scenarios and preallocate quantity containers
-                for i in range(self.mult_scen.scen_mask.size):
-                    # Only if there is a scenario we will allocate
-                    if self.mult_scen.scen_mask.flat[i]:
-                        dij[name].flat[i] = np.zeros(
-                            (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
-                        )
+                for i in self._scenarios.computed_indices():
+                    dij[name].flat[i] = np.zeros(
+                        (self.dose_grid.num_voxels, dij["num_of_beams"]), dtype=np.float32
+                    )
 
                 self._computed_quantities.append(name)
 

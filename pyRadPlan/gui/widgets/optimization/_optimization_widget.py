@@ -3,7 +3,8 @@
 Python translation of matRad's ``matRad_OptimizationWidget``: a per-VOI editor of
 the optimization objectives stored on the structure set (``cst``).  Each row binds
 one objective on one VOI; the user can change the objective type, its penalty
-(priority) and its numeric parameters, and add or remove objectives. A "Change all
+(priority), its quantity, its robustness (how it is combined over uncertainty scenarios) and its
+numeric parameters, and add or remove objectives. A "Change all
 quantities" selector above the table sets one quantity on the objectives of all VOIs at once.
 Constraints are intentionally out of scope because pyRadPlan currently ships objectives only.
 """
@@ -32,27 +33,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.cst import validate_cst
-from pyRadPlan.optimization.objectives import (
-    Objective,
-    get_available_objectives,
-    get_objective,
-)
+from pyRadPlan.app import PreconditionError
+from pyRadPlan.app._objectives import objectives_of, reference_values
+from pyRadPlan.optimization.objectives import Objective, get_available_objectives
 from pyRadPlan.quantities import get_available_quantities
 from pyRadPlan.gui.workspace import WorkspaceManager
-from .._base import AdaptiveDoubleSpinBox, WorkspaceWidget
-from .._display_names import add_identified_item, result_key_labels, show_identifiers_when_open
+from .._base import AdaptiveDoubleSpinBox, CompactComboBox, WorkspaceWidget
+from .._display_names import (
+    add_identified_item,
+    robustness_display_name,
+    select_identifier,
+    show_identifiers_when_open,
+)
 from ..ai import ai_disabled_reason
 
-
-#: Default objective name picked for a freshly added objective, per VOI type.
-_DEFAULT_OBJECTIVE_BY_TYPE = {
-    "TARGET": "Squared Deviation",
-    "OAR": "Squared Overdosing",
-    "EXTERNAL": "Squared Overdosing",
-    "HELPER": "Squared Overdosing",
-}
-_FALLBACK_OBJECTIVE = "Squared Overdosing"
+_ROBUSTNESS_TOOLTIP = (
+    "How the objective is combined over the scenarios of the dose influence data; "
+    "'None' uses the nominal scenario only"
+)
 
 
 class OptimizationWidget(WorkspaceWidget):
@@ -60,9 +58,10 @@ class OptimizationWidget(WorkspaceWidget):
 
     Binds to a :class:`~pyRadPlan.gui.workspace.WorkspaceManager` and rebuilds a
     table (one row per VOI/objective pair) whenever ``ct`` or ``cst`` change.
-    Edits are written straight back to ``workspace.cst`` inside
-    :meth:`~WorkspaceWidget.hold_updates` so other widgets are notified while this
-    widget does not re-enter its own update.
+    Edits go through the objectives editor of the workspace's session
+    (:meth:`~pyRadPlan.app.Session.objectives_edit`), which validates them and writes
+    ``workspace.cst``, inside :meth:`~WorkspaceWidget.hold_updates` so other widgets are
+    notified while this widget does not re-enter its own update.
 
     Parameters
     ----------
@@ -81,9 +80,14 @@ class OptimizationWidget(WorkspaceWidget):
     _COL_OBJECTIVE = 1
     _COL_PENALTY = 2
     _COL_QUANTITY = 3
-    _COL_PARAMS = 4
-    _COL_REMOVE = 5
-    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Parameters", "")
+    _COL_ROBUSTNESS = 4
+    _COL_PARAMS = 5
+    _COL_REMOVE = 6
+    _COLUMNS = ("VOI", "Objective", "Penalty", "Quantity", "Robustness", "Parameters", "")
+    #: Widths of the closed combo boxes, in characters; longer names are elided.
+    _OBJECTIVE_CHARACTERS = 9
+    _QUANTITY_CHARACTERS = 5
+    _ROBUSTNESS_CHARACTERS = 7
 
     def __init__(
         self,
@@ -238,18 +242,7 @@ class OptimizationWidget(WorkspaceWidget):
             total = sum(len(self._iter_objectives(voi)) for voi in cst.vois)
         self._lbl_count.setText(f"{total} objective{'s' if total != 1 else ''}")
 
-    @staticmethod
-    def _iter_objectives(voi) -> list[Objective]:
-        """Return the VOI's objectives normalized to :class:`Objective` instances."""
-        objectives = []
-        for raw in voi.objectives or []:
-            if raw is None or (isinstance(raw, (list, tuple)) and len(raw) == 0):
-                continue
-            try:
-                objectives.append(get_objective(raw))
-            except (KeyError, ValueError, TypeError):
-                continue
-        return objectives
+    _iter_objectives = staticmethod(objectives_of)
 
     def _insert_row(self, voi_idx: int, obj_idx: int, obj: Objective, voi_label: str) -> None:
         row = self._table.rowCount()
@@ -263,7 +256,7 @@ class OptimizationWidget(WorkspaceWidget):
             voi_item.setFont(font)
         self._table.setItem(row, self._COL_VOI, voi_item)
 
-        cmb = QComboBox()
+        cmb = CompactComboBox(self._OBJECTIVE_CHARACTERS)
         cmb.addItems(self._available)
         cmb.setCurrentText(obj.name)
         cmb.currentTextChanged.connect(
@@ -279,7 +272,7 @@ class OptimizationWidget(WorkspaceWidget):
         )
         self._table.setCellWidget(row, self._COL_PENALTY, penalty)
 
-        cmb_quantity = QComboBox()
+        cmb_quantity = CompactComboBox(self._QUANTITY_CHARACTERS)
         show_identifiers_when_open(cmb_quantity)
         for identifier, quantity in get_available_quantities().items():
             add_identified_item(cmb_quantity, quantity.name, identifier, identifier)
@@ -292,6 +285,27 @@ class OptimizationWidget(WorkspaceWidget):
             )
         )
         self._table.setCellWidget(row, self._COL_QUANTITY, cmb_quantity)
+
+        cmb_robustness = CompactComboBox(self._ROBUSTNESS_CHARACTERS)
+        cmb_robustness.setToolTip(_ROBUSTNESS_TOOLTIP)
+        show_identifiers_when_open(cmb_robustness)
+        options = type(obj).available_robustness()
+        # A scenario-aware objective has a single option, which applies regardless of the
+        # value stored on it.
+        if len(options) > 1 and obj.robustness not in options:
+            options = [*options, obj.robustness]
+        for option in options:
+            add_identified_item(cmb_robustness, robustness_display_name(option), option, option)
+        if len(options) > 1:
+            select_identifier(cmb_robustness, obj.robustness)
+        else:
+            cmb_robustness.setEnabled(False)
+        cmb_robustness.currentIndexChanged.connect(
+            lambda idx, c=cmb_robustness, v=voi_idx, o=obj_idx: self._on_robustness_changed(
+                v, o, c.itemData(idx)
+            )
+        )
+        self._table.setCellWidget(row, self._COL_ROBUSTNESS, cmb_robustness)
 
         self._table.setCellWidget(
             row, self._COL_PARAMS, self._build_param_editor(voi_idx, obj_idx, obj)
@@ -356,7 +370,7 @@ class OptimizationWidget(WorkspaceWidget):
             cmb.insertItem(0, self._summarize_image_reference(value), value)
             current = 0
         cmb.setCurrentIndex(current)
-        if cmb.count() == 1 and current == 0 and self._ws.result is None:
+        if cmb.count() == 1 and current == 0 and not self._ws.results:
             cmb.setToolTip("No result doses available yet — compute or import a dose first")
         else:
             cmb.setToolTip("Reference dose image (picked from the workspace results)")
@@ -370,19 +384,14 @@ class OptimizationWidget(WorkspaceWidget):
     def _reference_dose_options(self) -> list[tuple[str, Any, str]]:
         """Workspace result quantities usable as an image-reference value.
 
-        Each whole-volume quantity in the :class:`~pyRadPlan.result.PlanResult`
-        (optimized doses, imported doses and saved snapshots) is exposed as a
-        ``sitk.Image`` reference.  Per-beam quantities and beamlet weights are not
-        offered as references.  Returns ``(label, value, key)`` triples.
+        ``(label, value, key)`` triples of
+        :func:`pyRadPlan.app._objectives.reference_values`: each whole-volume quantity
+        of every workspace result (the active one, imported doses and snapshots).
         """
-        options: list[tuple[str, Any, str]] = []
-        result = self._ws.result
-        if result is None:
-            return options
-        labels = result_key_labels(result.stored_quantities)
-        for key in result.stored_quantities:
-            options.append((labels[key], result.quantities[key].values, key))
-        return options
+        return [
+            (label, value, key)
+            for key, label, value in reference_values(self._ws.result_entries())
+        ]
 
     @staticmethod
     def _image_ref_matches(current: Any, candidate: Any) -> bool:
@@ -409,25 +418,44 @@ class OptimizationWidget(WorkspaceWidget):
     # Edit callbacks (write back through the workspace)
     # ------------------------------------------------------------------
 
-    def _on_add_objective(self) -> None:
-        cst = self._ws.cst
-        if cst is None or self._cmb_voi.count() == 0:
-            return
-        voi_idx = self._cmb_voi.currentData()
-        voi = cst.vois[voi_idx]
-        name = _DEFAULT_OBJECTIVE_BY_TYPE.get(voi.voi_type, _FALLBACK_OBJECTIVE)
-        if name not in self._available:
-            name = self._available[0]
-        new_obj = get_objective(name)
-        # Follow the quantity the objectives agree on, so a new objective does not
-        # silently reintroduce a mix after "Change all quantities".
-        quantity = self._shared_quantity(cst)
-        if quantity is not None:
-            new_obj.quantity = quantity
+    def _edit(
+        self,
+        voi_idx: int,
+        op: str,
+        rejected: str = "Rejected change",
+        rebuild: bool = True,
+        **params: Any,
+    ) -> None:
+        """Run an objectives edit of the session on the VOI at *voi_idx*.
 
-        objectives = self._iter_objectives(voi)
-        objectives.append(new_obj)
-        self._write_objectives(cst, voi_idx, objectives)
+        A rejected edit is shown in the status line, prefixed with *rejected*; the table is
+        rebuilt afterwards unless *rebuild* is False (edits of a row's own editors).
+        """
+        cst = self._ws.cst
+        if cst is None or not 0 <= voi_idx < len(cst.vois):
+            return
+        try:
+            with self.hold_updates():
+                self._ws.session.objectives_edit(
+                    op, cst.vois[voi_idx].name, detail=False, voi_index=voi_idx, **params
+                )
+        except (PreconditionError, LookupError, ValueError, TypeError) as exc:
+            self._set_status(f"{rejected}: {exc}")
+            return
+        if rebuild:
+            self._rebuild_table(self._ws.cst)
+
+    def _objective(self, voi_idx: int, obj_idx: int) -> Optional[Objective]:
+        cst = self._ws.cst
+        if cst is None or not 0 <= voi_idx < len(cst.vois):
+            return None
+        objectives = self._iter_objectives(cst.vois[voi_idx])
+        return objectives[obj_idx] if 0 <= obj_idx < len(objectives) else None
+
+    def _on_add_objective(self) -> None:
+        if self._ws.cst is None or self._cmb_voi.count() == 0:
+            return
+        self._edit(self._cmb_voi.currentData(), "add")
 
     def _on_ai_objectives(self) -> None:
         cst = self._ws.cst
@@ -520,136 +548,66 @@ class OptimizationWidget(WorkspaceWidget):
             return None, True
 
     def _on_remove_objective(self, voi_idx: int, obj_idx: int) -> None:
-        cst = self._ws.cst
-        if cst is None:
-            return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if 0 <= obj_idx < len(objectives):
-            del objectives[obj_idx]
-            self._write_objectives(cst, voi_idx, objectives)
+        self._edit(voi_idx, "remove", index=obj_idx)
 
     def _on_objective_changed(self, voi_idx: int, obj_idx: int, name: str) -> None:
-        cst = self._ws.cst
-        if cst is None:
+        current = self._objective(voi_idx, obj_idx)
+        if current is None or current.name == name:
             return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if not (0 <= obj_idx < len(objectives)):
-            return
-        if objectives[obj_idx].name == name:
-            return
-        priority = objectives[obj_idx].priority
-        new_obj = get_objective(name)
-        new_obj.priority = priority
-        objectives[obj_idx] = new_obj
-        self._write_objectives(cst, voi_idx, objectives)
+        self._edit(voi_idx, "change_type", index=obj_idx, name=name)
+
+    def _update(self, voi_idx: int, obj_idx: int, rejected: str, **changes: Any) -> None:
+        self._edit(
+            voi_idx, "update", rejected=rejected, rebuild=False, index=obj_idx, changes=changes
+        )
 
     def _on_penalty_changed(self, voi_idx: int, obj_idx: int, value: float) -> None:
-        cst = self._ws.cst
-        if cst is None:
-            return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if not (0 <= obj_idx < len(objectives)):
-            return
-        try:
-            objectives[obj_idx].priority = float(value)
-        except (ValueError, TypeError):
-            self._set_status(f"Ignored invalid penalty {value!r}")
-            return
-        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+        self._update(voi_idx, obj_idx, f"Ignored invalid penalty {value!r}", priority=value)
 
     def _on_quantity_changed(self, voi_idx: int, obj_idx: int, quantity: str) -> None:
-        cst = self._ws.cst
-        if cst is None:
+        current = self._objective(voi_idx, obj_idx)
+        if current is None or current.quantity == quantity:
             return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if not (0 <= obj_idx < len(objectives)):
+        self._update(voi_idx, obj_idx, f"Rejected quantity {quantity!r}", quantity=quantity)
+
+    def _on_robustness_changed(self, voi_idx: int, obj_idx: int, robustness: str) -> None:
+        current = self._objective(voi_idx, obj_idx)
+        if current is None or current.robustness == robustness:
             return
-        if objectives[obj_idx].quantity == quantity:
-            return
-        try:
-            objectives[obj_idx].quantity = quantity
-        except (ValueError, TypeError) as exc:
-            self._set_status(f"Rejected quantity {quantity!r}: {exc}")
-            return
-        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+        self._update(
+            voi_idx, obj_idx, f"Rejected robustness {robustness!r}", robustness=robustness
+        )
 
     def _set_all_quantities(self, quantity: str) -> None:
         """Set *quantity* on the objectives of every VOI in one workspace write."""
         cst = self._ws.cst
         if cst is None:
             return
-
-        per_voi = {idx: self._iter_objectives(voi) for idx, voi in enumerate(cst.vois)}
-        if all(obj.quantity == quantity for objectives in per_voi.values() for obj in objectives):
+        if all(obj.quantity == quantity for voi in cst.vois for obj in self._iter_objectives(voi)):
             return
         try:
-            for idx, objectives in per_voi.items():
-                for obj in objectives:
-                    obj.quantity = quantity
-                cst.vois[idx].objectives = list(objectives)
-            cst = validate_cst(cst)
-        except (ValueError, TypeError) as exc:
+            with self.hold_updates():
+                self._ws.session.objectives_set_quantity_all(quantity)
+        except (PreconditionError, LookupError, ValueError, TypeError) as exc:
             self._set_status(f"Rejected quantity {quantity!r}: {exc}")
             return
-
-        with self.hold_updates():
-            self._ws.cst = cst
-        self._rebuild_table(cst)
+        self._rebuild_table(self._ws.cst)
 
     def _on_param_changed(self, voi_idx: int, obj_idx: int, param: str, value: float) -> None:
-        cst = self._ws.cst
-        if cst is None:
-            return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if not (0 <= obj_idx < len(objectives)):
-            return
-        try:
-            setattr(objectives[obj_idx], param, float(value))
-        except (ValueError, TypeError):
-            self._set_status(f"Ignored invalid value for {param}: {value!r}")
-            return
-        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+        self._update(
+            voi_idx, obj_idx, f"Ignored invalid value for {param}", parameters={param: value}
+        )
 
     def _on_image_ref_changed(self, voi_idx: int, obj_idx: int, param: str, value: Any) -> None:
-        cst = self._ws.cst
-        if cst is None or value is None:
+        if value is None:
             return
-        objectives = self._iter_objectives(cst.vois[voi_idx])
-        if not (0 <= obj_idx < len(objectives)):
-            return
-        try:
-            setattr(objectives[obj_idx], param, value)
-        except (ValueError, TypeError) as exc:
-            self._set_status(f"Rejected reference image for {param}: {exc}")
-            return
-        self._write_objectives(cst, voi_idx, objectives, rebuild=False)
+        self._update(
+            voi_idx, obj_idx, f"Rejected reference image for {param}", parameters={param: value}
+        )
 
     # ------------------------------------------------------------------
-    # Persistence helpers
+    # Status
     # ------------------------------------------------------------------
-
-    def _write_objectives(
-        self, cst, voi_idx: int, objectives: list[Objective], rebuild: bool = True
-    ) -> None:
-        """Assign *objectives* to the VOI and push the ``cst`` back to the workspace.
-
-        The structure set is mutated in place (VOIs are mutable pydantic models)
-        and re-validated to keep it consistent, then re-assigned to the workspace
-        inside :meth:`hold_updates` so peer widgets refresh while this widget does
-        not react to its own write.
-        """
-        try:
-            cst.vois[voi_idx].objectives = list(objectives)
-            cst = validate_cst(cst)
-        except (ValueError, TypeError) as exc:
-            self._set_status(f"Rejected change: {exc}")
-            return
-
-        with self.hold_updates():
-            self._ws.cst = cst
-
-        if rebuild:
-            self._rebuild_table(cst)
 
     def _set_status(self, text: str) -> None:
         self._lbl_status.setText(text)

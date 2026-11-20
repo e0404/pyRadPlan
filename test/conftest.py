@@ -1,4 +1,6 @@
 import importlib.util
+import platform
+import numpy as np
 import pytest
 import pymatreader
 import sys
@@ -43,6 +45,37 @@ def pytest_unconfigure(config):
         app.processEvents()
         app.shutdown()
     os._exit(getattr(config, "_pyradplan_exitstatus", 0))
+
+
+def _assert_resampled_like_sitk(actual, expected, source, target, indices, *, rtol, atol):
+    """Compare flat resampling results at target voxels with a SimpleITK reference.
+
+    Where a target voxel maps to a source index within 1e-9 voxel of an integer, the
+    interpolation weight of a neighbor is 0 or a few ulp depending on rounding, and a
+    weighted NaN neighbor propagates. SimpleITK's rounding there differs between
+    architectures (e.g. FMA contraction on arm64), so the NaN footprint at those voxels
+    is only compared on x86-64, where the backend resampler matches SimpleITK exactly.
+    """
+    actual, expected = np.asarray(actual), np.asarray(expected)
+    if platform.machine().lower() in ("x86_64", "amd64"):
+        np.testing.assert_allclose(actual, expected, rtol=rtol, atol=atol)
+        return
+    nx, ny, _ = target.dimensions
+    indices = np.asarray(indices)
+    voxel = np.stack((indices % nx, indices // nx % ny, indices // (nx * ny)))
+    points = (target.direction * target.resolution_vector) @ voxel + target.origin[:, None]
+    source_matrix = source.direction * source.resolution_vector
+    continuous = np.linalg.solve(source_matrix, points - source.origin[:, None])
+    exact = np.any(np.abs(continuous - np.round(continuous)) < 1e-9, axis=0)
+    np.testing.assert_array_equal(np.isnan(actual[~exact]), np.isnan(expected[~exact]))
+    finite = np.isfinite(actual) & np.isfinite(expected)
+    np.testing.assert_allclose(actual[finite], expected[finite], rtol=rtol, atol=atol)
+
+
+@pytest.fixture
+def assert_resampled_like_sitk():
+    """Compare backend and SimpleITK resampling, tolerating platform-dependent boundaries."""
+    return _assert_resampled_like_sitk
 
 
 @pytest.fixture

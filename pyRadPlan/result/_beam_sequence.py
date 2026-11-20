@@ -9,6 +9,8 @@ from pydantic import (
     Field,
     model_validator,
     field_validator,
+    field_serializer,
+    SerializationInfo,
     ValidationInfo,
     computed_field,
 )
@@ -170,6 +172,22 @@ class BeamSequence(PyRadPlanBaseModel):
             arr[mask] -= 1  # Convert to 0-based indexing
             return arr.T
 
+        return v
+
+    @field_serializer("bixel_ix")
+    def _bixel_ix_to_matrad(self, v: Optional[list[int]], info: SerializationInfo) -> Any:
+        """Count the bixels from 1 for matRad."""
+        if v is not None and info.context and info.context.get("matRad") == "mat-file":
+            return np.asarray(v, dtype=float) + 1
+        return v
+
+    @field_serializer("bixel_ind_map")
+    def _bixel_ind_map_to_matrad(self, v: Optional[np.ndarray], info: SerializationInfo) -> Any:
+        """Undo the rotation and the 0-based indexing of the import for matRad."""
+        if v is not None and info.context and info.context.get("matRad") == "mat-file":
+            arr = np.array(v, dtype=np.float64)
+            arr[~np.isnan(arr)] += 1
+            return arr.T
         return v
 
     @classmethod

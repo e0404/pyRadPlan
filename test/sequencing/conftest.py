@@ -6,7 +6,7 @@ from pyRadPlan.stf import validate_stf
 from pyRadPlan.dij import validate_dij
 from pyRadPlan.ct import validate_ct
 from pyRadPlan.cst import validate_cst
-from pyRadPlan.result import validate_result
+from pyRadPlan.result import PlanResult
 
 
 @pytest.fixture
@@ -16,8 +16,10 @@ def test_data_engel(test_data_engel_seq_raw):
     dij_mat = validate_dij(test_data_engel_seq_raw["dij"])
     ct_mat = validate_ct(test_data_engel_seq_raw["ct"])
     cst_mat = validate_cst(test_data_engel_seq_raw["cst"], ct=ct_mat)
-    result_mat = validate_result(test_data_engel_seq_raw["resultGUI_before_seq"])
-    result_seq_mat = validate_result(test_data_engel_seq_raw["resultGUI"])
+    result_mat = PlanResult.from_matrad(
+        test_data_engel_seq_raw["resultGUI_before_seq"], ct_mat.cube_hu
+    )
+    result_seq_mat = PlanResult.from_matrad(test_data_engel_seq_raw["resultGUI"], ct_mat.cube_hu)
 
     return pln_mat, stf_mat, dij_mat, ct_mat, cst_mat, result_mat, result_seq_mat
 
@@ -29,8 +31,10 @@ def test_data_siochi(test_data_siochi_seq_raw):
     dij_mat = validate_dij(test_data_siochi_seq_raw["dij"])
     ct_mat = validate_ct(test_data_siochi_seq_raw["ct"])
     cst_mat = validate_cst(test_data_siochi_seq_raw["cst"], ct=ct_mat)
-    result_mat = validate_result(test_data_siochi_seq_raw["resultGUI_before_seq"])
-    result_seq_mat = validate_result(test_data_siochi_seq_raw["resultGUI"])
+    result_mat = PlanResult.from_matrad(
+        test_data_siochi_seq_raw["resultGUI_before_seq"], ct_mat.cube_hu
+    )
+    result_seq_mat = PlanResult.from_matrad(test_data_siochi_seq_raw["resultGUI"], ct_mat.cube_hu)
 
     return pln_mat, stf_mat, dij_mat, ct_mat, cst_mat, result_mat, result_seq_mat
 
@@ -42,8 +46,10 @@ def test_data_xia(test_data_xia_seq_raw):
     dij_mat = validate_dij(test_data_xia_seq_raw["dij"])
     ct_mat = validate_ct(test_data_xia_seq_raw["ct"])
     cst_mat = validate_cst(test_data_xia_seq_raw["cst"], ct=ct_mat)
-    result_mat = validate_result(test_data_xia_seq_raw["resultGUI_before_seq"])
-    result_seq_mat = validate_result(test_data_xia_seq_raw["resultGUI"])
+    result_mat = PlanResult.from_matrad(
+        test_data_xia_seq_raw["resultGUI_before_seq"], ct_mat.cube_hu
+    )
+    result_seq_mat = PlanResult.from_matrad(test_data_xia_seq_raw["resultGUI"], ct_mat.cube_hu)
 
     return pln_mat, stf_mat, dij_mat, ct_mat, cst_mat, result_mat, result_seq_mat
 

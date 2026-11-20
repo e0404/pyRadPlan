@@ -33,7 +33,7 @@ class SquaredDeviation(Objective):
 
     def compute_objective(self, values: Array) -> Array:
         deviation = values - self.d_ref
-        return (deviation @ deviation) / array_api_compat.size(values)
+        return (deviation @ deviation) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
-        return 2.0 * (values - self.d_ref) / array_api_compat.size(values)
+        return 2.0 * (values - self.d_ref) / float(array_api_compat.size(values))

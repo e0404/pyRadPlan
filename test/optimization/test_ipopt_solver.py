@@ -4,7 +4,9 @@ import array_api_compat
 import array_api_extra as xpx
 import numpy as np
 
+from pyRadPlan import settings
 from pyRadPlan.optimization.solvers import get_solver, OptimizerIpopt, SolverBase
+from pyRadPlan.util.openmp import blocked_by_openmp
 
 skipif_no_ipopt = pytest.mark.skipif(
     OptimizerIpopt is None,
@@ -96,3 +98,71 @@ def test_simple_problem_ipopt():
     assert isinstance(result_info["status"], int)
 
     assert xp.all(xpx.isclose(result, 0.0, atol=1e-4))
+
+
+def _shifted_quadratic(solver):
+    target = np.array([2.0, -1.0])
+    solver.display = False
+    solver.objective = lambda x: np.sum((x - target) ** 2)
+    solver.gradient = lambda x: 2 * (x - target)
+
+
+@skipif_no_ipopt
+def test_ipopt_respects_bounds():
+    """Regression: `bounds` was ignored and IPOPT always solved on [0, inf)."""
+    solver = get_solver("ipopt")
+    _shifted_quadratic(solver)
+    solver.bounds = (np.array([0.0, -5.0]), 1.0)
+
+    x, _ = solver.solve(np.zeros(2))
+
+    assert np.allclose(x, [1.0, -1.0], atol=1e-6)
+
+
+@skipif_no_ipopt
+def test_ipopt_accepts_float32():
+    """Regression: a float32 x0 was read as float64 memory and gave garbage."""
+    solver = get_solver("ipopt")
+    _shifted_quadratic(solver)
+
+    x, _ = solver.solve(np.full(2, 0.5, dtype=np.float32))
+
+    assert np.allclose(x, [2.0, 0.0], atol=1e-6)
+
+
+@skipif_no_ipopt
+def test_ipopt_leaves_x0_untouched():
+    """Regression: IPOPT wrote the solution into the caller's x0."""
+    solver = get_solver("ipopt")
+    _shifted_quadratic(solver)
+    x0 = np.zeros(2)
+
+    x, _ = solver.solve(x0)
+
+    assert np.array_equal(x0, np.zeros(2))
+    assert x is not x0
+
+
+@skipif_no_ipopt
+def test_ipopt_evaluates_on_the_device_of_x0(monkeypatch):
+    """Regression: with a GPU preferred, a CPU x0 was evaluated (and returned) on the GPU."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    if blocked_by_openmp("ipyopt"):
+        pytest.skip("IPOPT blocked by an OpenMP clash with torch")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", True)
+    x0 = torch.ones(2, dtype=torch.float64)
+
+    def objective(x):
+        assert x.device == x0.device
+        return torch.sum(x**2)
+
+    solver = get_solver("ipopt")
+    solver.display = False
+    solver.objective = objective
+    solver.gradient = lambda x: 2 * x
+
+    x, _ = solver.solve(x0)
+
+    assert x.device == x0.device

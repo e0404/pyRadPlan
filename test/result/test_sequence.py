@@ -87,6 +87,27 @@ def test_sequence_matrad_import_converts_bixel_indices():
     assert seq.total_num_of_shapes == 2
 
 
+def test_sequence_matrad_import_of_a_single_beam():
+    """A single beam is read as a plain struct instead of one list per field."""
+    data = {
+        "beam": {
+            "numOfShapes": 1.0,
+            "shapes": np.ones((3, 4)),
+            "shapesWeight": 2.0,
+            "bixelIx": np.array([1.0, 2.0, 3.0]),
+            "fluence": np.full((3, 4), 0.5),
+        },
+        "aperture_info": {"bixelWidth": 5.0, "beam": {"numOfActiveLeafPairs": 3.0}},
+    }
+    seq = Sequence.model_validate(data, context={"from_matRad": True})
+
+    assert len(seq.beam) == 1
+    assert seq.beam[0].bixel_ix == [0, 1, 2]
+    assert seq.beam[0].shapes.shape == (3, 4, 1)
+    np.testing.assert_array_equal(seq.beam[0].shapes_weight, [2.0])
+    assert seq.beam[0].num_of_active_leaf_pairs == 3
+
+
 def test_sequence_matrad_import_merges_aperture_info():
     """apertureInfo entries are flattened onto the Sequence and its beams."""
     data = {

@@ -10,6 +10,7 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
+from ._variance import Variance
 
 from ._factory import (
     get_available_objectives,
@@ -27,6 +28,7 @@ register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
 register_objective(DoseUniformity)
+register_objective(Variance)
 
 __all__ = [
     "Objective",
@@ -39,6 +41,7 @@ __all__ = [
     "SquaredMimicking",
     "SquaredOverdosing",
     "SquaredUnderdosing",
+    "Variance",
     "get_available_objectives",
     "get_objective",
     "get_objectives_union",

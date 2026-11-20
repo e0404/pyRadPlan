@@ -31,7 +31,7 @@ from PySide6.QtGui import QAction, QIcon
 
 from pyRadPlan._settings import get_settings
 from pyRadPlan.gui.assets import asset_path
-from pyRadPlan.gui.menus import BaseDataMenu, FileMenu, SettingsMenu, ViewMenu
+from pyRadPlan.gui.menus import BaseDataMenu, FileMenu, HelpMenu, SettingsMenu, ViewMenu
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets import (
     WorkflowWidget,
@@ -125,7 +125,12 @@ class MainWindow(QMainWindow):
         self._build_menu_bar()
 
     def _apply_compact_font(self) -> None:
-        font = self.font()
+        # Set on the application, not the window: widgets with a style sheet (or whose
+        # style sheet is cleared again) fall back to the application font.
+        app = QApplication.instance()
+        if app.property("compact_font_applied"):
+            return
+        font = app.font()
         point = font.pointSizeF()
         if point > 0:
             font.setPointSizeF(point * self._FONT_SCALE)
@@ -133,7 +138,8 @@ class MainWindow(QMainWindow):
             pixel = font.pixelSize()
             if pixel > 0:
                 font.setPixelSize(max(1, round(pixel * self._FONT_SCALE)))
-        self.setFont(font)
+        app.setFont(font)
+        app.setProperty("compact_font_applied", True)
 
     def apply_ui_mode_setting(self) -> None:
         """Push the configured ``settings.gui.ui_mode`` to the widgets and the File menu."""
@@ -186,7 +192,14 @@ class MainWindow(QMainWindow):
         self._base_data_menu.base_data_changed.connect(self.plan_widget.refresh_base_data)
         self._settings_menu = SettingsMenu(self)
         self._settings_menu.settings_applied.connect(self.apply_ui_mode_setting)
-        for menu in (self._file_menu, self._view_menu, self._base_data_menu, self._settings_menu):
+        self._help_menu = HelpMenu(self)
+        for menu in (
+            self._file_menu,
+            self._view_menu,
+            self._base_data_menu,
+            self._settings_menu,
+            self._help_menu,
+        ):
             self.menuBar().addMenu(menu)
 
     # ------------------------------------------------------------------
