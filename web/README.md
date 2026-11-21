@@ -86,17 +86,19 @@ develop and releases, once the variable `WEB_PAGES_ENABLED` is `true`.
 ## Tests
 
 ```sh
-npm test               # vitest: codec, mock backend, renderer math (geometry, LUTs, marching squares)
+npm test               # vitest: codec, mock backend, renderer math (geometry, LUTs, marching squares), plot models (DVH, sequence window)
 npx tsc --noEmit       # type check
 npm run e2e            # Playwright (Edge, SwiftShader WebGL) against ?backend=mock; screenshots in e2e/screenshots/ (git-ignored)
 npm run e2e:viewer     # viewer parity (beams, drag, snapshots, VOIs, analysis window) against the mock, port 5202
-npm run e2e:plan       # plan widget, config forms, tissue dialog, objectives, status window against the mock
+npm run e2e:plan       # plan widget, config forms, tissue dialog, objectives, status window, sequencing + sequence window against the mock
 npm run e2e:menus      # menus, dialogs, saves (downloads), loads, base data, settings, help, log, dark mode (port 5203, screenshots menus-*.png)
 npm run e2e:pyodide    # the whole GUI against the real Pyodide backend (~3 min, see below); `-- --preview` uses the production build
 ```
 
 `e2e:pyodide` clicks through TG119 with the web profile defaults in stages (boot, phantom from
-File > Open Example Phantom, Calc. Dose Influence + Optimize of the default plan, plan form +
+File > Open Example Phantom, Calc. Dose Influence + Optimize of the default plan, `sequencing`
+of that plan (sequencer form, Run Sequencing, the sequenced dose, the sequence window with the
+shapes, fluence maps and target of `view.sequence`), plan form +
 engine / scenario / optimization dialogs, objectives, 5 beams with the status window, viewer,
 snapshot + analysis window, VOI edit, every File-menu save the capabilities report available
 (downloads kept in `e2e/downloads/`), reload of the workspace pickle and the plan `.mat`, Load Dij,

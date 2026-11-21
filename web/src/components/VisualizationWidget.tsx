@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DEFAULT_VIEW, slicesThrough } from "../renderer/geometry";
 import { parseNumbers } from "../results/numbers";
-import { setViewer, useApp, type ViewerSettings } from "../store/appStore";
-import { displayIsocenter, resultGroups, selectQuantity } from "../store/revisions";
+import { setViewer, showSequence, useApp, type ViewerSettings } from "../store/appStore";
+import { displayIsocenter, hasMethod, resultGroups, selectQuantity } from "../store/revisions";
 import { AnalysisWindow } from "./analysis/AnalysisWindow";
+import { SequenceWindow } from "./sequence/SequenceWindow";
 import { QuantitySelector } from "./QuantitySelector";
 import { Dialog } from "./common";
 
@@ -42,6 +43,13 @@ export function VisualizationWidget() {
   const hasResult = Boolean(state?.has.result) || groups.length > 0;
   const beamsAvailable = Boolean(beams?.beams.length);
   const analysisOpen = useApp((s) => s.analysisOpen);
+  const sequenceOpen = useApp((s) => s.sequenceOpen);
+  const sequenced = Boolean(state?.sequencing?.sequenced) && hasMethod("view.sequence");
+
+  // The window belongs to the sequence of the active result and goes with it.
+  useEffect(() => {
+    if (sequenceOpen && !sequenced) useApp.setState({ sequenceOpen: false });
+  }, [sequenceOpen, sequenced]);
 
   const toggle = (key: Toggle, label: string, testId: string, title?: string) => (
     <label className="check" title={title}>
@@ -114,8 +122,19 @@ export function VisualizationWidget() {
       >
         Show DVH / QI
       </button>
+      <button
+        className="btn"
+        style={{ width: "100%", marginTop: 4 }}
+        title="Show the sequence viewer for the sequenced plan (requires sequencing to have been run)"
+        disabled={!sequenced}
+        onClick={showSequence}
+        data-testid="btn-sequence-view"
+      >
+        Show Sequence
+      </button>
 
       {analysisOpen && hasResult && <AnalysisWindow onClose={() => useApp.setState({ analysisOpen: false })} />}
+      {sequenceOpen && sequenced && <SequenceWindow onClose={() => useApp.setState({ sequenceOpen: false })} />}
       {isoDialog && (
         <Dialog
           title="Set isolines"

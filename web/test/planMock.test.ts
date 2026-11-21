@@ -245,19 +245,19 @@ describe("mock backend, package A methods", () => {
   it("says why sequencing cannot run and adds the sequenced quantities to the active result", async () => {
     const { req, events } = await loaded();
     let state = await req("session.state", {});
-    expect(state.sequencing).toEqual({ available: false, reason: expect.stringMatching(/^Sequencing needs steering information and a dose influence matrix/) });
+    expect(state.sequencing).toEqual({ available: false, reason: expect.stringMatching(/^Sequencing needs steering information and a dose influence matrix/), sequenced: false });
     await req("plan.set", { gantry_angles: [0, 90] });
     state = await req("workflow.calc_dose_influence", {});
     expect(state.sequencing?.reason).toBe("No result available to sequence.");
     state = await req("workflow.optimize", { max_iter: 5 });
-    expect(state.sequencing).toEqual({ available: false, reason: "Enable 'Run sequencing' in the Plan panel first." });
+    expect(state.sequencing).toEqual({ available: false, reason: "Enable 'Run sequencing' in the Plan panel first.", sequenced: false });
     const refused = await failure(req("workflow.sequence", {}));
     expect([refused.type, refused.message]).toEqual(["PreconditionError", "Enable 'Run sequencing' in the Plan panel first."]);
 
     // Changing only the sequencing settings outdates neither the dose influence nor the result.
     state = await req("plan.set", { sequencing: { run: true, sequencer: "siochi", values: { num_of_levels: 4 } } });
     expect(state.stages).toMatchObject({ dij: "done", optimization: "done" });
-    expect(state.sequencing).toEqual({ available: true, reason: null });
+    expect(state.sequencing).toEqual({ available: true, reason: null, sequenced: false });
 
     await req("workflow.snapshot", { tag: "before" });
     const before = state.revisions!.workspace.result;
@@ -290,7 +290,7 @@ describe("mock backend, package A methods", () => {
     state = await req("plan.set", { bixel_width: 6 });
     expect(state.sequencing?.reason).toMatch(/^Result is outdated relative to the current plan/);
     state = await req("plan.set", { radiation_mode: "protons" });
-    expect(state.sequencing).toEqual({ available: false, reason: "Sequencing is only available for photon plans." });
+    expect(state.sequencing).toEqual({ available: false, reason: "Sequencing is only available for photon plans.", sequenced: false });
     expect((await req("app.info", {})).methods).toContain("workflow.sequence");
   });
 });

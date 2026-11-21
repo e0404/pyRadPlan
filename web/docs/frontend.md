@@ -133,6 +133,26 @@ production host must send the same headers (or use a service-worker shim such as
   quantities, which `results/resultGroups.ts` names "<name> (sequenced)" for backends without
   `state.results`. A backend without `state.sequencing` or `workflow.sequence` leaves the button
   disabled.
+- Show Sequence (amendment 28; Qt `SequenceWindow` with `ApertureViewerWidget`) is enabled by
+  `state.sequencing.sequenced` (and `view.sequence` among `app.info.methods`).
+  `components/sequence/SequenceWindow.tsx` is a non-modal window like the analysis window
+  (`sequenceOpen` in the viewer slice). `showSequence()` (`store/appStore.ts`) opens it on the
+  beam of the shown per-beam quantity (`"…_beam <n>"`); `actions.sequence` calls it after a
+  successful run, as Qt opens the window when sequencing finishes. The window fetches
+  `view.sequence` whenever `revisions.workspace.result` changes, resets its view options and
+  players with each fetched sequence, and closes when the active result has none (`sequenced`
+  false, or `PreconditionError` / `no_sequence`). Every beam tab keeps its own mounted player
+  (shape, Play, speed, Loop), so a hidden tab keeps playing as in Qt. What is drawn is computed
+  by pure functions in `sequenceModel.ts`, one per helper of
+  `pyRadPlan/visualization/_plot_aperture_info.py` (leaf rows, blocked rectangles, weight
+  colour, MLC outlines, bixel grid, colour limits, dwell time, titles incl. Python's `%.2g`);
+  `SequencePlot.tsx` draws both panels on one canvas with the plot theme. The vertical axis
+  increases upwards: row 0 of a fluence map and the first leaf row are the lowest stack
+  position, bixels without a ray (NaN) stay empty, and the target outline is the 0.5
+  marching-squares contour of `target.mask` (bin centres at `origin + index * spacing`). The
+  aperture panel fills its half (matplotlib `aspect="auto"`), the fluence panel keeps the
+  aspect ratio. Mock: `api/mock/sequence.ts` derives shapes, fluence maps and target from the
+  phantom's target and the plan's beams.
 - Structure visibility starts from `structures[].visible` and stays a viewer setting (not sent back).
 - Volume `range` entries that are `null` fall back to `[0, 1]` (quantity) / `[-1000, 1000]` (CT).
 - `iso_center` as a list of per-beam points: the viewer and the plan form show the first one; the plan
@@ -230,7 +250,9 @@ Files: `src/api/protocol/plan.ts` (v1 types; the shared v1 block lives in `proto
 `npm run e2e:pyodide` (`e2e/pyodide.mjs`) clicks through the GUI on TG119 with the web profile
 (5 × 5 × 5 mm dose grid, `total` doses) against the real worker: boot, phantom, plan widget and its
 engine / scenario / optimization dialogs, objectives (add, edit, change type, remove), Calc. Dose
-Influence + Optimize with the status window, 5 beams, viewer (beams, quantity selector incl.
+Influence + Optimize with the status window, sequencing of the default plan (sequencer form, Run
+Sequencing, the sequenced dose, the sequence window checked against the `view.sequence` data),
+5 beams, viewer (beams, quantity selector incl.
 per-beam, isolines, planes), snapshot + analysis compare, VOI edit, every available File-menu save,
 reload of workspace pickle / plan .mat / Load Dij, base data add + remove, Preferences, licenses,
 About, log level, dark mode, educational mode, a robust 1-beam plan (worst-case grid, voxel-wise

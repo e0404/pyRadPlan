@@ -26,6 +26,7 @@ import {
 } from "../../results/resultGroups";
 import { MethodError, precondition, resolveStructure, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
 import { fakeDose, type Phantom } from "./phantom";
+import { mockSequenceView, type MockSequence } from "./sequence";
 
 interface ViewerExt {
   seenData?: number;
@@ -52,6 +53,8 @@ interface MockResult {
   revisions: Map<string, number>;
   /** Labels of the result's `_scenario` components, by flat scenario index. */
   scenarioLabels: string[];
+  /** Delivery sequence of a sequenced result (`view.sequence`). */
+  sequence?: MockSequence;
 }
 
 /** Name of the active result (`pyRadPlan.app.DEFAULT_RESULT_NAME`). */
@@ -247,10 +250,10 @@ function activeResult(s: MockSession, dose: Float32Array, phantom: Phantom, plan
 
 /**
  * `workflow.sequence`: the active result is replaced by itself plus the `"<identifier>_sequenced"`
- * quantities (full and per beam) of its quantities, here the optimized ones times `scale`.
- * Quantities of an earlier sequencing are replaced. Returns the keys added.
+ * quantities (full and per beam) of its quantities, here the optimized ones times `scale`, and
+ * carries `sequence`. Quantities of an earlier sequencing are replaced. Returns the keys added.
  */
-export function addMockSequencedQuantities(s: MockSession, scale: number): string[] {
+export function addMockSequencedQuantities(s: MockSession, scale: number, sequence: MockSequence): string[] {
   const e = syncViewer(s);
   const active = e.results.get(e.active);
   if (!active) throw new MethodError("LookupError", "No result available to sequence.");
@@ -269,6 +272,7 @@ export function addMockSequencedQuantities(s: MockSession, scale: number): strin
     volumes,
     revisions: new Map([...volumes.keys()].map((key) => [key, tick()])),
     scenarioLabels: active.scenarioLabels,
+    sequence,
   });
   return added;
 }
@@ -317,6 +321,7 @@ export function viewerStateExtension(s: MockSession, state: SessionState): Parti
   };
   return {
     quantities: fullKeys,
+    ...(state.sequencing ? { sequencing: { ...state.sequencing, sequenced: Boolean(e.results.get(e.active)?.sequence) } } : {}),
     revisions: { workspace, volumes, masks: e.revMasks, beams: e.revBeams, base_data: 0 },
     results: {
       groups,
@@ -670,6 +675,16 @@ export const viewerHandlers: MockHandlers = {
     const iso = isoPoint ? [isoPoint] : [];
     const stf = s.computed.stf !== undefined && s.plan ? { gantry: s.plan.gantry_angles, couch: s.plan.couch_angles } : null;
     return beamsFor(s.plan, iso, ctx.stage(s, "stf") === "done" ? stf : null, draft);
+  },
+
+  async "view.sequence"(_params, ctx) {
+    const s = ctx.session();
+    const e = syncViewer(s);
+    const sequence = e.results.get(e.active)?.sequence;
+    if (!sequence || !s.plan) throw precondition("The active result has no delivery sequence.", "no_sequence");
+    const phantom = requirePhantom(s);
+    const iso = isoCenterPoint(s.plan.iso_center) ?? targetCenter(phantom) ?? [0, 0, 0];
+    return mockSequenceView(phantom, s.plan, iso, sequence);
   },
 
   async "cst.get"(params, ctx) {

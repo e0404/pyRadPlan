@@ -248,6 +248,85 @@ try {
     const group = after.results.groups.find((g) => g.base === "physical_dose_sequenced");
     expect(group?.label === "dose (sequenced)" && group.unit === "Gy" && group.meta_label === "Dose", `sequenced dose in the active result (${metrics.sequencing_s} s): ${JSON.stringify(group?.components.map((c) => c.key))}`);
     expect(after.stages.optimization === "done" && after.results.default === "physical_dose", "the result stays up to date and the optimized dose the default");
+
+    // The sequence window opens with the run and draws what `view.sequence` delivers.
+    await tid("sequence-window").waitFor();
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="sequence-window"]')?.dataset.beams) > 0, null, { timeout: 60000 });
+    expect(after.sequencing.sequenced === true, "the state reports the sequenced result");
+    const tabs = await tid("sequence-window").locator(".sequence-tabs .tab").allTextContents();
+    const expectedTabs = after.plan.gantry_angles.map((g, i) => `Beam ${i} (${g.toFixed(0)}°)`);
+    expect(tabs.join("|") === expectedTabs.join("|"), `one tab per beam: ${tabs.join(", ")}`);
+    expect((await tid("sequence-sequencer").textContent()) === "Sequencer: xia (4 levels)", "sequencer and levels in the header");
+    const beams = await page.evaluate(async () => {
+      const { backend, session } = window.__pyrpApp.useApp.getState();
+      const view = await backend.request("view.sequence", {}, session);
+      return view.beams.map((beam) => {
+        const { window: w, bixel_width: bw, optimized, delivered } = beam.fluence;
+        const [rows, cols] = delivered.shape;
+        // What the shapes add up to in every bixel, with row 0 of the map at the lowest leaf row
+        // (`flipped`: at the highest), to compare with the delivered fluence the backend sends.
+        const summed = (flipped) => {
+          let worst = 0;
+          for (let r = 0; r < rows; r++)
+            for (let c = 0; c < cols; c++) {
+              const value = delivered.data[(flipped ? rows - 1 - r : r) * cols + c];
+              if (Number.isNaN(value)) continue;
+              const x = w[0] + (c + 0.5) * bw;
+              const y = w[2] + (r + 0.5) * bw;
+              let sum = 0;
+              beam.shapes.forEach((shape, j) => {
+                const row = shape.boundaries.findIndex((b) => b <= y && y < b + shape.leaf_width);
+                if (row >= 0 && shape.leaf_positions[row][0] < x && x < shape.leaf_positions[row][1]) sum += beam.weights[j];
+              });
+              worst = Math.max(worst, Math.abs(sum - value));
+            }
+          return worst;
+        };
+        const finite = (a) => [...a.data].filter((v) => !Number.isNaN(v));
+        const total = (a) => finite(a).reduce((x, y) => x + y, 0);
+        return {
+          orientation: beam.orientation,
+          shapes: beam.shapes.length,
+          weights: beam.weights.length,
+          leafRows: beam.shapes[0]?.leaf_positions.length,
+          map: delivered.shape,
+          sameShape: optimized.shape.join() === delivered.shape.join(),
+          rays: finite(delivered).length,
+          gaps: delivered.data.length - finite(delivered).length,
+          max: Math.max(...finite(delivered)),
+          optimized: total(optimized),
+          delivered: total(delivered),
+          mismatch: summed(false),
+          mismatchFlipped: summed(true),
+          target: beam.target ? [...beam.target.mask.data].reduce((x, y) => x + y, 0) : 0,
+        };
+      });
+    });
+    expect(beams.length === expectedTabs.length && beams.every((b) => b.orientation === "X" && b.shapes > 0 && b.weights === b.shapes && b.leafRows > 0), `shapes per beam: ${beams.map((b) => `${b.shapes} of ${b.leafRows} leaf pairs`).join(", ")}`);
+    expect(
+      beams.every((b) => b.sameShape && b.rays > 0 && b.gaps > 0 && b.max > 0 && Math.abs(b.delivered - b.optimized) < 0.35 * b.optimized),
+      `optimized and delivered fluence per beam: ${beams.map((b) => `${b.map.join(" x ")} bixels, ${b.rays} rays, sum ${b.optimized.toFixed(1)} -> ${b.delivered.toFixed(1)}`).join("; ")}`,
+    );
+    expect(
+      beams.every((b) => b.mismatch <= 1e-3 * b.max && b.mismatchFlipped > 0.1 * b.max),
+      `the delivered fluence is what the shapes add up to with row 0 at the lowest leaf pair (off by ${beams.map((b) => b.mismatch.toExponential(1))}; upside down: ${beams.map((b) => b.mismatchFlipped.toFixed(2))})`,
+    );
+    expect(beams.every((b) => b.target > 0), `projected target per beam: ${beams.map((b) => b.target)} bins`);
+    expect((await tid("sequence-beam-0-label").textContent()) === `1 / ${beams[0].shapes}` && (await tid("sequence-beam-0").getAttribute("data-fluence")) === "true", "the first beam shows its first shape next to the fluence");
+    expect((await tid("sequence-overlays").isVisible()) && (await tid("sequence-fluence").inputValue()) === "delivered", "overlay bar shown, delivered fluence first");
+    await shot("sequence-window", tid("sequence-window"));
+    await tid("sequence-beam-0-slider").fill(String(beams[0].shapes - 1));
+    await tid("sequence-coordinate").selectOption("physical");
+    await tid("sequence-fluence").selectOption("difference");
+    await tid("sequence-bixelGrid").check();
+    expect((await tid("sequence-beam-0-label").textContent()) === `${beams[0].shapes} / ${beams[0].shapes}`, "the slider steps to the last shape");
+    await shot("sequence-window-difference", tid("sequence-window"));
+    await tid("sequence-close").click();
+    expect((await tid("sequence-window").count()) === 0 && (await tid("btn-sequence-view").isEnabled()), "Show Sequence enabled for the sequenced result");
+    await tid("btn-sequence-view").click();
+    await page.waitForFunction(() => Number(document.querySelector('[data-testid="sequence-window"]')?.dataset.beams) > 0, null, { timeout: 60000 });
+    expect((await tid("sequence-fluence").inputValue()) === "delivered", "Show Sequence reopens the window");
+    await tid("sequence-close").click();
     await tid("quantity-select-group").selectOption({ label: "dose (sequenced)" });
     await page.waitForFunction(() => window.__pyrpApp.useApp.getState().quantities["physical_dose_sequenced"], null, { timeout: 60000 });
     await shot("sequenced");

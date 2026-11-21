@@ -305,6 +305,78 @@ try {
   await page.waitForFunction(() => window.__pyrpApp.useApp.getState().state?.results?.groups.some((g) => g.base === "physical_dose_sequenced"));
   await waitIdle();
   expect((await tid("opt-status-window").count()) === 0, "sequencing does not open the optimization status window");
+
+  // ---- sequence window (Qt "pyRadPlan Sequence Viewer"): opened by the run, one tab per beam
+  const sequenceLoaded = () => page.waitForFunction(() => Number(document.querySelector('[data-testid="sequence-window"]')?.dataset.beams) > 0);
+  await tid("sequence-window").waitFor();
+  await sequenceLoaded();
+  /** The window is not modal: dragged aside by its title bar, the panels below stay usable. */
+  const dragSequenceWindow = async () => {
+    const before = await tid("sequence-window").boundingBox();
+    await page.mouse.move(before.x + 200, before.y + 12);
+    await page.mouse.down();
+    await page.mouse.move(before.x + 580, before.y + 62, { steps: 4 });
+    await page.mouse.up();
+    const after = await tid("sequence-window").boundingBox();
+    expect(after.x === before.x + 380 && after.y === before.y + 50, "the sequence window is dragged by its title bar");
+  };
+  const gantry = await page.evaluate(() => window.__pyrpApp.useApp.getState().state.plan.gantry_angles);
+  const tabs = await tid("sequence-window").locator(".sequence-tabs .tab").allTextContents();
+  expect(tabs.length === gantry.length && tabs[0] === `Beam 0 (${gantry[0]}°)`, `Run Sequencing opens the sequence window with a tab per beam (${tabs.join(", ")})`);
+  expect(/^Sequencer: siochi \(\d+ levels\)$/.test((await tid("sequence-sequencer").textContent()) ?? ""), "sequencer and levels in the header");
+  const viewOptions = async () => [
+    await tid("sequence-coordinate").inputValue(),
+    await tid("sequence-fluence").inputValue(),
+    await tid("sequence-mlcBorders").isChecked(),
+    await tid("sequence-target").isChecked(),
+    await tid("sequence-bixelGrid").isChecked(),
+  ];
+  expect((await viewOptions()).join() === "leaf_num,delivered,true,true,false", "view options start at the Qt defaults");
+  const shapes = Number(await tid("sequence-beam-0").getAttribute("data-shapes"));
+  const shapeLabel = async (beam = 0) => (await tid(`sequence-beam-${beam}-label`).textContent()) ?? "";
+  expect(shapes > 1 && (await shapeLabel()) === `1 / ${shapes}` && (await tid("sequence-beam-0").getAttribute("data-fluence")) === "true", `beam 0 shows shape 1 of ${shapes} next to its fluence`);
+  await shot("sequence-window", tid("sequence-window"));
+  await tid("sequence-beam-0-slider").fill("2");
+  expect((await shapeLabel()) === `3 / ${shapes}` && (await tid("sequence-beam-0-canvas").getAttribute("data-shape")) === "2", "the slider selects the shape");
+  await tid("sequence-coordinate").selectOption("physical");
+  await tid("sequence-fluence").selectOption("difference");
+  await tid("sequence-bixelGrid").check();
+  await shot("sequence-window-difference", tid("sequence-window"));
+
+  // Playback: dwell by weight, stops on the last shape without Loop, wraps with it.
+  await fillSpin("sequence-beam-0-speed", "10");
+  await tid("sequence-beam-0-loop").uncheck();
+  await tid("sequence-beam-0-play").click();
+  expect((await tid("sequence-beam-0-play").textContent()) === "Pause", "Play turns into Pause");
+  await page.waitForFunction(() => document.querySelector('[data-testid="sequence-beam-0-play"]')?.textContent === "Play");
+  expect((await shapeLabel()) === `${shapes} / ${shapes}`, "playback without Loop stops on the last shape");
+  await tid("sequence-beam-0-loop").check();
+  await tid("sequence-beam-0-play").click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="sequence-beam-0-label"]')?.textContent?.startsWith("1 /"));
+  await tid("sequence-beam-0-play").click();
+  expect((await tid("sequence-beam-0-play").textContent()) === "Play", "Loop wraps to the first shape; Pause stops");
+
+  // Every beam keeps its own player; Show Sequence selects the beam of the shown per-beam quantity.
+  await tid("sequence-tab-1").click();
+  expect((await tid("sequence-beam-1").isVisible()) && !(await tid("sequence-beam-0").isVisible()) && (await shapeLabel(1)).startsWith("1 /"), "the second beam's tab has its own player");
+  await tid("sequence-close").click();
+  expect((await tid("sequence-window").count()) === 0 && (await tid("btn-sequence-view").isEnabled()), "the window closes; Show Sequence stays enabled");
+  await page.evaluate(async () => (await import("/src/store/revisions.ts")).selectQuantity("physical_dose_beam 2"));
+  await tid("btn-sequence-view").click();
+  await sequenceLoaded();
+  expect(((await tid("sequence-tab-2").getAttribute("class")) ?? "").includes("active"), "Show Sequence opens on the beam of the shown per-beam quantity");
+  expect((await viewOptions()).join() === "leaf_num,delivered,true,true,false", "a reopened window starts at the defaults");
+  await page.evaluate(async () => (await import("/src/store/revisions.ts")).selectQuantity("physical_dose"));
+
+  // A new sequencing run refreshes the open window and resets its view options.
+  await tid("sequence-fluence").selectOption("optimized");
+  await tid("sequence-beam-2-slider").fill("1");
+  await dragSequenceWindow();
+  await tid("btn-sequence").click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="sequence-fluence"]')?.value === "delivered");
+  await waitIdle();
+  expect(((await tid("sequence-tab-0").getAttribute("class")) ?? "").includes("active") && (await shapeLabel()).startsWith("1 /"), "a new sequence starts on its first beam and shape");
+  await tid("sequence-close").click();
   const sequencedGroups = await tid("quantity-select-group").locator("option").allTextContents();
   expect(sequencedGroups.join() === "dose,dose (sequenced)", `sequenced dose listed in the quantity selector (${sequencedGroups.join(", ")})`);
   const sequencedPlan = await page.evaluate(async () => (await import("/src/store/planSlice.ts")).usePlanStore.getState().detail?.sequencing?.sequencer);
@@ -313,6 +385,19 @@ try {
   await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "physical_dose_sequenced");
   await shot("sequenced");
   expect((await tid("dot-result").getAttribute("data-status")) === "done", "result stays up to date after sequencing");
+
+  // The window belongs to the sequence: a new optimization (a result without one) closes it.
+  await tid("btn-sequence-view").click();
+  await sequenceLoaded();
+  await page.evaluate(async () => (await import("/src/theme.ts")).setDarkMode(true));
+  await shot("sequence-window-dark", tid("sequence-window"));
+  await page.evaluate(async () => (await import("/src/theme.ts")).setDarkMode(false));
+  await dragSequenceWindow();
+  await tid("btn-optimize").click();
+  await waitIdle();
+  await page.waitForFunction(() => document.querySelector('[data-testid="dot-result"]')?.getAttribute("data-status") === "done");
+  await tid("opt-close").click();
+  expect((await tid("sequence-window").count()) === 0 && (await tid("btn-sequence-view").isDisabled()), "a result without a sequence closes the window and disables Show Sequence");
 
   if (problems.length) throw new Error(`browser reported problems:\n${problems.join("\n")}`);
   console.log("plan e2e passed");

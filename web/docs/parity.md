@@ -207,7 +207,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Calc. Dose Influence (pending-edit check, bio-model check dialog, always generates the stf again; v1 amendment 20) | `:291,1199-1220` | verified on Pyodide | done | `workflow.calc_dose_influence` |
 | Load Dij (stf + dij from .mat; warns when the file has no dij) | `:292,1014-1035` | verified on Pyodide | impl | `data.load_dij` |
 | Optimize (pending-edit check, biological-objective check, opens the status window) | `:293,1268-1316` | verified on Pyodide | impl (status window) | `workflow.optimize`, `progress` events |
-| Run Sequencing (photon plan with sequencing enabled, dose influence and a current result; tooltip gives the reason while disabled; replaces the active result, adding the sequence and the `_sequenced` doses) | `_on_sequence`, `_update_button_states` | verified on Pyodide (the pending-edit check: mock e2e) | impl (pending-edit check; no sequence window yet, see Show Sequence) | `workflow.sequence`, `state.sequencing` |
+| Run Sequencing (photon plan with sequencing enabled, dose influence and a current result; tooltip gives the reason while disabled; replaces the active result, adding the sequence and the `_sequenced` doses) | `_on_sequence`, `_update_button_states` | verified on Pyodide (the pending-edit check: mock e2e) | impl (pending-edit check; the sequence window opens after the run, see Show Sequence) | `workflow.sequence`, `state.sequencing` |
 | Recalculate Dose (weights, angle match, bio check, moves beams to iso) | `:294,1333-1402` | done (mock e2e) | done | `workflow.recalc` |
 | Snapshot Result (name prompt, default "<mode>_<n>fx", sanitized; a result of its own, the name of the active result is refused) | `:295-300,1408-1442` | verified on Pyodide | impl | `workflow.snapshot` |
 | Warnings collected during a run, shown once afterwards | `:699-702` | verified on Pyodide | frontend: dialog with the run's `log` warnings | `log` events |
@@ -388,7 +388,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | Overlay quantity selector (two combos: quantity group incl. the groups of further results, component full / beam i / scenario i: label of the group's own result; scenario components after a robust optimization verified on Pyodide with a worst-case grid plan) | `:117-126`, `widgets/_quantity_selector.py:20-188` | verified on Pyodide | impl | `state.results`, `view.volume` (component keys) |
 | Set isolines dialog (OK / Cancel / Reset; says "(Gy)") | `:130-132,167-199` | done (mock e2e) | done | – |
 | Recenter | `:134-136` | done (mock e2e) | done | – |
-| Show Sequence → sequence window (per beam: MLC shapes of the delivered segments, playback, fluence delivered / optimized / difference, overlays) | `result/visualization_widget.py`, `result/aperture_widget.py`, `windows/_sequence_win.py` | **gap**: not available (no view method for sequences yet) | impl (backend and frontend open) | – |
+| Show Sequence → sequence window "pyRadPlan Sequence Viewer" (enabled while the active result has a sequence; opened by Run Sequencing too; header with sequencer and levels, stacking axis leaf pair # / physical; one tab per beam with its own player: aperture shaded by weight, shape slider, Play / Pause with dwell by weight, speed, Loop; fluence delivered / optimized / difference with colorbar; overlays MLC boundaries, target outline with colour, bixel grid; opens on the beam of the shown per-beam quantity) | `result/visualization_widget.py`, `_result_widget.py:_on_show_sequence`, `result/aperture_widget.py`, `windows/_sequence_win.py`, `visualization/_plot_aperture_info.py` | verified on Pyodide for a one-beam plan (opened by the run, tab and header, the first shape next to the fluence, `view.sequence` data: shapes, both fluence maps with empty bixels, target, and the delivered map equal to the sum of the shapes with row 0 at the lowest leaf pair; slider, physical axis, difference, bixel grid, close and reopen). Mock e2e only: several beam tabs with their own players, the beam of the per-beam quantity, playback (Play / Pause, speed, Loop), refresh with reset options after a new run, closing with the result, dragging, dark mode | impl (a floating window inside the page drawn on a canvas, not matplotlib: ticks and fonts differ; the window follows the active result by itself: it refetches when the result changes, resetting the view options, and closes when the result has no sequence, where Qt keeps showing the old sequence until Show Sequence is clicked again; the target colour uses the browser's colour input; in leaf pair mode the target outline is the mm contour mapped onto the leaf-pair axis instead of a contour of re-binned points, so its steps differ slightly; a speed change restarts the current dwell) | `view.sequence`, `state.sequencing.sequenced` |
 | Show DVH / QI → analysis window | `:145-149`, `_result_widget.py:861-887` | verified on Pyodide | impl (see Analysis) | `analysis.*` |
 | Default quantity after each result change (rbe_x_dose > physical_dose > first) | `_result_widget.py:62-74,553-556` | verified on Pyodide | done | `state.results.default` |
 
@@ -600,12 +600,12 @@ Methods: `plan.get {detail}`, `plan.options`, `plan.form`, `plan.set` (v1), `pla
 
 Components: `SliceViewer.tsx` + renderer (beams overlay and drag, pending beams, orientation
 mannequin, compact masks), `VisualizationWidget.tsx` (beams toggle, quantity selector),
-`QuantitySelector.tsx` (new), `StructureVisibility.tsx` (overlap grouping, tooltips, colour pick,
+`sequence/SequenceWindow.tsx` (sequence viewer), `QuantitySelector.tsx` (new), `StructureVisibility.tsx` (overlap grouping, tooltips, colour pick,
 Edit VOI dialog `vois/EditVoiDialog.tsx` embedding A's tissue single-row mode), `analysis/AnalysisWindow.tsx`
 (replaces `DvhDialog.tsx`: DVH plot, QI table, QI point dialog, gamma placeholder),
 `store/revisions.ts`.
 Methods: `view.volume` (v1 encodings and component keys), `view.structure_masks` (v1 encodings),
-`view.beams`, `cst.get`, `cst.update_structure`, `analysis.dvh` (v1), `analysis.qi`,
+`view.beams`, `view.sequence`, `cst.get`, `cst.update_structure`, `analysis.dvh` (v1), `analysis.qi`,
 `analysis.compare_units`, `state.results`, `state.revisions`, `workflow.snapshot` (the Snapshot
 Result button lives in the workflow widget but its data model is B's; B adds the button handler in
 `results/snapshot.ts`, C only wires the button).

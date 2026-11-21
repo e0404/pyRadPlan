@@ -151,6 +151,57 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
   { v: 1, method: "analysis.dvh", params: { range: "shared" } },
   { v: 1, method: "analysis.qi", params: { quantity: "physical_dose" } },
   { v: 1, method: "analysis.compare_units", params: { a: "physical_dose", b: "physical_dose" } },
+  // Sequencing (amendments 27 and 28): settings, the run on the active result, its sequence view.
+  { v: 1, method: "plan.form", params: { kind: "sequencer", name: "xia" }, expect: (r) => has(r, "fields", "values") },
+  {
+    v: 1,
+    method: "view.sequence",
+    note: "no sequence before sequencing",
+    expectError: { type: "PreconditionError", code: "no_sequence" },
+  },
+  {
+    v: 1,
+    method: "plan.set",
+    note: "sequencing settings outdate no stage",
+    params: { sequencing: { run: true, sequencer: "xia", values: { num_of_levels: 3 } } },
+    expect: (r) =>
+      (r.sequencing.available && !r.sequencing.sequenced && r.stages.optimization === "done") ||
+      JSON.stringify([r.sequencing, r.stages]),
+  },
+  {
+    v: 1,
+    method: "workflow.sequence",
+    expect: (r) =>
+      (r.sequencing.sequenced && r.quantities.includes("physical_dose_sequenced")) ||
+      JSON.stringify([r.sequencing, r.quantities]),
+  },
+  {
+    v: 1,
+    method: "view.sequence",
+    expect: (r, resp) => {
+      const bad = r.beams.filter((beam) => {
+        const map = beam.fluence?.delivered;
+        return !(
+          beam.shapes.length &&
+          beam.weights.length === beam.shapes.length &&
+          map &&
+          resp.buffers[map.$array]?.nbytes === 4 * prod(map.shape) &&
+          beam.target?.mask
+        );
+      });
+      return (
+        (r.sequencer === "xia" && r.num_of_levels === 3 && r.beams.length === PLAN.gantry_angles.length && !bad.length) ||
+        `${r.sequencer}, ${r.num_of_levels} levels, ${r.beams.length} beams, incomplete: ${bad.map((b) => b.label)}`
+      );
+    },
+  },
+  {
+    v: 1,
+    method: "plan.set",
+    note: "sequencing off again for the entries below",
+    params: { sequencing: { run: false, sequencer: null } },
+    expect: (r) => !r.sequencing.available || JSON.stringify(r.sequencing),
+  },
   {
     v: 1,
     method: "data.load_file",

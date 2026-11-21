@@ -21,6 +21,7 @@ import {
 import { ndarray } from "../api/codec";
 import { viewerSliceInitial, type ViewerSlice } from "./viewerSlice";
 import { scheduleViewSync, syncViews } from "./revisions";
+import { beamOfQuantity } from "../components/sequence/sequenceModel";
 import { DEFAULT_VIEW, voxelToWorld, type Plane, type PlaneConvention, type ViewState } from "../renderer/geometry";
 
 export interface LogEntry {
@@ -317,6 +318,13 @@ export function targetCenter(masks: StructureMasks | null, state: SessionState |
 // Actions
 // ---------------------------------------------------------------------------
 
+/** Qt `_on_show_sequence`: open the sequence window on the beam of the shown per-beam quantity. */
+export function showSequence(): void {
+  const { state, viewer, info } = get();
+  if (!state?.sequencing?.sequenced || (info?.methods && !info.methods.includes("view.sequence"))) return;
+  set({ sequenceOpen: true, sequenceBeam: { beam: beamOfQuantity(viewer.activeQuantity), revision: state.revisions?.workspace.result } });
+}
+
 export const actions = {
   loadPhantom: (name: string) => run(`Loading ${name}`, "data.load_phantom", { name }, "data"),
 
@@ -331,7 +339,12 @@ export const actions = {
   calcDoseInfluence: () => run("Dose influence calculation", "workflow.calc_dose_influence", {}, "none"),
   optimize: (params: ParamsOf<"workflow.optimize"> = {}) => run("Optimization", "workflow.optimize", params, "result"),
   recalc: () => run("Dose recalculation", "workflow.recalc", {}, "result"),
-  sequence: () => run("Sequencing", "workflow.sequence", {}, "result"),
+  /** As Qt: running sequencing is a request to see the delivery sequence. */
+  async sequence(): Promise<boolean> {
+    const done = await run("Sequencing", "workflow.sequence", {}, "result");
+    if (done) showSequence();
+    return done;
+  },
   runAll: () => run("Running all steps", "workflow.run_all", {}, "result"),
 
   async refresh(): Promise<void> {

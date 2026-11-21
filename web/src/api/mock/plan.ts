@@ -695,7 +695,7 @@ function sequence(ctx: MockContext, s: MockSession): Promise<SessionState> {
     }
     ctx.progress(s, "Sequencing", 1);
     // Fewer levels deliver the optimized fluence less closely.
-    const added = addMockSequencedQuantities(s, 1 - 0.1 / levels);
+    const added = addMockSequencedQuantities(s, 1 - 0.1 / levels, { sequencer, levels });
     ctx.touch(s, "optimization");
     ctx.log(s, "info", `Sequencing finished: ${added.filter((key) => !key.includes(" ")).join(", ")}`);
     return ctx.publish(s);
