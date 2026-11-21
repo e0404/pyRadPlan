@@ -789,8 +789,6 @@ def _plan_fields(locked: set[str], default_plan: Mapping[str, Any]) -> list[dict
             choices=[{"value": "auto", "label": "auto"}],
             **off,
         ),  # fmt: skip
-        field("run_sequencing", "Run sequencing", "bool", default=False, **off),
-        field("sequencing_levels", "Levels", "int", default=7, min=1, max=100, **off),
         field("run_dao", "Run DAO", "bool", default=False, **off),
         field("conformal", "3D conformal", "bool", default=False, **off),
     ]

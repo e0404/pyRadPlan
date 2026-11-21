@@ -485,8 +485,9 @@ scenario model keeps the plan's instance.
 advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 `dose_grid_resolution` (`number_list` length 3, 0.1..50 mm, `editable` per profile),
 `gantry_angles` and `couch_angles` (`number_list`), `iso_center` (`number_list` length 3,
-`nullable` = Auto), and the disabled Qt fields `optimized_quantity` and the four sequencing fields
-(`editable: false`, `reason: "not yet implemented"`).
+`nullable` = Auto), and the disabled Qt fields `optimized_quantity`, `run_dao` and `conformal`
+(`editable: false`, `reason: "not yet implemented"`). Sequencing is set with `sequencing`
+(amendment 27), not with a field.
 
 ### Structures, tissues and objectives
 

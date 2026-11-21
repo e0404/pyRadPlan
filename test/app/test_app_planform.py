@@ -70,7 +70,8 @@ def test_plan_options_list_the_registries(web_client):
     assert options["beam_presets"] and options["beam_presets"][0]["typical"]
     fields = {f["name"]: f for f in options["fields"]}
     assert fields["num_of_fractions"]["min"] == 1 and fields["num_of_fractions"]["advanced"]
-    assert fields["run_sequencing"]["editable"] is False
+    assert fields["run_dao"]["editable"] is False
+    assert "run_sequencing" not in fields
 
     protons = web_client.ok("plan.options", {"radiation_mode": "protons"})["result"]
     assert json.loads(protons["default_bio_model"])["model"] == "constant_rbe"

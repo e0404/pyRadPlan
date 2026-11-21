@@ -111,6 +111,8 @@ class Sequencer(ConfigurableAlgorithm, ABC):
                     f"but you are using '{self.short_name}'!"
                 )
             prop_dict.pop("sequencer", None)
+            # Whether to sequence is a setting of the plan, not of the sequencer
+            prop_dict.pop("run_sequencing", None)
             if "sequencing_level" in prop_dict:
                 self.num_of_levels = prop_dict.pop("sequencing_level")
             elif "sequencingLevel" in prop_dict:
@@ -122,7 +124,7 @@ class Sequencer(ConfigurableAlgorithm, ABC):
 
         # Set up warning message
         if warn_when_property_changed:
-            warning_msg = "Property in Dose Engine overwritten from pln.prop_seq"
+            warning_msg = "Property in Sequencer overwritten from pln.prop_seq"
         else:
             warning_msg = None
 
