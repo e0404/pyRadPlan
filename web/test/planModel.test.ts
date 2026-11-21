@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlanSummary } from "../src/api/protocol";
-import type { PlanDetail, PlanOptions } from "../src/api/protocol/plan";
+import type { PlanDetail, PlanOptions, TissueOp } from "../src/api/protocol/plan";
 import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity } from "../src/components/objectives/objectivesModel";
 import {
   applyBioSelection,
@@ -15,8 +15,7 @@ import {
   planSetParams,
   syncedCouch,
 } from "../src/components/plan/planModel";
-import { isUnappliedPick, pickComboOptions, tissueForModel } from "../src/components/plan/TissueDialog";
-import { withModel, withoutIdentity } from "../src/components/plan/tissueDraft";
+import { evaluationQueue, isUnappliedPick, pickComboOptions, tissueForModel } from "../src/components/plan/TissueDialog";import { withModel, withoutIdentity } from "../src/components/plan/tissueDraft";
 import { sameTissue } from "../src/components/vois/EditVoiDialog";
 import type { TissueDraft } from "../src/api/protocol";
 import { formatSummary, logAxis, pyExp } from "../src/components/optimization/StatusWindow";
@@ -267,6 +266,53 @@ describe("status window", () => {
     expect(axis.min).toBe(0);
     expect(axis.max).toBe(4);
     expect(axis.ticks.filter((t) => t.major).map((t) => t.label)).toEqual(["1", "10", "100", "1000", "10000"]);
+  });
+});
+
+describe("tissue evaluation queue", () => {
+  type Params = { op?: TissueOp; alpha: number };
+  const setup = () => {
+    const pending: Array<{ params: Params; resolve: (alpha: number) => void }> = [];
+    const applied: string[] = [];
+    const queue = evaluationQueue<Params, number>(
+      (params) => new Promise((resolve) => pending.push({ params, resolve })),
+      (alpha, params) => applied.push(`${params.op ?? "-"}:${alpha}`),
+      () => undefined,
+      150,
+    );
+    return { queue, pending, applied };
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops an edit scheduled before an operation, whose rows already hold the edit", async () => {
+    vi.useFakeTimers();
+    const { queue, pending, applied } = setup();
+    queue.schedule({ op: "none", alpha: 0.77 });
+    const op = queue.run({ op: "apply_pick", alpha: 0.77 });
+    pending[0].resolve(0.1);
+    await op;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(pending.map((p) => p.params.op)).toEqual(["apply_pick"]);
+    expect(applied).toEqual(["apply_pick:0.1"]);
+  });
+
+  it("applies an operation's result but no outdated edit evaluation", async () => {
+    vi.useFakeTimers();
+    const { queue, pending, applied } = setup();
+    queue.schedule({ op: "none", alpha: 0.5 });
+    await vi.advanceTimersByTimeAsync(150);
+    const op = queue.run({ op: "apply_pick", alpha: 0.5 });
+    queue.schedule({ op: "none", alpha: 0.6 });
+    await vi.advanceTimersByTimeAsync(150);
+    pending[1].resolve(0.1);
+    await op;
+    pending[2].resolve(0.6);
+    pending[0].resolve(0.5);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(applied).toEqual(["apply_pick:0.1", "none:0.6"]);
   });
 });
 
