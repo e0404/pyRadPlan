@@ -241,8 +241,8 @@ def test_target_outline_maps_onto_the_leaf_pair_axis(qapp):
     np.testing.assert_allclose(widget._target_points_for_axis(0)[:, 1], boundaries[:2])
 
     widget.set_leaf_coordinate("leaf_num")
-    # Rows are labelled 1..N ascending in z, matching _leaf_row_bounds.
-    np.testing.assert_allclose(widget._target_points_for_axis(0)[:, 1], [1.0, 2.0])
+    # Row n is drawn from n - 0.5 to n + 0.5 (_leaf_row_bounds): these are lower row edges
+    np.testing.assert_allclose(widget._target_points_for_axis(0)[:, 1], [0.5, 1.5])
 
 
 def test_target_color_is_configurable(qapp):

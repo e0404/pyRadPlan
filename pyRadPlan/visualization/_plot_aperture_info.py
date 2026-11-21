@@ -85,7 +85,8 @@ def _leaf_num_points(points: np.ndarray, mlc: MLC) -> np.ndarray:
     boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
     if boundaries.size == 0 or not mlc.leaf_width:
         return points
-    rows = 1.0 + (points[:, 1] - boundaries[0]) / mlc.leaf_width
+    # Row n is drawn from n - 0.5 to n + 0.5, so the lower edge of the first row is 0.5
+    rows = 0.5 + (points[:, 1] - boundaries[0]) / mlc.leaf_width
     return np.column_stack((points[:, 0], rows))
 
 

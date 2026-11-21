@@ -15,6 +15,8 @@ from pyRadPlan.stf._beamlet import PhotonBixel
 from pyRadPlan.visualization._plot_aperture_info import (
     _draw_mlc_borders,
     _draw_target_outline,
+    _leaf_num_points,
+    _leaf_row_bounds,
 )
 from pyRadPlan.sequencing._bev import target_bev_points
 
@@ -306,3 +308,13 @@ def test_dose_comparison_names_available_quantities_when_delivered_dose_missing(
             image_volume=ct,
             show_plot=False,
         )
+
+
+def test_leaf_num_points_put_a_leaf_edge_on_the_edge_of_its_drawn_row():
+    mlc = _make_mlc(leaf_width=10.0, opening=5.0)
+    low, high = _leaf_row_bounds(mlc, "leaf_num")
+    boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
+    edges = np.column_stack((np.zeros(len(boundaries)), boundaries))
+
+    np.testing.assert_allclose(_leaf_num_points(edges, mlc)[:, 1], low)
+    np.testing.assert_allclose(_leaf_num_points(edges + [0.0, 10.0], mlc)[:, 1], high)
