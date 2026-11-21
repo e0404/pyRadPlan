@@ -25,6 +25,7 @@ from pyRadPlan.core import (
 
 from ._plan import DEFAULT_PLAN, build_plan, plan_summary
 from ._profiles import running_in_pyodide
+from ._sequence_view import has_sequence, sequence_view
 from ._session_editors import SessionEditorsMixin
 from ._stages import (
     StageTracker,
@@ -503,7 +504,11 @@ class Session(SessionEditorsMixin):
         }
         blocker = self._busy.label + " is still running" if self._busy else None
         blocker = blocker or _derived(self.sequencing_blocker, "Sequencing is not available.")
-        state["sequencing"] = {"available": blocker is None, "reason": blocker}
+        state["sequencing"] = {
+            "available": blocker is None,
+            "reason": blocker,
+            "sequenced": _derived(lambda: has_sequence(ws.result), False),
+        }
         return self._editors_state(state)
 
     # ------------------------------------------------------------------
@@ -1120,6 +1125,13 @@ class Session(SessionEditorsMixin):
     ) -> dict[str, Any]:
         """Cumulative DVHs of the structures for a result quantity."""
         return self.views.dvh(quantity, names, num_points)
+
+    def sequence_view(self) -> dict[str, Any]:
+        """Return the delivery sequence of the active result, as a sequence viewer draws it."""
+        ws = self.workspace
+        if not has_sequence(ws.result):
+            raise PreconditionError("The active result has no delivery sequence.", "no_sequence")
+        return sequence_view(ws.result, ws.stf, ws.ct, ws.cst)
 
     # ------------------------------------------------------------------
 

@@ -30,8 +30,8 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import SteeringInformation
+from pyRadPlan.sequencing._bev import beam_label, native_fluence_map, target_bev_points
 from pyRadPlan.visualization._plot_aperture_info import (
-    _beam_label,
     _draw_aperture,
     _draw_bixel_grid,
     _draw_fluence_axis,
@@ -39,8 +39,6 @@ from pyRadPlan.visualization._plot_aperture_info import (
     _draw_mlc_borders,
     _draw_target_outline,
     _leaf_num_points,
-    _native_fluence_map,
-    _target_bev_points,
     _weight_color,
 )
 
@@ -171,7 +169,7 @@ class BeamApertureWidget(QWidget):
         for mode, values in (("optimized", optimized_fluence), ("delivered", delivered_fluence)):
             if values is None:
                 continue
-            grids[mode], window = _native_fluence_map(
+            grids[mode], window = native_fluence_map(
                 beam_geometry, np.asarray(values)[self.beam.bixel_ix], device_orientation
             )
 
@@ -189,7 +187,7 @@ class BeamApertureWidget(QWidget):
             return None
         try:
             self._target_resolution = max(float(v) for v in ct.resolution.values())
-            return _target_bev_points(
+            return target_bev_points(
                 ct, cst, beam_geometry, self.beam.mlc_sequence[0].device_orientation
             )
         except Exception:  # noqa: BLE001 - an un-projectable target must not break the viewer
@@ -502,7 +500,7 @@ class ApertureViewerWidget(QWidget):
 
         delivered = sequence.fluence
         for beam_ix, beam in enumerate(sequence.beam):
-            label = _beam_label(beam_ix, stf)
+            label = beam_label(beam_ix, stf)
             widget = BeamApertureWidget(
                 beam,
                 label,

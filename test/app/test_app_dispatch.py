@@ -29,6 +29,7 @@ def test_protocol_methods_are_registered():
         "workflow.run_all",
         "view.volume",
         "view.structure_masks",
+        "view.sequence",
         "analysis.dvh",
     }
     assert expected <= set(available_methods())

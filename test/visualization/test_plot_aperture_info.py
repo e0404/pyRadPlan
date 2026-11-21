@@ -15,8 +15,8 @@ from pyRadPlan.stf._beamlet import PhotonBixel
 from pyRadPlan.visualization._plot_aperture_info import (
     _draw_mlc_borders,
     _draw_target_outline,
-    _target_bev_points,
 )
+from pyRadPlan.sequencing._bev import target_bev_points
 
 matplotlib.use("Agg")
 
@@ -267,7 +267,7 @@ def test_target_bev_points_projects_target_onto_its_own_isocenter(test_data_phot
     center_of_mass = np.asarray(cst.target_center_of_mass()).ravel()
 
     beam = Beam(iso_center=center_of_mass.tolist(), bixel_width=5.0, rays=[])
-    points = _target_bev_points(ct, cst, beam, "X")
+    points = target_bev_points(ct, cst, beam, "X")
 
     assert points is not None
     assert points.ndim == 2 and points.shape[1] == 2
@@ -284,7 +284,7 @@ def test_target_bev_points_returns_none_without_target(test_data_photons_raw):
     ct = CT(cube_hu=sitk.Image(4, 4, 4, sitk.sitkFloat32))
     beam = Beam(iso_center=[0.0, 0.0, 0.0], bixel_width=5.0, rays=[])
 
-    assert _target_bev_points(ct, _NoTargetCst(), beam, "X") is None
+    assert target_bev_points(ct, _NoTargetCst(), beam, "X") is None
 
 
 def test_dose_comparison_names_available_quantities_when_delivered_dose_missing(

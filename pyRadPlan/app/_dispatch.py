@@ -382,6 +382,11 @@ def _view_beams(session: Session, draft: Optional[dict] = None) -> dict:
     return beam_geometry(ws.pln, ws.stf, ws.cst, draft)
 
 
+@method("view.sequence")
+def _view_sequence(session: Session) -> dict:
+    return session.sequence_view()
+
+
 @method("analysis.qi")
 def _analysis_qi(
     session: Session,

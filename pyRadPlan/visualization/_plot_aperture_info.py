@@ -7,20 +7,18 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.gridspec import GridSpec
 
-from scipy import ndimage
-
-from pyRadPlan.core import np2sitk
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
-from pyRadPlan.geometry import lps
 from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
-from pyRadPlan.stf import Beam, SteeringInformation, validate_stf
-from pyRadPlan.visualization._plot_dose_comparison import (
-    _beam_label,
-    _draw_dose_comparison_panels,
+from pyRadPlan.sequencing._bev import (
+    beam_label,
+    native_fluence_map,
+    target_outline_mask,
 )
+from pyRadPlan.stf import SteeringInformation, validate_stf
+from pyRadPlan.visualization._plot_dose_comparison import _draw_dose_comparison_panels
 
 
 def _leaf_row_bounds(mlc: MLC, leaf_coordinate: str) -> tuple[np.ndarray, np.ndarray]:
@@ -82,48 +80,6 @@ def _draw_aperture(ax: plt.Axes, mlc: MLC, mlc_window: list[float], leaf_coordin
     ax.set_ylabel("vert. pos. [mm]" if leaf_coordinate == "physical" else "leaf pair #")
 
 
-def _target_bev_points(
-    ct: CT, cst: StructureSet, beam: Beam, device_orientation: str
-) -> Optional[np.ndarray]:
-    """Project the target volume into *beam*'s isocenter (beam's-eye-view) plane.
-
-    Parameters
-    ----------
-    ct : CT
-        Provides the grid the target voxel indices refer to.
-    cst : StructureSet
-        Supplies the target volume (union of all TARGET VOIs).
-    beam : Beam
-        Steering-information beam, for its geometry (angles, isocenter, SAD).
-    device_orientation : str
-        "X" or "Y", from the corresponding ``MLC.device_orientation``.
-
-    Returns
-    -------
-    np.ndarray or None
-        ``(N, 2)`` array of (horizontal, vertical) positions in mm, on the same
-        axes as :func:`_native_fluence_map`'s window, or ``None`` when the
-        structure set holds no target.
-    """
-    mask = cst.target_union_mask()
-    if mask is None:
-        return None
-    voxels = np2sitk.sitk_mask_to_linear_indices(mask, order="numpy")
-    if voxels is None or np.size(voxels) == 0:
-        return None
-
-    coords = np2sitk.linear_indices_to_grid_coordinates(voxels, ct.grid, index_type="numpy").T
-    iso_center = np.asarray(beam.iso_center, dtype=float).reshape((3, 1))
-    rotation_t = lps.get_beam_rotation_matrix(beam.gantry_angle, beam.couch_angle).transpose()
-
-    bev = rotation_t @ (coords - iso_center)
-    # Divergent projection onto the isocenter plane; axis 1 is the beam's own axis.
-    bev = beam.sad * bev / (beam.sad + bev[1, :])
-
-    travel_axis, stack_axis = (0, 2) if device_orientation == "X" else (2, 0)
-    return np.column_stack((bev[travel_axis, :], bev[stack_axis, :]))
-
-
 def _leaf_num_points(points: np.ndarray, mlc: MLC) -> np.ndarray:
     """Map BEV points' vertical coordinate from mm onto the leaf-pair index axis."""
     boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
@@ -146,7 +102,7 @@ def _draw_bixel_grid(
     ----------
     window : list[float]
         ``[travel_min, travel_max, stack_min, stack_max]`` in mm, as returned by
-        :func:`_native_fluence_map` (already the bixel *boundaries*).
+        :func:`native_fluence_map` (already the bixel *boundaries*).
     vertical : np.ndarray, optional
         Pre-transformed vertical line positions, for an axis that is not in mm
         (e.g. the leaf-pair index). Defaults to the window's own mm positions.
@@ -179,25 +135,14 @@ def _draw_target_outline(
         horizontally but leaf-pair index vertically). Must be at least the
         projected voxel spacing on each axis.
     """
-    if points is None or len(points) == 0:
+    outline = target_outline_mask(points, resolution)
+    if outline is None:
         return
-
-    res_x, res_y = resolution if isinstance(resolution, tuple) else (resolution, resolution)
-    res_x, res_y = max(float(res_x), 1e-3), max(float(res_y), 1e-3)
-    x, y = points[:, 0], points[:, 1]
-    x_edges = np.arange(x.min() - res_x, x.max() + 2 * res_x, res_x)
-    y_edges = np.arange(y.min() - res_y, y.max() + 2 * res_y, res_y)
-    if x_edges.size < 2 or y_edges.size < 2:
-        return
-
-    hist, _, _ = np.histogram2d(x, y, bins=(x_edges, y_edges))
-    occupied = hist.T > 0
-    occupied = ndimage.binary_closing(occupied, structure=np.ones((3, 3)))
-    occupied = ndimage.binary_fill_holes(occupied)
+    x_centers, y_centers, occupied = outline
 
     ax.contour(
-        0.5 * (x_edges[:-1] + x_edges[1:]),
-        0.5 * (y_edges[:-1] + y_edges[1:]),
+        x_centers,
+        y_centers,
         occupied.astype(float),
         levels=[0.5],
         colors=color,
@@ -275,49 +220,6 @@ def _comparison_layout(show_fluence: bool, show_dose: bool) -> dict:
     }
 
 
-def _native_fluence_map(beam: Beam, values: np.ndarray, device_orientation: str) -> tuple:
-    """Scatter one beam's per-ray fluence values onto a dense 2D BEV grid.
-
-    Parameters
-    ----------
-    beam : Beam
-        The steering-information beam (for ray positions and bixel width).
-    values : np.ndarray
-        Per-ray fluence values for this beam, in ray order.
-    device_orientation : str
-        "X" or "Y", from the corresponding ``MLC.device_orientation``.
-
-    Returns
-    -------
-    tuple
-        ``(grid, window)``: ``grid`` is a ``(dim_stack, dim_travel)`` array (``nan``
-        where no ray exists) and ``window`` is
-        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, matching ``mlc_window``.
-    """
-    travel_axis, stack_axis = (0, 2) if device_orientation == "X" else (2, 0)
-    travel_pos = np.array([ray.ray_pos_bev[travel_axis] for ray in beam.rays])
-    stack_pos = np.array([ray.ray_pos_bev[stack_axis] for ray in beam.rays])
-    bw = beam.bixel_width
-
-    min_travel, max_travel = travel_pos.min(), travel_pos.max()
-    min_stack, max_stack = stack_pos.min(), stack_pos.max()
-    dim_travel = int((max_travel - min_travel) / bw + 1)
-    dim_stack = int((max_stack - min_stack) / bw + 1)
-
-    grid = np.full((dim_stack, dim_travel), np.nan)
-    travel_idx = ((travel_pos - min_travel) / bw).astype(int)
-    stack_idx = ((stack_pos - min_stack) / bw).astype(int)
-    grid[stack_idx, travel_idx] = values
-
-    window = [
-        min_travel - 0.5 * bw,
-        max_travel + 0.5 * bw,
-        min_stack - 0.5 * bw,
-        max_stack + 0.5 * bw,
-    ]
-    return grid, window
-
-
 def _draw_fluence_axis(
     ax: plt.Axes, fig: Figure, grid: np.ndarray, window: list[float], vmax: float, title: str
 ) -> None:
@@ -363,10 +265,10 @@ def _add_fluence_comparison_row(
 ) -> list[plt.Axes]:
     """Add the target/delivered/difference fluence comparison as one extra GridSpec row."""
     device_orientation = beam.mlc_sequence[0].device_orientation
-    target_grid, window = _native_fluence_map(
+    target_grid, window = native_fluence_map(
         stf.beams[beam_ix], unsequenced_result.fluence[beam.bixel_ix], device_orientation
     )
-    delivered_grid, _ = _native_fluence_map(
+    delivered_grid, _ = native_fluence_map(
         stf.beams[beam_ix], sequence.fluence[beam.bixel_ix], device_orientation
     )
     vmax = max(np.nanmax(target_grid), np.nanmax(delivered_grid))
@@ -451,7 +353,7 @@ def _draw_shape_grid(
     """Draw one beam's MLC shape grid (one subplot per delivered segment) into ``fig``."""
     n_shapes = beam.num_of_shapes
     gs = GridSpec(rows, cols, figure=fig)
-    fig.suptitle(_beam_label(beam_ix, stf))
+    fig.suptitle(beam_label(beam_ix, stf))
 
     created_axes = []
     w_max = float(np.max(beam.shapes_weight)) if n_shapes > 0 else 0.0
@@ -501,7 +403,7 @@ def _draw_comparison_content(  # noqa: PLR0913
     """
     total_rows = int(show_fluence) + int(show_dose)
     gs = GridSpec(total_rows, n_cols, figure=fig)
-    fig.suptitle(f"{_beam_label(beam_ix, stf)} — fluence / dose comparison")
+    fig.suptitle(f"{beam_label(beam_ix, stf)} — fluence / dose comparison")
 
     created_axes = []
     row = 0

@@ -10,19 +10,12 @@ from matplotlib.figure import Figure
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import PlanResult, QuantityDistribution
+from pyRadPlan.sequencing._bev import beam_label
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.visualization._plot_slice import plot_slice, _resolve_view_slices, _validate_inputs
 
 
 _DIFF_CMAP = "RdBu_r"
-
-
-def _beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:
-    if stf is not None and beam_index < len(stf.beams):
-        angle = getattr(stf.beams[beam_index], "gantry_angle", None)
-        if angle is not None:
-            return f"Beam {beam_index} ({float(angle):.0f}°)"
-    return f"Beam {beam_index}"
 
 
 def _beam_filename(save_filename: str, beam_index: int) -> str:
@@ -276,7 +269,7 @@ def plot_dose_comparison(  # noqa: PLR0913
 
     for beam_ix, beam_before, beam_after in beam_doses:
         beam_fig, beam_axes = plt.subplots(1, 3, figsize=(16, 5.5))
-        beam_fig.suptitle(_beam_label(beam_ix, stf))
+        beam_fig.suptitle(beam_label(beam_ix, stf))
         _draw_dose_comparison_panels(list(beam_axes), beam_before, beam_after, **panel_kwargs)
         beam_fig.tight_layout()
         if save_filename is not None:

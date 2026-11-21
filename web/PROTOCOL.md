@@ -540,6 +540,7 @@ doses) is kept. A recalculation keeps nothing of the previous doses of the activ
 | `view.volume` (extended) | read | `{name, phase?, encoding?: "float32" \| "auto"}` | v0 `Volume`; `name` may be any component key; `"auto"` sends the CT as int16 when all values are integral and within int16 (else float32); default `"float32"` (v0) |
 | `view.structure_masks` (extended) | read | `{names?: (string \| number)[], encoding?: "uint8" \| "bits" \| "crops"}` | every mask entry carries `index` (the structure's position). `"uint8"`: v0 plus `index`. `"bits"`: `{grid, encoding: "bits", planes: ArrayRef[], masks: [{name, index, color, plane, bit, num_voxels, bbox}]}`, each plane a `(z, y, x)` uint8 / uint16 / uint32 volume holding up to 32 structures, bit `bit` of plane `plane` set inside the structure. `"crops"`: `{grid, encoding: "crops", masks: [{name, index, color, num_voxels, bbox: [z0, y0, x0, z1, y1, x1] \| null, data: ArrayRef \| null}]}`, the uint8 crop of shape `(z1-z0, y1-y0, x1-x0)` (ends exclusive) |
 | `view.beams` | read | `{draft?: {gantry_angles, couch_angles, iso_center?}}` | `{source: "stf" \| "plan" \| null, iso_centers: Vec3[], beams: [{index, name, label, gantry, couch, iso_center, source_direction, orbit_u?, orbit_w?, orbit_axis?, pending}]}` |
+| `view.sequence` (amendment 28) | read | `{}` | `SequenceView` (below); `PreconditionError(code="no_sequence")` while `sequencing.sequenced` is false |
 
 `view.beams` mirrors `gui/widgets/_result_widget.py:_beam_geometry` in LPS millimetres instead of
 viewer voxels: `source_direction` is the unit vector isocenter → source; `orbit_u` / `orbit_w` are
@@ -772,7 +773,7 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     - `revisions.volumes` is keyed by the same component keys; a snapshot's keys have the
       revisions of the images they share (amendment 14).
 27. 2026-11-20 (sequencing): **added** photon leaf sequencing on the session layer, as the Qt GUI
-    runs it. The frontend of the web version does not use it yet (see `web/docs/parity.md`).
+    runs it.
     - `plan.set {sequencing: {run: boolean, sequencer: string | null, values?: object}}` writes
       the plan's `prop_seq` (`run_sequencing`, `sequencer` and the sequencer's settings);
       `run: false` removes them. Other `prop_seq` entries are kept. An unknown sequencer or
@@ -793,3 +794,44 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     - A `plan.set` that changes only `sequencing` outdates no stage.
     - `"<identifier>_sequenced"` groups in `results.groups` carry the `meta_label` and `unit` of
       their quantity, and the label `"<name> (sequenced)"`.
+28. 2026-11-21 (sequence view): **added** the data of the sequence viewer (Qt: Show Sequence).
+    - `SessionState.sequencing` adds `sequenced: boolean`: the active result carries a delivery
+      sequence.
+    - New method `view.sequence` `{}` -> `SequenceView` (cost: read):
+
+      ```ts
+      SequenceView = {
+        sequencer: string | null;        // short name of the sequencer, e.g. "xia"
+        num_of_levels: number | null;
+        beams: [{
+          index: number;
+          label: string;                 // "Beam 0 (45°)"
+          orientation: "X" | "Y" | null; // travel direction of the leaves in the beam's eye view
+          window: [number, number, number, number] | null; // travel min/max, stack min/max
+          weights: number[];             // one per shape
+          shapes: [{
+            leaf_width: number;
+            boundaries: number[];        // lower edge of every leaf row, ascending
+            leaf_positions: [number, number][]; // left and right leaf of every row
+          }];
+          fluence: {
+            window: [number, number, number, number];
+            bixel_width: number | null;
+            optimized: Float32Array | null; // (stack, travel), NaN where the beam has no ray
+            delivered: Float32Array | null;
+          } | null;
+          target: {
+            origin: [number, number];    // (travel, stack) of the center of the first bin
+            spacing: [number, number];
+            mask: Uint8Array;            // (stack, travel), 1 where the projected target lies
+          } | null;
+        }];
+      }
+      ```
+
+      All positions are in mm in the beam's eye view: the horizontal axis is the travel
+      direction of the leaves, the vertical axis the direction the leaf rows are stacked in
+      (for `orientation: "X"` the BEV x and z of the ray matrix). Arrays are row-major with
+      the stack axis first. `fluence` needs the steering information, `target` also the CT and
+      a target structure; they are `null` otherwise. The difference map of the Qt viewer is
+      `delivered - optimized`.
