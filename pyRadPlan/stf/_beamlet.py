@@ -130,9 +130,10 @@ class FieldShape(Beamlet):
 
     Notes
     -----
-    Coordinates in FieldShapes are defined in BEV in LPS.
-    Note that Beam Limiting Devices from DICOM are typically defined in IEC with the
-    X axis flipped compared to BEV convention (when gantry and couch angle are 0).
+    Coordinates in FieldShapes are those of the beam's eye view frame of the ray matrix
+    (``ray_pos_bev`` x and z, LPS +x and +z at gantry and couch angle 0). For a head-first
+    supine patient this coincides with the IEC 61217 frame of DICOM RT, see
+    :class:`~pyRadPlan.machines.BeamLimitingDevice`.
     """
 
     # TODO:
@@ -274,7 +275,8 @@ class FieldShapeAsMask(FieldShape):
 
     Notes
     -----
-    The mask coordinates are defined in the beam's eye view (BEV) in LPS.
+    The mask coordinates are those of the beam's eye view frame of the ray matrix
+    (``ray_pos_bev`` x and z, LPS +x and +z at gantry and couch angle 0).
     """
 
     mask: np.ndarray

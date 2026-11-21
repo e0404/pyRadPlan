@@ -177,7 +177,6 @@ pln_forward.prop_stf = {
     "gantry_angles": pln.prop_stf["gantry_angles"],
     "couch_angles": pln.prop_stf["couch_angles"],
     "generator": "photonSingleBixel",
-    "field_based": True,
     "beam_sequences": result_sequenced.sequence.beam,
     "resolution": 0.5,
     "energy": 6.0,

@@ -44,15 +44,22 @@ class BeamLimitingDevice(PyRadPlanBaseModel):
 
     Notes
     -----
-    Positions (jaw positions, MLC leaf positions and leaf-row boundaries) are in
-    **BEV-LPS**, *not* IEC. Convert at the I/O boundary (e.g. from DICOM RT).
+    Positions (jaw positions, MLC leaf positions and leaf-row boundaries) are in mm in the
+    isocenter plane, in the beam's eye view frame of the ray matrix of the steering
+    information: X is ``ray_pos_bev`` x and Y is ``ray_pos_bev`` z, which at gantry and couch
+    angle 0 are LPS +x and LPS +z.
+
+    For a head-first supine patient this frame coincides with the IEC 61217 BEAM LIMITING
+    DEVICE coordinate system of DICOM RT at collimator angle 0 (X to the patient's left and Y
+    towards the gantry at gantry and couch angle 0), so DICOM positions are used without a
+    change of sign. ``device_angle`` is stored but not applied yet.
 
     Attributes
     ----------
     device_type : str
         The type of device (X, Y, ASYMX, ASYMY, MLCX, MLCY). DICOM (300A,00B8)
     device_orientation : str
-        The orientation of the device (X, Y) in IEC coordinates.
+        The axis (X, Y) along which the device's leaves or jaws move.
     number_of_elements : int
         The number of leaf or jaw pairs (1 for standard jaws). DICOM (300A,00BC)
     source_to_device_distance : float
@@ -93,11 +100,11 @@ class MLC(BeamLimitingDevice):
     Attributes
     ----------
     leaf_position_boundaries : Optional[np.ndarray]
-        Boundaries in mm (in isocenter plane) in BEV-LPS coordinates.
+        Lower edges of the leaf rows in mm (in isocenter plane), ascending.
         (Conversion from DICOM's n+1 Leaf Position Boundaries (300A,00BE) to
         n leaf rows required in I/O.)
     leaf_positions : Optional[np.ndarray]
-        Leaf positions in mm (in isocenter plane) in BEV-LPS coordinates
+        Leaf positions in mm (in isocenter plane), ``(rows, 2)``
     leaf_width: float
         Width of the leaves (mm in isocenter plane)
     leaf_leakage: float
@@ -419,7 +426,7 @@ class Jaw(BeamLimitingDevice):
     Attributes
     ----------
     positions : list[float]
-        Jaw edge positions in mm (in isocenter plane) in BEV-LPS coordinates
+        Jaw edge positions in mm (in isocenter plane)
     field_width: float
         Width of field. ??
     leakage: float

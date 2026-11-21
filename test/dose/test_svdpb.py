@@ -325,11 +325,13 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
 @pytest.mark.parametrize(
     ("open_half", "expected_shift"),
     [
-        # Beam limiting devices are positioned in the beam's eye view in LPS: at gantry and
-        # couch angle 0, the leaf rows stack along LPS z (superior for a head-first supine
-        # patient) ...
+        # Beam limiting devices are positioned in the beam's eye view frame of the ray matrix:
+        # at gantry and couch angle 0, Y is LPS +z ...
         ("+Y", (0.0, 0.0, 1.0)),
-        # ... and the leaves travel along LPS x (the patient's left)
+        # ... and X is LPS +x. For a head-first supine patient these are IEC 61217 Y (toward
+        # the gantry) and X (the patient's left) of DICOM RT, which agrees with the dose of a
+        # planning system for single fields with asymmetric jaws and an MLC shape (XiO 4.64
+        # phantom plans of the SlicerRtData repository).
         ("+X", (1.0, 0.0, 0.0)),
     ],
 )

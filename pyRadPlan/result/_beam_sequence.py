@@ -46,7 +46,8 @@ class BeamSequence(PyRadPlanBaseModel):
     merged into a single object on import. ``cal_fac``, ``mlc_sequence`` and
     ``extra_blds`` have no matRad counterpart and are pyRadPlan additions.
 
-    All positions are in mm in the beam's eye view (BEV-LPS).
+    All positions are in mm in the beam's eye view frame of the ray matrix (LPS +x and +z at
+    gantry and couch angle 0, see :class:`~pyRadPlan.machines.BeamLimitingDevice`).
 
     Parameters
     ----------
