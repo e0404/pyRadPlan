@@ -95,6 +95,16 @@ input.invalid,
   border: 1px solid red !important;
 }
 
+label.check.modified {
+  outline: 1px solid var(--stale);
+  outline-offset: 1px;
+}
+
+label.check.invalid {
+  outline: 1px solid red;
+  outline-offset: 1px;
+}
+
 .pw-status {
   flex: 1;
   min-width: 0;

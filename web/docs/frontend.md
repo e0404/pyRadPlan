@@ -117,15 +117,22 @@ production host must send the same headers (or use a service-worker shim such as
 - The workflow grid follows the Qt widget's columns; the protocol's five stages map to its three
   dots: Loading = `data`, Dose Influence = worst of `stf`/`dij` (missing if `dij` is missing),
   Result Computation = `optimization`. The buttons are the Qt ones in the Qt places (Load File /
-  Load Folder / Import from Binary, Calc. Dose Influence / Load Dij, Optimize / Recalculate Dose,
-  Snapshot Result); there is no Run All, Generate STF or phantom selector, phantoms are opened from
-  File > Open Example Phantom as in Qt. "Load Folder" (capability reason) and "Import from Binary"
+  Load Folder / Import from Binary, Calc. Dose Influence / Load Dij, Optimize / Recalculate Dose /
+  Run Sequencing, Snapshot Result); there is no Run All, Generate STF or phantom selector, phantoms
+  are opened from File > Open Example Phantom as in Qt. "Load Folder" (capability reason) and "Import from Binary"
   ("Not yet implemented", as Qt) are disabled. While busy the status label shows the progress label,
   detail and fraction (Qt shows the progress levels there); there is no separate detail line.
   `workflow.run_all` and `workflow.generate_stf` stay protocol methods (tests, app smoke).
   Calc. Dose Influence generates the stf again every time (v1 amendment 20), so its dot turns
   green for both `stf` and `dij`; a structure edit leaves the stf "done" (as in Qt) and the next
   calculation still places the beams at the new automatic isocenter.
+- Run Sequencing (amendment 27) is enabled by `state.sequencing.available`, not by
+  `state.actions`; while disabled its tooltip is `state.sequencing.reason`. It runs
+  `workflow.sequence` like the other steps (busy bar, Stop, unapplied plan edits offered first)
+  and the views refetch by revision: the active result gains the `"<identifier>_sequenced"`
+  quantities, which `results/resultGroups.ts` names "<name> (sequenced)" for backends without
+  `state.results`. A backend without `state.sequencing` or `workflow.sequence` leaves the button
+  disabled.
 - Structure visibility starts from `structures[].visible` and stays a viewer setting (not sent back).
 - Volume `range` entries that are `null` fall back to `[0, 1]` (quantity) / `[-1000, 1000]` (CT).
 - `iso_center` as a list of per-beam points: the viewer and the plan form show the first one; the plan
@@ -206,6 +213,10 @@ Files: `src/api/protocol/plan.ts` (v1 types; the shared v1 block lives in `proto
   the pending re-list so a click right after a mode change cannot send the old mode's engine. The
   tissue dialog and its "…" checks send the unapplied form as `draft`. The form registers as
   pending-changes source and as beam editor and reports edited angles with `setDraftBeams`.
+  The sequencing row (Run sequencing, sequencer, "…") lists `plan.options.sequencers` and is
+  disabled for a radiation mode without any (`planModel.applySequencers`, Qt
+  `_update_sequencing_availability`); its three fields are tracked like the others and sent
+  together as `plan.set {sequencing}`, which outdates no stage.
 - **Objectives** read `structureDetails` (filled from `cst.get` by `revisions.ts`) and merge the
   `structure` returned by every `objectives.*` write.
 - **Status window** opens when an optimization starts (`busy` label or the first `progress.data`

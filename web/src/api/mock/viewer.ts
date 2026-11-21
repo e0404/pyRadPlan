@@ -11,16 +11,18 @@ import { isoCenterPoint } from "../protocol";
 import type { PlanSummary, ResultGroup, SessionState, StructureDetail, TissueDraft, Vec3 } from "../protocol";
 import type { BeamInfo, BeamsResult } from "../protocol/viewer";
 import {
-  QUANTITY_META,
+  SEQUENCED_SUFFIX,
   defaultQuantityKey,
   groupResultKeys,
   keyLabel,
+  quantityMeta,
   quantityName,
   resultKey,
   sanitizeTag,
   splitComponentSuffix,
   splitIndex,
   splitResultKey,
+  splitSequenced,
 } from "../../results/resultGroups";
 import { MethodError, precondition, resolveStructure, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
 import { fakeDose, type Phantom } from "./phantom";
@@ -241,6 +243,34 @@ function activeResult(s: MockSession, dose: Float32Array, phantom: Phantom, plan
     revisions: new Map([...fresh.keys()].map((key) => [key, tick()])),
     scenarioLabels: scenarios.map((scenario) => scenario.label),
   };
+}
+
+/**
+ * `workflow.sequence`: the active result is replaced by itself plus the `"<identifier>_sequenced"`
+ * quantities (full and per beam) of its quantities, here the optimized ones times `scale`.
+ * Quantities of an earlier sequencing are replaced. Returns the keys added.
+ */
+export function addMockSequencedQuantities(s: MockSession, scale: number): string[] {
+  const e = syncViewer(s);
+  const active = e.results.get(e.active);
+  if (!active) throw new MethodError("LookupError", "No result available to sequence.");
+  const optimized = [...active.volumes].filter(([key]) => !splitSequenced(splitComponentSuffix(splitIndex(key)[0])[0])[1]);
+  const volumes = new Map(optimized);
+  const added: string[] = [];
+  for (const [key, factory] of optimized) {
+    const [stem, index] = splitIndex(key);
+    const [base, kind] = splitComponentSuffix(stem);
+    if (kind === "scenario" || (kind === "" && index !== null)) continue;
+    const name = `${base}${SEQUENCED_SUFFIX}${kind ? `_${kind}` : ""}${index === null ? "" : ` ${index}`}`;
+    volumes.set(name, () => factory().map((v) => v * scale));
+    added.push(name);
+  }
+  e.results.set(e.active, {
+    volumes,
+    revisions: new Map([...volumes.keys()].map((key) => [key, tick()])),
+    scenarioLabels: active.scenarioLabels,
+  });
+  return added;
 }
 
 function volumeOf(e: ViewerExt, key: string): Float32Array {
@@ -514,12 +544,12 @@ function baseOf(key: string): string {
 }
 
 function unitOf(key: string): string {
-  return QUANTITY_META[baseOf(key)]?.[1] ?? "";
+  return quantityMeta(baseOf(key))?.[1] ?? "";
 }
 
 function labelOf(key: string): string {
   const base = baseOf(key);
-  return QUANTITY_META[base]?.[0] ?? quantityName(base);
+  return quantityMeta(base)?.[0] ?? quantityName(base);
 }
 
 function structureDetail(s: MockSession, e: ViewerExt, index: number): StructureDetail {

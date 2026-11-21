@@ -4,10 +4,12 @@ import type { PlanDetail, PlanOptions } from "../src/api/protocol/plan";
 import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity } from "../src/components/objectives/objectivesModel";
 import {
   applyBioSelection,
+  applySequencers,
   captureState,
   currentBio,
   draftFromPlan,
   equidistantAngles,
+  fieldKeyOf,
   formBeamAngles,
   modifiedKeys,
   planSetParams,
@@ -138,6 +140,45 @@ describe("plan form model", () => {
     const edited = { ...d, problemProps: { nonlin_fluence: { values: { ...d.problemProps.nonlin_fluence.values, p_norm: 3 }, solver: d.problemProps.nonlin_fluence.solver } } };
     const p = planSetParams(edited, clean, null);
     expect(p.problem).toEqual({ name: "nonlin_fluence", values: { max_iter: 50, p_norm: 3 } });
+  });
+
+  it("reads the sequencing settings of the plan and sends them alone when only they changed", () => {
+    const off = draftFromPlan(plan, detail);
+    expect([off.sequencing, off.sequencer, off.sequencerProps]).toEqual([false, "", {}]);
+    const photons = { ...plan, radiation_mode: "photons" };
+    const d = draftFromPlan(photons, { ...detail, ...photons, sequencing: { run: true, sequencer: "xia", values: { num_of_levels: 7 } } });
+    expect([d.sequencing, d.sequencer, d.sequencerProps]).toEqual([true, "xia", { xia: { num_of_levels: 7 } }]);
+    const clean = captureState(d);
+    expect(planSetParams(d, clean, null)).toEqual({});
+
+    const levels = { ...d, sequencerProps: { xia: { num_of_levels: 3, mode: "sliding_window" } } };
+    expect([...modifiedKeys(levels, clean)]).toEqual(["sequencer_props"]);
+    expect(planSetParams(levels, clean, null)).toEqual({ sequencing: { run: true, sequencer: "xia", values: { num_of_levels: 3, mode: "sliding_window" } } });
+
+    // Each sequencer keeps its own settings; one without entries is sent with defaults.
+    const other = { ...levels, sequencer: "siochi" };
+    expect([...modifiedKeys(other, clean)].sort()).toEqual(["sequencer", "sequencer_props"]);
+    expect(planSetParams(other, clean, null)).toEqual({ sequencing: { run: true, sequencer: "siochi", values: {} } });
+
+    const unticked = { ...d, sequencing: false };
+    expect([...modifiedKeys(unticked, clean)]).toEqual(["sequencing"]);
+    expect(planSetParams(unticked, clean, null)).toEqual({ sequencing: { run: false, sequencer: null, values: {} } });
+    expect(() => planSetParams({ ...off, sequencing: true }, captureState(off), null)).toThrow(/no sequencing algorithm available/);
+  });
+
+  it("follows the sequencers of the radiation mode (Qt _update_sequencing_availability)", () => {
+    const sequencers = [{ value: "engel", label: "engel_leaf_sequencing" }, { value: "xia", label: "xia_leaf_sequencing" }];
+    const withSequencers = { ...options([], "none"), sequencers };
+    expect(applySequencers({ sequencing: false, sequencer: "" }, withSequencers)).toEqual({ sequencing: false, sequencer: "engel" });
+    expect(applySequencers({ sequencing: true, sequencer: "xia" }, withSequencers)).toEqual({ sequencing: true, sequencer: "xia" });
+    // A mode without sequencers (and a backend not listing them) unticks "Run sequencing".
+    expect(applySequencers({ sequencing: true, sequencer: "xia" }, { ...withSequencers, sequencers: [] })).toEqual({ sequencing: false, sequencer: "" });
+    expect(applySequencers({ sequencing: true, sequencer: "xia" }, options([], "none"))).toEqual({ sequencing: false, sequencer: "" });
+  });
+
+  it("maps the sequencing errors of plan.set to the form's fields", () => {
+    expect(fieldKeyOf("sequencing")).toBe("sequencing");
+    expect(fieldKeyOf("sequencer.num_of_levels")).toBe("sequencer_props");
   });
 });
 

@@ -255,6 +255,65 @@ try {
   await tid("plan-discard").click();
   expect((await note()) === "Changes discarded.", "discard resets the form");
 
+  // ---- sequencing: plan row (photons only, "…" form, modified frames) and the workflow button
+  const sequenceTip = async () => (await tid("btn-sequence").getAttribute("title")) ?? "";
+  expect(await tid("plan-sequencing").isDisabled(), "carbon: Run sequencing disabled");
+  expect((await tid("btn-sequence").isDisabled()) && /only available for photon plans/.test(await sequenceTip()), "carbon: Run Sequencing disabled with the reason as tooltip");
+  await pick("plan-mode", "photons");
+  await page.waitForFunction(() => document.querySelector('[data-testid="plan-sequencing"]')?.disabled === false);
+  expect(await tid("plan-sequencer").isDisabled(), "sequencer combo disabled until Run sequencing is ticked");
+  await tid("plan-apply").click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="plan-note"]')?.textContent === "Plan applied.");
+  await tid("btn-dij").click();
+  await waitIdle();
+  await tid("btn-optimize").click();
+  await waitIdle();
+  await page.waitForFunction(() => document.querySelector('[data-testid="dot-result"]')?.getAttribute("data-status") === "done");
+  await tid("opt-close").click();
+  expect((await tid("btn-sequence").isDisabled()) && /Enable 'Run sequencing' in the Plan panel first/.test(await sequenceTip()), "Run Sequencing asks for the plan setting first");
+
+  await tid("plan-sequencing").check();
+  expect(((await tid("plan-sequencing").locator("xpath=..").getAttribute("class")) ?? "").includes("modified"), "Run sequencing framed as modified");
+  const firstSequencer = await tid("plan-sequencer").getAttribute("data-value");
+  expect(firstSequencer === "engel", `first sequencer of the mode selected (${firstSequencer})`);
+  await pick("plan-sequencer", "xia_leaf_sequencing");
+  await tid("plan-sequencer-config").click();
+  await tid("sequencer-dialog").waitFor();
+  await fillSpin("sequencer-dialog-form-num_of_levels", "0");
+  expect(/num_of_levels/.test((await tid("sequencer-dialog-status").textContent()) ?? ""), "sequencer form validates the number of levels");
+  await fillSpin("sequencer-dialog-form-num_of_levels", "7");
+  await shot("sequencer-dialog", tid("sequencer-dialog"));
+  await tid("sequencer-dialog-ok").click();
+  expect((await tid("plan-sequencer-config").getAttribute("class")).includes("modified"), "sequencer … framed as modified");
+  await shot("sequencing-row", tid("panel-plan"));
+  await page.evaluate(async () => (await import("/src/store/uiMode.ts")).setUiMode("educational"));
+  expect(await tid("plan-sequencing").isDisabled(), "educational: sequencing locked");
+  await page.evaluate(async () => (await import("/src/store/uiMode.ts")).setUiMode("default"));
+  await tid("plan-apply").click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="btn-sequence"]')?.disabled === false);
+  const sequencingDetail = await page.evaluate(async () => (await import("/src/store/planSlice.ts")).usePlanStore.getState().detail?.sequencing);
+  expect(JSON.stringify(sequencingDetail) === JSON.stringify({ run: true, sequencer: "xia", values: { num_of_levels: 7 } }), "sequencing settings applied to the plan");
+  expect((await tid("dot-dij").getAttribute("data-status")) === "done" && (await tid("dot-result").getAttribute("data-status")) === "done", "sequencing settings outdate neither dose influence nor result");
+  expect((await tid("plan-apply").textContent()) === "Apply", "applied form is clean");
+
+  // Unapplied sequencing edits are offered before the run, as before the other workflow steps.
+  await pick("plan-sequencer", "siochi_leaf_sequencing");
+  await tid("btn-sequence").click();
+  await tid("pending-changes-dialog").waitFor();
+  expect(!((await tid("pending-changes-dialog").textContent()) ?? "").includes("outdates the dose influence"), "Run Sequencing offers unapplied plan edits without the recalculation note");
+  await tid("msg-apply").click();
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().state?.results?.groups.some((g) => g.base === "physical_dose_sequenced"));
+  await waitIdle();
+  expect((await tid("opt-status-window").count()) === 0, "sequencing does not open the optimization status window");
+  const sequencedGroups = await tid("quantity-select-group").locator("option").allTextContents();
+  expect(sequencedGroups.join() === "dose,dose (sequenced)", `sequenced dose listed in the quantity selector (${sequencedGroups.join(", ")})`);
+  const sequencedPlan = await page.evaluate(async () => (await import("/src/store/planSlice.ts")).usePlanStore.getState().detail?.sequencing?.sequencer);
+  expect(sequencedPlan === "siochi", "the run used the sequencer applied from the dialog");
+  await tid("quantity-select-group").selectOption({ label: "dose (sequenced)" });
+  await page.waitForFunction(() => window.__pyrpApp.useApp.getState().viewer.activeQuantity === "physical_dose_sequenced");
+  await shot("sequenced");
+  expect((await tid("dot-result").getAttribute("data-status")) === "done", "result stays up to date after sequencing");
+
   if (problems.length) throw new Error(`browser reported problems:\n${problems.join("\n")}`);
   console.log("plan e2e passed");
 } catch (err) {

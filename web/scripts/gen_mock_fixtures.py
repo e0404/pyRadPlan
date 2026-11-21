@@ -134,9 +134,12 @@ def record() -> dict[str, Any]:
         for b in opt["bio_models"]
     }
     kinds["bio_model"] = models
+    kinds["sequencer"] = {
+        (key.split("|")[0], s["value"]) for key, opt in options.items() for s in opt["sequencers"]
+    }
     for kind, entries in kinds.items():
         for mode, name in sorted(entries, key=lambda e: (str(e[0]), e[1])):
-            if kind in {"bio_model", "engine"}:
+            if kind in {"bio_model", "engine", "sequencer"}:
                 result = rec.call("plan.form", session, kind=kind, name=name, radiation_mode=mode)
                 forms[f"{kind}:{mode}:{name}"] = result
             else:

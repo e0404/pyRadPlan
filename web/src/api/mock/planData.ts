@@ -13,7 +13,7 @@ import objectivesCatalog from "./fixtures/objectives_catalog.json";
 import phantomStructures from "./fixtures/phantom_structures.json";
 import tissueSchema from "./fixtures/tissue_schema.json";
 
-type Context = Pick<PlanOptions, "machines" | "engines" | "bio_models" | "default_bio_model" | "beam_presets">;
+type Context = Pick<PlanOptions, "machines" | "engines" | "bio_models" | "default_bio_model" | "beam_presets" | "sequencers">;
 type Shared = Pick<PlanOptions, "radiation_modes" | "scenario_models" | "problems" | "solvers" | "default_solver" | "fields">;
 
 const shared = optionsFixture.shared as unknown as Shared;
@@ -89,7 +89,7 @@ export function defaultBioOption(mode: string): BioModelChoice | undefined {
 
 /** The recorded form of an algorithm with `values` laid over its defaults (`undefined`: no such algorithm). */
 export function recordedForm(kind: FormKind, name: string, mode: string, values: Record<string, unknown>): FormSchema | undefined {
-  const key = kind === "engine" || kind === "bio_model" ? `${kind}:${mode}:${name}` : `${kind}:${name}`;
+  const key = kind === "engine" || kind === "bio_model" || kind === "sequencer" ? `${kind}:${mode}:${name}` : `${kind}:${name}`;
   const form = (forms as unknown as Record<string, FormSchema>)[key];
   if (!form) return undefined;
   const { notes, ...rest } = form;

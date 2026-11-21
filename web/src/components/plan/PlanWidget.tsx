@@ -3,8 +3,9 @@
  * engine (+ "…"), fractions and dose convention, beam angles (beam count, presets), bixel
  * width, isocenter (Auto preview), biological model (+ "…", tissue marker, tissue
  * parameters), scenario model (+ "…"), optimized quantity (not implemented), optimization
- * problem (+ "…"), sequencing (not implemented) and the dose grid; orange frames on modified
- * fields, Discard / Apply. Options and forms come from `plan.options` / `plan.form`.
+ * problem (+ "…"), sequencing (+ "…"; DAO and 3D conformal not implemented) and the dose grid;
+ * orange frames on modified fields, Discard / Apply. Options and forms come from `plan.options` /
+ * `plan.form`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FieldDescriptor, Vec3 } from "../../api/protocol";
@@ -27,11 +28,12 @@ import {
 } from "../../store/planSlice";
 import { Combo, EditableCombo, MenuButton, choiceOptions, type ComboOption } from "../forms/Combo";
 import { SpinInput } from "../forms/ConfigForm";
-import { BioModelDialog, EngineDialog, ScenarioDialog } from "./ConfigDialogs";
+import { BioModelDialog, EngineDialog, ScenarioDialog, SequencerDialog } from "./ConfigDialogs";
 import { OptimizationDialog } from "./OptimizationDialog";
 import {
   MODIFIED_NOTE,
   applyBioSelection,
+  applySequencers,
   captureState,
   currentBio,
   draftFromPlan,
@@ -57,7 +59,10 @@ import "./plan.css";
 const NUM_BEAMS_TOOLTIP = "Number of beams.\nSetting it replaces the gantry angles by that many equally spaced\nangles starting at 0 deg.";
 const QUANTITY_TOOLTIP =
   "Choosing a global optimized quantity not yet implemented.\nThe optimizer derives the quantity from the objectives table: with a biological model, physical-dose objectives are optimized on RBE-weighted dose, unless other objectives already use a biological quantity. \"Change all quantities…\" sets the quantity on all objectives at once.";
-const SEQUENCING_TOOLTIP = "Sequencing / aperture optimization not yet implemented.";
+const SEQUENCING_TOOLTIP =
+  "Configure MLC sequencing for this plan; run it from the workflow panel's 'Run Sequencing' button once a result is available.";
+const SEQUENCING_UNAVAILABLE = "Sequencing is only available for photon plans.";
+const DAO_TOOLTIP = "Direct aperture optimization not yet implemented.";
 const CONFORMAL_TOOLTIP = "3D conformal planning not yet implemented.";
 const BIO_TOOLTIP =
   "Biological model used in dose calculation and optimization, listed as formalism · base data model.\nThe entries follow the radiation mode and the base data of the machine; those the machine cannot run are shown disabled, their tooltip says why.";
@@ -69,7 +74,7 @@ const DOSE_CONVENTION_TOOLTIP =
 /** Controls Qt registers with `_add_advanced` (locked in the educational UI mode). */
 const ADVANCED = new Set(["machine", "engine", "fractions", "scenario", "quantity", "problem", "sequencing"]);
 
-type DialogKind = "engine" | "bio" | "scenario" | "problem" | "tissue";
+type DialogKind = "engine" | "bio" | "scenario" | "problem" | "sequencer" | "tissue";
 
 interface Status {
   text: string;
@@ -146,7 +151,8 @@ export function PlanWidget() {
   const relist = useCallback(
     (ctx: { mode: string; machine: string; engine: string | null }, base: PlanDraft, reason: "sync" | "mode" | "machine" | "engine") => {
       // Apply awaits this so a click right after a mode change never sends the old mode's engine.
-      if (reason !== "sync") draftRef.current = base;
+      // `base` is the draft just set: cached options resolve before the render that stores it.
+      draftRef.current = base;
       const run = relistBody(ctx, base, reason);
       relistPending.current = run;
       return run;
@@ -184,8 +190,10 @@ export function PlanWidget() {
           const problem = opts.problems.some((p) => p.value === base.problem) ? base.problem : String(opts.problems[0]?.value ?? base.problem);
           const bio = applyBioSelection(base, selection, opts);
           const bioChanged = bio.bioOption !== base.bioOption || bio.bioModel !== base.bioModel;
-          if ((engine !== base.engine || problem !== base.problem || bioChanged) && draftRef.current === base) {
-            const patched = { ...base, engine, problem, ...(bioChanged ? bio : {}) };
+          const sequencing = applySequencers(base, opts);
+          const sequencingChanged = sequencing.sequencing !== base.sequencing || sequencing.sequencer !== base.sequencer;
+          if ((engine !== base.engine || problem !== base.problem || bioChanged || sequencingChanged) && draftRef.current === base) {
+            const patched = { ...base, engine, problem, ...(bioChanged ? bio : {}), ...sequencing };
             draftRef.current = patched;
             setDraft(patched);
             setClean(captureState(patched));
@@ -194,7 +202,7 @@ export function PlanWidget() {
         }
         const problem = opts.problems.some((p) => p.value === base.problem) ? base.problem : String(opts.problems[0]?.value ?? base.problem);
         const d = draftRef.current;
-        const next = { ...d, machine, engine, problem, ...applyBioSelection(d, selection, opts) };
+        const next = { ...d, machine, engine, problem, ...applyBioSelection(d, selection, opts), ...applySequencers(d, opts) };
         draftRef.current = next;
         setDraft(next);
         if (selection?.note) setStatus({ text: selection.note.text, tooltip: selection.note.reason });
@@ -393,6 +401,9 @@ export function PlanWidget() {
   const engineOptions = keyed(options?.engines, draft.engine);
   const scenarioOptions = keyed(options?.scenario_models, draft.scenario);
   const problemOptions = keyed(options?.problems, draft.problem);
+  const sequencerOptions = keyed(options?.sequencers, draft.sequencer || null);
+  const sequencingAvailable = (options?.sequencers?.length ?? 0) > 0;
+  const sequencingOn = draft.sequencing && sequencingAvailable;
   const bioOptions: ComboOption[] = (options?.bio_models ?? []).map((o) => ({
     key: String(o.value),
     label: o.label,
@@ -788,25 +799,29 @@ export function PlanWidget() {
           <span />
 
           <div className={`row pw-cell span2${locked("sequencing") ? " dim" : ""}`}>
-            <label className="check" title={SEQUENCING_TOOLTIP}>
-              <input type="checkbox" disabled />
+            <label className={`check ${mod("sequencing")}`} title={advancedTitle("sequencing", sequencingAvailable ? SEQUENCING_TOOLTIP : SEQUENCING_UNAVAILABLE)}>
+              <input
+                type="checkbox"
+                checked={sequencingOn}
+                disabled={disabled || !sequencingAvailable || locked("sequencing")}
+                data-testid="plan-sequencing"
+                onChange={(e) => update({ sequencing: e.currentTarget.checked })}
+              />
               Run sequencing
             </label>
-            <span className="dim">Levels:</span>
-            <span className="spin disabled small" title={SEQUENCING_TOOLTIP}>
-              <input type="text" value="7" disabled readOnly />
-              <span className="spin-btns">
-                <button type="button" disabled tabIndex={-1}>
-                  ▴
-                </button>
-                <button type="button" disabled tabIndex={-1}>
-                  ▾
-                </button>
-              </span>
-            </span>
+            <Combo
+              value={draft.sequencer}
+              options={sequencerOptions}
+              className={`fill ${mod("sequencer")}`}
+              disabled={disabled || !sequencingOn || locked("sequencing")}
+              title={advancedTitle("sequencing", "Sequencing algorithm.")}
+              testId="plan-sequencer"
+              onChange={(sequencer) => update({ sequencer })}
+            />
+            {configButton("sequencer", "sequencer_props", sequencingOn && Boolean(draft.sequencer), "Configure the selected sequencing algorithm", "sequencing", "plan-sequencer-config")}
           </div>
           <div className={`row pw-cell span2${locked("sequencing") ? " dim" : ""}`}>
-            <label className="check" title={SEQUENCING_TOOLTIP}>
+            <label className="check" title={DAO_TOOLTIP}>
               <input type="checkbox" disabled />
               Run DAO
             </label>
@@ -917,6 +932,19 @@ export function PlanWidget() {
           onCancel={() => setDialog(null)}
           onAccept={(values) => {
             setDraft((d) => ({ ...d, scenarioProps: { ...d.scenarioProps, [d.scenario]: values } }));
+            setDialog(null);
+          }}
+        />
+      )}
+      {dialog === "sequencer" && draft.sequencer && (
+        <SequencerDialog
+          name={draft.sequencer}
+          radiationMode={draft.radiation_mode}
+          values={draft.sequencerProps[draft.sequencer] ?? {}}
+          educational={educational}
+          onCancel={() => setDialog(null)}
+          onAccept={(values) => {
+            setDraft((d) => ({ ...d, sequencerProps: { ...d.sequencerProps, [d.sequencer]: values } }));
             setDialog(null);
           }}
         />

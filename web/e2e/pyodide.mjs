@@ -221,6 +221,44 @@ try {
     await memory("after_default_run");
   });
 
+  await stage("sequencing", async () => {
+    if ((await tid("dot-result").getAttribute("data-status")) !== "done") {
+      await computeResult("sequencing");
+      await closeStatusWindow();
+    }
+    const applied = () => page.waitForFunction(() => /Plan applied/.test(document.querySelector('[data-testid="plan-note"]')?.textContent ?? ""), null, { timeout: 120000 });
+    expect((await tid("btn-sequence").isDisabled()) && /Enable 'Run sequencing'/.test((await tid("btn-sequence").getAttribute("title")) ?? ""), "Run Sequencing disabled until the plan asks for sequencing");
+    await tid("plan-sequencing").check();
+    await pick("plan-sequencer", "xia");
+    await tid("plan-sequencer-config").click();
+    await tid("sequencer-dialog").waitFor();
+    await page.waitForTimeout(300);
+    await fillSpin("sequencer-dialog-form-num_of_levels", "4");
+    await shot("sequencer-dialog", tid("sequencer-dialog"));
+    await tid("sequencer-dialog-ok").click();
+    await tid("plan-apply").click();
+    await applied();
+    await page.waitForFunction(() => window.__pyrpApp.useApp.getState().state?.sequencing?.available === true);
+    const before = await state();
+    expect(before.stages.dij === "done" && before.stages.optimization === "done", "sequencing settings outdate neither dose influence nor result");
+    const start = Date.now();
+    await runStep("btn-sequence", "sequencing");
+    metrics.sequencing_s = +((Date.now() - start) / 1000).toFixed(1);
+    const after = await state();
+    const group = after.results.groups.find((g) => g.base === "physical_dose_sequenced");
+    expect(group?.label === "dose (sequenced)" && group.unit === "Gy" && group.meta_label === "Dose", `sequenced dose in the active result (${metrics.sequencing_s} s): ${JSON.stringify(group?.components.map((c) => c.key))}`);
+    expect(after.stages.optimization === "done" && after.results.default === "physical_dose", "the result stays up to date and the optimized dose the default");
+    await tid("quantity-select-group").selectOption({ label: "dose (sequenced)" });
+    await page.waitForFunction(() => window.__pyrpApp.useApp.getState().quantities["physical_dose_sequenced"], null, { timeout: 60000 });
+    await shot("sequenced");
+    await tid("quantity-select-group").selectOption({ label: "dose" });
+    // The following stages run the plan without sequencing, as before.
+    await tid("plan-sequencing").uncheck();
+    await tid("plan-apply").click();
+    await applied();
+    expect((await state()).sequencing.available === false, "unticking Run sequencing disables the button again");
+  });
+
   await stage("plan", async () => {
     await tid("plan-num-beams").fill("5");
     await tid("plan-num-beams").press("Enter");

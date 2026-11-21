@@ -331,6 +331,7 @@ export const actions = {
   calcDoseInfluence: () => run("Dose influence calculation", "workflow.calc_dose_influence", {}, "none"),
   optimize: (params: ParamsOf<"workflow.optimize"> = {}) => run("Optimization", "workflow.optimize", params, "result"),
   recalc: () => run("Dose recalculation", "workflow.recalc", {}, "result"),
+  sequence: () => run("Sequencing", "workflow.sequence", {}, "result"),
   runAll: () => run("Running all steps", "workflow.run_all", {}, "result"),
 
   async refresh(): Promise<void> {
