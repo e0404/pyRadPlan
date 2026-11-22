@@ -94,7 +94,7 @@ cst.vois = cst.vois + [
 
 opt_info = {}
 # Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 ntcp_history_active = opt_info["objective_info"][0]["history"]
 
@@ -102,21 +102,17 @@ ntcp_history_active = opt_info["objective_info"][0]["history"]
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
-fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+result_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
 ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
-
-# # Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
-result_native = dij.compute_result_ct_grid(fluence_native)
 # %% [markdown]
 # Signed difference between the native and the CNN-guided dose.
 # %%
 
-diff = result_native["physical_dose"] - result["physical_dose"]
+diff = result_native.physical_dose.values - result.physical_dose.values
 plot_slice(
-    ct=ct,
+    image_volume=ct,
     cst=cst,
     overlay=diff,
 )

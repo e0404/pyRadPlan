@@ -63,7 +63,7 @@ pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
 
 pln.prop_stf = {
     "gantry_angles": [0, 60, 120, 180, 240, 300],
-    "couch_angles": [0, 0, 0, 0, 0],
+    "couch_angles": [0, 0, 0, 0, 0, 0],
 }
 stf = generate_stf(ct, cst, pln)
 
@@ -105,8 +105,8 @@ cst.vois = cst.vois + [
 ]
 
 opt_info = {}
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+# Optimize the fluence; the result holds the dose on the CT grid
+result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 ntcp_history_active = opt_info["objective_info"][0]["history"]
 
@@ -114,22 +114,20 @@ ntcp_history_active = opt_info["objective_info"][0]["history"]
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
-fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+result_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
 ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
-
-# # Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
-result_native = dij.compute_result_ct_grid(fluence_native)
 # %% [markdown]
 # CNN-guided dose, native dose and their difference in the viewer; NTCP curve.
 # %%
 
 
-result_collective = result.copy()
-result_collective["physical_dose_native"] = result_native["physical_dose"]
-result_collective["physical_dose_diff"] = result["physical_dose"] - result_native["physical_dose"]
+result_collective = result.model_copy()
+result_collective.add_quantity("physical_dose_native", result_native.physical_dose)
+result_collective.add_quantity(
+    "physical_dose_diff", result.physical_dose.values - result_native.physical_dose.values
+)
 
 # %% [markdown]
 # NTCP history: CNN-guided (active gradients) vs native (monitor-only) optimization.
