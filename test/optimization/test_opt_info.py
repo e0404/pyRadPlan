@@ -18,8 +18,8 @@ def optimized(request, small_proton_case):
     pln.prop_opt = {"solver": request.param, "display": False, "max_iter": 25}
 
     opt_info = {}
-    w = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
-    return w, opt_info
+    result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+    return result, opt_info
 
 
 @pytest.mark.parametrize("optimized", SOLVERS, indirect=True)
@@ -65,9 +65,9 @@ def test_no_opt_info_leaves_history_disabled(small_proton_case):
     pln, ct, cst, stf, dij = small_proton_case
     pln.prop_opt = {"solver": SOLVERS[0], "display": False, "max_iter": 2}
 
-    w = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
 
-    assert w.shape == (dij.total_num_of_bixels,)
+    assert result.fluence.shape == (dij.total_num_of_bixels,)
 
 
 def test_opt_info_is_keyword_only(small_proton_case):

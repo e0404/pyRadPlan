@@ -21,7 +21,7 @@ distribution and structure contours.
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose,
         overlay_unit="Gy",
     )
 
@@ -78,7 +78,7 @@ Key parameters
         plot_slice(
             image_volume=ct,
             cst=cst,
-            overlay=result["physical_dose"],
+            overlay=result.physical_dose,
             overlay_unit="Gy",
             plane=plane,
             show_plot=False,
@@ -116,7 +116,7 @@ and ``cst`` arguments as :func:`~pyRadPlan.visualization.plot_slice`, but uses `
     plot_multiple_slices(
         image_volume=ct,
         cst=cst,
-        overlays=result["physical_dose"],
+        overlays=result.physical_dose,
         overlay_unit="Gy",
         view_slice=[40, 50, 60],
         plane="axial",
@@ -127,7 +127,7 @@ Tips
 
 - Pass ``show_plot=False`` to suppress the interactive window (useful in scripts or notebooks
   that call ``plt.savefig()`` manually).
-- ``overlay`` can be any quantity array returned by ``dij.compute_result_ct_grid()``, not just
-  ``"physical_dose"`` — e.g. ``result["rbe_x_dose"]`` or ``result["let_dose"]``.
+- ``overlay`` can be any quantity of a :class:`~pyRadPlan.result.PlanResult`, not just
+  ``physical_dose`` — e.g. ``result.rbe_x_dose`` or ``result.let``.
 - Structure colors are assigned automatically but can be customized by setting ``voi.color``
   on individual VOI objects.

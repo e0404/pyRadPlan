@@ -24,14 +24,16 @@ The high-level entry point is :func:`~pyRadPlan.fluence_optimization`:
 
     from pyRadPlan import fluence_optimization
 
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
+    fluence = result.fluence
 
 Under the hood, this function:
 
 1. Instantiates the planning problem configured in ``pln.prop_opt["problem"]``.
 2. Reads objectives from each VOI in ``cst``.
 3. Resolves required :ref:`quantities <concept_quantities>` from ``dij``.
-4. Calls the solver and returns the optimal fluence vector.
+4. Calls the solver and returns a :class:`~pyRadPlan.result.PlanResult` with the quantities on
+   the CT grid and the optimal fluence vector (``result.fluence``).
 
 Planning problems
 -----------------
@@ -488,7 +490,8 @@ by the composite worst case, the organ at risk by the expected value:
         SquaredOverdosing(priority=500, d_max=45.0, robustness="expected_value"),
     ]
 
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
+    fluence = result.fluence
 
 The optimization reads the scenario set from the influence data and evaluates each scenario's
 dose through that scenario's influence matrix.
@@ -503,14 +506,16 @@ computing the result images:
 
     result = dij.compute_result_ct_grid(fluence, scenarios=True)
 
-    nominal = result["physical_dose"]
-    per_scenario = result["physical_dose_scenario"]   # one image per scenario
-    third = per_scenario[3]                           # index = flat index in dij.scenarios
+    nominal = result.physical_dose
+    per_scenario = result.scenario.physical_dose     # one distribution per scenario
+    third = per_scenario[3]                          # index = flat index in dij.scenarios
+    label = result.scenario_labels[3]
 
-Next to the usual ``"<quantity>"`` and ``"<quantity>_beam"`` entries, the result holds a
-``"<quantity>_scenario"`` list with one image per scenario. The position in the list is the
-flat index of the scenario in the set, which is also the slot in the influence-matrix
-containers of the Dij.
+Next to the usual quantities (``result.quantities``) and per-beam quantities
+(``result.beam_quantities``), the result holds ``result.scenario_quantities``: per quantity a
+list with one distribution per scenario (``None`` for scenarios that are not computed). The
+position in the list is the flat index of the scenario in the set, which is also the slot in
+the influence-matrix containers of the Dij; ``result.scenario_labels`` names the scenarios.
 
 Robustness in the GUI
 ~~~~~~~~~~~~~~~~~~~~~

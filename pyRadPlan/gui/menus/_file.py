@@ -124,7 +124,7 @@ class FileMenu(QMenu):
         self._act_save_plan.setEnabled(self._ws.has("pln"))
         self._act_save_dij.setEnabled(self._ws.has("dij"))
         self._act_save_cst.setEnabled(self._ws.has("cst"))
-        self._act_save_result.setEnabled(self._ws.has("result"))
+        self._act_save_result.setEnabled(bool(self._ws.results))
         self._act_save.setEnabled(self._ws.has("ct"))
 
     def _rebuild_phantom_menu(self) -> None:

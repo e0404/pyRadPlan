@@ -7,6 +7,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 from ..base import BaseExporter
 
@@ -25,6 +26,7 @@ class PickleExporter(BaseExporter):
         ct: Optional[CT] = None,
         cst: Optional[StructureSet] = None,
         dose: Optional[sitk.Image] = None,
+        result: Optional[PlanResult] = None,
         **extra,
     ) -> None:
         objects: dict = {}
@@ -34,10 +36,12 @@ class PickleExporter(BaseExporter):
             objects["cst"] = cst
         if dose is not None:
             objects["dose"] = dose
+        if result is not None:
+            objects["result"] = result
         objects.update({k: v for k, v in extra.items() if v is not None})
 
         if not objects:
-            raise ValueError("Nothing to export: provide ct, cst, dose or extra objects.")
+            raise ValueError("Nothing to export: provide ct, cst, dose, result or extra objects.")
 
         with open(self.path, "wb") as fh:
             pickle.dump(objects, fh, protocol=pickle.HIGHEST_PROTOCOL)

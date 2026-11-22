@@ -272,8 +272,8 @@ def test_protons_constant_rbe(test_data_protons):
     assert dij_py.sqrt_beta_dose is None
 
     res = dij_py.compute_result_ct_grid(np.asarray(result["w"]))
-    phys = sitk.GetArrayFromImage(res["physical_dose"])
-    rbe_x = sitk.GetArrayFromImage(res["rbe_x_dose"])
+    phys = sitk.GetArrayFromImage(res["physical_dose"].values)
+    rbe_x = sitk.GetArrayFromImage(res["rbe_x_dose"].values)
     assert np.allclose(rbe_x, 1.1 * phys)
 
 
@@ -355,7 +355,7 @@ def test_carbon_kernel_based_lq_alpha_beta_matrices(test_data_carbon):
     expected[valid] = (np.sqrt(ax[valid] ** 2 + 4 * bx[valid] * effect[valid]) - ax[valid]) / (
         2 * bx[valid]
     )
-    assert np.allclose(np.asarray(res["rbe_x_dose"]).ravel(), expected, rtol=1e-5, atol=1e-8)
+    assert np.allclose(np.asarray(res.rbe_x_dose.values).ravel(), expected, rtol=1e-5, atol=1e-8)
 
 
 def test_tissue_classes_reach_the_evaluator_but_not_the_dij(test_data_carbon, monkeypatch):

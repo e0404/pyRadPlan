@@ -107,11 +107,7 @@ print(f"Accelerated GPU backend selected: {xp_utils.choose_array_api_namespace()
 # or you can force a specific backend:
 # settings.xp.preferred_gpu_array_backend = "torch"  # or "cupy"
 
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
@@ -127,7 +123,7 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose,
         view_slice=view_slice,
         plane="axial",
         overlay_unit="Gy",

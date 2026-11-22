@@ -67,10 +67,7 @@ cst.vois[2].objectives = [
 # We then calculate the optimized fluence and the corresponding result of the plan.
 # Additionally we plot both the physical dose and the LET.
 # %%
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result
-result = dij.compute_result_ct_grid(fluence)
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed
@@ -83,12 +80,12 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose,
         view_slice=view_slice,
     )
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["let"],
+        overlay=result.let,
         view_slice=view_slice,
     )

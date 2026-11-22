@@ -8,8 +8,9 @@ import os
 from pathlib import Path
 import sys
 
-from pyRadPlan import settings
+# pyRadPlan.gui first: it loads Qt before pyRadPlan.settings pulls in SimpleITK (see there).
 from pyRadPlan.gui import main as gui_main
+from pyRadPlan import settings
 
 #: Base data the app ships in addition to pyRadPlan's, the phantoms of matRad that the build
 #: downloads with scripts/fetch_matrad_phantoms.py.

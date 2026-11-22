@@ -1,0 +1,384 @@
+/* Plan form, tissue dialog, objectives table, optimization dialog and status window. */
+
+.plan-widget {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pw-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.pw-grid {
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.pw-grid .span2 {
+  grid-column: span 2;
+}
+
+.pw-cell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.pw-cell > .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.pw-cell > .combo,
+.pw-cell > .spin {
+  flex: 1;
+}
+
+.pw-grid > label.dim,
+.pw-grid .locked {
+  color: var(--disabled);
+}
+
+.pw-grid .menu-btn {
+  padding: 2px 6px;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.btn.dots {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  flex: none;
+}
+
+.btn.bold {
+  font-weight: bold;
+}
+
+.spin.beams {
+  width: 70px;
+  flex: none;
+}
+
+.spin.small {
+  width: 52px;
+  flex: none;
+}
+
+.tip-wrap {
+  display: inline-flex;
+}
+
+.tissue-mark {
+  font-weight: bold;
+  flex: none;
+  cursor: default;
+}
+
+.tissue-mark.error {
+  color: #e67e22;
+}
+
+.tissue-mark.warning {
+  color: #b7950b;
+}
+
+input.invalid,
+.spin.invalid,
+.combo.invalid {
+  border: 1px solid red !important;
+}
+
+.pw-status {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pw-status.error {
+  color: red;
+}
+
+/* ---- tissue dialog */
+
+.dialog.tissue-dialog {
+  width: min(1100px, 94vw);
+  max-width: 94vw;
+}
+
+.dialog.tissue-dialog .body {
+  max-height: 74vh;
+}
+
+.tissue-note {
+  color: var(--text);
+  max-width: 100%;
+}
+
+.tissue-table {
+  flex: none;
+  max-height: 42vh;
+  overflow: auto;
+}
+
+.tissue-table td {
+  padding: 1px 4px;
+}
+
+.tissue-table .combo,
+.tissue-table .spin {
+  width: 100%;
+  min-width: 70px;
+}
+
+.tissue-table tr.selected td {
+  background: var(--accent-soft);
+}
+
+.tissue-name {
+  cursor: default;
+  user-select: none;
+}
+
+.tissue-name.issue-error {
+  background: rgba(230, 126, 34, 0.35);
+}
+
+.tissue-name.issue-warning {
+  background: rgba(241, 196, 15, 0.28);
+}
+
+.cell-mismatch {
+  background: rgba(230, 126, 34, 0.35) !important;
+}
+
+.cell-warning {
+  background: rgba(241, 196, 15, 0.28) !important;
+}
+
+.spin.implicit input {
+  color: gray;
+  font-style: italic;
+}
+
+.tissue-status {
+  color: gray;
+  min-height: 16px;
+}
+
+.tissue-issues {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+.tissue-issues.error {
+  color: #c0392b;
+}
+
+.tissue-issues.warning {
+  color: var(--warn-text, #b9770e);
+}
+
+.tissue-single .tissue-table {
+  max-height: none;
+}
+
+/* ---- optimization dialog */
+
+.dialog.opt-dialog {
+  width: 480px;
+  max-height: 86vh;
+  height: min(600px, 86vh);
+}
+
+.dialog.opt-dialog .body {
+  flex: 1;
+  min-height: 0;
+}
+
+.qt-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 0;
+  padding: 4px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.qt-group.grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.qt-group > legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.solver-note {
+  white-space: pre-wrap;
+}
+
+.solver-note.warn {
+  color: var(--text-dim);
+}
+
+.solver-scroll {
+  flex: 1;
+  min-height: 80px;
+  overflow: auto;
+}
+
+/* ---- objectives */
+
+.objectives-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 4px;
+}
+
+.obj-controls {
+  flex-wrap: nowrap;
+}
+
+.obj-table {
+  flex: 1;
+}
+
+.obj-table td {
+  padding: 1px 4px;
+  border-bottom: none;
+}
+
+.obj-table td.obj-voi {
+  padding-right: 8px;
+}
+
+.obj-voi.bold {
+  font-weight: bold;
+}
+
+.obj-spin {
+  width: 80px;
+}
+
+.obj-params {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.obj-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.obj-param .combo {
+  min-width: 90px;
+}
+
+.obj-status {
+  min-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- optimization status window */
+
+.opt-window {
+  position: fixed;
+  z-index: 150;
+  width: 600px;
+  background: var(--window);
+  border: 1px solid #8a8a8a;
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+
+.opt-titlebar {
+  display: flex;
+  align-items: center;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--edge, #ddd);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.opt-titlebar > span {
+  flex: 1;
+}
+
+.opt-titlebar .title-close {
+  border: none;
+  background: transparent;
+  width: 26px;
+  height: 22px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.opt-titlebar .title-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.opt-body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opt-plot {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  font: 11px var(--font);
+}
+
+.opt-plot-bg {
+  fill: var(--base);
+}
+
+.opt-plot-title {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.opt-grid line {
+  stroke: var(--text);
+  stroke-opacity: 0.12;
+}
+
+.opt-axis line {
+  stroke: var(--text);
+  stroke-opacity: 0.7;
+}
+
+.opt-axis text {
+  fill: var(--text);
+}
+
+.opt-marks path {
+  stroke: var(--text);
+  stroke-width: 2.5;
+  fill: none;
+}

@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
       - uses: actions/checkout@v7
@@ -79,3 +80,11 @@ jobs:
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: ${{ steps.changelog.outputs.status == 'prereleased' || steps.changelog.outputs.status == 'unreleased' }}
+
+      # A release created with GITHUB_TOKEN does not start the release trigger of web-pages.yml;
+      # workflow_dispatch is exempt, and a run on develop rebuilds /latest/ and /develop/.
+      - name: Rebuild the web Pages site
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run web-pages.yml --ref develop
