@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import array_api_compat
@@ -119,6 +120,85 @@ def test_base_class_works_without_torch_models():
     assert float(obj.compute_objective(dose)) == pytest.approx(1.0 / (1.0 + np.exp(0.0)))
     assert obj.compute_gradient(dose).shape == index.shape
     assert obj.report_info() == {"history": obj.history}
+
+
+def _mask_cst():
+    """Two box VOIs on the FakeGrid geometry, with their union in dose-vector order."""
+    import SimpleITK as sitk
+
+    boxes = {"A": np.s_[1:3, 2:5, 3:6], "B": np.s_[0:1, 6:8, 0:2]}
+    vois, union = [], np.zeros(DIMS[::-1], dtype=bool)
+    for name, box in boxes.items():
+        arr = np.zeros(DIMS[::-1], dtype=np.uint8)
+        arr[box] = 1
+        union |= arr > 0
+        mask = sitk.GetImageFromArray(arr)
+        mask.SetSpacing(tuple(FakeGrid().resolution_vector))
+        vois.append(SimpleNamespace(name=name, mask=mask))
+    return SimpleNamespace(vois=vois), union.ravel()
+
+
+def _frozen_obj(gradient_vois=("A", "B"), **overrides):
+    cst, union = _mask_cst()
+    obj = MeanDoseLogistic(priority=1.0, gradient_vois=list(gradient_vois), **overrides)
+    obj.setup(None, cst)
+    obj.preprocess_image_reference_parameters(FakeGrid())
+    return obj, union
+
+
+def test_gradient_vois_freeze_the_dose_outside_after_warmup():
+    obj, union = _frozen_obj(warmup_iterations=1)
+    full = MeanDoseLogistic(priority=1.0)
+    full.preprocess_image_reference_parameters(FakeGrid())
+    dose = _dose().astype(np.float64)
+    moved = dose + np.where(union, 0.0, 30.0)
+
+    assert np.all(obj.compute_gradient(dose) == 0.0)  # warmup: nothing frozen yet
+    assert float(obj.compute_objective(moved)) == float(full.compute_objective(moved))
+
+    grad = obj.compute_gradient(dose)
+    np.testing.assert_array_equal(grad[union], full.compute_gradient(dose)[union])
+    assert np.all(grad[~union] == 0.0)
+    dose[:] = 0.0  # the frozen dose is a copy
+    reference = float(full.compute_objective(_dose().astype(np.float64)))
+    assert float(obj.compute_objective(moved)) == reference
+
+
+def test_frozen_gradient_matches_finite_differences():
+    obj, union = _frozen_obj()
+    dose = _dose().astype(np.float64)
+    grad = obj.compute_gradient(dose)
+
+    step = 1e-4
+    for i in (int(np.flatnonzero(union)[0]), int(np.flatnonzero(~union)[0])):
+        bumped = dose.copy()
+        bumped[i] += step
+        fd = (float(obj.compute_objective(bumped)) - float(obj.compute_objective(dose))) / step
+        assert fd == pytest.approx(grad[i], rel=1e-3, abs=1e-12)
+
+
+def test_gradient_vois_on_a_voi_subset():
+    cst, union = _mask_cst()
+    obj = MeanDoseLogistic(priority=1.0, gradient_vois=["A"])
+    obj.setup(None, cst)
+    index = np.arange(0, N_VOXELS, 2)
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=index)
+    obj.compute_gradient(_dose()[index])
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=index)
+    assert obj._frozen_dose is None  # a new optimization unfreezes
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=index)
+
+    grad = obj.compute_gradient(_dose()[index])
+    in_a = obj._gradient_mask[index]
+    assert np.all(grad[~in_a] == 0.0)
+    assert np.all(grad[in_a] != 0.0)
+    assert not np.any(in_a & ~union[index])
+
+
+def test_unknown_gradient_voi_raises():
+    cst, _ = _mask_cst()
+    with pytest.raises(ValueError, match="not in the structure set"):
+        MeanDoseLogistic(priority=1.0, gradient_vois=["A", "PAROTID"]).setup(None, cst)
 
 
 def test_import_objectives_does_not_load_torch():

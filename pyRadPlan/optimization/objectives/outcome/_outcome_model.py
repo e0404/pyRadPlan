@@ -97,6 +97,7 @@ class OutcomeModel(OutcomeObjective):
 
     def setup(self, ct, cst) -> None:
         """Configure the preprocessor with the planning CT and structures."""
+        super().setup(ct, cst)
         self.preprocessor.configure(ct, cst, cst_masks=self.cst_masks, device=self._model_device)
 
     def _set_dose_grid(self, dose_grid) -> None:
