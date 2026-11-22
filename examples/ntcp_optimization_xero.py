@@ -58,11 +58,11 @@ cst.create_body_seg()  # adds BODY/SKIN as vois[4]
 # %%
 # Create a plan object
 pln = PhotonPlan(radiation_mode="photons", machine="Generic")
-pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln.prop_opt = {"solver": "ipax", "max_iter": 200, "display": True}
 pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
 
 pln.prop_stf = {
-    "gantry_angles": [0, 72, 144, 216, 288],
+    "gantry_angles": [0, 60, 120, 180, 240, 300],
     "couch_angles": [0, 0, 0, 0, 0],
 }
 stf = generate_stf(ct, cst, pln)
@@ -74,11 +74,10 @@ stf = generate_stf(ct, cst, pln)
 ntcp_obj = OutcomeModel(
     priority=300000.0,
     model=r"pyRadPlan-outcome-ORPDenseNet-Xerostomia",
-    warmup_iterations=5,
-    cst_masks=[
-        "PAROTID_LT",
-        "PAROTID_RT",
-    ],  # channel order matters unless the model collapses masks
+    warmup_iterations=20,
+    cst_masks=["PAROTID_LT", "PAROTID_RT"],
+    # Only parotid dose drives the NTCP; the dose elsewhere is frozen when the warmup ends.
+    gradient_vois=["PAROTID_LT", "PAROTID_RT"],
 )
 
 cst.vois[0].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_LT
