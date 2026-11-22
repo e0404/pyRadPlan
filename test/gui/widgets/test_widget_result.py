@@ -55,10 +55,8 @@ def _sequenced_result_for(ct):
         "leaf_width": 10.0,
         "leaf_leakage": 0.1,
     }
-    beam = BeamSequence(
-        mlc_sequence=[create_bld(mlc_info)], shapes_weight=[1.0], mlc_window=[-20, 20]
-    )
-    return result.model_copy(update={"sequence": Sequence(beam=[beam, beam])})
+    beam = BeamSequence.from_shapes([create_bld(mlc_info)], [1.0])
+    return result.model_copy(update={"sequence": Sequence(beams=[beam, beam])})
 
 
 def test_viewing_widget_init(qapp):

@@ -41,7 +41,7 @@ from pyRadPlan.stf.generators import (
     StfGeneratorVHEE,
 )
 from pyRadPlan.machines import MLC, Jaw
-from pyRadPlan.result._beam_sequence import BeamSequence
+from pyRadPlan.result import BeamSequence, MachineState, Segment
 
 
 @pytest.fixture
@@ -245,15 +245,20 @@ def _make_mlc(leaf_width: float, opening: float) -> MLC:
 
 
 def _make_beam_sequence(n_shapes: int, weight_start: float = 1.0) -> BeamSequence:
-    mlc_sequence = [_make_mlc(leaf_width=10.0, opening=5.0 + s) for s in range(n_shapes)]
-    return BeamSequence(
-        shapes=np.ones((3, 4, n_shapes), dtype=np.uint8),
-        shapes_weight=np.array([weight_start + s for s in range(n_shapes)]),
-        bixel_ix=list(range(4)),
-        fluence=np.ones(4),
-        mlc_sequence=mlc_sequence,
-        mlc_window=[-20.0, 20.0, -15.0, 15.0],
+    mlcs = [_make_mlc(leaf_width=10.0, opening=5.0 + s) for s in range(n_shapes)]
+    return BeamSequence.from_shapes(mlcs, [weight_start + s for s in range(n_shapes)])
+
+
+def _with_jaws(beam_sequence: BeamSequence, jaws_per_segment: list) -> BeamSequence:
+    return BeamSequence.from_shapes(
+        [segment.start.mlc for segment in beam_sequence.segments],
+        beam_sequence.weights,
+        jaws=jaws_per_segment,
     )
+
+
+def _mlcs(beam_sequence: BeamSequence) -> list:
+    return [segment.start.mlc for segment in beam_sequence.segments]
 
 
 def test_photon_single_bixel_bare_pencil_beam_without_beam_sequences(
@@ -275,19 +280,48 @@ def test_photon_single_bixel_bare_pencil_beam_without_beam_sequences(
         assert beamlet["energy"] == 6.0
 
 
-def test_group_shapes_by_extra_blds_none_groups_everything():
-    beam_sequence = _make_beam_sequence(3)
-    groups = StfGeneratorPhotonSingleBixel._group_shapes_by_extra_blds(beam_sequence)
+def _states(beam_sequence: BeamSequence) -> list:
+    return StfGeneratorPhotonSingleBixel()._segment_states(beam_sequence)
+
+
+def test_group_by_jaws_without_jaws_groups_everything():
+    groups = StfGeneratorPhotonSingleBixel._group_by_jaws(_states(_make_beam_sequence(3)))
     assert groups == [[0, 1, 2]]
 
 
-def test_group_shapes_by_extra_blds_splits_on_differing_devices():
-    beam_sequence = _make_beam_sequence(3)
+def test_group_by_jaws_splits_on_differing_devices():
     jaw_a = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
     jaw_b = Jaw(device_orientation="X", positions=[-15.0, 15.0], field_width=30.0)
-    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_a], [jaw_a], [jaw_b]]})
-    groups = StfGeneratorPhotonSingleBixel._group_shapes_by_extra_blds(beam_sequence)
+    beam_sequence = _with_jaws(_make_beam_sequence(3), [[jaw_a], [jaw_a], [jaw_b]])
+    groups = StfGeneratorPhotonSingleBixel._group_by_jaws(_states(beam_sequence))
     assert groups == [[0, 1], [2]]
+
+
+def test_segment_states_sample_a_moving_segment():
+    start, end = _make_mlc(leaf_width=10.0, opening=5.0), _make_mlc(leaf_width=10.0, opening=15.0)
+    moving = Segment(weight=2.0, start=MachineState(mlc=start), end=MachineState(mlc=end))
+    generator = StfGeneratorPhotonSingleBixel()
+
+    states = generator._segment_states(BeamSequence(segments=[moving]))
+
+    assert len(states) == generator.DYNAMIC_SAMPLES
+    assert sum(weight for weight, _, _ in states) == pytest.approx(2.0)
+    travelled = [
+        (mlc.leaf_positions - start.leaf_positions) / (end.leaf_positions - start.leaf_positions)
+        for _, mlc, _ in states
+    ]
+    np.testing.assert_allclose([np.nanmean(t) for t in travelled], [0.1, 0.3, 0.5, 0.7, 0.9])
+
+
+def test_segment_states_refuse_gantry_motion():
+    mlc = _make_mlc(leaf_width=10.0, opening=5.0)
+    arc = Segment(
+        weight=1.0,
+        start=MachineState(gantry_angle=0.0, mlc=mlc),
+        end=MachineState(gantry_angle=4.0, mlc=mlc),
+    )
+    with pytest.raises(NotImplementedError, match="gantry or couch motion"):
+        StfGeneratorPhotonSingleBixel()._segment_states(BeamSequence(segments=[arc]))
 
 
 def test_photon_single_bixel_beam_sequences(sample_ct, sample_cst, sample_photon_pln_dict):
@@ -305,7 +339,7 @@ def test_photon_single_bixel_beam_sequences(sample_ct, sample_cst, sample_photon
     stf = stf_gen.generate(sample_ct, sample_cst)
 
     assert len(stf) == 2
-    # all shapes of each beam share extra_blds=None -> one group -> one ray
+    # all shapes of each beam share no jaws -> one group -> one ray
     assert len(stf[0]["rays"]) == 1
     assert len(stf[1]["rays"]) == 1
 
@@ -319,7 +353,7 @@ def test_photon_single_bixel_beam_sequences(sample_ct, sample_cst, sample_photon
             * FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5)
             .resample(new_grid=beamlet.grid)
             .mask
-            for w, mlc in zip(beam_sequence.shapes_weight, beam_sequence.mlc_sequence)
+            for w, mlc in zip(beam_sequence.weights, _mlcs(beam_sequence))
         )
         np.testing.assert_allclose(beamlet.mask, expected_mask)
 
@@ -345,11 +379,11 @@ def test_photon_single_bixel_beam_sequences_single_shape_stays_a_plain_composite
     assert len(stf[0]["rays"]) == 1
     beamlet = stf[0]["rays"][0]["beamlets"][0]
     assert isinstance(beamlet, FieldShapeAsBLD)
-    assert beamlet.bld is beam_sequence.mlc_sequence[0]
-    assert beamlet.weight == pytest.approx(beam_sequence.shapes_weight[0])
+    assert beamlet.bld is _mlcs(beam_sequence)[0]
+    assert beamlet.weight == pytest.approx(beam_sequence.weights[0])
 
 
-def test_photon_single_bixel_beam_sequences_with_extra_blds(
+def test_photon_single_bixel_beam_sequences_with_jaws(
     sample_ct, sample_cst, sample_photon_pln_dict
 ):
     sample_photon_pln_dict["prop_stf"] = {
@@ -365,7 +399,7 @@ def test_photon_single_bixel_beam_sequences_with_extra_blds(
     beam_sequence = _make_beam_sequence(2)
     jaw_x = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
     jaw_y = Jaw(device_orientation="Y", positions=[-15.0, 15.0], field_width=30.0)
-    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_x, jaw_y]] * 2})
+    beam_sequence = _with_jaws(beam_sequence, [[jaw_x, jaw_y]] * 2)
     stf_gen.beam_sequences = [beam_sequence]
 
     stf = stf_gen.generate(sample_ct, sample_cst)
@@ -376,7 +410,7 @@ def test_photon_single_bixel_beam_sequences_with_extra_blds(
     assert beamlet.weight == pytest.approx(1.0)
 
 
-def test_photon_single_bixel_beam_sequences_differing_extra_blds_are_merged_into_one_ray(
+def test_photon_single_bixel_beam_sequences_differing_jaws_are_merged_into_one_ray(
     sample_ct, sample_cst, sample_photon_pln_dict
 ):
     sample_photon_pln_dict["prop_stf"] = {
@@ -392,7 +426,7 @@ def test_photon_single_bixel_beam_sequences_differing_extra_blds_are_merged_into
     beam_sequence = _make_beam_sequence(2)
     jaw_a = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
     jaw_b = Jaw(device_orientation="X", positions=[-15.0, 15.0], field_width=30.0)
-    beam_sequence = beam_sequence.model_copy(update={"extra_blds": [[jaw_a], [jaw_b]]})
+    beam_sequence = _with_jaws(beam_sequence, [[jaw_a], [jaw_b]])
     stf_gen.beam_sequences = [beam_sequence]
 
     stf = stf_gen.generate(sample_ct, sample_cst)
@@ -406,9 +440,7 @@ def test_photon_single_bixel_beam_sequences_differing_extra_blds_are_merged_into
         w
         * FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5).resample(new_grid=beamlet.grid).mask
         * FieldShapeAsBLD(energy=6.0, bld=jaw, resolution=0.5).resample(new_grid=beamlet.grid).mask
-        for w, mlc, jaw in zip(
-            beam_sequence.shapes_weight, beam_sequence.mlc_sequence, [jaw_a, jaw_b]
-        )
+        for w, mlc, jaw in zip(beam_sequence.weights, _mlcs(beam_sequence), [jaw_a, jaw_b])
     )
     np.testing.assert_allclose(beamlet.mask, expected_mask, atol=1e-6)
 

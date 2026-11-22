@@ -134,16 +134,33 @@ class MLC(BeamLimitingDevice):
         # the number of active pairs equals the number of leaf rows in the field).
         return len(self.leaf_positions)
 
-    def is_active_leaf_pair(self, central_leaf_pair: float) -> np.ndarray:
+    @property
+    def central_leaf_pair(self) -> float:
+        """1-based index of the leaf pair on isocenter, derived from the leaf rows.
+
+        A device that is symmetric about the isocenter has a leaf boundary there for an
+        even number of leaf pairs (``N / 2 + 0.5``) and a leaf center for an odd number.
+        Leaf rows that put a leaf center on the isocenter of an even device, as sequencing
+        on the ray grid does, give matRad's ``ceil(N / 2)``.
+        """
+        fraction = (self.leaf_position_boundaries[0] / self.leaf_width + 0.5) % 1.0
+        on_center = min(fraction, 1.0 - fraction) < 1e-6  # noqa: PLR2004
+        num = self.number_of_elements
+        return float(math.ceil(num / 2)) if on_center else num / 2 + 0.5
+
+    def is_active_leaf_pair(self, central_leaf_pair: Optional[float] = None) -> np.ndarray:
         """Map the field's leaf rows onto the full MLC, given beam geometry.
 
         Parameters
         ----------
-        central_leaf_pair : float
+        central_leaf_pair : float, optional
             1-based index of the leaf pair centred on isocenter, with indices
             increasing towards negative stack coordinates. Fractional (``k + 0.5``)
             when isocenter falls on the boundary between pairs ``k`` and ``k + 1``.
+            Defaults to :attr:`central_leaf_pair`.
         """
+        if central_leaf_pair is None:
+            central_leaf_pair = self.central_leaf_pair
         idx = self._device_leaf_indices(central_leaf_pair)
         is_active_leaf_pair = np.zeros(self.number_of_elements)
         is_active_leaf_pair[idx[(idx >= 0) & (idx < self.number_of_elements)]] = 1
@@ -160,7 +177,7 @@ class MLC(BeamLimitingDevice):
         centers = self.leaf_position_boundaries + self.leaf_width / 2.0
         return np.rint(central_leaf_pair - 1 - centers / self.leaf_width).astype(int)
 
-    def full_leaf_positions(self, central_leaf_pair: float) -> np.ndarray:
+    def full_leaf_positions(self, central_leaf_pair: Optional[float] = None) -> np.ndarray:
         """Leaf positions across the full physical device.
 
         Returns an ``(number_of_elements, 2)`` array with this shape's leaf
@@ -169,9 +186,12 @@ class MLC(BeamLimitingDevice):
 
         Parameters
         ----------
-        central_leaf_pair : float
-            Index of the central leaf pair in the full MLC.
+        central_leaf_pair : float, optional
+            Index of the central leaf pair in the full MLC. Defaults to
+            :attr:`central_leaf_pair`.
         """
+        if central_leaf_pair is None:
+            central_leaf_pair = self.central_leaf_pair
         idx = self._device_leaf_indices(central_leaf_pair)
         is_active = self.is_active_leaf_pair(central_leaf_pair).astype(bool)
         if is_active.sum() != len(self.leaf_positions):

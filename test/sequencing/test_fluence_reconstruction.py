@@ -82,28 +82,44 @@ def _sequence_filled_field(sequencer_name, input_fluence):
     fluence = np.concatenate([input_fluence.ravel(order="C")] * len(stf.beams))
 
     # No dij: this checks the decomposition, not the dose it would deliver.
-    return run_sequencing(PlanResult(fluence=fluence), pln, stf, dij=None)
+    sequenced = run_sequencing(PlanResult(fluence=fluence), pln, stf, dij=None)
+    return sequenced, sequenced.sequence.aperture_info(stf)
 
 
-def _assert_reconstructs(where, beam, input_fluence):
+def _beam_map(info, beam_ix, bixel_values, shape):
+    """The values of one beam's bixels on its field (rays are laid out row-major)."""
+    grid = info.grids[beam_ix]
+    bixels = slice(grid.bixel_offset, grid.bixel_offset + grid.num_of_bixels)
+    return np.asarray(bixel_values, dtype=float)[bixels].reshape(shape)
+
+
+def _assert_reconstructs(where, info, beam_ix, input_fluence):
     """Assert what holds for any input map, and return what differs between them."""
-    d_0 = np.asarray(beam.stratified_fluence)
-    d_0_stratified_from_input = _stratify(input_fluence)
-    np.testing.assert_array_equal(
+    beam = info.sequence.beams[beam_ix]
+    # The fluence is stratified against the beam's peak.
+    level = input_fluence.max() / NUM_OF_LEVELS
+
+    d_0 = _stratify(input_fluence)
+    np.testing.assert_allclose(
+        _beam_map(info, beam_ix, info.sequence.fluence, input_fluence.shape) / level,
         d_0,
-        d_0_stratified_from_input,
+        atol=1e-9,
         err_msg=f"{where}: input was not stratified to the expected level map",
     )
 
-    shapes = np.asarray(beam.shapes)  # (dim_stack, dim_travel, n_shapes)
+    # (dim_stack, dim_travel, n_shapes): the open fraction of every bixel per segment
+    shapes = np.stack(
+        [
+            info.aperture_fluence(beam_ix, segment_ix).reshape(input_fluence.shape)
+            for segment_ix in range(beam.num_of_segments)
+        ],
+        axis=-1,
+    )
     assert set(np.unique(shapes)) <= {0, 1}, f"{where}: shapes are not binary"
 
-    # cal_fac is the beam's peak fluence
-    assert beam.cal_fac == pytest.approx(input_fluence.max()), f"{where}: wrong cal_fac"
-
     # Calculate the weight of each shape in the stratified level units
-    weights = np.asarray(beam.shapes_weight, dtype=float)
-    level_weights = weights * NUM_OF_LEVELS / beam.cal_fac
+    weights = beam.weights
+    level_weights = weights / level
     np.testing.assert_allclose(
         level_weights,
         np.rint(level_weights),
@@ -123,7 +139,7 @@ def _assert_reconstructs(where, beam, input_fluence):
     # Stratification error: *physical* delivered fluence must be within half a level.
     delivered_fluence = (shapes * weights).sum(axis=-1)
     stratification_error = np.abs(delivered_fluence - input_fluence).max()
-    assert stratification_error <= 0.5 * beam.cal_fac / NUM_OF_LEVELS, (
+    assert stratification_error <= 0.5 * level, (
         f"{where}: delivery exceeds the stratification error bound"
     )
 
@@ -135,11 +151,11 @@ def test_constant_fluence_reconstructs_from_weighted_shapes(sequencer_name):
     """A constant map must come back exactly: every bixel open at the top level."""
     input_fluence = np.full((FIELD_SIDE, FIELD_SIDE), CONSTANT)
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights, stratification_error = _assert_reconstructs(where, beam, input_fluence)
+        weights, stratification_error = _assert_reconstructs(where, info, beam_ix, input_fluence)
 
         # A flat map sits exactly on the top level, so stratifying it loses nothing.
         assert stratification_error == 0.0, f"{where}: a constant map must stratify exactly"
@@ -156,18 +172,19 @@ def test_ramp_fluence_reconstructs_from_weighted_shapes(sequencer_name):
     scaled = input_fluence / input_fluence.max() * NUM_OF_LEVELS
     assert not np.array_equal(np.round(scaled), np.floor(scaled)), "ramp sits on the levels"
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights, stratification_error = _assert_reconstructs(where, beam, input_fluence)
+        weights, stratification_error = _assert_reconstructs(where, info, beam_ix, input_fluence)
 
         # Ramp does not sit on the levels, so the half-level bound is genuinely exercised
         # rather than trivially met.
         assert stratification_error > 0.0, f"{where}: ramp should not stratify exactly"
 
         # No delivery can beat the sliding-window bound; only Engel and Siochi meet it.
-        bound = _weight_lower_bound(beam.stratified_fluence) * beam.cal_fac / NUM_OF_LEVELS
+        level = input_fluence.max() / NUM_OF_LEVELS
+        bound = _weight_lower_bound(_stratify(input_fluence)) * level
         assert weights.sum() >= bound - 1e-9, f"{where}: delivers less than the lower bound"
 
 
@@ -182,18 +199,19 @@ def test_pyramid_fluence_reconstructs_from_weighted_shapes(sequencer_name):
     scaled = input_fluence / input_fluence.max() * NUM_OF_LEVELS
     assert not np.array_equal(np.round(scaled), np.floor(scaled)), "pyramid sits on the levels"
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights, stratification_error = _assert_reconstructs(where, beam, input_fluence)
+        weights, stratification_error = _assert_reconstructs(where, info, beam_ix, input_fluence)
 
         # Pyramid does not sit on the levels, so the half-level bound is genuinely exercised
         # rather than trivially met.
         assert stratification_error > 0.0, f"{where}: pyramid should not stratify exactly"
 
         # No delivery can beat the sliding-window bound; only Engel and Siochi meet it.
-        bound = _weight_lower_bound(beam.stratified_fluence) * beam.cal_fac / NUM_OF_LEVELS
+        level = input_fluence.max() / NUM_OF_LEVELS
+        bound = _weight_lower_bound(_stratify(input_fluence)) * level
         assert weights.sum() >= bound - 1e-9, f"{where}: delivers less than the lower bound"
 
 
@@ -203,11 +221,11 @@ def test_single_spike_fluence_reconstructs_from_weighted_shapes(sequencer_name):
     input_fluence = np.zeros((FIELD_SIDE, FIELD_SIDE))
     input_fluence[FIELD_SIDE // 2, FIELD_SIDE // 2] = CONSTANT
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights, stratification_error = _assert_reconstructs(where, beam, input_fluence)
+        weights, stratification_error = _assert_reconstructs(where, info, beam_ix, input_fluence)
 
         # Only zero and the peak occur, and both sit on a level.
         assert stratification_error == 0.0, f"{where}: a spike must stratify exactly"
@@ -216,8 +234,9 @@ def test_single_spike_fluence_reconstructs_from_weighted_shapes(sequencer_name):
         assert weights.sum() == pytest.approx(CONSTANT), f"{where}: delivers excess weight"
 
         # Every leaf row but the spike's is closed.
-        for shape_ix, (left, right) in enumerate(zip(beam.left_leaf_pos, beam.right_leaf_pos)):
-            closed = np.isclose(np.asarray(left), np.asarray(right))
+        for shape_ix, segment in enumerate(beam.segments):
+            left, right = np.asarray(segment.start.mlc.leaf_positions, dtype=float).T
+            closed = np.isclose(left, right)
             assert closed.sum() == FIELD_SIDE - 1, (
                 f"{where}, shape {shape_ix}: every row but the spike's should be closed"
             )
@@ -228,17 +247,18 @@ def test_checkerboard_fluence_reconstructs_from_weighted_shapes(sequencer_name):
     """Alternating open and closed bixels -- the worst case for a sliding window."""
     input_fluence = np.indices((FIELD_SIDE, FIELD_SIDE)).sum(axis=0) % 2 * CONSTANT
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights, stratification_error = _assert_reconstructs(where, beam, input_fluence)
+        weights, stratification_error = _assert_reconstructs(where, info, beam_ix, input_fluence)
 
         # Only zero and the peak occur, and both sit on a level.
         assert stratification_error == 0.0, f"{where}: a checkerboard must stratify exactly"
 
         # Each peak bixel must be paid for separately, so the total weight is above the peak.
-        bound = _weight_lower_bound(beam.stratified_fluence) * beam.cal_fac / NUM_OF_LEVELS
+        level = input_fluence.max() / NUM_OF_LEVELS
+        bound = _weight_lower_bound(_stratify(input_fluence)) * level
         assert bound > input_fluence.max(), f"{where}: a checkerboard should cost above its peak"
         assert weights.sum() >= bound - 1e-9, f"{where}: delivers less than the lower bound"
 
@@ -248,22 +268,18 @@ def test_zero_fluence_delivers_nothing(sequencer_name):
     """A beam the optimization zeroed out sequences to nothing rather than raising."""
     input_fluence = np.zeros((FIELD_SIDE, FIELD_SIDE))
 
-    sequenced = _sequence_filled_field(sequencer_name, input_fluence)
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
 
-    # Not _assert_reconstructs: with no peak there is no cal_fac to express levels in.
-    for beam_ix, beam in enumerate(sequenced.sequence.beam):
+    # Not _assert_reconstructs: with no peak there is no level to express the weights in.
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
         where = f"{sequencer_name}: beam {beam_ix}"
-        weights = np.asarray(beam.shapes_weight, dtype=float)
-        shapes = np.asarray(beam.shapes)
-        assert weights.sum() == pytest.approx(0.0), f"{where}: delivers weight for a zero map"
-        delivered = (
-            (shapes * weights).sum(axis=-1) if shapes.size else np.zeros_like(input_fluence)
-        )
-        np.testing.assert_array_equal(
-            delivered,
-            np.zeros_like(input_fluence),
-            err_msg=f"{where}: delivers fluence for a zero map",
-        )
+        assert beam.weights.sum() == pytest.approx(0.0), f"{where}: delivers weight for a zero map"
+        for delivered in (info.bixel_weights(), sequenced.sequence.fluence):
+            np.testing.assert_array_equal(
+                _beam_map(info, beam_ix, delivered, input_fluence.shape),
+                np.zeros_like(input_fluence),
+                err_msg=f"{where}: delivers fluence for a zero map",
+            )
 
 
 @pytest.mark.parametrize("sequencer_name", sorted(get_available_sequencers("photons")))
@@ -279,14 +295,81 @@ def test_one_zeroed_beam_does_not_disturb_the_others(sequencer_name):
 
     sequenced = run_sequencing(PlanResult(fluence=fluence), pln, stf, dij=None)
 
-    zeroed, kept = sequenced.sequence.beam
-    assert np.asarray(zeroed.shapes_weight).sum() == pytest.approx(0.0)
-    assert np.asarray(kept.shapes_weight).sum() == pytest.approx(CONSTANT)
+    zeroed, kept = sequenced.sequence.beams
+    assert zeroed.weights.sum() == pytest.approx(0.0)
+    assert kept.weights.sum() == pytest.approx(CONSTANT)
 
     # The dropped beam must not leak NaN into the plan-wide structures it shares.
-    aperture_vector = np.asarray(sequenced.sequence.aperture_vector, dtype=float)
-    assert np.isfinite(aperture_vector).all(), f"{sequencer_name}: aperture vector holds NaN"
+    info = sequenced.sequence.aperture_info(stf)
+    assert np.isfinite(info.to_vector()).all(), f"{sequencer_name}: aperture vector holds NaN"
+    lower, upper = info.bounds()
+    leaves = slice(info.total_num_of_apertures, None)
+    assert np.isfinite(lower).all(), f"{sequencer_name}: lower bounds hold NaN"
+    assert np.isfinite(upper[leaves]).all(), f"{sequencer_name}: leaf limits hold NaN"
 
     delivered = np.asarray(sequenced.sequence.fluence, dtype=float)
     np.testing.assert_array_equal(delivered[:per_beam], np.zeros(per_beam))
     np.testing.assert_allclose(delivered[per_beam:], np.full(per_beam, CONSTANT))
+
+
+def _bumpy_fluence():
+    """A map with another profile in every leaf row, off the levels and with closed bixels."""
+    rows = np.array(
+        [
+            [0.0, 0.7, 1.9, 0.3, 0.0],
+            [1.1, 2.0, 0.4, 1.3, 0.9],
+            [0.0, 0.0, 1.5, 1.5, 0.2],
+            [0.6, 0.0, 0.0, 1.7, 1.0],
+        ]
+    )
+    return rows * CONSTANT / rows.max()
+
+
+@pytest.mark.parametrize("sequencer_name", sorted(get_available_sequencers("photons")))
+def test_segments_carry_their_stf_beam_and_both_jaws(sequencer_name):
+    """Every segment names the beam it is planned on and is bounded by an X and a Y jaw."""
+    input_fluence = _bumpy_fluence()
+    n_stack, n_travel = input_fluence.shape
+
+    sequenced, _ = _sequence_filled_field(sequencer_name, input_fluence)
+
+    assert len(sequenced.sequence.beams) == len(GANTRY_ANGLES)
+    for beam_ix, beam in enumerate(sequenced.sequence.beams):
+        assert beam.num_of_segments > 0, f"{sequencer_name}: beam {beam_ix} has no segments"
+        assert beam.stf_beams == [beam_ix]
+        for segment_ix, segment in enumerate(beam.segments):
+            where = f"{sequencer_name}: beam {beam_ix}, segment {segment_ix}"
+            assert segment.stf_beam == beam_ix, f"{where}: wrong stf_beam"
+            assert segment.end is None, f"{where}: step and shoot does not move"
+            assert segment.start.mlc is not None, f"{where}: no MLC"
+
+            jaws = {jaw.device_orientation: jaw for jaw in segment.start.jaws}
+            assert len(segment.start.jaws) == 2, f"{where}: expected one jaw per axis"
+            assert set(jaws) == {"X", "Y"}, f"{where}: expected an X and a Y jaw"
+            # The leaves travel along X: the X jaw bounds the columns, the Y jaw the rows.
+            half_x, half_y = 0.5 * n_travel * BIXEL_WIDTH, 0.5 * n_stack * BIXEL_WIDTH
+            np.testing.assert_allclose(jaws["X"].positions, [-half_x, half_x])
+            np.testing.assert_allclose(jaws["Y"].positions, [-half_y, half_y])
+
+
+@pytest.mark.parametrize("sequencer_name", sorted(get_available_sequencers("photons")))
+def test_bixel_weights_of_the_apertures_reproduce_the_sequenced_fluence(sequencer_name):
+    """On the ray grid the apertures open whole bixels, so their weights add up to the fluence."""
+    input_fluence = _bumpy_fluence()
+
+    sequenced, info = _sequence_filled_field(sequencer_name, input_fluence)
+
+    for grid in info.grids:
+        assert grid.leaf_width == grid.bixel_width == BIXEL_WIDTH
+    bixel_weights = info.bixel_weights()
+    assert bixel_weights.shape == sequenced.sequence.fluence.shape
+    np.testing.assert_allclose(bixel_weights, sequenced.sequence.fluence, rtol=1e-12, atol=1e-12)
+    # The fluence is the stratified input, so the comparison is not met by zeros.
+    level = input_fluence.max() / NUM_OF_LEVELS
+    for beam_ix in range(len(sequenced.sequence.beams)):
+        np.testing.assert_allclose(
+            _beam_map(info, beam_ix, bixel_weights, input_fluence.shape),
+            _stratify(input_fluence) * level,
+            atol=1e-9,
+        )
+    np.testing.assert_allclose(info.to_sequence().fluence, sequenced.sequence.fluence)

@@ -1,289 +1,356 @@
-"""Sequenced beam object."""
+"""The delivery sequence of one beam: segments between machine states."""
 
-from collections.abc import Mapping
-from typing import Any, Optional
-from numpy.typing import NDArray
-import logging
+from typing import Any, Literal, Optional
+
 import numpy as np
+from numpy.typing import NDArray
+from pydantic import Field, computed_field, field_validator, model_validator
 
-from pydantic import (
-    Field,
-    model_validator,
-    field_validator,
-    field_serializer,
-    SerializationInfo,
-    ValidationInfo,
-    computed_field,
-    SerializeAsAny,
-)
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.machines import MLC, BeamLimitingDevice, Jaw
+from pyRadPlan.machines import MLC, Jaw
 
-logger = logging.getLogger(__name__)
-
-
-def _as_list(devices: Any) -> list:
-    if isinstance(devices, np.ndarray):
-        return devices.tolist()
-    return [devices] if isinstance(devices, (Mapping, BeamLimitingDevice)) else list(devices)
+_FULL_CIRCLE = 360.0
 
 
-def _concrete_bld(device: Any) -> Any:
-    """Validate a dumped beam limiting device as an MLC or a jaw, told apart by its fields."""
-    if not isinstance(device, Mapping):
-        return device
-    if "leaf_positions" in device or "leafPositions" in device:
-        return MLC.model_validate(device)
-    if "positions" in device:
-        return Jaw.model_validate(device)
-    return device
+def _angle_span(start: float, end: float, rotation: Optional[str]) -> float:
+    """Signed angle travelled from *start* to *end*, positive clockwise (ascending angles)."""
+    span = float(end) - float(start)
+    if rotation == "cw":
+        return span % _FULL_CIRCLE
+    if rotation == "ccw":
+        return -((-span) % _FULL_CIRCLE)
+    return (span + _FULL_CIRCLE / 2) % _FULL_CIRCLE - _FULL_CIRCLE / 2
+
+
+class MachineState(PyRadPlanBaseModel):
+    """The machine at one instant: where the gantry, the couch, the leaves and the jaws are.
+
+    A state is a snapshot without any speed. Everything that moves is described by the
+    :class:`Segment` between two states.
+
+    Attributes
+    ----------
+    gantry_angle : float, optional
+        Gantry angle in degrees. ``None`` stands for the angle of the beam the segment is
+        planned on.
+    couch_angle : float, optional
+        Couch angle in degrees. ``None`` stands for the angle of the beam.
+    mlc : MLC, optional
+        The multi-leaf collimator with its leaf positions. Its ``device_angle`` is the
+        collimator angle.
+    jaws : list[Jaw]
+        The jaws, at most one per axis.
+    """
+
+    gantry_angle: Optional[float] = None
+    couch_angle: Optional[float] = None
+    mlc: Optional[MLC] = None
+    jaws: list[Jaw] = Field(default_factory=list)
+
+    @field_validator("jaws", mode="before")
+    @classmethod
+    def _jaw_list(cls, v: Any) -> Any:
+        if v is None:
+            return []
+        if isinstance(v, (Jaw, dict)):
+            return [v]
+        return list(v)
+
+    def interpolate(self, other: "MachineState", fraction: float) -> "MachineState":
+        """State a *fraction* (0 to 1) of the way to *other*, all axes moving linearly.
+
+        Angles are interpolated as given, so a state pair has to be free of the 360 degree
+        wrap (see :meth:`Segment.state_at`).
+        """
+
+        def lerp(a: Any, b: Any) -> Any:
+            if a is None or b is None:
+                return a
+            return a + fraction * (np.asarray(b) - np.asarray(a))
+
+        mlc = self.mlc
+        if mlc is not None and other.mlc is not None:
+            mlc = mlc.model_copy(
+                update={"leaf_positions": lerp(mlc.leaf_positions, other.mlc.leaf_positions)}
+            )
+        jaws = list(self.jaws)
+        if len(jaws) == len(other.jaws):
+            jaws = [
+                jaw.model_copy(
+                    update={"positions": [float(p) for p in lerp(jaw.positions, to.positions)]}
+                )
+                for jaw, to in zip(jaws, other.jaws)
+            ]
+        return MachineState(
+            gantry_angle=lerp(self.gantry_angle, other.gantry_angle),
+            couch_angle=lerp(self.couch_angle, other.couch_angle),
+            mlc=mlc,
+            jaws=jaws,
+        )
+
+
+class Segment(PyRadPlanBaseModel):
+    """A part of a beam that delivers ``weight`` while the machine is in or between states.
+
+    With only ``start``, nothing moves while the beam is on (step and shoot). With ``end``,
+    every axis moves linearly from ``start`` to ``end`` while the weight is delivered at a
+    constant rate (sliding window, arc).
+
+    Attributes
+    ----------
+    weight : float
+        Fluence weight delivered by the segment, in the unit of the bixel weights.
+    start : MachineState
+        The machine when the segment starts.
+    end : MachineState, optional
+        The machine when the segment ends. ``None``: the machine stays at ``start``.
+    duration : float, optional
+        Time the segment takes in seconds. Leaf speed, gantry speed and dose rate follow
+        from it; without it only the travelled distances are known.
+    stf_beam : int, optional
+        Index of the beam of the steering information the segment is planned on, whose
+        beamlets its fluence refers to.
+    """
+
+    weight: float = Field(ge=0.0)
+    start: MachineState
+    end: Optional[MachineState] = None
+    duration: Optional[float] = Field(default=None, gt=0.0)
+    stf_beam: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _matching_leaf_rows(self) -> "Segment":
+        if self.end is None or self.start.mlc is None or self.end.mlc is None:
+            return self
+        start, end = self.start.mlc.leaf_positions, self.end.mlc.leaf_positions
+        if start is not None and end is not None and np.shape(start) != np.shape(end):
+            raise ValueError("The start and the end of a segment need the same leaf rows.")
+        return self
+
+    @property
+    def is_dynamic(self) -> bool:
+        """Whether the machine moves while the segment is delivered."""
+        return self.end is not None and self.end != self.start
+
+    @property
+    def leaf_travel(self) -> Optional[NDArray]:
+        """Distance each leaf travels during the segment in mm, ``(rows, 2)``, signed."""
+        if self.start.mlc is None or self.start.mlc.leaf_positions is None:
+            return None
+        start = np.asarray(self.start.mlc.leaf_positions, dtype=float)
+        if self.end is None or self.end.mlc is None:
+            return np.zeros_like(start)
+        return np.asarray(self.end.mlc.leaf_positions, dtype=float) - start
+
+    def gantry_travel(self, rotation: Optional[str] = None) -> float:
+        """Angle the gantry travels during the segment in degrees, positive clockwise."""
+        if self.end is None or self.start.gantry_angle is None or self.end.gantry_angle is None:
+            return 0.0
+        return _angle_span(self.start.gantry_angle, self.end.gantry_angle, rotation)
+
+    @property
+    def max_leaf_speed(self) -> Optional[float]:
+        """Speed of the fastest leaf in mm/s, ``None`` without a duration."""
+        travel = self.leaf_travel
+        if self.duration is None or travel is None:
+            return None
+        return float(np.max(np.abs(travel), initial=0.0)) / self.duration
+
+    def gantry_speed(self, rotation: Optional[str] = None) -> Optional[float]:
+        """Gantry speed in degrees/s, ``None`` without a duration."""
+        if self.duration is None:
+            return None
+        return abs(self.gantry_travel(rotation)) / self.duration
+
+    @property
+    def weight_rate(self) -> Optional[float]:
+        """Weight delivered per second (the dose rate in weight units), ``None`` without a duration."""
+        return None if self.duration is None else self.weight / self.duration
+
+    def state_at(self, fraction: float, rotation: Optional[str] = None) -> MachineState:
+        """Return the machine a *fraction* (0 to 1) of the way through the segment."""
+        if self.end is None:
+            return self.start
+        state = self.start.interpolate(self.end, fraction)
+        if self.start.gantry_angle is not None and self.end.gantry_angle is not None:
+            angle = self.start.gantry_angle + fraction * self.gantry_travel(rotation)
+            state = state.model_copy(update={"gantry_angle": angle % _FULL_CIRCLE})
+        return state
+
+
+class ControlPoint(PyRadPlanBaseModel):
+    """A machine state with the weight delivered up to it, as in a DICOM RT Plan.
+
+    Attributes
+    ----------
+    index : int
+        Position in the control point list, from 0.
+    cumulative_weight : float
+        Weight delivered when the machine reaches this control point.
+    cumulative_meterset_weight : float
+        ``cumulative_weight`` as a fraction of the weight of the beam (0 to 1).
+    gantry_angle, couch_angle : float, optional
+        Angles in degrees.
+    gantry_rotation_direction : str
+        Direction the gantry moves in towards the next control point: ``"CW"``, ``"CC"`` or
+        ``"NONE"``.
+    mlc : MLC, optional
+        The multi-leaf collimator with its leaf positions.
+    jaws : list[Jaw]
+        The jaws.
+    """
+
+    index: int
+    cumulative_weight: float
+    cumulative_meterset_weight: float
+    gantry_angle: Optional[float] = None
+    couch_angle: Optional[float] = None
+    gantry_rotation_direction: Literal["CW", "CC", "NONE"] = "NONE"
+    mlc: Optional[MLC] = None
+    jaws: list[Jaw] = Field(default_factory=list)
 
 
 class BeamSequence(PyRadPlanBaseModel):
-    """A class representing the aperture information of a beam.
-
-    Following matRad's ``resultGUI.sequencing.beam`` and ``apertureInfo.beam``,
-    merged into a single object on import. ``cal_fac``, ``mlc_sequence`` and
-    ``extra_blds`` have no matRad counterpart and are pyRadPlan additions.
+    """What the machine does to deliver one beam: a static field or one arc.
 
     All positions are in mm in the beam's eye view frame of the ray matrix (LPS +x and +z at
     gantry and couch angle 0, see :class:`~pyRadPlan.machines.BeamLimitingDevice`).
 
-    Parameters
-    ----------
-    shapes : Optional[NDArray]
-        A 3D array of the binary shapes in the beam, ``(dim_stack, dim_travel, num_shapes)``.
-    shapes_weight : NDArray
-        Weight of each shape in the beam, ``(num_shapes,)``, in physical fluence units (not
-        stratified).
-    bixel_ix : Optional[list[int]]
-        Global bixel indices of this beam's rays (columns in dij).
-    stratified_fluence : Optional[NDArray]
-        The stratified fluence map (matRad's ``D_0``), shaped ``(dim_stack, dim_travel)`` on the
-        leaf-row/column grid. Integer-valued in *level* units (physical fluence in
-        ``Sequence.fluence``).
-    cal_fac : Optional[float]
-        Calibration factor the fluence was stratified against (the beam's peak fluence),
-        so one intensity level of ``stratified_fluence`` is worth
-        ``cal_fac / num_of_levels``.
-    leaf_pair_pos : Optional[list[float]]
-        A list of positions for each leaf pair in the beam (leaf centers, not boundaries).
-    is_active_leaf_pair : Optional[list[bool]]
-        A list indicating whether each leaf pair is active (True) or inactive (False).
-    bixel_ind_map : Optional[NDArray]
-        The same indices as ``bixel_ix`` (native ray resolution) as 2D array spanning the
-        beam's bounding box, with ``NaN`` wherever the box holds no ray.
-    pos_of_corner_bixel : Optional[list[float]]
-        BEV position of the grid's corner bixel: a 3-vector carrying ``min_travel`` at
-        the travel axis and ``min_stack`` at the stack axis, 0 elsewhere. The origin
-        for turning grid indices back into BEV coordinates.
-    mlc_window : Optional[list[float]]
-        Field window ``[travel_min, travel_max, stack_min, stack_max]``. The travel axis spans the ray
-        extent plus half a bixel either side; the stack axis spans the union of that
-        and the leaf rows in use, so the jaws never clip a leaf.
-    lim_l : Optional[list[float]]
-        Left leaf travel limit (DAO bound, not a position) for each leaf pair.
-
-    lim_r : Optional[list[float]]
-        Right leaf travel limit (DAO bound, not a position) for each leaf pair.
-    central_leaf_pair : Optional[float]
-        1-based index of the leaf pair on isocenter. On a physical leaf grid with an
-        even leaf count a leaf boundary sits on the isocenter (``N/2 + 0.5``), for an
-        odd leaf count a leaf center (``(N + 1) / 2``). Sequencing directly on the ray
-        grid keeps matRad's ``ceil(N/2)``, with a leaf centre on isocenter.
-    left_leaf_pos : Optional[list[NDArray]]
-        A list of 1D arrays containing the left leaf positions of the active leaf pairs
-        for each shape in the beam. Mirrors ``mlc_sequence[m].leaf_positions[:, 0]``.
-    right_leaf_pos : Optional[list[NDArray]]
-        A list of 1D arrays containing the right leaf positions of the active leaf pairs
-        for each shape in the beam. Mirrors ``mlc_sequence[m].leaf_positions[:, 1]``.
-    vector_offset : Optional[list[int]]
-        A list containing the vector offset for each shape in the beam indicating the
-        starting index of the shape in the flat ``Sequence.aperture_vector``.
-    num_of_active_leaf_pairs : Optional[int]
-        The number of active leaf pairs (also closed pairs) within the field.
-    mlc_sequence : Optional[list[MLC]]
-        One ``MLC`` object per shape, carrying the full geometry (leaf width, boundaries,
-        leaf positions, orientation).
-    extra_blds : Optional[list[list[BeamLimitingDevice]]]
-        Beam limiting devices active for each shape beyond the MLCs, currently the
-        static X/Y jaw pair bounding ``mlc_window``.
-
-
     Attributes
     ----------
-    sum_shapes : NDArray
-        Unweighted sum of ``shapes`` over the shape axis: how many shapes each
-        bixel is open in.
-    num_of_shapes : int
-        Number of delivered shapes.
-    shape_map : Optional[list[NDArray]]
-        ``shapes`` sliced per shape, in matRad's per-shape layout.
-    weight : list[float]
-        ``shapes_weight`` in matRad's per-shape layout.
+    segments : list[Segment]
+        The segments in the order they are delivered.
+    rotation : str, optional
+        Direction the gantry rotates in during an arc, ``"cw"`` (ascending angles) or
+        ``"ccw"``. ``None`` takes the shorter way between two gantry angles.
     """
 
-    shapes: Optional[NDArray] = Field(default=None)
-    shapes_weight: NDArray
-    bixel_ix: Optional[list[int]] = Field(default=None)
-    stratified_fluence: Optional[NDArray] = Field(default=None, alias="fluence")
-    cal_fac: Optional[float] = Field(default=None)
-    leaf_pair_pos: Optional[list[float]] = Field(default=None)
-    is_active_leaf_pair: Optional[list[bool]] = Field(default=None)
-    bixel_ind_map: Optional[NDArray] = Field(default=None)
-    pos_of_corner_bixel: Optional[list[float]] = Field(default=None)
-    mlc_window: Optional[list[float]] = Field(alias="MLCWindow", default=None)
-    lim_l: Optional[list[float]] = Field(default=None)
-    lim_r: Optional[list[float]] = Field(default=None)
-    central_leaf_pair: Optional[float] = Field(default=None)
-    left_leaf_pos: Optional[list[NDArray]] = Field(default=None)
-    right_leaf_pos: Optional[list[NDArray]] = Field(default=None)
-    vector_offset: Optional[list[int]] = Field(default=None)
-    num_of_active_leaf_pairs: Optional[int] = Field(default=None)
-    mlc_sequence: Optional[list[MLC]] = Field(default=None)
-    extra_blds: Optional[list[list[SerializeAsAny[BeamLimitingDevice]]]] = Field(default=None)
+    segments: list[Segment] = Field(default_factory=list)
+    rotation: Optional[Literal["cw", "ccw"]] = None
+
+    @classmethod
+    def from_shapes(
+        cls,
+        mlcs: Optional[list[MLC]],
+        weights: Any,
+        jaws: Optional[list] = None,
+        stf_beam: Optional[int] = None,
+    ) -> "BeamSequence":
+        """Step-and-shoot sequence from one MLC and one weight per segment.
+
+        Parameters
+        ----------
+        mlcs : list[MLC], optional
+            The MLC of each segment; ``None`` for a field shaped by the jaws only.
+        weights : array-like
+            The weight of each segment.
+        jaws : list, optional
+            The jaws of the beam (a list of ``Jaw``), or one such list per segment.
+        stf_beam : int, optional
+            Index of the beam of the steering information the segments are planned on.
+        """
+        weights = np.asarray(weights, dtype=float).reshape(-1)
+        num = len(weights)
+        if mlcs is not None and len(mlcs) != num:
+            raise ValueError(f"Got {len(mlcs)} MLC shapes for {num} weights.")
+        jaws = list(jaws or [])
+        per_segment = bool(jaws) and all(isinstance(j, (list, tuple)) for j in jaws)
+        if per_segment and len(jaws) != num:
+            raise ValueError(f"Got jaws for {len(jaws)} segments, expected {num}.")
+        return cls(
+            segments=[
+                Segment(
+                    weight=weights[m],
+                    start=MachineState(
+                        mlc=None if mlcs is None else mlcs[m],
+                        jaws=jaws[m] if per_segment else jaws,
+                    ),
+                    stf_beam=stf_beam,
+                )
+                for m in range(num)
+            ]
+        )
 
     @computed_field
     @property
-    def sum_shapes(self) -> NDArray:
-        """Sum of all shapes in the beam along the last dimension."""
-        if self.shapes is None:
-            return np.array([])
-        if self.shapes.ndim == 3:
-            return np.sum(self.shapes, axis=-1)  # Sum over the last dimension (e.g. n=1 => 3x3x1)
-        elif self.shapes.ndim == 2:
-            return self.shapes
-        else:
-            logger.warning("Shapes have an unsupported number of dimensions.")
-            return np.array([])  # Return an empty array for unsupported cases
+    def num_of_segments(self) -> int:
+        """Number of segments of the beam."""
+        return len(self.segments)
 
-    @computed_field
     @property
-    def shape_map(self) -> Optional[list[NDArray]]:
-        """``shapes`` sliced per shape, as matRad's ``shape(j).shapeMap``."""
-        if self.shapes is None:
-            return None
-        if self.shapes.ndim == 3:
-            return [self.shapes[:, :, m] for m in range(self.shapes.shape[2])]
-        return [self.shapes]
+    def weights(self) -> NDArray:
+        """Weight of each segment."""
+        return np.array([segment.weight for segment in self.segments], dtype=float)
 
-    @computed_field
     @property
-    def weight(self) -> list[float]:
-        """``shapes_weight`` in matRad's per-shape ``shape(j).weight`` layout."""
-        return [float(w) for w in self.shapes_weight]
+    def total_weight(self) -> float:
+        """Weight the beam delivers in total."""
+        return float(self.weights.sum())
 
-    @computed_field
     @property
-    def num_of_shapes(self) -> int:
-        """Total number of shapes in the beam."""
-        if self.shapes is not None:
-            return self.shapes.shape[2] if self.shapes.ndim == 3 else 1
-        return len(self.shapes_weight)
+    def is_dynamic(self) -> bool:
+        """Whether the machine moves while any segment is delivered."""
+        return any(segment.is_dynamic for segment in self.segments)
 
-    @field_validator("bixel_ind_map", mode="after")
-    @classmethod
-    def validate_bixel_ind_map(cls, v: Any, info: ValidationInfo) -> np.ndarray:
-        """Rotate 2D index map and convert from 1-based to 0-based indexing."""
+    @property
+    def is_continuous(self) -> bool:
+        """Whether every segment starts in the state the one before ended in."""
+        return all(
+            (before.end or before.start) == after.start
+            for before, after in zip(self.segments, self.segments[1:])
+        )
 
-        if info.context and info.context.get("from_matRad"):
-            arr = np.asarray(v, dtype=np.float64)
-            mask = ~np.isnan(arr)
-            arr[mask] -= 1  # Convert to 0-based indexing
-            return arr.T
+    @property
+    def stf_beams(self) -> list[int]:
+        """Indices of the beams of the steering information the segments are planned on."""
+        return sorted({s.stf_beam for s in self.segments if s.stf_beam is not None})
 
-        return v
+    @property
+    def mlc(self) -> Optional[MLC]:
+        """The MLC of the first segment, for the geometry all segments share."""
+        return self.segments[0].start.mlc if self.segments else None
 
-    @field_serializer("bixel_ix")
-    def _bixel_ix_to_matrad(self, v: Optional[list[int]], info: SerializationInfo) -> Any:
-        """Count the bixels from 1 for matRad."""
-        if v is not None and info.context and info.context.get("matRad") == "mat-file":
-            return np.asarray(v, dtype=float) + 1
-        return v
+    def control_points(
+        self, gantry_angle: Optional[float] = None, couch_angle: Optional[float] = None
+    ) -> list[ControlPoint]:
+        """List the sequence as control points with cumulative weights, as in a DICOM RT Plan.
 
-    @field_serializer("bixel_ind_map")
-    def _bixel_ind_map_to_matrad(self, v: Optional[np.ndarray], info: SerializationInfo) -> Any:
-        """Undo the rotation and the 0-based indexing of the import for matRad."""
-        if v is not None and info.context and info.context.get("matRad") == "mat-file":
-            arr = np.array(v, dtype=np.float64)
-            arr[~np.isnan(arr)] += 1
-            return arr.T
-        return v
+        A segment contributes the state it starts in at the weight delivered before it, and
+        the state it ends in at the weight delivered after it. A start that repeats the
+        control point before it is left out, so a continuous arc of ``n`` segments gives
+        ``n + 1`` control points and ``n`` step-and-shoot segments give ``2 n``.
 
-    @classmethod
-    def _process_matrad_data(cls, data: Any, info: ValidationInfo) -> dict:
-        """Handle data coming from matRad."""
-        # Guard against non-dict inputs (e.g. an empty matRad struct read as an
-        # ndarray by newer readers) before the truthiness test, since ``ndarray == {}``
-        # raises an ambiguous-truth ValueError.
-        if not isinstance(data, dict) or not data:
-            return data
+        Parameters
+        ----------
+        gantry_angle, couch_angle : float, optional
+            Angles of the beam, used where a state does not give its own.
+        """
+        total = self.total_weight
+        points: list[dict] = []
 
-        # add dimension because if num_of_shapes = 1, matLab saves only has 2d Shapes
-        # TODO: In future we should add up all shapes along axis=0 (currently axis=2)
-        if "shapes" in data:
-            if data["shapes"].ndim == 2:
-                shapes = data["shapes"][:, :, np.newaxis]
-                data["shapes"] = shapes
-            # matRad's shapeMap weighted for Xia and binary for Siochi and Engel
-            data["shapes"] = (np.asarray(data["shapes"]) > 0).astype(np.uint8)
-        if "shapes_weight" in data:
-            shapes_weight = np.array(data["shapes_weight"])
-            data["shapes_weight"] = shapes_weight
+        def add(state: MachineState, cumulative: float) -> None:
+            point = {
+                "cumulative_weight": cumulative,
+                "cumulative_meterset_weight": cumulative / total if total > 0 else 0.0,
+                "gantry_angle": gantry_angle if state.gantry_angle is None else state.gantry_angle,
+                "couch_angle": couch_angle if state.couch_angle is None else state.couch_angle,
+                "mlc": state.mlc,
+                "jaws": state.jaws,
+            }
+            if points and all(points[-1][key] == value for key, value in point.items()):
+                return
+            points.append(point)
 
-        if "shape" in data:
-            for key in data["shape"].keys():
-                if data["num_of_shapes"] != 1:
-                    data.update({key: data["shape"][key]})
-                else:
-                    data.update({key: [data["shape"][key]]})
-            data.pop("shape", None)
+        cumulative = 0.0
+        for segment in self.segments:
+            add(segment.start, cumulative)
+            cumulative += segment.weight
+            add(segment.end or segment.start, cumulative)
 
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def validate_distribution(cls, data: Any, info: ValidationInfo) -> Any:
-        if info.context and info.context.get("from_matRad"):
-            data = cls._process_matrad_data(data, info)
-
-        return data
-
-    # The devices are stored by their base class: their own fields are serialized
-    # (SerializeAsAny) and a dumped device is validated as the class its fields describe.
-    @field_validator("extra_blds", mode="before")
-    @classmethod
-    def _concrete_blds(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, np.ndarray):
-            v = v.tolist()
-        # A single shape is read from a .mat file without its list of shapes
-        if len(v) > 0 and all(isinstance(d, (Mapping, BeamLimitingDevice)) for d in v):
-            v = [v]
-        return [[_concrete_bld(device) for device in _as_list(devices)] for devices in v]
-
-    # shapes are binary aperture masks, so uint8 is lossless and compact
-    @field_validator("shapes", mode="before")
-    @classmethod
-    def _to_uint8(cls, v):
-        if v is None:
-            return None
-        arr = np.asarray(v)
-        return arr.astype(np.uint8)
-
-    # the level map must stay float: uint8 like shapes would wrap above 255
-    @field_validator("stratified_fluence", mode="before")
-    @classmethod
-    def _to_float(cls, v):
-        if v is None:
-            return None
-        arr = np.asarray(v)
-        return arr.astype(float)
-
-    # ensure shapes_weight always 1D float
-    @field_validator("shapes_weight", mode="before")
-    @classmethod
-    def _to_float1d(cls, v):
-        arr = np.asarray(v)
-        return arr.astype(float).reshape(-1)
+        for point, after in zip(points, points[1:]):
+            if point["gantry_angle"] is None or after["gantry_angle"] is None:
+                continue
+            span = _angle_span(point["gantry_angle"], after["gantry_angle"], self.rotation)
+            if span != 0:
+                point["gantry_rotation_direction"] = "CW" if span > 0 else "CC"
+        return [ControlPoint(index=ix, **point) for ix, point in enumerate(points)]

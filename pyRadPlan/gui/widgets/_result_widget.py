@@ -324,7 +324,7 @@ class ViewingWidget(WorkspaceWidget):
             has_sequence = bool(
                 isinstance(ws.result, PlanResult)
                 and ws.result.sequence is not None
-                and ws.result.sequence.beam
+                and ws.result.sequence.beams
             )
             self.vis_widget.set_sequence_enabled(has_sequence)
 

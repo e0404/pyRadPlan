@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan, validate_pln
-from pyRadPlan.result import PlanResult, ApertureInfo, validate_result
+from pyRadPlan.result import BeamSequence, PlanResult, Sequence, validate_result
 from pyRadPlan.stf import SteeringInformation, Beam
 from pyRadPlan.machines import MLC, Jaw, load_from_name, validate_machine
 from pyRadPlan.quantities._display_names import SEQUENCED_SUFFIX
@@ -415,222 +415,6 @@ class PhotonSequencer(Sequencer):
 
         return [_jaw("X", bev_x_bounds), _jaw("Y", bev_y_bounds)]
 
-    def _compute_beam_aperture_info(
-        self,
-        stf: SteeringInformation,
-        sequencing,
-        central_leaf_pair,
-        bixel_ind_offset,
-        vector_offset,
-    ) -> list:
-        """
-        Compute the beam aperture information.
-
-        Parameters
-        ----------
-        stf : SteeringInformation
-            The steering information containing the beams.
-        central_leaf_pair : int
-            The index of the central leaf pair.
-        bixel_ind_offset : int
-            The offset for bixel indices.
-
-        Returns
-        -------
-        list
-            A list containing the beam aperture information.
-        """
-        info_beam = []
-        bixel_width = stf.beams[0].bixel_width
-        for i, beam in enumerate(stf.beams):
-            init = sequencing["beam"][i]["_fluence_dict"]
-
-            # Initialize limits and dimensions
-            lim_l, lim_r = self._compute_leaf_limits(init)
-
-            # Create bixelIndMap at native ray resolution: each physical bixel/dij
-            # column needs its own unique index even when shapes below are
-            # resampled onto a coarser physical leaf grid.
-            bixel_ind_map = np.full((init["native_dim_stack"], init["dim_travel"]), np.nan)
-            num_rays = len(beam.rays)
-            bixel_ind_map.flat[init["native_indices"]] = np.arange(0, num_rays) + bixel_ind_offset
-            bixel_ind_offset += num_rays
-
-            beam_aperture = {}
-            # TODO: This should in general be correct. If not, change .T
-            beam_aperture["bixel_ind_map"] = bixel_ind_map.T
-            # min_travel/min_stack are on the leaf axes, not fixed BEV axes,
-            # so place them at their true BEV index.
-            pos_of_corner_bixel = [0.0, 0.0, 0.0]
-            pos_of_corner_bixel[init["travel_axis"]] = init["min_travel"]
-            pos_of_corner_bixel[init["stack_axis"]] = init["min_stack"]
-            beam_aperture["pos_of_corner_bixel"] = pos_of_corner_bixel
-
-            # Process shapes for the current beam
-            # initialize per‐shape lists in beam_aperture
-            shapes_arr = sequencing["beam"][i]["shapes"]
-            weights_arr = sequencing["beam"][i]["shapes_weight"]
-            num_shapes = sequencing["beam"][i]["num_of_shapes"]
-            beam_aperture["weight"] = list(weights_arr)
-            beam_aperture["vector_offset"] = [
-                vector_offset + m * init["dim_stack"] for m in range(num_shapes)
-            ]
-
-            # advance the global counter once
-            vector_offset += num_shapes * init["dim_stack"]
-
-            # Effective row pitch shapes were computed on: the machine's physical
-            # leaf width when configured and applicable, else the ray/bixel width.
-            leaf_pitch = self._leaf_pitch(bixel_width) or bixel_width
-
-            # compute all mlc in one go
-            mlc_sequence = []
-            for m in range(num_shapes):
-                shape_map = shapes_arr[:, :, m]
-                mlc = MLC(
-                    device_type=f"MLC{self.mlc_orientation}",
-                    number_of_elements=self.num_of_mlc_leaf_pairs,
-                )
-                mlc.calculate_from_shape(
-                    shape_map,
-                    init["min_travel"],
-                    init["row_pos"],
-                    bixel_width,
-                    lim_l,
-                    lim_r,
-                    leaf_width=leaf_pitch,
-                )
-                mlc_sequence.append(mlc)
-            beam_aperture["mlc_sequence"] = mlc_sequence
-
-            # Derive flattened per-beam fields from the MLC objects (single source of
-            # truth = MLC methods). These stay on the beam sequence for matRad interop.
-            beam_aperture["left_leaf_pos"] = [mlc.leaf_positions[:, 0] for mlc in mlc_sequence]
-            beam_aperture["right_leaf_pos"] = [mlc.leaf_positions[:, 1] for mlc in mlc_sequence]
-            # leaf pair positions (matRad's leafPairPos) holds row centres, the MLC
-            # stores boundaries (row's lower edges)
-            beam_aperture["leaf_pair_pos"] = (
-                mlc_sequence[0].leaf_position_boundaries + mlc_sequence[0].leaf_width / 2.0
-            )
-            beam_aperture["is_active_leaf_pair"] = mlc_sequence[0].is_active_leaf_pair(
-                central_leaf_pair
-            )
-            beam_aperture["num_of_active_leaf_pairs"] = mlc_sequence[0].num_of_active_leaf_pairs
-            beam_aperture["central_leaf_pair"] = central_leaf_pair
-            beam_aperture["lim_l"] = lim_l
-            beam_aperture["lim_r"] = lim_r
-
-            # Define MLC window using physical coordinates. The stack direction takes
-            # whichever reaches further, the ray extent or the leaf rows actually used
-            stack_min = init["min_stack"] - 0.5 * init["bixel_width"]
-            stack_max = init["max_stack"] + 0.5 * init["bixel_width"]
-            leaf_row_pos = init.get("leaf_row_pos")
-            if leaf_row_pos is not None and len(leaf_row_pos) > 0:
-                pitch = (
-                    float(np.diff(leaf_row_pos).min())
-                    if len(leaf_row_pos) > 1
-                    else self.leaf_width
-                )
-                stack_min = min(stack_min, float(leaf_row_pos[0]) - 0.5 * pitch)
-                stack_max = max(stack_max, float(leaf_row_pos[-1]) + 0.5 * pitch)
-
-            beam_aperture["MLCWindow"] = [
-                init["min_travel"] - 0.5 * init["bixel_width"],
-                init["max_travel"] + 0.5 * init["bixel_width"],
-                stack_min,
-                stack_max,
-            ]
-
-            # Static jaw pair bounding the field
-            jaw_pair = self._build_jaw_pair(beam_aperture["MLCWindow"], init["travel_axis"])
-            beam_aperture["extra_blds"] = [list(jaw_pair) for _ in range(num_shapes)]
-
-            info_beam.append(beam_aperture)
-        return info_beam
-
-    def _dao_aperture_info_to_vec(self, aperture_info: dict) -> tuple:
-        """
-        Convert aperture information to a vector and mapping matrix.
-
-        Parameters
-        ----------
-        aperture_info : dict
-            A dictionary containing the aperture information of the beams.
-
-        Returns
-        -------
-        tuple
-            A tuple containing the aperture vector, mapping matrix, and limits matrix.
-        """
-        total_shapes = aperture_info["total_num_of_shapes"]
-        total_leaf_pairs = aperture_info["total_num_of_leaf_pairs"]
-        vec_length = total_shapes + 2 * total_leaf_pairs
-
-        # 1. initialize output vector
-        aperture_vec = np.full(vec_length, np.nan, dtype=float)
-
-        # 2. aperture weights
-        offset = 0
-        for beam in aperture_info["beam"]:
-            for weight in beam["weight"]:
-                aperture_vec[offset] = weight
-                offset += 1
-
-        # 3. left & right leaf positions
-        offset = total_shapes
-        for beam in aperture_info["beam"]:
-            mlc_sequence = beam["mlc_sequence"]
-            for mlc in mlc_sequence:
-                n_active = mlc.num_of_active_leaf_pairs
-                left_pos = mlc.leaf_positions[:, 0]
-                right_pos = mlc.leaf_positions[:, 1]
-                aperture_vec[offset : offset + n_active] = left_pos
-                aperture_vec[offset + total_leaf_pairs : offset + total_leaf_pairs + n_active] = (
-                    right_pos
-                )
-                offset += n_active
-
-        # 4. mapping and limits
-        mapping_mx = np.full((vec_length, 4), np.nan)
-        lim_mx = np.full((vec_length, 2), np.nan)
-
-        # weights bounds = [0, inf]
-        lim_mx[:total_shapes, 0] = 0
-        lim_mx[:total_shapes, 1] = np.inf
-
-        # mapping for weights (store beam index)
-        counter = 0
-        for i, beam in enumerate(aperture_info["beam"], start=1):
-            for _ in range(len(beam["mlc_sequence"])):
-                mapping_mx[counter, 0] = i
-                counter += 1
-
-        # mapping and bounds for leaves
-        shape_offset = 0
-        counter = total_shapes
-        for i, beam in enumerate(aperture_info["beam"], start=1):
-            mlc_sequence = beam["mlc_sequence"]
-            lim_l = beam["lim_l"]
-            lim_r = beam["lim_r"]
-            for j, mlc in enumerate(mlc_sequence):
-                n_active = mlc.num_of_active_leaf_pairs
-                for k in range(n_active):
-                    mapping_mx[counter, 0] = i
-                    mapping_mx[counter, 1] = j + 1 + shape_offset
-                    mapping_mx[counter, 2] = j + 1
-                    mapping_mx[counter, 3] = k + 1
-                    lim_mx[counter, 0] = lim_l[k]
-                    lim_mx[counter, 1] = lim_r[k]
-                    counter += 1
-            shape_offset += len(mlc_sequence)
-
-        # replicate tail if any unused slots remain
-        if counter < vec_length:
-            mapping_mx[counter:] = mapping_mx[total_shapes:counter]
-            lim_mx[counter:] = lim_mx[total_shapes:counter]
-
-        return aperture_vec, mapping_mx, lim_mx
-
     def _build_beam_sequencing(
         self,
         shapes_list: list,
@@ -680,9 +464,6 @@ class PhotonSequencer(Sequencer):
             "num_of_shapes": num_shapes,
             "shapes": shapes_arr,
             "shapes_weight": shapes_w_arr,
-            "bixel_ix": np.arange(offset, offset + num_of_rays_per_beam),
-            "stratified_fluence": tmp_fluence_dict["d_0"],
-            "cal_fac": tmp_fluence_dict["cal_fac"],
             "_fluence_dict": tmp_fluence_dict,
         }
 
@@ -694,54 +475,81 @@ class PhotonSequencer(Sequencer):
 
         return beam_sequencing
 
-    def sequencing_to_aperture_info(self, sequencing, stf: SteeringInformation) -> ApertureInfo:
-        """
-        Convert the sequencing result to an ApertureInfo object.
+    def _beam_sequence(self, stf_beam: int, beam: Beam, beam_sequencing: dict) -> BeamSequence:
+        """Build the delivery sequence of one beam from the shapes of its fluence.
+
+        Every shape becomes a step-and-shoot segment with the leaf positions that open it;
+        the jaws bound the field of the beam and are the same for all segments.
 
         Parameters
         ----------
-        sequencing : dict
-            The sequencing result containing per-beam details.
-        stf : object
-            The steering information.
-
-        Returns
-        -------
-        ApertureInfo : object
-            A data structure representing the aperture information of the beams.
+        stf_beam : int
+            Index of the beam in the steering information.
+        beam : Beam
+            The beam of the steering information.
+        beam_sequencing : dict
+            The shapes and weights of the beam (see ``_build_beam_sequencing``).
         """
-        aperture_info = {}
+        init = beam_sequencing["_fluence_dict"]
+        bixel_width = beam.bixel_width
+        lim_l, lim_r = self._compute_leaf_limits(init)
+        # Row pitch the shapes were computed on: the machine's leaf width when it differs
+        # from the bixel width, else the bixel width.
+        leaf_pitch = self._leaf_pitch(bixel_width) or bixel_width
 
-        # MLC parameters
-        bixel_width = stf.beams[0].bixel_width  # [mm]
-        central_leaf_pair = self._central_leaf_pair(bixel_width)
+        shapes = beam_sequencing["shapes"]
+        mlcs = []
+        for m in range(beam_sequencing["num_of_shapes"]):
+            mlc = MLC(
+                device_type=f"MLC{self.mlc_orientation}",
+                number_of_elements=self.num_of_mlc_leaf_pairs,
+            )
+            mlc.calculate_from_shape(
+                shapes[:, :, m],
+                init["min_travel"],
+                init["row_pos"],
+                bixel_width,
+                lim_l,
+                lim_r,
+                leaf_width=leaf_pitch,
+            )
+            mlcs.append(mlc)
 
-        bixel_ind_offset = 0
-        total_num_of_bixels = sum(beam.total_number_of_bixels for beam in stf.beams)
-        total_num_of_shapes = sum(beam_seq["num_of_shapes"] for beam_seq in sequencing["beam"])
-        vector_offset = total_num_of_shapes + 1
-        aperture_info["beam"] = self._compute_beam_aperture_info(
-            stf, sequencing, central_leaf_pair, bixel_ind_offset, vector_offset
+        # The field window: along the leaves the extent of the rays, across them whichever
+        # reaches further, the rays or the leaf rows in use, so the jaws never clip a leaf.
+        stack_min = init["min_stack"] - 0.5 * bixel_width
+        stack_max = init["max_stack"] + 0.5 * bixel_width
+        leaf_row_pos = init.get("leaf_row_pos")
+        if leaf_row_pos is not None and len(leaf_row_pos) > 0:
+            stack_min = min(stack_min, float(leaf_row_pos[0]) - 0.5 * leaf_pitch)
+            stack_max = max(stack_max, float(leaf_row_pos[-1]) + 0.5 * leaf_pitch)
+        window = [
+            init["min_travel"] - 0.5 * bixel_width,
+            init["max_travel"] + 0.5 * bixel_width,
+            stack_min,
+            stack_max,
+        ]
+        return BeamSequence.from_shapes(
+            mlcs,
+            beam_sequencing["shapes_weight"],
+            jaws=self._build_jaw_pair(window, init["travel_axis"]),
+            stf_beam=stf_beam,
         )
 
-        # Global aperture information
-        aperture_info["bixel_width"] = bixel_width
-        aperture_info["num_of_mlc_leaf_pairs"] = self.num_of_mlc_leaf_pairs
-        aperture_info["total_num_of_bixels"] = total_num_of_bixels
-        aperture_info["total_num_of_shapes"] = total_num_of_shapes
-        total_leaf_pairs = sum(
-            sum(mlc.num_of_active_leaf_pairs for mlc in b["mlc_sequence"])
-            for b in aperture_info["beam"]
+    def _sequenced_result(
+        self, result: PlanResult, sequencing: dict, stf: SteeringInformation, dij: Optional[Dij]
+    ) -> PlanResult:
+        """Return the result with the delivery sequence and the quantities it delivers."""
+        sequence = Sequence(
+            beams=[
+                self._beam_sequence(ix, beam, beam_sequencing)
+                for ix, (beam, beam_sequencing) in enumerate(zip(stf.beams, sequencing["beam"]))
+            ],
+            fluence=sequencing["fluence"],
         )
-        aperture_info["total_num_of_leaf_pairs"] = total_leaf_pairs
-
-        # Optimization vectors
-        ap_vec, map_mx, lim_mx = self._dao_aperture_info_to_vec(aperture_info)
-        aperture_info["aperture_vector"] = ap_vec
-        aperture_info["mapping_mx"] = map_mx
-        aperture_info["lim_mx"] = lim_mx
-
-        return aperture_info
+        result_data = result.model_dump()
+        result_data["sequence"] = sequence
+        return self._result_with_sequenced_quantities(result_data, sequencing["fluence"], dij)
 
     def _result_with_sequenced_quantities(
         self, result_data: dict, fluence: np.ndarray, dij: Optional[Dij]

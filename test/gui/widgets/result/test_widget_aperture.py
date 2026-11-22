@@ -1,6 +1,6 @@
 import numpy as np
 
-from pyRadPlan.machines import create_bld
+from pyRadPlan.machines import Jaw, create_bld
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, Ray, SteeringInformation
@@ -11,6 +11,13 @@ from pyRadPlan.gui.widgets.result.aperture_widget import (
     BeamApertureWidget,
     SequenceViewContext,
 )
+
+
+def _jaws() -> list[Jaw]:
+    return [
+        Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0),
+        Jaw(device_orientation="Y", positions=[-20.0, 20.0], field_width=40.0),
+    ]
 
 
 def _make_beam(n_shapes: int = 2) -> BeamSequence:
@@ -24,7 +31,7 @@ def _make_beam(n_shapes: int = 2) -> BeamSequence:
     }
     shapes = [create_bld(mlc_info) for _ in range(n_shapes)]
     weights = list(np.linspace(1.0, 0.3, n_shapes))
-    return BeamSequence(mlc_sequence=shapes, shapes_weight=weights, mlc_window=[-20, 20])
+    return BeamSequence.from_shapes(shapes, weights, jaws=_jaws())
 
 
 def test_beam_aperture_widget_init(qapp):
@@ -65,7 +72,7 @@ def test_beam_aperture_widget_slider_updates_label(qapp):
 
 
 def test_aperture_viewer_widget_set_sequence(qapp):
-    sequence = Sequence(beam=[_make_beam(), _make_beam()])
+    sequence = Sequence(beams=[_make_beam(), _make_beam()])
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -75,7 +82,7 @@ def test_aperture_viewer_widget_set_sequence(qapp):
 
 
 def test_aperture_viewer_widget_rebuild_stops_previous_playback(qapp):
-    sequence = Sequence(beam=[_make_beam()])
+    sequence = Sequence(beams=[_make_beam()])
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -87,7 +94,7 @@ def test_aperture_viewer_widget_rebuild_stops_previous_playback(qapp):
 
 
 def test_aperture_viewer_widget_shows_sequencer_label(qapp):
-    sequence = Sequence(beam=[_make_beam()], sequencer="xia")
+    sequence = Sequence(beams=[_make_beam()], sequencer="xia")
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -97,7 +104,7 @@ def test_aperture_viewer_widget_shows_sequencer_label(qapp):
 
 
 def test_aperture_viewer_widget_hides_sequencer_label_when_unknown(qapp):
-    sequence = Sequence(beam=[_make_beam()])
+    sequence = Sequence(beams=[_make_beam()])
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -117,13 +124,9 @@ def _make_stf(n_beams: int = 1) -> SteeringInformation:
 
 def _fluence_context(n_beams: int = 1) -> SequenceViewContext:
     return SequenceViewContext(
-        stf=_make_stf(n_beams), result=PlanResult(fluence=np.array([1.0, 2.0, 3.0, 4.0]))
+        stf=_make_stf(n_beams),
+        result=PlanResult(fluence=np.array([1.0, 2.0, 3.0, 4.0] * n_beams)),
     )
-
-
-def _beam_with_bixels() -> BeamSequence:
-    beam = _make_beam()
-    return beam.model_copy(update={"bixel_ix": [0, 1, 2, 3]})
 
 
 def test_no_fluence_panel_without_context(qapp):
@@ -134,7 +137,7 @@ def test_no_fluence_panel_without_context(qapp):
 
 def test_fluence_panel_offers_optimized_delivered_and_difference(qapp):
     widget = BeamApertureWidget(
-        _beam_with_bixels(),
+        _make_beam(),
         "Beam 0",
         beam_ix=0,
         context=_fluence_context(),
@@ -152,7 +155,7 @@ def test_fluence_panel_offers_optimized_delivered_and_difference(qapp):
 
 def test_overlay_bar_hidden_when_no_beam_has_fluence(qapp):
     viewer = ApertureViewerWidget()
-    viewer.set_sequence(Sequence(beam=[_make_beam()]))
+    viewer.set_sequence(Sequence(beams=[_make_beam()]))
 
     assert viewer.overlay_bar.isHidden()
 
@@ -160,8 +163,8 @@ def test_overlay_bar_hidden_when_no_beam_has_fluence(qapp):
 def test_fluence_selector_applies_to_every_beam_tab(qapp):
     context = _fluence_context(n_beams=2)
     sequence = Sequence(
-        beam=[_beam_with_bixels(), _beam_with_bixels()],
-        fluence=np.array([4.0, 3.0, 2.0, 1.0]),
+        beams=[_make_beam(), _make_beam()],
+        fluence=np.array([4.0, 3.0, 2.0, 1.0] * 2),
     )
 
     viewer = ApertureViewerWidget()
@@ -176,7 +179,7 @@ def test_fluence_selector_applies_to_every_beam_tab(qapp):
 
 def test_overlay_checkboxes_apply_to_every_beam_tab(qapp):
     context = _fluence_context()
-    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+    sequence = Sequence(beams=[_make_beam()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence, context=context)
@@ -191,7 +194,7 @@ def test_overlay_checkboxes_apply_to_every_beam_tab(qapp):
 
 
 def test_leaf_coordinate_selector_applies_to_every_beam_tab(qapp):
-    sequence = Sequence(beam=[_make_beam(), _make_beam()])
+    sequence = Sequence(beams=[_make_beam(), _make_beam()])
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -204,7 +207,7 @@ def test_leaf_coordinate_selector_applies_to_every_beam_tab(qapp):
 
 
 def test_leaf_coordinate_selector_reflects_caller_chosen_coordinate(qapp):
-    sequence = Sequence(beam=[_make_beam()])
+    sequence = Sequence(beams=[_make_beam()])
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence, leaf_coordinate="physical")
@@ -226,14 +229,14 @@ def test_set_leaf_coordinate_keeps_displayed_shape(qapp):
 def test_target_outline_maps_onto_the_leaf_pair_axis(qapp):
     context = _fluence_context()
     widget = BeamApertureWidget(
-        _beam_with_bixels(),
+        _make_beam(),
         "Beam 0",
         beam_ix=0,
         context=context,
         delivered_fluence=np.array([4.0, 3.0, 2.0, 1.0]),
     )
     # Stand in for a projected target spanning two known leaf rows.
-    mlc = widget.beam.mlc_sequence[0]
+    mlc = widget.beam.segments[0].start.mlc
     boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
     widget._target_points = np.array([[0.0, boundaries[0]], [0.0, boundaries[1]]])
 
@@ -247,7 +250,7 @@ def test_target_outline_maps_onto_the_leaf_pair_axis(qapp):
 
 def test_target_color_is_configurable(qapp):
     context = _fluence_context()
-    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+    sequence = Sequence(beams=[_make_beam()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence, context=context)
@@ -262,7 +265,7 @@ def test_target_color_is_configurable(qapp):
 
 def test_bixel_grid_checkbox_applies_to_every_beam_tab(qapp):
     context = _fluence_context()
-    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+    sequence = Sequence(beams=[_make_beam()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence, context=context)
@@ -274,7 +277,7 @@ def test_bixel_grid_checkbox_applies_to_every_beam_tab(qapp):
 
 
 def test_sequencer_label_includes_the_level_count(qapp):
-    sequence = Sequence(beam=[_make_beam()], sequencer="xia", num_of_levels=7)
+    sequence = Sequence(beams=[_make_beam()], sequencer="xia", num_of_levels=7)
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -283,7 +286,7 @@ def test_sequencer_label_includes_the_level_count(qapp):
 
 
 def test_sequencer_label_omits_levels_when_unknown(qapp):
-    sequence = Sequence(beam=[_make_beam()], sequencer="xia")
+    sequence = Sequence(beams=[_make_beam()], sequencer="xia")
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence)
@@ -293,7 +296,7 @@ def test_sequencer_label_omits_levels_when_unknown(qapp):
 
 def test_view_options_reset_for_a_newly_shown_sequence(qapp):
     context = _fluence_context()
-    sequence = Sequence(beam=[_beam_with_bixels()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
+    sequence = Sequence(beams=[_make_beam()], fluence=np.array([4.0, 3.0, 2.0, 1.0]))
 
     viewer = ApertureViewerWidget()
     viewer.set_sequence(sequence, context=context)
@@ -321,7 +324,7 @@ def test_target_projection_runs_with_a_full_context(qapp, test_data_photons):
     context.cst = cst
 
     widget = BeamApertureWidget(
-        _beam_with_bixels(),
+        _make_beam(),
         "Beam 0",
         beam_ix=0,
         context=context,

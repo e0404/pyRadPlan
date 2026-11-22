@@ -46,7 +46,9 @@ class MatlabExporter(BaseExporter):
 
         # matRad stores the result under "resultGUI"; a full result wins over a bare dose.
         if result is not None:
-            mdict["resultGUI"] = validate_result(result).to_matrad(context="mat-file")
+            mdict["resultGUI"] = validate_result(result).to_matrad(
+                context="mat-file", stf=extra.get("stf")
+            )
         elif dose is not None:
             mdict["resultGUI"] = {"physicalDose": _dose_to_matrad_cube(dose)}
 

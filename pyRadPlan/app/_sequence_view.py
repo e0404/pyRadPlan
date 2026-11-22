@@ -12,20 +12,22 @@ logger = logging.getLogger(__name__)
 
 def has_sequence(result: Any) -> bool:
     """Whether *result* carries a delivery sequence with beams."""
-    return bool(getattr(getattr(result, "sequence", None), "beam", None))
+    return bool(getattr(getattr(result, "sequence", None), "beams", None))
 
 
-def _fluence(beam: Any, geometry: Any, orientation: str, fluences: dict) -> Optional[dict]:
+def _fluence(
+    bixels: Optional[slice], geometry: Any, orientation: str, fluences: dict
+) -> Optional[dict]:
     from pyRadPlan.sequencing._bev import native_fluence_map  # noqa: PLC0415
 
-    if geometry is None or beam.bixel_ix is None:
+    if geometry is None or bixels is None:
         return None
     maps: dict[str, Any] = {"optimized": None, "delivered": None}
     window = None
     for mode, values in fluences.items():
         if values is None:
             continue
-        grid, window = native_fluence_map(geometry, np.asarray(values)[beam.bixel_ix], orientation)
+        grid, window = native_fluence_map(geometry, np.asarray(values)[bixels], orientation)
         maps[mode] = grid.astype(np.float32)
     if window is None:
         return None
@@ -79,7 +81,13 @@ def sequence_view(result: Any, stf: Any = None, ct: Any = None, cst: Any = None)
         ``(stack, travel)`` region the projected target covers). ``fluence`` and ``target``
         are ``None`` when the workspace lacks what they are derived from.
     """
-    from pyRadPlan.sequencing._bev import beam_label  # noqa: PLC0415
+    from pyRadPlan.sequencing._bev import (  # noqa: PLC0415
+        beam_bixels,
+        beam_label,
+        field_window,
+        shape_segments,
+        stf_beam_index,
+    )
 
     if not has_sequence(result):
         raise ValueError("The active result has no delivery sequence.")
@@ -88,17 +96,20 @@ def sequence_view(result: Any, stf: Any = None, ct: Any = None, cst: Any = None)
     fluences = {"optimized": getattr(result, "fluence", None), "delivered": sequence.fluence}
 
     beams = []
-    for index, beam in enumerate(sequence.beam):
-        mlcs = list(beam.mlc_sequence or [])
-        geometry = stf_beams[index] if index < len(stf_beams) else None
+    for index, beam in enumerate(sequence.beams):
+        segments = shape_segments(beam)
+        mlcs = [segment.start.mlc for segment in segments]
+        stf_beam = stf_beam_index(beam, index)
+        bixels = beam_bixels(stf, stf_beam)
+        geometry = stf_beams[stf_beam] if stf_beam < len(stf_beams) else None
         orientation = mlcs[0].device_orientation if mlcs else None
         beams.append(
             {
                 "index": index,
                 "label": beam_label(index, stf),
                 "orientation": orientation,
-                "window": None if beam.mlc_window is None else [float(v) for v in beam.mlc_window],
-                "weights": [float(w) for w in beam.shapes_weight],
+                "window": field_window(beam),
+                "weights": [float(segment.weight) for segment in segments],
                 "shapes": [
                     {
                         "leaf_width": float(mlc.leaf_width),
@@ -107,7 +118,7 @@ def sequence_view(result: Any, stf: Any = None, ct: Any = None, cst: Any = None)
                     }
                     for mlc in mlcs
                 ],
-                "fluence": _fluence(beam, geometry, orientation, fluences) if mlcs else None,
+                "fluence": _fluence(bixels, geometry, orientation, fluences) if mlcs else None,
                 "target": _target(ct, cst, geometry, orientation) if mlcs else None,
             }
         )

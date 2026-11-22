@@ -1,42 +1,372 @@
-"""
-Module for handling the result of calc_dose_forward and calc_dose_influence.
+"""Mapping between a delivery sequence, the beamlets and the variables of an optimization."""
 
-Defines a result pydantic model and factories.
-"""
+from typing import TYPE_CHECKING, Any, Literal
 
-from typing import Any, Union
+import numpy as np
 from numpy.typing import NDArray
-import logging
+from pydantic import Field
+from scipy import sparse
 
-from pydantic import (
-    Field,
-    model_validator,
-    ValidationInfo,
-)
 from pyRadPlan.core import PyRadPlanBaseModel
-from pyRadPlan.machines import MLC
+from pyRadPlan.result._beam_sequence import Segment
+from pyRadPlan.result._sequence import Sequence
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from pyRadPlan.stf import SteeringInformation
+
+
+class ApertureGrid(PyRadPlanBaseModel):
+    """The beamlets of one beam of the steering information and the leaf rows over them.
+
+    Positions are in mm on the axes of the MLC: ``travel`` along the leaves, ``stack``
+    across the leaf rows.
+
+    Attributes
+    ----------
+    stf_beam : int
+        Index of the beam in the steering information.
+    orientation : str
+        Axis the leaves travel along, ``"X"`` or ``"Y"``.
+    bixel_width : float
+        Width of a beamlet.
+    bixel_offset : int
+        Index of the first beamlet of the beam among all beamlets (columns of the dose
+        influence matrix).
+    travel, stack : NDArray
+        Position of the center of each beamlet, in ray order.
+    row_boundaries : NDArray
+        Lower edges of the leaf rows, ascending.
+    leaf_width : float
+        Width of a leaf row.
+    lim_left, lim_right : NDArray
+        Per leaf row the outer edges of the beamlets it covers, the range leaf positions
+        are meaningful in. A row without beamlets has both at the lowest beamlet edge.
+    """
+
+    stf_beam: int
+    orientation: Literal["X", "Y"] = "X"
+    bixel_width: float
+    bixel_offset: int
+    travel: NDArray
+    stack: NDArray
+    row_boundaries: NDArray
+    leaf_width: float
+    lim_left: NDArray
+    lim_right: NDArray
+
+    @classmethod
+    def from_beam(cls, beam: Any, stf_beam: int, bixel_offset: int, mlc: Any) -> "ApertureGrid":
+        """Grid of a steering-information *beam* under the leaf rows of *mlc* (or none)."""
+        orientation = "X" if mlc is None else mlc.device_orientation
+        travel_axis, stack_axis = (0, 2) if orientation == "X" else (2, 0)
+        positions = np.array([ray.ray_pos_bev for ray in beam.rays], dtype=float).reshape(-1, 3)
+        bixel_width = float(beam.bixel_width)
+        travel, stack = positions[:, travel_axis], positions[:, stack_axis]
+
+        if mlc is None or mlc.leaf_position_boundaries is None:
+            boundaries, leaf_width = np.zeros(0), bixel_width
+        else:
+            boundaries = np.asarray(mlc.leaf_position_boundaries, dtype=float)
+            leaf_width = float(mlc.leaf_width)
+
+        grid = cls(
+            stf_beam=stf_beam,
+            orientation=orientation,
+            bixel_width=bixel_width,
+            bixel_offset=bixel_offset,
+            travel=travel,
+            stack=stack,
+            row_boundaries=boundaries,
+            leaf_width=leaf_width,
+            lim_left=np.zeros(len(boundaries)),
+            lim_right=np.zeros(len(boundaries)),
+        )
+        covered = grid.row_coverage > 0
+        lowest = travel.min() - 0.5 * bixel_width if travel.size else 0.0
+        left = np.full(len(boundaries), lowest)
+        right = np.full(len(boundaries), lowest)
+        for row in np.flatnonzero(covered.any(axis=1)):
+            left[row] = travel[covered[row]].min() - 0.5 * bixel_width
+            right[row] = travel[covered[row]].max() + 0.5 * bixel_width
+        grid.lim_left, grid.lim_right = left, right
+        return grid
+
+    @property
+    def num_of_bixels(self) -> int:
+        """Number of beamlets of the beam."""
+        return int(self.travel.size)
+
+    @property
+    def num_of_rows(self) -> int:
+        """Number of leaf rows."""
+        return int(self.row_boundaries.size)
+
+    @property
+    def row_coverage(self) -> NDArray:
+        """Fraction of each beamlet's width a leaf row covers, ``(rows, beamlets)``."""
+        low = np.maximum(
+            self.row_boundaries[:, None], self.stack[None, :] - 0.5 * self.bixel_width
+        )
+        high = np.minimum(
+            self.row_boundaries[:, None] + self.leaf_width,
+            self.stack[None, :] + 0.5 * self.bixel_width,
+        )
+        coverage = np.clip(high - low, 0.0, None) / self.bixel_width
+        coverage[coverage < 1e-9] = 0.0
+        return coverage
+
+    def open_fraction(self, left: NDArray, right: NDArray) -> NDArray:
+        """Fraction of each beamlet the leaves leave open per row, ``(rows, beamlets)``."""
+        low = np.maximum(left[:, None], self.travel[None, :] - 0.5 * self.bixel_width)
+        high = np.minimum(right[:, None], self.travel[None, :] + 0.5 * self.bixel_width)
+        return np.clip(high - low, 0.0, None) / self.bixel_width
+
+    def bixel_index_map(self) -> tuple[NDArray, float, float]:
+        """Place the beamlets on their dense grid.
+
+        Returns
+        -------
+        tuple
+            ``(index, travel_min, stack_min)``: ``index`` holds per ``(stack, travel)`` grid
+            position the index of the beamlet among all beamlets, ``-1`` where the beam has
+            none; the two positions are those of the first grid column and row.
+        """
+        travel_min, stack_min = float(self.travel.min()), float(self.stack.min())
+        cols = np.rint((self.travel - travel_min) / self.bixel_width).astype(int)
+        rows = np.rint((self.stack - stack_min) / self.bixel_width).astype(int)
+        index = np.full((rows.max() + 1, cols.max() + 1), -1, dtype=int)
+        index[rows, cols] = self.bixel_offset + np.arange(self.num_of_bixels)
+        return index, travel_min, stack_min
 
 
 class ApertureInfo(PyRadPlanBaseModel):
-    """A class representing the aperture information of a beam."""
+    """A delivery sequence together with the beamlets its apertures open.
 
-    beam: Union[list, dict[str, Any]] = Field(default_factory=dict)
-    bixel_width: float = Field(default=0.0, gt=0.0)
-    num_of_mlc_leaf_pairs: int = Field(default=0, gt=0, alias="num_of_MLC_leaf_pairs")
-    total_num_of_bixels: int = Field(default=0, gt=0)
-    total_num_of_shapes: int = Field(default=0, gt=0)
-    total_num_of_leaf_pairs: int = Field(default=0, gt=0)
-    aperture_vector: Union[NDArray, None] = Field(default=None)
-    mapping_mx: Union[NDArray, None] = Field(default=None)
-    lim_mx: Union[NDArray, None] = Field(default=None)
+    This is the bridge between the three views of a deliverable plan: the
+    :class:`Sequence` the machine delivers, the beamlet weights the dose calculation
+    works on, and the variable vector of an optimization over apertures (weights and leaf
+    positions). It is built from a sequence and the steering information and is not part
+    of a result.
 
-    mlc_sequence: Union[list[MLC], None] = Field(default=None)
+    The variable vector is ``[weights | left leaf positions | right leaf positions]``, the
+    apertures in the order of the beams and their segments, the leaves in the order of the
+    leaf rows.
 
-    @model_validator(mode="before")
+    Attributes
+    ----------
+    sequence : Sequence
+        The delivery sequence.
+    grids : list[ApertureGrid]
+        One grid per beam of the steering information.
+    """
+
+    sequence: Sequence
+    grids: list[ApertureGrid] = Field(default_factory=list)
+
     @classmethod
-    def validate_distribution(cls, data: Any, info: ValidationInfo) -> Any:
-        # Early return for distribution input (assuming distribution is defined/imported elsewhere)
+    def from_sequence(cls, sequence: Sequence, stf: "SteeringInformation") -> "ApertureInfo":
+        """Relate the segments of *sequence* to the beamlets of *stf*.
 
-        return data
+        A segment without ``stf_beam`` belongs to the beam at the position of its
+        ``BeamSequence``, which requires as many beam sequences as beams.
+        """
+        stf_beams = list(stf.beams)
+        aligned = len(sequence.beams) == len(stf_beams)
+        beams = []
+        for beam_ix, beam in enumerate(sequence.beams):
+            segments = []
+            for segment in beam.segments:
+                if segment.is_dynamic:
+                    raise NotImplementedError(
+                        "Segments that move while they are delivered cannot be mapped to "
+                        "beamlets yet."
+                    )
+                stf_beam = segment.stf_beam
+                if stf_beam is None:
+                    if not aligned:
+                        raise ValueError(
+                            "Segments without stf_beam need one beam sequence per beam of the "
+                            "steering information."
+                        )
+                    stf_beam = beam_ix
+                if stf_beam >= len(stf_beams):
+                    raise ValueError(f"The steering information has no beam {stf_beam}.")
+                segments.append(segment.model_copy(update={"stf_beam": stf_beam}))
+            beams.append(beam.model_copy(update={"segments": segments}))
+        sequence = sequence.model_copy(update={"beams": beams})
+
+        mlcs: dict[int, Any] = {}
+        for beam in sequence.beams:
+            for segment in beam.segments:
+                mlc = segment.start.mlc
+                if mlc is None:
+                    raise ValueError("Every segment needs an MLC to be mapped to beamlets.")
+                known = mlcs.setdefault(segment.stf_beam, mlc)
+                if not np.array_equal(
+                    known.leaf_position_boundaries, mlc.leaf_position_boundaries
+                ):
+                    raise ValueError(
+                        f"The segments on beam {segment.stf_beam} do not share their leaf rows."
+                    )
+
+        grids, offset = [], 0
+        for stf_beam, beam in enumerate(stf_beams):
+            grids.append(ApertureGrid.from_beam(beam, stf_beam, offset, mlcs.get(stf_beam)))
+            offset += len(beam.rays)
+        return cls(sequence=sequence, grids=grids)
+
+    @property
+    def apertures(self) -> list[tuple[int, int, Segment]]:
+        """Every aperture as ``(beam sequence index, segment index, segment)``."""
+        return [
+            (beam_ix, segment_ix, segment)
+            for beam_ix, beam in enumerate(self.sequence.beams)
+            for segment_ix, segment in enumerate(beam.segments)
+        ]
+
+    @property
+    def total_num_of_bixels(self) -> int:
+        """Number of beamlets of all beams."""
+        return sum(grid.num_of_bixels for grid in self.grids)
+
+    @property
+    def total_num_of_apertures(self) -> int:
+        """Number of apertures (segments) of all beams."""
+        return len(self.apertures)
+
+    @property
+    def total_num_of_leaf_pairs(self) -> int:
+        """Number of leaf pairs over all apertures."""
+        return sum(self.grids[s.stf_beam].num_of_rows for _, _, s in self.apertures)
+
+    def _leaf_offsets(self) -> NDArray:
+        rows = [self.grids[s.stf_beam].num_of_rows for _, _, s in self.apertures]
+        return np.concatenate(([0], np.cumsum(rows))).astype(int)
+
+    def to_vector(self) -> NDArray:
+        """Return the variables ``[weights | left leaf positions | right leaf positions]``."""
+        apertures = self.apertures
+        weights = [segment.weight for _, _, segment in apertures]
+        leaves = [np.asarray(s.start.mlc.leaf_positions, dtype=float) for _, _, s in apertures]
+        left = [positions[:, 0] for positions in leaves]
+        right = [positions[:, 1] for positions in leaves]
+        return np.concatenate([np.asarray(weights, dtype=float), *left, *right])
+
+    def bounds(self) -> tuple[NDArray, NDArray]:
+        """Lower and upper bound of every variable.
+
+        Weights are not negative; leaf positions stay within the beamlets of their row.
+        """
+        apertures = self.apertures
+        num = len(apertures)
+        lim_left = [self.grids[s.stf_beam].lim_left for _, _, s in apertures]
+        lim_right = [self.grids[s.stf_beam].lim_right for _, _, s in apertures]
+        lower = np.concatenate([np.zeros(num), *lim_left, *lim_left])
+        upper = np.concatenate([np.full(num, np.inf), *lim_right, *lim_right])
+        return lower, upper
+
+    def update(self, vector: Any) -> "ApertureInfo":
+        """Return the aperture info with weights and leaf positions of a variable vector."""
+        vector = np.asarray(vector, dtype=float).reshape(-1)
+        apertures = self.apertures
+        num, offsets = len(apertures), self._leaf_offsets()
+        total = int(offsets[-1])
+        if vector.size != num + 2 * total:
+            raise ValueError(f"Expected {num + 2 * total} variables, got {vector.size}.")
+
+        beams = [list(beam.segments) for beam in self.sequence.beams]
+        for ix, (beam_ix, segment_ix, segment) in enumerate(apertures):
+            rows = slice(num + offsets[ix], num + offsets[ix + 1])
+            left, right = vector[rows], vector[rows.start + total : rows.stop + total]
+            mlc = segment.start.mlc.model_copy(
+                update={"leaf_positions": np.column_stack((left, right))}
+            )
+            state = segment.start.model_copy(update={"mlc": mlc})
+            beams[beam_ix][segment_ix] = segment.model_copy(
+                update={"weight": float(vector[ix]), "start": state, "end": None}
+            )
+        sequence = self.sequence.model_copy(
+            update={
+                "beams": [
+                    beam.model_copy(update={"segments": segments})
+                    for beam, segments in zip(self.sequence.beams, beams)
+                ]
+            }
+        )
+        return self.model_copy(update={"sequence": sequence})
+
+    def _coverage(self, segment: Segment) -> tuple[ApertureGrid, NDArray, NDArray]:
+        grid = self.grids[segment.stf_beam]
+        positions = np.asarray(segment.start.mlc.leaf_positions, dtype=float)
+        return grid, positions, grid.row_coverage * grid.open_fraction(*positions.T)
+
+    def aperture_fluence(self, beam_ix: int, segment_ix: int) -> NDArray:
+        """Open fraction of each beamlet of the segment's beam, in ray order (0 to 1)."""
+        segment = self.sequence.beams[beam_ix].segments[segment_ix]
+        return self._coverage(segment)[2].sum(axis=0)
+
+    def bixel_weights(self) -> NDArray:
+        """Weight every beamlet receives from all apertures.
+
+        A beamlet counts by the fraction of its area an aperture leaves open, so leaf
+        positions between beamlet edges and leaf rows wider than the beamlets are handled.
+        """
+        weights = np.zeros(self.total_num_of_bixels)
+        for _, _, segment in self.apertures:
+            grid, _, coverage = self._coverage(segment)
+            bixels = slice(grid.bixel_offset, grid.bixel_offset + grid.num_of_bixels)
+            weights[bixels] += segment.weight * coverage.sum(axis=0)
+        return weights
+
+    def bixel_jacobian(self) -> sparse.csr_matrix:
+        """Derive the beamlet weights with respect to the variables.
+
+        Returns
+        -------
+        scipy.sparse.csr_matrix
+            ``(variables, beamlets)``: row ``i`` holds the change of each beamlet weight per
+            unit change of variable ``i`` of :meth:`to_vector`.
+        """
+        apertures = self.apertures
+        num, offsets = len(apertures), self._leaf_offsets()
+        total = int(offsets[-1])
+        rows, cols, values = [], [], []
+        for ix, (_, _, segment) in enumerate(apertures):
+            grid, positions, coverage = self._coverage(segment)
+            offset = grid.bixel_offset
+
+            per_bixel = coverage.sum(axis=0)
+            hit = np.flatnonzero(per_bixel)
+            rows.append(np.full(hit.size, ix))
+            cols.append(offset + hit)
+            values.append(per_bixel[hit])
+
+            half = 0.5 * grid.bixel_width
+            scale = segment.weight * grid.row_coverage / grid.bixel_width
+            left, right = positions[:, 0][:, None], positions[:, 1][:, None]
+            travel = grid.travel[None, :]
+            # A leaf edge inside a beamlet changes that beamlet while the opposite leaf
+            # leaves it open: the left leaf closes it, the right leaf opens it.
+            for inside, sign, start in (
+                ((left > travel - half) & (left < np.minimum(right, travel + half)), -1.0, num),
+                (
+                    (right < travel + half) & (right > np.maximum(left, travel - half)),
+                    1.0,
+                    num + total,
+                ),
+            ):
+                row, bixel = np.nonzero(inside & (scale > 0))
+                rows.append(start + offsets[ix] + row)
+                cols.append(offset + bixel)
+                values.append(sign * scale[row, bixel])
+
+        shape = (num + 2 * total, self.total_num_of_bixels)
+        if not rows:
+            return sparse.csr_matrix(shape)
+        return sparse.csr_matrix(
+            (np.concatenate(values), (np.concatenate(rows), np.concatenate(cols))), shape=shape
+        )
+
+    def to_sequence(self) -> Sequence:
+        """Return the delivery sequence with the beamlet weights it delivers as fluence."""
+        return self.sequence.model_copy(update={"fluence": self.bixel_weights()})

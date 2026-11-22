@@ -23,8 +23,8 @@ def _pln_with_mlc(pln, leaf_width: float, number_of_elements: int, device_type: 
 
 
 def test_inititialize_beam_fluence_matrix_called_once_per_beam(test_data_xia, monkeypatch):
-    """_compute_beam_aperture_info must reuse the geometry cached by the earlier,
-    weighted call from sequence() rather than recomputing it from scratch.
+    """Building the delivery sequence must reuse the geometry cached by the weighted
+    call from sequence() rather than recomputing it from scratch.
     """
     pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
 
@@ -39,7 +39,7 @@ def test_inititialize_beam_fluence_matrix_called_once_per_beam(test_data_xia, mo
 
     run_sequencing(deepcopy(result_mat), pln_mat, stf_mat, dij=dij_mat)
 
-    # Exactly one call per beam, always with weights (the aperture-info pass
+    # Exactly one call per beam, always with weights (building the segments
     # must not trigger a second, weight-less call for the same beam).
     assert len(calls) == len(stf_mat.beams)
     assert all(calls)
@@ -55,12 +55,21 @@ def test_leaf_width_matching_bixel_width_is_a_noop(test_data_xia):
     with_mlc = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
 
     np.testing.assert_array_equal(baseline.sequence.fluence, with_mlc.sequence.fluence)
-    np.testing.assert_array_equal(
-        baseline.sequence.aperture_vector, with_mlc.sequence.aperture_vector
-    )
-    for b_base, b_mlc in zip(baseline.sequence.beam, with_mlc.sequence.beam):
-        np.testing.assert_array_equal(b_base.shapes, b_mlc.shapes)
-        np.testing.assert_array_equal(b_base.leaf_pair_pos, b_mlc.leaf_pair_pos)
+    info_base = baseline.sequence.aperture_info(stf_mat)
+    info_mlc = with_mlc.sequence.aperture_info(stf_mat)
+    np.testing.assert_array_equal(info_base.to_vector(), info_mlc.to_vector())
+    for bound_base, bound_mlc in zip(info_base.bounds(), info_mlc.bounds()):
+        np.testing.assert_array_equal(bound_base, bound_mlc)
+    for b_base, b_mlc in zip(baseline.sequence.beams, with_mlc.sequence.beams, strict=True):
+        for s_base, s_mlc in zip(b_base.segments, b_mlc.segments, strict=True):
+            np.testing.assert_array_equal(
+                s_base.start.mlc.leaf_positions, s_mlc.start.mlc.leaf_positions
+            )
+            np.testing.assert_array_equal(
+                s_base.start.mlc.leaf_position_boundaries,
+                s_mlc.start.mlc.leaf_position_boundaries,
+            )
+            assert s_base.start.jaws == s_mlc.start.jaws
 
 
 def test_coarser_leaf_grid_resamples_and_broadcasts(test_data_xia):
@@ -73,8 +82,7 @@ def test_coarser_leaf_grid_resamples_and_broadcasts(test_data_xia):
     baseline = run_sequencing(deepcopy(result_mat), pln_mat, stf_mat, dij=dij_mat)
     result_seq = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
 
-    first_beam = result_seq.sequence.beam[0]
-    first_mlc = first_beam.mlc_sequence[0]
+    first_mlc = result_seq.sequence.beams[0].segments[0].start.mlc
     assert np.isclose(first_mlc.leaf_width, leaf_width)
     assert first_mlc.number_of_elements == 40
 
@@ -88,6 +96,14 @@ def test_coarser_leaf_grid_resamples_and_broadcasts(test_data_xia):
     assert fluence.min() >= 0.0
     assert fluence.max() <= baseline.sequence.fluence.max() * 1.01
 
+    # Leaf rows wider than the bixels: the area overlap of the apertures with the bixels
+    # distributes the weight differently than the row interpolation of the sequencer, but
+    # delivers the same in total.
+    info = result_seq.sequence.aperture_info(stf_mat)
+    for grid in info.grids:
+        assert np.isclose(grid.leaf_width, leaf_width)
+    np.testing.assert_allclose(info.bixel_weights().sum(), fluence.sum())
+
 
 def test_full_leaf_positions_closed_elsewhere(test_data_xia):
     pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
@@ -96,42 +112,83 @@ def test_full_leaf_positions_closed_elsewhere(test_data_xia):
     pln_mlc = _pln_with_mlc(pln_mat, leaf_width=2 * bixel_width, number_of_elements=60)
     result_seq = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
 
-    beam = result_seq.sequence.beam[0]
-    mlc = beam.mlc_sequence[0]
+    mlc = result_seq.sequence.beams[0].segments[0].start.mlc
+    central_leaf_pair = XiaLeafSequencer(pln_mlc)._central_leaf_pair(bixel_width)
+    assert central_leaf_pair == 30.5
 
-    full = mlc.full_leaf_positions(beam.central_leaf_pair)
+    full = mlc.full_leaf_positions(central_leaf_pair)
     assert full.shape == (60, 2)
 
-    is_active = mlc.is_active_leaf_pair(beam.central_leaf_pair).astype(bool)
+    is_active = mlc.is_active_leaf_pair(central_leaf_pair).astype(bool)
     assert np.count_nonzero(is_active) == len(mlc.leaf_positions)
     np.testing.assert_array_equal(full[is_active], mlc.leaf_positions)
     np.testing.assert_array_equal(full[~is_active], np.zeros((np.count_nonzero(~is_active), 2)))
 
 
-def test_extra_blds_jaw_pair_matches_field_window(test_data_xia):
-    """Each shape gets a static X/Y jaw pair bounding the beam's field window."""
+def test_jaw_pair_matches_field_window(test_data_xia):
+    """Each segment gets a static X/Y jaw pair bounding the beam's field window."""
     pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
     result_seq = run_sequencing(deepcopy(result_mat), pln_mat, stf_mat, dij=dij_mat)
 
-    for beam in result_seq.sequence.beam:
-        assert beam.extra_blds is not None
-        assert len(beam.extra_blds) == beam.num_of_shapes
+    for beam, stf_beam in zip(result_seq.sequence.beams, stf_mat.beams, strict=True):
+        assert beam.num_of_segments > 0
 
-        travel_min, travel_max, stack_min, stack_max = beam.mlc_window
-        jaw_by_orientation = {jaw.device_orientation: jaw for jaw in beam.extra_blds[0]}
+        ray_pos = np.array([ray.ray_pos_bev for ray in stf_beam.rays]).reshape(-1, 3)
+        half = 0.5 * stf_beam.bixel_width
+        jaw_by_orientation = {jaw.device_orientation: jaw for jaw in beam.segments[0].start.jaws}
         assert set(jaw_by_orientation) == {"X", "Y"}
         for jaw in jaw_by_orientation.values():
             assert isinstance(jaw, Jaw)
         # test_data_xia has no configured machine MLC, so it uses the
         # default MLCX orientation: travel axis == BEV "X".
-        np.testing.assert_allclose(jaw_by_orientation["X"].positions, [travel_min, travel_max])
-        np.testing.assert_allclose(jaw_by_orientation["Y"].positions, [stack_min, stack_max])
+        np.testing.assert_allclose(
+            jaw_by_orientation["X"].positions,
+            [ray_pos[:, 0].min() - half, ray_pos[:, 0].max() + half],
+        )
+        np.testing.assert_allclose(
+            jaw_by_orientation["Y"].positions,
+            [ray_pos[:, 2].min() - half, ray_pos[:, 2].max() + half],
+        )
 
-        # jaws are static: identical across every shape of the beam
-        for shape_jaws in beam.extra_blds[1:]:
-            for jaw in shape_jaws:
+        # jaws are static: identical across every segment of the beam
+        for segment in beam.segments[1:]:
+            assert len(segment.start.jaws) == len(jaw_by_orientation)
+            for jaw in segment.start.jaws:
                 reference = jaw_by_orientation[jaw.device_orientation]
                 assert jaw.positions == reference.positions
+
+
+@pytest.mark.parametrize("device_type", ["MLCX", "MLCY"])
+def test_jaws_reach_over_leaf_rows_wider_than_the_field(test_data_xia, device_type):
+    """Across the leaves the jaws open to the leaf rows in use, so they never clip a leaf."""
+    pln_mat, stf_mat, dij_mat, *_, result_mat, _ = test_data_xia
+    stf_beam = stf_mat.beams[0]
+    bixel_width = stf_beam.bixel_width
+    leaf_width = 2.3 * bixel_width
+    pln_mlc = _pln_with_mlc(
+        pln_mat, leaf_width=leaf_width, number_of_elements=40, device_type=device_type
+    )
+    result_seq = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
+
+    travel_axis, stack_axis = (0, 2) if device_type == "MLCX" else (2, 0)
+    ray_pos = np.array([ray.ray_pos_bev for ray in stf_beam.rays]).reshape(-1, 3)
+    half = 0.5 * bixel_width
+    for segment in result_seq.sequence.beams[0].segments:
+        mlc = segment.start.mlc
+        jaws = {jaw.device_orientation: jaw for jaw in segment.start.jaws}
+        travel_jaw, stack_jaw = (
+            (jaws["X"], jaws["Y"]) if device_type == "MLCX" else (jaws["Y"], jaws["X"])
+        )
+        np.testing.assert_allclose(
+            travel_jaw.positions,
+            [ray_pos[:, travel_axis].min() - half, ray_pos[:, travel_axis].max() + half],
+        )
+        np.testing.assert_allclose(
+            stack_jaw.positions,
+            [mlc.leaf_position_boundaries[0], mlc.leaf_position_boundaries[-1] + leaf_width],
+        )
+        assert stack_jaw.positions[0] <= ray_pos[:, stack_axis].min() - half
+        assert stack_jaw.positions[1] >= ray_pos[:, stack_axis].max() + half
 
 
 def test_leaf_grid_centers_are_evenly_spaced_and_cover_the_range():
@@ -246,16 +303,31 @@ def test_mlcy_orientation_swaps_travel_and_stack_axes(test_data_xia):
     result_seq_x = run_sequencing(deepcopy(result_mat), pln_x, stf_mat, dij=dij_mat)
     result_seq_y = run_sequencing(deepcopy(result_mat), pln_y, stf_mat, dij=dij_mat)
 
-    mlc_y = result_seq_y.sequence.beam[0].mlc_sequence[0]
+    mlc_y = result_seq_y.sequence.beams[0].segments[0].start.mlc
     assert mlc_y.device_type == "MLCY"
     assert mlc_y.device_orientation == "Y"
 
-    # pos_of_corner_bixel places the travel/stack min at its true BEV index
-    # (0 for X-orientation travel, 2 for Y-orientation travel).
-    corner_x = result_seq_x.sequence.beam[0].pos_of_corner_bixel
-    corner_y = result_seq_y.sequence.beam[0].pos_of_corner_bixel
-    np.testing.assert_allclose(corner_x[0], corner_y[2])
-    np.testing.assert_allclose(corner_x[2], corner_y[0])
+    # The beamlet grid follows the MLC: travel is BEV x for an MLCX and BEV z for an MLCY.
+    grid_x = result_seq_x.sequence.aperture_info(stf_mat).grids[0]
+    grid_y = result_seq_y.sequence.aperture_info(stf_mat).grids[0]
+    assert (grid_x.orientation, grid_y.orientation) == ("X", "Y")
+    ray_pos = np.array([ray.ray_pos_bev for ray in beam.rays]).reshape(-1, 3)
+    np.testing.assert_allclose(grid_x.travel, ray_pos[:, 0])
+    np.testing.assert_allclose(grid_x.stack, ray_pos[:, 2])
+    np.testing.assert_allclose(grid_y.travel, ray_pos[:, 2])
+    np.testing.assert_allclose(grid_y.stack, ray_pos[:, 0])
+    _, travel_min_x, stack_min_x = grid_x.bixel_index_map()
+    _, travel_min_y, stack_min_y = grid_y.bixel_index_map()
+    np.testing.assert_allclose([travel_min_x, stack_min_x], [stack_min_y, travel_min_y])
+
+    # The jaws stay on their BEV axes whichever of them the leaves travel along.
+    for jaw_x, jaw_y in zip(
+        result_seq_x.sequence.beams[0].segments[0].start.jaws,
+        result_seq_y.sequence.beams[0].segments[0].start.jaws,
+        strict=True,
+    ):
+        assert jaw_x.device_orientation == jaw_y.device_orientation
+        np.testing.assert_allclose(jaw_x.positions, jaw_y.positions)
 
 
 def test_mlcy_resamples_the_stack_axis_not_the_travel_axis(test_data_xia):
@@ -326,5 +398,6 @@ def test_sequence_reports_the_leaf_pairs_of_the_machine(test_data_xia):
 
     result_seq = run_sequencing(deepcopy(result_mat), pln_mlc, stf_mat, dij=dij_mat)
 
-    assert result_seq.sequence.num_of_mlc_leaf_pairs == 40
-    assert result_seq.sequence.beam[0].mlc_sequence[0].number_of_elements == 40
+    for beam in result_seq.sequence.beams:
+        for segment in beam.segments:
+            assert segment.start.mlc.number_of_elements == 40

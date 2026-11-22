@@ -105,12 +105,12 @@ result = fluence_optimization(ct, cst, stf, dij, pln)
 # %%
 result_sequenced = run_sequencing(deepcopy(result), pln, stf, dij=dij)
 
-first_beam = result_sequenced.sequence.beam[0]
-first_mlc = first_beam.mlc_sequence[0]
+first_beam = result_sequenced.sequence.beams[0]
+first_mlc = first_beam.segments[0].start.mlc
 print(f"Leaf width used for sequencing: {first_mlc.leaf_width} mm")
 print(f"Number of physical leaf pairs: {first_mlc.number_of_elements}")
 
-full_positions = first_mlc.full_leaf_positions(first_beam.central_leaf_pair)
+full_positions = first_mlc.full_leaf_positions()
 print(f"Full-device leaf positions shape: {full_positions.shape}")
 print(f"Closed (unused) leaf pairs: {np.sum(np.all(full_positions == 0, axis=1))}")
 
@@ -177,7 +177,7 @@ pln_forward.prop_stf = {
     "gantry_angles": pln.prop_stf["gantry_angles"],
     "couch_angles": pln.prop_stf["couch_angles"],
     "generator": "photonSingleBixel",
-    "beam_sequences": result_sequenced.sequence.beam,
+    "beam_sequences": result_sequenced.sequence.beams,
     "resolution": 0.5,
     "energy": 6.0,
 }

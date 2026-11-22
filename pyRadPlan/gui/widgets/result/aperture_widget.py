@@ -27,10 +27,19 @@ from matplotlib.figure import Figure
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import SteeringInformation
-from pyRadPlan.sequencing._bev import beam_label, native_fluence_map, target_bev_points
+from pyRadPlan.sequencing._bev import (
+    beam_bixels,
+    beam_label,
+    field_window,
+    native_fluence_map,
+    shape_segments,
+    stf_beam_index,
+    target_bev_points,
+)
 from pyRadPlan.visualization._plot_aperture_info import (
     _draw_aperture,
     _draw_bixel_grid,
@@ -86,8 +95,11 @@ class BeamApertureWidget(QWidget):
         self.show_target = True
         self.show_bixel_grid = False
         self.target_color = "red"
-        self._n_shapes = beam.num_of_shapes
-        self._w_max = float(np.max(beam.shapes_weight)) if self._n_shapes else 0.0
+        self._segments = shape_segments(beam)
+        self._window = field_window(beam)
+        self._stf_beam = stf_beam_index(beam, beam_ix)
+        self._n_shapes = len(self._segments)
+        self._w_max = max((segment.weight for segment in self._segments), default=0.0)
 
         # Computed once: neither the fluence maps nor the target projection depend
         # on which shape is displayed, and the player redraws on every step.
@@ -145,22 +157,27 @@ class BeamApertureWidget(QWidget):
 
         self._draw_shape(0)
 
+    def _mlc(self, index: int) -> MLC:
+        """Return the MLC of shape *index*, in the state its segment starts in."""
+        return self._segments[index].start.mlc
+
     def _beam_geometry(self):
         """Return the steering-information beam for this tab, if the context supplies one."""
         stf = getattr(self.context, "stf", None)
-        if stf is None or self.beam_ix >= len(stf.beams):
+        if stf is None or self._stf_beam >= len(stf.beams):
             return None
-        return stf.beams[self.beam_ix]
+        return stf.beams[self._stf_beam]
 
     def _build_fluence_grids(
         self, delivered_fluence: Optional[np.ndarray]
     ) -> tuple[dict, Optional[list]]:
         """Scatter this beam's optimized/delivered fluence onto a dense BEV grid."""
         beam_geometry = self._beam_geometry()
-        if beam_geometry is None or self.beam.bixel_ix is None or not self.beam.mlc_sequence:
+        bixels = beam_bixels(getattr(self.context, "stf", None), self._stf_beam)
+        if beam_geometry is None or bixels is None or not self._segments:
             return {}, None
 
-        device_orientation = self.beam.mlc_sequence[0].device_orientation
+        device_orientation = self._mlc(0).device_orientation
         grids: dict = {}
         window = None
 
@@ -170,7 +187,7 @@ class BeamApertureWidget(QWidget):
             if values is None:
                 continue
             grids[mode], window = native_fluence_map(
-                beam_geometry, np.asarray(values)[self.beam.bixel_ix], device_orientation
+                beam_geometry, np.asarray(values)[bixels], device_orientation
             )
 
         if "optimized" in grids and "delivered" in grids:
@@ -183,13 +200,11 @@ class BeamApertureWidget(QWidget):
         beam_geometry = self._beam_geometry()
         ct = getattr(self.context, "ct", None)
         cst = getattr(self.context, "cst", None)
-        if beam_geometry is None or ct is None or cst is None or not self.beam.mlc_sequence:
+        if beam_geometry is None or ct is None or cst is None or not self._segments:
             return None
         try:
             self._target_resolution = max(float(v) for v in ct.resolution.values())
-            return target_bev_points(
-                ct, cst, beam_geometry, self.beam.mlc_sequence[0].device_orientation
-            )
+            return target_bev_points(ct, cst, beam_geometry, self._mlc(0).device_orientation)
         except Exception:  # noqa: BLE001 - an un-projectable target must not break the viewer
             logger.debug("Could not project the target into BEV", exc_info=True)
             return None
@@ -234,13 +249,13 @@ class BeamApertureWidget(QWidget):
             return None
         if self.leaf_coordinate == "physical":
             return self._target_points
-        return _leaf_num_points(self._target_points, self.beam.mlc_sequence[index])
+        return _leaf_num_points(self._target_points, self._mlc(index))
 
     def _target_bin_size(self, index: int):
         """Outline bin size for the current axes."""
         if self.leaf_coordinate == "physical":
             return self._target_resolution
-        leaf_width = getattr(self.beam.mlc_sequence[index], "leaf_width", None)
+        leaf_width = getattr(self._mlc(index), "leaf_width", None)
         if not leaf_width:
             return self._target_resolution
         return (self._target_resolution, self._target_resolution / leaf_width)
@@ -259,9 +274,9 @@ class BeamApertureWidget(QWidget):
         )
         if self.leaf_coordinate == "physical":
             return lines
-        return _leaf_num_points(
-            np.column_stack((np.zeros_like(lines), lines)), self.beam.mlc_sequence[index]
-        )[:, 1]
+        return _leaf_num_points(np.column_stack((np.zeros_like(lines), lines)), self._mlc(index))[
+            :, 1
+        ]
 
     def set_leaf_coordinate(self, leaf_coordinate: str) -> None:
         """Switch the stacking axis between leaf-pair index and physical mm."""
@@ -279,7 +294,7 @@ class BeamApertureWidget(QWidget):
 
     def _schedule_next(self) -> None:
         j = self.shape_slider.value()
-        weight = float(self.beam.shapes_weight[j]) if self._n_shapes else 0.0
+        weight = float(self._segments[j].weight) if self._n_shapes else 0.0
         frac = (weight / self._w_max) if self._w_max > 0 else 1.0
         interval = max(int(_BASE_INTERVAL_MS * frac / self.speed_spin.value()), _MIN_INTERVAL_MS)
         self._timer.start(interval)
@@ -308,11 +323,9 @@ class BeamApertureWidget(QWidget):
 
         n_panels = 2 if self.has_fluence else 1
         ax = self.figure.add_subplot(1, n_panels, 1)
-        weight = float(self.beam.shapes_weight[index])
+        weight = float(self._segments[index].weight)
         ax.set_facecolor(_weight_color(weight, self._w_max))
-        _draw_aperture(
-            ax, self.beam.mlc_sequence[index], self.beam.mlc_window, self.leaf_coordinate
-        )
+        _draw_aperture(ax, self._mlc(index), self._window, self.leaf_coordinate)
         if self.show_bixel_grid and self._fluence_window is not None:
             _draw_bixel_grid(
                 ax,
@@ -373,7 +386,7 @@ class BeamApertureWidget(QWidget):
                 getattr(self._beam_geometry(), "bixel_width", 0.0),
             )
         if self.show_mlc_borders:
-            _draw_mlc_borders(ax, self.beam.mlc_sequence[index], self.beam.mlc_window)
+            _draw_mlc_borders(ax, self._mlc(index), self._window)
         if self.show_target:
             _draw_target_outline(
                 ax, self._target_points, self._target_resolution, self.target_color
@@ -499,7 +512,7 @@ class ApertureViewerWidget(QWidget):
         self._reset_view_options()
 
         delivered = sequence.fluence
-        for beam_ix, beam in enumerate(sequence.beam):
+        for beam_ix, beam in enumerate(sequence.beams):
             label = beam_label(beam_ix, stf)
             widget = BeamApertureWidget(
                 beam,

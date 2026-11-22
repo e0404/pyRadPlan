@@ -56,7 +56,7 @@ def show_sequence_viewer(
     SequenceWindow or None
         The created window, or ``None`` if there is no sequencing data.
     """
-    if not isinstance(sequence, Sequence) or not sequence.beam:
+    if not isinstance(sequence, Sequence) or not sequence.beams:
         return None
 
     if stf is not None:
@@ -84,7 +84,7 @@ def _launch_sequence_window(sequence: Sequence, stf: Optional[SteeringInformatio
         Steering information used to label each beam's tab with its gantry
         angle, if available.
     """
-    if not isinstance(sequence, Sequence) or not sequence.beam:
+    if not isinstance(sequence, Sequence) or not sequence.beams:
         raise ValueError("No sequencing data to visualize.")
 
     app = QApplication.instance() or QApplication(sys.argv)

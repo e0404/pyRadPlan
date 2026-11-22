@@ -1,7 +1,7 @@
 import logging
 
 import numpy as np
-from typing import Optional
+from typing import Any, Optional
 
 from ._externalbeam import StfGeneratorExternalBeamRayBixel, StfGeneratorSingleBixel
 from .._beamlet import FieldShape, FieldShapeAsMask, FieldShapeAsBLD, FieldShapeComposite
@@ -157,9 +157,10 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
     possible_radiation_modes : list[str]
         A list of possible radiation modes (["photons"]).
     beam_sequences : list[BeamSequence]
-        Per-beam field configuration (e.g. a static field: single shape,
-        weight 1.0). If not given, each beam gets a single ray with no
-        field shape.
+        The delivery sequence of each beam (e.g. a static field: one segment of weight
+        1.0). A segment whose leaves or jaws move is sampled at ``DYNAMIC_SAMPLES``
+        intermediate states; gantry or couch motion within a segment is not supported.
+        If not given, each beam gets a single ray with no field shape.
     """
 
     name = "Photon Single Bixel Geometry"
@@ -167,6 +168,9 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
     possible_radiation_modes = ["photons"]
 
     energy: float = 6.0
+
+    #: Number of intermediate states a moving segment is sampled at.
+    DYNAMIC_SAMPLES: int = 5
 
     beam_sequences: Optional[list[BeamSequence]]
 
@@ -209,18 +213,35 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         stf = super()._generate_source_geometry()
         return stf
 
-    @staticmethod
-    def _group_shapes_by_extra_blds(beam_sequence: BeamSequence) -> list[list[int]]:
-        """Group shape indices that share value-identical ``extra_blds`` (e.g. the same jaws)."""
-        extra_blds = beam_sequence.extra_blds
-        n = len(beam_sequence.mlc_sequence)
-        if extra_blds is None:
-            return [list(range(n))]
+    def _segment_states(self, beam_sequence: BeamSequence) -> list[tuple[float, Any, list]]:
+        """List the fields a beam sequence delivers as ``(weight, mlc, jaws)``.
 
+        A static segment is one field; a segment with moving leaves or jaws is split into
+        ``DYNAMIC_SAMPLES`` fields of equal weight at evenly spaced intermediate states.
+        """
+        states = []
+        for segment in beam_sequence.segments:
+            if not segment.is_dynamic:
+                states.append((segment.weight, segment.start.mlc, segment.start.jaws))
+                continue
+            start, end = segment.start, segment.end
+            if start.gantry_angle != end.gantry_angle or start.couch_angle != end.couch_angle:
+                raise NotImplementedError(
+                    "A segment with gantry or couch motion cannot be delivered from one beam."
+                )
+            num = self.DYNAMIC_SAMPLES
+            for k in range(num):
+                state = segment.state_at((k + 0.5) / num)
+                states.append((segment.weight / num, state.mlc, state.jaws))
+        return states
+
+    @staticmethod
+    def _group_by_jaws(states: list[tuple[float, Any, list]]) -> list[list[int]]:
+        """Group the indices of fields that share value-identical jaws."""
         groups: list[list[int]] = []
-        for m in range(n):
+        for m, (_, _, jaws) in enumerate(states):
             for group in groups:
-                if extra_blds[m] == extra_blds[group[0]]:
+                if jaws == states[group[0]][2]:
                     group.append(m)
                     break
             else:
@@ -230,14 +251,26 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
     def _composite_shape_group(
         self, mlcs: list, weights: list[float], extra_blds: Optional[list]
     ) -> FieldShape:
-        """Build one field shape for a group of shapes that share identical ``extra_blds``."""
-        mlc_shapes = [
-            FieldShapeAsBLD(energy=self.energy, bld=mlc, resolution=self.resolution)
-            for mlc in mlcs
-        ]
+        """Build one field shape for a group of fields that share identical jaws."""
         extra_shapes = [
             FieldShapeAsBLD(energy=self.energy, bld=bld, resolution=self.resolution)
             for bld in (extra_blds or [])
+        ]
+        if all(mlc is None for mlc in mlcs):
+            if not extra_shapes:
+                raise ValueError("A segment needs an MLC or jaws to shape its field.")
+            beamlet = (
+                extra_shapes[0]
+                if len(extra_shapes) == 1
+                else FieldShapeComposite(energy=self.energy, shapes=extra_shapes)
+            )
+            beamlet.weight = float(sum(weights))
+            return beamlet
+        if any(mlc is None for mlc in mlcs):
+            raise ValueError("Segments with and without an MLC cannot share one beam.")
+        mlc_shapes = [
+            FieldShapeAsBLD(energy=self.energy, bld=mlc, resolution=self.resolution)
+            for mlc in mlcs
         ]
 
         if len(mlc_shapes) == 1:
@@ -262,7 +295,7 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         return FieldShapeAsMask(energy=self.energy, mask=combined_mask, grid=grid, weight=1.0)
 
     def _merge_group_shapes(self, group_shapes: list[FieldShape]) -> FieldShape:
-        """Combine every extra_blds group's own composite field shape into one beam-wide mask."""
+        """Combine the composite field shape of every jaw group into one beam-wide mask."""
         if len(group_shapes) == 1:
             return group_shapes[0]
 
@@ -292,18 +325,15 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         ray = rays[0]  # single ray for single-bixel generator
 
         if self.beam_sequences is not None:
-            beam_sequence = self.beam_sequences[beam["beam_ix"]]
-            groups = self._group_shapes_by_extra_blds(beam_sequence)
-            group_shapes = []
-            for group in groups:
-                mlcs = [beam_sequence.mlc_sequence[m] for m in group]
-                weights = [float(beam_sequence.shapes_weight[m]) for m in group]
-                extra_blds = (
-                    beam_sequence.extra_blds[group[0]]
-                    if beam_sequence.extra_blds is not None
-                    else None
+            states = self._segment_states(self.beam_sequences[beam["beam_ix"]])
+            group_shapes = [
+                self._composite_shape_group(
+                    [states[m][1] for m in group],
+                    [float(states[m][0]) for m in group],
+                    states[group[0]][2],
                 )
-                group_shapes.append(self._composite_shape_group(mlcs, weights, extra_blds))
+                for group in self._group_by_jaws(states)
+            ]
 
             beamlet = self._merge_group_shapes(group_shapes)
             return [

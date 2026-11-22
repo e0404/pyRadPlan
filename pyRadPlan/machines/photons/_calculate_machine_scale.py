@@ -40,7 +40,7 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
         leaf_positions=positions,
         leaf_width=leaf_width,
     )
-    beam_sequence = BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0])
+    beam_sequence = BeamSequence.from_shapes([mlc], [1.0])
 
     # Create a plan object
     pln = PhotonPlan(machine="Generic")

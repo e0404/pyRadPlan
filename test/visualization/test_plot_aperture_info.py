@@ -7,7 +7,7 @@ import pytest
 from pyRadPlan import CT, plot_aperture_info
 from pyRadPlan.cst import validate_cst
 from pyRadPlan.ct import validate_ct
-from pyRadPlan.machines import MLC
+from pyRadPlan.machines import MLC, Jaw
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.stf import Beam, Ray, SteeringInformation
@@ -18,7 +18,12 @@ from pyRadPlan.visualization._plot_aperture_info import (
     _leaf_num_points,
     _leaf_row_bounds,
 )
-from pyRadPlan.sequencing._bev import target_bev_points
+from pyRadPlan.sequencing._bev import (
+    beam_bixels,
+    field_window,
+    stf_beam_index,
+    target_bev_points,
+)
 
 matplotlib.use("Agg")
 
@@ -34,21 +39,21 @@ def _make_mlc(leaf_width: float, opening: float) -> MLC:
     )
 
 
+def _jaws() -> list[Jaw]:
+    return [
+        Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0),
+        Jaw(device_orientation="Y", positions=[-15.0, 15.0], field_width=40.0),
+    ]
+
+
 def _make_beam_sequence(n_shapes: int = 2) -> BeamSequence:
-    mlc_sequence = [_make_mlc(leaf_width=10.0, opening=5.0 + s) for s in range(n_shapes)]
-    return BeamSequence(
-        shapes=np.ones((3, 4, n_shapes), dtype=np.uint8),
-        shapes_weight=np.array([1.0 + s for s in range(n_shapes)]),
-        bixel_ix=list(range(4)),
-        fluence=np.ones(4),
-        mlc_sequence=mlc_sequence,
-        mlc_window=[-20.0, 20.0, -15.0, 15.0],
-    )
+    mlcs = [_make_mlc(leaf_width=10.0, opening=5.0 + s) for s in range(n_shapes)]
+    return BeamSequence.from_shapes(mlcs, [1.0 + s for s in range(n_shapes)], jaws=_jaws())
 
 
 @pytest.fixture
 def sample_sequence():
-    return Sequence(beam=[_make_beam_sequence(2), _make_beam_sequence(3)])
+    return Sequence(beams=[_make_beam_sequence(2), _make_beam_sequence(3)])
 
 
 def test_plot_aperture_info_from_sequence(sample_sequence, tmp_path):
@@ -106,15 +111,8 @@ def fluence_comparison_setup():
     stf = SteeringInformation(beams=[beam])
 
     mlc = _make_mlc(leaf_width=10.0, opening=2.0)
-    beam_sequence = BeamSequence(
-        shapes=np.ones((3, 4, 1), dtype=np.uint8),
-        shapes_weight=np.array([1.0]),
-        bixel_ix=list(range(4)),
-        fluence=np.ones(4),
-        mlc_sequence=[mlc],
-        mlc_window=[-20.0, 20.0, -15.0, 15.0],
-    )
-    sequence = Sequence(beam=[beam_sequence], fluence=np.array([1.1, 2.1, 2.9, 3.9]))
+    beam_sequence = BeamSequence.from_shapes([mlc], [1.0], jaws=_jaws(), stf_beam=0)
+    sequence = Sequence(beams=[beam_sequence], fluence=np.array([1.1, 2.1, 2.9, 3.9]))
     unsequenced_result = PlanResult(fluence=np.array([1.0, 2.0, 3.0, 4.0]))
     return stf, sequence, unsequenced_result
 
@@ -318,3 +316,50 @@ def test_leaf_num_points_put_a_leaf_edge_on_the_edge_of_its_drawn_row():
 
     np.testing.assert_allclose(_leaf_num_points(edges, mlc)[:, 1], low)
     np.testing.assert_allclose(_leaf_num_points(edges + [0.0, 10.0], mlc)[:, 1], high)
+
+
+def test_field_window_follows_the_jaws_on_the_leaf_axes():
+    beam = _make_beam_sequence()
+    assert field_window(beam) == [-20.0, 20.0, -15.0, 15.0]
+
+    mlc_y = _make_mlc(leaf_width=10.0, opening=5.0).model_copy(
+        update={"device_type": "MLCY", "device_orientation": "Y"}
+    )
+    assert field_window(BeamSequence.from_shapes([mlc_y], [1.0], jaws=_jaws())) == [
+        -15.0,
+        15.0,
+        -20.0,
+        20.0,
+    ]
+
+
+def test_field_window_without_jaws_spans_leaf_rows_and_positions():
+    mlcs = [_make_mlc(leaf_width=10.0, opening=opening) for opening in (5.0, 7.0)]
+    assert field_window(BeamSequence.from_shapes(mlcs, [1.0, 2.0])) == [-7.0, 7.0, -10.0, 20.0]
+    assert field_window(BeamSequence()) is None
+
+
+def test_beam_bixels_are_offset_by_the_rays_of_the_beams_before(fluence_comparison_setup):
+    stf, sequence, _ = fluence_comparison_setup
+    stf = SteeringInformation(beams=[stf.beams[0], stf.beams[0]])
+
+    assert beam_bixels(stf, 1) == slice(4, 8)
+    assert beam_bixels(stf, 2) is None and beam_bixels(None, 0) is None
+    assert stf_beam_index(sequence.beams[0], 3) == 0
+    assert stf_beam_index(_make_beam_sequence(), 3) == 3
+
+
+def test_plot_aperture_info_shows_the_start_of_a_dynamic_segment(fluence_comparison_setup):
+    stf, sequence, unsequenced_result = fluence_comparison_setup
+    segment = sequence.beams[0].segments[0]
+    end = segment.start.model_copy(update={"mlc": _make_mlc(leaf_width=10.0, opening=4.0)})
+    dynamic = BeamSequence(segments=[segment.model_copy(update={"end": end})])
+    assert dynamic.is_dynamic
+
+    figures = plot_aperture_info(
+        sequence.model_copy(update={"beams": [dynamic]}),
+        stf=stf,
+        unsequenced_result=unsequenced_result,
+        show_plot=False,
+    )
+    assert len(figures) == 2

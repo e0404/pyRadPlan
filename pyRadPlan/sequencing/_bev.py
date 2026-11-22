@@ -9,6 +9,7 @@ from pyRadPlan.core import np2sitk
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.geometry import lps
+from pyRadPlan.result._beam_sequence import BeamSequence, Segment
 from pyRadPlan.stf import Beam, SteeringInformation
 
 
@@ -19,6 +20,87 @@ def beam_label(beam_index: int, stf: Optional[SteeringInformation]) -> str:
         if angle is not None:
             return f"Beam {beam_index} ({float(angle):.0f}°)"
     return f"Beam {beam_index}"
+
+
+def shape_segments(beam_sequence: BeamSequence) -> list[Segment]:
+    """Return the segments of a beam that have leaf positions to draw, in delivery order.
+
+    A viewer shows the state a segment starts in.
+    """
+    return [
+        segment
+        for segment in beam_sequence.segments
+        if segment.start.mlc is not None and segment.start.mlc.leaf_positions is not None
+    ]
+
+
+def field_window(beam_sequence: BeamSequence) -> Optional[list[float]]:
+    """Return the field of a sequenced beam on the axes of its leaves.
+
+    The jaws of the first segment bound the field. An axis without a jaw takes the extent
+    of the leaf positions (along the leaves) or of the leaf rows (across them) of all
+    segments.
+
+    Returns
+    -------
+    list of float or None
+        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, ``None`` when neither
+        jaws nor leaves give the field.
+    """
+    if not beam_sequence.segments:
+        return None
+    mlcs = [segment.start.mlc for segment in shape_segments(beam_sequence)]
+    orientation = mlcs[0].device_orientation if mlcs else "X"
+    jaws = {jaw.device_orientation: jaw.positions for jaw in beam_sequence.segments[0].start.jaws}
+    travel = jaws.get(orientation)
+    stack = jaws.get("Y" if orientation == "X" else "X")
+
+    if travel is None and mlcs:
+        travel = np.concatenate(
+            [np.asarray(mlc.leaf_positions, dtype=float).ravel() for mlc in mlcs]
+        )
+    rows = [mlc for mlc in mlcs if mlc.leaf_position_boundaries is not None]
+    if stack is None and rows:
+        stack = np.concatenate(
+            [
+                np.asarray(mlc.leaf_position_boundaries, dtype=float).ravel() + offset
+                for mlc in rows
+                for offset in (0.0, mlc.leaf_width)
+            ]
+        )
+    if travel is None or stack is None or not len(travel) or not len(stack):
+        return None
+    return [
+        float(np.min(travel)),
+        float(np.max(travel)),
+        float(np.min(stack)),
+        float(np.max(stack)),
+    ]
+
+
+def stf_beam_index(beam_sequence: BeamSequence, position: int) -> int:
+    """Return the index of the steering-information beam a sequenced beam is planned on.
+
+    Parameters
+    ----------
+    beam_sequence : BeamSequence
+        The sequenced beam.
+    position : int
+        Position of *beam_sequence* in its sequence, used when its segments do not name
+        their beam.
+    """
+    for segment in beam_sequence.segments:
+        if segment.stf_beam is not None:
+            return segment.stf_beam
+    return position
+
+
+def beam_bixels(stf: Optional[SteeringInformation], stf_beam: int) -> Optional[slice]:
+    """Return the slice of beam *stf_beam* among all beamlets of *stf*, ``None`` without it."""
+    if stf is None or not 0 <= stf_beam < len(stf.beams):
+        return None
+    offset = sum(len(beam.rays) for beam in stf.beams[:stf_beam])
+    return slice(offset, offset + len(stf.beams[stf_beam].rays))
 
 
 def native_fluence_map(beam: Beam, values: np.ndarray, device_orientation: str) -> tuple:
@@ -38,7 +120,7 @@ def native_fluence_map(beam: Beam, values: np.ndarray, device_orientation: str) 
     tuple
         ``(grid, window)``: ``grid`` is a ``(dim_stack, dim_travel)`` array (``nan``
         where no ray exists) and ``window`` is
-        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, matching ``mlc_window``.
+        ``[travel_min, travel_max, stack_min, stack_max]`` in mm, like :func:`field_window`.
     """
     travel_axis, stack_axis = (0, 2) if device_orientation == "X" else (2, 0)
     travel_pos = np.array([ray.ray_pos_bev[travel_axis] for ray in beam.rays])

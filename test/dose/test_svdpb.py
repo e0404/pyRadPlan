@@ -54,7 +54,7 @@ def test_photons_field_based():
         "gantry_angles": [0.0],
         "couch_angles": [0.0],
         "generator": "photonSingleBixel",
-        "beam_sequences": [BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0])],
+        "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0])],
         "resolution": 2.0,
         "energy": 6.0,
     }
@@ -99,9 +99,7 @@ def _mlc(opening: float) -> MLC:
 
 def _forward_dose(ct, cst, mlc_sequence, weights, extra_blds=None):
     pln = PhotonPlan(machine="Generic")
-    beam_sequence = BeamSequence(
-        mlc_sequence=mlc_sequence, shapes_weight=weights, extra_blds=extra_blds
-    )
+    beam_sequence = BeamSequence.from_shapes(mlc_sequence, weights, jaws=extra_blds)
     pln.prop_stf = {
         "gantry_angles": [0.0],
         "couch_angles": [0.0],
@@ -311,7 +309,7 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
             "gantry_angles": [0.0],
             "couch_angles": [0.0],
             "generator": "photonSingleBixel",
-            "beam_sequences": [BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0])],
+            "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0])],
             "resolution": 1.0,
             "energy": 6.0,
         }
@@ -359,7 +357,7 @@ def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift)
         "gantry_angles": [0.0],
         "couch_angles": [0.0],
         "generator": "photonSingleBixel",
-        "beam_sequences": [BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0])],
+        "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0])],
         "resolution": 1.0,
         "energy": 6.0,
     }

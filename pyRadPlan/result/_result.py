@@ -26,6 +26,7 @@ from pyRadPlan.result._quantity_distribution import QuantityDistribution
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.result._sequence import Sequence
+from pyRadPlan.result._matrad_sequence import sequence_to_matrad
 
 logger = logging.getLogger(__name__)
 
@@ -663,7 +664,7 @@ class PlanResult(PyRadPlanBaseModel):
             return None
         return v
 
-    def to_matrad(self, context: str = "mat-file") -> Any:
+    def to_matrad(self, context: str = "mat-file", stf: Any = None) -> Any:
         """
         Convert the PlanResult object to a dictionary format for matRad.
 
@@ -671,6 +672,10 @@ class PlanResult(PyRadPlanBaseModel):
         ----------
         context : str
             The context in which the object is being serialized. Default is "mat-file".
+        stf : SteeringInformation, optional
+            The steering information the delivery sequence is planned on. matRad's
+            ``sequencing`` and ``apertureInfo`` hold data derived from the beamlets (shape
+            masks, beamlet index maps, leaf travel limits), which is only written with it.
 
         Returns
         -------
@@ -678,8 +683,9 @@ class PlanResult(PyRadPlanBaseModel):
             The serialized dictionary representation of the PlanResult object.
         """
         export = super().to_matrad(context=context)
-        if self.sequence is None or not self.sequence.model_fields_set:
-            export.pop("sequencing", None)
+        export.pop("sequencing", None)
+        if self.sequence is not None and self.sequence.model_fields_set:
+            export.update(sequence_to_matrad(self.sequence, stf))
         # removing Quantities and beamQuantities key from dict and passing content to top layer
         if "quantities" in export and isinstance(export["quantities"], dict):
             export.update(export.pop("quantities"))

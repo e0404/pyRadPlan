@@ -9,6 +9,7 @@ import SimpleITK as sitk
 
 import pyRadPlan.app
 from pyRadPlan.app import Session, decode
+from pyRadPlan.sequencing._bev import beam_bixels, field_window
 
 
 def _arrays(response):
@@ -227,10 +228,10 @@ def test_sequencing_adds_the_delivered_dose_to_the_active_result(client, coarse_
     assert (view["sequencer"], view["num_of_levels"]) == ("siochi", 9)
     stf = session.workspace.stf
     assert len(view["beams"]) == len(stf.beams)
-    for beam, sequenced, geometry in zip(view["beams"], result.sequence.beam, stf.beams):
+    for beam, sequenced, geometry in zip(view["beams"], result.sequence.beams, stf.beams):
         assert beam["label"] == f"Beam {beam['index']} ({geometry.gantry_angle:.0f}°)"
-        assert beam["orientation"] == "X" and beam["window"] == sequenced.mlc_window
-        assert len(beam["shapes"]) == len(beam["weights"]) == sequenced.num_of_shapes
+        assert beam["orientation"] == "X" and beam["window"] == field_window(sequenced)
+        assert len(beam["shapes"]) == len(beam["weights"]) == sequenced.num_of_segments
         shape = beam["shapes"][0]
         assert len(shape["leaf_positions"]) == len(shape["boundaries"])
         # The fluence maps lie on the ray grid of the beam, one bixel per ray
@@ -242,7 +243,7 @@ def test_sequencing_adds_the_delivered_dose_to_the_active_result(client, coarse_
         assert delivered.shape[1] == round((window[1] - window[0]) / bixel_width)
         assert np.isfinite(delivered).sum() == len(geometry.rays)
         np.testing.assert_allclose(
-            np.nansum(optimized), result.fluence[sequenced.bixel_ix].sum(), rtol=1e-5
+            np.nansum(optimized), result.fluence[beam_bixels(stf, beam["index"])].sum(), rtol=1e-5
         )
         # The projected target lies inside the field the leaves can open
         target = beam["target"]

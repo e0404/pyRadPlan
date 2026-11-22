@@ -13,8 +13,12 @@ from pyRadPlan.machines import MLC
 from pyRadPlan.result import PlanResult, Sequence
 from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.sequencing._bev import (
+    beam_bixels,
     beam_label,
+    field_window,
     native_fluence_map,
+    shape_segments,
+    stf_beam_index,
     target_outline_mask,
 )
 from pyRadPlan.stf import SteeringInformation, validate_stf
@@ -265,12 +269,17 @@ def _add_fluence_comparison_row(
     unsequenced_result: PlanResult,
 ) -> list[plt.Axes]:
     """Add the target/delivered/difference fluence comparison as one extra GridSpec row."""
-    device_orientation = beam.mlc_sequence[0].device_orientation
+    device_orientation = "X" if beam.mlc is None else beam.mlc.device_orientation
+    stf_beam = stf_beam_index(beam, beam_ix)
+    bixels = beam_bixels(stf, stf_beam)
+    if bixels is None:
+        raise ValueError(f"The steering information has no beam {stf_beam}.")
+    geometry = stf.beams[stf_beam]
     target_grid, window = native_fluence_map(
-        stf.beams[beam_ix], unsequenced_result.fluence[beam.bixel_ix], device_orientation
+        geometry, np.asarray(unsequenced_result.fluence)[bixels], device_orientation
     )
     delivered_grid, _ = native_fluence_map(
-        stf.beams[beam_ix], sequence.fluence[beam.bixel_ix], device_orientation
+        geometry, np.asarray(sequence.fluence)[bixels], device_orientation
     )
     vmax = max(np.nanmax(target_grid), np.nanmax(delivered_grid))
 
@@ -352,20 +361,22 @@ def _draw_shape_grid(
     cols: int,
 ) -> list[plt.Axes]:
     """Draw one beam's MLC shape grid (one subplot per delivered segment) into ``fig``."""
-    n_shapes = beam.num_of_shapes
+    segments = shape_segments(beam)
+    n_shapes = len(segments)
+    window = field_window(beam)
     gs = GridSpec(rows, cols, figure=fig)
     fig.suptitle(beam_label(beam_ix, stf))
 
     created_axes = []
-    w_max = float(np.max(beam.shapes_weight)) if n_shapes > 0 else 0.0
+    w_max = max((segment.weight for segment in segments), default=0.0)
 
-    for j in range(n_shapes):
+    for j, segment in enumerate(segments):
         r, c = divmod(j, cols)
         ax = fig.add_subplot(gs[r, c])
         created_axes.append(ax)
-        weight = float(beam.shapes_weight[j])
+        weight = float(segment.weight)
         ax.set_facecolor(_weight_color(weight, w_max))
-        _draw_aperture(ax, beam.mlc_sequence[j], beam.mlc_window, leaf_coordinate)
+        _draw_aperture(ax, segment.start.mlc, window, leaf_coordinate)
         ax.set_title(f"Shape {j + 1}, w={weight:.2g}", fontsize=8)
 
     for j in range(n_shapes, rows * cols):
@@ -512,7 +523,7 @@ def plot_aperture_info(  # noqa: PLR0913
     """
     sequenced_result = result if isinstance(result, PlanResult) else None
     sequence = result.sequence if isinstance(result, PlanResult) else result
-    if not isinstance(sequence, Sequence) or not sequence.beam:
+    if not isinstance(sequence, Sequence) or not sequence.beams:
         raise ValueError("No sequencing data to visualize.")
 
     if leaf_coordinate not in ("leaf_num", "physical"):
@@ -536,7 +547,7 @@ def plot_aperture_info(  # noqa: PLR0913
         stf = validate_stf(stf)
 
     if beam_indices is None:
-        beam_indices = list(range(len(sequence.beam)))
+        beam_indices = list(range(len(sequence.beams)))
     elif isinstance(beam_indices, int):
         beam_indices = [beam_indices]
 
@@ -544,9 +555,9 @@ def plot_aperture_info(  # noqa: PLR0913
 
     figures = []
     for beam_ix in beam_indices:
-        beam: BeamSequence = sequence.beam[beam_ix]
+        beam: BeamSequence = sequence.beams[beam_ix]
 
-        shape_layout = _shape_grid_layout(beam.num_of_shapes)
+        shape_layout = _shape_grid_layout(len(shape_segments(beam)))
         shape_fig = plt.figure(figsize=shape_layout["figsize"])
         _draw_shape_grid(
             shape_fig,

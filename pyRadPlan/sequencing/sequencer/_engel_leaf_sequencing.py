@@ -358,17 +358,4 @@ class EngelLeafSequencer(PhotonSequencer):
             sequencing["beam"].append(beam_sequencing)
             offset += num_of_rays_per_beam
 
-        # Finalize sequencing result
-        result_tmp = result.model_dump()
-        # we do this so that "beam" in aperture_info does not overwrite the beam in sequencing
-        result_tmp["sequence"] = sequencing
-        ap_info = self.sequencing_to_aperture_info(sequencing, stf)
-        # merge per‐beam aperture info into each beam entry
-        for idx, beam_info in enumerate(ap_info.get("beam", [])):
-            result_tmp["sequence"]["beam"][idx].update(beam_info)
-        # merge any other (global) aperture_info key
-        for key, val in ap_info.items():
-            if key != "beam":
-                result_tmp["sequence"][key] = val
-
-        return self._result_with_sequenced_quantities(result_tmp, sequencing["fluence"], dij)
+        return self._sequenced_result(result, sequencing, stf, dij)

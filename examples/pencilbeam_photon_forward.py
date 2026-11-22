@@ -205,11 +205,7 @@ num_of_beams = 1
 # A BeamSequence describes the field shape(s) delivered by one beam: here, the
 # short step-and-shoot sequence defined above (three MLC segments, decreasing
 # weight), each combined with the same static jaw.
-beam_sequence = BeamSequence(
-    mlc_sequence=mlc_shapes,
-    shapes_weight=shapes_weight,
-    extra_blds=[[jaw_x] for _ in mlc_shapes],
-)
+beam_sequence = BeamSequence.from_shapes(mlc_shapes, shapes_weight, jaws=[jaw_x])
 
 pln.prop_stf = {
     "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),

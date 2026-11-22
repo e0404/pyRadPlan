@@ -8,7 +8,21 @@ result
 
    PlanResult
    QuantityDistribution
+
+
+Delivery sequence
+-----------------
+
+.. autosummary::
+   :toctree: generated/result/
+
    Sequence
+   BeamSequence
+   Segment
+   MachineState
+   ControlPoint
+   ApertureInfo
+   ApertureGrid
 
 
 Creating and validating

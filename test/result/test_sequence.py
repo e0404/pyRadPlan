@@ -1,187 +1,401 @@
-"""Tests for the sequencing part of a plan result (Sequence / BeamSequence)."""
+"""The delivery sequence model: segments, control points, and the bridge to beamlets."""
+
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from pyRadPlan.machines import MLC, Jaw
-from pyRadPlan.result._beam_sequence import BeamSequence
-from pyRadPlan.result._sequence import Sequence
+from pyRadPlan.result import (
+    ApertureInfo,
+    BeamSequence,
+    MachineState,
+    PlanResult,
+    Segment,
+    Sequence,
+)
+
+
+def _mlc(boundaries, positions, leaf_width=5.0):
+    return MLC(
+        device_orientation="X",
+        number_of_elements=80,
+        leaf_width=leaf_width,
+        leaf_position_boundaries=boundaries,
+        leaf_positions=positions,
+    )
+
+
+def _stf_beam(travel, stack, bixel_width=5.0):
+    rays = [SimpleNamespace(ray_pos_bev=(x, 0.0, z)) for z in stack for x in travel]
+    return SimpleNamespace(bixel_width=bixel_width, rays=rays)
 
 
 @pytest.fixture
-def beam_sequence_data():
-    """Minimal valid BeamSequence input."""
-    return {
-        "shapes": np.ones((3, 4, 2)),
-        "shapes_weight": np.array([1.5, 2.5]),
-        "bixel_ix": [0, 1, 2],
-        "fluence": np.array([[0.4, 1.7], [2.9, 300.5]]),
-    }
-
-
-def test_beam_sequence_keeps_stratified_fluence_unwrapped(beam_sequence_data):
-    """The level map must stay float: uint8 like shapes would wrap above 255."""
-    beam = BeamSequence.model_validate(beam_sequence_data)
-
-    assert beam.stratified_fluence.dtype == float
-    np.testing.assert_allclose(beam.stratified_fluence, [[0.4, 1.7], [2.9, 300.5]])
-
-
-def test_beam_sequence_shapes_are_compact(beam_sequence_data):
-    """Shapes are binary aperture masks, stored as uint8."""
-    beam = BeamSequence.model_validate(beam_sequence_data)
-
-    assert beam.shapes.dtype == np.uint8
-    assert beam.num_of_shapes == 2
-    np.testing.assert_array_equal(beam.sum_shapes, np.full((3, 4), 2))
-
-
-def test_beam_sequence_derives_matrad_per_shape_views(beam_sequence_data):
-    """``shape_map``/``weight`` are matRad's per-shape layout of data stored once."""
-    beam_sequence_data["shapes"] = np.dstack([np.zeros((3, 4)), np.ones((3, 4))])
-    beam = BeamSequence.model_validate(beam_sequence_data)
-
-    assert len(beam.shape_map) == 2
-    for m, shape_map in enumerate(beam.shape_map):
-        np.testing.assert_array_equal(shape_map, beam.shapes[:, :, m])
-    np.testing.assert_allclose(beam.weight, beam.shapes_weight)
-
-    # Both are computed, so matRad export still carries them under their own keys.
-    dumped = beam.model_dump(by_alias=True)
-    assert "shapeMap" in dumped and "weight" in dumped
-
-
-def test_beam_sequence_per_shape_views_without_shapes():
-    """A BeamSequence built from MLCs alone has no shapes to slice."""
-    beam = BeamSequence(shapes_weight=[1.0, 2.0])
-
-    assert beam.shape_map is None
-    np.testing.assert_allclose(beam.weight, [1.0, 2.0])
-
-
-def test_beam_sequence_adds_shape_axis_from_matrad(beam_sequence_data):
-    """matRad stores a single shape as a 2D array; a shape axis is added on import."""
-    beam_sequence_data["shapes"] = np.ones((3, 4))
-    beam = BeamSequence.model_validate(beam_sequence_data, context={"from_matRad": True})
-
-    assert beam.shapes.shape == (3, 4, 1)
-    assert beam.num_of_shapes == 1
-
-
-def _matrad_beam_struct(num_beams=2):
-    """A matRad ``sequencing.beam`` struct-of-arrays for *num_beams* beams."""
-    return {
-        "shapes": [np.ones((3, 4, 1)) for _ in range(num_beams)],
-        "shapesWeight": [np.array([1.0]) for _ in range(num_beams)],
-        "bixelIx": [np.array([1, 2, 3]) for _ in range(num_beams)],
-        "fluence": [np.full((3, 4), 0.5) for _ in range(num_beams)],
-    }
-
-
-def test_sequence_matrad_import_converts_bixel_indices():
-    """matRad bixel indices are 1-based and become 0-based on import."""
-    seq = Sequence.model_validate({"beam": _matrad_beam_struct()}, context={"from_matRad": True})
-
-    assert len(seq.beam) == 2
-    assert seq.beam[0].bixel_ix == [0, 1, 2]
-    assert seq.total_num_of_shapes == 2
-
-
-def test_sequence_matrad_import_of_a_single_beam():
-    """A single beam is read as a plain struct instead of one list per field."""
-    data = {
-        "beam": {
-            "numOfShapes": 1.0,
-            "shapes": np.ones((3, 4)),
-            "shapesWeight": 2.0,
-            "bixelIx": np.array([1.0, 2.0, 3.0]),
-            "fluence": np.full((3, 4), 0.5),
-        },
-        "aperture_info": {"bixelWidth": 5.0, "beam": {"numOfActiveLeafPairs": 3.0}},
-    }
-    seq = Sequence.model_validate(data, context={"from_matRad": True})
-
-    assert len(seq.beam) == 1
-    assert seq.beam[0].bixel_ix == [0, 1, 2]
-    assert seq.beam[0].shapes.shape == (3, 4, 1)
-    np.testing.assert_array_equal(seq.beam[0].shapes_weight, [2.0])
-    assert seq.beam[0].num_of_active_leaf_pairs == 3
-
-
-def test_sequence_matrad_import_merges_aperture_info():
-    """apertureInfo entries are flattened onto the Sequence and its beams."""
-    data = {
-        "beam": _matrad_beam_struct(),
-        "aperture_info": {
-            "bixelWidth": 5.0,
-            "numOfMLCLeafPairs": 40,
-            "totalNumOfBixels": 6,
-            "beam": {"numOfActiveLeafPairs": [3, 3]},
-        },
-    }
-    seq = Sequence.model_validate(data, context={"from_matRad": True})
-
-    assert seq.bixel_width == 5.0
-    assert seq.num_of_mlc_leaf_pairs == 40
-    assert seq.total_num_of_bixels == 6
-    assert [beam.num_of_active_leaf_pairs for beam in seq.beam] == [3, 3]
-    assert seq.total_num_of_leaf_pairs == 6
-
-
-def test_sequence_matrad_import_without_beam_substruct():
-    """An apertureInfo without a 'beam' sub-struct must not raise."""
-    seq = Sequence.model_validate(
-        {"aperture_info": {"bixelWidth": 5.0, "numOfMLCLeafPairs": 40}},
-        context={"from_matRad": True},
+def stf():
+    return SimpleNamespace(
+        beams=[_stf_beam([-10, -5, 0, 5, 10], [-5, 0, 5]), _stf_beam([-5, 0, 5], [0, 5])]
     )
 
-    assert seq.bixel_width == 5.0
-    assert seq.num_of_mlc_leaf_pairs == 40
-    assert seq.beam is None
-    assert seq.total_num_of_leaf_pairs == 0
 
-
-def test_sequence_matrad_import_mismatched_beam_count(caplog):
-    """A beam-count mismatch is reported rather than crashing."""
-    data = {
-        "beam": _matrad_beam_struct(num_beams=2),
-        "aperture_info": {"beam": {"numOfActiveLeafPairs": [3, 3, 3]}},
-    }
-    seq = Sequence.model_validate(data, context={"from_matRad": True})
-
-    assert "does not match" in caplog.text
-    assert [beam.num_of_active_leaf_pairs for beam in seq.beam] == [None, None]
-
-
-def test_beam_sequence_minimal_construction_for_forward_planning():
-    """A BeamSequence built without any sequencer bookkeeping (shapes/bixel_ix/fluence)
-    is valid and enough to drive forward-planning field shapes: only mlc_sequence,
-    shapes_weight, and extra_blds are needed for that.
-    """
-    mlc = MLC(
-        device_type="MLCX",
-        leaf_position_boundaries=np.array([-10.0, 0.0, 10.0]),
-        leaf_positions=np.array([[-5.0, 5.0]] * 3),
-        leaf_width=10.0,
+@pytest.fixture
+def sequence():
+    rows = [-7.5, -2.5, 2.5]
+    jaws = [
+        Jaw(device_orientation="X", positions=[-12.5, 12.5], field_width=50.0),
+        Jaw(device_orientation="Y", positions=[-25.0, 20.0], field_width=50.0),
+    ]
+    first = BeamSequence.from_shapes(
+        [
+            _mlc(rows, [[-12.5, 2.5], [-7.5, 12.5], [-2.5, -2.5]]),
+            _mlc(rows, [[-6.0, 1.0], [-7.5, 7.5], [0.0, 4.0]]),
+        ],
+        [1.0, 2.5],
+        jaws=jaws,
+        stf_beam=0,
     )
+    second = BeamSequence.from_shapes(
+        [_mlc([-2.5, 2.5], [[-7.5, 7.5], [-2.5, 2.5]])], [3.0], stf_beam=1
+    )
+    return Sequence(beams=[first, second], sequencer="xia", num_of_levels=5)
+
+
+def test_from_shapes_builds_static_segments(sequence):
+    beam = sequence.beams[0]
+
+    assert beam.num_of_segments == 2
+    np.testing.assert_array_equal(beam.weights, [1.0, 2.5])
+    assert beam.total_weight == pytest.approx(3.5)
+    assert not beam.is_dynamic
+    assert beam.stf_beams == [0]
+    assert [len(segment.start.jaws) for segment in beam.segments] == [2, 2]
+    assert all(segment.end is None for segment in beam.segments)
+    assert sequence.total_num_of_segments == 3
+
+
+def test_from_shapes_takes_jaws_per_segment():
+    mlcs = [_mlc([0.0], [[-5.0, 5.0]]), _mlc([0.0], [[-2.0, 2.0]])]
+    wide = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+    narrow = Jaw(device_orientation="X", positions=[-10.0, 10.0], field_width=40.0)
+
+    beam = BeamSequence.from_shapes(mlcs, [1.0, 1.0], jaws=[[wide], [narrow]])
+
+    assert beam.segments[0].start.jaws == [wide]
+    assert beam.segments[1].start.jaws == [narrow]
+
+
+def test_from_shapes_rejects_mismatching_counts():
+    with pytest.raises(ValueError, match="1 MLC shapes for 2 weights"):
+        BeamSequence.from_shapes([_mlc([0.0], [[-5.0, 5.0]])], [1.0, 2.0])
+
+
+def test_jaw_only_field():
     jaw = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
-
-    beam = BeamSequence(mlc_sequence=[mlc], shapes_weight=[1.0], extra_blds=[[jaw]])
-
-    assert beam.shapes is None
-    assert beam.bixel_ix is None
-    assert beam.stratified_fluence is None
-    assert beam.num_of_shapes == 1
-    np.testing.assert_array_equal(beam.sum_shapes, np.array([]))
-    assert beam.mlc_sequence == [mlc]
-    assert beam.extra_blds == [[jaw]]
+    beam = BeamSequence.from_shapes(None, [1.0], jaws=[jaw])
+    assert beam.mlc is None
+    assert beam.segments[0].start.jaws == [jaw]
 
 
-def test_sequence_matrad_import_leaves_input_untouched():
-    """Validation must not consume the caller's dictionary."""
-    data = {"beam": _matrad_beam_struct(), "aperture_info": {"bixelWidth": 5.0}}
-    snapshot = set(data)
+def test_segment_weight_must_not_be_negative():
+    with pytest.raises(ValueError):
+        Segment(weight=-1.0, start=MachineState())
 
-    Sequence.model_validate(data, context={"from_matRad": True})
 
-    assert set(data) == snapshot
+def test_segment_needs_the_same_leaf_rows_at_start_and_end():
+    with pytest.raises(ValueError, match="same leaf rows"):
+        Segment(
+            weight=1.0,
+            start=MachineState(mlc=_mlc([0.0], [[-5.0, 5.0]])),
+            end=MachineState(mlc=_mlc([0.0, 5.0], [[-5.0, 5.0], [-5.0, 5.0]])),
+        )
+
+
+@pytest.fixture
+def moving_segment():
+    return Segment(
+        weight=3.0,
+        start=MachineState(gantry_angle=350.0, mlc=_mlc([-2.5, 2.5], [[-7.5, 7.5], [-2.5, 2.5]])),
+        end=MachineState(gantry_angle=10.0, mlc=_mlc([-2.5, 2.5], [[-5.5, 7.5], [-2.5, 4.5]])),
+        duration=2.0,
+    )
+
+
+def test_a_state_carries_no_speed_the_segment_derives_it(moving_segment):
+    assert moving_segment.is_dynamic
+    np.testing.assert_allclose(moving_segment.leaf_travel, [[2.0, 0.0], [0.0, 2.0]])
+    assert moving_segment.max_leaf_speed == pytest.approx(1.0)
+    assert moving_segment.gantry_travel() == pytest.approx(20.0)
+    assert moving_segment.gantry_speed() == pytest.approx(10.0)
+    assert moving_segment.weight_rate == pytest.approx(1.5)
+
+
+def test_speeds_are_unknown_without_a_duration(moving_segment):
+    untimed = moving_segment.model_copy(update={"duration": None})
+    assert untimed.max_leaf_speed is None
+    assert untimed.gantry_speed() is None
+    assert untimed.weight_rate is None
+    np.testing.assert_allclose(untimed.leaf_travel, [[2.0, 0.0], [0.0, 2.0]])
+
+
+def test_gantry_travel_follows_the_rotation_direction(moving_segment):
+    assert moving_segment.gantry_travel("cw") == pytest.approx(20.0)
+    assert moving_segment.gantry_travel("ccw") == pytest.approx(-340.0)
+
+
+def test_state_at_interpolates_linearly_across_the_wrap(moving_segment):
+    state = moving_segment.state_at(0.75)
+    assert state.gantry_angle == pytest.approx(5.0)
+    np.testing.assert_allclose(state.mlc.leaf_positions, [[-6.0, 7.5], [-2.5, 4.0]])
+
+    static = Segment(weight=1.0, start=moving_segment.start)
+    assert static.state_at(0.5) is static.start
+    assert not static.is_dynamic
+    assert static.gantry_travel() == 0.0
+
+
+def test_control_points_of_step_and_shoot(sequence):
+    points = sequence.beams[0].control_points(gantry_angle=30.0, couch_angle=0.0)
+
+    assert [point.index for point in points] == [0, 1, 2, 3]
+    np.testing.assert_allclose([point.cumulative_weight for point in points], [0.0, 1.0, 1.0, 3.5])
+    np.testing.assert_allclose(
+        [point.cumulative_meterset_weight for point in points], [0.0, 1 / 3.5, 1 / 3.5, 1.0]
+    )
+    assert {point.gantry_angle for point in points} == {30.0}
+    assert {point.gantry_rotation_direction for point in points} == {"NONE"}
+    assert points[0].mlc == points[1].mlc
+    assert points[2].mlc == points[3].mlc
+    assert points[1].mlc != points[2].mlc
+
+
+def test_control_points_of_a_continuous_arc(moving_segment):
+    onward = Segment(
+        weight=1.0,
+        start=moving_segment.end,
+        end=moving_segment.end.model_copy(update={"gantry_angle": 30.0}),
+    )
+    arc = BeamSequence(segments=[moving_segment, onward], rotation="cw")
+
+    assert arc.is_dynamic
+    assert arc.is_continuous
+    points = arc.control_points()
+    assert [point.gantry_angle for point in points] == [350.0, 10.0, 30.0]
+    np.testing.assert_allclose([point.cumulative_weight for point in points], [0.0, 3.0, 4.0])
+    assert [point.gantry_rotation_direction for point in points] == ["CW", "CW", "NONE"]
+
+
+def test_a_gap_between_segments_is_not_continuous(moving_segment):
+    elsewhere = Segment(weight=1.0, start=moving_segment.start)
+    assert not BeamSequence(segments=[moving_segment, elsewhere]).is_continuous
+
+
+def test_sequence_survives_a_model_dump(sequence, moving_segment):
+    sequence = sequence.model_copy(
+        update={"beams": [*sequence.beams, BeamSequence(segments=[moving_segment], rotation="cw")]}
+    )
+    assert Sequence.model_validate(sequence.model_dump()) == sequence
+
+
+def test_aperture_info_maps_segments_to_beamlets(sequence, stf):
+    info = ApertureInfo.from_sequence(sequence, stf)
+
+    assert [grid.bixel_offset for grid in info.grids] == [0, 15]
+    assert info.total_num_of_bixels == 21
+    assert info.total_num_of_apertures == 3
+    assert info.total_num_of_leaf_pairs == 8
+    np.testing.assert_allclose(info.grids[0].lim_left, [-12.5, -12.5, -12.5])
+    np.testing.assert_allclose(info.grids[1].lim_right, [7.5, 7.5])
+
+    # Row at z=-5 of beam 0: the first shape opens x < 2.5, the second [-6, 1], which
+    # covers 70 % of the beamlets at -5 and 0.
+    np.testing.assert_allclose(
+        info.bixel_weights()[:5], [1.0, 1.0 + 2.5 * 0.7, 1.0 + 2.5 * 0.7, 0.0, 0.0]
+    )
+    np.testing.assert_allclose(info.aperture_fluence(1, 0), [1, 1, 1, 0, 1, 0])
+    np.testing.assert_allclose(info.to_sequence().fluence, info.bixel_weights())
+
+
+def test_aperture_info_counts_leaf_rows_wider_than_beamlets():
+    stf = SimpleNamespace(beams=[_stf_beam([0.0], [-2.5, 2.5, 7.5])])
+    wide_rows = _mlc([-5.0, 5.0], [[-2.5, 2.5], [0.0, 0.0]], leaf_width=10.0)
+    sequence = Sequence(beams=[BeamSequence.from_shapes([wide_rows], [2.0], stf_beam=0)])
+
+    info = sequence.aperture_info(stf)
+
+    np.testing.assert_allclose(info.bixel_weights(), [2.0, 2.0, 0.0])
+    np.testing.assert_allclose(info.grids[0].row_coverage, [[1, 1, 0], [0, 0, 1]])
+
+
+def test_aperture_vector_round_trip_and_bounds(sequence, stf):
+    info = sequence.aperture_info(stf)
+    vector = info.to_vector()
+
+    assert vector.size == 3 + 2 * 8
+    np.testing.assert_allclose(vector[:3], [1.0, 2.5, 3.0])
+    np.testing.assert_allclose(vector[3:6], [-12.5, -7.5, -2.5])
+    np.testing.assert_allclose(vector[3 + 8 : 6 + 8], [2.5, 12.5, -2.5])
+    assert info.update(vector).sequence == info.sequence
+
+    lower, upper = info.bounds()
+    np.testing.assert_array_equal(lower[:3], 0.0)
+    assert np.all(np.isinf(upper[:3]))
+    np.testing.assert_allclose(lower[3:6], -12.5)
+    np.testing.assert_allclose(upper[3:6], 12.5)
+
+    with pytest.raises(ValueError, match="Expected 19 variables"):
+        info.update(vector[:-1])
+
+
+def test_updated_vector_becomes_a_sequence(sequence, stf):
+    info = sequence.aperture_info(stf)
+    vector = info.to_vector()
+    vector[0] = 4.0
+    vector[3] = -11.0
+
+    updated = info.update(vector).to_sequence()
+
+    first = updated.beams[0].segments[0]
+    assert first.weight == pytest.approx(4.0)
+    assert first.start.mlc.leaf_positions[0, 0] == pytest.approx(-11.0)
+    assert first.start.jaws == sequence.beams[0].segments[0].start.jaws
+    assert updated.sequencer == "xia"
+    # The beamlet at x=-10 spans [-12.5, -7.5]; the leaf at -11 leaves 70 % of it open.
+    assert updated.fluence[0] == pytest.approx(4.0 * 0.7)
+
+
+def test_bixel_jacobian_matches_finite_differences(sequence, stf):
+    info = sequence.aperture_info(stf)
+    # Leaf edges on beamlet edges are kinks of the mapping; move every edge off them.
+    vector = info.to_vector()
+    vector[3:11] += 0.8
+    vector[11:] -= 0.6
+    info = info.update(vector)
+
+    jacobian = info.bixel_jacobian().toarray()
+
+    step = 1e-4
+    numeric = np.zeros_like(jacobian)
+    for ix in range(vector.size):
+        up, down = vector.copy(), vector.copy()
+        up[ix] += step
+        down[ix] -= step
+        numeric[ix] = (info.update(up).bixel_weights() - info.update(down).bixel_weights()) / (
+            2 * step
+        )
+    assert jacobian.shape == (19, 21)
+    assert np.count_nonzero(jacobian) > 20  # noqa: PLR2004
+    np.testing.assert_allclose(jacobian, numeric, atol=1e-8)
+
+
+def test_aperture_info_requires_static_segments_with_an_mlc(stf, moving_segment):
+    arc = Sequence(beams=[BeamSequence(segments=[moving_segment])])
+    with pytest.raises(NotImplementedError, match="move while they are delivered"):
+        arc.aperture_info(SimpleNamespace(beams=stf.beams[:1]))
+
+    jaw = Jaw(device_orientation="X", positions=[-20.0, 20.0], field_width=40.0)
+    jaw_only = Sequence(beams=[BeamSequence.from_shapes(None, [1.0], jaws=[jaw], stf_beam=0)])
+    with pytest.raises(ValueError, match="needs an MLC"):
+        jaw_only.aperture_info(stf)
+
+
+def test_aperture_info_assigns_segments_without_stf_beam_by_position(sequence, stf):
+    unassigned = Sequence(
+        beams=[
+            BeamSequence(segments=[s.model_copy(update={"stf_beam": None}) for s in beam.segments])
+            for beam in sequence.beams
+        ]
+    )
+    np.testing.assert_allclose(
+        unassigned.aperture_info(stf).bixel_weights(), sequence.aperture_info(stf).bixel_weights()
+    )
+    with pytest.raises(ValueError, match="one beam sequence per beam"):
+        Sequence(beams=unassigned.beams[:1]).aperture_info(stf)
+
+
+@pytest.mark.parametrize("with_stf", [False, True])
+def test_matrad_round_trip_keeps_segments(sequence, stf, with_stf):
+    fluence = sequence.aperture_info(stf).bixel_weights()
+    result = PlanResult(
+        fluence=np.ones(21), sequence=sequence.model_copy(update={"fluence": fluence})
+    )
+
+    exported = result.to_matrad(stf=stf if with_stf else None)
+
+    info = exported["apertureInfo"]
+    assert ("totalNumOfBixels" in info) == with_stf
+    assert ("beam" in exported["sequencing"]) == with_stf
+    assert info["totalNumOfShapes"] == 3  # noqa: PLR2004
+    assert info["totalNumOfLeafPairs"] == 8  # noqa: PLR2004
+    np.testing.assert_allclose(info["apertureVector"][:3], [1.0, 2.5, 3.0])
+    if with_stf:
+        beam = exported["sequencing"]["beam"][0]
+        assert beam["shapes"].shape == (3, 5, 2)
+        np.testing.assert_array_equal(beam["bixelIx"], np.arange(1, 16))
+        np.testing.assert_array_equal(beam["shapes"][0, :, 0], [1, 1, 1, 0, 0])
+        np.testing.assert_allclose(info["limMx"][3:6], [[-12.5, 12.5]] * 3)
+
+    loaded = PlanResult.from_matrad(exported).sequence
+    assert loaded.sequencer == "xia"
+    assert loaded.num_of_levels == 5  # noqa: PLR2004
+    np.testing.assert_allclose(loaded.fluence, fluence)
+    # The jaws reach further than the beamlets and must come back as they were.
+    assert loaded.beams[0].segments[0].start.jaws == sequence.beams[0].segments[0].start.jaws
+    for beam, original in zip(loaded.beams, sequence.beams):
+        np.testing.assert_allclose(beam.weights, original.weights)
+        assert beam.stf_beams == original.stf_beams
+        for segment, expected in zip(beam.segments, original.segments):
+            np.testing.assert_allclose(
+                segment.start.mlc.leaf_positions, expected.start.mlc.leaf_positions
+            )
+            np.testing.assert_allclose(
+                segment.start.mlc.leaf_position_boundaries,
+                expected.start.mlc.leaf_position_boundaries,
+            )
+
+
+def test_matrad_import_of_a_single_beam_with_a_single_shape():
+    data = {
+        "w": np.ones(3),
+        "apertureInfo": {
+            "bixelWidth": 5.0,
+            "numOfMLCLeafPairs": 80.0,
+            "beam": {
+                "leafPairPos": np.array([-5.0, 0.0]),
+                "MLCWindow": np.array([-7.5, 7.5, -7.5, 2.5]),
+                "shape": {
+                    "leftLeafPos": np.array([-7.5, -2.5]),
+                    "rightLeafPos": np.array([2.5, 7.5]),
+                    "weight": 1.5,
+                },
+            },
+        },
+    }
+
+    sequence = Sequence.model_validate(data, context={"from_matRad": True})
+
+    segment = sequence.beams[0].segments[0]
+    assert segment.weight == 1.5  # noqa: PLR2004
+    assert segment.stf_beam == 0
+    np.testing.assert_allclose(segment.start.mlc.leaf_positions, [[-7.5, 2.5], [-2.5, 7.5]])
+    np.testing.assert_allclose(segment.start.mlc.leaf_position_boundaries, [-7.5, -2.5])
+    assert [jaw.positions for jaw in segment.start.jaws] == [[-7.5, 7.5], [-7.5, 2.5]]
+
+
+def test_matrad_import_without_aperture_info_keeps_the_weights_only(caplog):
+    data = {"w": np.ones(3), "beam": {"shapes": np.ones((3, 4)), "shapesWeight": 1.0}}
+
+    sequence = Sequence.model_validate(data, context={"from_matRad": True})
+
+    assert sequence.beams == []
+    np.testing.assert_array_equal(sequence.fluence, np.ones(3))
+    assert "carries no leaf positions" in caplog.text
+
+
+def test_matrad_export_leaves_out_what_matrad_cannot_hold(sequence, moving_segment, caplog):
+    arc = sequence.model_copy(update={"beams": [BeamSequence(segments=[moving_segment])]})
+
+    exported = PlanResult(fluence=np.ones(3), sequence=arc).to_matrad()
+
+    assert "apertureInfo" not in exported
+    assert exported["sequencing"] == {"sequencer": "xia", "numOfLevels": 5}
+    assert "segments are not exported" in caplog.text

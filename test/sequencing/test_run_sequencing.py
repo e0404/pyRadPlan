@@ -113,14 +113,17 @@ def test_sequenced_result_survives_a_dump(test_data_xia):
     result_seq = run_sequencing(result_mat, pln_mat, stf_mat, dij=dij_mat)
 
     dumped = result_seq.model_dump()
-    jaw = dumped["sequence"]["beam"][0]["extra_blds"][0][0]
-    assert jaw["positions"] == result_seq.sequence.beam[0].extra_blds[0][0].positions
+    jaw = dumped["sequence"]["beams"][0]["segments"][0]["start"]["jaws"][0]
+    assert jaw["positions"] == result_seq.sequence.beams[0].segments[0].start.jaws[0].positions
     restored = validate_result(dumped)
 
-    for beam, original in zip(restored.sequence.beam, result_seq.sequence.beam):
-        assert all(isinstance(jaw, Jaw) for jaws in beam.extra_blds for jaw in jaws)
-        assert beam.extra_blds == original.extra_blds
-        assert beam.mlc_sequence == original.mlc_sequence
+    for beam, original in zip(restored.sequence.beams, result_seq.sequence.beams, strict=True):
+        for segment, original_segment in zip(beam.segments, original.segments, strict=True):
+            assert all(isinstance(jaw, Jaw) for jaw in segment.start.jaws)
+            assert segment.start.jaws == original_segment.start.jaws
+            assert segment.start.mlc == original_segment.start.mlc
+            assert segment.weight == original_segment.weight
+            assert segment.stf_beam == original_segment.stf_beam
 
 
 def test_sequenced_result_survives_a_mat_file(test_data_xia, tmp_path):
@@ -129,12 +132,40 @@ def test_sequenced_result_survives_a_mat_file(test_data_xia, tmp_path):
     pln_mat, stf_mat, dij_mat, ct_mat, _cst_mat, result_mat, _result_seq_mat = test_data_xia
     result_seq = run_sequencing(result_mat, pln_mat, stf_mat, dij=dij_mat)
 
+    save_data(file_name=tmp_path / "sequenced.mat", result=result_seq, ct=ct_mat, stf=stf_mat)
+    loaded = load_data(str(tmp_path / "sequenced.mat"))["result"]
+
+    assert len(loaded.sequence.beams) == len(result_seq.sequence.beams)
+    grids = loaded.sequence.aperture_info(stf_mat).grids
+    original_grids = result_seq.sequence.aperture_info(stf_mat).grids
+    for beam, original, grid, original_grid in zip(
+        loaded.sequence.beams, result_seq.sequence.beams, grids, original_grids, strict=True
+    ):
+        assert grid.bixel_offset == original_grid.bixel_offset
+        assert grid.num_of_bixels == original_grid.num_of_bixels
+        np.testing.assert_allclose(beam.weights, original.weights)
+        for segment, original_segment in zip(beam.segments, original.segments, strict=True):
+            assert segment.start.jaws == original_segment.start.jaws
+            assert segment.stf_beam == original_segment.stf_beam
+            np.testing.assert_allclose(
+                segment.start.mlc.leaf_positions, original_segment.start.mlc.leaf_positions
+            )
+
+
+def test_sequenced_result_keeps_its_segments_in_a_mat_file_without_stf(test_data_xia, tmp_path):
+    from pyRadPlan.io import load_data, save_data
+
+    pln_mat, stf_mat, dij_mat, ct_mat, _cst_mat, result_mat, _result_seq_mat = test_data_xia
+    result_seq = run_sequencing(result_mat, pln_mat, stf_mat, dij=dij_mat)
+
     save_data(file_name=tmp_path / "sequenced.mat", result=result_seq, ct=ct_mat)
     loaded = load_data(str(tmp_path / "sequenced.mat"))["result"]
 
-    assert len(loaded.sequence.beam) == len(result_seq.sequence.beam)
-    for beam, original in zip(loaded.sequence.beam, result_seq.sequence.beam):
-        assert beam.extra_blds == original.extra_blds
-        assert beam.bixel_ix == original.bixel_ix
-        for mlc, original_mlc in zip(beam.mlc_sequence, original.mlc_sequence, strict=True):
-            np.testing.assert_allclose(mlc.leaf_positions, original_mlc.leaf_positions)
+    np.testing.assert_allclose(loaded.sequence.fluence, result_seq.sequence.fluence)
+    for beam, original in zip(loaded.sequence.beams, result_seq.sequence.beams, strict=True):
+        np.testing.assert_allclose(beam.weights, original.weights)
+        for segment, original_segment in zip(beam.segments, original.segments, strict=True):
+            assert segment.stf_beam == original_segment.stf_beam
+            np.testing.assert_allclose(
+                segment.start.mlc.leaf_positions, original_segment.start.mlc.leaf_positions
+            )
