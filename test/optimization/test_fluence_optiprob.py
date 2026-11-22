@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from pyRadPlan.optimization.problems import (
 )
 from pyRadPlan.optimization.solvers import OptimizerSciPy, SolverBase
 from pyRadPlan.plan import create_pln
+from pyRadPlan.scenarios import CTPhaseUncertainty, ScenarioSet
 
 
 @pytest.fixture
@@ -172,9 +174,7 @@ def test_supported_properties_still_reach_the_solver():
 def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, monkeypatch):
     """The photon LQ effect a dij with alphax / betax allows is not evaluated for a constant RBE."""
     pln, ct, cst, stf, dij = small_proton_case
-    num_voxels = dij.dose_grid.num_voxels
-    dij.alphax = np.full((num_voxels, 1), 0.1)
-    dij.betax = np.full((num_voxels, 1), 0.05)
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
     dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
 
@@ -198,6 +198,55 @@ def test_constant_rbe_evaluates_only_the_quantities_it_uses(small_proton_case, m
     assert len(calls) == len(dose.scenarios)
 
 
+@pytest.mark.parametrize("changed", [None, "float32", "alphax", "betax"])
+def test_dij_lq_params_must_match_the_structure_set(small_proton_case, changed):
+    pln, ct, cst, stf, dij = small_proton_case
+    dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 2, "display": False}}
+    prob = NonLinearFluencePlanningProblem(pln)
+
+    if changed == "float32":
+        assert not np.array_equal(dij.alphax.astype(np.float32), dij.alphax)
+        dij.alphax = dij.alphax.astype(np.float32)
+        dij.betax = dij.betax.astype(np.float32)
+    if changed in (None, "float32"):
+        prob.solve(ct, cst, stf, dij)
+        return
+
+    values = np.array(getattr(dij, changed))
+    values[0, 0] += 1
+    setattr(dij, changed, values)
+    with pytest.raises(ValueError, match=rf"{changed} \(1 voxels\)"):
+        prob.solve(ct, cst, stf, dij)
+
+
+@pytest.mark.parametrize("ct_phase", [[1, 0], [1], [0, 1], [1, 0, 1]])
+def test_dij_lq_check_uses_the_engine_column_order(ct_phase):
+    """The dose engines store one column per CT phase, in first-appearance order."""
+    scenarios = ScenarioSet.from_points(
+        (CTPhaseUncertainty(phases=[0, 1], probabilities=[0.5, 0.5]),),
+        {"ct_phase": [[p] for p in ct_phase]},
+    )
+    columns = list(dict.fromkeys(ct_phase))
+    assert scenarios.voxel_param_ct_phases() == columns
+
+    # per CT phase, as StructureSet.get_tissue_data returns them
+    alpha = np.array([[0.1, 0.2], [0.3, 0.4]])
+    beta = np.array([[0.05, 0.06], [0.07, 0.08]])
+    prob = NonLinearFluencePlanningProblem()
+    prob._ct = SimpleNamespace(num_of_ct_scen=2)
+    prob._cst = SimpleNamespace(get_tissue_data=lambda resample_grid: (alpha, beta, None, None))
+    prob._dij = SimpleNamespace(
+        alphax=alpha[:, columns], betax=beta[:, columns], dose_grid=None, scenarios=scenarios
+    )
+    prob._check_tissue_data_matches_dij()
+
+    if columns != sorted(columns):
+        prob._dij.alphax = alpha
+        with pytest.raises(ValueError, match="alphax"):
+            prob._check_tissue_data_matches_dij()
+
+
 @pytest.mark.parametrize("rbe_path", ["constant", "effect"])
 def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_path):
     """Without the bypass, each objective gets its own gradient row, also across quantities."""
@@ -205,9 +254,7 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     if rbe_path == "constant":
         dij.bio_model = {"model": "constant_rbe", "rbe": 1.1}
     else:
-        num_voxels = dij.dose_grid.num_voxels
-        dij.alphax = np.full((num_voxels, 1), 0.1)
-        dij.betax = np.full((num_voxels, 1), 0.05)
+        dij.alphax, dij.betax, _, _ = cst.get_tissue_data(resample_grid=dij.dose_grid)
         alpha_dose = np.empty_like(dij.physical_dose)
         sqrt_beta_dose = np.empty_like(dij.physical_dose)
         for i, mat in enumerate(dij.physical_dose.flat):
@@ -227,8 +274,6 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
 
     prob.bypass_objective_jacobian = False
     prob._grad_cache = prob._grad_cache_intermediate = None
-    for q in prob._quantities:
-        q._w_grad_cache = None
     num_objectives = sum(len(obj_info[1]) for obj_info in prob._objective_list)
     jacobian = xp_utils.to_numpy(prob._objective_jacobian(x))
 
@@ -236,3 +281,70 @@ def test_objective_jacobian_has_one_row_per_objective(small_proton_case, rbe_pat
     assert prob._num_objectives == num_objectives
     assert jacobian.shape == (num_objectives, dij.total_num_of_bixels)
     assert np.allclose(jacobian.sum(axis=0), gradient, rtol=1e-5)
+
+
+@pytest.mark.parametrize("backend", [None, "jax.numpy"])
+def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_proton_case, backend):
+    """
+    Gradient over several scenarios is sum_s w_s D_s^T g_s, not sum_s D_s^T (sum_s' g_s').
+
+    Non-robust objectives evaluate the nominal scenario only, so the objectives use the
+    expected value over the set; equal weights keep the expectation a plain (scaled) sum over
+    the scenarios, which is what this test checks the back-projection of.
+    """
+    xp_new = None if backend is None else pytest.importorskip(backend)
+    from pyRadPlan.scenarios import (
+        CTPhaseUncertainty,
+        RangeUncertainty,
+        ScenarioSet,
+        SetupUncertainty,
+    )
+
+    pln, ct, cst, stf, dij = small_proton_case
+    rbe = 1.1
+    dij.bio_model = {"model": "constant_rbe", "rbe": rbe}
+    base = dij.physical_dose.flat[0]
+    for name in dij.quantities:
+        if name != "physical_dose":
+            setattr(dij, name, None)
+    container = np.empty((2,), dtype=object)
+    container[0] = base
+    container[1] = 0.8 * base
+    dij.physical_dose = container
+    dij.scenarios = ScenarioSet.from_points(
+        (CTPhaseUncertainty(), SetupUncertainty(), RangeUncertainty()),
+        {"setup": [[0, 0, 0], [3, 0, 0]]},
+        weights=[0.5, 0.5],
+    )
+    for voi in cst.vois:
+        for obj in voi.objectives:
+            obj.robustness = "expected_value"
+    pln.prop_opt = {"solver": {"name": "scipy", "max_iter": 1, "display": False}}
+
+    prob = NonLinearFluencePlanningProblem(pln)
+    prob.solve(ct, cst, stf, dij if xp_new is None else dij.to_namespace(xp_new))
+    xp = prob._array_backend
+    x = xp.full((dij.total_num_of_bixels,), 0.5, dtype=xp.float64)
+    gradient = xp_utils.to_numpy(prob._objective_gradient(x))
+    x_np = xp_utils.to_numpy(x)
+
+    expected = np.zeros(dij.total_num_of_bixels)
+    for ix, objectives in prob._objective_list:
+        for obj in objectives:
+            assert obj.quantity in ("rbe_x_dose", "physical_dose")
+            factor = rbe if obj.quantity == "rbe_x_dose" else 1.0
+            for s in range(2):
+                mat = dij.physical_dose.flat[s]
+                quantity = factor * (mat @ x_np)
+                g = (
+                    0.5
+                    * obj.priority
+                    * xp_utils.to_numpy(
+                        obj.compute_gradient(xp.asarray(quantity[ix], dtype=xp.float64))
+                    )
+                )
+                cotangent = np.zeros(mat.shape[0])
+                cotangent[ix] = g
+                expected += factor * (mat.T @ cotangent)
+
+    assert np.allclose(gradient, expected, rtol=1e-4, atol=1e-8 * np.abs(expected).max())

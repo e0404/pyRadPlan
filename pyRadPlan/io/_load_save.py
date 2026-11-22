@@ -1,20 +1,16 @@
 """Top-level import/export API: ``load_patient``, ``load_data`` and ``save_data``."""
 
 import os
-import sys
 import warnings
 import logging
 from typing import Any, Optional, Union
 
-if sys.version_info < (3, 10):
-    import importlib_resources as resources  # Backport for older versions
-else:
-    from importlib import resources
-
 import SimpleITK as sitk
 
+from pyRadPlan.core import BaseDataFile, get_base_data_kind, list_base_data
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 from .matlab import validate_matrad_patient
 from ._factory import (
@@ -42,45 +38,60 @@ def _normalize_format(fmt: str) -> str:
     return key
 
 
-_PHANTOM_PACKAGE = "pyRadPlan.data.phantoms"
+def list_phantoms() -> list[BaseDataFile]:
+    """Return the phantom files, shipped ones first, then the user's and the shared ones.
+
+    Phantoms are the ``.mat`` (matRad) and ``.npz`` files in the ``phantoms`` folders of
+    the base data (see :mod:`pyRadPlan.core._base_data`): ``pyRadPlan/data/phantoms``,
+    ``<data_dir>/phantoms`` and ``<root>/phantoms`` for each root in
+    ``pyRadPlan.settings.base_data_path``. A phantom is named by its file name without
+    the ending; a file named like one listed before it is skipped, whatever its ending.
+    """
+    phantoms: list[BaseDataFile] = []
+    seen: set[str] = set()
+    for entry in list_base_data("phantoms"):
+        stem = os.path.splitext(entry.name)[0].casefold()
+        if stem not in seen:
+            seen.add(stem)
+            phantoms.append(entry)
+    return phantoms
 
 
 def available_phantoms() -> list[str]:
-    """Names of the phantoms bundled with pyRadPlan, e.g. ``["TG119"]``."""
-    root = resources.files(_PHANTOM_PACKAGE)
-    return sorted(
-        entry.name[:-4] for entry in root.iterdir() if entry.name.lower().endswith(".mat")
-    )
+    """Names of the available phantoms (see :func:`list_phantoms`), e.g. ``["TG119"]``."""
+    return [os.path.splitext(entry.name)[0] for entry in list_phantoms()]
 
 
 def phantom_path(name: str) -> Any:
     """
-    Resolve a bundled phantom by name.
+    Resolve a phantom by name (see :func:`list_phantoms`).
 
     Parameters
     ----------
     name : str
-        Phantom name, case-insensitive, with or without the ``.mat`` extension
+        Phantom name, case-insensitive, with or without its file ending
         (``"TG119"``, ``"tg119.mat"``).
 
     Returns
     -------
     Traversable
-        Path-like object of the bundled ``.mat`` file, accepted by
-        :func:`load_patient` and :func:`load_data`.
+        Path-like object of the phantom file, accepted by :func:`load_patient` and
+        :func:`load_data`.
 
     Raises
     ------
     FileNotFoundError
-        If no bundled phantom has that name.
+        If no phantom has that name.
     """
-    stem = name.lower().removesuffix(".mat")
-    for entry in resources.files(_PHANTOM_PACKAGE).iterdir():
-        if entry.name.lower().endswith(".mat") and entry.name.lower()[:-4] == stem:
-            return entry
-    raise FileNotFoundError(
-        f"No bundled phantom named {name!r}; available: {', '.join(available_phantoms())}"
-    )
+    stem, ending = os.path.splitext(name)
+    if ending.lower() not in get_base_data_kind("phantoms").endings:
+        stem = name
+    phantoms = list_phantoms()
+    for entry in phantoms:
+        if os.path.splitext(entry.name)[0].casefold() == stem.casefold():
+            return entry.path
+    names = ", ".join(os.path.splitext(entry.name)[0] for entry in phantoms)
+    raise FileNotFoundError(f"No phantom named {name!r}; available: {names}")
 
 
 def load_tg119() -> tuple[CT, StructureSet]:
@@ -177,19 +188,23 @@ def load_data(path: os.PathLike) -> dict:
     return importer.load_data()
 
 
-def _collect_objects(data, ct, cst, dose, extra) -> dict:
+def _collect_objects(  # noqa: PLR0913 - mirrors save_data's convenience arguments
+    data, ct, cst, dose, result, extra
+) -> dict:
     """Gather the named objects to save into a single dict."""
     objects: dict = {}
     if data is not None:
         if not isinstance(data, dict):
             raise TypeError("'data' must be a dict of named objects.")
         objects.update(data)
-    for key, value in (("ct", ct), ("cst", cst), ("dose", dose)):
+    for key, value in (("ct", ct), ("cst", cst), ("dose", dose), ("result", result)):
         if value is not None:
             objects[key] = value
     objects.update({k: v for k, v in extra.items() if v is not None})
     if not objects:
-        raise ValueError("Nothing to save: provide ct, cst, dose, extra objects or a data dict.")
+        raise ValueError(
+            "Nothing to save: provide ct, cst, dose, result, extra objects or a data dict."
+        )
     return objects
 
 
@@ -215,6 +230,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     ct: Optional[CT] = None,
     cst: Optional[StructureSet] = None,
     dose: Optional[sitk.Image] = None,
+    result: Optional[PlanResult] = None,
     **extra,
 ) -> Union[str, list[str]]:
     """
@@ -237,6 +253,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         Convenience keyword arguments for the most common objects.
     dose : sitk.Image, optional
         A dose distribution to save.
+    result : PlanResult, optional
+        A plan result to save. Formats that store only a single dose image fall
+        back to its physical dose.
     **extra
         Further named objects passed through to the exporter.
 
@@ -245,7 +264,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     str or list[str]
         The path(s) written.
     """
-    objects = _collect_objects(data, ct, cst, dose, extra)
+    objects = _collect_objects(data, ct, cst, dose, result, extra)
     fmt = _resolve_format(file_name, format)
 
     ext = default_extension(fmt)

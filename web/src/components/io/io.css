@@ -1,0 +1,435 @@
+/* Styles of package C: menus, message boxes, save / base data / preferences / licenses / about
+   dialogs, log console toolbar and the startup splash. Colours come from the variables of
+   styles.css and theme.css. */
+
+/* ---------------------------------------------------------------- menus */
+
+.menubar .menu > button.disabled {
+  color: var(--disabled);
+}
+
+.menubar .menu > button u {
+  text-decoration: none;
+}
+
+.menubar.mnemonics .menu > button u,
+.menubar:focus-within .menu > button u {
+  text-decoration: underline;
+}
+
+.menu-popup {
+  min-width: 210px;
+}
+
+.menu-popup .item {
+  position: relative;
+  color: var(--text);
+}
+
+.menu-popup .item.disabled {
+  color: var(--disabled);
+}
+
+.menu-popup .item.disabled:hover {
+  background: transparent;
+}
+
+.menu-popup .item:not(.disabled):hover,
+.menu-popup .item:not(.disabled):focus-visible,
+.menu-popup .item.open {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.menu-popup .item .check-mark {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+}
+
+.menu-popup .item.has-sub {
+  padding-right: 28px;
+}
+
+.menu-popup .item .arrow {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+}
+
+.submenu-wrap {
+  position: relative;
+}
+
+.menu-popup.sub {
+  top: -5px;
+  left: 100%;
+  margin-left: -2px;
+}
+
+/* ---------------------------------------------------------------- dialogs */
+
+.dialog-layer {
+  display: contents;
+}
+
+.dialog.wide {
+  max-width: 95vw;
+  max-height: 92vh;
+}
+
+.dialog .buttons .spacer {
+  flex: 1;
+}
+
+.dialog .icon-row .icon.info {
+  background: var(--accent);
+}
+
+.dialog .icon-row .icon.warning {
+  background: var(--stale);
+}
+
+.dialog .icon-row .icon.question {
+  background: var(--accent);
+}
+
+.dialog .icon-row .icon.critical {
+  background: var(--danger);
+}
+
+.msg-text {
+  white-space: pre-wrap;
+  min-width: 0;
+}
+
+.msg-informative {
+  margin-top: 6px;
+  color: var(--text-dim);
+}
+
+.prompt-label {
+  white-space: pre-wrap;
+}
+
+.form-error {
+  color: var(--danger);
+  min-height: 15px;
+}
+
+.form-rows {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 8px;
+  align-items: center;
+}
+
+.form-rows .row > .fill {
+  flex: 1;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 80px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--base);
+  border: 1px solid var(--border);
+  padding: 6px;
+}
+
+.check-list label.check {
+  white-space: normal;
+}
+
+label.radio {
+  white-space: normal;
+}
+
+label.disabled {
+  color: var(--disabled);
+}
+
+input.indented {
+  margin-left: 20px;
+}
+
+.dialog .row .spacer,
+.log-toolbar .spacer {
+  flex: 1;
+}
+
+/* About */
+
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+}
+
+.about-logo {
+  height: 72px;
+}
+
+.about a {
+  color: var(--link, var(--accent));
+}
+
+.disclaimer-box {
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.dialog.about-dialog,
+.dialog.notice-dialog {
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+}
+
+/* Disclaimer and privacy notice (first visit: above the splash and every other dialog) */
+
+.modal-backdrop.qt-modal.notice-backdrop {
+  z-index: 110;
+}
+
+.dialog.notice-dialog {
+  width: 560px;
+}
+
+.notice-dialog .notice-heading {
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.notice-dialog .notice-paragraph {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.splash-notice {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.statusbar .status-notice {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.statusbar .status-notice:hover {
+  text-decoration: underline;
+}
+
+/* Tabs (Base Data, Preferences) */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs .tab {
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  padding: 4px 14px;
+  border-radius: 4px 4px 0 0;
+  position: relative;
+  top: 1px;
+}
+
+.tabs .tab:hover {
+  background: var(--hover, #e0e0e0);
+}
+
+.tabs .tab.active {
+  background: var(--panel);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--panel);
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-panel.scroll {
+  overflow: auto;
+}
+
+.kind-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.folder-lines {
+  font-size: 11px;
+  user-select: text;
+  word-break: break-all;
+}
+
+.base-data-table {
+  min-height: 160px;
+}
+
+table.qt.selectable tbody tr {
+  cursor: default;
+}
+
+table.qt.selectable tbody tr.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+table.qt.selectable tbody tr.problem {
+  color: #e67e22;
+}
+
+table.qt.selectable tbody tr.problem.selected {
+  color: #ffd9a8;
+}
+
+/* Licenses */
+
+.dialog .body:has(.splitter) {
+  min-height: 0;
+}
+
+.splitter {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.licenses-table {
+  min-height: 0;
+}
+
+.license-text {
+  resize: none;
+  min-height: 0;
+  background: var(--base);
+  border: 1px solid var(--border);
+  padding: 6px;
+  font: 11px/1.4 var(--mono);
+  user-select: text;
+}
+
+.clearable {
+  position: relative;
+  display: flex;
+}
+
+.clearable input {
+  flex: 1;
+  padding-right: 22px;
+}
+
+.clearable .clear {
+  position: absolute;
+  right: 4px;
+  top: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 18px;
+}
+
+/* ---------------------------------------------------------------- log console */
+
+.log-console {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 4px;
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.log-toolbar select {
+  min-width: 90px;
+}
+
+.log .info {
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- splash (Qt frameless card) */
+
+.qt-splash {
+  width: 520px;
+  max-width: 92vw;
+  min-height: 230px;
+  background: var(--window);
+  border: 1px solid var(--border-strong);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.qt-splash .splash-logo {
+  height: 96px;
+  align-self: center;
+  margin-bottom: 12px;
+}
+
+.splash-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.splash-detail {
+  min-height: 16px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.splash-status.failed {
+  color: var(--danger);
+}
+
+.dialog.wide .body {
+  flex: 1;
+  min-height: 0;
+}
+
+.main-window .splash {
+  background: var(--window);
+}

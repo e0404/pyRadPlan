@@ -95,6 +95,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     def setup(self, ct, cst) -> None:
         """Resolve the segments and compute the geometry features on the CT grid."""
+        super().setup(ct, cst)
         self._extractor = FeatureExtractor(
             self.spec.features, ct, cst, segment_map=self.segment_map
         )

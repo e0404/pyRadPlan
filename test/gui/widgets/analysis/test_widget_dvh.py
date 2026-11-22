@@ -1,6 +1,7 @@
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from pyRadPlan.analysis._dvh import DVH
 from pyRadPlan.gui.widgets.analysis._dvh import DVHPlotWidget
@@ -158,6 +159,9 @@ def _plot_with_markers(widget):
 def _shown(qapp, widget):
     widget.resize(600, 400)
     widget.show()
+    # A real X11 window manager maps the window asynchronously; the view range is only
+    # laid out once it is exposed.
+    QTest.qWaitForWindowExposed(widget)
     qapp.processEvents()
 
 
@@ -322,13 +326,17 @@ def test_data_cursor_lists_volumes_at_the_mouse(qapp):
 
     assert widget.cursor_line.isVisible()
     assert abs(widget.cursor_line.value() - 1.0) < 1e-6
+    assert widget.cursor_hline.isVisible()
+    assert abs(widget.cursor_hline.value() - 50.0) < 1e-6
     html = widget.cursor_text.textItem.toHtml()
     curve = widget.shown_plot.primary_curve("PTV")
     assert "PTV" in html and "Body" in html
     assert f"{np.interp(1.0, curve.x, curve.y):.1f} %" in html
+    assert "Volume [%]: 50.0" in html
 
     widget._on_mouse_moved(QPointF(-50.0, -50.0))
     assert not widget.cursor_line.isVisible()
+    assert not widget.cursor_hline.isVisible()
 
 
 def test_plotted_widget_is_freed_without_garbage_collection(qapp):

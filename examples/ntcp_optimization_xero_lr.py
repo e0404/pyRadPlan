@@ -129,7 +129,7 @@ cst.vois.append(
 )
 
 opt_info = {}
-fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 ntcp_history_active = opt_info["objective_info"][0]["history"]
 
@@ -141,16 +141,14 @@ ntcp_history_active = opt_info["objective_info"][0]["history"]
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
-fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+result_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
 print(f"NTCP model-guided: {ntcp_history_active[-1]:.2%}")
 print(f"NTCP native:       {ntcp_history_native[-1]:.2%}")
 
 # %%
-# Compute the result on the CT grid, as total-course dose
-result = dij.compute_result_ct_grid(fluence, num_of_fractions=pln.result_dose_factor)
-result_native = dij.compute_result_ct_grid(fluence_native, num_of_fractions=pln.result_dose_factor)
+# The results hold the total-course dose on the CT grid
 
 
 def mean_dose(dose_image, voi):
@@ -161,13 +159,15 @@ def mean_dose(dose_image, voi):
 
 for voi in cst.vois[:4]:
     print(
-        f"Mean dose {voi.name:<12} model-guided: {mean_dose(result['physical_dose'], voi):6.2f} Gy"
-        f"   native: {mean_dose(result_native['physical_dose'], voi):6.2f} Gy"
+        f"Mean dose {voi.name:<12} model-guided: {mean_dose(result.physical_dose.values, voi):6.2f} Gy"
+        f"   native: {mean_dose(result_native.physical_dose.values, voi):6.2f} Gy"
     )
 
-result_collective = result.copy()
-result_collective["physical_dose_native"] = result_native["physical_dose"]
-result_collective["physical_dose_diff"] = result["physical_dose"] - result_native["physical_dose"]
+result_collective = result.model_copy()
+result_collective.add_quantity("physical_dose_native", result_native.physical_dose)
+result_collective.add_quantity(
+    "physical_dose_diff", result.physical_dose.values - result_native.physical_dose.values
+)
 
 # %% [markdown]
 # NTCP history: model-guided (active gradients) vs. native (monitor-only) optimization.

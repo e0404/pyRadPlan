@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
 from pyRadPlan.io import load_tg119
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.optimization import OptimizationWidget
+from pyRadPlan.gui.widgets._display_names import select_identifier
 from pyRadPlan.optimization.objectives import Objective, get_objective
 
 
@@ -230,6 +231,96 @@ def test_change_quantity_writes_through(qapp, tg119):
     assert _objectives(ws.cst.vois[voi_idx])[0].quantity == new_quantity
 
 
+def _robustness_combo(widget, voi_idx, obj_idx=0):
+    """Robustness combo box of the *obj_idx*-th objective row of VOI *voi_idx*."""
+    rows = [
+        (v, o)
+        for v, voi in enumerate(widget._ws.cst.vois)
+        for o in range(len(widget._iter_objectives(voi)))
+    ]
+    return widget._table.cellWidget(rows.index((voi_idx, obj_idx)), widget._COL_ROBUSTNESS)
+
+
+def test_robustness_column_writes_through(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    header = widget._table.horizontalHeaderItem(OptimizationWidget._COL_ROBUSTNESS).text()
+    assert header == "Robustness"
+    assert OptimizationWidget._COL_ROBUSTNESS == OptimizationWidget._COL_QUANTITY + 1
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    cmb = _robustness_combo(widget, voi_idx)
+    options = [cmb.itemData(i) for i in range(cmb.count())]
+    assert options == type(obj).available_robustness()
+    assert cmb.currentData() == "none"
+    assert cmb.currentText() == "None"
+    assert cmb.itemText(options.index("voxel_worst_case")) == "Voxel-wise worst case"
+    assert cmb.isEnabled()
+    assert "nominal scenario only" in cmb.toolTip()
+
+    new = next(name for name in options if name != "none")
+    select_identifier(cmb, new)
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == new
+    # the edit does not rebuild the table, so the combo stays in place
+    assert _robustness_combo(widget, voi_idx) is cmb
+
+
+def test_long_names_do_not_widen_the_columns(qapp, tg119):
+    """The closed combo boxes elide long labels, their open popups show them in full."""
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    cmb = _robustness_combo(widget, voi_idx)
+    longest = max(cmb.fontMetrics().horizontalAdvance(cmb.itemText(i)) for i in range(cmb.count()))
+    # the closed combo elides the longest label, the open popup shows it in full
+    assert cmb.sizeHint().width() < longest
+    cmb.showPopup()
+    assert cmb.view().width() > longest
+    cmb.hidePopup()
+
+
+def test_objective_type_change_keeps_robustness(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    select_identifier(_robustness_combo(widget, voi_idx), "expected_value")
+    current = _objectives(ws.cst.vois[voi_idx])[0].name
+    other = next(name for name in widget._available if name != current)
+    widget._on_objective_changed(voi_idx, 0, other)
+
+    obj = _objectives(ws.cst.vois[voi_idx])[0]
+    assert obj.name == other
+    assert obj.robustness == "expected_value"
+    assert _robustness_combo(widget, voi_idx).currentData() == "expected_value"
+
+
+def test_scenario_aware_objectives_show_their_single_robustness(qapp, tg119, monkeypatch):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    monkeypatch.setattr(
+        type(_objectives(ws.cst.vois[voi_idx])[0]), "scenario_aware", True, raising=False
+    )
+    widget._rebuild_table(ws.cst)
+
+    cmb = _robustness_combo(widget, voi_idx)
+    assert [cmb.itemData(i) for i in range(cmb.count())] == ["scenario_stack"]
+    assert not cmb.isEnabled()
+
+
 def test_change_all_quantities_applies_to_all_vois(qapp, tg119):
     from pyRadPlan.quantities import get_available_quantities
 
@@ -322,6 +413,7 @@ def _image_reference_combos(widget):
 def mimicking_workspace(qapp, tg119):
     """Workspace with a Squared Mimicking objective and one result dose."""
     import SimpleITK as sitk
+    from pyRadPlan.result import create_result
 
     ct, cst = tg119
     ws = WorkspaceManager()
@@ -333,7 +425,7 @@ def mimicking_workspace(qapp, tg119):
     ]
 
     ref = sitk.Image([4, 4, 4], sitk.sitkFloat32)
-    ws.set_many(ct=ct, cst=cst, result={"physical_dose": ref})
+    ws.set_many(ct=ct, cst=cst, result=create_result({"physical_dose": ref}))
     return ws, widget, voi_idx, ref
 
 
@@ -364,21 +456,22 @@ def test_image_reference_selection_writes_through(mimicking_workspace):
     assert not any(label.startswith("Custom") for label in labels)
 
 
-def test_image_reference_accepts_imported_numpy_dose(mimicking_workspace):
-    import numpy as np
-
-    ws, widget, voi_idx, ref = mimicking_workspace
+def test_image_reference_accepts_imported_dose(mimicking_workspace):
     import SimpleITK as sitk
 
-    cube = sitk.GetArrayFromImage(ws.ct.cube_hu).astype(float)
-    ws.result = {**ws.result, "import_measured": cube}
+    ws, widget, voi_idx, ref = mimicking_workspace
+
+    # An imported dose is a result of its own and keeps its own grid.
+    measured = sitk.Image([8, 8, 8], sitk.sitkFloat32)
+    measured.SetSpacing((2.0, 2.0, 2.0))
+    ws.add_result("measured", {"physical_dose": measured})
 
     cmb = _image_reference_combos(widget)[0]
-    cmb.setCurrentIndex(cmb.findText("import_measured"))
+    cmb.setCurrentIndex(cmb.findText("dose (measured)"))
 
     d_ref = _objectives(ws.cst.vois[voi_idx])[-1].d_ref
-    assert isinstance(d_ref, tuple)
-    assert d_ref[0] is cube
+    assert d_ref is ws.results["measured"].quantities["physical_dose"].values
+    assert d_ref.GetSize() == (8, 8, 8)
 
 
 def _tg119_dose_image(ct):
@@ -460,3 +553,57 @@ def test_objectives_normalized_to_instances(qapp, tg119):
 
     for obj in ws.cst.vois[voi_idx].objectives:
         assert isinstance(obj, Objective)
+
+
+def test_robustness_change_guards_and_rejections(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    widget._on_robustness_changed(0, 0, "expected_value")  # no structures loaded yet
+
+    ws.set_many(ct=ct, cst=cst)
+    voi_idx = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    before = _objectives(ws.cst.vois[voi_idx])[0].robustness
+
+    widget._on_robustness_changed(voi_idx, 99, "expected_value")
+    widget._on_robustness_changed(voi_idx, 0, before)
+    widget._on_robustness_changed(voi_idx, 0, "not_a_robustness")
+
+    assert _objectives(ws.cst.vois[voi_idx])[0].robustness == before
+    assert "Rejected robustness" in widget._lbl_status.text()
+
+
+def test_edits_reach_the_row_of_a_structure_named_like_another(qapp, tg119):
+    """Rows are bound to positions: a second structure of the same name keeps its own."""
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst = tg119
+    vois = list(cst.vois)
+    vois[1] = recreate_voi(vois[1], name=vois[0].name)
+    cst.vois = vois
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    first_before = [o.priority for o in _objectives(ws.cst.vois[0])]
+
+    widget._cmb_voi.setCurrentIndex(widget._cmb_voi.findData(1))
+    widget._on_add_objective()
+    added = len(_objectives(ws.cst.vois[1])) - 1
+    widget._on_penalty_changed(1, added, 42.0)
+
+    assert [o.priority for o in _objectives(ws.cst.vois[0])] == first_before
+    assert _objectives(ws.cst.vois[1])[added].priority == 42.0
+
+
+def test_a_rejected_edit_is_shown_and_leaves_the_objective(qapp, tg119):
+    ct, cst = tg119
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+    voi = next(i for i, v in enumerate(ws.cst.vois) if _objectives(v))
+    before = _objectives(ws.cst.vois[voi])[0].priority
+
+    widget._on_penalty_changed(voi, 0, -1.0)
+
+    assert widget._lbl_status.text().startswith("Ignored invalid penalty -1.0: ")
+    assert _objectives(ws.cst.vois[voi])[0].priority == before

@@ -26,7 +26,9 @@ objects, so their output can be fed directly into the rest of the pipeline.
        export OPENAI_API_KEY=sk-...          # OpenAI
        export GOOGLE_API_KEY=...             # Google Gemini
 
-   API keys can also be stored in a ``.env`` file in the working directory.
+   API keys can also be stored in a ``.env`` file in the working directory or,
+   e.g. for the installed desktop application, in the per-user
+   ``~/.pyradplan/.env`` (see :doc:`/api/settings`).
 
 Overview
 --------
@@ -179,11 +181,10 @@ The script ``examples/utils_ai_agents.py`` shows a complete workflow:
 
     stf = generate_stf(ct, cst, pln)
     dij = calc_dose_influence(ct, cst, stf, pln)
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
 
-    result = dij.compute_result_ct_grid(fluence)
-    dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
-    plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
+    dvhs = DVHCollection.from_structure_set(cst, result.physical_dose)
+    plot_slice(ct=ct, cst=cst, overlay=result.physical_dose)
 
 API reference
 -------------

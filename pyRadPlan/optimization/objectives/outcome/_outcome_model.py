@@ -58,7 +58,10 @@ class OutcomeModel(OutcomeObjective):
             return data
 
         spec = data.get("model")
-        nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
+        try:
+            nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
+        except (OSError, ValueError) as exc:  # pydantic reports a ValueError as invalid input
+            raise ValueError(f"Cannot load outcome model {spec!r}: {exc}") from exc
         nn_model.requires_grad_(False)
         if not isinstance(spec, str):
             data["model"] = "<preloaded>"
@@ -94,6 +97,7 @@ class OutcomeModel(OutcomeObjective):
 
     def setup(self, ct, cst) -> None:
         """Configure the preprocessor with the planning CT and structures."""
+        super().setup(ct, cst)
         self.preprocessor.configure(ct, cst, cst_masks=self.cst_masks, device=self._model_device)
 
     def _set_dose_grid(self, dose_grid) -> None:

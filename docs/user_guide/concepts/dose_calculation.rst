@@ -150,7 +150,7 @@ Reconstructing dose on the CT grid
 
     # Compute dose for optimized fluence and resample to CT grid
     result = dij.compute_result_ct_grid(fluence)
-    physical_dose_ct = result["physical_dose"]  # SimpleITK image on the CT grid
+    physical_dose_ct = result.physical_dose.values  # SimpleITK image on the CT grid
 
     # Inspect which quantities are available
     print(dij.quantities)   # e.g. ['physical_dose', 'alpha_dose', 'sqrt_beta_dose']
@@ -237,7 +237,11 @@ performance option, never a correctness requirement.
 Multi-scenario support
 -----------------------
 
-When the plan carries a robustness scenario model (``pln.mult_scen``), ``calc_dose_influence``
-returns a ``Dij`` whose quantity matrices are stored as object-array containers with one
-influence matrix per scenario. The optimization problem is then responsible for aggregating over
-the resolved scenario quantities.
+When the plan carries an uncertainty scenario model (``pln.scenarios``, see
+:ref:`concept_uncertainty`), ``calc_dose_influence`` resolves it into a
+:class:`~pyRadPlan.scenarios.ScenarioSet`, checks the set against the engine's
+``supported_uncertainties`` and returns a ``Dij`` whose quantity matrices are flat object-array
+containers with one influence matrix per computed scenario, addressed by the scenario's flat
+index (``dij.scenarios`` records the set). Scenarios sharing CT phase and setup shift share the
+ray tracing; the range perturbation is applied per scenario. The quantities evaluate every
+scenario of the set and the optimization problem aggregates over them.

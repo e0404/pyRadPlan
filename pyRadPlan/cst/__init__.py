@@ -7,6 +7,7 @@ from ._voi import (
     HelperVOI,
     ExternalVOI,
     create_voi,
+    recreate_voi,
     validate_voi,
     DEFAULT_VOI_COLORS,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "HelperVOI",
     "ExternalVOI",
     "create_voi",
+    "recreate_voi",
     "validate_voi",
     "DEFAULT_VOI_COLORS",
 ]

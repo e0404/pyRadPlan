@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pydantic import ValidationError
 from PySide6.QtCore import Qt, QTimer
@@ -25,10 +25,29 @@ from PySide6.QtWidgets import (
 )
 
 from pyRadPlan.biology.models import TissueComparison, apply_provenance_fixes
-from pyRadPlan.cst import StructureSet, create_voi
+from pyRadPlan.app._tissue import replace_tissues
+from pyRadPlan.cst import StructureSet
 from pyRadPlan.biology.tissues import REFERENCE_FIELDS, TissueProperties
 
 from .._tissue_params import (
+    apply_derived_reference,
+    ask_tissue_issues,
+    cell_container,
+    combo_value,
+    current_pick,
+    fill_tissue_picker,
+    make_derive_button,
+    make_param_combo,
+    make_param_spin,
+    make_reference_radiation_combo,
+    reference_radiation_value,
+    reference_source_of,
+    set_base_tooltip,
+    show_comparison,
+    spin_value,
+    write_tissue,
+)
+from pyRadPlan.biology._editing import (
     APPLY_ANYWAY,
     DERIVE_REFERENCE_TOOLTIP,
     MATCH_BASE_DATA_TEXT,
@@ -43,24 +62,14 @@ from .._tissue_params import (
     all_tissue_choice_fields,
     all_tissue_param_fields,
     apply_base_data_class,
-    apply_derived_reference,
-    ask_tissue_issues,
     available_tissue_classes,
     bio_model_quietly,
     build_tissue_properties,
-    cell_container,
     cell_line_presets,
-    combo_value,
     compare_tissues_quietly,
     comparison_row_note,
-    current_pick,
     derives_reference_params,
-    fill_tissue_picker,
     machine_summary,
-    make_derive_button,
-    make_param_combo,
-    make_param_spin,
-    make_reference_radiation_combo,
     model_label_name,
     param_field,
     param_label,
@@ -70,14 +79,9 @@ from .._tissue_params import (
     ranked_tissue_picks,
     reference_group_note,
     reference_radiation_fields,
-    reference_radiation_value,
-    reference_source_of,
     reference_sources,
     relabel_issues,
     relabel_text,
-    set_base_tooltip,
-    show_comparison,
-    spin_value,
     target_provenance,
     tissue_class,
     tissue_edit_fields,
@@ -85,7 +89,6 @@ from .._tissue_params import (
     tissue_issue_text,
     tissue_issues_quietly,
     tissue_model_label,
-    write_tissue,
 )
 
 #: Background of the structure cell of a row whose tissue fails the model's check.
@@ -157,8 +160,10 @@ class TissueParametersDialog(QDialog):
     "Match base data" applies the closest class. Accepting the dialog checks the edited
     tissues against the model and machine; rows failing the check are highlighted and the
     user asked whether to apply them anyway, while rows that only warn never ask.
-    Accepting writes the values to the VOIs of the given structure set; :attr:`changed`
-    tells whether any value differs from before.
+    Accepting writes the edited tissues with `apply`, called with ``{"structure",
+    "voi_index", "tissue"}`` rows (e.g. :meth:`pyRadPlan.app.Session.tissue_apply`), or
+    else to the VOIs of the given structure set itself; :attr:`changed` tells whether any
+    value differs from before.
 
     The dose engine (class, name or instance) decides, with the machine, which base data the
     model reads: an engine not using the machine's kernels restricts nothing.
@@ -171,10 +176,12 @@ class TissueParametersDialog(QDialog):
         bio_model: Any = None,
         parent: Optional[QWidget] = None,
         engine: Any = None,
+        apply: Optional[Callable[[list[dict]], None]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Tissue parameters")
         self._cst = cst
+        self._apply = apply
         self._machine = machine
         summary = machine_summary(machine)
         resolved = bio_model_quietly(bio_model, summary.radiation_mode if summary else "")
@@ -836,27 +843,18 @@ class TissueParametersDialog(QDialog):
         errors = tissue_errors(self.check_tissues(tissues))
         if edited and errors and ask_tissue_issues(self, errors) != APPLY_ANYWAY:
             return
+        rows = [
+            {"structure": voi.name, "voi_index": index, "tissue": tissue}
+            for index, (voi, tissue) in enumerate(zip(self._cst.vois, tissues))
+            if tissue != voi.tissue_properties
+        ]
         try:
-            vois = []
-            changed = False
-            for voi, tissue in zip(self._cst.vois, tissues):
-                if tissue == voi.tissue_properties:
-                    vois.append(voi)
-                    continue
-                # VOIs mirror alpha_x/beta_x of their tissue properties and reject
-                # assignments leaving the two inconsistent, hence the recreation.
-                data = dict(voi)
-                data.update(tissue_properties=tissue, alpha_x=tissue.alpha_x, beta_x=tissue.beta_x)
-                new_voi = create_voi(data)
-                if "color" not in voi.model_fields_set:
-                    # Recreating marks the copied color as set; keep it reading as auto-assigned
-                    new_voi.model_fields_set.discard("color")
-                vois.append(new_voi)
-                changed = True
-            if changed:
-                self._cst.vois = vois
-            self.changed = changed
-        except (ValidationError, ValueError, TypeError) as exc:
+            if rows and self._apply is not None:
+                self._apply(rows)
+            elif rows:
+                replace_tissues(self._cst, {row["voi_index"]: row["tissue"] for row in rows})
+            self.changed = bool(rows)
+        except (ValidationError, ValueError, TypeError, LookupError, RuntimeError) as exc:
             self.changed = False
             QMessageBox.warning(self, "Invalid value", str(exc))
             return

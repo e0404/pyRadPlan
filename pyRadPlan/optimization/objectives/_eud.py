@@ -46,7 +46,7 @@ class EUD(Objective):
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        eud = (xp.sum(values ** (1 / self.k)) / array_api_compat.size(values)) ** self.k
+        eud = (xp.sum(values ** (1 / self.k)) / float(array_api_compat.size(values))) ** self.k
         if self.f_diff == "linear":
             return xp.abs(eud - self.eud_ref)
         else:
@@ -54,11 +54,11 @@ class EUD(Objective):
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        eud = (xp.sum(values ** (1 / self.k)) / array_api_compat.size(values)) ** self.k
+        eud = (xp.sum(values ** (1 / self.k)) / float(array_api_compat.size(values))) ** self.k
         eud_gradient = (
             xp.sum(values ** (1 / self.k)) ** (self.k - 1)
             * values ** (1 / self.k - 1)
-            / (array_api_compat.size(values) ** self.k)
+            / (float(array_api_compat.size(values)) ** self.k)
         )
         if self.f_diff == "linear":
             return xp.sign(eud - self.eud_ref) * eud_gradient

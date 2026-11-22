@@ -58,12 +58,12 @@ cst.create_body_seg()  # adds BODY/SKIN as vois[4]
 # %%
 # Create a plan object
 pln = PhotonPlan(radiation_mode="photons", machine="Generic")
-pln.prop_opt = {"solver": "ipopt", "max_iter": 200, "display": True}
+pln.prop_opt = {"solver": "ipax", "max_iter": 200, "display": True}
 pln.prop_dose_calc = {"dose_grid": {"resolution": [5.0, 5.0, 5.0]}}
 
 pln.prop_stf = {
-    "gantry_angles": [0, 72, 144, 216, 288],
-    "couch_angles": [0, 0, 0, 0, 0],
+    "gantry_angles": [0, 60, 120, 180, 240, 300],
+    "couch_angles": [0, 0, 0, 0, 0, 0],
 }
 stf = generate_stf(ct, cst, pln)
 
@@ -74,11 +74,10 @@ stf = generate_stf(ct, cst, pln)
 ntcp_obj = OutcomeModel(
     priority=300000.0,
     model=r"pyRadPlan-outcome-ORPDenseNet-Xerostomia",
-    warmup_iterations=5,
-    cst_masks=[
-        "PAROTID_LT",
-        "PAROTID_RT",
-    ],  # channel order matters unless the model collapses masks
+    warmup_iterations=20,
+    cst_masks=["PAROTID_LT", "PAROTID_RT"],
+    # Only parotid dose drives the NTCP; the dose elsewhere is frozen when the warmup ends.
+    gradient_vois=["PAROTID_LT", "PAROTID_RT"],
 )
 
 cst.vois[0].objectives = [SquaredOverdosing(priority=100.0, d_max=25.0)]  # PAROTID_LT
@@ -106,8 +105,8 @@ cst.vois = cst.vois + [
 ]
 
 opt_info = {}
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+# Optimize the fluence; the result holds the dose on the CT grid
+result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 ntcp_history_active = opt_info["objective_info"][0]["history"]
 
@@ -115,22 +114,20 @@ ntcp_history_active = opt_info["objective_info"][0]["history"]
 ntcp_obj.monitor_only = True
 
 opt_info_native = {}
-fluence_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
+result_native = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info_native)
 
 ntcp_history_native = opt_info_native["objective_info"][0]["history"]
 
-
-# # Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
-result_native = dij.compute_result_ct_grid(fluence_native)
 # %% [markdown]
 # CNN-guided dose, native dose and their difference in the viewer; NTCP curve.
 # %%
 
 
-result_collective = result.copy()
-result_collective["physical_dose_native"] = result_native["physical_dose"]
-result_collective["physical_dose_diff"] = result["physical_dose"] - result_native["physical_dose"]
+result_collective = result.model_copy()
+result_collective.add_quantity("physical_dose_native", result_native.physical_dose)
+result_collective.add_quantity(
+    "physical_dose_diff", result.physical_dose.values - result_native.physical_dose.values
+)
 
 # %% [markdown]
 # NTCP history: CNN-guided (active gradients) vs native (monitor-only) optimization.

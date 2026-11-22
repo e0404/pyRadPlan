@@ -1,5 +1,6 @@
 import logging
-from typing import Optional, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional, TypedDict, Union
 
 import numpy as np
 
@@ -8,10 +9,31 @@ from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
 from pyRadPlan.stf import SteeringInformation, validate_stf
-
+from pyRadPlan.result import PlanResult
 from .problems import get_problem_from_pln
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_solver_info(solver_info: Any) -> dict[str, Any]:
+    """
+    Reduce the raw solver output to its scalar entries.
+
+    Solvers also report arrays and solver objects (the solution, gradients, Hessian
+    approximations) that are either stored on the result already or cannot be saved.
+    """
+    if not isinstance(solver_info, Mapping):
+        return {}
+    summary: dict[str, Any] = {}
+    for key, raw in solver_info.items():
+        value = raw
+        if isinstance(raw, np.generic) or (isinstance(raw, np.ndarray) and raw.ndim == 0):
+            value = raw.item()
+        elif isinstance(raw, bytes):
+            value = raw.decode(errors="replace")
+        if isinstance(value, (bool, int, float, str)):
+            summary[str(key)] = value
+    return summary
 
 
 class OptInfo(TypedDict, total=False):
@@ -50,7 +72,8 @@ def fluence_optimization(  # noqa: PLR0913
     pln: Plan,
     *,
     opt_info: Optional[OptInfo] = None,
-) -> np.ndarray:
+    scenarios: Union[bool, Sequence[int]] = False,
+) -> PlanResult:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
 
@@ -68,13 +91,17 @@ def fluence_optimization(  # noqa: PLR0913
         Plan object.
     opt_info : OptInfo, optional
         If provided (e.g. as an empty ``{}``), it will be populated with
-        ``obj_history``, ``num_iter``, ``result_info`` and ``objective_info``
-        after optimization.
+        ``obj_history``, ``num_iter`` and ``result_info`` after optimization.
+    scenarios : bool or sequence of int, default False
+        Scenarios to also report the optimized quantities for, as
+        ``result.scenario_quantities`` (see :meth:`Dij.compute_result_ct_grid`).
+        ``True`` selects every scenario of a dij with several scenarios; by default
+        only the nominal scenario is reported.
 
     Returns
     -------
-    np.ndarray
-        The optimized fluence map.
+    PlanResult
+        Result object containing the requested dose cubes and information.
     """
 
     _ct = validate_ct(ct)
@@ -97,7 +124,7 @@ def fluence_optimization(  # noqa: PLR0913
     if opt_info is not None and records_history:
         planning_prob.obj_history = []
 
-    x, result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
+    fluence, result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
 
     if opt_info is not None:
         # Only a problem that declares it actually fills the history; reporting an empty list
@@ -121,4 +148,12 @@ def fluence_optimization(  # noqa: PLR0913
         if objective_info:
             opt_info["objective_info"] = objective_info
 
-    return x
+    result = _dij.compute_result_ct_grid(
+        fluence, num_of_fractions=_pln.result_dose_factor, scenarios=scenarios
+    )
+    result.info = _summarize_solver_info(result_info)
+    # solve() resolves the solver from its identifier, so read it back afterwards.
+    solver = getattr(planning_prob, "solver", None)
+    if solver is not None:
+        result.used_optimizer = getattr(solver, "short_name", str(solver))
+    return result

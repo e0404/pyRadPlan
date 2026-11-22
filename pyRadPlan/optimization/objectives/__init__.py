@@ -17,6 +17,7 @@ from .outcome import (
     OutcomeLR,
     OutcomeSklearn,
 )
+from ._variance import Variance
 
 from ._factory import (
     get_available_objectives,
@@ -37,6 +38,7 @@ register_objective(DoseUniformity)
 register_objective(OutcomeModel)
 register_objective(OutcomeLR)
 register_objective(OutcomeSklearn)
+register_objective(Variance)
 
 __all__ = [
     "Objective",
@@ -54,6 +56,7 @@ __all__ = [
     "FeatureOutcomeObjective",
     "OutcomeLR",
     "OutcomeSklearn",
+    "Variance",
     "get_available_objectives",
     "get_objective",
     "get_objectives_union",

@@ -47,11 +47,8 @@ stf = generate_stf(ct, cst, pln)
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# Calculate optimized fluence
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute the result on the CT grid
-result = dij.compute_result_ct_grid(fluence)
+# Calculate optimized fluence and compute the result on the CT grid
+result = fluence_optimization(ct, cst, stf, dij, pln)
 
 # %% [markdown]
 # Visualize the results
@@ -67,7 +64,7 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose,
         view_slice=view_slice,
         plane="axial",
         overlay_unit="Gy",
@@ -75,7 +72,7 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["rbe_x_dose"],
+        overlay=result.rbe_x_dose,
         view_slice=view_slice,
         plane="axial",
         overlay_unit="Gy",

@@ -70,9 +70,8 @@ stf = generate_stf(ct, cst, pln)
 dij = calc_dose_influence(ct, cst, stf, pln)
 
 # Objectives are taken from the TG119 cst
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-result_pb = dij.compute_result_ct_grid(fluence)
+result_pb = fluence_optimization(ct, cst, stf, dij, pln)
+fluence = result_pb.fluence
 
 # %% [markdown]
 # ## TOPAS recalculation, pass 1: write the input files
@@ -94,9 +93,8 @@ calc_dose_forward(ct, cst, stf, pln, fluence)
 # %% [markdown]
 # ## TOPAS recalculation, pass 2: read the results back
 #
-# This only works once TOPAS has actually run. Note that pass 1 overwrote the beamlet
-# weights in ``stf`` with history counts, so ``fluence`` has to be passed again to get
-# the scaling right.
+# This only works once TOPAS has actually run. ``fluence`` is passed again, since the
+# normalization of the scored cubes uses the weights of this pass.
 # %%
 topas_output_available = any(topas_dir.glob("score_*_physicalDose.bin"))
 
@@ -113,10 +111,10 @@ else:
 # The viewer takes a dict of named quantities and lets you switch between them. Keeping
 # the ``physical_dose`` prefix makes it pick up the correct label and unit.
 # %%
-result = {"physical_dose (pencil beam)": result_pb["physical_dose"]}
+result = {"physical_dose (pencil beam)": result_pb.physical_dose}
 if result_mc is not None:
-    result["physical_dose (TOPAS)"] = result_mc["physical_dose"]
-    result["physical_dose_var (TOPAS)"] = result_mc["physical_dose_var"]
+    result["physical_dose (TOPAS)"] = result_mc.physical_dose
+    result["physical_dose_var (TOPAS)"] = result_mc.physical_dose_var
 
 if GUI_AVAILABLE:
     # Use the GUI if [gui] dependencies are installed
