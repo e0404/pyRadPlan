@@ -55,7 +55,7 @@ def test_protons_cd_forward(test_data_protons):
         pln.prop_dose_calc["dose_grid"] = dij.dose_grid
 
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
-    result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    result_py = sitk.GetArrayFromImage(result_py.physical_dose.values)
 
     result_matRad_rot = np.swapaxes(result["physicalDose"], 0, 1)
 
@@ -103,8 +103,8 @@ def test_forward_matches_influence_matrix(test_data_protons):
     expected = dij_py.compute_result_ct_grid(weights)
 
     assert np.allclose(
-        sitk.GetArrayFromImage(forward["physical_dose"]),
-        sitk.GetArrayFromImage(expected["physical_dose"]),
+        sitk.GetArrayFromImage(forward.physical_dose.values),
+        sitk.GetArrayFromImage(expected.physical_dose.values),
         rtol=1e-5,
         atol=1e-8,
     )

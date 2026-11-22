@@ -220,8 +220,8 @@ def test_topas_derives_biological_matrices_from_the_scored_let(test_data_protons
         )
 
     result = dij.compute_result_dose_grid(np.ones(dij.total_num_of_bixels))
-    assert np.all(np.isfinite(np.asarray(result["rbe_x_dose"])))
-    assert np.asarray(result["let"]).max() > 1.0
+    assert np.all(np.isfinite(np.asarray(result.rbe_x_dose.values)))
+    assert np.asarray(result.let.values).max() > 1.0
 
 
 def test_topas_reports_missing_let_output(test_data_protons, tmp_path):
@@ -266,9 +266,9 @@ def test_topas_read_back_on_a_reused_engine(test_data_protons, tmp_path):
     w = np.linspace(0.5, 2.0, stf.total_number_of_bixels)
     pln = _topas_plan(pln, "none", external_calculation=str(tmp_path))
     engine = ParticleTOPASMCEngine(pln)
-    first = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"]
-    second = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"]
-    fresh = ParticleTOPASMCEngine(pln).calc_dose_forward(ct, cst, stf, w)["physical_dose"]
+    first = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"].values
+    second = engine.calc_dose_forward(ct, cst, stf, w)["physical_dose"].values
+    fresh = ParticleTOPASMCEngine(pln).calc_dose_forward(ct, cst, stf, w)["physical_dose"].values
 
     reference = sitk.GetArrayFromImage(fresh)
     np.testing.assert_array_equal(sitk.GetArrayFromImage(first), reference)

@@ -183,7 +183,7 @@ def test_results_default_to_the_nominal_scenario():
     np.testing.assert_allclose(out["physical_dose_scenario"][1], nominal)
     assert not np.allclose(out["physical_dose_scenario"][0], nominal)
 
-    image = dij.compute_result_ct_grid(w)["physical_dose"]
+    image = dij.compute_result_ct_grid(w)["physical_dose"].values
     np.testing.assert_allclose(sitk.GetArrayFromImage(image).ravel(), nominal, rtol=1e-6)
 
     # without a nominal scenario the first computed one stands in
@@ -234,11 +234,13 @@ def test_results_per_scenario_skip_derived_scenarios():
     out = dij.get_result_arrays_from_intensity(w, scenarios=True)
     assert [d is None for d in out["physical_dose_scenario"]] == [False, False, True]
 
-    images = dij.compute_result_ct_grid(w, scenarios=True)["physical_dose_scenario"]
+    result = dij.compute_result_ct_grid(w, scenarios=True)
+    images = result.scenario.physical_dose
     assert images[2] is None
+    assert result.scenario_labels == tuple(dij.scenario_labels())
     scenario_1 = dij.compute_result_ct_grid(w, scenario_index=1)["physical_dose"]
     np.testing.assert_allclose(
-        sitk.GetArrayFromImage(images[1]), sitk.GetArrayFromImage(scenario_1)
+        sitk.GetArrayFromImage(images[1].values), sitk.GetArrayFromImage(scenario_1.values)
     )
 
     with pytest.raises(ValueError, match="derived"):
@@ -609,10 +611,10 @@ def test_results_per_scenario_only_for_the_requested_quantities(sparse_grid_set)
     )
     assert "physical_dose" in out and "physical_dose_scenario" not in out
 
-    out = dij.compute_result_ct_grid(
+    result = dij.compute_result_ct_grid(
         weights, scenarios=True, scenario_quantities=["physical_dose"]
     )
-    assert "physical_dose_scenario" in out
+    assert result.stored_scenario_quantities == ["physical_dose"]
 
 
 def test_matrad_patient_dij_takes_the_scenario_model_of_the_plan():

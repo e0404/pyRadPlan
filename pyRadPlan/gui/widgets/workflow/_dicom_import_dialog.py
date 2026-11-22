@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app._io import dicom_catalog as scan_folder
+
 
 class DicomImportDialog(QDialog):
     """Choose which CT series, structure set and dose to import from a DICOM folder.
@@ -112,19 +114,6 @@ class DicomImportDialog(QDialog):
             "load_dose": load_dose,
             "dose_file": dose_file,
         }
-
-
-def scan_folder(importer) -> dict:
-    """Enumerate a DICOM folder into the *catalog* consumed by the dialog.
-
-    Reads one header per file, so it belongs in a worker thread for anything
-    larger than a toy folder; the importer reports its progress while it runs.
-    """
-    return {
-        "series": importer.list_ct_series(),
-        "structs": importer.list_structure_sets(),
-        "doses": importer.list_doses(),
-    }
 
 
 #: Sentinels distinguishing "no dose" from "auto-select a dose" in the combo data.

@@ -19,6 +19,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan.dij import Dij, validate_dij
+from pyRadPlan.result import PlanResult
 from pyRadPlan.scenarios import validate_scenario_model, ScenarioModel, ScenarioSet
 from pyRadPlan.machines import load_from_name, validate_machine, Machine
 from pyRadPlan.biology.models import (
@@ -416,7 +417,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
         stf: SteeringInformation,
         w: np.ndarray,
         scenarios: Union[str, dict, ScenarioModel, ScenarioSet, None] = None,
-    ) -> dict:
+    ) -> PlanResult:
         """
         Perform a forward dose calculation.
 
@@ -438,13 +439,12 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         Returns
         -------
-        dict
-            Result quantities on the CT grid, keyed by quantity name, with the
-            weights already applied. The unsuffixed results are those of the nominal
-            scenario (:meth:`Dij.nominal_scenario_index`); when the set
-            has several computed scenarios, every quantity also gets a
-            ``"<quantity>_scenario"`` list with one image per scenario slot
-            (see :meth:`Dij.compute_result_ct_grid`).
+        PlanResult
+            Result quantities on the CT grid with the weights already applied. The
+            quantities are those of the nominal scenario
+            (:meth:`Dij.nominal_scenario_index`); when the set has several computed
+            scenarios, ``result.scenario_quantities`` also holds every quantity with one
+            image per scenario slot (see :meth:`Dij.compute_result_ct_grid`).
 
         Notes
         -----
@@ -460,6 +460,9 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         if w is None:
             logger.info("No weights given. Using weights stored in stf.")
+            w = np.array(
+                [bixel.weight for beam in stf.beams for ray in beam.rays for bixel in ray.beamlets]
+            )
         else:
             logger.info("Using provided weights for forward dose calculation.")
 
@@ -486,6 +489,7 @@ class DoseEngineBase(ConfigurableAlgorithm, ProgressReporter, ABC):
             num_of_fractions=self._result_dose_factor,
             scenarios=dij.scenarios is not None and dij.scenarios.num_computed > 1,
         )
+        result.fluence = w
 
         time_elapsed = time.time() - time_start
         logger.info("Forward dose calculation done in %.2f seconds.", time_elapsed)

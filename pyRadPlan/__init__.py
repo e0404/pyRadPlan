@@ -49,6 +49,11 @@ if TYPE_CHECKING:
     from .cst._cst import StructureSet as StructureSet, validate_cst as validate_cst
     from .stf._generate_stf import generate_stf as generate_stf
     from .stf import SteeringInformation as SteeringInformation, validate_stf as validate_stf
+    from .result import (
+        PlanResult as PlanResult,
+        create_result as create_result,
+        validate_result as validate_result,
+    )
     from .dose._calc_dose import (
         calc_dose_influence as calc_dose_influence,
         calc_dose_forward as calc_dose_forward,
@@ -80,6 +85,7 @@ __getattr__, __dir__, __all__ = attach_lazy(
         ".cst._cst": ("StructureSet", "validate_cst"),
         ".stf._generate_stf": ("generate_stf",),
         ".stf": ("SteeringInformation", "validate_stf"),
+        ".result": ("PlanResult", "create_result", "validate_result"),
         ".dose._calc_dose": ("calc_dose_influence", "calc_dose_forward"),
         ".optimization._fluence_optimization": ("fluence_optimization", "OptInfo"),
         ".analysis._dvh": ("DVH", "DVHCollection"),
