@@ -73,14 +73,18 @@ def test_protons_range_shifter_broadens_dose(test_data_protons):
     scattering sigma never reached the lateral profile.
     """
     pln, ct, cst, stf, _, _ = test_data_protons
-    dose_open = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    dose_open = sitk.GetArrayFromImage(
+        calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
+    )
 
     for beam in stf.beams:
         for ray in beam.rays:
             for beamlet in ray.beamlets:
                 beamlet.range_shifter.eq_thickness = 20.0
                 beamlet.range_shifter.source_rashi_distance = beam.sad - 400.0
-    dose_rashi = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    dose_rashi = sitk.GetArrayFromImage(
+        calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
+    )
 
     def lateral_std(dose, axis):
         coords = np.arange(dose.shape[axis]).reshape([-1 if i == axis else 1 for i in range(3)])
