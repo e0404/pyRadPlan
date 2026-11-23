@@ -539,17 +539,22 @@ class PhotonSequencer(Sequencer):
     def _sequenced_result(
         self, result: PlanResult, sequencing: dict, stf: SteeringInformation, dij: Optional[Dij]
     ) -> PlanResult:
-        """Return the result with the delivery sequence and the quantities it delivers."""
+        """Return the result with the delivery sequence and the quantities it delivers.
+
+        The delivered fluence is the open area of the apertures over each beamlet. With
+        leaves wider than the beamlets this differs from the interpolated fluence the shapes
+        were sequenced for.
+        """
         sequence = Sequence(
             beams=[
                 self._beam_sequence(ix, beam, beam_sequencing)
                 for ix, (beam, beam_sequencing) in enumerate(zip(stf.beams, sequencing["beam"]))
             ],
-            fluence=sequencing["fluence"],
         )
+        sequence = sequence.aperture_info(stf).to_sequence()
         result_data = result.model_dump()
         result_data["sequence"] = sequence
-        return self._result_with_sequenced_quantities(result_data, sequencing["fluence"], dij)
+        return self._result_with_sequenced_quantities(result_data, sequence.fluence, dij)
 
     def _result_with_sequenced_quantities(
         self, result_data: dict, fluence: np.ndarray, dij: Optional[Dij]

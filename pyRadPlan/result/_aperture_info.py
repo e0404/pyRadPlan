@@ -104,11 +104,20 @@ class ApertureGrid(PyRadPlanBaseModel):
     @property
     def row_coverage(self) -> NDArray:
         """Fraction of each beamlet's width a leaf row covers, ``(rows, beamlets)``."""
+        return self.row_coverage_between(-np.inf, np.inf)
+
+    def row_coverage_between(self, stack_min: float, stack_max: float) -> NDArray:
+        """Fraction of each beamlet's width a leaf row covers within ``[stack_min, stack_max]``.
+
+        This is :attr:`row_coverage` with the part outside a jaw window across the leaf
+        rows cut away.
+        """
         low = np.maximum(
-            self.row_boundaries[:, None], self.stack[None, :] - 0.5 * self.bixel_width
+            np.maximum(self.row_boundaries[:, None], stack_min),
+            self.stack[None, :] - 0.5 * self.bixel_width,
         )
         high = np.minimum(
-            self.row_boundaries[:, None] + self.leaf_width,
+            np.minimum(self.row_boundaries[:, None] + self.leaf_width, stack_max),
             self.stack[None, :] + 0.5 * self.bixel_width,
         )
         coverage = np.clip(high - low, 0.0, None) / self.bixel_width
@@ -150,7 +159,8 @@ class ApertureInfo(PyRadPlanBaseModel):
 
     The variable vector is ``[weights | left leaf positions | right leaf positions]``, the
     apertures in the order of the beams and their segments, the leaves in the order of the
-    leaf rows.
+    leaf rows. The jaws of a segment are fixed: they cut away what lies outside their
+    window, and a leaf behind a jaw does not change the beamlet weights.
 
     Attributes
     ----------
@@ -169,6 +179,15 @@ class ApertureInfo(PyRadPlanBaseModel):
 
         A segment without ``stf_beam`` belongs to the beam at the position of its
         ``BeamSequence``, which requires as many beam sequences as beams.
+
+        Raises
+        ------
+        NotImplementedError
+            For segments that move while they are delivered, or whose MLC or jaws are
+            rotated by a collimator angle.
+        ValueError
+            For segments without an MLC, segments of one beam with different leaf rows, or
+            an assignment to beams the steering information does not have.
         """
         stf_beams = list(stf.beams)
         aligned = len(sequence.beams) == len(stf_beams)
@@ -180,6 +199,14 @@ class ApertureInfo(PyRadPlanBaseModel):
                     raise NotImplementedError(
                         "Segments that move while they are delivered cannot be mapped to "
                         "beamlets yet."
+                    )
+                devices = [segment.start.mlc, *segment.start.jaws]
+                if any(
+                    device is not None and (device.device_angle or 0.0) % 360.0 != 0.0
+                    for device in devices
+                ):
+                    raise NotImplementedError(
+                        "Segments with a collimator angle cannot be mapped to beamlets yet."
                     )
                 stf_beam = segment.stf_beam
                 if stf_beam is None:
@@ -295,25 +322,49 @@ class ApertureInfo(PyRadPlanBaseModel):
         )
         return self.model_copy(update={"sequence": sequence})
 
-    def _coverage(self, segment: Segment) -> tuple[ApertureGrid, NDArray, NDArray]:
+    @staticmethod
+    def _jaw_window(segment: Segment, orientation: str) -> tuple[float, float, float, float]:
+        """Return the jaw window of a segment as ``(travel_min, travel_max, stack_min, stack_max)``."""
+        window = [-np.inf, np.inf, -np.inf, np.inf]
+        for jaw in segment.start.jaws:
+            low, high = (float(p) for p in jaw.positions)
+            ix = 0 if jaw.device_orientation == orientation else 2
+            window[ix], window[ix + 1] = max(window[ix], low), min(window[ix + 1], high)
+        return tuple(window)
+
+    def _coverage(self, segment: Segment) -> tuple[ApertureGrid, NDArray, NDArray, NDArray]:
+        """Grid, leaf positions, row coverage and open fraction of a segment within its jaws.
+
+        Returns
+        -------
+        tuple
+            ``(grid, positions, rows, coverage)``: the ``(rows, 2)`` leaf positions, the
+            coverage of each beamlet by each row within the jaws, and the part of each
+            beamlet each row leaves open, ``(rows, beamlets)``.
+        """
         grid = self.grids[segment.stf_beam]
         positions = np.asarray(segment.start.mlc.leaf_positions, dtype=float)
-        return grid, positions, grid.row_coverage * grid.open_fraction(*positions.T)
+        travel_min, travel_max, stack_min, stack_max = self._jaw_window(segment, grid.orientation)
+        rows = grid.row_coverage_between(stack_min, stack_max)
+        left = np.maximum(positions[:, 0], travel_min)
+        right = np.minimum(positions[:, 1], travel_max)
+        return grid, positions, rows, rows * grid.open_fraction(left, right)
 
     def aperture_fluence(self, beam_ix: int, segment_ix: int) -> NDArray:
         """Open fraction of each beamlet of the segment's beam, in ray order (0 to 1)."""
         segment = self.sequence.beams[beam_ix].segments[segment_ix]
-        return self._coverage(segment)[2].sum(axis=0)
+        return self._coverage(segment)[3].sum(axis=0)
 
     def bixel_weights(self) -> NDArray:
         """Weight every beamlet receives from all apertures.
 
-        A beamlet counts by the fraction of its area an aperture leaves open, so leaf
-        positions between beamlet edges and leaf rows wider than the beamlets are handled.
+        A beamlet counts by the fraction of its area an aperture leaves open within the
+        jaws, so leaf positions between beamlet edges and leaf rows wider than the beamlets
+        are handled.
         """
         weights = np.zeros(self.total_num_of_bixels)
         for _, _, segment in self.apertures:
-            grid, _, coverage = self._coverage(segment)
+            grid, _, _, coverage = self._coverage(segment)
             bixels = slice(grid.bixel_offset, grid.bixel_offset + grid.num_of_bixels)
             weights[bixels] += segment.weight * coverage.sum(axis=0)
         return weights
@@ -332,7 +383,8 @@ class ApertureInfo(PyRadPlanBaseModel):
         total = int(offsets[-1])
         rows, cols, values = [], [], []
         for ix, (_, _, segment) in enumerate(apertures):
-            grid, positions, coverage = self._coverage(segment)
+            grid, positions, row_coverage, coverage = self._coverage(segment)
+            travel_min, travel_max, _, _ = self._jaw_window(segment, grid.orientation)
             offset = grid.bixel_offset
 
             per_bixel = coverage.sum(axis=0)
@@ -342,15 +394,25 @@ class ApertureInfo(PyRadPlanBaseModel):
             values.append(per_bixel[hit])
 
             half = 0.5 * grid.bixel_width
-            scale = segment.weight * grid.row_coverage / grid.bixel_width
+            scale = segment.weight * row_coverage / grid.bixel_width
             left, right = positions[:, 0][:, None], positions[:, 1][:, None]
+            edge_left, edge_right = np.maximum(left, travel_min), np.minimum(right, travel_max)
             travel = grid.travel[None, :]
-            # A leaf edge inside a beamlet changes that beamlet while the opposite leaf
-            # leaves it open: the left leaf closes it, the right leaf opens it.
+            # A leaf edge inside a beamlet changes that beamlet while the opposite edge
+            # leaves it open: the left leaf closes it, the right leaf opens it. A leaf
+            # behind a jaw changes nothing.
             for inside, sign, start in (
-                ((left > travel - half) & (left < np.minimum(right, travel + half)), -1.0, num),
                 (
-                    (right < travel + half) & (right > np.maximum(left, travel - half)),
+                    (left > travel_min)
+                    & (left > travel - half)
+                    & (left < np.minimum(edge_right, travel + half)),
+                    -1.0,
+                    num,
+                ),
+                (
+                    (right < travel_max)
+                    & (right < travel + half)
+                    & (right > np.maximum(edge_left, travel - half)),
                     1.0,
                     num + total,
                 ),

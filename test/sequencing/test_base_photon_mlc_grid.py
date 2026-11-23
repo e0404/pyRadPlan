@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
+import SimpleITK as sitk
 
 from pyRadPlan.machines import MLC, Jaw, load_from_name
 from pyRadPlan.sequencing import run_sequencing
@@ -96,13 +97,26 @@ def test_coarser_leaf_grid_resamples_and_broadcasts(test_data_xia):
     assert fluence.min() >= 0.0
     assert fluence.max() <= baseline.sequence.fluence.max() * 1.01
 
-    # Leaf rows wider than the bixels: the area overlap of the apertures with the bixels
-    # distributes the weight differently than the row interpolation of the sequencer, but
-    # delivers the same in total.
+    # The delivered fluence is what the apertures open over each bixel, not the row
+    # interpolation the shapes were sequenced for, and the sequenced dose follows from it.
     info = result_seq.sequence.aperture_info(stf_mat)
     for grid in info.grids:
         assert np.isclose(grid.leaf_width, leaf_width)
-    np.testing.assert_allclose(info.bixel_weights().sum(), fluence.sum())
+    np.testing.assert_allclose(fluence, info.bixel_weights())
+
+    def recomputed(weights):
+        return sitk.GetArrayFromImage(
+            dij_mat.compute_result_ct_grid(weights).quantities["physical_dose"].values
+        )
+
+    factor = (
+        sitk.GetArrayFromImage(baseline.quantities["physical_dose_sequenced"].values).max()
+        / recomputed(baseline.sequence.fluence).max()
+    )
+    dose = sitk.GetArrayFromImage(result_seq.quantities["physical_dose_sequenced"].values)
+    np.testing.assert_allclose(
+        dose, factor * recomputed(fluence), rtol=1e-6, atol=1e-9 * dose.max()
+    )
 
 
 def test_full_leaf_positions_closed_elsewhere(test_data_xia):

@@ -124,6 +124,7 @@ def _jaw_window(jaws: list) -> Optional[np.ndarray]:
 
 
 def _exportable(sequence: Any) -> bool:
+    leaf_widths = set()
     for beam in sequence.beams:
         if not beam.segments:
             return False
@@ -133,10 +134,11 @@ def _exportable(sequence: Any) -> bool:
                 return False
             if mlc.device_orientation != "X":
                 return False
-    return bool(sequence.beams)
+            leaf_widths.add(round(float(mlc.leaf_width), 9))
+    return bool(sequence.beams) and len(leaf_widths) == 1
 
 
-def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noqa: PLR0912
+def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noqa: PLR0912, PLR0915
     """Entries of matRad's ``resultGUI`` that describe a delivery sequence.
 
     Parameters
@@ -147,7 +149,9 @@ def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noq
         The steering information the sequence is planned on. With it, everything matRad
         derives from the beamlets is written as well: the shape masks, the beamlet index
         maps and the leaf travel limits. Without it the leaf positions, the weights and the
-        field window of the jaws are.
+        field window of the jaws are. matRad's leaf rows are as wide as its beamlets; the
+        beamlet information is left out for leaves of another width, so that the leaf
+        positions come back as they were.
 
     Returns
     -------
@@ -169,8 +173,8 @@ def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noq
     if not _exportable(sequence):
         if sequence.beams:
             logger.warning(
-                "matRad holds static segments of an MLC along X only; the segments are not "
-                "exported."
+                "matRad holds static segments of an MLC along X with one leaf width only; "
+                "the segments are not exported."
             )
         if sequencing:
             out["sequencing"] = sequencing
@@ -182,6 +186,15 @@ def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noq
             info = sequence.aperture_info(stf)
         except (ValueError, NotImplementedError) as exc:
             logger.warning("Sequence exported without beamlet information: %s", exc)
+    if info is not None:
+        if any(not np.isclose(grid.leaf_width, grid.bixel_width) for grid in info.grids):
+            logger.warning(
+                "Sequence exported without beamlet information: matRad needs leaves as wide "
+                "as the beamlets."
+            )
+            info = None
+        else:
+            sequence = info.sequence
 
     total_shapes = sequence.total_num_of_segments
     total_leaf_pairs = sum(
@@ -304,7 +317,7 @@ def sequence_to_matrad(sequence: Any, stf: Optional[Any] = None) -> dict:  # noq
     aperture_info = {
         "beam": _struct_array(aperture_beams),
         "runVMAT": False,
-        "bixelWidth": float(first_mlc.leaf_width if info is None else info.grids[0].bixel_width),
+        "bixelWidth": float(first_mlc.leaf_width),
         "numOfMLCLeafPairs": float(first_mlc.number_of_elements),
         "totalNumOfShapes": float(total_shapes),
         "totalNumOfLeafPairs": float(total_leaf_pairs),

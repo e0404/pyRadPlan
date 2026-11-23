@@ -287,6 +287,74 @@ def test_bixel_jacobian_matches_finite_differences(sequence, stf):
     np.testing.assert_allclose(jacobian, numeric, atol=1e-8)
 
 
+def test_jaws_cut_the_apertures(stf):
+    rows = [-7.5, -2.5, 2.5]
+    jaws = [
+        Jaw(device_orientation="X", positions=[-8.0, 12.5], field_width=50.0),
+        Jaw(device_orientation="Y", positions=[-6.0, 20.0], field_width=50.0),
+    ]
+    mlc = _mlc(rows, [[-12.5, 2.5], [-7.5, 12.5], [-2.5, -2.5]])
+    clipped = Sequence(beams=[BeamSequence.from_shapes([mlc], [1.0], jaws=jaws, stf_beam=0)])
+    single = SimpleNamespace(beams=stf.beams[:1])
+
+    info = clipped.aperture_info(single)
+
+    # Row at z=-5 ([-7.5, -2.5]): the Y jaw keeps 70 % of it, the X jaw at -8 cuts the
+    # leaf at -12.5 so that the beamlet at -10 ([-12.5, -7.5]) is open 10 % of its width.
+    np.testing.assert_allclose(info.bixel_weights()[:5], [0.7 * 0.1, 0.7, 0.7, 0.0, 0.0])
+    np.testing.assert_allclose(info.bixel_weights()[5:10], [0.0, 1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(info.to_sequence().fluence, info.bixel_weights())
+
+
+def test_bixel_jacobian_within_jaws_matches_finite_differences(stf):
+    rows = [-7.5, -2.5, 2.5]
+    jaws = [
+        Jaw(device_orientation="X", positions=[-8.0, 9.0], field_width=50.0),
+        Jaw(device_orientation="Y", positions=[-6.0, 3.5], field_width=50.0),
+    ]
+    mlc = _mlc(rows, [[-11.7, 1.8], [-5.4, 11.2], [-3.1, 3.3]])
+    clipped = Sequence(beams=[BeamSequence.from_shapes([mlc], [1.5], jaws=jaws, stf_beam=0)])
+    info = clipped.aperture_info(SimpleNamespace(beams=stf.beams[:1]))
+    vector = info.to_vector()
+
+    jacobian = info.bixel_jacobian().toarray()
+
+    step = 1e-4
+    numeric = np.zeros_like(jacobian)
+    for ix in range(vector.size):
+        up, down = vector.copy(), vector.copy()
+        up[ix] += step
+        down[ix] -= step
+        numeric[ix] = (info.update(up).bixel_weights() - info.update(down).bixel_weights()) / (
+            2 * step
+        )
+    # The leaves behind the jaws (left of row 0, right of row 1) change nothing.
+    assert not jacobian[1].any()
+    assert not jacobian[1 + 3 + 1].any()
+    np.testing.assert_allclose(jacobian, numeric, atol=1e-8)
+
+
+def test_aperture_info_refuses_a_collimator_angle(sequence, stf):
+    segment = sequence.beams[1].segments[0]
+    mlc = segment.start.mlc.model_copy(update={"device_angle": 15.0})
+    rotated = sequence.model_copy(
+        update={
+            "beams": [
+                sequence.beams[0],
+                BeamSequence(
+                    segments=[
+                        segment.model_copy(
+                            update={"start": segment.start.model_copy(update={"mlc": mlc})}
+                        )
+                    ]
+                ),
+            ]
+        }
+    )
+    with pytest.raises(NotImplementedError, match="collimator angle"):
+        rotated.aperture_info(stf)
+
+
 def test_aperture_info_requires_static_segments_with_an_mlc(stf, moving_segment):
     arc = Sequence(beams=[BeamSequence(segments=[moving_segment])])
     with pytest.raises(NotImplementedError, match="move while they are delivered"):
@@ -351,6 +419,66 @@ def test_matrad_round_trip_keeps_segments(sequence, stf, with_stf):
                 segment.start.mlc.leaf_position_boundaries,
                 expected.start.mlc.leaf_position_boundaries,
             )
+
+
+def test_matrad_export_assigns_segments_without_stf_beam_by_position(sequence, stf):
+    unassigned = Sequence(
+        beams=[
+            BeamSequence(segments=[s.model_copy(update={"stf_beam": None}) for s in beam.segments])
+            for beam in sequence.beams
+        ]
+    )
+
+    exported = PlanResult(fluence=np.ones(21), sequence=unassigned).to_matrad(stf=stf)
+
+    assert exported["apertureInfo"]["totalNumOfBixels"] == 21  # noqa: PLR2004
+    np.testing.assert_array_equal(exported["sequencing"]["beam"][1]["bixelIx"], np.arange(16, 22))
+
+
+def test_matrad_export_keeps_leaves_wider_than_the_beamlets(stf, caplog):
+    wide = _mlc([-10.0, 0.0], [[-12.5, 2.5], [-7.5, 7.5]], leaf_width=10.0)
+    second = _mlc([-10.0, 0.0], [[-7.5, 7.5], [-2.5, 2.5]], leaf_width=10.0)
+    sequence = Sequence(
+        beams=[
+            BeamSequence.from_shapes([wide], [1.0], stf_beam=0),
+            BeamSequence.from_shapes([second], [2.0], stf_beam=1),
+        ]
+    )
+
+    exported = PlanResult(fluence=np.ones(21), sequence=sequence).to_matrad(stf=stf)
+
+    assert "leaves as wide as the beamlets" in caplog.text
+    assert exported["apertureInfo"]["bixelWidth"] == 10.0  # noqa: PLR2004
+    assert "totalNumOfBixels" not in exported["apertureInfo"]
+    loaded = PlanResult.from_matrad(exported).sequence
+    mlc = loaded.beams[0].segments[0].start.mlc
+    assert mlc.leaf_width == 10.0  # noqa: PLR2004
+    np.testing.assert_allclose(mlc.leaf_position_boundaries, [-10.0, 0.0])
+    np.testing.assert_allclose(mlc.leaf_positions, wide.leaf_positions)
+
+
+def test_matrad_export_refuses_beams_of_different_leaf_widths(sequence, caplog):
+    segment = sequence.beams[1].segments[0]
+    wide = _mlc([-10.0, 0.0], [[-7.5, 7.5], [-2.5, 2.5]], leaf_width=10.0)
+    mixed = sequence.model_copy(
+        update={
+            "beams": [
+                sequence.beams[0],
+                BeamSequence(
+                    segments=[
+                        segment.model_copy(
+                            update={"start": segment.start.model_copy(update={"mlc": wide})}
+                        )
+                    ]
+                ),
+            ]
+        }
+    )
+
+    exported = PlanResult(fluence=np.ones(21), sequence=mixed).to_matrad()
+
+    assert "apertureInfo" not in exported
+    assert "one leaf width" in caplog.text
 
 
 def test_matrad_import_of_a_single_beam_with_a_single_shape():
