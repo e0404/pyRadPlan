@@ -278,6 +278,34 @@ def test_boundary_planes_do_not_create_duplicate_voxel_segments(monkeypatch):
     assert np.isclose(np.sum(lengths[0, valid]), size[0] * spacing[0])
 
 
+def test_corner_crossings_do_not_repeat_voxels(monkeypatch):
+    """A 45 degree ray through voxel corners must visit each voxel once.
+
+    Regression test: the x- and y-plane intersections at a corner differ by a few ulps in
+    float32, leaving a sliver segment that maps back into the voxel just traversed. The voxel
+    then appeared twice and could take its depth from the end of its segment instead of the
+    middle. Geometry cropped from the HEAD_AND_NECK phantom, where this was found.
+    """
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    cube = sitk.GetImageFromArray(np.ones((5, 9, 9), dtype=np.float32))
+    cube.SetSpacing((3.0, 3.0, 5.0))
+    cube.SetOrigin((-240.51, 131.23, -893.5))
+    raytracer = RayTracerSiddon(cube)
+    iso_center = np.array([6.883, -38.462, -840.045])
+    source = np.array([[707.10678119, -707.10678119, 0.0]])
+    target = np.array([[-239.13203436, 185.13203436, -42.42640687]])
+
+    _, lengths, _, _, ix = raytracer.trace_rays(iso_center, source, target)
+
+    valid = ix[0] >= 0
+    assert np.all(np.diff(ix[0, valid]) != 0)
+    # the corner voxel keeps the full path length of its two former segments
+    np.testing.assert_allclose(lengths[0, valid][ix[0, valid] == 202], 4.12561, atol=1e-4)
+    np.testing.assert_allclose(np.sum(lengths[0, valid]), 23.70681, atol=1e-4)
+
+
 @pytest.mark.parametrize(("gantry", "couch"), [(0.0, 0.0), (45.0, 0.0), (30.0, 45.0)])
 def test_trace_cubes_traverses_full_cube_at_oblique_angles(monkeypatch, gantry, couch):
     """The ray matrix extent must reach past the cube for any beam orientation.

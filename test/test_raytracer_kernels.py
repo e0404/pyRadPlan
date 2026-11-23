@@ -1,5 +1,7 @@
 """Differential tests for the dispatchable ray tracer kernels."""
 
+import importlib
+
 import numpy as np
 import pytest
 
@@ -171,3 +173,42 @@ def test_jax_jit_matches_generic():
     merged_ref = _kernels.merge_sorted_unique.generic(limits, ax, ay, az)
     merged_out = _kernels.merge_sorted_unique(limits, ax, ay, az)
     np.testing.assert_array_equal(np.asarray(merged_out), np.asarray(merged_ref))
+
+
+@pytest.mark.parametrize("backend", ["numpy", "array_api_strict"])
+def test_merge_repeated_voxel_segments(backend):
+    """Runs of same-voxel segments fold into their first segment, conserving length."""
+    nan = np.nan
+    lengths = np.array(
+        [
+            [1.0, 0.25, 2.0, 0.5, nan],  # run of two in the middle
+            [3.0, 0.1, 0.2, 1.0, nan],  # run of three at the start
+            [1.0, 2.0, 3.0, nan, nan],  # no repeats, padded
+        ],
+        dtype=np.float32,
+    )
+    ix = np.array([[4, 7, 7, 9, -1], [5, 5, 5, 6, -1], [1, 2, 3, -1, -1]], dtype=np.int64)
+    rho = [lengths * 0.0 + 1.5, lengths * 0.0 + 0.5]
+    xp = importlib.import_module(
+        "array_api_compat.numpy" if backend == "numpy" else "array_api_strict"
+    )
+
+    merged_l, merged_rho, merged_ix = _kernels.merge_repeated_voxel_segments(
+        xp.asarray(lengths), [xp.asarray(r) for r in rho], xp.asarray(ix)
+    )
+    merged_l, merged_ix = np.asarray(merged_l), np.asarray(merged_ix)
+
+    np.testing.assert_array_equal(
+        merged_ix, [[4, 7, -1, 9, -1], [5, -1, -1, 6, -1], [1, 2, 3, -1, -1]]
+    )
+    np.testing.assert_allclose(
+        merged_l,
+        [[1.0, 2.25, 0.0, 0.5, nan], [3.3, 0.0, 0.0, 1.0, nan], [1.0, 2.0, 3.0, nan, nan]],
+        rtol=1e-6,
+    )
+    # path length per ray is conserved
+    np.testing.assert_allclose(np.nansum(merged_l, axis=1), np.nansum(lengths, axis=1), rtol=1e-6)
+    for r_in, r_merged in zip(rho, merged_rho):
+        r_out = np.asarray(r_merged)
+        assert np.all(np.isnan(r_out[merged_ix == -1]))
+        np.testing.assert_array_equal(r_out[merged_ix >= 0], r_in[merged_ix >= 0])

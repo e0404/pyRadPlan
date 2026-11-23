@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
 - A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
+- Siddon ray tracer: a ray crossing a voxel corner could visit the voxel twice, because the coinciding plane intersections differ slightly in float32 and left a sliver segment in the same voxel. The voxel could then take its radiological depth from the end of its path instead of the middle, up to half a voxel too deep. Consecutive segments in the same voxel are now merged
 
 ## [0.9.0] - 2026-11-18
 

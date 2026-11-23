@@ -71,6 +71,39 @@ def merge_sorted_unique(
     return xp.sort(xp.where(mask, xp.inf, alphas), axis=1)
 
 
+def merge_repeated_voxel_segments(
+    lengths: Array, rho: list[Array], ix: Array
+) -> tuple[Array, list[Array], Array]:
+    """
+    Fold consecutive segments of a ray that lie in the same voxel into the first one.
+
+    Plane intersections that coincide in exact arithmetic (e.g. voxel corners at 45 degrees)
+    can differ by a few ulps, leaving a sliver segment whose midpoint rounds back into the
+    voxel just traversed. The voxel then appears twice in a row, and its depth depends on
+    which of the two segments is selected. Each run keeps its first segment with the summed
+    length; the repeats become invalid (index -1, NaN density, zero length).
+    """
+    xp = array_api_compat.array_namespace(lengths, ix)
+    device = array_api_compat.device(ix)
+    no_repeat = xp.zeros((ix.shape[0], 1), dtype=xp.bool, device=device)
+    invalid_ix = xp.full_like(ix, -1)
+    zero_length = xp.zeros_like(lengths)
+
+    # Each pass folds the last segment of every run into its predecessor
+    while True:
+        repeat = (ix[:, 1:] == ix[:, :-1]) & (ix[:, 1:] >= 0)
+        if not bool(xp.any(repeat)):
+            return lengths, rho, ix
+        run_tail = repeat & ~xp.concat((repeat[:, 1:], no_repeat), axis=1)
+        run_tail = xp.concat((no_repeat, run_tail), axis=1)
+        moved = xp.where(run_tail, lengths, zero_length)
+        lengths = xp.where(
+            run_tail, zero_length, lengths + xp.concat((moved[:, 1:], zero_length[:, :1]), axis=1)
+        )
+        ix = xp.where(run_tail, invalid_ix, ix)
+        rho = [xp.where(run_tail, xp.full_like(r, xp.nan), r) for r in rho]
+
+
 @jittable(backends=("jax", "torch"))
 def compute_indices_from_alpha(
     source_points: Array,
