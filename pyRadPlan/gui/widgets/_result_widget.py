@@ -17,18 +17,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app import PreconditionError
+from pyRadPlan.app._results import result_keys_meta, scenario_labels
+from pyRadPlan.app._views import beam_geometry, plan_beam_angles, plan_iso_centers
+from pyRadPlan.app._views import default_quantity as default_quantity_key
 from pyRadPlan.cst import VOI
+from pyRadPlan.core.resample import resample_image
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
-from pyRadPlan.geometry import lps
 from pyRadPlan.gui.windows._analysis_win import show_analysis
 from pyRadPlan.gui.workspace import WorkspaceManager
-from pyRadPlan.stf import resolve_iso_centers
+from pyRadPlan.result import PlanResult
 
 # Local import (module is in the same folder)
 from ._base import WorkspaceWidget
-from ._display_names import SCENARIO_LABELS_KEY
-from ._tissue_params import load_machine_quietly, plan_dose_engine
+from ._display_names import result_key
+from pyRadPlan.biology._editing import load_machine_quietly, plan_dose_engine
 from .result.quantity_widget import QuantityWidget
 from .result.visualization_widget import VisualizationWidget
 from .result.viewer_options_widget import ViewerOptionsWidget
@@ -36,101 +40,48 @@ from .result.vois_widget import VOIsWidget
 
 logger = logging.getLogger(__name__)
 
-#: Human-readable label and unit for each known result quantity key. Shared with the
-#: Save-Result dialog so quantity checkboxes and overlays use the same names.
-QUANTITY_META: dict[str, tuple[str, str]] = {
-    "physical_dose": ("Dose", "Gy"),
-    "physical_dose_beam": ("Dose", "Gy"),
-    "let": ("LET", "keV/μm"),
-    "let_beam": ("LET", "keV/μm"),
-    "effect": ("Effect", ""),
-    "effect_beam": ("Effect", ""),
-    "rbe_x_dose": ("RBE-weighted Dose", "Gy (RBE)"),
-    "rbe_x_dose_beam": ("RBE-weighted Dose", "Gy (RBE)"),
-    "alpha_dose": ("Alpha Dose", "Gy"),
-    "alpha_dose_beam": ("Alpha Dose", "Gy"),
-    "sqrt_beta_dose": ("Sqrt(Beta) Dose", "Gy½"),
-    "sqrt_beta_dose_beam": ("Sqrt(Beta) Dose", "Gy½"),
-    "let_dose": ("LET·Dose", "Gy·keV/μm"),
-    "let_dose_beam": ("LET·Dose", "Gy·keV/μm"),
-}
-
-
-#: Result keys preferred as the initially shown quantity, in this order. A result
-#: carries an RBE-weighted dose only when it was computed with a biological model,
-#: so that is what the plan was optimized and should be judged on.
-_DEFAULT_QUANTITY_KEYS = ("rbe_x_dose", "physical_dose", "Physical quantity", "physical_quantity")
-
-
-def default_quantity_key(keys: Sequence[str]) -> Optional[str]:
-    """Return the quantity to show first: RBE-weighted dose if present, else dose.
-
-    Falls back to the first key when none of the preferred ones is present, and to
-    ``None`` for no keys.
-    """
-    for candidate in _DEFAULT_QUANTITY_KEYS:
-        if candidate in keys:
-            return candidate
-    return keys[0] if keys else None
-
 
 # --- Data derivation helpers (workspace objects -> viewer-ready arrays) -------
 
 
-def _process_result(result: dict | np.ndarray | sitk.Image | None) -> dict | np.ndarray | None:
-    """Convert a workspace ``result`` into viewer-ready (transposed) arrays."""
-    if result is None:
-        return None
-    if isinstance(result, dict):
-        return _process_dict_result(result)
-    return _process_raw_result(result)
+def _on_grid(image: sitk.Image, reference: Optional[sitk.Image]) -> sitk.Image:
+    """Return *image* on the grid of *reference*, resampling it if the grids differ."""
+    if reference is None or image is reference:
+        return image
+
+    def geometry(img: sitk.Image) -> np.ndarray:
+        return np.concatenate([img.GetSpacing(), img.GetOrigin(), img.GetDirection()])
+
+    if image.GetSize() == reference.GetSize() and np.allclose(
+        geometry(image), geometry(reference), rtol=0.0, atol=1e-4
+    ):
+        return image
+    return resample_image(
+        image, interpolator=sitk.sitkLinear, target_image=reference, extrapolate=0
+    )
 
 
-def _process_dict_result(result_dict: dict) -> dict:
-    """Convert each 3-D value in a result dict into a transposed array (or list)."""
-    quantities_dict: dict = {}
-    for k, v in result_dict.items():
-        if isinstance(v, sitk.Image):
-            arr = sitk.GetArrayFromImage(v)
-            if arr.ndim == 3:
-                quantities_dict[k] = np.transpose(arr, (0, 2, 1))
-        elif isinstance(v, np.ndarray) and v.ndim == 3:
-            quantities_dict[k] = np.transpose(v, (0, 2, 1))
-        elif isinstance(v, list):
-            processed = _process_list_quantity(v)
-            if processed:
-                quantities_dict[k] = processed
-    return quantities_dict
+def _display_array(
+    images: sitk.Image | tuple[Optional[sitk.Image], ...] | None,
+    reference: Optional[sitk.Image] = None,
+) -> np.ndarray | list | None:
+    """Transpose an image (or each per-beam/per-scenario image) into the viewer's axis order.
 
-
-def _process_list_quantity(items: list) -> list:
-    """Transpose each 3-D array in a list of images/arrays.
-
-    Other entries (e.g. ``None`` for scenarios without a result) become ``None``, so that
-    list positions keep their meaning (beam or flat scenario index).  A list without any
-    3-D entry yields ``[]``.
+    Images on another grid than *reference* (the CT) are resampled onto it first.
+    ``None`` entries (scenarios without a result) stay ``None``, so that list positions keep
+    their meaning (beam or flat scenario index).
     """
-    processed = []
-    for item in items:
-        if isinstance(item, sitk.Image):
-            arr = sitk.GetArrayFromImage(item)
-        elif isinstance(item, np.ndarray):
-            arr = item
-        else:
-            arr = None
-        processed.append(
-            np.transpose(arr, (0, 2, 1)) if arr is not None and arr.ndim == 3 else None
-        )
-    return processed if any(p is not None for p in processed) else []
+    if images is None:
+        return None
+    if isinstance(images, tuple):
+        return [_display_array(image, reference) for image in images]
+    return np.transpose(sitk.GetArrayFromImage(_on_grid(images, reference)), (0, 2, 1))
 
 
-def _process_raw_result(result: object) -> np.ndarray:
-    """Convert a single raw image or array to a transposed numpy array."""
-    if isinstance(result, sitk.Image):
-        result_arr = sitk.GetArrayFromImage(result)
-    else:
-        result_arr = np.asarray(result)
-    return np.transpose(result_arr, (0, 2, 1))
+def _same_images(a: object, b: object) -> bool:
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(x is y for x, y in zip(a, b))
+    return a is b
 
 
 def _build_overlay_meta(
@@ -141,38 +92,19 @@ def _build_overlay_meta(
     overlay_units: dict[str, str] = {}
     overlay_labels: dict[str, str] = {}
     if isinstance(quantity_data, dict):
-        for k, v in quantity_data.items():
-            base = k.split()[0] if " " in k else k
-            # per-beam and per-scenario lists carry their quantity's label and unit
-            for suffix in ("_beam", "_scenario"):
-                if base not in QUANTITY_META and base.endswith(suffix):
-                    base = base.removesuffix(suffix)
-            qname, unit = QUANTITY_META.get(base, ("Quantity", ""))
-            if isinstance(v, list):
-                for i in range(len(v)):
-                    expanded = f"{k} {i}"
-                    overlay_units[expanded] = unit
-                    overlay_labels[expanded] = qname
-            else:
-                overlay_units[k] = unit
-                overlay_labels[k] = qname
+        expanded_keys = [
+            f"{k} {i}" if isinstance(v, list) else k
+            for k, v in quantity_data.items()
+            for i in (range(len(v)) if isinstance(v, list) else [None])
+        ]
+        for expanded, (qname, unit) in result_keys_meta(expanded_keys).items():
+            overlay_units[expanded] = unit
+            overlay_labels[expanded] = qname
     else:
         overlay_units = {"Physical quantity": "Gy"}
         overlay_labels = {"Physical quantity": "Dose"}
 
     return overlay_units, overlay_labels
-
-
-def _plan_iso_centers(pln, cst: Optional[StructureSet]) -> np.ndarray | None:
-    """Isocenters of *pln* in mm, shape ``(k, 3)``, resolved as the stf generators do.
-
-    ``None`` when the plan sets none and there is no target to derive it from.
-    """
-    iso_center = (getattr(pln, "prop_stf", None) or {}).get("iso_center")
-    try:
-        return resolve_iso_centers(iso_center, cst)
-    except Exception:  # noqa: BLE001 - isocenter is optional
-        return None
 
 
 def _isocenter_vox(ct: CT, iso_centers: np.ndarray | None) -> np.ndarray | None:
@@ -196,129 +128,38 @@ def _to_viewer_direction(direction_lps: np.ndarray, spacing: np.ndarray) -> np.n
     return np.array([vec[2], vec[0], vec[1]])
 
 
-def _as_angle_array(value) -> np.ndarray:
-    """Flatten a ``prop_stf`` angle entry (list, scalar, array or None) to 1-D floats."""
-    if value is None:
-        return np.empty(0)
-    return np.atleast_1d(np.asarray(value, dtype=float)).ravel()
+def _viewer_beams(ct: CT, geometry: dict, edited: bool = False) -> list[dict]:
+    """Beam axes of :func:`pyRadPlan.app._views.beam_geometry` in the viewer's voxel space.
 
-
-def _plan_beam_angles(pln) -> tuple[np.ndarray, np.ndarray] | None:
-    """Gantry and couch angle of every beam of *pln*, or None if it defines no beams."""
-    prop_stf = getattr(pln, "prop_stf", None) or {}
-    gantry_angles = _as_angle_array(prop_stf.get("gantry_angles"))
-    if gantry_angles.size == 0:
-        return None
-    couch_angles = _as_angle_array(prop_stf.get("couch_angles"))
-    if couch_angles.size == 0:
-        couch_angles = np.zeros_like(gantry_angles)
-    elif couch_angles.size == 1:
-        couch_angles = np.full_like(gantry_angles, couch_angles[0])
-    if couch_angles.size != gantry_angles.size:
-        return None
-    return gantry_angles, couch_angles
-
-
-def _same_angles(a: Sequence[float], b: Sequence[float]) -> bool:
-    difference = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
-    return bool(np.allclose((difference + 180.0) % 360.0 - 180.0, 0.0, atol=1e-6))
-
-
-def _source_direction(gantry: float, couch: float) -> np.ndarray:
-    # Matches Beam.derive_source_points: the source sits at -y in the BEV.
-    return lps.get_beam_rotation_matrix(float(gantry), float(couch)) @ np.array([0.0, -1.0, 0.0])
-
-
-def _beam_orbit(couch: float, spacing: np.ndarray) -> dict:
-    """Return the gantry orbit of a beam at *couch*, in the viewer's voxel space.
-
-    The source direction at gantry angle g is ``cos(g) * u + sin(g) * w``; the
-    orbit's axis is ``u x w``.
-    """
-    u = _source_direction(0.0, couch)
-    w = _source_direction(90.0, couch)
-    return {
-        "orbit": (_to_viewer_direction(u, spacing), _to_viewer_direction(w, spacing)),
-        "orbit_axis": _to_viewer_direction(np.cross(u, w), spacing),
-    }
-
-
-def _beam_geometry(ct: CT, pln, stf, iso_centers: np.ndarray | None) -> list[dict]:
-    """Beam axes to draw, in the viewer's voxel space.
-
-    Prefers the generated steering information, which carries the exact source
-    point and target point of every beam, as long as it still has the plan's
-    angles; otherwise (no stf yet, or the plan changed since) the axes are
-    derived from the plan's gantry/couch angles.  Returns an empty list when
-    neither is available.  Beams with plan angles carry their ``index`` in the
-    plan, ``gantry``/``couch`` angles and gantry orbit (see :func:`_beam_orbit`),
-    so the viewer can rotate them.
-
-    *iso_centers* are the plan's isocenters in mm (see :func:`_plan_iso_centers`).
-    With a plan, they take precedence over those of the stf, as Recalculate Dose
-    moves the beams to them.
+    Beams with plan angles carry their ``index`` in the plan, ``gantry``/``couch``
+    angles and gantry ``orbit`` ``(u, w)`` with its ``orbit_axis``, so the viewer can
+    rotate them; *edited* adds the ``pending`` flags of drawn but unapplied angles.
     """
     origin = np.array(ct.cube_hu.GetOrigin())
     spacing = np.array(ct.cube_hu.GetSpacing())
-    angles = _plan_beam_angles(pln)
-
-    def plan_iso(i: int) -> np.ndarray:
-        return iso_centers[min(i, len(iso_centers) - 1)]
-
-    beams = getattr(stf, "beams", None)
-    if beams and (
-        angles is None
-        or (
-            len(beams) == angles[0].size
-            and _same_angles([b.gantry_angle for b in beams], angles[0])
-            and _same_angles([b.couch_angle for b in beams], angles[1])
-        )
-    ):
-        use_plan_iso = angles is not None and iso_centers is not None
-        geometry = []
-        for i, beam in enumerate(beams):
-            direction = np.asarray(beam.source_point, dtype=float)
-            norm = float(np.linalg.norm(direction))
-            if norm == 0.0:
-                continue
-            beam_iso = plan_iso(i) if use_plan_iso else beam.iso_center
-            entry = {
-                "iso_center": _to_viewer_vox(beam_iso, origin, spacing),
-                "source_direction": _to_viewer_direction(direction / norm, spacing),
-                "name": f"#{i}",
-                "label": f"Beam #{i}: gantry {beam.gantry_angle:g}°, couch {beam.couch_angle:g}°",
-            }
-            if angles is not None:
-                entry.update(
-                    index=i,
-                    gantry=float(beam.gantry_angle),
-                    couch=float(beam.couch_angle),
-                    **_beam_orbit(beam.couch_angle, spacing),
-                )
-            geometry.append(entry)
-        return geometry
-
-    if angles is None or iso_centers is None:
-        return []
-    gantry_angles, couch_angles = angles
-
-    geometry = []
-    for i, (gantry, couch) in enumerate(zip(gantry_angles, couch_angles)):
-        geometry.append(
-            {
-                "iso_center": _to_viewer_vox(plan_iso(i), origin, spacing),
-                "source_direction": _to_viewer_direction(
-                    _source_direction(gantry, couch), spacing
+    beams = []
+    for entry in geometry["beams"]:
+        beam = {
+            "iso_center": _to_viewer_vox(entry["iso_center"], origin, spacing),
+            "source_direction": _to_viewer_direction(entry["source_direction"], spacing),
+            "name": entry["name"],
+            "label": entry["label"],
+        }
+        if "orbit_axis" in entry:
+            beam.update(
+                index=entry["index"],
+                gantry=entry["gantry"],
+                couch=entry["couch"],
+                orbit=(
+                    _to_viewer_direction(entry["orbit_u"], spacing),
+                    _to_viewer_direction(entry["orbit_w"], spacing),
                 ),
-                "name": f"#{i}",
-                "label": f"Beam #{i}: gantry {float(gantry):g}°, couch {float(couch):g}°",
-                "index": i,
-                "gantry": float(gantry),
-                "couch": float(couch),
-                **_beam_orbit(couch, spacing),
-            }
-        )
-    return geometry
+                orbit_axis=_to_viewer_direction(entry["orbit_axis"], spacing),
+            )
+        if edited:
+            beam["pending"] = entry["pending"]
+        beams.append(beam)
+    return beams
 
 
 class ViewingWidget(WorkspaceWidget):
@@ -369,8 +210,8 @@ class ViewingWidget(WorkspaceWidget):
         #: Beam angles edited in a plan form but not applied yet (see set_beam_editor).
         self._edited_angles: Optional[tuple[list[float], list[float]]] = None
         self._beam_editor: Optional[Callable[[int, float], None]] = None
-        #: Labels of the workspace dij's scenarios, by flat scenario index.
-        self._scenario_labels: list[str] = []
+        #: Scenario labels of each result by its tag, by flat scenario index.
+        self._scenario_labels: dict[str, list[str]] = {}
 
         # Create and wire the four sub-widgets.  Whether they are arranged here
         # (standalone use) or placed individually by a host window (e.g. the
@@ -400,6 +241,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vois_widget.set_machine_provider(self._plan_machine)
         self.vois_widget.set_bio_model_provider(self._plan_bio_model)
         self.vois_widget.set_engine_provider(self._plan_engine)
+        self.vois_widget.set_color_writer(self._write_voi_color)
         self.vois_widget.voi_toggled.connect(self._on_voi_toggled)
         self.vois_widget.selection_changed.connect(self.vois_selection_changed)
         self.vois_widget.color_changed.connect(self._on_voi_color_changed)
@@ -456,7 +298,7 @@ class ViewingWidget(WorkspaceWidget):
         ws = self.workspace
         full = not changed_keys
         if full or "dij" in changed_keys or "result" in changed_keys:
-            self._apply_scenario_labels(ws.dij, ws.result)
+            self._apply_scenario_labels(ws.dij, ws.result_entries())
         ct = ws.ct
         if ct is None:
             # Workspace was cleared: drop the previous patient's display state
@@ -471,7 +313,7 @@ class ViewingWidget(WorkspaceWidget):
         beams_changed = cst_changed or "pln" in changed_keys or "stf" in changed_keys
 
         if data_changed:
-            self._apply_ct_and_result(ct, ws.cst, ws.result)
+            self._apply_ct_and_result(ct, ws.cst, ws.result_entries())
             self._has_data = True
 
         if cst_changed:
@@ -480,13 +322,15 @@ class ViewingWidget(WorkspaceWidget):
         if data_changed or beams_changed:
             self._apply_beams(ct, ws.cst, ws.pln, ws.stf)
 
-    def _apply_scenario_labels(self, dij, result=None) -> None:
-        # The result's own labels: it can stem from another scenario set than the current dij
-        labels = result.get(SCENARIO_LABELS_KEY) if isinstance(result, dict) else None
-        if labels is not None:
-            labels = list(labels)
-        else:
-            labels = dij.scenario_labels() if hasattr(dij, "scenario_labels") else []
+    def _apply_scenario_labels(self, dij, entries=()) -> None:
+        # Each result's own labels: it can stem from another scenario set than the current dij
+        labels = {
+            tag: scenario_labels(result)
+            for tag, result in entries
+            if result.scenario_labels is not None
+        }
+        if "" not in labels and hasattr(dij, "scenario_labels"):
+            labels[""] = scenario_labels(None, dij)
         self._scenario_labels = labels
         self.vis_widget.set_scenario_labels(labels)
 
@@ -509,35 +353,66 @@ class ViewingWidget(WorkspaceWidget):
         self._ct_cache = (ct.cube_hu, ct_arr)
         return ct_arr
 
-    def _process_result_cached(self, result) -> dict | np.ndarray | None:
-        """Like :func:`_process_result`, reusing per-key conversions by identity.
+    def _display_arrays(
+        self,
+        results: PlanResult | Sequence[tuple[str, PlanResult]] | None,
+        reference: Optional[sitk.Image] = None,
+    ) -> dict | None:
+        """Viewer-ready arrays of the *results*, reusing per-quantity conversions by identity.
 
-        Result dicts routinely share value objects across updates (snapshots,
-        carried-forward keys), so unchanged cubes are not converted again.
+        *results* are ``(tag, result)`` pairs (see
+        :meth:`~pyRadPlan.gui.workspace.WorkspaceManager.result_entries`) or a single
+        result; their quantities are listed under
+        :func:`~pyRadPlan.gui.widgets._display_names.result_key`.  Quantities on another
+        grid than *reference* (the CT) are resampled onto it.
+
+        A stored :class:`~pyRadPlan.result.PlanResult` is replaced (not mutated) on
+        every optimization/recalculation, and a snapshot shares the images of the
+        result it copies, so unchanged cubes are not converted again.
         """
-        if not isinstance(result, dict):
+        if isinstance(results, PlanResult):
+            results = [("", results)]
+        if not results:
             self._quantity_cache.clear()
-            return _process_result(result)
+            return None
         cache: dict[str, tuple[object, object]] = {}
         processed: dict = {}
-        for key, value in result.items():
+        entries: list[tuple[str, object]] = []
+        for tag, result in results:
+            entries += [
+                (result_key(tag, name), qd.values) for name, qd in result.quantities.items()
+            ]
+            entries += [
+                (result_key(tag, f"{name}_beam"), tuple(qd.values for qd in qds))
+                for name, qds in result.beam_quantities.items()
+            ]
+            entries += [
+                (
+                    result_key(tag, f"{name}_scenario"),
+                    tuple(None if qd is None else qd.values for qd in qds),
+                )
+                for name, qds in result.scenario_quantities.items()
+                if any(qd is not None for qd in qds)
+            ]
+        for key, images in entries:
             cached = self._quantity_cache.get(key)
-            if cached is not None and cached[0] is value:
-                cache[key] = cached
-            else:
-                single = _process_dict_result({key: value})
-                if key not in single:
-                    continue
-                cache[key] = (value, single[key])
+            if cached is None or not _same_images(cached[0], images):
+                # A snapshot lists the images of the result it copies under its own keys.
+                known = (*cache.values(), *self._quantity_cache.values())
+                cached = next((c for c in known if _same_images(c[0], images)), None)
+            cache[key] = cached or (images, _display_array(images, reference))
             processed[key] = cache[key][1]
         self._quantity_cache = cache
         return processed
 
-    def _apply_ct_and_result(self, ct: CT, cst, result) -> None:
+    def _apply_ct_and_result(self, ct: CT, cst, results) -> None:
+        if self._ct_cache is None or self._ct_cache[0] is not ct.cube_hu:
+            # Quantities on another grid were resampled onto the previous CT.
+            self._quantity_cache.clear()
         ct_arr = self._ct_array(ct)
-        quantity_data = self._process_result_cached(result)
+        quantity_data = self._display_arrays(results, ct.cube_hu)
         overlay_units, overlay_labels = _build_overlay_meta(quantity_data)
-        isocenter_vox = _isocenter_vox(ct, _plan_iso_centers(self.workspace.pln, cst))
+        isocenter_vox = _isocenter_vox(ct, plan_iso_centers(self.workspace.pln, cst))
 
         self.quantity_widget.set_ct_geometry(
             ct.cube_hu.GetOrigin(), ct.cube_hu.GetSpacing(), ct.cube_hu.GetDirection()
@@ -590,35 +465,18 @@ class ViewingWidget(WorkspaceWidget):
         Beam angles edited but not applied yet are drawn in place of the plan's,
         each changed beam flagged ``pending``.
         """
-        iso_centers = _plan_iso_centers(pln, cst)
+        iso_centers = plan_iso_centers(pln, cst)
         self.quantity_widget.set_isocenter(_isocenter_vox(ct, iso_centers))
-        applied = _plan_beam_angles(pln)
         edited = self._edited_angles if pln is not None else None
+        draft = None
         if edited is not None:
-            pln = pln.model_copy(
-                update={
-                    "prop_stf": {
-                        **pln.prop_stf,
-                        "gantry_angles": list(edited[0]),
-                        "couch_angles": list(edited[1]),
-                    }
-                }
-            )
+            draft = {"gantry_angles": list(edited[0]), "couch_angles": list(edited[1])}
         try:
-            beams = _beam_geometry(ct, pln, stf, iso_centers)
+            geometry = beam_geometry(pln, stf, cst, draft, iso_centers=iso_centers)
+            beams = _viewer_beams(ct, geometry, edited=draft is not None)
         except Exception:  # noqa: BLE001 - the overlay must never break the viewer
             logger.warning("Could not derive the beam geometry for the viewer", exc_info=True)
             beams = []
-        if edited is not None:
-            for beam in beams:
-                i = beam.get("index", -1)
-                beam["pending"] = not (
-                    applied is not None
-                    and 0 <= i < applied[0].size
-                    and _same_angles(
-                        [beam["gantry"], beam["couch"]], [applied[0][i], applied[1][i]]
-                    )
-                )
         self.quantity_widget.set_beams(beams)
         self.vis_widget.set_beams_available(bool(beams))
 
@@ -712,26 +570,64 @@ class ViewingWidget(WorkspaceWidget):
         self.voi_toggled.emit(name, checked)
         # selection_changed is emitted by vois_widget directly
 
-    def _on_voi_replaced(self, name: str, new_voi) -> None:
-        """Write a VOI recreated by the metadata editor back to the workspace ``cst``.
+    def _on_voi_replaced(self, old_voi, new_voi) -> None:
+        """Write the metadata edited in the VOI editor to the workspace ``cst``.
 
-        Metadata edits recreate the VOI (its type and tissue properties are bound to
-        the model class), so the new instance must replace the old one in the structure
-        set. The write is wrapped in :meth:`hold_updates` so this widget does not
-        rebuild (and reset the VOI selection) from its own change, while peer widgets
-        refresh.
+        The edited type, overlap priority and tissue go through
+        :meth:`~pyRadPlan.app.Session.update_structure` (the editor has already asked
+        about tissue errors), addressing the structure by its position, which recreates
+        the VOI in the structure set; the stored VOI then replaces the editor's in the VOI
+        list. While a calculation runs, the session refuses structure edits, so the edit is
+        applied once the calculation has ended, unless another structure set has been
+        loaded meanwhile.
+        The write is wrapped in :meth:`hold_updates` so this widget does not rebuild (and
+        reset the VOI selection) from its own change, while peer widgets refresh.
         """
-        self._vois = [new_voi if v.name == name else v for v in self._vois]
+        name = old_voi.name
+        position = next((i for i, v in enumerate(self._vois) if v is old_voi), None)
+        self._vois = [new_voi if v is old_voi else v for v in self._vois]
+        changes = {
+            "type": new_voi.voi_type,
+            "overlap_priority": new_voi.overlap_priority,
+            "tissue": new_voi.tissue_properties,
+        }
+        queued_cst = self._ws.cst
+
+        def apply() -> None:
+            cst = self._ws.cst
+            if cst is None or cst is not queued_cst or position is None:
+                logger.warning("Dropped the edit of structure %r: the structure set changed", name)
+                return
+            if not 0 <= position < len(cst.vois) or cst.vois[position].name != name:
+                logger.warning("Dropped the edit of structure %r: it is no longer there", name)
+                return
+            try:
+                with self.hold_updates():
+                    self._ws.session.update_structure(
+                        position, changes, apply_anyway=True, detail=False
+                    )
+            except (PreconditionError, LookupError, ValueError, TypeError):
+                logger.exception("Rejected VOI type change for %r", name)
+                return
+            stored = cst.vois[position]
+            self._vois = [stored if v is new_voi else v for v in self._vois]
+            self.vois_widget.replace_voi(name, stored)
+
+        self._ws.session.call_when_idle(apply)
+
+    def _write_voi_color(self, voi: VOI, rgb: tuple) -> None:
+        """Set a picked colour through the session (a display edit, also during a run)."""
         cst = self._ws.cst
-        if cst is None:
-            return
-        try:
-            cst.vois = [new_voi if v.name == name else v for v in cst.vois]
-        except (ValueError, TypeError):
-            logger.exception("Rejected VOI type change for %r", name)
-            return
-        with self.hold_updates():
-            self._ws.cst = cst
+        position = next((i for i, v in enumerate(self._vois) if v is voi), None)
+        if (
+            cst is not None
+            and position is not None
+            and position < len(cst.vois)
+            and cst.vois[position].name == voi.name
+        ):
+            self._ws.session.update_structure(position, {"color": rgb}, detail=False)
+        else:
+            voi.color = rgb
 
     def _on_voi_color_changed(self, name: str, rgb: tuple) -> None:
         """Re-propagate updated colors to quantity widget for contour redraw."""
@@ -783,7 +679,7 @@ class ViewingWidget(WorkspaceWidget):
             self._beam_editor(index, gantry)
             return
         pln = self._ws.pln
-        angles = _plan_beam_angles(pln)
+        angles = plan_beam_angles(pln)
         if angles is None or not 0 <= index < angles[0].size:
             return
         gantry_angles = [float(angle) for angle in angles[0]]

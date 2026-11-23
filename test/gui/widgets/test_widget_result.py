@@ -1,9 +1,11 @@
 import numpy as np
 import pytest
+from PySide6.QtGui import QColor
 import SimpleITK as sitk
 
 from pyRadPlan.gui.widgets._result_widget import ViewingWidget
 from pyRadPlan.gui.workspace import WorkspaceManager
+from pyRadPlan.result import create_result
 
 
 def _beam_labels(quantity_widget):
@@ -32,6 +34,11 @@ def _make_workspace(ct, cst, result=None):
     return ws
 
 
+def _result_for(ct):
+    """A minimal validated PlanResult on the CT grid for viewer tests."""
+    return create_result({"physical_dose": sitk.Cast(ct.cube_hu, sitk.sitkFloat32)})
+
+
 def test_viewing_widget_init(qapp):
     widget = ViewingWidget()
     assert widget is not None
@@ -44,7 +51,8 @@ def test_viewing_widget_init(qapp):
 def test_viewing_widget_reacts_to_workspace(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    # The result overlay is not asserted here; only CT/VOIs/colours are checked.
+    ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
 
     # CT was derived from the workspace and pushed to the renderer
@@ -90,21 +98,78 @@ def test_viewing_widget_set_plane(qapp, test_data_photons):
     assert widget.quantity_widget._plane == "Sagittal"
 
 
-def test_viewing_widget_raw_array_result(qapp, test_data_photons):
+def test_viewing_widget_single_quantity_result(qapp, test_data_photons):
     ct, cst, _ = test_data_photons
-    raw = np.ones(sitk.GetArrayFromImage(ct.cube_hu).shape)
 
-    ws = _make_workspace(ct, cst, raw)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
 
     assert widget.quantity_widget._active_quantity_name is not None
     assert widget.quantity_widget.get_available_quantities()
 
 
+def test_viewing_widget_reuses_unchanged_quantities(qapp, test_data_photons):
+    """Unchanged images (also those a snapshot shares) are not converted again."""
+    ct, cst, _ = test_data_photons
+    ws = _make_workspace(ct, cst, _result_for(ct))
+    widget = ViewingWidget(ws)
+    before = widget._display_arrays(ws.result_entries(), ct.cube_hu)["physical_dose"]
+
+    ws.add_result("saved", ws.result.model_copy())
+
+    arrays = widget._display_arrays(ws.result_entries(), ct.cube_hu)
+    assert list(arrays) == ["physical_dose", "saved/physical_dose"]
+    assert arrays["physical_dose"] is before
+    assert arrays["saved/physical_dose"] is before
+    assert list(widget.quantity_widget._quantities) == list(arrays)
+
+
+def test_viewing_widget_shows_results_of_other_grids_and_scenarios(qapp, test_data_photons):
+    """Each result is listed with its own scenario labels, resampled onto the CT."""
+    ct, cst, _ = test_data_photons
+    dose = _result_for(ct).physical_dose.values
+    ws = _make_workspace(ct, cst, None)
+    ws.result = {
+        "physical_dose": dose,
+        "physical_dose_scenario": [dose, dose],
+        "scenario_labels": ("nominal", "shifted"),
+    }
+    coarse = sitk.Image([s // 2 for s in dose.GetSize()], sitk.sitkFloat32)
+    coarse.SetSpacing([2.0 * s for s in dose.GetSpacing()])
+    coarse.SetOrigin(dose.GetOrigin())
+    coarse.SetDirection(dose.GetDirection())
+    ws.add_result(
+        "measured",
+        {
+            "physical_dose": coarse + 1.0,
+            "physical_dose_scenario": [coarse, coarse, coarse],
+            "scenario_labels": ("a", "b", "c"),
+        },
+    )
+    widget = ViewingWidget(ws)
+
+    quantities = widget.quantity_widget._quantities
+    assert "measured/physical_dose" in quantities
+    assert "measured/physical_dose_scenario 2" in quantities
+    assert quantities["measured/physical_dose"].shape == quantities["physical_dose"].shape
+    assert quantities["measured/physical_dose"].max() == pytest.approx(1.0)
+
+    selector = widget.vis_widget.quantity_selector
+    texts = {}
+    for key in ("physical_dose_scenario 1", "measured/physical_dose_scenario 1"):
+        assert selector.set_current_key(key)
+        texts[key] = selector.component_combo.currentText()
+    assert texts == {
+        "physical_dose_scenario 1": "scenario 1: shifted",
+        "measured/physical_dose_scenario 1": "scenario 1: b",
+    }
+    assert selector.quantity_combo.currentText() == "dose (measured)"
+
+
 def test_viewing_widget_clears_on_workspace_clear(qapp, test_data_photons):
     ct, cst, result = test_data_photons
 
-    ws = _make_workspace(ct, cst, result if isinstance(result, dict) else None)
+    ws = _make_workspace(ct, cst, _result_for(ct))
     widget = ViewingWidget(ws)
     assert widget.quantity_widget._ct is not None
     assert len(widget.vois_widget._voi_checkboxes) == len(cst.vois)
@@ -133,12 +198,45 @@ def test_viewing_widget_voi_replaced_writes_back_to_cst(qapp, test_data_photons)
     new_voi = create_voi(data)
 
     selected_before = widget.vois_widget.selected_vois()
-    widget.vois_widget.voi_replaced.emit(voi.name, new_voi)
+    widget.vois_widget.voi_replaced.emit(voi, new_voi)
 
-    assert ws.cst.vois[0] is new_voi
-    assert ws.cst.vois[0].voi_type == new_type
+    # The session recreates the VOI from the edited fields; the list holds the stored one.
+    stored = ws.cst.vois[0]
+    assert stored.voi_type == new_type and stored.name == voi.name
+    assert widget.vois_widget._voi_by_name[voi.name] is stored
     # The viewer must not rebuild (and reset the selection) from its own write
-    assert widget.vois_widget.selected_vois() == selected_before
+    assert set(widget.vois_widget.selected_vois()) == set(selected_before)
+
+
+def test_structure_edits_during_a_run(qapp, test_data_photons, monkeypatch):
+    """A colour pick applies at once; a metadata edit waits for the run to end."""
+    from pyRadPlan.app import Operation
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    ws = _make_workspace(ct, cst)
+    widget = ViewingWidget(ws)
+    ws.set_many(result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+    session = ws.session
+    operation = Operation("calc", "Calculating", lambda: None, lambda value: None)
+    session.begin(operation)
+    voi = ws.cst.vois[0]
+    picked = QColor(1, 2, 3)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.result.vois_widget.QColorDialog.getColor", lambda *a: picked
+    )
+    changes = []
+    ws.workspace_changed.connect(changes.append)
+
+    widget.vois_widget._pick_color(voi)
+    new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
+    widget.vois_widget.voi_replaced.emit(voi, recreate_voi(voi, voi_type=new_type))
+
+    assert tuple(ws.cst.vois[0].color) == (1, 2, 3)
+    assert ws.cst.vois[0] is voi and changes == []
+    session.finish(operation, None)
+    assert ws.cst.vois[0].voi_type == new_type and changes == [["cst"]]
+    assert session.stages()["optimization"] == "stale"
 
 
 def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
@@ -152,8 +250,13 @@ def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
     ws = _make_workspace(ct, cst)
     widget = ViewingWidget(ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(pln=object(), stf=object(), dij=object(), result={})
-    assert not workflow._dij_stale
+    ws.set_many(
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
+    assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
         self.alpha_spin.setValue(0.42)
@@ -162,10 +265,10 @@ def test_voi_tissue_edit_marks_dose_influence_stale(qapp, test_data_photons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        widget.vois_widget._edit_voi(ws.cst.vois[0].name)
+        widget.vois_widget._edit_voi(ws.cst.vois[0])
 
     assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.42)
-    assert workflow._dij_stale
+    assert workflow.session.tracker.dij_stale
     assert "recalculate" in workflow._lbl_status.text().lower()
 
 
@@ -728,6 +831,72 @@ def test_overlay_meta_covers_per_scenario_lists():
     assert labels["physical_dose_beam 0"] == "Dose"
 
 
+def test_overlay_meta_resolves_other_results_and_shares_rbe_axis():
+    from pyRadPlan.analysis._units import compare_units
+    from pyRadPlan.gui.widgets._result_widget import _build_overlay_meta
+
+    arr = np.zeros((2, 2, 2))
+    units, labels = _build_overlay_meta(
+        {
+            "rbe_x_dose": arr,
+            "physical_dose": arr,
+            "carbon/rbe_x_dose": arr,
+            "carbon/physical_dose": arr,
+            "carbon/effect": arr,
+            "carbon/rbe_x_dose_beam": [arr],
+            "effect": arr,
+        }
+    )
+    assert units["carbon/rbe_x_dose"] == units["rbe_x_dose"] == "Gy (RBE)"
+    assert labels["carbon/rbe_x_dose"] == labels["carbon/rbe_x_dose_beam 0"] == "RBE-weighted Dose"
+    assert compare_units(units["rbe_x_dose"], units["carbon/rbe_x_dose"]) == (True, 1.0)
+    assert compare_units(units["rbe_x_dose"], units["carbon/effect"])[0] is False
+
+
+def test_beam_axes_are_mapped_to_the_viewer_voxel_space():
+    """The shared LPS beam geometry, in the viewer's anisotropic (z, x, y) voxel space."""
+    from types import SimpleNamespace
+
+    from pyRadPlan.gui.widgets._result_widget import _viewer_beams
+
+    image = sitk.Image([4, 5, 6], sitk.sitkFloat32)
+    image.SetOrigin((10.0, 20.0, 30.0))
+    image.SetSpacing((2.0, 4.0, 5.0))
+    ct = SimpleNamespace(cube_hu=image)
+    stf_beam = {
+        "index": 0,
+        "gantry": 0.0,
+        "couch": 0.0,
+        "iso_center": [12.0, 28.0, 45.0],
+        "source_direction": [0.0, -1.0, 0.0],
+        "name": "#0",
+        "label": "Beam #0: gantry 0°, couch 0°",
+        "pending": False,
+    }
+    plan_beam = {
+        **stf_beam,
+        "index": 1,
+        "name": "#1",
+        "orbit_u": [0.0, -1.0, 0.0],
+        "orbit_w": [1.0, 0.0, 0.0],
+        "orbit_axis": [0.0, 0.0, 1.0],
+        "pending": True,
+    }
+
+    beams = _viewer_beams(ct, {"beams": [stf_beam, plan_beam]})
+
+    np.testing.assert_allclose(beams[0]["iso_center"], [3.0, 1.0, 2.0])
+    np.testing.assert_allclose(beams[0]["source_direction"], [0.0, 0.0, -0.25])
+    # Only beams with plan angles (an orbit) can be rotated by dragging.
+    assert set(beams[0]) == {"iso_center", "source_direction", "name", "label"}
+    assert (beams[1]["index"], beams[1]["gantry"]) == (1, 0.0)
+    np.testing.assert_allclose(beams[1]["orbit"][1], [0.0, 0.5, 0.0])
+    np.testing.assert_allclose(beams[1]["orbit_axis"], [0.2, 0.0, 0.0])
+    assert "pending" not in beams[1]
+    edited = _viewer_beams(ct, {"beams": [stf_beam, plan_beam]}, edited=True)
+    assert [beam["pending"] for beam in edited] == [False, True]
+
+
 def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photons):
     from types import SimpleNamespace
 
@@ -747,3 +916,63 @@ def test_viewer_prefers_the_scenario_labels_of_the_result(qapp, test_data_photon
     }
     assert combo.itemText(2) == "scenario 1: from result 1"
     assert "scenario_labels" not in widget.quantity_widget.get_available_quantities()
+
+
+def _duplicate_named_workspace(test_data_photons):
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    cst.vois = [
+        recreate_voi(voi, name=cst.vois[0].name) if i == 1 else voi
+        for i, voi in enumerate(cst.vois)
+    ]
+    ws = _make_workspace(ct, cst)
+    return ws, ViewingWidget(ws)
+
+
+def test_structure_edits_address_structures_sharing_a_name(qapp, test_data_photons, monkeypatch):
+    from pyRadPlan.cst import recreate_voi
+
+    ws, widget = _duplicate_named_workspace(test_data_photons)
+    first, second = ws.cst.vois[0], ws.cst.vois[1]
+    assert first.name == second.name
+    first_before = (first.voi_type, tuple(first.color))
+    new_type = next(t for t in ("TARGET", "OAR") if t != second.voi_type)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.result.vois_widget.QColorDialog.getColor",
+        lambda *a: QColor(4, 5, 6),
+    )
+
+    widget.vois_widget._pick_color(second)
+    widget.vois_widget.voi_replaced.emit(second, recreate_voi(second, voi_type=new_type))
+
+    assert tuple(ws.cst.vois[1].color) == (4, 5, 6)
+    assert ws.cst.vois[1].voi_type == new_type
+    assert (ws.cst.vois[0].voi_type, tuple(ws.cst.vois[0].color)) == first_before
+
+
+def test_deferred_structure_edit_is_dropped_when_the_structure_set_changed(
+    qapp, test_data_photons
+):
+    import copy
+
+    from pyRadPlan.app import Operation
+    from pyRadPlan.cst import recreate_voi
+
+    ct, cst, result = test_data_photons
+    ws = _make_workspace(ct, cst)
+    widget = ViewingWidget(ws)
+    session = ws.session
+    operation = Operation("calc", "Calculating", lambda: None, lambda value: None)
+    session.begin(operation)
+    voi = ws.cst.vois[0]
+    new_type = next(t for t in ("TARGET", "OAR") if t != voi.voi_type)
+    widget.vois_widget.voi_replaced.emit(voi, recreate_voi(voi, voi_type=new_type))
+
+    other = copy.deepcopy(cst)
+    original_type = other.vois[0].voi_type
+    ws.set_many(cst=other)
+    session.finish(operation, None)
+
+    assert ws.cst is other
+    assert ws.cst.vois[0].voi_type == original_type

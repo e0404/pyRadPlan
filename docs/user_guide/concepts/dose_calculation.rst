@@ -150,7 +150,7 @@ Reconstructing dose on the CT grid
 
     # Compute dose for optimized fluence and resample to CT grid
     result = dij.compute_result_ct_grid(fluence)
-    physical_dose_ct = result["physical_dose"]  # SimpleITK image on the CT grid
+    physical_dose_ct = result.physical_dose.values  # SimpleITK image on the CT grid
 
     # Inspect which quantities are available
     print(dij.quantities)   # e.g. ['physical_dose', 'alpha_dose', 'sqrt_beta_dose']

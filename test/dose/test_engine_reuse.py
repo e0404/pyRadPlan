@@ -7,7 +7,7 @@ from pyRadPlan.dose.engines import get_engine
 
 
 def _dose(result):
-    return sitk.GetArrayFromImage(result["physical_dose"])
+    return sitk.GetArrayFromImage(result["physical_dose"].values)
 
 
 def test_reused_engine_repeats_forward_dose(test_data_photons):

@@ -49,19 +49,18 @@ def test_group_result_keys_joins_beams_with_their_total():
     ]
 
 
-def test_group_result_keys_splits_snapshot_tags():
+def test_group_result_keys_splits_results():
     current = ["physical_dose", "physical_dose_beam 0", "alpha", "physical_dose_var"]
-    saved = [f"{k}_protons_30fx" for k in ("physical_dose", "alpha", "physical_dose_var")]
-    saved.append("physical_dose_beam_protons_30fx 0")
+    saved = [f"protons_30fx/{k}" for k in current]
     groups = group_result_keys(current + saved)
 
     by_label = {g.label: g for g in groups}
     assert by_label["dose (protons_30fx)"].keys == (
-        "physical_dose_protons_30fx",
-        "physical_dose_beam_protons_30fx 0",
+        "protons_30fx/physical_dose",
+        "protons_30fx/physical_dose_beam 0",
     )
+    assert by_label["dose (protons_30fx)"].identifier == "protons_30fx/physical_dose"
     assert by_label["alpha (protons_30fx)"].tag == "protons_30fx"
-    # a single suffixed entry is not mistaken for a snapshot tag
     assert "physical_dose_var" in by_label
     assert "physical_dose_var (protons_30fx)" in by_label
 
@@ -88,14 +87,9 @@ def test_group_result_keys_lists_scenarios_after_beams():
     assert groups[0].keys_of("beam") == ("physical_dose_beam 0",)
 
 
-def test_scenario_suffix_is_not_a_snapshot_tag():
+def test_results_keep_their_scenarios_apart():
     current = ["physical_dose", "physical_dose_scenario 0", "rbe_x_dose", "rbe_x_dose_scenario 0"]
-    saved = [
-        "physical_dose_saved",
-        "physical_dose_scenario_saved 0",
-        "rbe_x_dose_saved",
-        "rbe_x_dose_scenario_saved 0",
-    ]
+    saved = [f"saved/{key}" for key in current]
     groups = {(g.base, g.tag): g for g in group_result_keys(current + saved)}
     assert set(groups) == {
         ("physical_dose", ""),
@@ -104,10 +98,10 @@ def test_scenario_suffix_is_not_a_snapshot_tag():
         ("rbe_x_dose", "saved"),
     }
     assert groups["physical_dose", "saved"].keys == (
-        "physical_dose_saved",
-        "physical_dose_scenario_saved 0",
+        "saved/physical_dose",
+        "saved/physical_dose_scenario 0",
     )
-    assert result_key_labels(saved)["physical_dose_scenario_saved 0"] == (
+    assert result_key_labels(saved)["saved/physical_dose_scenario 0"] == (
         "dose (saved), scenario 0"
     )
 
@@ -121,23 +115,23 @@ def test_result_key_labels():
     }
 
 
-@pytest.mark.parametrize("tag", ["dose", "x_dose", "dose_beam"])
-def test_snapshot_suffix_does_not_split_live_quantity_names(tag):
+@pytest.mark.parametrize("name", ["dose", "x_dose", "dose_beam", "beam", "scenario"])
+def test_result_names_resembling_quantities_stay_apart(name):
     bases = ["physical_dose", "rbe_x_dose", "alpha_dose", "sqrt_beta_dose"]
     current = [key for base in bases for key in (base, f"{base}_beam 0")]
-    saved = [key for base in bases for key in (f"{base}_{tag}", f"{base}_beam_{tag} 0")]
+    other = [f"{name}/{key}" for key in current]
 
-    groups = {(g.base, g.tag): g for g in group_result_keys(current + saved)}
+    groups = {(g.base, g.tag): g for g in group_result_keys(current + other)}
     assert len(groups) == 2 * len(bases)
     for base in bases:
         assert groups[base, ""].keys == (base, f"{base}_beam 0")
         assert groups[base, ""].label == quantity_display_name(base)
-        assert groups[base, tag].keys == (f"{base}_{tag}", f"{base}_beam_{tag} 0")
-        assert groups[base, tag].label == f"{quantity_display_name(base)} ({tag})"
+        assert groups[base, name].keys == (f"{name}/{base}", f"{name}/{base}_beam 0")
+        assert groups[base, name].label == f"{quantity_display_name(base)} ({name})"
 
 
-def test_live_quantities_do_not_count_as_snapshot_evidence():
-    keys = ["physical_dose", "rbe_x_dose", "physical_dose_dose"]
+def test_suffixed_quantities_are_not_taken_for_results():
+    keys = ["physical_dose", "rbe_x_dose", "physical_dose_dose", "physical_dose_saved"]
     assert all(group.tag == "" for group in group_result_keys(keys))
 
 

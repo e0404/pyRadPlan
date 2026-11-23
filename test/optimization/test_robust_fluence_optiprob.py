@@ -415,7 +415,7 @@ def test_robust_fluence_optimization_end_to_end(proton_case):
         }
     )
     robust_dij = _dij_with(dij, SCALES, _scenario_set())
-    w = fluence_optimization(ct, cst, stf, robust_dij, pln)
+    w = fluence_optimization(ct, cst, stf, robust_dij, pln).fluence
     assert w.shape == (robust_dij.total_num_of_bixels,)
     assert np.all(np.isfinite(w)) and np.all(w >= 0)
     result = robust_dij.get_result_arrays_from_intensity(w, scenario_index=2)

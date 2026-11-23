@@ -11,6 +11,7 @@ from pyRadPlan.cst import validate_cst, StructureSet
 from pyRadPlan.stf import validate_stf
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.dij import validate_dij
+from pyRadPlan.result import PlanResult
 
 from ..base import BaseImporter
 from . import _matfile
@@ -77,29 +78,46 @@ def validate_matrad_patient(mdict: dict[str], remove_matrad_structures: bool = T
 
     result = mdict.get("resultGUI", None)
     if result is not None:
-        # TODO: validation as soon as result structure is implemented
-        patient_dict["result"] = result
-        if remove_matrad_structures:
-            mdict.pop("resultGUI")
+        try:
+            patient_dict["result"] = _validate_matrad_result(result, patient_dict.get("ct"))
+            if remove_matrad_structures:
+                mdict.pop("resultGUI")
+        except ValueError as exc:
+            logger.warning("resultGUI present but could not be validated: %s", exc)
 
     return patient_dict
 
 
-def _result_dose_to_sitk(result: dict, ct: CT) -> Optional[sitk.Image]:
-    """Extract a physical dose cube from a matRad resultGUI dict as a SimpleITK image."""
-    if not isinstance(result, dict):
-        return None
+def _validate_matrad_result(result: Any, ct: Optional[CT] = None) -> PlanResult:
+    """Validate a matRad resultGUI, placing its cubes on the grid of the CT (if any).
 
-    cube = result.get("physicalDose", result.get("physical_dose", None))
-    if cube is None:
-        return None
+    Cubes that do not match the CT grid are dropped, as their order cannot be verified.
+    """
+    if ct is None:
+        return PlanResult.from_matrad(result)
+    # matRad stores its result cubes on the CT grid, but without any geometry.
+    reference = ct.cube_hu
+    if reference.GetDimension() == 4:
+        reference = reference[:, :, :, 0]
+    if isinstance(result, dict):
+        # matRad cubes are (y, x, z)
+        nx, ny, nz = reference.GetSize()
+        mismatching = [
+            key
+            for key, value in result.items()
+            if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape != (ny, nx, nz)
+        ]
+        if mismatching:
+            logger.warning("resultGUI fields %s do not match the CT grid, ignored.", mismatching)
+            result = {key: value for key, value in result.items() if key not in mismatching}
+    return PlanResult.from_matrad(result, reference_image=reference)
 
-    cube = np.asarray(cube, dtype=float)
-    # matRad cubes are stored as (y, x, z); SimpleITK expects (z, y, x).
-    dose_image = sitk.GetImageFromArray(np.transpose(cube, (2, 0, 1)))
-    if dose_image.GetSize() == ct.cube_hu.GetSize():
-        dose_image.CopyInformation(ct.cube_hu)
-    return dose_image
+
+def _result_dose_to_sitk(result: Optional[PlanResult]) -> Optional[sitk.Image]:
+    """Extract the physical dose of a plan result as a SimpleITK image."""
+    if result is None or "physical_dose" not in result:
+        return None
+    return result["physical_dose"].values
 
 
 class MatlabImporter(BaseImporter):
@@ -135,21 +153,24 @@ class MatlabImporter(BaseImporter):
         return validate_cst(cst, ct)
 
     def load_dose(self) -> Optional[sitk.Image]:
+        return _result_dose_to_sitk(self.load_result())
+
+    def load_result(self) -> Optional[PlanResult]:
         result = self.mdict.get("resultGUI", None)
         if result is None:
             return None
-        return _result_dose_to_sitk(result, self.load_ct())
+        ct = self.load_ct() if self.mdict.get("ct", None) is not None else None
+        return _validate_matrad_result(result, ct)
 
     def load_data(self) -> dict:
         # Operate on a copy so the cached dictionary is not consumed.
         mdict = dict(self.mdict)
         patient_dict = validate_matrad_patient(mdict, remove_matrad_structures=True)
 
-        result = patient_dict.pop("result", None)
-        if result is not None and "ct" in patient_dict:
-            dose = _result_dose_to_sitk(result, patient_dict["ct"])
-            if dose is not None:
-                patient_dict["dose"] = dose
-            patient_dict["result"] = result
+        # Expose the result's physical dose as "dose" as well, for consumers that
+        # only handle a single image.
+        dose = _result_dose_to_sitk(patient_dict.get("result"))
+        if dose is not None:
+            patient_dict["dose"] = dose
 
         return patient_dict

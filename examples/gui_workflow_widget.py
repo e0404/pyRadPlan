@@ -46,8 +46,7 @@ win.show()
 def _on_changed(keys: list[str]) -> None:
     print(f"workspace changed: {keys}")
     if "result" in keys and ws.has("result"):
-        result = ws.result
-        print(f"  result keys: {[k for k in result if k != 'w']}")
+        print(f"  result quantities: {ws.result.stored_quantities}")
 
 
 ws.workspace_changed.connect(_on_changed)

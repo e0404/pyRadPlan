@@ -195,9 +195,12 @@ the dij.
   full (non-beam) result, a `"<quantity>_scenario"` list with one entry per slot of the set
   (index = flat set index; `None` for derived or unselected scenarios) next to the existing
   `"<quantity>_beam"` lists, which stay nominal-only. `True` selects the computed and alias
-  scenarios. `fluence_optimization` and `calc_dose_forward` are unchanged; the GUI workflow asks
-  for scenarios after optimizing when the dij's set has more than one (a forward recalculation
-  drops the stale per-scenario lists). "beam" and "scenario" are rejected as snapshot names.
+  scenarios. `compute_result_*` return a `PlanResult`, which keeps these lists in
+  `scenario_quantities` (`result.scenario.<quantity>[i]`) with `scenario_labels`.
+  `fluence_optimization(..., scenarios=True)` passes the request on, which the GUI workflow
+  uses when optimizing (a forward recalculation replaces the result, so no stale per-scenario
+  lists remain). Snapshots are results of their
+  own in the workspace and keep their scenarios and labels.
 - Labels: `ScenarioSet.label(i)` / `labels()` (built from `UncertaintyDimension.label(values)`
   of the perturbed dimensions: `"setup (+3.0, 0.0, 0.0) mm"`, `"range +1.0 mm / +3.5 %"`,
   `"phase 1"`, joined by `", "`; `"nominal"`, `"derived"`); `Dij.scenario_labels()` delegates.

@@ -9,6 +9,7 @@ import SimpleITK as sitk
 from pyRadPlan.core import ProgressReporter
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 
 class BaseImporter(ProgressReporter, ABC):
@@ -81,6 +82,10 @@ class BaseImporter(ProgressReporter, ABC):
         """Load and return a dose distribution as a SimpleITK image, if available."""
         return None
 
+    def load_result(self) -> Optional[PlanResult]:
+        """Load and return the plan result (quantities, fluence, ...), if available."""
+        return None
+
     def load_patient(self) -> tuple[CT, StructureSet]:
         """
         Load CT and StructureSet.
@@ -104,8 +109,8 @@ class BaseImporter(ProgressReporter, ABC):
         Returns
         -------
         dict
-            A dictionary that may contain the keys ``"ct"``, ``"cst"`` and
-            ``"dose"``. Missing pieces are simply omitted.
+            A dictionary that may contain the keys ``"ct"``, ``"cst"``,
+            ``"dose"`` and ``"result"``. Missing pieces are simply omitted.
         """
         data = {}
 
@@ -125,5 +130,9 @@ class BaseImporter(ProgressReporter, ABC):
             if dose is not None:
                 data["dose"] = dose
             step.advance()
+
+        result = self.load_result()
+        if result is not None:
+            data["result"] = result
 
         return data
