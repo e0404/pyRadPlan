@@ -25,7 +25,10 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         ]  # {"lateral_cut_off":{"comp_fac": xp.asarray(bixel["kernel"]["lateral_cut_off"]["comp_fac"])}}
 
         lateral = self._lateral_profile(
-            bixel["radial_dist_sq"], bixel.get("lat_dists"), bixel["sigma_ini_sq"], kernels
+            bixel["radial_dist_sq"],
+            bixel.get("lat_dists"),
+            bixel["sigma_ini_sq"] + bixel.get("add_sigma_sq", 0),
+            kernels,
         )
 
         bixel["physical_dose"] = (
