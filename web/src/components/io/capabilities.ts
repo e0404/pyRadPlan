@@ -47,10 +47,10 @@ export function loadAccept(info: AppInfo | null | undefined): string {
   return [...new Set(extensions)].join(",");
 }
 
-/** The structure-set DICOM variant of an export entry (`structure_format` of `export.save`). */
-export function structureFormatOf(format: ExportFormat): "rtstruct" | "seg" | undefined {
+/** The structure-set variant of an export entry (`structure_format` of `export.save`). */
+export function structureFormatOf(format: ExportFormat): "rtstruct" | "seg" | "layers" | undefined {
   const explicit = (format as ExportFormat & { structure_format?: string }).structure_format;
-  if (explicit === "seg" || explicit === "rtstruct") return explicit;
+  if (explicit === "seg" || explicit === "rtstruct" || explicit === "layers") return explicit;
   if (format.format !== "dcm" || format.object !== "cst") return undefined;
   return /\bseg\b/i.test(format.label) ? "seg" : "rtstruct";
 }
