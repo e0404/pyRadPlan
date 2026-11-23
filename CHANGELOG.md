@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
 - Siddon ray tracer: a ray crossing a voxel corner could visit the voxel twice, because the coinciding plane intersections differ slightly in float32 and left a sliver segment in the same voxel. The voxel could then take its radiological depth from the end of its path instead of the middle, up to half a voxel too deep. Consecutive segments in the same voxel are now merged
 - Range shifters in the particle pencil-beam engines, aligned with matRad: a beamlet with a range shifter raised a `KeyError` (the range shifter was read with camelCase keys), and the range shifter scattering never reached the lateral profile of the Hong engine. The scattering model now uses the base data range in cm instead of mm, scales to helium, carbon and oxygen ions, and is applied in the lateral cut-off as for the dose. Radiation modes without a scattering model (VHEE) warn and only shift the depth
+- Photon machines: the penumbra (`penumbraFWHMatIso`) was read under a misspelled key, so every machine used the default of 5 mm. This did not change the generic photon machine, whose penumbra is 5 mm
 
 ## [0.9.0] - 2026-11-18
 
