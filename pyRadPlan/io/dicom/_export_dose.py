@@ -5,12 +5,14 @@ import warnings
 
 import numpy as np
 import SimpleITK as sitk
-from typing import Optional
+from typing import Optional, Sequence
 
 from pydicom.dataset import Dataset
 from pydicom.tag import Tag
 from pydicom.uid import generate_uid
 from pydicom.valuerep import format_number_as_ds
+
+from pyRadPlan.result import PlanResult
 
 from ._export_dvh import DvhExport, add_dvh_module
 from ._export_common import (
@@ -181,18 +183,8 @@ def export_dose(  # noqa: PLR0913 - DICOM dose attributes
 RESULT_DOSE_TYPES = {"physical_dose": "PHYSICAL", "rbe_x_dose": "EFFECTIVE"}
 
 
-def _is_image_entry(value) -> bool:
-    if isinstance(value, sitk.Image):
-        return True
-    return (
-        isinstance(value, (list, tuple))
-        and any(v is not None for v in value)
-        and all(v is None or isinstance(v, sitk.Image) for v in value)
-    )
-
-
 def export_result(  # noqa: PLR0913 - export options
-    result: dict,
+    result: PlanResult,
     directory: str,
     ctx: ExportContext,
     *,
@@ -200,15 +192,17 @@ def export_result(  # noqa: PLR0913 - export options
     per_beam: bool = False,
     plan_ref: Optional[PlanReference] = None,
     dvh: Optional[DvhExport] = None,
+    skipped_beams: Sequence[int] = (),
 ) -> list[str]:
     """
-    Write the dose quantities of a result dictionary as RTDOSE files.
+    Write the dose quantities of a plan result as RTDOSE files.
 
     Physical dose is written with Dose Type ``PHYSICAL`` and RBE-weighted dose with
     ``EFFECTIVE`` as ``RTDOSE_<quantity>.dcm``. Other quantities (LET, effect, alpha, ...)
-    are skipped with a warning, as are scenario results beyond the nominal scenario (the
-    unsuffixed entries). With ``per_beam``, the ``<quantity>_beam`` lists are written as
-    ``RTDOSE_<quantity>_beam<N>.dcm`` with Dose Summation Type ``BEAM``. With ``dvh``, every
+    are skipped with a warning, as are the scenarios of ``result.scenario_quantities``
+    beyond the nominal one. With ``per_beam``, the per-beam quantities are written as
+    ``RTDOSE_<quantity>_beam<N>.dcm`` with Dose Summation Type ``BEAM``, except for the
+    beams in ``skipped_beams`` (0-based, left out of the plan export). With ``dvh``, every
     file also gets the RT DVH module.
 
     Returns
@@ -216,21 +210,17 @@ def export_result(  # noqa: PLR0913 - export options
     list of str
         The paths of the written files.
     """
-    names = {k: v for k, v in result.items() if _is_image_entry(v)}
-    scenario_keys = [k for k in names if k.endswith("_scenario")]
-    skipped = sorted(
-        {
-            k.removesuffix("_scenario").removesuffix("_beam")
-            for k in names
-            if k.removesuffix("_scenario").removesuffix("_beam") not in RESULT_DOSE_TYPES
-        }
-    )
+    names = {*result.quantities, *result.beam_quantities, *result.scenario_quantities}
+    skipped = sorted(name for name in names if name not in RESULT_DOSE_TYPES)
     if skipped:
         warnings.warn(
             f"DICOM RTDOSE export skips non-dose quantities: {', '.join(skipped)}.",
             stacklevel=3,
         )
-    if any(sum(v is not None for v in names[k]) > 1 for k in scenario_keys):
+    if any(
+        sum(v is not None for v in result.scenario_quantities.get(name, ())) > 1
+        for name in RESULT_DOSE_TYPES
+    ):
         warnings.warn(
             "DICOM RTDOSE export writes the nominal scenario only; "
             "the other scenarios of the result are skipped.",
@@ -240,8 +230,9 @@ def export_result(  # noqa: PLR0913 - export options
     written = []
     series_number = 2
     for quantity, dose_type in RESULT_DOSE_TYPES.items():
-        image = names.get(quantity)
-        if image is not None:
+        distribution = result.quantities.get(quantity)
+        if distribution is not None:
+            image = distribution.values
             written.append(
                 export_dose(
                     image,
@@ -260,9 +251,10 @@ def export_result(  # noqa: PLR0913 - export options
     if per_beam:
         found = False
         for quantity, dose_type in RESULT_DOSE_TYPES.items():
-            for index, image in enumerate(names.get(f"{quantity}_beam", ())):
-                if image is None:
+            for index, distribution in enumerate(result.beam_quantities.get(quantity, ())):
+                if index in skipped_beams:
                     continue
+                image = distribution.values
                 found = True
                 number = plan_ref.beam_number(index) if plan_ref else index + 1
                 written.append(

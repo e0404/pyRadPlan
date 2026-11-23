@@ -160,8 +160,11 @@ class VisualizationWidget(QWidget):
         """Update the selectable result keys, grouped by quantity and beam."""
         self.quantity_selector.set_keys(quantities, active)
 
-    def set_scenario_labels(self, labels: list[str]) -> None:
-        """Label the scenario components of the quantity selector by flat scenario index."""
+    def set_scenario_labels(self, labels: list[str] | dict[str, list[str]]) -> None:
+        """Label the scenario components of the quantity selector by flat scenario index.
+
+        A mapping gives the labels of each result by its tag.
+        """
         self.quantity_selector.set_scenario_labels(labels)
 
     def _on_set_isolines(self) -> None:

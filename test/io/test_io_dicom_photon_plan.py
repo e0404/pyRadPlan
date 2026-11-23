@@ -311,7 +311,7 @@ def _stf_world_center(stf_beam):
 
 def _lateral_dose_center(result, stf_beam, depth_window=12.0):
     """Dose-weighted lateral center (world) of the dose within a slab around the iso plane."""
-    dose = result["physical_dose"]
+    dose = result["physical_dose"].values
     arr = sitk.GetArrayFromImage(dose)
     sp, origin = np.array(dose.GetSpacing()), np.array(dose.GetOrigin())
     k, j, i = np.indices(arr.shape)
@@ -442,7 +442,7 @@ def test_beam_without_weight_is_skipped(tmp_path, imrt_case):
             cst=cst,
             stf=stf,
             pln=pln,
-            result={**result, "w": w},
+            result=result.model_copy(update={"fluence": np.asarray(w)}),
             options={"per_beam_doses": True},
         )
     plan = pydicom.dcmread(out / "RTPLAN.dcm")
@@ -532,7 +532,7 @@ def test_imrt_plan_validates(tmp_path, dicom_standard, imrt_case):
             cst=cst,
             stf=stf,
             pln=pln,
-            result={**result, "w": w},
+            result=result.model_copy(update={"fluence": np.asarray(w)}),
             options={"per_beam_doses": True},
         )
     assert _validation_errors(dicom_standard, out / "RTPLAN.dcm") == []

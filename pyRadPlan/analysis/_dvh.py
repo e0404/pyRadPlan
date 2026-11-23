@@ -15,11 +15,11 @@ from numpydantic import NDArray, Shape
 import pint
 import numpy as np
 import SimpleITK as sitk
-import matplotlib.pyplot as plt
 
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core._units import ureg
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import QuantityDistribution
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +298,7 @@ class DVH(PyRadPlanBaseModel):
     @classmethod
     def compute(
         cls,
-        quantity: Union[sitk.Image, NDArray],
+        quantity: Union[QuantityDistribution, sitk.Image, NDArray],
         mask: Optional[Union[sitk.Image, NDArray]] = None,
         num_points: int = 1000,
         max_value: Optional[float] = None,
@@ -310,8 +310,8 @@ class DVH(PyRadPlanBaseModel):
 
         Parameters
         ----------
-        quantity : Union[sitk.Image, NDArray]
-            The dose-like quantity to update the DVH with. Can be a SimpleITK image or a numpy array.
+        quantity : Union[QuantityDistribution, sitk.Image, NDArray]
+            The dose-like quantity to update the DVH with, e.g. ``result.physical_dose``.
         mask : Optional[Union[sitk.Image, NDArray]], optional
             The mask to apply to the dose quantity. If None, the whole image / array will be used.
             If provided, it must either have the same shape as the quantity.
@@ -335,6 +335,8 @@ class DVH(PyRadPlanBaseModel):
         """
 
         voxel_volume = None
+        if isinstance(quantity, QuantityDistribution):
+            quantity = quantity.values
         if isinstance(quantity, sitk.Image):
             voxel_volume = float(np.prod(quantity.GetSpacing())) / 1000.0
             # Convert SimpleITK image to numpy array
@@ -465,6 +467,8 @@ class DVH(PyRadPlanBaseModel):
             matplotlib.axes.Axes: The axes containing the plot
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots()
 
         # Plot with or without legend
@@ -501,7 +505,7 @@ class DVHCollection(PyRadPlanBaseModel):
     def from_structure_set(
         cls,
         cst: StructureSet,
-        dose: Union[NDArray, sitk.Image],
+        dose: Union[QuantityDistribution, NDArray, sitk.Image],
     ) -> Self:
         """
         Create DVH collection from a structure set.
@@ -510,8 +514,8 @@ class DVHCollection(PyRadPlanBaseModel):
         ----------
         cst : StructureSet
             The structure set containing the VOIs (Volumes of Interest).
-        dose : Union[NDArray, sitk.Image]
-            The dose-like quantity to compute the DVH from. Can be a SimpleITK image or a numpy array.
+        dose : Union[QuantityDistribution, NDArray, sitk.Image]
+            The dose-like quantity to compute the DVH from, e.g. ``result.physical_dose``.
 
         Returns
         -------
@@ -649,6 +653,8 @@ class DVHCollection(PyRadPlanBaseModel):
             matplotlib.axes.Axes: The axes containing the plot
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots()
 
         # Filter DVHs based on structure names if provided

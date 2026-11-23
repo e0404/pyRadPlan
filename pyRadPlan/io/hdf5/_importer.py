@@ -11,6 +11,7 @@ from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.dij import validate_dij
 from pyRadPlan.machines import create_bld
 from pyRadPlan.plan import validate_pln
+from pyRadPlan.result import validate_result
 from pyRadPlan.stf import validate_stf
 
 from ..base import BaseImporter
@@ -30,6 +31,8 @@ _FACTORIES: dict[str, Callable[[Any], Any]] = {
     "pln": _validate_pln,
     "stf": validate_stf,
     "dij": validate_dij,
+    "result": validate_result,
+    "results": lambda tree: {name: validate_result(value) for name, value in tree.items()},
     "tree": lambda tree: tree,
 }
 

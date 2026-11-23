@@ -181,11 +181,10 @@ The script ``examples/utils_ai_agents.py`` shows a complete workflow:
 
     stf = generate_stf(ct, cst, pln)
     dij = calc_dose_influence(ct, cst, stf, pln)
-    fluence = fluence_optimization(ct, cst, stf, dij, pln)
+    result = fluence_optimization(ct, cst, stf, dij, pln)
 
-    result = dij.compute_result_ct_grid(fluence)
-    dvhs = DVHCollection.from_structure_set(cst, result["physical_dose"])
-    plot_slice(ct=ct, cst=cst, overlay=result["physical_dose"])
+    dvhs = DVHCollection.from_structure_set(cst, result.physical_dose)
+    plot_slice(ct=ct, cst=cst, overlay=result.physical_dose)
 
 API reference
 -------------

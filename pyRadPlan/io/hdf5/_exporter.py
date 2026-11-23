@@ -3,6 +3,7 @@
 import json
 import os
 import warnings
+from collections.abc import Mapping
 from typing import Any, ClassVar, Optional
 
 import h5py
@@ -14,6 +15,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.ct import CT
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
+from pyRadPlan.result import PlanResult
 from pyRadPlan.stf import SteeringInformation
 
 from ..base import ANY_OBJECT, BaseExporter
@@ -25,7 +27,17 @@ _MODEL_KINDS = (
     (Plan, "pln"),
     (SteeringInformation, "stf"),
     (Dij, "dij"),
+    (PlanResult, "result"),
 )
+
+
+def _is_result_collection(obj: Any) -> bool:
+    """Whether *obj* is a non-empty mapping of names to plan results (``Workspace.results``)."""
+    return (
+        isinstance(obj, Mapping)
+        and bool(obj)
+        and all(isinstance(k, str) and isinstance(v, PlanResult) for k, v in obj.items())
+    )
 
 
 class Hdf5Exporter(BaseExporter):
@@ -104,6 +116,8 @@ class Hdf5Exporter(BaseExporter):
         if not name or "/" in name:
             return self._skip(f"Skipping object with invalid name {name!r}.")
         kind = next((k for cls, k in _MODEL_KINDS if isinstance(obj, cls)), "tree")
+        if kind == "tree" and _is_result_collection(obj):
+            kind = "results"
         if kind == "tree" and isinstance(obj, PyRadPlanBaseModel):
             return self._skip(
                 f"Skipping {name!r}: {type(obj).__name__} cannot be rebuilt from an HDF5 file."
@@ -113,6 +127,10 @@ class Hdf5Exporter(BaseExporter):
         try:
             if kind == "tree":
                 write_tree(group, obj)
+            elif kind == "results":
+                write_tree(
+                    group, {key: value.model_dump() for key, value in obj.items()}, jsonable=True
+                )
             elif kind == "cst" and ct is not None and (obj.ct_image is ct or obj.ct_image == ct):
                 # the reference CT is stored once, in the "ct" group
                 group.attrs["ct_ref"] = "ct"

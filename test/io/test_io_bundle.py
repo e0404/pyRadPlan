@@ -31,11 +31,11 @@ def workspace():
         dij = calc_dose_influence(ct, cst, stf, pln)
         weights = np.ones(dij.total_num_of_bixels)
         result = calc_dose_forward(ct, cst, stf, pln, weights)
-    result["w"] = weights
+    result.fluence = weights
     return {
         "ct": ct,
         "cst": cst,
-        "dose": result["physical_dose"],
+        "dose": result["physical_dose"].values,
         "pln": pln,
         "stf": stf,
         "dij": dij,
@@ -103,12 +103,10 @@ def test_image_formats_store_exactly_the_declared_kinds(workspace, tmp_path, fmt
 
 def test_mat_stores_every_kind(workspace, tmp_path):
     path = tmp_path / "ws.mat"
-    # result images cannot be written to a .mat file; matRad results hold arrays
-    objects = {**workspace, "result": {"w": workspace["weights"], "d": np.ones((2, 2, 2))}}
-    assert _save_all(objects, path, "mat") == set()
+    assert _save_all(workspace, path, "mat") == set()
     keys = set(pymatreader.read_mat(str(path)))
-    # the dose is stored as matRad's resultGUI
-    assert {"ct", "cst", "resultGUI", "pln", "stf", "dij", "result", "weights"} <= keys
+    # the result (and the dose) are stored as matRad's resultGUI
+    assert {"ct", "cst", "resultGUI", "pln", "stf", "dij", "weights"} <= keys
 
 
 def test_pickle_stores_every_kind(workspace, tmp_path):
@@ -271,7 +269,8 @@ def test_bundle_hdf5_roundtrip(workspace, tmp_path):
     assert isinstance(loaded.dose, sitk.Image)
     np.testing.assert_array_equal(loaded.weights, bundle.weights)
     assert (loaded.dij.physical_dose[0] != bundle.dij.physical_dose[0]).nnz == 0
-    assert set(loaded.result) == set(bundle.result)
+    assert loaded.result.stored_quantities == bundle.result.stored_quantities
+    np.testing.assert_array_equal(loaded.result.fluence, bundle.result.fluence)
     assert loaded.extras == {"saved_result_tags": ["saved"], "note": "x"}
 
 

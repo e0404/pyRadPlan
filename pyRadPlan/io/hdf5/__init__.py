@@ -9,11 +9,14 @@ File layout (``format_version`` 1)::
                             pyradplan_version, contents = JSON list of the group names in
                             the order they were saved
     /<name>/                one group per object (ct, cst, pln, stf, dij, result, dose, ...)
-                            attribute kind = "ct" | "cst" | "pln" | "stf" | "dij" | "tree"
+                            attribute kind = "ct" | "cst" | "pln" | "stf" | "dij" | "result"
+                            | "results" | "tree"
                             attribute ct_ref = "ct" on a cst whose reference CT is the saved
                             ct; its tree then omits ct_image
     /<name>/tree            UTF-8 JSON string dataset: the python-mode dump of the object
-                            (kind ct, cst, pln, stf, dij) or the object itself (kind tree:
+                            (kind ct, cst, pln, stf, dij, result; kind results: a mapping of
+                            names to the dumps of plan results, as ``Workspace.results`` of
+                            :mod:`pyRadPlan.app`) or the object itself (kind tree:
                             dicts, lists, strings, numbers, arrays, images) with every array
                             leaf replaced by a tagged dictionary
     /<name>/arrays/<n>      the array data of the larger leaves; sparse matrices are a subgroup
@@ -37,8 +40,8 @@ Numeric arrays below 4 KiB are stored inline in the tree, in the format of
 a dataset costs about 1.5 KiB of file and some milliseconds regardless of its size; a stf has
 four tiny arrays per ray. The reader accepts both forms, so files written without inline
 arrays load unchanged. Datasets of at least 64 KiB are stored chunked with shuffle and gzip
-level 1, smaller ones uncompressed. The kinds ct, cst, pln, stf and dij are rebuilt with the
-matching ``validate_*`` factory, so the loaded objects equal the saved ones.
+level 1, smaller ones uncompressed. The kinds ct, cst, pln, stf, dij and result (and every
+entry of results) are rebuilt with the matching ``validate_*`` factory, so the loaded objects equal the saved ones.
 """
 
 from .._factory import register_importer, register_exporter

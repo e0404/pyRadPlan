@@ -10,6 +10,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.ct import CT
 from pyRadPlan.dij import Dij
 from pyRadPlan.plan import Plan
+from pyRadPlan.result import PlanResult
 from pyRadPlan.stf import SteeringInformation
 
 
@@ -34,8 +35,8 @@ class ExportBundle:
         The steering information.
     dij : Dij, optional
         The dose influence matrix.
-    result : dict, optional
-        A result dictionary, e.g. of a dose calculation or optimization.
+    result : PlanResult, optional
+        A plan result, e.g. of a dose calculation or optimization.
     weights : array_like, optional
         Fluence or spot weights.
     dose : sitk.Image, optional
@@ -49,7 +50,7 @@ class ExportBundle:
     pln: Optional[Plan] = None
     stf: Optional[SteeringInformation] = None
     dij: Optional[Dij] = None
-    result: Optional[dict] = None
+    result: Optional[PlanResult] = None
     weights: Optional[Any] = None
     dose: Optional[sitk.Image] = None
     extras: dict[str, Any] = field(default_factory=dict)

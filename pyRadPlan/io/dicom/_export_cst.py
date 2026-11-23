@@ -4,7 +4,6 @@ import os
 from typing import Optional
 
 import numpy as np
-import contourpy
 import SimpleITK as sitk
 from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
@@ -49,6 +48,8 @@ def _slice_contours(mask_slice: np.ndarray) -> list:
     """Return closed contour polygons (index coordinates) for one mask slice."""
     if not mask_slice.any():
         return []
+    import contourpy  # noqa: PLC0415 - comes with matplotlib, which is optional at runtime
+
     padded = np.pad(mask_slice.astype(float), 1)
     gen = contourpy.contour_generator(z=padded, line_type=contourpy.LineType.Separate)
     return [line - 1.0 for line in gen.lines(0.5) if len(line) >= 3]

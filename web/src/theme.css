@@ -1,0 +1,163 @@
+/*
+ * Dark scheme (Qt Fusion dark fallback palette of menus/_view.py). The variables of styles.css are
+ * redefined; the second block overrides the few colours styles.css spells out as literals, so the
+ * components of the other packages keep working without changes.
+ */
+:root[data-theme="dark"] {
+  --window: #353535;
+  --panel: #3a3a3a;
+  --base: #2a2a2a;
+  --text: #f0f0f0;
+  --text-dim: #a0a0a0;
+  --disabled: #7f7f7f;
+  --border: #555555;
+  --border-strong: #8a8a8a;
+  --accent: #2a82da;
+  --accent-soft: #1f4f80;
+  --ok: #2ecc71;
+  --stale: #e8903a;
+  --missing: #9a9a9a;
+  --danger: #ff6b5a;
+  --link: #56a0e8;
+  --alt-base: #424242;
+  --hover: #484848;
+  --edge: #4a4a4a;
+  --button: #404040;
+  --button-hover: #4a4a4a;
+  --button-active: #363636;
+  --button-border: #5a5a5a;
+  --button-border-bottom: #2b2b2b;
+  --button-disabled: #333333;
+  --button-disabled-border: #444444;
+  --input-border: #5a5a5a;
+  --input-disabled: #303030;
+  --track: #484848;
+  --header: #3c3c3c;
+  --row-line: #383838;
+  --warn-text: #e8a43a;
+  color-scheme: dark;
+}
+
+:root:not([data-theme="dark"]) {
+  --link: #005fb8;
+  --alt-base: #f7f7f7;
+  --hover: #e0e0e0;
+  --edge: #e0e0e0;
+  --button: #fdfdfd;
+  --button-hover: #f6f6f6;
+  --button-active: #ebebeb;
+  --button-border: #d1d1d1;
+  --button-border-bottom: #b5b5b5;
+  --button-disabled: #f9f9f9;
+  --button-disabled-border: #e3e3e3;
+  --input-border: #d1d1d1;
+  --input-disabled: #f6f6f6;
+  --track: #e2e2e2;
+  --header: #f3f3f3;
+  --row-line: #f0f0f0;
+  --warn-text: #b9770e;
+}
+
+:root[data-theme="dark"] .menubar {
+  border-bottom-color: var(--edge);
+}
+
+:root[data-theme="dark"] .menubar .menu > button:hover,
+:root[data-theme="dark"] .menubar .menu.open > button {
+  background: var(--hover);
+}
+
+:root[data-theme="dark"] .menu-popup {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="dark"] .menu-popup .sep {
+  background: var(--edge);
+}
+
+:root[data-theme="dark"] .statusbar {
+  border-top-color: var(--edge);
+}
+
+:root[data-theme="dark"] .btn {
+  background: var(--button);
+  border-color: var(--button-border);
+  border-bottom-color: var(--button-border-bottom);
+}
+
+:root[data-theme="dark"] .btn:hover:not(:disabled) {
+  background: var(--button-hover);
+}
+
+:root[data-theme="dark"] .btn:active:not(:disabled) {
+  background: var(--button-active);
+}
+
+:root[data-theme="dark"] .btn:disabled {
+  background: var(--button-disabled);
+  border-color: var(--button-disabled-border);
+}
+
+:root[data-theme="dark"] .btn.primary {
+  background: var(--accent);
+  border-color: #1d68b3;
+  color: #fff;
+}
+
+:root[data-theme="dark"] .btn.primary:hover:not(:disabled) {
+  background: #3a92ea;
+}
+
+:root[data-theme="dark"] .btn.checked {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+:root[data-theme="dark"] input[type="text"],
+:root[data-theme="dark"] input[type="number"],
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  background: var(--base);
+  border-color: var(--input-border);
+  border-bottom-color: var(--border-strong);
+}
+
+:root[data-theme="dark"] input:disabled,
+:root[data-theme="dark"] select:disabled {
+  background: var(--input-disabled);
+}
+
+:root[data-theme="dark"] .progress {
+  background: var(--track);
+}
+
+:root[data-theme="dark"] table.qt th {
+  background: var(--header);
+  border-right-color: var(--edge);
+  border-bottom-color: var(--border);
+}
+
+:root[data-theme="dark"] table.qt td {
+  border-bottom-color: var(--row-line);
+}
+
+:root[data-theme="dark"] .log .warning {
+  color: var(--warn-text);
+}
+
+:root[data-theme="dark"] .dialog {
+  border-color: var(--border-strong);
+}
+
+:root[data-theme="dark"] .dialog .title,
+:root[data-theme="dark"] .dialog .buttons {
+  border-color: var(--edge);
+}
+
+:root[data-theme="dark"] .info-widget a {
+  color: var(--link);
+}
+
+:root[data-theme="dark"] .swatch {
+  border-color: #bbb;
+}

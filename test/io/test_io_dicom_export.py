@@ -802,16 +802,17 @@ def test_save_data_result_and_pln(photon_data, photon_result, tmp_path, caplog):
     ds = _read(out / "RTDOSE_physical_dose.dcm")
     assert ds.DoseSummationType == expected
     assert ds.FrameOfReferenceUID == _read(next(out.glob("CT_*.dcm"))).FrameOfReferenceUID
-    n_beams = len(photon_result["physical_dose_beam"])
+    n_beams = len(photon_result.beam_quantities["physical_dose"])
     assert len(list(out.glob("RTDOSE_physical_dose_beam*.dcm"))) == n_beams
     back = DicomImporter(out).load_dose()
-    ref = sitk.GetArrayFromImage(photon_result["physical_dose"])
+    ref = sitk.GetArrayFromImage(photon_result["physical_dose"].values)
     np.testing.assert_allclose(sitk.GetArrayFromImage(back), ref, atol=ref.max() * 1e-6)
 
 
 def test_other_exporters_unaffected_by_result_and_pln(photon_data, tmp_path):
     pln, _ct, _cst, _stf = photon_data
-    path = save_data(file_name=tmp_path / "res.mat", result={"physical_dose": 1.0}, pln=pln)
+    result = {"physical_dose": _fake_result()["physical_dose"]}
+    path = save_data(file_name=tmp_path / "res.mat", result=result, pln=pln)
     assert Path(path).exists()
 
 

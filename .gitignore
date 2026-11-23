@@ -188,3 +188,7 @@ pyRadPlan/optimization/solvers/IpoptMUMPS
 token.txt
 
 Datasets/
+
+# Assembled GitHub Pages site and release checkout (web/scripts/assemble_pages.mjs)
+_site/
+_pages/

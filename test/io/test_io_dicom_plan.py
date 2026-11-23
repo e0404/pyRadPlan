@@ -756,7 +756,7 @@ def test_forward_dose_follows_spot_and_beam(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = calc_dose_forward(ct, cst, out["stf"], pln, out["weights"])
-    dose = result["physical_dose"]
+    dose = result["physical_dose"].values
     arr = np.asarray(__import__("SimpleITK").GetArrayFromImage(dose))
     assert arr.max() > 0
 

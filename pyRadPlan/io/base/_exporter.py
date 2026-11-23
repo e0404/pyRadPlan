@@ -8,6 +8,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 #: Entry of :attr:`BaseExporter.supports` for exporters that store any named object.
 ANY_OBJECT = "*"
@@ -47,6 +48,21 @@ class BaseExporter(ABC):
     def __init__(self, path: Union[str, os.PathLike]):
         self.path = os.fspath(path)
 
+    @staticmethod
+    def resolve_dose(
+        dose: Optional[sitk.Image] = None, result: Optional[PlanResult] = None
+    ) -> Optional[sitk.Image]:
+        """Return the dose to write, falling back to the physical dose of *result*.
+
+        Used by formats that store a single dose image rather than a full result,
+        so that passing ``result=`` does not silently write nothing.
+        """
+        if dose is not None:
+            return dose
+        if result is not None and "physical_dose" in result:
+            return result["physical_dose"].values
+        return None
+
     @abstractmethod
     def save(
         self,
@@ -54,6 +70,7 @@ class BaseExporter(ABC):
         ct: Optional[CT] = None,
         cst: Optional[StructureSet] = None,
         dose: Optional[sitk.Image] = None,
+        result: Optional[PlanResult] = None,
         **extra,
     ) -> None:
         """
@@ -67,6 +84,9 @@ class BaseExporter(ABC):
             The StructureSet to export.
         dose : sitk.Image, optional
             A dose distribution to export.
+        result : PlanResult, optional
+            A plan result to export. Exporters that cannot store a full result
+            ignore it (a bare dose can be passed via *dose* instead).
         **extra
             Additional named objects an exporter may understand.
         """

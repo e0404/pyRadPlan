@@ -621,11 +621,11 @@ class StructureSet(PyRadPlanBaseModel):
             The resampled StructureSet.
         """
 
-        new_model = self.model_dump()
-
-        if new_model["ct_image"] != new_ct:
-            new_model["ct_image"] = new_ct
-            new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
+        # No model_dump here: it would evaluate every computed field (voxel indices, shape
+        # statistics) of every VOI on the old grid, only to discard them.
+        new_model = {name: getattr(self, name) for name in type(self).model_fields}
+        new_model["ct_image"] = new_ct
+        new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
         return self.model_validate(new_model)
 
     @staticmethod

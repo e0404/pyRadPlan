@@ -1,0 +1,7 @@
+# Inherits the project configuration; the shim mirrors SimpleITK's CamelCase API.
+extend = "../../pyproject.toml"
+
+[lint.per-file-ignores]
+"shims/SimpleITK/*.py" = ["N802", "N803", "N806", "N816", "D101", "D102", "D103", "D105", "D107"]
+"tests/*.py" = ["D", "N802", "N803", "PLC0415"]
+"tools/*.py" = ["E402"]

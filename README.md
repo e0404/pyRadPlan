@@ -80,11 +80,8 @@ stf = generate_stf(ct, cst, pln)
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# Fluence Optimization (objectives loaded from "cst")
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+# Fluence Optimization (objectives loaded from "cst"), returns the result on the CT grid
+result = fluence_optimization(ct, cst, stf, dij, pln)
 ```
 
 This script uses the top-level API exposed when importing pyRadPlan. The top-level functions are designed to take the main data structures as input and configure the corresponding workflow step via the `Plan` using the attribute dictionaries `pln.prop*`:

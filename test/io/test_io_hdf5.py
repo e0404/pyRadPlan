@@ -17,6 +17,7 @@ from pyRadPlan.io import Hdf5Handler, load_data, save_data
 from pyRadPlan.io._factory import detect_format, is_container_format
 from pyRadPlan.io.hdf5._codec import COMPRESSION_THRESHOLD, INLINE_THRESHOLD
 from pyRadPlan.machines import create_bld
+from pyRadPlan.result import validate_result
 
 
 def assert_same(a, b, path="obj"):
@@ -85,8 +86,8 @@ def ion_workspace(tg119):
     dij = calc_dose_influence(ct, cst, stf, pln)
     weights = np.ones(dij.total_num_of_bixels)
     result = calc_dose_forward(ct, cst, stf, pln, weights)
-    result["w"] = weights
-    result["per_scenario"] = [[result["physical_dose"]], [None]]
+    result.fluence = weights
+    result.add_scenario_quantity("physical_dose", [result.quantities["physical_dose"], None])
     return {
         "ct": ct,
         "cst": cst,
@@ -97,6 +98,25 @@ def ion_workspace(tg119):
         "weights": weights,
         "saved_result_tags": ["a", "b"],
     }
+
+
+def test_named_results_roundtrip(tmp_path, ion_workspace):
+    result = ion_workspace["result"]
+    measured = validate_result({"physical_dose": result.physical_dose.values * 2.0})
+    out = tmp_path / "results.h5"
+    save_data(
+        file_name=str(out),
+        ct=ion_workspace["ct"],
+        results={"current": result, "measured": measured},
+        active_result="current",
+    )
+    with h5py.File(out) as fh:
+        assert fh["results"].attrs["kind"] == "results"
+    data = load_data(out)
+    assert list(data["results"]) == ["current", "measured"]
+    assert data["results"]["current"] == result
+    assert data["results"]["measured"] == measured
+    assert data["active_result"] == "current"
 
 
 def test_factory_knows_hdf5(tmp_path):
@@ -115,15 +135,15 @@ def test_full_ion_workspace_roundtrip(tmp_path, ion_workspace):
         assert fh.attrs["pyradplan_format"] == "workspace"
         assert fh.attrs["format_version"] == 1
         assert fh["dij"].attrs["kind"] == "dij"
-        assert fh["result"].attrs["kind"] == "tree"
+        assert fh["result"].attrs["kind"] == "result"
         assert fh["dij/tree"].dtype.kind == "O"
         assert fh["cst"].attrs["ct_ref"] == "ct"
 
     data = load_data(out)
-    assert list(data) == list(ion_workspace)
+    assert set(data) == set(ion_workspace)
     for key, value in ion_workspace.items():
         assert_same(data[key], value, key)
-    assert isinstance(data["result"]["per_scenario"][1][0], type(None))
+    assert data["result"].scenario_quantities["physical_dose"][1] is None
     assert sp.issparse(data["dij"].physical_dose.flat[0])
     assert isinstance(data["ct"].dicom_info, DicomInfo)
     assert data["cst"].ct_image is data["ct"]

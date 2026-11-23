@@ -10,6 +10,7 @@ import SimpleITK as sitk
 from pyRadPlan.core import BaseDataFile, get_base_data_kind, list_base_data
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult, validate_result
 
 from .base import ANY_OBJECT
 from .matlab import validate_matrad_patient
@@ -189,7 +190,9 @@ def load_data(path: os.PathLike) -> dict:
     return importer.load_data()
 
 
-def _collect_objects(data, ct, cst, dose, extra) -> dict:
+def _collect_objects(  # noqa: PLR0913 - mirrors save_data's convenience arguments
+    data, ct, cst, dose, result, extra
+) -> dict:
     """Gather the named objects to save into a single dict, leaving out ``None`` values."""
     objects: dict = {}
     if data is not None:
@@ -198,20 +201,31 @@ def _collect_objects(data, ct, cst, dose, extra) -> dict:
         elif not isinstance(data, dict):
             raise TypeError("'data' must be a dict of named objects or an ExportBundle.")
         objects.update({k: v for k, v in data.items() if v is not None})
-    for key, value in (("ct", ct), ("cst", cst), ("dose", dose)):
+    for key, value in (("ct", ct), ("cst", cst), ("dose", dose), ("result", result)):
         if value is not None:
             objects[key] = value
     objects.update({k: v for k, v in extra.items() if v is not None})
     if not objects:
-        raise ValueError("Nothing to save: provide ct, cst, dose, extra objects or a data dict.")
+        raise ValueError(
+            "Nothing to save: provide ct, cst, dose, result, extra objects or a data dict."
+        )
     return objects
 
 
 def _split_supported(objects: dict, fmt: str) -> dict:
-    """Keep the objects the exporter of ``fmt`` stores and warn once about the others."""
+    """Keep the objects the exporter of ``fmt`` stores and warn once about the others.
+
+    A format that stores a dose but no result writes the physical dose of the result.
+    """
     supports = get_exporter(fmt).supports
     if ANY_OBJECT in supports:
         return objects
+    result = objects.get("result")
+    if result is not None and "result" not in supports and "dose" in supports:
+        result = validate_result(result)
+        if objects.get("dose") is None and "physical_dose" in result:
+            objects = {k: v for k, v in objects.items() if k != "result"}
+            objects["dose"] = result["physical_dose"].values
     kept = {k: v for k, v in objects.items() if k in supports}
     dropped = [k for k in objects if k not in supports]
     if dropped:
@@ -249,6 +263,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
     ct: Optional[CT] = None,
     cst: Optional[StructureSet] = None,
     dose: Optional[sitk.Image] = None,
+    result: Optional[PlanResult] = None,
     exporter_options: Optional[dict] = None,
     **extra,
 ) -> Union[str, list[str]]:
@@ -273,6 +288,9 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         Convenience keyword arguments for the most common objects.
     dose : sitk.Image, optional
         A dose distribution to save.
+    result : PlanResult, optional
+        A plan result to save. Formats that store only a single dose image fall
+        back to its physical dose; DICOM writes its dose quantities as RTDOSE files.
     exporter_options : dict, optional
         Keyword arguments forwarded to the exporter's constructor, e.g.
         ``{"structure_format": "seg", "anonymize": True}`` for DICOM. DICOM refuses to
@@ -282,8 +300,8 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         directory (e.g. ``{"num_histories": 1e6}``).
     **extra
         Further named objects passed through to the exporter. The DICOM exporter
-        consumes ``result`` (a result dictionary, exported as RTDOSE files) and ``pln``
-        (selects the Dose Summation Type from its ``dose_convention``).
+        consumes ``pln`` (selects the Dose Summation Type from its ``dose_convention``),
+        ``stf`` and ``weights`` (RT (Ion) Plan; the weights default to ``result.fluence``).
 
     Returns
     -------
@@ -297,7 +315,7 @@ def save_data(  # noqa: PLR0913 - convenience keyword arguments are intentional
         :attr:`BaseExporter.supports`); only the others are saved. If none is left,
         a :class:`ValueError` is raised.
     """
-    objects = _collect_objects(data, ct, cst, dose, extra)
+    objects = _collect_objects(data, ct, cst, dose, result, extra)
     fmt = _resolve_format(file_name, format)
     objects = _split_supported(objects, fmt)
 

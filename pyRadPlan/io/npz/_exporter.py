@@ -8,6 +8,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult
 
 from ..base import BaseExporter
 from ._serialize import FORMAT_VERSION, image_to_array_geom
@@ -28,8 +29,11 @@ class NpzExporter(BaseExporter):
         ct: Optional[CT] = None,
         cst: Optional[StructureSet] = None,
         dose: Optional[sitk.Image] = None,
+        result: Optional[PlanResult] = None,
         **extra,
     ) -> None:
+        # The archive stores a single dose cube, not a full result.
+        dose = self.resolve_dose(dose, result)
         if ct is None and cst is None and dose is None:
             raise ValueError("Nothing to export: provide at least one of ct, cst, dose.")
 

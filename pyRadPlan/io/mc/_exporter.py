@@ -12,6 +12,7 @@ from pyRadPlan.cst import ExternalVOI, StructureSet
 from pyRadPlan.dose.engines._base_montecarlo import MonteCarloEngineAbstract
 from pyRadPlan.dose.engines import ParticleFredMCEngine, ParticleTOPASMCEngine
 from pyRadPlan.plan import validate_pln
+from pyRadPlan.result import PlanResult, validate_result
 
 from ..base import BaseExporter
 
@@ -55,7 +56,7 @@ class McExporter(BaseExporter):
 
     Notes
     -----
-    Spot weights (``weights=`` or ``result["w"]``) are required: the Monte Carlo inputs
+    Spot weights (``weights=`` or ``result.fluence``) are required: the Monte Carlo inputs
     distribute the histories over the spots according to them. Only ion plans are supported.
     The ``cst`` selects the voxels the dose is scored in; without it, the whole CT is.
     """
@@ -88,16 +89,16 @@ class McExporter(BaseExporter):
         pln: Optional[Any] = None,
         stf: Optional[Any] = None,
         weights: Optional[Any] = None,
-        result: Optional[dict] = None,
+        result: Optional[PlanResult] = None,
         **extra,
     ) -> None:
         if ct is None or pln is None or stf is None:
             raise ValueError(f"The {self.format} export needs ct, pln and stf.")
         if weights is None and result is not None:
-            weights = result.get("w")
+            weights = validate_result(result).fluence
         if weights is None:
             raise ValueError(
-                f"The {self.format} export needs spot weights (weights= or result['w']) to "
+                f"The {self.format} export needs spot weights (weights= or result.fluence) to "
                 "distribute the histories over the spots."
             )
 

@@ -24,6 +24,7 @@ from pyRadPlan.ct import CT, DicomInfo, validate_ct
 from pyRadPlan.dij import validate_dij
 from pyRadPlan.machines import create_bld
 from pyRadPlan.plan import IonPlan, validate_pln
+from pyRadPlan.result import validate_result
 from pyRadPlan.stf import validate_stf
 
 
@@ -484,10 +485,11 @@ def test_forward_result_roundtrip(tg119):
     pln.prop_dose_calc["dose_grid"] = {"resolution": {"x": 8.0, "y": 8.0, "z": 8.0}}
     stf = generate_stf(ct, cst, pln)
     result = calc_dose_forward(ct, cst, stf, pln)
-    out = decode_tree(json_roundtrip(encode_tree(result)))
-    assert out.keys() == result.keys()
-    for key, value in result.items():
-        assert_same(out[key], value, key)
+    out = validate_result(json.loads(result.model_dump_json()))
+    assert out == result
+    assert out.stored_beam_quantities == result.stored_beam_quantities
+    for key, value in result.quantities.items():
+        assert_same(out[key].values, value.values, key)
 
 
 def test_python_dump_unchanged(proton_raw):

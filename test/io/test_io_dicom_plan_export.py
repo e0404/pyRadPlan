@@ -104,7 +104,7 @@ def generated():
     """Two-beam proton plan on the TG119 phantom with a forward dose calculation."""
     pln, ct, cst, stf, w = _generated_plan([0, 90], [0, 0], bixel_width=20)
     result = calc_dose_forward(ct, cst, stf, pln, w)
-    assert "physical_dose_beam" in result
+    assert "physical_dose" in result.beam_quantities
     return pln, ct, cst, stf, w, result
 
 
@@ -402,7 +402,7 @@ def test_rtdose_validates_and_references_plan(tmp_path, dicom_standard, generate
         cst=cst,
         stf=stf,
         pln=pln,
-        result={**result, "w": w},
+        result=result.model_copy(update={"fluence": np.asarray(w)}),
         options={"per_beam_doses": True},
     )
     plan = pydicom.dcmread(out / "RTPLAN.dcm")
@@ -429,7 +429,9 @@ def test_rtdose_validates_and_references_plan(tmp_path, dicom_standard, generate
 
 def test_rtdose_image_validates(tmp_path, dicom_standard, generated):
     pln, ct, cst, stf, w, result = generated
-    out = _export(tmp_path, ct=ct, dose=result["physical_dose"], stf=stf, pln=pln, weights=w)
+    out = _export(
+        tmp_path, ct=ct, dose=result["physical_dose"].values, stf=stf, pln=pln, weights=w
+    )
     assert _validation_errors(dicom_standard, out / "RTDOSE.dcm") == []
     ref = pydicom.dcmread(out / "RTDOSE.dcm").ReferencedRTPlanSequence[0]
     assert ref.ReferencedSOPInstanceUID == pydicom.dcmread(out / "RTPLAN.dcm").SOPInstanceUID
@@ -449,7 +451,7 @@ def test_linking(tmp_path, generated, anonymize):
         cst=cst,
         stf=stf,
         pln=pln,
-        result={**result, "w": w},
+        result=result.model_copy(update={"fluence": np.asarray(w)}),
         options={"anonymize": anonymize},
     )
     plan = pydicom.dcmread(out / "RTPLAN.dcm")
@@ -490,7 +492,13 @@ def test_save_data_exports_plan(tmp_path, generated):
     pln, ct, cst, stf, w, result = generated
     target = tmp_path / "dicom"
     save_data(
-        file_name=target, ct=ct, cst=cst, stf=stf, pln=pln, result={**result, "w": w}, format="dcm"
+        file_name=target,
+        ct=ct,
+        cst=cst,
+        stf=stf,
+        pln=pln,
+        result=result.model_copy(update={"fluence": np.asarray(w)}),
+        format="dcm",
     )
     assert (target / "RTPLAN.dcm").exists()
     assert (target / "RTDOSE_physical_dose.dcm").exists()
@@ -546,7 +554,7 @@ def test_beam_without_weight_is_skipped(tmp_path, generated):
             ct=ct,
             stf=stf,
             pln=pln,
-            result={**result, "w": w2},
+            result=result.model_copy(update={"fluence": np.asarray(w2)}),
             options={"per_beam_doses": True},
         )
     plan = pydicom.dcmread(out / "RTPLAN.dcm")
