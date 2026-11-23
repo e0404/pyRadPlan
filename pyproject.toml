@@ -20,6 +20,7 @@ authors = [
   { name="Tobias Becher", email = "t.becher@dkfz-heidelberg.de" },
   { name="Maxim Braunsburger", email = "m.braunsburger@icloud.com" },
   { name="Lina Bucher", email = "lina.bucher@dkfz-heidelberg.de" },
+  { name="Samuele Caggia" },
   { name="Louis Ermeneux", email = "louis.ermeneux@gmail.com" },
   { name="Jennifer Josephine Hardt", email = "jennifer.hardt@dkfz-heidelberg.de" },
   { name="Antonios Kontopoulos", email = "antonios.kontopoulos@dkfz-heidelberg.de" },
