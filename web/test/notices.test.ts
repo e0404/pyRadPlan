@@ -46,6 +46,11 @@ describe("disclaimer and privacy notice", () => {
     expect(ABOUT.disclaimer).toContain("not a medical device");
   });
 
+  it("links the imprint and the privacy policy in the documentation", () => {
+    expect(ABOUT.imprint_url).toMatch(/^https:\/\/docs\.pyradplan\.org\/.*\/legal\/imprint\.html$/);
+    expect(ABOUT.privacy_url).toMatch(/^https:\/\/docs\.pyradplan\.org\/.*\/legal\/privacy\.html$/);
+  });
+
   it("states where data and downloads go", () => {
     const text = privacyParagraphs("https://example.org").join(" ");
     expect(text).toContain("https://example.org");

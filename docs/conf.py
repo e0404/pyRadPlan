@@ -115,6 +115,7 @@ html_theme_options = {
             "icon": "fa-solid fa-globe",
         },
     ],
+    "footer_center": ["legal-links"],
     "navigation_depth": 5,
     "collapse_navigation": True,
     "show_toc_level": 2,

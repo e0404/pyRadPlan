@@ -9,6 +9,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtGui import QDesktopServices
 
+from pyRadPlan.app._about import IMPRINT_URL, PRIVACY_URL
 from pyRadPlan.gui.menus import HelpMenu
 from pyRadPlan.gui.menus._help import (
     DOCUMENTATION_URL,
@@ -51,6 +52,12 @@ def test_about_dialog_contains_version_and_disclaimer(qapp):
     assert "research and education" in text
     assert "not for clinical use" in text.lower()
     assert "must not be used for clinical treatment planning" in text
+
+
+def test_about_dialog_links_imprint_and_privacy_policy(qapp):
+    text = AboutDialog().text()
+    assert f'<a href="{IMPRINT_URL}">Imprint</a>' in text
+    assert f'<a href="{PRIVACY_URL}">Privacy policy</a>' in text
 
 
 def test_licenses_dialog_lists_numpy_and_shows_its_license(qapp):
