@@ -8,9 +8,12 @@ import scipy.ndimage as ndi
 import SimpleITK as sitk
 
 from pyRadPlan.dose import calc_dose_forward
+from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine as HongEngine
 from pyRadPlan.dose.engines._base_pencilbeam_particle import (
     ParticlePencilBeamEngineAbstract as ParticleEngine,
 )
+
+RASHI_THICKNESS = 20.0
 
 
 def _engine_stub(radiation_mode):
@@ -21,6 +24,18 @@ def _engine_stub(radiation_mode):
             _engine_stub(radiation_mode), *args
         ),
     )
+
+
+def _add_range_shifter(stf):
+    for beam in stf.beams:
+        for ray in beam.rays:
+            for beamlet in ray.beamlets:
+                beamlet.range_shifter.eq_thickness = RASHI_THICKNESS
+                beamlet.range_shifter.source_rashi_distance = beam.sad - 400.0
+
+
+def _physical_dose(ct, cst, stf, pln):
+    return sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values)
 
 
 # Reference values from matRad_calcSigmaRashi (matRad dev, 3ebbc20a)
@@ -73,18 +88,9 @@ def test_protons_range_shifter_broadens_dose(test_data_protons):
     scattering sigma never reached the lateral profile.
     """
     pln, ct, cst, stf, _, _ = test_data_protons
-    dose_open = sitk.GetArrayFromImage(
-        calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
-    )
-
-    for beam in stf.beams:
-        for ray in beam.rays:
-            for beamlet in ray.beamlets:
-                beamlet.range_shifter.eq_thickness = 20.0
-                beamlet.range_shifter.source_rashi_distance = beam.sad - 400.0
-    dose_rashi = sitk.GetArrayFromImage(
-        calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
-    )
+    dose_open = _physical_dose(ct, cst, stf, pln)
+    _add_range_shifter(stf)
+    dose_rashi = _physical_dose(ct, cst, stf, pln)
 
     def lateral_std(dose, axis):
         coords = np.arange(dose.shape[axis]).reshape([-1 if i == axis else 1 for i in range(3)])
@@ -94,3 +100,78 @@ def test_protons_range_shifter_broadens_dose(test_data_protons):
     # beams at gantry 0 and 180 run along y, the lateral axes are z and x
     for axis in (0, 2):
         assert lateral_std(dose_rashi, axis) > 1.1 * lateral_std(dose_open, axis)
+
+
+def test_range_shifter_sigma_enters_every_lateral_profile_once(test_data_protons, monkeypatch):
+    """The range shifter sigma is added once to the spots and once to the lateral cut-off."""
+    pln, ct, cst, stf, _, _ = test_data_protons
+    monkeypatch.setattr(ParticleEngine, "_calc_sigma_rashi", lambda *args: 3.0)
+    sigmas_sq = []
+    lateral_profile = HongEngine._lateral_profile
+
+    def spy(self, radial_dist_sq, lat_dists, sigma_ini_sq, kernels):
+        sigmas_sq.append(float(sigma_ini_sq))
+        return lateral_profile(self, radial_dist_sq, lat_dists, sigma_ini_sq, kernels)
+
+    monkeypatch.setattr(HongEngine, "_lateral_profile", spy)
+
+    calc_dose_forward(ct, cst, stf, pln)
+    sigmas_sq_open = np.unique(np.round(sigmas_sq, 6))
+    sigmas_sq.clear()
+    _add_range_shifter(stf)
+    calc_dose_forward(ct, cst, stf, pln)
+
+    np.testing.assert_allclose(np.unique(np.round(sigmas_sq, 6)), sigmas_sq_open + 3.0**2)
+
+
+def test_range_shifter_widens_lateral_cut_off(test_data_protons, monkeypatch):
+    """The lateral cut-off of every used energy accounts for the range shifter scattering."""
+    pln, ct, cst, stf, _, _ = test_data_protons
+    cut_offs = []
+    calc_cut_off = ParticleEngine._calc_lateral_particle_cut_off
+
+    def spy(self, cut_off_level, stf_element):
+        calc_cut_off(self, cut_off_level, stf_element)
+        energies = {b["energy"] for ray in stf_element["beam"]["rays"] for b in ray["beamlets"]}
+        cut_offs.append(
+            {
+                energy: self._machine.get_kernel_by_energy(energy).lateral_cut_off.cut_off.copy()
+                for energy in energies
+            }
+        )
+
+    monkeypatch.setattr(ParticleEngine, "_calc_lateral_particle_cut_off", spy)
+
+    calc_dose_forward(ct, cst, stf, pln)
+    cut_offs_open = list(cut_offs)
+    cut_offs.clear()
+    _add_range_shifter(stf)
+    calc_dose_forward(ct, cst, stf, pln)
+
+    assert len(cut_offs) == len(cut_offs_open) > 0
+    for beam_open, beam_rashi in zip(cut_offs_open, cut_offs):
+        assert beam_open.keys() == beam_rashi.keys()
+        for energy, cut_off_open in beam_open.items():
+            assert np.all(beam_rashi[energy] > cut_off_open)
+
+
+@pytest.mark.parametrize("test_data", ["test_data_protons", "test_data_carbon"])
+def test_range_shifter_pulls_dose_back_by_its_thickness(test_data, request):
+    """The depth dose of a beam moves towards the source by the range shifter thickness."""
+    pln, ct, cst, stf, _, _ = request.getfixturevalue(test_data)
+    stf.beams = stf.beams[:1]
+
+    depth_dose_open = _physical_dose(ct, cst, stf, pln).sum(axis=(0, 2))
+    _add_range_shifter(stf)
+    depth_dose_rashi = _physical_dose(ct, cst, stf, pln).sum(axis=(0, 2))
+
+    # the beam at gantry 0 runs along +y; the voxels at the surface and the far edge of the
+    # dose grid have no counterpart in the other profile
+    shift = round(RASHI_THICKNESS / ct.resolution["y"])
+    assert shift > 0
+    np.testing.assert_allclose(
+        depth_dose_rashi[1 : -shift - 1],
+        depth_dose_open[shift + 1 : -1],
+        rtol=0.05,
+        atol=1e-3 * depth_dose_open.max(),
+    )

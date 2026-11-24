@@ -306,6 +306,37 @@ def test_corner_crossings_do_not_repeat_voxels(monkeypatch):
     np.testing.assert_allclose(np.sum(lengths[0, valid]), 23.70681, atol=1e-4)
 
 
+def test_corner_voxels_take_mid_segment_depth(monkeypatch):
+    """Voxels whose corners a 45 degree ray crosses get the depth at the middle of their path.
+
+    Regression test: the sliver segment a corner leaves in float32 repeated the voxel, which
+    then took the depth at the end of its path, up to half its chord too deep. A float64 trace
+    separates the plane intersections and serves as reference.
+    """
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    cube = sitk.GetImageFromArray(np.ones((4, 40, 40), dtype=np.float32))
+    cube.SetSpacing((3.0, 3.0, 3.0))
+    cube.SetOrigin((-240.51, 131.23, -893.5))
+    beam = Beam(
+        gantry_angle=45.0,
+        couch_angle=0.0,
+        iso_center=np.array(cube.TransformIndexToPhysicalPoint((20, 20, 2))),
+        SAD=1000.0,
+        rays=[Ray(ray_pos_bev=np.zeros(3), ray_pos=np.zeros(3), beamlets=[Beamlet(energy=100.0)])],
+    )
+
+    depths = {}
+    for precision in (np.float32, np.float64):
+        raytracer = RayTracerSiddon(cube)
+        raytracer.lateral_cut_off = 20.0
+        raytracer.precision = precision
+        depths[precision] = to_numpy(raytracer.trace_cubes_array(beam)[0])
+
+    np.testing.assert_allclose(depths[np.float32], depths[np.float64], atol=1e-3)
+
+
 @pytest.mark.parametrize(("gantry", "couch"), [(0.0, 0.0), (45.0, 0.0), (30.0, 45.0)])
 def test_trace_cubes_traverses_full_cube_at_oblique_angles(monkeypatch, gantry, couch):
     """The ray matrix extent must reach past the cube for any beam orientation.
