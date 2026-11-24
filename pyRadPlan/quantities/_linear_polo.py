@@ -17,7 +17,9 @@ class LinearPOLO(POLOBase):
 
     Voxels below :attr:`dose_threshold` fall outside the dose domain the model was fitted on
     and are returned as ``-inf``, which maps to a probability of zero. Objectives on eta are
-    expected to filter these out (see :class:`HellingerConvPOLO`).
+    expected to filter these out (see :class:`HellingerConvPOLO`). They request
+    ``dose_threshold=0.0`` by default, which makes eta affine in the fluence on every voxel;
+    with a threshold it jumps from ``-inf`` to about -26 there.
 
     For coefficients and references, see :class:`~pyRadPlan.quantities.POLOBase`.
     """

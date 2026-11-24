@@ -122,7 +122,8 @@ class POLOBase(FluenceDependentQuantity):
             ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component.
         dose_threshold : float, optional
             Course dose in Gy below which the model is treated as undefined, by default
-            2.0 Gy. Set to 0.0 to disable.
+            2.0 Gy. Set to 0.0 to disable. The objectives on the linear predictor disable
+            it by default (see :class:`~pyRadPlan.optimization.objectives.LogSumExpConvPOLO`).
         mode : str, optional
             Compute mode, ``"direct"`` or ``"indirect"``. Resolved automatically when omitted.
         dependencies : dict, optional

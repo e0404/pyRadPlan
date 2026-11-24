@@ -531,6 +531,41 @@ def test_polo_objectives():
     assert np.all(hconv_obj.compute_gradient(vals) == 1.0)
 
 
+def test_polo_objectives_dose_threshold_defaults():
+    # Objectives on the probability keep the 2 Gy filter of Ortkamp et al.; those on the
+    # linear predictor drop it, since it makes them discontinuous in the fluence.
+    for objective_cls, default in [
+        (NTCPPOLO, 2.0),
+        (HellingerPOLO, 2.0),
+        (LogSumExpConvPOLO, 0.0),
+        (HellingerConvPOLO, 0.0),
+    ]:
+        assert objective_cls().dose_threshold == default
+        assert objective_cls(dose_threshold=1.0).dose_threshold == 1.0
+        assert "dose_threshold" in objective_cls.quantity_params
+        assert objective_cls().parameter_names == ["risk_voi_name", "dose_threshold"]
+        assert objective_cls().parameter_types == ["voi_reference", "numeric"]
+        with pytest.raises(ValueError):
+            objective_cls(dose_threshold=-1.0)
+
+    # A course dose threshold of the model, not a reference dose of the objective: the
+    # conversion of total-dose objectives to dose per fraction must leave it alone.
+    assert NTCPPOLO().normalize_to_fraction_num(30).dose_threshold == 2.0
+
+
+def test_logsumexp_convpolo_without_voxels_in_domain():
+    # Only reachable with dose_threshold > 0, where LinearPOLO marks excluded voxels as -inf.
+    lse = LogSumExpConvPOLO(dose_threshold=2.0)
+    vals = np.full(3, -np.inf)
+    assert lse.compute_objective(vals) == 0.0
+    assert np.all(lse.compute_gradient(vals) == 0.0)
+
+    mixed = np.array([-np.inf, -25.0, -26.0])
+    assert np.isclose(lse.compute_objective(mixed), np.log(np.exp(-25.0) + np.exp(-26.0)))
+    grad = lse.compute_gradient(mixed)
+    assert grad[0] == 0.0 and np.isclose(grad.sum(), 1.0)
+
+
 def test_polo_objectives_custom_quantity_preservation():
     from pyRadPlan.optimization.objectives import Objective, SquaredDeviation
 

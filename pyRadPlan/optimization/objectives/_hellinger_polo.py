@@ -13,7 +13,9 @@ class HellingerPOLO(Objective):
     """
     Hellinger POLO objective.
 
-    Evaluates the sum of the POLO probabilities.
+    Evaluates the sum of the POLO probabilities. Voxels below :attr:`dose_threshold` (2 Gy
+    course dose by default, the index filter of Ortkamp et al., Sec. 2.3) contribute a
+    probability of zero.
 
     For model formulation and paper references, see :class:`pyRadPlan.quantities.POLO`
     (Ortkamp et al., Med Phys 2026, DOI: 10.1002/mp.70395).
@@ -31,8 +33,20 @@ class HellingerPOLO(Objective):
         ),
         ParameterMetadata(kind="voi_reference"),
     ]
+    dose_threshold: Annotated[
+        float,
+        Field(
+            default=2.0,
+            ge=0.0,
+            description=(
+                "Course dose in Gy below which the model is treated as undefined and the voxel "
+                "contributes a probability of zero. 0.0 disables the filter."
+            ),
+        ),
+        ParameterMetadata(kind="numeric"),
+    ]
 
-    quantity_params: ClassVar[tuple[str, ...]] = ("risk_voi_name",)
+    quantity_params: ClassVar[tuple[str, ...]] = ("risk_voi_name", "dose_threshold")
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)

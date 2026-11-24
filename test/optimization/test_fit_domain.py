@@ -8,7 +8,7 @@ from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.ct import validate_ct
 from pyRadPlan.cst import validate_cst
 from pyRadPlan.dij import validate_dij
-from pyRadPlan.optimization.objectives import NTCPPOLO
+from pyRadPlan.optimization.objectives import HellingerConvPOLO, LogSumExpConvPOLO, NTCPPOLO
 from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.stf import validate_stf
@@ -117,3 +117,20 @@ def test_polo_objectives_with_different_risk_structures_are_independent(proton_c
     assert np.all(f > 0) and np.all(np.abs(jac).max(axis=1) > 0)
     np.testing.assert_allclose(f, [f_target[0], f_body[0]], rtol=1e-6)
     np.testing.assert_allclose(jac, np.vstack([jac_target, jac_body]), rtol=1e-5)
+
+
+def test_polo_objectives_forward_their_dose_threshold(proton_case):
+    pln, ct, cst, dij, stf, vois = proton_case
+    vois["Target"].objectives = [
+        NTCPPOLO(risk_voi_name="Body"),
+        LogSumExpConvPOLO(risk_voi_name="Body"),
+        HellingerConvPOLO(risk_voi_name="Body", dose_threshold=2.0),
+    ]
+
+    prob, _ = _initialize(pln, ct, cst, dij, stf)
+
+    # Each default reaches its own instance of the quantity, and so does an override.
+    thresholds = sorted(
+        (q.identifier, q.dose_threshold) for q in prob._quantities if "polo" in q.identifier
+    )
+    assert thresholds == [("linear_polo", 0.0), ("linear_polo", 2.0), ("polo", 2.0)]

@@ -7,6 +7,7 @@ import SimpleITK as sitk
 from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import StructureSet, create_voi
 from pyRadPlan.dij import Dij
+from pyRadPlan.optimization.objectives import HellingerConvPOLO, LogSumExpConvPOLO
 from pyRadPlan.quantities import POLO, LinearPOLO, QuantityResolver
 
 
@@ -145,6 +146,28 @@ def test_linear_polo_marks_below_threshold_as_neg_inf(sample_dij_dense):
         .flat[0]
     )
     assert np.all(np.isfinite(eta_in_domain))
+
+
+@pytest.mark.parametrize("objective_cls", [LogSumExpConvPOLO, HellingerConvPOLO])
+def test_eta_objectives_are_continuous_across_2_gy(sample_dij_dense, objective_cls):
+    # The objectives on eta drop the 2 Gy filter of Ortkamp et al. by default, because with it
+    # a voxel jumps from "excluded" to eta of about -26 when its dose crosses the threshold.
+    objective = objective_cls()
+
+    def value(dose):
+        quantity = LinearPOLO(
+            sample_dij_dense,
+            num_of_fractions=1,
+            risk_voi_name=None,
+            dose_threshold=objective.dose_threshold,
+        )
+        # dij is all ones over 10 bixels: a uniform fluence w gives 10 * w Gy everywhere.
+        fluence = xp.full((10,), dose / 10.0, dtype=xp.float32)
+        return float(objective.compute_objective(np.asarray(quantity.compute(fluence).flat[0])))
+
+    # eta rises by 0.19 + 0.018 per Gy in each of the 125 voxels, so 2 mGy move the
+    # log-sum-exp by 4e-4 and the sum by 0.05.
+    assert abs(value(2.001) - value(1.999)) < 0.1
 
 
 def test_polo_derivative_without_forward_compute(sample_dij_dense):
