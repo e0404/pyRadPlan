@@ -1,8 +1,9 @@
-"""Two-level result quantity selector: quantity (per saved result), then full / beam / scenario."""
+"""Two-level result quantity selector: quantity (per result), then full / beam / scenario."""
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+from collections.abc import Mapping
+from typing import Iterable, Optional, Sequence, Union
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QWidget
@@ -20,7 +21,7 @@ from ._display_names import (
 class QuantitySelector(QWidget):
     """Pick a result key by quantity group and component.
 
-    The first combo box lists one entry per quantity and saved result (see
+    The first combo box lists one entry per quantity and result (see
     :func:`~pyRadPlan.gui.widgets._display_names.group_result_keys`), the
     second one the total (``"full"``), the individual beam contributions and
     the individual uncertainty scenarios of the selected group.  Scenario
@@ -42,7 +43,8 @@ class QuantitySelector(QWidget):
         super().__init__(parent)
         self._none_label = none_label
         self._groups: list[ResultGroup] = []
-        self._scenario_labels: list[str] = []
+        #: Scenario labels by result tag; ``None`` holds labels given for all results.
+        self._scenario_labels: dict[Optional[str], list[str]] = {}
         #: Group whose components the component combo box lists.
         self._shown_group: Optional[ResultGroup] = None
 
@@ -87,14 +89,20 @@ class QuantitySelector(QWidget):
         self.quantity_combo.blockSignals(False)
         self._fill_components(group, component)
 
-    def set_scenario_labels(self, labels: Sequence[str]) -> None:
+    def set_scenario_labels(
+        self, labels: Union[Sequence[str], Mapping[str, Sequence[str]]]
+    ) -> None:
         """Label the scenario components by flat scenario index, e.g. ``"setup (...) mm"``.
 
         Scenario entries then read ``"scenario <i>: <label>"``; indices without a label
-        keep ``"scenario <i>"``.  Keeps the selection and does not emit
-        :attr:`key_changed`.
+        keep ``"scenario <i>"``.  A mapping gives the labels of each result by its tag
+        (``""`` for the active result), a sequence labels the scenarios of every result.
+        Keeps the selection and does not emit :attr:`key_changed`.
         """
-        labels = list(labels)
+        if isinstance(labels, Mapping):
+            labels = {tag: list(values) for tag, values in labels.items()}
+        else:
+            labels = {None: list(labels)}
         if labels == self._scenario_labels:
             return
         self._scenario_labels = labels
@@ -157,18 +165,20 @@ class QuantitySelector(QWidget):
         components = group.components if group is not None else ()
         kinds = group.kinds if group is not None and group.kinds else ("",) * len(components)
         for (label, key), kind in zip(components, kinds):
-            add_identified_item(self.component_combo, self._component_text(label, kind), key, key)
+            text = self._component_text(label, kind, group.tag)
+            add_identified_item(self.component_combo, text, key, key)
         labels = [label for label, _ in components]
         self.component_combo.setCurrentIndex(labels.index(component) if component in labels else 0)
         self.component_combo.setEnabled(len(components) > 1)
         self.component_combo.blockSignals(False)
 
-    def _component_text(self, label: str, kind: str) -> str:
+    def _component_text(self, label: str, kind: str, tag: str) -> str:
         if kind != SCENARIO_COMPONENT:
             return label
+        names = self._scenario_labels.get(tag, self._scenario_labels.get(None, []))
         index = int(label.rpartition(" ")[2]) if label[-1:].isdigit() else -1
-        if 0 <= index < len(self._scenario_labels) and self._scenario_labels[index]:
-            return f"{label}: {self._scenario_labels[index]}"
+        if 0 <= index < len(names) and names[index]:
+            return f"{label}: {names[index]}"
         return label
 
     def _current_component(self) -> str:

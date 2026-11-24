@@ -1,4 +1,7 @@
+import numpy as np
 import pytest
+import SimpleITK as sitk
+from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
 from pyRadPlan.gui.widgets.workflow import WorkflowWidget
@@ -44,6 +47,28 @@ def test_busy_text_shown_in_status(qapp):
     if w._thread is not None:
         w._thread.wait(2000)
     qapp.processEvents()
+
+
+def test_status_returns_after_a_save(qapp, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from pyRadPlan.app._stages import status_text
+    from pyRadPlan.plan import PhotonPlan
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.pln = PhotonPlan()
+    info = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.information", info
+    )
+    w._save("Save Plan", "pln", "pickle", str(tmp_path / "plan.pkl"))
+    assert w._lbl_status.text().startswith("Saving")
+    w._thread.wait(5000)
+    qapp.processEvents()
+
+    info.assert_called_once()
+    assert w._lbl_status.text() == status_text(ws.present(), w.session.tracker)
 
 
 def test_progress_report_drives_combined_nested_bar(qapp):
@@ -95,27 +120,71 @@ def test_plan_change_marks_downstream_stale(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
 
+    def _result():
+        return create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
+
     # Loading everything at once leaves the products current, not stale.
-    ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result={})
-    assert not w._dij_stale and not w._result_stale
+    ws.set_many(
+        ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
+    )
+    assert not w.session.tracker.dij_stale and not w.session.tracker.result_stale
 
     # Changing the plan invalidates the dose influence and the result.
     ws.pln = object()
-    assert w._dij_stale and w._result_stale
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
 
     # Recomputing the dose influence clears its flag (and the result stays stale).
     ws.set_many(stf=object(), dij=object())
-    assert not w._dij_stale and w._result_stale
+    assert not w.session.tracker.dij_stale and w.session.tracker.result_stale
 
     # Re-optimizing clears the result flag.
-    ws.result = {"w": 1}
-    assert not w._result_stale
+    ws.result = _result()
+    assert not w.session.tracker.result_stale
 
     # Moved beams (stf without dij) outdate the dose influence as well.
     ws.set_many(stf=object(), dij=object())
     ws.stf = object()
-    assert w._dij_stale and w._result_stale
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
+
+
+def test_indicators_status_and_buttons_follow_the_session(qapp):
+    import numpy as np
+
+    from pyRadPlan.app._stages import available_actions, status_text
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    tooltips = {"missing": "Not yet computed", "stale": "Outdated", "done": "Up to date"}
+    rng = np.random.default_rng(3)
+    for _ in range(40):
+        key = str(rng.choice(ws.keys))
+        if rng.integers(4) == 0:
+            ws.clear([key])
+        else:
+            ws.set_many(**{key: _result() if key == "result" else object()})
+        stages = w.session.stages()
+        for indicator, stage in (("load", "data"), ("dij", "dij"), ("result", "optimization")):
+            assert w._indicators[indicator].toolTip().startswith(tooltips[stages[stage]])
+        assert w._lbl_status.text() == status_text(ws.present(), w.session.tracker)
+        actions = available_actions(ws.present())
+        assert w._btn_calc_dose.isEnabled() == actions["calc_dose_influence"]
+        assert w._btn_optimize.isEnabled() == actions["optimize"]
+        assert w._btn_recalc.isEnabled() == actions["recalc"]
+        assert w._btn_load_dij.isEnabled()
+
+
+def test_a_replaced_ct_outdates_the_dose_influence(qapp):
+    """The session counts the CT as an input of every product (the widget used not to)."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(
+        ct=object(), cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
+    )
+    ws.ct = object()
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
+    assert w._indicators["dij"].toolTip().startswith("Outdated")
+    assert w._lbl_status.text() == "Dose influence outdated — recalculate"
 
 
 def test_tissue_parameter_change_marks_dij_stale(qapp):
@@ -127,14 +196,14 @@ def test_tissue_parameter_change_marks_dij_stale(qapp):
     ct, cst = load_tg119()
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    assert not w._dij_stale and not w._result_stale
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result=_result())
+    assert not w.session.tracker.dij_stale and not w.session.tracker.result_stale
 
     # Other structure set edits leave the dose influence valid, only the result stale
     cst.vois[0].objectives = []
     ws.cst = cst
-    assert not w._dij_stale
-    assert w._result_stale
+    assert not w.session.tracker.dij_stale
+    assert w.session.tracker.result_stale
 
     # Changing a structure's tissue properties invalidates the dose influence as well
     voi = cst.vois[0]
@@ -144,7 +213,7 @@ def test_tissue_parameter_change_marks_dij_stale(qapp):
     cst.vois = [create_voi(data), *cst.vois[1:]]
     ws.cst = cst
 
-    assert w._dij_stale
+    assert w.session.tracker.dij_stale
     assert w._indicators["dij"].toolTip().startswith("Outdated")
     assert "recalculate" in w._lbl_status.text().lower()
 
@@ -155,21 +224,25 @@ def test_cst_export_options_resolve_against_registry(qapp):
     Guards the GUI's "Save CST" against a stale format key (e.g. the MetaImage
     exporter registers as ``"meta"``, not ``"metaimage"``).
     """
+    from pyRadPlan.app._io import export_entries, path_label, writes_folder
     from pyRadPlan.io import get_available_formats
 
     available = get_available_formats()
-    options = WorkflowWidget._cst_export_options()
-    keys = [fmt for _label, fmt, *_ in options]
+    entries = export_entries("cst")
+    keys = [entry.format for entry in entries]
 
     assert all(fmt in available for fmt in keys), keys
     # The container formats that preserve objectives, plus the image and both
     # DICOM structure representations, are all offered.
     assert {"mat", "pickle", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
-    dicom_structs = {struct for _l, fmt, struct, *_ in options if fmt == "dcm"}
+    dicom_structs = {entry.structure_format for entry in entries if entry.format == "dcm"}
     assert dicom_structs == {"rtstruct", "seg"}
     # Only mat/pickle advertise objective preservation.
-    keeps = {fmt for _l, fmt, _s, _d, keep in options if keep}
-    assert keeps == {"mat", "pickle"}
+    assert {entry.format for entry in entries if entry.keeps_objectives} == {"mat", "pickle"}
+    # Label maps and DICOM are written to a folder, named so in the format choice.
+    folders = [entry for entry in entries if writes_folder(entry)]
+    assert {entry.format for entry in folders} == {"nifti", "nrrd", "meta", "dcm"}
+    assert all(path_label(entry).endswith("(folder)") for entry in folders)
 
 
 def test_cst_export_all_formats_write_loadable_masks(qapp, tmp_path):
@@ -223,6 +296,138 @@ def test_cst_export_all_formats_write_loadable_masks(qapp, tmp_path):
     assert len(DicomHandler(seg).load_cst().vois) == n
 
 
+def _result():
+    return create_result({"physical_dose": _dose_image()})
+
+
+def _dose_image(value=1.0):
+    image = sitk.Image([4, 4, 2], sitk.sitkFloat32)
+    image += value
+    return image
+
+
+def test_workspace_validates_a_result_dict(qapp):
+    """A dict assigned to ws.result becomes a PlanResult for every consumer."""
+    ws = WorkspaceManager()
+
+    ws.result = {"physical_dose": _dose_image()}
+    assert isinstance(ws.result, PlanResult)
+    assert "physical_dose" in ws.result
+
+    ws.set_many(result={"physical_dose": _dose_image()})
+    assert isinstance(ws.result, PlanResult)
+
+    ws.result = None
+    assert ws.result is None
+
+
+def test_snapshot_is_a_result_of_its_own(qapp, monkeypatch):
+    """Snapshot Result keeps a copy of the active result under the given name."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.result = create_result(
+        {"physical_dose": _dose_image(), "physical_dose_beam": [_dose_image()]},
+        fluence=np.ones(2),
+    )
+    original = ws.result
+
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QInputDialog.getText",
+        lambda *a, **k: ("run 1", True),
+    )
+    w._on_save_result()
+
+    assert ws.result is original
+    assert list(ws.results) == ["current", "run_1"]
+    snapshot = ws.results["run_1"]
+    assert snapshot is not original
+    assert snapshot["physical_dose"] is original["physical_dose"]
+    assert snapshot.stored_beam_quantities == ["physical_dose"]
+    assert snapshot.fluence is original.fluence
+
+    # The snapshot survives a re-optimization untouched.
+    ws.result = create_result({"physical_dose": _dose_image(2.0)})
+    assert ws.results["run_1"] is snapshot
+    assert ws.result is not original
+
+
+def test_imported_dose_is_a_result_on_its_own_grid(qapp, monkeypatch, tmp_path):
+    """An imported dose keeps its grid and does not join the active result."""
+    from types import SimpleNamespace
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(
+        ct=SimpleNamespace(cube_hu=sitk.Image([4, 4, 2], sitk.sitkFloat32)),
+        result={"physical_dose": _dose_image()},
+    )
+    active = ws.result
+    measured = sitk.Image([8, 8, 4], sitk.sitkFloat32)
+    measured.SetSpacing((0.5, 0.5, 0.5))
+    path = tmp_path / "measured.nrrd"
+    sitk.WriteImage(measured, str(path))
+
+    from PySide6.QtWidgets import QDialog
+
+    dialog = SimpleNamespace(
+        exec=lambda: QDialog.DialogCode.Accepted,
+        selection=lambda: {"mode": "dose", "name": "film scan"},
+    )
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._image_import_dialog.ImageImportDialog",
+        lambda *a, **k: dialog,
+    )
+    monkeypatch.setattr(
+        WorkflowWidget,
+        "_run_in_thread",
+        staticmethod(lambda fn, on_success, **kw: on_success(fn())),
+    )
+    w._open_image_import_dialog(str(path))
+    w._open_image_import_dialog(str(path))
+
+    assert ws.result is active
+    assert list(ws.results) == ["current", "film_scan", "film_scan_2"]
+    imported = ws.results["film_scan"]["physical_dose"].values
+    assert imported.GetSize() == (8, 8, 4)
+    assert imported.GetSpacing() == (0.5, 0.5, 0.5)
+    # Importing does not mark an outdated result as up to date
+    assert not w.session.tracker.result_stale
+    ws.pln = object()
+    assert w.session.tracker.result_stale
+    w._open_image_import_dialog(str(path))
+    assert w.session.tracker.result_stale
+
+
+def test_session_of_version_0_9_is_split_into_results(qapp):
+    """Snapshots and imported doses of older sessions were mangled into one result."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    dose, snapshot, imported = _dose_image(1.0), _dose_image(2.0), _dose_image(3.0)
+
+    w.session.merge_loaded(
+        {
+            "result": {
+                "physical_dose": dose,
+                "physical_dose_beam": [dose],
+                "w": np.ones(2),
+                "physical_dose_run1": snapshot,
+                "physical_dose_beam_run1": [snapshot],
+                "import_measured": imported,
+            },
+            "saved_result_tags": ["run1"],
+        }
+    )
+
+    assert list(ws.results) == ["current", "run1", "measured"]
+    assert ws.result.stored_quantities == ["physical_dose"]
+    assert ws.result.stored_beam_quantities == ["physical_dose"]
+    np.testing.assert_array_equal(ws.result.fluence, np.ones(2))
+    assert ws.results["run1"].stored_quantities == ["physical_dose"]
+    assert ws.results["run1"].stored_beam_quantities == ["physical_dose"]
+    assert ws.results["run1"]["physical_dose"].values is snapshot
+    assert ws.results["measured"]["physical_dose"].values is imported
+
+
 @pytest.mark.parametrize("same_grid", [False, True])
 def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     import SimpleITK as sitk
@@ -232,18 +437,42 @@ def test_new_patient_clears_missing_objects_atomically(qapp, same_grid):
     w = WorkflowWidget(ws)
     old_ct = validate_ct(cube_hu=sitk.Image([5, 5, 5], sitk.sitkFloat32))
     new_ct = validate_ct(cube_hu=sitk.Image([5 if same_grid else 7, 5, 5], sitk.sitkFloat32))
-    ws.set_many(ct=old_ct, cst=object(), pln=object(), stf=object(), dij=object(), result={})
-    w._saved_tags = ["old"]
+    ws.set_many(
+        ct=old_ct, cst=object(), pln=object(), stf=object(), dij=object(), result=_result()
+    )
+    ws.add_result("old", _result())
     states = []
     ws.workspace_changed.connect(lambda keys: states.append({k: getattr(ws, k) for k in ws.keys}))
 
-    w._merge_loaded_data({"ct": new_ct})
+    w.session.merge_loaded({"ct": new_ct})
 
     assert len(states) == 1
     assert states[0]["ct"] is new_ct
     assert all(states[0][key] is None for key in ws.keys if key != "ct")
     assert not w._btn_optimize.isEnabled()
-    assert w._saved_tags == []
+    assert ws.results == {}
+
+
+def test_results_loaded_without_ct_join_the_workspace(qapp):
+    """Only a new patient replaces the results; a loaded plan result the active one."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=object(), result=_result())
+    ws.add_result("saved", _result())
+    ws.add_result("imported", _result())
+    kept = ws.results
+    events = []
+    ws.workspace_changed.connect(events.append)
+
+    w.session.merge_loaded({"dose": _dose_image(2.0)})
+    assert list(ws.results) == ["current", "saved", "imported", "imported_2"]
+    assert all(ws.results[name] is kept[name] for name in kept)
+    assert events == [["result"]]
+
+    w.session.merge_loaded({"result": {"physical_dose": _dose_image(3.0)}})
+    assert list(ws.results) == ["current", "saved", "imported", "imported_2"]
+    assert ws.result is not kept["current"]
+    assert ws.results["saved"] is kept["saved"]
 
 
 def test_import_without_ct_keeps_current_patient(qapp):
@@ -251,7 +480,7 @@ def test_import_without_ct_keeps_current_patient(qapp):
     w = WorkflowWidget(ws)
     ct, cst, new_plan = object(), object(), object()
     ws.set_many(ct=ct, cst=cst)
-    w._merge_loaded_data({"pln": new_plan})
+    w.session.merge_loaded({"pln": new_plan})
     assert ws.ct is ct and ws.cst is cst and ws.pln is new_plan
 
 
@@ -270,12 +499,9 @@ def _recalc_setup(monkeypatch, prop_stf, beam_isos, forward):
             beams=[SimpleNamespace(iso_center=np.asarray(iso, dtype=float)) for iso in beam_isos]
         ),
         dij=object(),
-        result={
-            "w": np.array([2.0, 3.0]),
-            "physical_dose": object(),
-            "physical_dose_saved": object(),
-        },
+        result={"w": np.array([2.0, 3.0]), "physical_dose": _dose_image()},
     )
+    ws.add_result("saved", {"physical_dose": _dose_image()})
     monkeypatch.setattr("pyRadPlan.calc_dose_forward", forward)
     monkeypatch.setattr(
         WorkflowWidget,
@@ -299,11 +525,11 @@ def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, pr
     import numpy as np
     from unittest.mock import Mock
 
-    fresh_dose = object()
-    forward = Mock(return_value={"physical_dose": fresh_dose})
+    fresh = create_result({"physical_dose": _dose_image(2.0)})
+    forward = Mock(return_value=fresh)
     ws, w = _recalc_setup(monkeypatch, prop_stf, [np.zeros(3)] * 2, forward)
-    old_stf, weights = ws.stf, ws.result["w"]
-    snapshot = ws.result["physical_dose_saved"]
+    old_stf, weights = ws.stf, ws.result.fluence
+    snapshot = ws.results["saved"]
 
     w._on_recalc_dose()
 
@@ -312,24 +538,25 @@ def test_recalculate_uses_forward_result_and_keeps_weights(qapp, monkeypatch, pr
     assert ws.stf is not old_stf
     assert np.allclose([beam.iso_center for beam in ws.stf.beams], isos)
     assert np.allclose([beam.iso_center for beam in old_stf.beams], 0.0)
-    assert w._dij_stale and not w._result_stale
-    assert ws.result["physical_dose"] is fresh_dose
-    assert ws.result["w"] is weights
-    assert ws.result["physical_dose_saved"] is snapshot
+    assert w.session.tracker.dij_stale and not w.session.tracker.result_stale
+    assert ws.result["physical_dose"] is fresh["physical_dose"]
+    assert ws.result.fluence is weights
+    assert ws.results["saved"] is snapshot
 
 
 def test_recalculate_keeps_the_stf_of_unmoved_beams(qapp, monkeypatch):
     from unittest.mock import Mock
 
-    forward = Mock(return_value={"physical_dose": object()})
+    forward = Mock(return_value=_result())
     ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
     stf = ws.stf
 
     w._on_recalc_dose()
 
-    forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result["w"])
+    forward.assert_called_once_with(ws.ct, ws.cst, stf, ws.pln, ws.result.fluence)
     assert ws.stf is stf
-    assert not w._dij_stale
+    assert not w.session.tracker.dij_stale
+    assert w._lbl_status.text().endswith("1 further result")
 
 
 def test_failed_recalculation_leaves_the_stf_untouched(qapp, monkeypatch):
@@ -380,14 +607,14 @@ def test_recalculate_rejects_changed_beam_geometry(qapp, monkeypatch, angles):
     warning.assert_called_once()
     assert "Calculate Dose Influence" in warning.call_args.args[2]
     assert ws.stf is original_stf and ws.result is original_result
-    assert w._result_stale and w._dij_stale
+    assert w.session.tracker.result_stale and w.session.tracker.dij_stale
 
 
 @pytest.mark.parametrize("couch", [None, [], [0], [0, 360]])
 def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
     from unittest.mock import Mock
 
-    forward = Mock(return_value={"physical_dose": object()})
+    forward = Mock(return_value=_result())
     angles = {"gantry_angles": [360, -180], "couch_angles": couch}
     ws, w = _recalc_setup(monkeypatch, angles, [[1, 2, 3]] * 2, forward)
     for beam, gantry in zip(ws.stf.beams, [0.0, 180.0]):
@@ -396,12 +623,12 @@ def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
 
     w._on_recalc_dose()
 
-    forward.assert_called_once_with(ws.ct, ws.cst, original_stf, ws.pln, ws.result["w"])
+    forward.assert_called_once_with(ws.ct, ws.cst, original_stf, ws.pln, ws.result.fluence)
     assert ws.stf is original_stf
 
 
 @pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
-def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monkeypatch, suffix):
+def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffix):
     import numpy as np
     import SimpleITK as sitk
     from pyRadPlan.ct import validate_ct
@@ -419,14 +646,10 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
         pln=PhotonPlan(prop_opt={"solver": "scipy"}),
         stf={"test": 1},
         dij={"test": 2},
-        result={
-            "physical_dose": dose,
-            "w": weights,
-            "physical_dose_saved": dose,
-            "w_saved": weights.copy(),
-        },
+        result={"physical_dose": dose, "w": weights},
     )
-    w._saved_tags = ["saved"]
+    ws.add_result("saved", ws.result.model_copy())
+    ws.add_result("measured", {"physical_dose": dose * 2.0})
     path = tmp_path / ("workspace" + suffix)
     filters = []
 
@@ -437,25 +660,28 @@ def test_save_workspace_preserves_results_and_snapshot_tags(qapp, tmp_path, monk
     monkeypatch.setattr(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName", choose_file
     )
-    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda fn, *args: fn()))
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda op, *args: op.compute()))
 
     w._on_save_workspace()
     data = load_data(path if suffix else path.with_suffix(".pkl"))
     restored_ws = WorkspaceManager()
     restored = WorkflowWidget(restored_ws)
-    restored._merge_loaded_data(data)
+    restored.session.merge_loaded(data)
 
     assert "*.pkl" in filters[0] and "*.mat" not in filters[0] and "*.npz" not in filters[0]
     assert restored_ws.pln.prop_opt == {"solver": "scipy"}
     assert restored_ws.stf == ws.stf and restored_ws.dij == ws.dij
-    assert set(restored_ws.result) == set(ws.result)
-    np.testing.assert_array_equal(restored_ws.result["w"], weights)
-    np.testing.assert_array_equal(restored_ws.result["w_saved"], weights)
+    assert restored_ws.result.stored_quantities == ws.result.stored_quantities
+    np.testing.assert_array_equal(restored_ws.result.fluence, weights)
+    restored_dose = restored_ws.result["physical_dose"].values
     np.testing.assert_array_equal(
-        sitk.GetArrayFromImage(restored_ws.result["physical_dose"]), sitk.GetArrayFromImage(dose)
+        sitk.GetArrayFromImage(restored_dose), sitk.GetArrayFromImage(dose)
     )
-    assert restored_ws.result["physical_dose"].GetOrigin() == dose.GetOrigin()
-    assert restored._is_tagged("physical_dose_saved")
+    assert restored_dose.GetOrigin() == dose.GetOrigin()
+    assert list(restored_ws.results) == ["current", "saved", "measured"]
+    assert restored_ws.active_result == "current"
+    # A snapshot still shares its images with the result it was taken from
+    assert restored_ws.results["saved"]["physical_dose"].values is restored_dose
 
 
 @pytest.mark.parametrize("suffix", [".mat", ".npz"])
@@ -590,6 +816,7 @@ class _Editor:
 
 def _workflow_with_editor(monkeypatch, choice, applies=True):
     w = WorkflowWidget(WorkspaceManager())
+    w._ws.set_many(ct=object(), cst=object(), pln=object(), stf=object(), dij=object())
     editor = _Editor(applies)
     w.add_pending_changes_source("plan", editor.has_pending, editor.apply)
     asked = []
@@ -631,7 +858,7 @@ def test_applying_pending_changes_stops_steps_using_the_dose_influence(
     qapp, monkeypatch, handler, step
 ):
     w, editor, asked, started = _workflow_with_editor(monkeypatch, "apply")
-    w._ws.set_many(result={"w": [1.0]})
+    w._ws.set_many(result={"w": np.array([1.0])})
 
     getattr(w, handler)()
 
@@ -658,12 +885,12 @@ def test_renaming_a_structure_keeps_the_dose_influence(qapp):
     ct, cst = load_tg119()
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result=_result())
 
     cst.vois = [cst.vois[0].model_copy(update={"name": "renamed"}), *cst.vois[1:]]
     ws.cst = cst
 
-    assert not w._dij_stale
+    assert not w.session.tracker.dij_stale
 
 
 # ----------------------------------------------------------------------
@@ -719,6 +946,24 @@ def _bio_workflow(monkeypatch, bio_model, cst=None, prop_dose_calc=None):
     return ws, w, runs
 
 
+def _spy_on_operations(ws, monkeypatch):
+    prepared = []
+    prepare = ws.session.prepare
+
+    def spy(*args, **kwargs):
+        prepared.append(prepare(*args, **kwargs))
+        return prepared[-1]
+
+    monkeypatch.setattr(ws.session, "prepare", spy)
+    return prepared
+
+
+def _commit(ws, operation):
+    stf = ws.stf
+    value = object() if operation.name == "calc_dose_influence" else _result()
+    operation.commit((stf, value))
+
+
 @pytest.mark.parametrize("handler", ["_on_calc_dose", "_on_recalc_dose"])
 def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler):
     from pyRadPlan.gui.widgets.plan import PlanWidget
@@ -727,10 +972,14 @@ def test_failing_tissues_offer_the_physical_dose_only(qapp, monkeypatch, handler
     plan_widget = PlanWidget(workspace=ws)
     assert plan_widget._cmb_bio_model.currentText() == "z* kernels · mMKM"
     shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+    prepared = _spy_on_operations(ws, monkeypatch)
 
     getattr(w, handler)()
 
     assert len(shown) == 1 and "No matching tissue class" in shown[0]
+    assert ws.pln.bio_model.model == "zstar_kernels"
+    (operation,) = prepared
+    _commit(ws, operation)
     assert ws.pln.bio_model.model == "none"
     assert ws.pln.radiation_mode == "oxygen" and ws.pln.prop_stf["gantry_angles"] == [0.0]
     assert len(runs) == 1
@@ -769,12 +1018,14 @@ def test_the_check_uses_the_dose_engine_of_the_plan(qapp, monkeypatch):
         monkeypatch, "alpha_beta_kernels", prop_dose_calc={"engine": "TOPAS"}
     )
     shown = _answer_message_boxes(monkeypatch, "Calculate physical dose only")
+    prepared = _spy_on_operations(ws, monkeypatch)
 
     w._on_calc_dose()
 
     assert len(shown) == 1
     assert "TOPAS does not use the machine's α/β kernels" in shown[0]
     assert "dose engine" in shown[0]
+    _commit(ws, prepared[0])
     assert ws.pln.bio_model.model == "none"
     assert ws.pln.prop_dose_calc["engine"] == "TOPAS"
     assert runs == ["Calculating dose influence…"]
@@ -826,6 +1077,7 @@ def test_optimize_explains_biological_objectives_without_a_biological_dij(
     objective = SimpleNamespace(quantity=quantity)
     ws.set_many(
         pln=PhotonPlan(),
+        stf=object(),
         cst=SimpleNamespace(vois=[SimpleNamespace(name="PTV", objectives=[objective])]),
         dij=SimpleNamespace(
             bio_model=create_bio_model(bio_model) if bio_model else None, alpha_dose=None
@@ -930,170 +1182,422 @@ def test_tissue_check_without_a_quick_fix_offers_none(qapp, monkeypatch):
     assert runs == []
 
 
-@pytest.mark.parametrize(("scenarios", "expected"), [(None, False), (1, False), (3, True)])
-def test_optimize_requests_results_per_scenario(qapp, monkeypatch, scenarios, expected):
-    import numpy as np
+def _optimize_setup(monkeypatch, scenarios, calls, objectives=()):
+    """A workflow widget whose optimization runs synchronously on a stand-in dij."""
     from types import SimpleNamespace
 
     from pyRadPlan.plan import PhotonPlan
 
-    calls = []
+    optimized = create_result(
+        {
+            "physical_dose": _dose_image(),
+            "physical_dose_scenario": [_dose_image(), _dose_image()],
+            "scenario_labels": ("a", "b"),
+        },
+        fluence=np.ones(2),
+        info={"status": "done"},
+    )
 
-    def compute_result_ct_grid(weights, **kwargs):
+    def fluence_optimization(*args, **kwargs):
         calls.append(kwargs)
-        return {"physical_dose": object()}
+        return optimized
 
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
+    voi = SimpleNamespace(name="t", objectives=list(objectives))
     ws.set_many(
         pln=PhotonPlan(),
-        cst=SimpleNamespace(vois=[]),
+        stf=object(),
+        cst=SimpleNamespace(vois=[voi]),
         dij=SimpleNamespace(
-            bio_model=None,
+            bio_model=object(),
             alpha_dose=None,
             scenarios=None if scenarios is None else list(range(scenarios)),
-            scenario_labels=lambda: [],
-            compute_result_ct_grid=compute_result_ct_grid,
         ),
     )
-    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: np.ones(2))
+    monkeypatch.setattr("pyRadPlan.fluence_optimization", fluence_optimization)
     monkeypatch.setattr(
         WorkflowWidget,
         "_run_in_thread",
         staticmethod(lambda fn, on_success, **kw: on_success(fn())),
     )
     monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
+    return ws, w, optimized
+
+
+def test_optimize_requests_results_per_scenario(qapp, monkeypatch):
+    calls = []
+    ws, w, optimized = _optimize_setup(monkeypatch, 3, calls)
 
     w._on_optimize()
 
-    assert len(calls) == 1
-    assert calls[0]["scenarios"] is expected
-    assert "physical_dose" in ws.result
+    # The optimization reports the scenarios itself; the result is not computed again
+    assert len(calls) == 1 and calls[0]["scenarios"] is True
+    assert ws.result is optimized
 
 
-def test_recalculate_drops_stale_results_per_scenario(qapp, monkeypatch):
+def test_recalculate_replaces_the_active_result_only(qapp, monkeypatch):
     from unittest.mock import Mock
 
-    forward = Mock(return_value={"physical_dose": object()})
+    forward = Mock(return_value=_result())
     ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
-    w._saved_tags = ["saved"]
-    snapshot = [object(), object()]
     ws.result = {
-        **ws.result,
-        "physical_dose_scenario": [object(), object()],
-        "physical_dose_scenario_saved": snapshot,
+        "w": np.array([2.0, 3.0]),
+        "physical_dose": _dose_image(),
+        "let": _dose_image(),
+        "physical_dose_scenario": [_dose_image(), _dose_image()],
+        "scenario_labels": ("a", "b"),
     }
+    ws.add_result("saved", ws.result.model_copy())
+    snapshot = ws.results["saved"]
 
     w._on_recalc_dose()
 
-    assert "physical_dose_scenario" not in ws.result
-    assert ws.result["physical_dose_scenario_saved"] is snapshot
+    # Nothing of the previous doses is left behind in the recalculated result
+    assert ws.result.stored_quantities == forward.return_value.stored_quantities
+    assert ws.result.scenario_quantities == {}
+    assert ws.result.scenario_labels is None
+    assert ws.results["saved"] is snapshot
+    assert snapshot.scenario_labels == ("a", "b")
 
 
 def test_snapshots_keep_results_per_scenario(qapp, monkeypatch):
     from PySide6.QtWidgets import QInputDialog, QMessageBox
 
-    from pyRadPlan.gui.widgets._display_names import group_result_keys
-
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
-    scenario_doses = [object(), object()]
-    ws.result = {"physical_dose": object(), "physical_dose_scenario": scenario_doses}
-    names = iter(["scenario", "robust"])
+    ws.result = {
+        "physical_dose": _dose_image(),
+        "physical_dose_scenario": [_dose_image(), None],
+        "scenario_labels": ("nominal", "shifted"),
+    }
+    scenario_doses = ws.result.scenario_quantities["physical_dose"]
+    names = iter(["current", "scenario"])
     monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kw: (next(names), True))
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
 
-    w._on_save_result()  # "scenario" would read as the per-scenario suffix
+    w._on_save_result()  # the name of the result being worked on
     assert len(warnings) == 1
-    assert set(ws.result) == {"physical_dose", "physical_dose_scenario"}
+    assert list(ws.results) == ["current"]
 
-    w._on_save_result()
-    assert ws.result["physical_dose_scenario_robust"] is scenario_doses
-    assert w._is_tagged("physical_dose_scenario_robust")
-    assert not w._is_tagged("physical_dose_scenario")
+    w._on_save_result()  # no longer clashes with the per-scenario entries
+    assert len(warnings) == 1
+    assert ws.results["scenario"].scenario_quantities["physical_dose"] == scenario_doses
 
-    flattened = [
-        f"{key} {i}" if isinstance(value, list) else key
-        for key, value in ws.result.items()
-        for i in (range(len(value)) if isinstance(value, list) else [0])
-    ]
-    groups = {(g.base, g.tag): g for g in group_result_keys(flattened)}
-    assert set(groups) == {("physical_dose", ""), ("physical_dose", "robust")}
-    assert [label for label, _ in groups["physical_dose", "robust"].components] == [
-        "full",
-        "scenario 0",
-        "scenario 1",
-    ]
+    # The snapshot keeps its scenarios and their labels through a re-optimization
+    ws.result = create_result({"physical_dose": _dose_image(2.0)})
+    assert ws.results["scenario"].stored_scenario_quantities == ["physical_dose"]
+    assert ws.results["scenario"].scenario_labels == ("nominal", "shifted")
 
 
 def test_optimize_keeps_every_result_per_scenario_with_their_labels(qapp, monkeypatch):
-    import numpy as np
     from types import SimpleNamespace
 
-    from pyRadPlan.plan import PhotonPlan
-
     calls = []
+    objectives = [SimpleNamespace(quantity="physical_dose")]
+    ws, w, _ = _optimize_setup(monkeypatch, 2, calls, objectives)
 
-    def compute_result_ct_grid(weights, **kwargs):
-        calls.append(kwargs)
-        return {"physical_dose": object()}
+    w._on_optimize()
 
-    ws = WorkspaceManager()
-    w = WorkflowWidget(ws)
-    voi = SimpleNamespace(name="t", objectives=[SimpleNamespace(quantity="physical_dose")])
-    ws.set_many(
-        pln=PhotonPlan(),
-        cst=SimpleNamespace(vois=[voi]),
-        dij=SimpleNamespace(
-            bio_model=object(),
-            alpha_dose=None,
-            scenarios=[0, 1],
-            scenario_labels=lambda: ["a", "b"],
-            compute_result_ct_grid=compute_result_ct_grid,
-        ),
+    # Also the RBE dose the viewer shows first, though the objectives are on physical dose
+    assert len(calls) == 1 and calls[0]["scenarios"] is True
+    assert ws.result.scenario_labels == ("a", "b")
+
+
+def test_recalculate_keeps_the_scenarios_of_every_quantity(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    dose = _dose_image()
+    forward = Mock(
+        return_value=create_result(
+            {
+                "physical_dose": dose,
+                "rbe_x_dose": dose,
+                "physical_dose_scenario": [dose, dose],
+                "rbe_x_dose_scenario": [dose, dose],
+                "let_scenario": [dose, dose],
+                "scenario_labels": ("from plan 0", "from plan 1"),
+            }
+        )
     )
-    monkeypatch.setattr("pyRadPlan.fluence_optimization", lambda *args: np.ones(2))
+    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
+    ws.result = ws.result.model_copy(update={"scenario_labels": ("stale",)})
+
+    w._on_recalc_dose()
+
+    assert ws.result.scenario_labels == ("from plan 0", "from plan 1")
+    # Not only those the objectives evaluate: the viewer shows a proton plan's RBE dose first
+    for key in ("physical_dose", "rbe_x_dose", "let"):
+        assert [q.values for q in ws.result.scenario_quantities[key]] == [dose, dose]
+
+
+def _synchronous(monkeypatch):
     monkeypatch.setattr(
         WorkflowWidget,
         "_run_in_thread",
         staticmethod(lambda fn, on_success, **kw: on_success(fn())),
     )
-    monkeypatch.setattr(WorkflowWidget, "_open_optimization_status_window", lambda *a: None)
-
-    w._on_optimize()
-
-    # Also the RBE dose the viewer shows first, though the objectives are on physical dose
-    assert calls[0].get("scenario_quantities") is None
-    assert ws.result["scenario_labels"] == ("a", "b")
 
 
-def test_recalculate_keeps_the_scenarios_of_every_quantity(qapp, monkeypatch):
-    from types import SimpleNamespace
+@pytest.mark.parametrize(("chosen", "suffix"), [("NRRD (*.nrrd)", ".nrrd"), ("", ".nii.gz")])
+def test_save_result_writes_the_format_of_the_chosen_filter(
+    qapp, tmp_path, monkeypatch, chosen, suffix
+):
+    import SimpleITK as sitk
     from unittest.mock import Mock
 
-    dose = object()
-    forward = Mock(
-        return_value={
-            "physical_dose": dose,
-            "rbe_x_dose": dose,
-            "physical_dose_scenario": [dose, dose],
-            "rbe_x_dose_scenario": [dose, dose],
-            "let_scenario": [dose, dose],
-        }
-    )
-    ws, w = _recalc_setup(monkeypatch, {"iso_center": [4.0, 5.0, 6.0]}, [[4.0, 5.0, 6.0]], forward)
-    ws.pln = SimpleNamespace(
-        prop_stf=ws.pln.prop_stf,
-        scenarios=SimpleNamespace(
-            scenarios=lambda: SimpleNamespace(labels=lambda: ["from plan 0", "from plan 1"])
-        ),
-    )
-    ws.result = {**ws.result, "scenario_labels": ("stale",)}
+    from pyRadPlan.ct import validate_ct
+    from pyRadPlan.gui.widgets.result import _save_result_dialog
 
-    w._on_recalc_dose()
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ct = validate_ct(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    ws.set_many(ct=ct, result={"physical_dose": sitk.Image(ct.cube_hu) + 2.0, "w": [1.0]})
 
-    assert ws.result["scenario_labels"] == ("from plan 0", "from plan 1")
-    # Not only those the objectives evaluate: the viewer shows a proton plan's RBE dose first
-    for key in ("physical_dose_scenario", "rbe_x_dose_scenario", "let_scenario"):
-        assert ws.result[key] == [dose, dose]
+    class _Dialog:
+        def __init__(self, keys, parent):
+            assert keys == ["physical_dose"]
+
+        def exec(self):
+            return 1
+
+        def selected_quantities(self):
+            return ["physical_dose"]
+
+    filters = []
+
+    def choose(parent, title, name, offered):
+        filters.append(offered)
+        return str(tmp_path / name), chosen
+
+    monkeypatch.setattr(_save_result_dialog, "SaveResultDialog", _Dialog)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName", choose
+    )
+    info = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.information", info
+    )
+    _synchronous(monkeypatch)
+
+    w._on_save_result_to_disk()
+
+    written = tmp_path / f"physical_dose{suffix}"
+    assert filters == ["NIfTI (*.nii.gz *.nii);;NRRD (*.nrrd);;MetaImage (*.mha *.mhd)"]
+    assert sitk.GetArrayFromImage(sitk.ReadImage(str(written))).max() == 2.0
+    assert str(written) in info.call_args.args[2]
+    assert not w.session.busy
+
+
+def test_save_result_offers_the_quantities_of_all_results(qapp, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from pyRadPlan.ct import validate_ct
+    from pyRadPlan.gui.menus import FileMenu
+    from pyRadPlan.gui.widgets.result import _save_result_dialog
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    menu = FileMenu(ws, w)
+    ct = validate_ct(cube_hu=sitk.Image([5, 4, 3], sitk.sitkFloat32))
+    ws.ct = ct
+    assert not menu._act_save_result.isEnabled()
+
+    # A dose on its own grid, without an active result
+    measured = sitk.Image([10, 8, 6], sitk.sitkFloat32) + 3.0
+    measured.SetSpacing((0.5, 0.5, 0.5))
+    ws.add_result("measured", {"physical_dose": measured, "physical_dose_beam": [measured]})
+    assert menu._act_save_result.isEnabled() and not w._btn_save_result.isEnabled()
+
+    ws.result = {"physical_dose": sitk.Image(ct.cube_hu) + 2.0, "w": [1.0]}
+    offered = []
+
+    class _Dialog:
+        def __init__(self, keys, parent):
+            offered.extend(keys)
+
+        def exec(self):
+            return 1
+
+        def selected_quantities(self):
+            return ["measured/physical_dose"]
+
+    names = []
+
+    def choose(parent, title, name, filters):
+        names.append(name)
+        return str(tmp_path / name), ""
+
+    monkeypatch.setattr(_save_result_dialog, "SaveResultDialog", _Dialog)
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName", choose
+    )
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.information", Mock()
+    )
+    _synchronous(monkeypatch)
+
+    w._on_save_result_to_disk()
+
+    assert offered == ["physical_dose", "measured/physical_dose"]
+    assert names == ["measured_physical_dose"]
+    written = sitk.ReadImage(str(tmp_path / "measured_physical_dose.nii.gz"))
+    assert written.GetSize() == (10, 8, 6) and written.GetSpacing() == (0.5, 0.5, 0.5)
+    assert sitk.GetArrayFromImage(written).max() == 3.0
+
+
+def test_image_import_runs_the_session_operation(qapp, tmp_path, monkeypatch):
+    import numpy as np
+    import SimpleITK as sitk
+
+    from pyRadPlan.gui.widgets.workflow import _image_import_dialog
+
+    path = tmp_path / "ct.nii.gz"
+    sitk.WriteImage(sitk.GetImageFromArray(np.full((3, 4, 5), -500, dtype=np.int16)), str(path))
+
+    class _Dialog:
+        def __init__(self, filepath, **kwargs):
+            pass
+
+        def exec(self):
+            return 1
+
+        def selection(self):
+            return {"mode": "ct_new"}
+
+    monkeypatch.setattr(_image_import_dialog, "ImageImportDialog", _Dialog)
+    _synchronous(monkeypatch)
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(cst=object(), pln=object())
+
+    w._open_image_import_dialog(str(path))
+
+    assert ws.present() == {"ct"} and ws.ct.cube_hu.GetSize() == (5, 4, 3)
+
+
+def _wait_until(qapp, predicate, timeout_ms=5000):
+    from PySide6.QtCore import QDeadlineTimer
+
+    deadline = QDeadlineTimer(timeout_ms)
+    while not predicate() and not deadline.hasExpired():
+        qapp.processEvents()
+    assert predicate()
+
+
+def _threaded_operation(compute, commit=lambda value: value, **kwargs):
+    from pyRadPlan.app import Operation
+
+    return Operation("test", "Testing", compute, commit, **kwargs)
+
+
+def test_failing_computation_aborts_the_session_and_shows_the_error(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    deferred = []
+
+    def boom():
+        raise RuntimeError("boom")
+
+    w._run_operation(_threaded_operation(boom))
+    assert session.busy
+    session.call_when_idle(lambda: deferred.append("edit"))
+    _wait_until(qapp, lambda: critical.called)
+
+    assert not session.busy
+    assert deferred == ["edit"]
+    assert "boom" in critical.call_args.args[2]
+    assert not w.is_busy
+
+
+def test_failing_commit_shows_the_error_and_frees_the_session(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+
+    def commit(value):
+        raise ValueError("cannot commit")
+
+    w._run_operation(_threaded_operation(lambda: 1, commit))
+    _wait_until(qapp, lambda: critical.called)
+
+    assert not w.session.busy
+    assert "cannot commit" in critical.call_args.args[2]
+
+
+def test_stop_keeps_the_partial_result_of_an_optimization(qapp):
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    committed = []
+    started = []
+
+    def compute():
+        started.append(True)
+        w._control.pause()
+        w._control.wait_if_paused(5)
+        return "partial"
+
+    operation = _threaded_operation(
+        compute, lambda value: committed.append(value), keeps_partial_result=True
+    )
+    w._run_operation(operation)
+    _wait_until(qapp, lambda: started)
+    w._on_stop()
+    _wait_until(qapp, lambda: not session.busy)
+
+    assert committed == ["partial"]
+    assert operation.control.stop_requested
+    assert not w.is_busy
+    assert w._lbl_status.text() != "Stopping…"
+
+
+def test_stop_of_a_discarded_computation_shows_stopped(qapp):
+    from pyRadPlan.core import ComputeCancelledError
+
+    w = WorkflowWidget(WorkspaceManager())
+    session = w.session
+    started = []
+
+    def compute():
+        started.append(True)
+        w._control.pause()
+        w._control.wait_if_paused(5)
+        raise ComputeCancelledError("stopped")
+
+    w._run_operation(_threaded_operation(compute))
+    _wait_until(qapp, lambda: started)
+    w._on_stop()
+    _wait_until(qapp, lambda: not session.busy)
+
+    assert w._lbl_status.text() == "Stopped"
+    assert not w.is_busy
+
+
+def test_unexpected_prepare_error_is_shown(qapp, monkeypatch):
+    from unittest.mock import Mock
+
+    critical = Mock()
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.critical", critical
+    )
+    w = WorkflowWidget(WorkspaceManager())
+
+    def prepare(action, **params):
+        raise FileNotFoundError("no such phantom")
+
+    monkeypatch.setattr(w.session, "prepare", prepare)
+
+    assert w._prepare("Load", "load_phantom", name="x") is None
+    critical.assert_called_once()
+    assert "no such phantom" in critical.call_args.args[2]

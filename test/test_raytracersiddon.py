@@ -11,6 +11,7 @@ from pyRadPlan.core import xp_utils
 
 
 from pyRadPlan.core.xp_utils import cupy_available, from_numpy, to_numpy
+from pyRadPlan.dose.engines._base_pencilbeam import PencilBeamEngineAbstract
 from pyRadPlan.geometry import lps
 from pyRadPlan.raytracer import RayTracerBase, RayTracerSiddon
 from pyRadPlan.stf._beam import Beam
@@ -91,11 +92,81 @@ def test_raytracer_candidate_mx_array_api(sample_cube):
         xps.floor(-500.0 / ray_spacing), xps.ceil(500.0 / ray_spacing) + 1, dtype=xps.float32
     )
 
+    rng = np.random.default_rng(0)
     lookup_pos = xps.zeros((100, 3), dtype=xps.float32)
-    lookup_pos[:, 0] = xps.asarray(np.random.uniform(-500.0, 500.0, 100), dtype=xps.float32)
-    lookup_pos[:, 2] = xps.asarray(np.random.uniform(-500.0, 500.0, 100), dtype=xps.float32)
+    lookup_pos[:, 0] = xps.asarray(rng.uniform(-500.0, 500.0, 100), dtype=xps.float32)
+    lookup_pos[:, 2] = xps.asarray(rng.uniform(-500.0, 500.0, 100), dtype=xps.float32)
 
-    candidate_mx = raytracer._get_candidate_ray_matrix(spacing_range, lookup_pos)
+    cut_off = xps.asarray(rng.uniform(40.0, 60.0, 100), dtype=xps.float32)
+    candidate_mx = raytracer._get_candidate_ray_matrix(spacing_range, lookup_pos, cut_off)
+
+    grid = to_numpy(spacing_range).astype(np.float64)
+    ref = to_numpy(lookup_pos).astype(np.float64)
+    radius = to_numpy(cut_off).astype(np.float64)
+    expected = np.zeros((grid.size, grid.size), dtype=bool)
+    for (x, _, z), r in zip(ref, radius):
+        rows, cols = np.abs(grid - z) <= r, np.abs(grid - x) <= r
+        disc = (grid[rows, None] - z) ** 2 + (grid[None, cols] - x) ** 2 <= r**2
+        expected[np.ix_(rows, cols)] |= disc
+    np.testing.assert_array_equal(to_numpy(candidate_mx), expected)
+
+
+class _GeometricSelectionEngine(PencilBeamEngineAbstract):
+    def __init__(self):
+        self.dose_grid = {"resolution": [4.0, 4.0, 4.0]}
+        self.mult_scen = "nominal"
+        super().__init__()
+
+    def _compute_bixel(self, curr_ray, k):
+        pass
+
+
+@pytest.mark.parametrize(
+    "ray_xz", [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (100.0, 100.0), (-150.0, 50.0)]
+)
+def test_trace_cubes_covers_geometric_cone(ray_xz):
+    """Every voxel the dose engines select around a ray must receive a radiological depth.
+
+    The engines select a cone with the lateral cut-off as radius at the isocenter plane, so
+    the traced region must widen behind the isocenter and for tilted, off-axis rays.
+    """
+    sad, cut_off, res = 1000.0, 50.0, 4.0
+    size = (45, 50, 45)
+    # the cube only surrounds the cone of the ray, to keep the test fast far off axis
+    origin = (ray_xz[0] - 88.0, -98.0, ray_xz[1] - 88.0)
+    cube = sitk.GetImageFromArray(np.ones(size[::-1], dtype=np.float32))
+    cube.SetSpacing((res, res, res))
+    cube.SetOrigin(origin)
+    raytracer = RayTracerSiddon(cube)
+    raytracer.lateral_cut_off = cut_off
+
+    ray_pos = np.array([ray_xz[0], 0.0, ray_xz[1]])
+    beam = Beam(
+        gantry_angle=0.0,
+        couch_angle=0.0,
+        iso_center=np.zeros(3),
+        SAD=sad,
+        rays=[Ray(ray_pos_bev=ray_pos, ray_pos=ray_pos, beamlets=[Beamlet(energy=6.0)])],
+    )
+    depth = to_numpy(raytracer.trace_cubes_array(beam)[0]).ravel()
+
+    # gantry and couch 0: BEV coincides with LPS; (z, y, x) order like the depth array
+    axes = [o + res * np.arange(n) for o, n in zip(origin, size)]
+    zz, yy, xx = np.meshgrid(axes[2], axes[1], axes[0], indexing="ij")
+    coords = np.stack((xx.ravel(), yy.ravel(), zz.ravel()), axis=1).astype(np.float32)
+    source = beam.source_point_bev.astype(np.float32)
+    in_cone, *_ = _GeometricSelectionEngine().calc_geo_dists(
+        coords - source,
+        source,
+        (2.0 * ray_pos - beam.source_point_bev).astype(np.float32),
+        sad,
+        np.ones(coords.shape[0], dtype=bool),
+        cut_off,
+    )
+
+    assert np.count_nonzero(in_cone) > 10000
+    missing = np.count_nonzero(~np.isfinite(depth[in_cone]))
+    assert missing == 0, f"{missing} of {np.count_nonzero(in_cone)} cone voxels without depth"
 
 
 def test_raytracer_trace_multiple_cubes(sample_cube):
@@ -205,6 +276,65 @@ def test_boundary_planes_do_not_create_duplicate_voxel_segments(monkeypatch):
     assert valid_ix.size == size[0]
     assert np.all(np.diff(valid_ix) != 0)
     assert np.isclose(np.sum(lengths[0, valid]), size[0] * spacing[0])
+
+
+def test_corner_crossings_do_not_repeat_voxels(monkeypatch):
+    """A 45 degree ray through voxel corners must visit each voxel once.
+
+    Regression test: the x- and y-plane intersections at a corner differ by a few ulps in
+    float32, leaving a sliver segment that maps back into the voxel just traversed. The voxel
+    then appeared twice and could take its depth from the end of its segment instead of the
+    middle. Geometry cropped from the HEAD_AND_NECK phantom, where this was found.
+    """
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    cube = sitk.GetImageFromArray(np.ones((5, 9, 9), dtype=np.float32))
+    cube.SetSpacing((3.0, 3.0, 5.0))
+    cube.SetOrigin((-240.51, 131.23, -893.5))
+    raytracer = RayTracerSiddon(cube)
+    iso_center = np.array([6.883, -38.462, -840.045])
+    source = np.array([[707.10678119, -707.10678119, 0.0]])
+    target = np.array([[-239.13203436, 185.13203436, -42.42640687]])
+
+    _, lengths, _, _, ix = raytracer.trace_rays(iso_center, source, target)
+
+    valid = ix[0] >= 0
+    assert np.all(np.diff(ix[0, valid]) != 0)
+    # the corner voxel keeps the full path length of its two former segments
+    np.testing.assert_allclose(lengths[0, valid][ix[0, valid] == 202], 4.12561, atol=1e-4)
+    np.testing.assert_allclose(np.sum(lengths[0, valid]), 23.70681, atol=1e-4)
+
+
+def test_corner_voxels_take_mid_segment_depth(monkeypatch):
+    """Voxels whose corners a 45 degree ray crosses get the depth at the middle of their path.
+
+    Regression test: the sliver segment a corner leaves in float32 repeated the voxel, which
+    then took the depth at the end of its path, up to half its chord too deep. A float64 trace
+    separates the plane intersections and serves as reference.
+    """
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", "numpy")
+
+    cube = sitk.GetImageFromArray(np.ones((4, 40, 40), dtype=np.float32))
+    cube.SetSpacing((3.0, 3.0, 3.0))
+    cube.SetOrigin((-240.51, 131.23, -893.5))
+    beam = Beam(
+        gantry_angle=45.0,
+        couch_angle=0.0,
+        iso_center=np.array(cube.TransformIndexToPhysicalPoint((20, 20, 2))),
+        SAD=1000.0,
+        rays=[Ray(ray_pos_bev=np.zeros(3), ray_pos=np.zeros(3), beamlets=[Beamlet(energy=100.0)])],
+    )
+
+    depths = {}
+    for precision in (np.float32, np.float64):
+        raytracer = RayTracerSiddon(cube)
+        raytracer.lateral_cut_off = 20.0
+        raytracer.precision = precision
+        depths[precision] = to_numpy(raytracer.trace_cubes_array(beam)[0])
+
+    np.testing.assert_allclose(depths[np.float32], depths[np.float64], atol=1e-3)
 
 
 @pytest.mark.parametrize(("gantry", "couch"), [(0.0, 0.0), (45.0, 0.0), (30.0, 45.0)])

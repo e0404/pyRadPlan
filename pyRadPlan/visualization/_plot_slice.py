@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pint
 from pyRadPlan import CT, validate_ct, StructureSet, validate_cst
 from pyRadPlan.core._units import ureg
+from pyRadPlan.result import QuantityDistribution
 
 
 class PlotSliceKwargs(TypedDict, total=False):
@@ -125,7 +126,7 @@ def _resolve_view_slices(
 def _normalize_overlay_unit(overlay_unit: Union[str, pint.Unit, pint.Quantity]) -> pint.Unit:
     """Normalize ``overlay_unit`` to a ``pint.Unit`` so formatting and predicates are uniform."""
     if isinstance(overlay_unit, str):
-        return ureg(overlay_unit).units
+        return ureg.Unit(overlay_unit)
     if isinstance(overlay_unit, pint.Quantity):
         return overlay_unit.units
     return overlay_unit
@@ -297,7 +298,7 @@ def _render_slice(ctx: _PlotCtx, slice_idx: int, cfg: _SliceConfig) -> None:
 def plot_slice(
     image_volume: Optional[Union[CT, dict, sitk.Image]] = None,
     cst: Optional[Union[StructureSet, dict, list]] = None,
-    overlay: Optional[Union[sitk.Image, np.ndarray]] = None,
+    overlay: Optional[Union[QuantityDistribution, sitk.Image, np.ndarray]] = None,
     view_slice: Optional[Union[list[int], np.ndarray, int]] = None,
     *,
     ct: Optional[Union[CT, dict, sitk.Image]] = None,
@@ -311,8 +312,9 @@ def plot_slice(
         The image_volume object.
     cst : StructureSet
         The StructureSet object.
-    overlay : sitk.Image or np.ndarray
-        The overlay image to visualize.
+    overlay : QuantityDistribution, sitk.Image or np.ndarray
+        The overlay image to visualize. A plan-result quantity (e.g.
+        ``result.physical_dose``) is accepted directly.
     view_slice : List[int], array, int or None
         Slice indices to visualize.
 
@@ -380,6 +382,8 @@ def plot_slice(
     global_overlay_max = None
     symmetric = False
     if overlay is not None:
+        if isinstance(overlay, QuantityDistribution):
+            overlay = overlay.values
         if isinstance(overlay, sitk.Image):
             overlay = sitk.GetArrayViewFromImage(overlay)
         symmetric = bool(np.nanmin(overlay) < 0)

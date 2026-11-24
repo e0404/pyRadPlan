@@ -1,7 +1,15 @@
 import pytest
 import numpy as np
 import SimpleITK as sitk
-from pyRadPlan.cst import OAR, Target, HelperVOI, ExternalVOI, create_voi, DEFAULT_VOI_COLORS
+from pyRadPlan.cst import (
+    OAR,
+    Target,
+    HelperVOI,
+    ExternalVOI,
+    create_voi,
+    recreate_voi,
+    DEFAULT_VOI_COLORS,
+)
 from pyRadPlan.ct import create_ct
 from pyRadPlan.biology.tissues import (
     LEMTissueProperties,
@@ -1205,6 +1213,21 @@ def test_voi_single_objective_dict_still_works(generic_input_3d):
     assert isinstance(voi.objectives[0], SquaredOverdosing)
 
 
+@pytest.mark.parametrize("placeholder", [None, [None], [()], [[]], [np.array([])]])
+def test_voi_drops_empty_objective_placeholders(generic_input_3d, placeholder):
+    """A VOI with only empty placeholders has no objectives, also on assignment."""
+    from pyRadPlan.optimization.objectives import SquaredOverdosing  # noqa: PLC0415
+
+    name, ct, mask, _, _ = generic_input_3d
+    voi = create_voi(voi_type="OAR", name=name, ct_image=ct, mask=mask, objectives=placeholder)
+    assert voi.objectives == []
+
+    obj = {"name": "Squared Overdosing", "d_max": 30.0}
+    voi.objectives = [None, obj]
+    assert len(voi.objectives) == 1
+    assert isinstance(voi.objectives[0], SquaredOverdosing)
+
+
 # Tissue properties
 
 
@@ -1418,3 +1441,44 @@ def test_resample_4d_voi_on_4d_ct(generic_input_4d):
 
     assert resampled.mask.GetSize() == mask.GetSize()
     np.testing.assert_array_equal(resampled.indices, voi.indices)
+
+
+def test_recreate_voi_mirrors_tissue_and_leaves_input_unchanged(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask, overlap_priority=3)
+    tissue = LEMTissueProperties(alpha_x=0.5, beta_x=0.04)
+
+    new_voi = recreate_voi(voi, tissue_properties=tissue, overlap_priority=1)
+
+    assert new_voi is not voi
+    assert new_voi.tissue_properties == tissue
+    assert (new_voi.alpha_x, new_voi.beta_x) == (0.5, 0.04)
+    assert new_voi.overlap_priority == 1
+    assert voi.overlap_priority == 3
+    assert voi.tissue_properties != tissue
+
+
+def test_recreate_voi_keeps_an_auto_color_unset(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask)
+
+    same_type = recreate_voi(voi, voi_type="OAR")
+    assert same_type.color == voi.color
+    assert "color" not in same_type.model_fields_set
+
+    target = recreate_voi(voi, voi_type="TARGET")
+    assert isinstance(target, Target)
+    assert target.color == DEFAULT_VOI_COLORS["TARGET"][0]
+    assert "color" not in target.model_fields_set
+
+
+def test_recreate_voi_keeps_an_explicit_color(generic_input_3d):
+    name, ct, mask, _, _ = generic_input_3d
+    voi = OAR(name=name, ct_image=ct, mask=mask, color=(10, 20, 30))
+
+    target = recreate_voi(voi, voi_type="TARGET")
+    assert target.color == (10, 20, 30)
+    assert "color" in target.model_fields_set
+
+    recolored = recreate_voi(voi, color=(1, 2, 3))
+    assert recolored.color == (1, 2, 3)

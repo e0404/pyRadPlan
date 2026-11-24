@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.core import field_constraints
+from pyRadPlan.app._planform import PROBLEM_FORM_EXCLUDE as _HIDDEN_PROBLEM_FIELDS
+from pyRadPlan.app._planform import default_solver, solver_defaults
+from pyRadPlan.app._planform import split_solver_spec as _split_solver_spec
 from pyRadPlan.optimization.problems import PlanningProblem
 from pyRadPlan.optimization.solvers import (
     IPOPT_DISABLED_REASON,
@@ -29,11 +31,6 @@ from .._display_names import add_identified_item, show_identifiers_when_open
 
 logger = logging.getLogger(__name__)
 
-#: Problem settings the problem form leaves out. The solver has its own selector; the
-#: legacy conversion of physical-dose objectives is switched off by the GUI workflow, whose
-#: objectives table sets every quantity, unless a plan explicitly asks for it.
-_HIDDEN_PROBLEM_FIELDS = frozenset({"solver", "convert_dose_objectives"})
-
 
 def _unavailable_reason(name: str) -> str:
     if name == "ipopt" and IPOPT_DISABLED_REASON:
@@ -41,44 +38,13 @@ def _unavailable_reason(name: str) -> str:
     return "it is not installed in this environment"
 
 
-def _configurable_fields(model: type) -> list[str]:
-    names = []
-    for name, info in model.model_fields.items():
-        meta = field_constraints(info).get("param_meta")
-        if meta is None or meta.configurable:
-            names.append(name)
-    return names
-
-
 def _solver_defaults(solver_cls: type[SolverBase]) -> dict[str, Any]:
     """Effective defaults of a solver, which most solvers only set in ``__init__``."""
-    try:
-        solver = solver_cls()
-    except Exception as exc:  # noqa: BLE001 - the form then shows the model defaults
+
+    def _log(exc: Exception) -> None:
         logger.debug("Could not instantiate solver %s for its defaults: %s", solver_cls, exc)
-        return {}
-    return {
-        name: getattr(solver, name)
-        for name in _configurable_fields(solver_cls.config_model())
-        if hasattr(solver, name)
-    }
 
-
-def _split_solver_spec(spec: Any) -> tuple[Optional[str], dict[str, Any]]:
-    """Solver name and configuration of a ``prop_opt["solver"]`` entry."""
-    if spec is None:
-        return None, {}
-    if isinstance(spec, str):
-        return spec, {}
-    if isinstance(spec, SolverBase):
-        # Hidden parameters such as keyboard cancellation still belong to the
-        # configuration and must survive replacing an instance with a dictionary.
-        names = spec.config_model().model_fields
-        return spec.short_name, {n: getattr(spec, n) for n in names if hasattr(spec, n)}
-    if isinstance(spec, Mapping):
-        values = dict(spec)
-        return values.pop("name", None), values
-    return None, {}
+    return solver_defaults(solver_cls, on_error=_log)
 
 
 class OptimizationConfigDialog(QDialog):
@@ -254,10 +220,7 @@ class OptimizationConfigDialog(QDialog):
 
     def _default_solver(self) -> str:
         """Return the solver the problem picks when none is configured."""
-        default = self._problem_cls.config_model().model_fields["solver"].default
-        if isinstance(default, str) and default in self._solvers:
-            return default
-        return next(iter(self._solvers), default)
+        return default_solver(self._problem_cls)
 
     def _on_solver_changed(self, index: int) -> None:
         if self._solver_form is not None:

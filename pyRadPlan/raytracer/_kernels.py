@@ -71,6 +71,50 @@ def merge_sorted_unique(
     return xp.sort(xp.where(mask, xp.inf, alphas), axis=1)
 
 
+def merge_repeated_voxel_segments(
+    lengths: Array, rho: list[Array], ix: Array
+) -> tuple[Array, list[Array], Array]:
+    """
+    Fold consecutive segments of a ray that lie in the same voxel into the first one.
+
+    Plane intersections that coincide in exact arithmetic (e.g. voxel corners at 45 degrees)
+    can differ by a few ulps, leaving a sliver segment whose midpoint rounds back into the
+    voxel just traversed. The voxel then appears twice in a row, and its depth depends on
+    which of the two segments is selected. Each run keeps its first segment with the summed
+    length; the repeats become invalid (index -1, NaN density, zero length).
+
+    Only the repeated segments are touched. Backends with mutable arrays are updated in
+    place, so the inputs must not be used afterwards.
+    """
+    xp = array_api_compat.array_namespace(lengths, ix)
+    shape = ix.shape
+    if shape[1] < 2:
+        return lengths, rho, ix
+
+    rows, cols = xp.nonzero((ix[:, 1:] == ix[:, :-1]) & (ix[:, 1:] >= 0))
+    if rows.shape[0] == 0:
+        return lengths, rho, ix
+
+    # Flat positions of the repeats, ascending, so a run is a stretch of consecutive values
+    repeats = rows * shape[1] + cols + 1
+    ix = xp.reshape(xp_utils.scatter(xp.reshape(ix, (-1,)), repeats, -1), shape)
+    rho = [xp.reshape(xp_utils.scatter(xp.reshape(r, (-1,)), repeats, xp.nan), shape) for r in rho]
+
+    # Each pass folds the last segment of every run into its predecessor
+    lengths = xp.reshape(lengths, (-1,))
+    run_end = xp.ones((1,), dtype=xp.bool, device=array_api_compat.device(repeats))
+    pending = repeats
+    while pending.shape[0] > 0:
+        last_of_run = xp.concat(((pending[1:] - pending[:-1]) != 1, run_end))
+        last = pending[last_of_run]
+        folded = xp.take(lengths, last - 1) + xp.take(lengths, last)
+        lengths = xp_utils.scatter(lengths, last - 1, folded)
+        pending = pending[~last_of_run]
+    lengths = xp_utils.scatter(lengths, repeats, 0.0)
+
+    return xp.reshape(lengths, shape), rho, ix
+
+
 @jittable(backends=("jax", "torch"))
 def compute_indices_from_alpha(
     source_points: Array,

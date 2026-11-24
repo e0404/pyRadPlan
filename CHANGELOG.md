@@ -7,18 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pyRadPlan.result`: `PlanResult` holds the quantities of a plan on the CT grid as `QuantityDistribution`s (`result.physical_dose.values` is a `sitk.Image`), the per-beam quantities (`result.beam.physical_dose[i]`), the per-scenario quantities with their labels (`result.scenario.physical_dose[i]`, `result.scenario_labels`), the fluence and a summary of the solver information. All quantities of a result share one grid and agree in their number of beams and scenarios. It is saved and loaded by the IO backends and is the result the GUI works with. A matRad `resultGUI` is read with `PlanResult.from_matrad` (as the `.mat` importer does), which translates the matRad field names (e.g. `RBExDose` to `rbe_x_dose`) and places the cubes on the CT grid
+- GUI and web version: the data cursor of the DVH view also shows a horizontal line at the mouse pointer and its volume in the readout
+- Experimental web version of the GUI in `web/`: pyRadPlan runs in the browser with Pyodide (numpy backend), without a server. It mirrors the desktop GUI (plan form, objectives, dose influence, optimization with scipy or ipax, slice viewer, DVH and quality indicators, workspace load and save) and uses a 5 mm dose grid by default. Not available in the browser: image and DICOM import, Monte Carlo engines, IPOPT, GPU backends and the AI features
+- `pyRadPlan.app`: a session layer without Qt (`Session`, `Workspace`, `dispatch`) that holds the workflow logic of the GUIs. The desktop GUI and the web version both run on it
+- Documentation: an imprint and a privacy policy covering the documentation and the web version, linked from the footer of every documentation page, the README, the web version's landing page, Info panel, About dialog and first-visit notice, and the desktop GUI's About dialog
+- Web version: the landing page opens the newest release after a 5 s countdown, which the visitor can cancel ("Stay on this page", or `?stay` in the URL)
+- Documentation: a FAQ section on the Help and support page, starting with the GUI failing to start on Windows with an outdated Visual C++ Redistributable
+
+### Changed
+
+- **Breaking:** `fluence_optimization` returns a `PlanResult` instead of the fluence vector, which is available as `result.fluence`. `Dij.compute_result_ct_grid`, `Dij.compute_result_dose_grid` and `calc_dose_forward` return a `PlanResult` instead of a dictionary of images; their `"<quantity>_scenario"` lists are `result.scenario_quantities`
+- `fluence_optimization(..., scenarios=True)` also reports the optimized quantities of every scenario (`result.scenario_quantities`)
+- GUI and web version: the workspace keeps every result on its own. A snapshot, an imported dose and the result being worked on are separate results (`Workspace.results`, `add_result`, `remove_result`, `active_result` in `pyRadPlan.app`, also on the desktop GUI's `WorkspaceManager`; `workspace.result` is the active one), each with its own beams, scenarios and scenario labels. Optimizing or recalculating replaces only the active result, and a recalculation no longer leaves quantities of the previous doses behind. The viewer, the analysis window and the reference dose of an objective list the quantities of all results, e.g. `dose (protons_30fx)`. An imported dose keeps its own grid, is shown resampled onto the CT, and a dose loaded together with a patient is listed as `dose (imported)`. Save Result exports the quantities of all results. Saved workspaces store all results; workspaces saved with earlier versions are split into their results when loaded. Any name can be used for a snapshot, including `beam` and `scenario`. Loading a result or a dose without a CT adds it to the results of the current patient instead of replacing them
+- GUI: replacing the CT marks the dose influence matrix and the result as outdated
+- GUI: the engine settings dialog no longer shows `dose_grid`, `mult_scen`, `bio_model`, `voxel_sub_ix` and `select_voxels_in_scenarios`; the plan form sets them
+- GUI: a plan that leaves the dose engine to its radiation mode keeps doing so when it is applied
+- GUI: file dialogs take their formats from one table. NIfTI is the default format for result images, DICOM folders are loaded with Load Folder only, and a file name ending in another format's extension is refused instead of getting a second extension
+- GUI: a structure edited while a computation runs is updated when the computation ends
+- GUI: a dose-only `.npz` file can be loaded as a dose
+- GUI: structures are addressed by position, so a structure set with duplicate structure names can be edited; a structure edit queued during a computation is dropped if another structure set was loaded meanwhile
+- Web version: loading pickle files is disabled in the browser (unpickling runs code from the file); saving pickles still works
+- `pyRadPlan.app`: hosts can refuse pickle loading and process-wide settings changes (`SessionManager(allow_pickle=..., allow_global_settings=...)`)
+- Replacing a structure's mask marks the dose influence matrix as outdated
+- Optimization starts faster: resampling the structure set onto the dose grid no longer computes the voxel indices and shape statistics of every structure on the CT grid first (about 4.7 s down to 1.4 s for one carbon beam on the LIVER phantom)
+
+### Fixed
+
+- `plot_slice` / `plot_multiple_slices` failed for a dimensionless `overlay_unit` such as `"1"` (e.g. in the carbon example)
+- `calculate_machine_scale` read the forward dose as a dictionary and failed
+- `Grid.resample` now centers the resampled grid on the original one (issue #32). The origin is the center of the first voxel, but the grid was centered as if it were the voxel corner, so every grid coarser than the CT, including the default dose grid of the dose engines, was shifted by half the resolution difference per axis (e.g. 1.5 mm for a 5 mm dose grid on a 2 mm CT). Doses were always placed at the correct world positions, but structures resampled onto the dose grid were represented asymmetrically. This changes numerical results: dose grid voxel positions, structure voxels on the dose grid, and therefore dose influence matrices and optimized plans differ slightly from earlier versions
+- GUI: comparing saved results in the DVH view no longer puts RBE-weighted doses of two plans (e.g. proton and carbon) on separate x axes; saved results now keep the unit and label of their quantity
+- GUI: the problem settings of a plan with `convert_dose_objectives` could not be edited ("Unknown field(s)")
+- GUI: changing the radiation mode of a plan with an explicit scenario set failed
+- GUI: the status line kept showing "Saving ..." after a save
+- Base data files could be removed outside the base data folder through a file name containing `..` or a path separator
+- Wrong masks and DVHs for structures sharing a name in the session layer
+- GUI: unexpected errors while preparing or committing a step were printed instead of shown
+- GUI on Windows machines with an outdated Microsoft Visual C++ Redistributable: Qt failed to load, because SimpleITK was imported first and made Qt use the system's older `msvcp140.dll` instead of the one PySide6 ships. Qt is now imported first. The standalone Windows app, which did not start, now also ships the runtime of PySide6 next to its executable, so it no longer depends on the one installed in Windows
+- A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
+- Radiological depth for oblique beams: where a ray passes through a voxel corner (for example at 45°), the voxel could get the depth at the end of the ray's path through it instead of the middle, up to half that path too deep (about 2 mm for 3 mm voxels). On the GPU, the affected voxels could differ from those on the CPU. The Siddon ray tracer listed such a voxel twice, because the coinciding plane intersections differ slightly in float32 and leave a sliver segment in the same voxel. Consecutive segments in the same voxel are now merged
+- Range shifters in the particle pencil-beam engines, aligned with matRad: a beamlet with a range shifter raised a `KeyError` (the range shifter was read with camelCase keys), and the range shifter scattering never reached the lateral profile of the Hong engine. The scattering model now uses the base data range in cm instead of mm, scales to helium, carbon and oxygen ions, and is applied in the lateral cut-off as for the dose. Radiation modes without a scattering model (VHEE) warn and only shift the depth
+- Photon machines: the penumbra (`penumbraFWHMatIso`) was read under a misspelled key, so every machine used the default of 5 mm. This did not change the generic photon machine, whose penumbra is 5 mm
+- GUI: the Edit VOI dialog now shows the predefined tissue (base data class or cell line preset) a structure already has in its tissue picker, also after Apply and Match base data. Pressing OK with a tissue selected in the picker but not applied now asks whether to apply it, discard the selection or keep editing, instead of silently dropping it
+- Web version: the Edit VOI dialog now offers the tissue picker with Apply, Match base data, Relabel and Derive from model, with the same preselection and the same warning for an unapplied selection as the desktop GUI. The tissue editor of that dialog had no picker before
+
+## [0.9.0] - 2026-11-18
+
 ### Changed
 
 - numpy 2.4 and 2.5 are supported
 - All dependencies have upper version bounds: below the next major release, or below the next minor release for 0.x packages, PySide6, numpy and pydantic. New releases are allowed after they were tested with pyRadPlan
+- Documentation: the photon SVD pencil beam engine and `PhotonSVDKernel` docstrings describe the attributes, units, kernel data layout and the dose calculation steps. The `betas` of a kernel are described as build-up coefficients, not weighting factors
+- Fluence optimization on the GPU evaluates objectives and gradients faster: structure voxel indices are transferred to the device once per optimization instead of at every evaluation, and Squared Overdosing / Squared Underdosing no longer wait for the host. On TG119 with 5 photon beams and CuPy, an evaluation takes about half the time
+
+### Deprecated
+
+- `StructureSet.get_reference_lq_params` and `get_tissue_class_indices`: the `overlap_is_applied` argument has no effect, because the result is the same with and without overlap priorities applied. Passing it emits a `DeprecationWarning`
 
 ### Fixed
 
 - Exporting steering information in matRad format (e.g. to a `.mat` file) failed with numpydantic 2.0
+- Dose influence matrices failed to validate ("Invalid shape!") with numpydantic 2.0 on Python 3.12.3, the system Python of Ubuntu 24.04, so no dose could be calculated there. This also broke the Linux desktop installer
 - Photon SVD pencil beam engine: in bixel-based dose calculation, the bixel lay half a convolution pixel beside its ray (0.25 mm in both lateral directions at the default 5 mm bixel width and 0.5 mm resolution). It is now centered, which slightly shifts all bixel-based photon doses and dose influence matrices. `use_custom_primary_photon_fluence=True` no longer fails with a `KeyError` in this mode
 - Photon SVD pencil beam engine with `use_custom_primary_photon_fluence=True`: the primary fluence across a bixel was evaluated mirrored through the ray center and with its two lateral directions swapped, so a bixel off the central axis in x had its fluence tilt along z and vice versa, pointing inward. The mean fluence per bixel was correct, so the effect on dose is small
 - Photon SVD pencil beam engine: the Gaussian penumbra filter and the dose kernels were sampled on grids without their last positive sample, which made photon doses slightly asymmetric when the kernel is cut off (up to 0.03 % of the maximum dose with a 20 mm kernel cutoff). Both grids are now symmetric around the ray
 - Photon SVD pencil beam engine: field-based dose calculation mirrored the field shape along IEC Y, so an MLC opening toward the gantry deposited dose on the opposite side (e.g. inferior instead of superior for a head-first supine patient). Fields symmetric in IEC Y were not affected
+- GUI: the slice viewer drew every voxel square, so CTs with a slice spacing different from the in-plane resolution (e.g. the head and neck phantom) looked squished in the sagittal and coronal views. Slices are now drawn with the correct aspect ratio.
+- Ray tracers: the lateral cut-off was applied on the ray-matrix plane behind the patient instead of at the isocenter plane, and did not account for the tilt of off-axis rays, so the traced region was narrower than the geometric cut-off of the dose engines (about 11 % for photons in a 240 mm phantom, ~1 % for ions). Voxels in between got no radiological depth and no dose. Every voxel inside the geometric cut-off now gets a depth. Photon dose influence matrices gain entries at the edge of the cut-off, existing entries are unchanged (TG119, two beams, 50 mm cut-off, dij sampling off: +0.7 % non-zeros, dose up to +0.26 % of the maximum). With dij sampling on (the default), the additional voxels shift the random sampling, so photon results with a fixed `random_seed` differ from 0.8.0 within the sampling noise (up to ±1.6 % of the maximum dose in the same case). Photon ray tracing traces about 30 % more rays and takes correspondingly longer. Proton dose influence matrices on TG119 are bit-identical. matRad applies the cut-off unscaled on the ray-matrix plane, so photon dose influence matrices now have slightly more entries than matRad's
+- Quantities: `compute_chain_derivative` returned the derivative of the previous cotangent when it was called again with the same fluence and a different cotangent. It now always uses the cotangent it is given
+- `import pyRadPlan.raytracer` (or `from pyRadPlan.raytracer import RayTracerSiddon`) as the first pyRadPlan import failed with a circular `ImportError`
+- GUI: in the plan settings, the orange border that marks a field with unapplied changes no longer changes how the field is drawn. On spin boxes such as the dose grid resolution, the up/down arrows used to change their look and position while the field was marked; they now look the same with and without the border
+- Overlap priorities: a VOI without objectives removed its voxels from VOIs with a higher overlap priority number, so those voxels lost their objectives. This can cause problems if a CTV inside a PTV has no objective. Overlap priorities are now only resolved among VOIs with objectives; VOIs without objectives keep their full masks. A warning is logged when a VOI with objectives is completely overlapped. Reference LQ parameters and tissue classes of voxels that several VOIs share come from the VOI with the lowest overlap priority number. They used to come from the VOI listed last, so a dose influence matrix with `alphax` / `betax` calculated with 0.8.0 can differ where VOIs with different tissues overlap; optimizing it then raises a `ValueError` (see below), and it has to be recalculated. Empty placeholders such as `None` in a VOI's objectives are dropped, so such a VOI counts as having no objectives.
+- Optimization: the check that the Dij's `alphax` / `betax` match the structure set only logged an error, and computed the reference values differently from the dose engines. The check now builds the values with `StructureSet.get_tissue_data`, like the dose engines, and raises a `ValueError`.
 
 ## [0.8.0] - 2026-11-05
 
@@ -762,7 +825,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/e0404/pyRadPlan/compare/v0.6.0...v0.6.1

@@ -793,6 +793,13 @@ class ScenarioSet(PyRadPlanBaseModel):
         """
         return self.group_by(*self.dimensions_affecting(AFFECTS_VOXEL_PARAMS))
 
+    def voxel_param_ct_phases(self) -> list[int]:
+        """CT phase behind each per-voxel parameter column, in :meth:`voxel_param_sets` order."""
+        return [
+            int(round(float(values["ct_phase"][0]))) if "ct_phase" in values else 0
+            for values, _ in self.voxel_param_sets()
+        ]
+
     @property
     def num_voxel_param_sets(self) -> int:
         """Number of per-voxel parameter columns the set requires."""

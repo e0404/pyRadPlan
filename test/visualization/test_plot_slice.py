@@ -225,3 +225,11 @@ def test_image_windowing(sample_ct, sample_cst, sample_overlay, tmp_path):
         save_filename=str(tmp_path / "image_windowing_centerwidth.png"),
         show_plot=False,
     )
+
+
+@pytest.mark.parametrize("unit", ["1", "Gy", ""])
+def test_normalize_overlay_unit(unit):
+    from pyRadPlan.core._units import ureg
+    from pyRadPlan.visualization._plot_slice import _normalize_overlay_unit
+
+    assert _normalize_overlay_unit(unit) == ureg.Unit(unit)

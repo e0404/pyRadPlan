@@ -10,7 +10,6 @@ and biological model selections.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app._basedata import machine_identity, mat_file_name, rbe_table_summary
 from pyRadPlan.core import (
     BaseDataFile,
     bundled_base_data_dir,
@@ -52,30 +52,20 @@ _SOURCE_LABELS = {"bundled": "pyRadPlan", "user": "User", "shared": "Shared"}
 
 
 def _describe_machine(entry: BaseDataFile) -> tuple[list[str], str]:
-    stem = os.path.splitext(entry.name)[0]
-    mode, _, name = stem.partition("_")
+    mode, name = machine_identity(entry.name)
     return [mode, name, _SOURCE_LABELS[entry.source], entry.name], ""
 
 
 def _describe_rbe_table(entry: BaseDataFile) -> tuple[list[str], str]:
-    # Deferred: the biology package is only needed once the tables are listed.
-    from pyRadPlan.biology.models import TabulatedAlphaBetaModel  # noqa: PLC0415
-
-    try:
-        table = TabulatedAlphaBetaModel.quantity_table_kernel_set(entry.name)
-    except Exception as exc:  # noqa: BLE001 - an unreadable table is listed as such
-        return [entry.name, "unreadable", "", _SOURCE_LABELS[entry.source], ""], str(exc)
-    tissues = ", ".join(
-        f"α_x={c.tissue.alpha_x:g}, β_x={c.tissue.beta_x:g}" for c in table.tissue_classes
-    )
+    summary = rbe_table_summary(entry.name)
     cells = [
         entry.name,
-        table.provenance_label,
-        tissues,
+        summary["model"],
+        summary["tissue_classes"],
         _SOURCE_LABELS[entry.source],
-        table.reference,
+        summary["reference"],
     ]
-    return cells, "\n".join(table.problems)
+    return cells, summary["problem"] or ""
 
 
 def _describe_stopping_power_table(entry: BaseDataFile) -> tuple[list[str], str]:
@@ -222,13 +212,10 @@ def _adder(
     else:
         raise ValueError(f"Unknown base data kind {kind!r}")
 
-    def file_name_of(name: str) -> str:
-        return name if name.lower().endswith(".mat") else f"{name}.mat"
-
     def add(name: str, overwrite: bool) -> Path:
-        return add_table(filename, name=file_name_of(name), overwrite=overwrite)
+        return add_table(filename, name=mat_file_name(name), overwrite=overwrite)
 
-    return add, Path(filename).name, file_name_of
+    return add, Path(filename).name, mat_file_name
 
 
 class _KindTab(QWidget):

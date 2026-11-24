@@ -396,27 +396,28 @@ def test_forward_dose_returns_every_scenario(test_data_photons):
 
     result = calc_dose_forward(ct, cst, stf, pln, w, scenarios=scen_set)
 
-    per_scenario = result["physical_dose_scenario"]
+    per_scenario = [q.values for q in result.scenario.physical_dose]
     assert len(per_scenario) == 2 and all(img is not None for img in per_scenario)
-    nominal = sitk.GetArrayFromImage(result["physical_dose"])
+    assert result.scenario_labels is not None and len(result.scenario_labels) == 2
+    nominal = sitk.GetArrayFromImage(result["physical_dose"].values)
     assert np.array_equal(nominal, sitk.GetArrayFromImage(per_scenario[1]))
     assert not np.allclose(nominal, sitk.GetArrayFromImage(per_scenario[0]))
-    assert len(result["physical_dose_beam"]) == len(stf.beams)
-    assert "physical_dose_beam_scenario" not in result
+    assert len(result.beam.physical_dose) == len(stf.beams)
+    assert result.stored_scenario_quantities == result.stored_quantities
 
     single = calc_dose_forward(
         ct, cst, stf, pln, w, scenarios=_scenario_set(setup=[(0.0, 0.0, 0.0)])
     )
-    assert np.allclose(nominal, sitk.GetArrayFromImage(single["physical_dose"]))
+    assert np.allclose(nominal, sitk.GetArrayFromImage(single["physical_dose"].values))
 
     # the scenario doses agree with those weighted from the influence matrices
     dij = calc_dose_influence(ct, cst, stf, pln, scenarios=scen_set)
     reference = dij.compute_result_ct_grid(
         w, scenario_index=1, num_of_fractions=pln.result_dose_factor, scenarios=True
     )
-    for forward, influence in zip(per_scenario, reference["physical_dose_scenario"]):
+    for forward, influence in zip(per_scenario, reference.scenario.physical_dose):
         assert np.allclose(
-            sitk.GetArrayFromImage(forward), sitk.GetArrayFromImage(influence), atol=1e-6
+            sitk.GetArrayFromImage(forward), sitk.GetArrayFromImage(influence.values), atol=1e-6
         )
 
 
@@ -430,12 +431,12 @@ def test_forward_dose_single_scenario_has_no_scenario_lists(test_data_photons):
     )
     result = calc_dose_forward(ct, cst, stf, pln, w, scenarios=alias_set)
     assert "physical_dose" in result
-    assert not any(key.endswith("_scenario") for key in result)
+    assert not result.scenario_quantities
 
     # a single shifted scenario is the unsuffixed result itself
     shifted = calc_dose_forward(ct, cst, stf, pln, w, scenarios=_scenario_set(setup=[SHIFT_X]))
     assert "physical_dose" in shifted
-    assert not any(key.endswith("_scenario") for key in shifted)
+    assert not shifted.scenario_quantities
 
 
 BIO_SHIFTS = [(3.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, -3.0, 0.0), (2.0, 2.0, 0.0)]

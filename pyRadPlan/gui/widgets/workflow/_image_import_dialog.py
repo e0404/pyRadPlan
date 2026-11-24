@@ -11,8 +11,8 @@ user decides how to import it:
   StructureSet; name clashes are resolved by numeric suffix.
 - **Dose**: add the image to the result collection under a user-supplied name.
 
-The dialog only inspects the image (labels, geometry); the actual import runs in
-the caller's worker thread.
+The dialog only shows what :func:`pyRadPlan.app._io.inspect_image` finds (labels,
+geometry, a guessed kind); the import is the session's ``import_image`` operation.
 """
 
 from __future__ import annotations
@@ -31,22 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-def _read_label_info(image: sitk.Image) -> int:
-    """Return the number of distinct nonzero values in the image (label count)."""
-    import numpy as np  # noqa: PLC0415
-
-    arr = sitk.GetArrayViewFromImage(image)
-    return int(len([v for v in np.unique(arr) if v != 0]))
-
-
-def _same_grid(a: sitk.Image, b: sitk.Image) -> bool:
-    return (
-        a.GetSize() == b.GetSize()
-        and a.GetSpacing() == b.GetSpacing()
-        and a.GetOrigin() == b.GetOrigin()
-        and a.GetDirection() == b.GetDirection()
-    )
+from pyRadPlan.app._io import inspect_image
 
 
 class ImageImportDialog(QDialog):
@@ -62,11 +47,10 @@ class ImageImportDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Import Image")
-        self._path = path
 
-        new_image = sitk.ReadImage(path)
-        num_labels = _read_label_info(new_image)
-        self._grid_matches = ct_image is not None and _same_grid(new_image, ct_image)
+        info = inspect_image(path, ct_image)
+        self._grid_matches = info.grid_matches
+        self._default_name = info.default_name
 
         root = QVBoxLayout(self)
         root.addWidget(QLabel(f"Import <b>{os.path.basename(path)}</b> as:"))
@@ -74,7 +58,7 @@ class ImageImportDialog(QDialog):
         self._rb_ct_new = QRadioButton("CT — new patient (clears all loaded data)")
         self._rb_ct_replace = QRadioButton("CT — replace current CT only")
         self._rb_structures = QRadioButton(
-            f"Structure(s) — add to structure set ({num_labels} label(s) found)"
+            f"Structure(s) — add to structure set ({info.num_labels} label(s) found)"
         )
         self._rb_dose = QRadioButton("Dose — add to result collection")
 
@@ -93,7 +77,7 @@ class ImageImportDialog(QDialog):
         root.addWidget(self._rb_structures)
         root.addWidget(self._rb_dose)
 
-        self._dose_name = QLineEdit(_default_dose_name(path))
+        self._dose_name = QLineEdit(info.default_name)
         self._dose_name.setPlaceholderText("Result name")
         self._dose_name.setVisible(False)
         dose_row = QVBoxLayout()
@@ -105,7 +89,7 @@ class ImageImportDialog(QDialog):
         self._rb_ct_replace.setEnabled(has_ct)
         self._rb_structures.setEnabled(has_ct)
         self._rb_dose.setEnabled(has_ct)
-        self._preselect(new_image, has_ct)
+        self._preselect(info.inferred, has_ct)
 
         self._rb_ct_replace.toggled.connect(self._update_detail_rows)
         self._rb_dose.toggled.connect(self._update_detail_rows)
@@ -116,7 +100,7 @@ class ImageImportDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
-    def _preselect(self, image: sitk.Image, has_ct: bool) -> None:
+    def _preselect(self, inferred: str, has_ct: bool) -> None:
         """Preselect the mode inferred from the image's pixel type and values.
 
         Boolean/unsigned images preselect structures, non-negative floats dose,
@@ -124,9 +108,6 @@ class ImageImportDialog(QDialog):
         grid is loaded, new patient otherwise). Falls back to "new patient" when
         the inferred option is unavailable. Only a default — the user decides.
         """
-        from pyRadPlan.io.sitk_based import infer_image_kind  # noqa: PLC0415
-
-        inferred = infer_image_kind(image)
         if inferred == "structures" and self._rb_structures.isEnabled():
             self._rb_structures.setChecked(True)
         elif inferred == "dose" and self._rb_dose.isEnabled():
@@ -158,15 +139,6 @@ class ImageImportDialog(QDialog):
         if self._rb_structures.isChecked():
             return {"mode": "structures"}
         if self._rb_dose.isChecked():
-            name = self._dose_name.text().strip() or _default_dose_name(self._path)
+            name = self._dose_name.text().strip() or self._default_name
             return {"mode": "dose", "name": name}
         return {"mode": "ct_new"}
-
-
-def _default_dose_name(path: str) -> str:
-    """Sanitized result-collection key derived from the file name."""
-    import re  # noqa: PLC0415
-
-    from pyRadPlan.io.sitk_based._binary_import import _file_stem  # noqa: PLC0415
-
-    return re.sub(r"\W+", "_", _file_stem(path)).strip("_") or "imported_dose"

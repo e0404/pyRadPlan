@@ -611,7 +611,7 @@ class Test_calc_dose_forward:
             }
         )
         result_py = calc_dose_forward(ct_mat, cst_mat, stf, pln)
-        result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+        result_py = sitk.GetArrayFromImage(result_py["physical_dose"].values)
         result_matRad_rot = np.swapaxes(result["physicalDose_beam1"], 0, 1)
         # TODO: 1e-4 should be possible!
         assert np.allclose(result_py, result_matRad_rot, atol=1e-3)
@@ -631,7 +631,7 @@ class Test_calc_dose_forward:
         pln = test_plan_fred
 
         result_py = calc_dose_forward(ct_mat, cst_mat, stf, pln)
-        result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+        result_py = sitk.GetArrayFromImage(result_py["physical_dose"].values)
 
         result_matRad_rot = np.swapaxes(result_mat["physicalDose"], 0, 1)
         # TODO: 1e-4 should be possible!
@@ -687,7 +687,7 @@ class Test_calc_dose_forward:
         )
 
         result_py = calc_dose_forward(ct_mat, cst_mat, stf_mat, pln)
-        result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+        result_py = sitk.GetArrayFromImage(result_py["physical_dose"].values)
 
         result_matRad_rot = np.swapaxes(result_mat["physicalDose"], 0, 1)
         # TODO: 1e-4 should be possible! (boundary is off!)

@@ -395,7 +395,7 @@ class AnalysisWidget(QWidget):
         initial_quantity: str = "",
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
-        scenario_labels: list[str] | None = None,
+        scenario_labels: list[str] | dict[str, list[str]] | None = None,
     ) -> None:
         """Set all data, populate controls, and trigger the initial plot.
 

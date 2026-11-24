@@ -80,11 +80,8 @@ stf = generate_stf(ct, cst, pln)
 # Calculate Dose Influence Matrix ("dij")
 dij = calc_dose_influence(ct, cst, stf, pln)
 
-# Fluence Optimization (objectives loaded from "cst")
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Result
-result = dij.compute_result_ct_grid(fluence)
+# Fluence Optimization (objectives loaded from "cst"), returns the result on the CT grid
+result = fluence_optimization(ct, cst, stf, dij, pln)
 ```
 
 This script uses the top-level API exposed when importing pyRadPlan. The top-level functions are designed to take the main data structures as input and configure the corresponding workflow step via the `Plan` using the attribute dictionaries `pln.prop*`:
@@ -140,3 +137,6 @@ Afterwards run `pre-commit install`. This reads the `.pre-commit_config.yaml` an
 If you want to interface via matRad, the simplest way is to write mat files using scipy's `savemat` and load them in matRad. To save a datastructure such that it can be read into Matlab and interpreted by matRad, you can call `to_matrad` on the structure and then pass the resulting dictionary to `savemat`.
 You can also install the matlab engine by appending `[matlab]` to the pip install command. However, as there is some compatibility matrix for what matlabengine version is suitable for your Matlab installation, it might be better to not install the latest version but instead install the correct matlabengine manually before.
 To use Octave via oct2py, analogously append `[octave]`.
+
+## Imprint and Privacy
+[Imprint](https://docs.pyradplan.org/en/latest/legal/imprint.html) · [Privacy policy](https://docs.pyradplan.org/en/latest/legal/privacy.html) (for the documentation and the browser version of pyRadPlan)

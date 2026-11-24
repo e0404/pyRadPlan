@@ -53,7 +53,8 @@ class PencilBeamEngineAbstract(DoseEngineBase):
     keep_rad_depth_cubes : bool
         Flag to keep radiation depth cubes.
     geometric_lateral_cutoff : float
-        Lateral geometric cut-off in mm, used for raytracing and geometry.
+        Lateral geometric cut-off in mm, used for raytracing and geometry. It is the radius
+        around each ray at the isocenter plane; the selected region diverges with depth.
     dosimetric_lateral_cutoff : float
         Relative dosimetric cut-off (in fraction of values calculated).
     ssd_density_threshold : float
@@ -111,7 +112,13 @@ class PencilBeamEngineAbstract(DoseEngineBase):
 
     keep_rad_depth_cubes: bool = False
     geometric_lateral_cutoff: Annotated[
-        float, Field(gt=0.0, description="Lateral geometric cut-off [mm]")
+        float,
+        Field(
+            gt=0.0,
+            description=(
+                "Lateral geometric cut-off [mm], radius around each ray at the isocenter plane"
+            ),
+        ),
     ] = 50.0
     dosimetric_lateral_cutoff: Annotated[
         float, Field(gt=0.0, le=1.0, description="Relative dosimetric cut-off")

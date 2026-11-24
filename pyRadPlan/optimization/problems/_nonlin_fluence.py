@@ -54,6 +54,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._grad_cache_intermediate = None
         self._grad_cache = None
+        self._voxel_indices = {}
         self._obj_times = []
         self._deriv_times = []
         self._solve_time = None
@@ -67,6 +68,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         # Their shapes follow the terms' scenarios and quantities, which can change between runs
         self._grad_cache_intermediate = None
         self._grad_cache = None
+        self._voxel_indices = {}
 
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
@@ -96,25 +98,37 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
     def _robustness_options(self) -> RobustnessOptions:
         return RobustnessOptions(max_approximation=self.max_approximation, p_norm=self.p_norm)
 
+    def _mask_indices(self, xp, mask: NDArray) -> Array:
+        """
+        Device indices of a mask's voxels, converted once per solve.
+
+        The entry keeps the mask alive, so its ``id`` cannot be recycled by another mask.
+        """
+        entry = self._voxel_indices.get(id(mask))
+        if entry is None:
+            indices = xp_utils.from_numpy(xp, np.flatnonzero(mask), device=self._device)
+            entry = self._voxel_indices[id(mask)] = (mask, indices)
+        return entry[1]
+
     def _term_values(self, xp, q_vectors: dict, term: RobustTerm) -> tuple[list, list]:
         """
-        Device masks of the term's items per scenario and the items' values.
+        Device voxel indices of the term's items per scenario and the items' values.
 
         The values are stacked over the term's scenarios, or a list per scenario if the
         contours differ between them.
         """
-        masks = []
+        indices = []
         values = []
         for item, item_masks in zip(term.items, term.scenario_masks):
-            device = {id(m): xp_utils.from_numpy(xp, m, device=self._device) for m in item_masks}
-            item_ix = [device[id(m)] for m in item_masks]
+            item_ix = [self._mask_indices(xp, m) for m in item_masks]
             scenario_values = [
-                q_vectors[item.quantity].flat[s][ix]
+                xp.take(q_vectors[item.quantity].flat[s], ix, axis=0)
                 for s, ix in zip(term.scenario_indices, item_ix)
             ]
-            masks.append(item_ix)
-            values.append(xp.stack(scenario_values) if len(device) == 1 else scenario_values)
-        return masks, values
+            indices.append(item_ix)
+            shared = len({id(m) for m in item_masks}) == 1
+            values.append(xp.stack(scenario_values) if shared else scenario_values)
+        return indices, values
 
     def _objective_functions(self, x: Array) -> Array:
         """Define the objective functions: one value per robust term."""
@@ -233,9 +247,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         q_scenarios = {q.identifier: q.scenarios for q in self._objective_quantities}
 
         for term_ix, term in enumerate(self._terms):
-            masks, values = self._term_values(xp, q_vectors, term)
+            indices, values = self._term_values(xp, q_vectors, term)
             grads = term.operator.gradient(term.entries, values)
-            for item, item_ix, item_grad in zip(term.items, masks, grads):
+            for item, item_ix, item_grad in zip(term.items, indices, grads):
                 row = (
                     0
                     if self.bypass_objective_jacobian
@@ -250,7 +264,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                     # A view on mutable backends, so the scatter below writes through to cache;
                     # where it cannot (JAX, out-of-place fallback) the block is written back.
                     block = cache[pos, row, ...]
-                    updated = xp_utils.scatter(block, ix, block[ix] + grad)
+                    updated = xp_utils.scatter(block, ix, xp.take(block, ix, axis=0) + grad)
                     if updated is not block:
                         cache = xp_utils.scatter(cache, (pos, row, ...), updated)
                 self._grad_cache_intermediate[item.quantity] = cache

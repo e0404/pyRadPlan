@@ -79,6 +79,9 @@ the scripting/API core only:
 The GUI degrades gracefully: ``import pyRadPlan`` works as usual, and calling a GUI
 entry point without the extra raises an ``ImportError`` explaining how to install it.
 
+If the GUI reports missing dependencies on Windows although the extra is installed, see
+:ref:`faq-gui-windows-msvc`.
+
 ----
 
 Installation from source
