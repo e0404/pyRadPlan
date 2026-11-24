@@ -788,7 +788,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             # TODO: what's the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
             cnt += len_ray_energy
 
-        # Setup energy, focus index, sigma look up table - only consider unique rows
+        beamlets = [beamlet for ray in stf_element["beam"]["rays"] for beamlet in ray["beamlets"]]
+
+        # Setup energy, focus index, sigma look up table - only consider unique rows. The range
+        # shifter is part of the row, so beamlets that differ only in it are kept apart
         energy_sigma_lut, ix_unique = np.unique(
             np.column_stack(
                 (
@@ -803,6 +806,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                         for beamlet in ray["beamlets"]
                     ],
                     v_ssd,
+                    [beamlet["range_shifter"]["eq_thickness"] for beamlet in beamlets],
+                    [beamlet["range_shifter"]["source_rashi_distance"] for beamlet in beamlets],
                 )
             ),
             axis=0,
@@ -814,12 +819,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             (energy_sigma_lut, np.full((len(energy_sigma_lut), 1), np.nan))
         )
 
-        range_shifter_lut = [
-            beamlet["range_shifter"]
-            for ray in stf_element["beam"]["rays"]
-            for beamlet in ray["beamlets"]
-        ]
-        range_shifter_lut = [range_shifter_lut[i] for i in ix_unique]
+        range_shifter_lut = [beamlets[i]["range_shifter"] for i in ix_unique]
 
         # Find the largest initial beam width considering focus index, SSD and range shifter
         # for each individual energy
@@ -847,7 +847,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 )
                 sigma_ini_sq += sigma_rashi**2
 
-            energy_sigma_lut[i, 3] = sigma_ini_sq
+            energy_sigma_lut[i, -1] = sigma_ini_sq
 
         # Find for each individual energy the broadest initial beam width
         unique_energies = np.unique(energy_sigma_lut[:, 0])
@@ -855,9 +855,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ix_max = np.full(len(unique_energies), np.nan)
         for i, energy in enumerate(unique_energies):
             largest_sigma_sq4unique_energies[i] = np.max(
-                energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3]
+                energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1]
             )
-            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3])
+            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1])
 
         # Get energy indices for looping
         v_energies_ix = np.where(np.isin(self._machine.energies, unique_energies))[0]
@@ -1143,13 +1143,13 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             range_mm, energy = None, bd_entry
 
         # Ion range in water [cm]
-        if range_mm is not None:
+        if range_mm is not None and np.isfinite(range_mm):
             range_in_water = float(range_mm) / 10.0
         else:  # Bragg-Kleeman with energy per nucleon
             range_in_water = (a_mass / z**2) * alpha * (float(energy) ** p)
 
         # Check if valid computation possible or range shifter too thick
-        if t / range_in_water >= 0.95:
+        if range_in_water <= 0 or t / range_in_water >= 0.95:
             raise ValueError(
                 "Computation of range shifter sigma invalid. Range shifter is too thick."
             )

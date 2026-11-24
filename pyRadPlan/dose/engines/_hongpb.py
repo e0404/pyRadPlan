@@ -27,7 +27,7 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
         lateral = self._lateral_profile(
             bixel["radial_dist_sq"],
             bixel.get("lat_dists"),
-            bixel["sigma_ini_sq"] + bixel.get("add_sigma_sq", 0),
+            bixel["sigma_ini_sq"] + bixel["add_sigma_sq"],
             kernels,
         )
 
