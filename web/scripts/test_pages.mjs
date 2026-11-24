@@ -85,6 +85,16 @@ try {
     console.log(`${res.ok ? "ok" : "FAIL"}: ${res.status} ${prefix}${path}`);
     failed ||= !res.ok;
   }
+  const landing = await (await fetch(base)).text();
+  for (const [what, needle] of [
+    ["imprint link", "/legal/imprint.html"],
+    ["privacy policy link", "/legal/privacy.html"],
+    ["redirect countdown", 'id="redirect"'],
+  ]) {
+    const ok = landing.includes(needle);
+    console.log(`${ok ? "ok" : "FAIL"}: landing page has the ${what}`);
+    failed ||= !ok;
+  }
   if (!args["no-smoke"] && existsSync(join(out, "develop", "index.html"))) {
     const smoke = spawnSync(process.execPath, [join(web, "e2e", "pages.mjs"), `${base}develop/`, "--stop"], { cwd: web, stdio: "inherit" });
     failed ||= smoke.status !== 0;

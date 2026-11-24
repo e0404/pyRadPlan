@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GUI and web version: the data cursor of the DVH view also shows a horizontal line at the mouse pointer and its volume in the readout
 - Experimental web version of the GUI in `web/`: pyRadPlan runs in the browser with Pyodide (numpy backend), without a server. It mirrors the desktop GUI (plan form, objectives, dose influence, optimization with scipy or ipax, slice viewer, DVH and quality indicators, workspace load and save) and uses a 5 mm dose grid by default. Not available in the browser: image and DICOM import, Monte Carlo engines, IPOPT, GPU backends and the AI features
 - `pyRadPlan.app`: a session layer without Qt (`Session`, `Workspace`, `dispatch`) that holds the workflow logic of the GUIs. The desktop GUI and the web version both run on it
+- Documentation: an imprint and a privacy policy covering the documentation and the web version, linked from the footer of every documentation page, the README, the web version's landing page, Info panel, About dialog and first-visit notice, and the desktop GUI's About dialog
+- Web version: the landing page opens the newest release after a 5 s countdown, which the visitor can cancel ("Stay on this page", or `?stay` in the URL)
 - Documentation: a FAQ section on the Help and support page, starting with the GUI failing to start on Windows with an outdated Visual C++ Redistributable
 
 ### Changed
