@@ -423,7 +423,7 @@ def test_topas_reads_dose_to_water_when_only_that_is_scored(test_data_protons, t
     pln_medium = _topas_plan(pln, "none", external_calculation=str(tmp_path))
     medium = ParticleTOPASMCEngine(pln_medium).calc_dose_forward(ct, cst, stf, w)["physical_dose"]
 
-    water, medium = sitk.GetArrayFromImage(water), sitk.GetArrayFromImage(medium)
+    water, medium = sitk.GetArrayFromImage(water.values), sitk.GetArrayFromImage(medium.values)
     assert water.max() > 0
     np.testing.assert_allclose(medium, 10 * water, rtol=1e-5)
 

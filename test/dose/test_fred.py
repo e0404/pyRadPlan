@@ -265,13 +265,13 @@ class Test_file_handling:
 
         result = calc_dose_forward(ct_mat, cst_mat, stf, pln)
 
-        beams = [sitk.GetArrayFromImage(image) for image in result["physical_dose_beam"]]
+        beams = [sitk.GetArrayFromImage(q.values) for q in result.beam.physical_dose]
         assert len(beams) == len(stf.beams)
         assert beams[0].max() > 0
         for b, beam in enumerate(beams):
             np.testing.assert_allclose(beam, (b + 1) * beams[0], rtol=1e-5)
         np.testing.assert_allclose(
-            sitk.GetArrayFromImage(result["physical_dose"]), sum(beams), rtol=1e-5
+            sitk.GetArrayFromImage(result["physical_dose"].values), sum(beams), rtol=1e-5
         )
 
     @pytest.mark.parametrize("forward", [True, False])
@@ -287,9 +287,9 @@ class Test_file_handling:
 
         if forward:
             result = calc_dose_forward(ct_mat, cst_mat, stf, pln)
-            beams = result["physical_dose_beam"]
+            beams = result.beam.physical_dose
             assert len(beams) == len(stf.beams)
-            assert not sitk.GetArrayFromImage(result["physical_dose"]).any()
+            assert not sitk.GetArrayFromImage(result["physical_dose"].values).any()
             runs = [f"beam_{b}/" for b in range(len(stf.beams))]
         else:
             dij = calc_dose_influence(ct_mat, cst_mat, stf, pln)
@@ -647,10 +647,10 @@ class Test_calc_dose_forward:
         for b in range(len(stf.beams)):
             assert (tmp_path / f"inp/beam_{b}/fred.inp").exists()
             assert (tmp_path / f"out/beam_{b}/score/Phantom.Dose.mhd").exists()
-            beam_dose = sitk.GetArrayFromImage(result["physical_dose_beam"][b])
+            beam_dose = sitk.GetArrayFromImage(result.beam.physical_dose[b].values)
             reference = np.swapaxes(result_mat[f"physicalDose_beam{b + 1}"], 0, 1)
             assert np.allclose(beam_dose, reference, atol=1e-3)
-        total = sitk.GetArrayFromImage(result["physical_dose"])
+        total = sitk.GetArrayFromImage(result["physical_dose"].values)
         assert np.allclose(total, np.swapaxes(result_mat["physicalDose"], 0, 1), atol=1e-3)
 
     def test_external_calculation_round_trip(self, test_data_protons, test_plan_fred, tmp_path):
@@ -673,7 +673,7 @@ class Test_calc_dose_forward:
         read_pln.prop_dose_calc.update({"external_calculation": str(tmp_path / "out")})
         result = calc_dose_forward(ct_mat, cst_mat, stf, read_pln)
 
-        total = sitk.GetArrayFromImage(result["physical_dose"])
+        total = sitk.GetArrayFromImage(result["physical_dose"].values)
         assert np.allclose(total, np.swapaxes(result_mat["physicalDose"], 0, 1), atol=1e-3)
 
     def test_use_output(self, test_data_protons, test_plan_fred, tmp_path):
