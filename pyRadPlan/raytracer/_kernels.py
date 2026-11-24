@@ -82,26 +82,37 @@ def merge_repeated_voxel_segments(
     voxel just traversed. The voxel then appears twice in a row, and its depth depends on
     which of the two segments is selected. Each run keeps its first segment with the summed
     length; the repeats become invalid (index -1, NaN density, zero length).
+
+    Only the repeated segments are touched. Backends with mutable arrays are updated in
+    place, so the inputs must not be used afterwards.
     """
     xp = array_api_compat.array_namespace(lengths, ix)
-    device = array_api_compat.device(ix)
-    no_repeat = xp.zeros((ix.shape[0], 1), dtype=xp.bool, device=device)
-    invalid_ix = xp.full_like(ix, -1)
-    zero_length = xp.zeros_like(lengths)
+    shape = ix.shape
+    if shape[1] < 2:
+        return lengths, rho, ix
+
+    rows, cols = xp.nonzero((ix[:, 1:] == ix[:, :-1]) & (ix[:, 1:] >= 0))
+    if rows.shape[0] == 0:
+        return lengths, rho, ix
+
+    # Flat positions of the repeats, ascending, so a run is a stretch of consecutive values
+    repeats = rows * shape[1] + cols + 1
+    ix = xp.reshape(xp_utils.scatter(xp.reshape(ix, (-1,)), repeats, -1), shape)
+    rho = [xp.reshape(xp_utils.scatter(xp.reshape(r, (-1,)), repeats, xp.nan), shape) for r in rho]
 
     # Each pass folds the last segment of every run into its predecessor
-    while True:
-        repeat = (ix[:, 1:] == ix[:, :-1]) & (ix[:, 1:] >= 0)
-        if not bool(xp.any(repeat)):
-            return lengths, rho, ix
-        run_tail = repeat & ~xp.concat((repeat[:, 1:], no_repeat), axis=1)
-        run_tail = xp.concat((no_repeat, run_tail), axis=1)
-        moved = xp.where(run_tail, lengths, zero_length)
-        lengths = xp.where(
-            run_tail, zero_length, lengths + xp.concat((moved[:, 1:], zero_length[:, :1]), axis=1)
-        )
-        ix = xp.where(run_tail, invalid_ix, ix)
-        rho = [xp.where(run_tail, xp.full_like(r, xp.nan), r) for r in rho]
+    lengths = xp.reshape(lengths, (-1,))
+    run_end = xp.ones((1,), dtype=xp.bool, device=array_api_compat.device(repeats))
+    pending = repeats
+    while pending.shape[0] > 0:
+        last_of_run = xp.concat(((pending[1:] - pending[:-1]) != 1, run_end))
+        last = pending[last_of_run]
+        folded = xp.take(lengths, last - 1) + xp.take(lengths, last)
+        lengths = xp_utils.scatter(lengths, last - 1, folded)
+        pending = pending[~last_of_run]
+    lengths = xp_utils.scatter(lengths, repeats, 0.0)
+
+    return xp.reshape(lengths, shape), rho, ix
 
 
 @jittable(backends=("jax", "torch"))
