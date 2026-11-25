@@ -38,6 +38,17 @@ export function NoticeDialog(props: { firstVisit?: boolean; onClose: () => void;
           {text}
         </p>
       ))}
+      <p className="notice-paragraph" data-testid="notice-legal">
+        Details:{" "}
+        <a href={ABOUT.privacy_url} target="_blank" rel="noreferrer">
+          privacy policy
+        </a>{" "}
+        and{" "}
+        <a href={ABOUT.imprint_url} target="_blank" rel="noreferrer">
+          imprint
+        </a>
+        .
+      </p>
       {first && <div className="dim">pyRadPlan starts loading after you continue.</div>}
     </ModalDialog>
   );

@@ -193,6 +193,12 @@ leave the browser only through the user's own downloads ("Save"). Precisely:
   The acknowledgement is one `localStorage` entry whose key contains a hash of all texts, so any
   change of the text asks again; without storage (private windows, blocked site data) it is asked
   on every visit.
+- **Imprint and privacy policy (done).** Both live in the documentation (`docs/legal/imprint.rst`,
+  `docs/legal/privacy.rst`, linked in the footer of every page) and cover the documentation on
+  Read the Docs and the Pages site. Their URLs are `imprint_url` and `privacy_url` in
+  `pyRadPlan/app/about.json`, used by the landing page, the placeholder, the web app (Info panel,
+  Help > About, the notice) and the Qt About dialog. The privacy policy describes the hosts listed
+  above; update it when the app contacts a new host or stores something new.
 - **Licenses (done).** Help > Third-party Licenses lists the Python distributions from inside
   Pyodide (checked for the installed wheels: the Pyodide distribution packages such as numpy,
   scipy, h5py carry their texts; the SimpleITK stand-in is `pyradplan-sitk-shim`, BSD-3-Clause,
@@ -230,7 +236,11 @@ Because the base is relative, the build is identical in all three.
 
 Exactly two public deployments: `https://<org>.github.io/<repo>/latest/` (the newest release) and
 `.../develop/` (the head of `develop`), with a landing page at `.../` that links both, says which
-version and commit each is, and carries the disclaimer line. A Pages deployment replaces the
+version and commit each is, and carries the disclaimer line and the imprint and privacy policy
+links. After a 5 s countdown it opens the first channel that contains the app (`/latest/`, or
+`/develop/` while the newest release has none) with `location.replace`, so Back does not land on it
+and redirect again; "Stay on this page", Escape or `?stay` in the URL cancel it (the placeholder's
+"All channels" link uses `?stay`). A Pages deployment replaces the
 whole site, so every run of `.github/workflows/web-pages.yml` builds and assembles both channels
 (option 2 of the earlier list, with N = 1 release; a release-asset scheme or a `gh-pages` branch
 remain the ways to keep more versions).

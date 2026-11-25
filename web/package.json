@@ -26,6 +26,8 @@
     "e2e:menus": "node e2e/menus.mjs",
     "pree2e:plan": "npm run fixtures",
     "e2e:plan": "node e2e/plan.mjs",
+    "pree2e:responsive": "npm run fixtures",
+    "e2e:responsive": "node e2e/responsive.mjs",
     "pages:test": "node scripts/test_pages.mjs",
     "gen:colormaps": "python scripts/gen_colormaps.py",
     "fixtures": "node scripts/mock_fixtures.mjs"

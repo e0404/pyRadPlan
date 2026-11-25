@@ -20,7 +20,7 @@ from pyRadPlan.cst import validate_cst, validate_voi, VOI, StructureSet
 from pyRadPlan.core.resample import resample_image
 
 from .._helpers import determine_structure_type
-from .base._serialize import _check_3d, label_image_to_vois, read_sidecar
+from .base._serialize import label_image_to_vois, read_sidecar
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS: tuple[str, ...] = (".nii.gz", ".nii", ".nrrd", ".nhdr", ".mha", ".mhd")
 
 PathLike = Union[str, os.PathLike]
+
+
+def _check_3d(image: sitk.Image) -> None:
+    if image.GetDimension() == 4:
+        raise NotImplementedError("Importing 4D images from foreign datasets is not supported.")
 
 
 def list_image_files(path: PathLike) -> list[str]:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from pyRadPlan.app import Operation, PreconditionError, Session
 from pyRadPlan.app._io import (
+    entry_for_extension,
     entry_for_filter,
     export_entries,
     export_filter,
@@ -988,12 +989,30 @@ class WorkflowWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     def _save(self, title: str, obj: str, fmt: str, path: str, **params: Any) -> None:
-        """Prepare the session's save of *obj* to *path* and run it; refusals are explained."""
+        """Prepare the session's save of *obj* to *path* and run it; refusals are explained.
+
+        A DICOM save into a folder with DICOM files asks before replacing them.
+        """
         try:
             operation = self.session.prepare(
                 "save_path", object=obj, format=fmt, path=path, **params
             )
-        except (PreconditionError, ValueError) as exc:
+        except PreconditionError as exc:
+            if exc.code != "exists":
+                QMessageBox.warning(self, title, str(exc))
+                return
+            answer = QMessageBox.question(
+                self,
+                title,
+                f"{exc}\n\nReplace the existing DICOM files?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self._save(title, obj, fmt, path, **params, overwrite=True)
+            return
+        except ValueError as exc:
             QMessageBox.warning(self, title, str(exc))
             return
         self._run_save(operation, title)
@@ -1012,11 +1031,13 @@ class WorkflowWidget(WorkspaceWidget):
             return
         if not self._resolve_pending_changes("Save Workspace"):
             return
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "Save workspace", "", export_filter(export_entries("workspace"))
+        entries = export_entries("workspace")
+        filepath, chosen = QFileDialog.getSaveFileName(
+            self, "Save workspace", "", export_filter(entries)
         )
         if filepath:
-            self._save("Save Workspace", "workspace", "pickle", filepath)
+            entry = entry_for_extension(filepath, entries) or entry_for_filter(chosen, entries)
+            self._save("Save Workspace", "workspace", entry.format, filepath)
 
     def _save_single_object(self, title: str, obj: str) -> None:
         """Save a single workspace object (pln/dij) to a chosen ``.mat`` file."""
@@ -1105,6 +1126,25 @@ class WorkflowWidget(WorkspaceWidget):
         if not selected:
             QMessageBox.warning(self, "Save Result", "No quantities were selected.")
             return
+
+        dicom = export_entries("result", ("dcm",))
+        if dicom:
+            kinds = ["Image files", path_label(dicom[0])]
+            kind, ok = QInputDialog.getItem(self, "Save Result", "Export as:", kinds, 0, False)
+            if not ok:
+                return
+            if kind == kinds[1]:
+                directory = QFileDialog.getExistingDirectory(self, "Save Result — DICOM")
+                if directory:
+                    self._save(
+                        "Save Result",
+                        "result",
+                        "dcm",
+                        directory,
+                        quantities=selected,
+                        label="Saving result as DICOM",
+                    )
+                return
 
         entries = export_entries("result", ("nifti", "nrrd", "meta"))
         if len(selected) == 1:

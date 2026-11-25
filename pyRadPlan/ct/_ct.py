@@ -5,7 +5,7 @@ Defines a CT pydantic model and factories.
 
 import os
 from abc import ABC
-from typing import Annotated, Any, Union
+from typing import Annotated, Any, Optional, Union
 from typing_extensions import Self
 from pydantic import (
     Field,
@@ -17,6 +17,8 @@ import numpy as np
 from pyRadPlan.core import resample_image
 
 from pyRadPlan.core import PyRadPlanBaseModel, Grid
+
+from ._dicom_info import DicomInfo
 
 
 class CT(PyRadPlanBaseModel, ABC):
@@ -39,6 +41,8 @@ class CT(PyRadPlanBaseModel, ABC):
         The origin coordinates of the CT image.
     direction : tuple
         The direction cosines of the CT image.
+    dicom_info : DicomInfo, optional
+        DICOM provenance metadata (patient, study, frame of reference, source series).
 
     Methods
     -------
@@ -47,6 +51,7 @@ class CT(PyRadPlanBaseModel, ABC):
     """
 
     cube_hu: Annotated[sitk.Image, Field(init=False, alias="cubeHU")]
+    dicom_info: Optional[DicomInfo] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -85,6 +90,8 @@ class CT(PyRadPlanBaseModel, ABC):
         # Work on copies so the caller's dict and image are not modified
         data = dict(data)
 
+        cls._merge_matrad_dicom_info(data)
+
         # Extract cube_hu from data using field name or alias
         cube_hu = cls._extract_cube_hu(data)
         if isinstance(cube_hu, sitk.Image):
@@ -107,6 +114,18 @@ class CT(PyRadPlanBaseModel, ABC):
         cls._apply_image_properties(data, cube_hu)
 
         return data
+
+    @classmethod
+    def _merge_matrad_dicom_info(cls, data: dict) -> None:
+        """Merge matRad's ``dicomInfo``/``dicomMeta`` structs into ``dicom_info``."""
+        info = data.pop("dicomInfo", None)
+        meta = data.pop("dicomMeta", None)
+        if data.get("dicom_info") is not None:
+            return
+        if meta is not None:
+            data["dicom_info"] = DicomInfo.from_matrad(info, meta)
+        elif info is not None:
+            data["dicom_info"] = info
 
     @classmethod
     def _extract_cube_hu(cls, data: dict) -> Any:
@@ -472,6 +491,9 @@ class CT(PyRadPlanBaseModel, ABC):
         for i, cube in enumerate(cubes):
             ct_dict["cubeHU"][i] = np.transpose(cube, (1, 2, 0))
         ct_dict["cubeDim"] = np.array(ct_dict["cubeDim"], dtype=float)[[1, 0, 2]]
+        ct_dict.pop("dicomInfo", None)
+        if self.dicom_info is not None:
+            ct_dict["dicomInfo"] = self.dicom_info.to_dicom_dict()
         return ct_dict
 
     def resample_to_grid(self, grid: Grid) -> Self:
@@ -504,7 +526,7 @@ class CT(PyRadPlanBaseModel, ABC):
         else:
             new_ct = resampler.Execute(self.cube_hu)
 
-        return self.model_validate({"cube_hu": new_ct})
+        return self.model_validate({"cube_hu": new_ct, "dicom_info": self.dicom_info})
 
 
 def resample_ct(ct: CT, interpolator=sitk.sitkBSpline, **kwargs) -> CT:
@@ -521,7 +543,7 @@ def resample_ct(ct: CT, interpolator=sitk.sitkBSpline, **kwargs) -> CT:
 
     resampled_ct_cube = resample_image(input_image=ct_cube, interpolator=interpolator, **kwargs)
 
-    return validate_ct(cube_hu=resampled_ct_cube)
+    return validate_ct(cube_hu=resampled_ct_cube, dicom_info=ct.dicom_info)
 
 
 def ct_from_file(file_path: Union[str, os.PathLike]) -> CT:

@@ -1,9 +1,12 @@
+import csv
 import logging
-from typing import Union, Optional, Any
+import os
+from typing import Literal, Union, Optional, Any
 from typing_extensions import Self
 from pydantic import (
     Field,
     computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -19,6 +22,23 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import QuantityDistribution
 
 logger = logging.getLogger(__name__)
+
+DVHKind = Literal["cumulative", "differential"]
+
+
+def _unit_symbol(unit: pint.Unit) -> str:
+    from pyRadPlan.analysis._qi import format_unit_symbol  # noqa: PLC0415 - circular import
+
+    return format_unit_symbol(unit)
+
+
+def _write_csv(path: Union[str, os.PathLike], rows: list[list[str]]) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerows(rows)
+
+
+def _number(value: float) -> str:
+    return repr(float(value))
 
 
 def dose_at_volume(
@@ -77,6 +97,9 @@ class DVH(PyRadPlanBaseModel):
 
     unit: pint.Unit = Field(default=ureg.gray, description="Unit of the DVH bins")
     name: str = Field(default="DVH", description="Name of the DVH")
+    total_volume: Optional[float] = Field(
+        default=None, description="Absolute volume of the structure in cm3, if known"
+    )
 
     bin_edges: NDArray[Shape["*"], np.float64] = Field(
         alias="doseGrid", description="Left bin edges for the DVH"
@@ -102,9 +125,17 @@ class DVH(PyRadPlanBaseModel):
             return v
 
         try:
-            return ureg(v)
+            return ureg.Unit(v)
         except pint.UndefinedUnitError:
             raise ValueError(f"Invalid unit: {v}")
+
+    @field_serializer("unit")
+    def _serialize_unit(self, v: pint.Unit) -> str:
+        return str(v)
+
+    @field_serializer("has_regular_bins")
+    def _serialize_has_regular_bins(self, v: Any) -> bool:
+        return bool(v)
 
     @model_validator(mode="after")
     def check_shapes(self) -> Self:
@@ -296,13 +327,18 @@ class DVH(PyRadPlanBaseModel):
         Returns
         -------
             DVH: DVH Object
+
+        Notes
+        -----
+        For a SimpleITK quantity, `total_volume` (cm3) is the number of voxels in the
+        mask times the voxel volume, unless passed explicitly.
         """
 
-        # manage quantity
+        voxel_volume = None
         if isinstance(quantity, QuantityDistribution):
-            # Unwrap a stored plan-result quantity to its image
             quantity = quantity.values
         if isinstance(quantity, sitk.Image):
+            voxel_volume = float(np.prod(quantity.GetSpacing())) / 1000.0
             # Convert SimpleITK image to numpy array
             quantity = sitk.GetArrayFromImage(quantity)
 
@@ -329,6 +365,8 @@ class DVH(PyRadPlanBaseModel):
         )
         # Remove the last bin
         hist = hist / len(q_array) * 100
+        if voxel_volume is not None:
+            kwargs.setdefault("total_volume", len(q_array) * voxel_volume)
 
         # np.histogram takes the bin dtype from the quantity, so a float32 input --
         # what a DICOM-imported dose is -- would produce float32 edges, which the
@@ -339,6 +377,76 @@ class DVH(PyRadPlanBaseModel):
             bin_edges=np.asarray(edges, dtype=np.float64),
             **kwargs,
         )
+
+    def _curve(self, kind: DVHKind) -> tuple[Any, Any]:
+        if kind == "cumulative":
+            return self.bins, self.cum_volume
+        if kind == "differential":
+            return self.bin_centers, self.diff_volume
+        raise ValueError("kind must be 'cumulative' or 'differential'.")
+
+    def to_rows(
+        self, kind: DVHKind = "cumulative", absolute_volume: bool = False
+    ) -> list[list[str]]:
+        """Return the DVH as a table of strings, header first.
+
+        Parameters
+        ----------
+        kind : {"cumulative", "differential"}, optional
+            Cumulative DVH at the left bin edges (default) or differential DVH at the bin
+            centers.
+        absolute_volume : bool, optional
+            Add a ``volume [cm3]`` column. Requires `total_volume`.
+
+        Returns
+        -------
+        list of list of str
+            Columns ``dose [<unit>]``, ``volume [%]`` and optionally ``volume [cm3]``. Numbers
+            are written with full precision.
+        """
+        x, y = self._curve(kind)
+        header = [f"dose [{_unit_symbol(self.unit)}]", "volume [%]"]
+        columns = [x, y]
+        if absolute_volume:
+            if self.total_volume is None:
+                raise ValueError(f"DVH '{self.name}' does not know its absolute volume.")
+            header.append("volume [cm3]")
+            columns.append(y / 100.0 * self.total_volume)
+        rows = [header]
+        rows.extend([_number(v) for v in values] for values in zip(*columns))
+        return rows
+
+    def to_csv(
+        self,
+        path: Union[str, os.PathLike],
+        kind: DVHKind = "cumulative",
+        absolute_volume: bool = False,
+    ) -> None:
+        """Write the DVH as CSV (see :meth:`to_rows` for the columns).
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        kind : {"cumulative", "differential"}, optional
+            DVH type to write.
+        absolute_volume : bool, optional
+            Add a ``volume [cm3]`` column.
+        """
+        _write_csv(path, self.to_rows(kind, absolute_volume))
+
+    def to_json(self, path: Union[str, os.PathLike], indent: Optional[int] = None) -> None:
+        """Write the DVH as lossless JSON (see ``model_dump_json``).
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        indent : int, optional
+            Indentation of the JSON.
+        """
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.model_dump_json(indent=indent))
 
     def plot(self, ax=None, line_width=2, plot_legend=True, **kwargs):
         """Plot the DVH curve.
@@ -415,6 +523,117 @@ class DVHCollection(PyRadPlanBaseModel):
         """
         dvhs = [DVH.compute(quantity=dose, mask=voi.mask, name=voi.name) for voi in cst.vois]
         return cls(dvhs=dvhs)
+
+    def to_rows(
+        self,
+        kind: DVHKind = "cumulative",
+        absolute_volume: bool = False,
+        layout: Literal["auto", "wide", "long"] = "auto",
+    ) -> list[list[str]]:
+        """Return the DVHs as a table of strings, header first.
+
+        Parameters
+        ----------
+        kind : {"cumulative", "differential"}, optional
+            Cumulative DVH at the left bin edges (default) or differential DVH at the bin
+            centers.
+        absolute_volume : bool, optional
+            Also write the volume in cm3 (requires `DVH.total_volume` for every DVH).
+        layout : {"auto", "wide", "long"}, optional
+            ``"wide"``: one ``dose [<unit>]`` column followed by a ``<name> [%]`` column per
+            structure (and a ``<name> [cm3]`` column each with ``absolute_volume``); needs
+            identical dose points, units and unique names. ``"long"``: columns ``structure``,
+            ``dose [<unit>]``, ``volume [%]`` (and ``volume [cm3]``), one row per DVH point.
+            ``"auto"`` uses wide when possible and long otherwise.
+
+        Returns
+        -------
+        list of list of str
+            The table; empty for an empty collection.
+        """
+        if layout not in ("auto", "wide", "long"):
+            raise ValueError("layout must be 'auto', 'wide' or 'long'.")
+        if not self.dvhs:
+            return []
+        if absolute_volume and any(dvh.total_volume is None for dvh in self.dvhs):
+            raise ValueError("Not every DVH knows its absolute volume.")
+
+        curves = [dvh._curve(kind) for dvh in self.dvhs]
+        shared = (
+            len({dvh.name for dvh in self.dvhs}) == len(self.dvhs)
+            and len({dvh.unit for dvh in self.dvhs}) == 1
+            and all(
+                len(x) == len(curves[0][0]) and np.array_equal(x, curves[0][0]) for x, _ in curves
+            )
+        )
+        if layout == "wide" and not shared:
+            raise ValueError(
+                "Wide layout needs identical dose points, units and unique names; use 'long'."
+            )
+
+        if layout == "long" or not shared:
+            unit = self.dvhs[0].unit
+            rows = [["structure", *self.dvhs[0].to_rows(kind, absolute_volume)[0]]]
+            for dvh, (x, y) in zip(self.dvhs, curves):
+                try:
+                    scale = ureg.Quantity(1.0, dvh.unit).to(unit).magnitude
+                except pint.DimensionalityError as err:
+                    raise ValueError(
+                        f"DVH '{dvh.name}' is in {dvh.unit:~}, incompatible units with the "
+                        f"{unit:~} of the first DVH; export the collections separately."
+                    ) from err
+                columns = [x * scale, y]
+                if absolute_volume:
+                    columns.append(y / 100.0 * dvh.total_volume)
+                rows.extend([dvh.name, *(_number(v) for v in values)] for values in zip(*columns))
+            return rows
+
+        header = [f"dose [{_unit_symbol(self.dvhs[0].unit)}]"]
+        columns = [curves[0][0]]
+        for dvh, (_, y) in zip(self.dvhs, curves):
+            header.append(f"{dvh.name} [%]")
+            columns.append(y)
+            if absolute_volume:
+                header.append(f"{dvh.name} [cm3]")
+                columns.append(y / 100.0 * dvh.total_volume)
+        rows = [header]
+        rows.extend([_number(v) for v in values] for values in zip(*columns))
+        return rows
+
+    def to_csv(
+        self,
+        path: Union[str, os.PathLike],
+        kind: DVHKind = "cumulative",
+        absolute_volume: bool = False,
+        layout: Literal["auto", "wide", "long"] = "auto",
+    ) -> None:
+        """Write the DVHs as CSV (see :meth:`to_rows` for the layouts).
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        kind : {"cumulative", "differential"}, optional
+            DVH type to write.
+        absolute_volume : bool, optional
+            Also write the volume in cm3.
+        layout : {"auto", "wide", "long"}, optional
+            Table layout.
+        """
+        _write_csv(path, self.to_rows(kind, absolute_volume, layout))
+
+    def to_json(self, path: Union[str, os.PathLike], indent: Optional[int] = None) -> None:
+        """Write the collection as lossless JSON (see ``model_dump_json``).
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        indent : int, optional
+            Indentation of the JSON.
+        """
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.model_dump_json(indent=indent))
 
     def plot(
         self,
