@@ -3,6 +3,10 @@
 The engine is framework-agnostic: what a model needs is declared by the model
 itself (``metadata.requirements``), so these tests fake a missing package rather
 than a missing torch, and run on installs without any ML framework.
+
+Availability only looks at the file system: the engine is always offered unless
+the plan names a model on disk that cannot be used, and a model that is not on
+disk is fetched only when a calculation runs.
 """
 
 import json
@@ -12,6 +16,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import huggingface_hub
 import pytest
 
 import pyRadPlan
@@ -30,6 +35,32 @@ def _local_models_offline(monkeypatch):
     models_dir = Path(__file__).resolve().parents[1] / "data" / "ai_models"
     monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", models_dir)
     monkeypatch.setattr(get_settings().ai, "modelhub_offline", True)
+
+
+@pytest.fixture
+def no_hub(monkeypatch):
+    """Record every attempt to reach the HuggingFace Hub, with offline mode off.
+
+    The calls are recorded rather than failing on the spot, since the factory turns an
+    exception inside an availability check into "not available".
+    """
+    calls = []
+
+    def _record(name):
+        def _call(*args, **kwargs):
+            if not kwargs.get("local_files_only"):  # a cache lookup is no network access
+                calls.append(name)
+            raise ConnectionError(f"{name} must not be called")
+
+        return _call
+
+    monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
+    monkeypatch.setattr(huggingface_hub, "HfApi", _record("HfApi"))
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _record("hf_hub_download"))
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _record("snapshot_download"))
+    monkeypatch.setattr(_base_ai_beamlet, "list_hub_models", _record("list_hub_models"))
+    monkeypatch.setattr(_base_ai_beamlet, "hub_config_dir", _record("hub_config_dir"))
+    return calls
 
 
 @pytest.fixture
@@ -61,12 +92,14 @@ def test_registered():
 
 
 def test_model_framework_missing(unmet_requirements):
-    """A model whose declared packages are missing is not offered (nor is the engine)."""
+    """A named model whose declared packages are missing makes the engine unavailable."""
     available, msg = AIBeamletEngine.is_available(_pln(), None)
     assert available is False
     assert "torch" in msg
-    assert "AIBeamlet" not in get_available_engines("protons")
-    assert "HongPB" in get_available_engines("protons")
+    assert "AIBeamlet" not in get_available_engines(_pln())
+    assert "HongPB" in get_available_engines(_pln())
+    # without a model named there is nothing to check yet
+    assert "AIBeamlet" in get_available_engines("protons")
 
 
 def test_model_available(met_requirements):
@@ -74,24 +107,44 @@ def test_model_available(met_requirements):
     assert "AIBeamlet" in get_available_engines(_pln())
 
 
-def test_model_missing_offline():
-    available, msg = AIBeamletEngine.is_available(_pln(model="other_org/no_such_model"), None)
-    assert available is False
-    assert "no_such_model" in msg
-    assert "AIBeamlet" not in get_available_engines(_pln(model="other_org/no_such_model"))
+def test_model_not_on_disk_is_offered(no_hub):
+    """A model that is not on disk is fetched when a calculation runs, not when listing."""
+    pln = _pln(model="other_org/no_such_model")
+    assert AIBeamletEngine.is_available(pln, None) == (True, "")
+    assert "AIBeamlet" in get_available_engines(pln)
+    assert no_hub == []
 
 
-def test_model_missing_locally_but_on_hub(monkeypatch):
-    monkeypatch.setattr(
-        _base_ai_beamlet, "list_hub_models", lambda org, offline=False: [f"{org}/remote_model"]
+def test_no_model_named_is_offered(no_hub, monkeypatch, tmp_path):
+    """Even a fresh installation without any model sees the engine, for every mode."""
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
+    assert AIBeamletEngine.is_available("protons", None) == (True, "")
+    assert AIBeamletEngine.is_available("VHEE", None) == (True, "")
+    assert AIBeamletEngine.is_available(_pln(model=None), None) == (True, "")
+    assert AIBeamletEngine.is_available(_pln(model=""), None) == (True, "")
+    assert no_hub == []
+
+
+def test_listing_engines_never_contacts_the_hub(no_hub, monkeypatch, tmp_path):
+    """Listing engines and picking a plain HongPB engine stay off the network."""
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
+    assert "AIBeamlet" in get_available_engines("protons")
+    hongpb = validate_pln(
+        {"radiation_mode": "protons", "machine": "Generic", "prop_dose_calc": {"engine": "HongPB"}}
     )
-    assert AIBeamletEngine.is_available(_pln(model="other_org/remote_model"), None) == (True, "")
+    assert get_engine(hongpb).short_name == "HongPB"
+    assert no_hub == []
 
 
-def test_model_missing_and_no_network(monkeypatch):
-    monkeypatch.setattr(_base_ai_beamlet, "list_hub_models", lambda org, offline=False: [])
-    available, _ = AIBeamletEngine.is_available(_pln(model="other_org/remote_model"), None)
-    assert available is False
+def test_model_not_on_disk_fails_clearly_when_calculating(test_data_protons, monkeypatch):
+    """The deferred resolution reports what is missing, once the code is trusted."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", True)
+    pln.prop_dose_calc["engine"] = "AIBeamlet"
+    pln.prop_dose_calc["model"] = "other_org/no_such_model"
+
+    with pytest.raises(FileNotFoundError, match="other_org/no_such_model.*offline"):
+        AIBeamletEngine(pln).calc_dose_influence(ct, cst, stf)
 
 
 def test_bare_model_name_is_rejected():
@@ -168,49 +221,6 @@ def test_modality_mismatch():
     assert "'protons'" in msg and "'VHEE'" in msg
 
 
-def test_no_model_named_uses_local_models(met_requirements):
-    assert AIBeamletEngine.is_available("protons", None) == (True, "")
-    assert AIBeamletEngine.is_available(_pln(model=None), None) == (True, "")
-    available, msg = AIBeamletEngine.is_available("VHEE", None)
-    assert available is False
-    assert "VHEE" in msg
-
-
-def test_no_models_on_disk_but_hub_has_some(monkeypatch, tmp_path):
-    """A fresh installation must still see the engine, so a model can be picked at all."""
-    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
-    monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
-    monkeypatch.setattr(_base_ai_beamlet, "list_local_models", lambda: [])
-    monkeypatch.setattr(
-        _base_ai_beamlet, "list_hub_models", lambda org, offline=False: [f"{org}/dosecalc-a-model"]
-    )
-
-    assert AIBeamletEngine.is_available("protons", None) == (True, "")
-    assert "AIBeamlet" in get_available_engines("protons")
-
-
-def test_nothing_on_disk_and_nothing_on_the_hub(monkeypatch, tmp_path):
-    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
-    monkeypatch.setattr(_base_ai_beamlet, "list_local_models", lambda: [])
-    monkeypatch.setattr(_base_ai_beamlet, "list_hub_models", lambda org, offline=False: [])
-
-    available, msg = AIBeamletEngine.is_available("protons", None)
-    assert available is False
-    assert "no network" in msg
-    assert "AIBeamlet" not in get_available_engines("protons")
-
-
-def test_hub_offering_only_outcome_models_does_not_count(monkeypatch, tmp_path):
-    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
-    monkeypatch.setattr(_base_ai_beamlet, "list_local_models", lambda: [])
-    monkeypatch.setattr(
-        _base_ai_beamlet, "list_hub_models", lambda org, offline=False: [f"{org}/outcome-a-model"]
-    )
-
-    available, _ = AIBeamletEngine.is_available("protons", None)
-    assert available is False
-
-
 def test_model_taken_from_prop_dose_calc():
     engine = AIBeamletEngine(_pln())
     assert engine.model == DUMMY_MODEL
@@ -261,9 +271,12 @@ def test_import_without_ml_framework(tmp_path):
         from pyRadPlan.dose.engines._factory import DOSE_ENGINES
 
         assert "AIBeamlet" in DOSE_ENGINES
-        # the only model available declares torch, which is not importable here
-        assert "AIBeamlet" not in get_available_engines("protons")
         assert "HongPB" in get_available_engines("protons")
+        # the engine is offered, but a plan naming a model that declares torch is refused
+        assert "AIBeamlet" in get_available_engines("protons")
+        pln = {{"radiation_mode": "protons", "machine": "Generic",
+               "prop_dose_calc": {{"engine": "AIBeamlet", "model": "{DUMMY_MODEL}"}}}}
+        assert "AIBeamlet" not in get_available_engines(pln)
         """
     )
     result = subprocess.run(
@@ -314,9 +327,9 @@ def test_requirements_key_is_documented_for_model_authors():
 def test_engine_offered_without_torch_for_a_model_that_does_not_need_it(tmp_path):
     """A model needing no torch makes the engine available on an install without torch.
 
-    The counterpart of ``test_import_without_ml_framework``: there the only model
-    declares torch and the engine is withheld. The model's code is never imported
-    to find out, only its declaration is read.
+    The counterpart of ``test_import_without_ml_framework``: there the plan names a
+    model declaring torch and the engine is withheld. The model's code is never
+    imported to find out, only its declaration is read.
     """
     _model_declaring(tmp_path, ["numpy"])
     code = textwrap.dedent(
@@ -331,12 +344,13 @@ def test_engine_offered_without_torch_for_a_model_that_does_not_need_it(tmp_path
 
         from pyRadPlan.dose.engines import AIBeamletEngine, get_available_engines
 
-        pln = {{"radiation_mode": "protons",
-               "prop_dose_calc": {{"model": "OtherOrg/dosecalc-other-framework"}}}}
+        pln = {{"radiation_mode": "protons", "machine": "Generic",
+               "prop_dose_calc": {{"engine": "AIBeamlet",
+                                   "model": "OtherOrg/dosecalc-other-framework"}}}}
         assert AIBeamletEngine.is_available(pln, None) == (True, ""), AIBeamletEngine.is_available(
             pln, None
         )
-        assert "AIBeamlet" in get_available_engines("protons")
+        assert "AIBeamlet" in get_available_engines(pln)
         """
     )
     result = subprocess.run(

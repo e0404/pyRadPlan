@@ -248,11 +248,11 @@ pyRadPlan carries no per-model code:
 Availability
 ~~~~~~~~~~~~
 
-Because a model is needed to compute anything, the engine reports itself unavailable -- and is
-left out of :func:`~pyRadPlan.dose.engines.get_available_engines` and of the GUI's engine list --
-when no usable model can be found: nothing on disk for the plan's radiation mode and nothing
-offered by the configured organization, a model trained for another modality, or a model whose
-declared packages are not installed. The reason is part of the answer:
+The engine is always offered in :func:`~pyRadPlan.dose.engines.get_available_engines` and in
+the GUI's engine list, so a model can be picked at all. It reports itself unavailable only when
+the plan names a model that is already on disk and cannot be used -- trained for another
+modality, or its declared packages are not installed -- or names a model that is not an
+``"<org>/<model>"`` id. The reason is part of the answer:
 
 .. code-block:: python
 
@@ -261,8 +261,11 @@ declared packages are not installed. The reason is part of the answer:
     available, reason = AIBeamletEngine.is_available(pln, machine=None)
     # e.g. (False, "Model '<org>/<model>' was trained for 'VHEE', but the plan uses 'protons'.")
 
-Only the file system is consulted while a model is on disk; the hub is contacted only when
-nothing local fits. Setting ``PYRADPLAN_AI_MODELHUB_OFFLINE=1`` keeps everything local.
+This check only consults the file system and never contacts the hub. A model that is not on
+disk is resolved -- and downloaded, unless ``PYRADPLAN_AI_MODELHUB_OFFLINE=1`` -- only when a
+calculation runs; if it cannot be found, that calculation fails with an error naming the model.
+The suggestions in the GUI's engine configuration dialog do list the models of the configured
+hub organization.
 
 Devices and backends
 ~~~~~~~~~~~~~~~~~~~~

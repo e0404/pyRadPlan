@@ -176,17 +176,18 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     def is_available(pln, machine) -> Tuple[bool, str]:
         """Whether the engine can run for *pln*, and why not.
 
-        Never raises. Only the file system is inspected, except for a named model
-        missing locally: the hub is then asked (never in offline mode) whether its
-        organization offers it. A model is usable when the packages it declares
-        under ``metadata.requirements`` are installed; the engine itself requires
-        no particular ML framework.
+        Never raises and never contacts the network: only a model already on disk
+        (or in the HuggingFace cache) is inspected. The engine is offered unless the
+        plan names such a model and it cannot be used -- trained for another radiation
+        mode, or the packages it declares under ``metadata.requirements`` are not
+        installed -- or names a model that is not an ``'<org>/<model>'`` id. Without a
+        model, or with one that is not on disk, the engine is available; the model is
+        then resolved, and downloaded if needed, only when a calculation runs.
 
         Parameters
         ----------
         pln : Plan, dict or str
-            The plan (or plan dict) to check. A bare radiation mode is accepted too,
-            in which case any local dose-calc model trained for it suffices.
+            The plan (or plan dict) to check. A bare radiation mode is accepted too.
         machine : Any
             Unused; part of the engine interface.
 
@@ -195,8 +196,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         tuple[bool, str]
             ``(True, "")`` if available, otherwise ``(False, reason)``.
         """
-        offline = get_settings().ai.modelhub_offline
-
         # pln may be a Plan, a plan dict, or just a radiation mode
         if pln is None or isinstance(pln, str):
             radiation_mode, prop_dose_calc = pln, None
@@ -212,52 +211,26 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         else:  # an already constructed engine
             model = getattr(prop_dose_calc, "model", None)
 
-        if model:  # an empty name counts as "none given"
-            if "/" not in model:
-                return False, f"Model '{model}' is not a '<org>/<model>'."
-            model_dir = local_model_dir(model)
-            if model_dir is None:
-                if model in list_hub_models(model.split("/")[0], offline):
-                    return True, ""
-                return False, (
-                    f"Model '{model}' is not available locally and cannot be downloaded "
-                    "(offline mode, no network or unknown repository)."
-                )
-            _, modality, missing = model_facts(model_dir)
-            if radiation_mode and modality and modality != radiation_mode:
-                return False, (
-                    f"Model '{model}' was trained for '{modality}', "
-                    f"but the plan uses '{radiation_mode}'."
-                )
-            if missing:
-                return False, (
-                    f"Model '{model}' requires {', '.join(missing)}, which is not installed."
-                )
+        if not model:  # an empty name counts as "none given"
+            return True, ""
+        if "/" not in model:
+            return False, f"Model '{model}' is not a '<org>/<model>'."
+
+        model_dir = local_model_dir(model)
+        if model_dir is None:
             return True, ""
 
-        for candidate in list_local_models():
-            model_dir = local_model_dir(candidate) if "/" in candidate else None
-            if model_dir is None or task_from_dir(model_dir) == ModelTask.OUTCOME:
-                continue
-            _, modality, missing = model_facts(model_dir)
-            if (not radiation_mode or not modality or modality == radiation_mode) and not missing:
-                return True, ""
-
-        # Nothing suitable on disk: the hub decides, so a new installation without
-        # any downloaded model still sees the engine. Which of its models fit is
-        # settled in the engine's configuration dialog (see config_choices), since
-        # that would mean reading every model's metadata from the hub here.
-        org = get_settings().ai.modelhub_hf_org
-        if any(
-            task_from_name(name) != ModelTask.OUTCOME for name in list_hub_models(org, offline)
-        ):
-            return True, ""
-
-        return False, (
-            f"No AI dose-calculation model for '{radiation_mode}' is available "
-            f"locally, and none can be downloaded from '{org}' "
-            "(offline mode, no network or no models)."
-        )
+        _, modality, missing = model_facts(model_dir)
+        if radiation_mode and modality and modality != radiation_mode:
+            return False, (
+                f"Model '{model}' was trained for '{modality}', "
+                f"but the plan uses '{radiation_mode}'."
+            )
+        if missing:
+            return False, (
+                f"Model '{model}' requires {', '.join(missing)}, which is not installed."
+            )
+        return True, ""
 
     def _compute_bixel(self, ray: dict, k: int) -> dict:
         """Read back a precomputed bixel dose contribution.
