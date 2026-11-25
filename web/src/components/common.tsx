@@ -1,9 +1,66 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
-export function GroupBox(props: { title: string; className?: string; children: ReactNode; testId?: string }) {
+export type LayoutMode = "desktop" | "tablet" | "phone";
+
+/** Widths below which the main window switches layout; styles.css keys off `data-layout`. */
+export const LAYOUT_BREAKPOINTS = { tablet: 1100, phone: 720 } as const;
+
+const layoutQueries =
+  typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? {
+        tablet: window.matchMedia(`(max-width: ${LAYOUT_BREAKPOINTS.tablet - 0.02}px)`),
+        phone: window.matchMedia(`(max-width: ${LAYOUT_BREAKPOINTS.phone - 0.02}px)`),
+      }
+    : null;
+
+function currentLayout(): LayoutMode {
+  if (!layoutQueries) return "desktop";
+  if (layoutQueries.phone.matches) return "phone";
+  return layoutQueries.tablet.matches ? "tablet" : "desktop";
+}
+
+function subscribeLayout(onChange: () => void): () => void {
+  if (!layoutQueries) return () => {};
+  layoutQueries.tablet.addEventListener("change", onChange);
+  layoutQueries.phone.addEventListener("change", onChange);
+  return () => {
+    layoutQueries.tablet.removeEventListener("change", onChange);
+    layoutQueries.phone.removeEventListener("change", onChange);
+  };
+}
+
+export function useLayoutMode(): LayoutMode {
+  return useSyncExternalStore(subscribeLayout, currentLayout, () => "desktop");
+}
+
+/** A Qt-style group box; passing `onToggle` makes the title a collapse button. */
+export function GroupBox(props: {
+  title: string;
+  className?: string;
+  children: ReactNode;
+  testId?: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
+  const collapsible = props.onToggle !== undefined;
+  const collapsed = collapsible && !!props.collapsed;
+  const classes = ["groupbox", collapsible ? "collapsible" : "", collapsed ? "collapsed" : "", props.className ?? ""];
   return (
-    <section className={`groupbox ${props.className ?? ""}`} data-testid={props.testId}>
-      <div className="gb-title">{props.title}</div>
+    <section className={classes.filter(Boolean).join(" ")} data-testid={props.testId}>
+      {collapsible ? (
+        <button
+          type="button"
+          className="gb-title gb-toggle"
+          aria-expanded={!collapsed}
+          onClick={props.onToggle}
+          data-testid={props.testId ? `${props.testId}-toggle` : undefined}
+        >
+          <span className="gb-chevron" aria-hidden="true" />
+          {props.title}
+        </button>
+      ) : (
+        <div className="gb-title">{props.title}</div>
+      )}
       <div className="gb-body">{props.children}</div>
     </section>
   );

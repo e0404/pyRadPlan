@@ -79,6 +79,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Right: Viewer Options | `_main_win.py:261` | verified on Pyodide | impl | – |
 | Right: Structure Visibility (VOIs widget) | `_main_win.py:262` | verified on Pyodide | impl | – |
 | Right: Info | `_main_win.py:263` | verified on Pyodide | frontend | `app.info` |
+| Tablet / phone layouts (configuration row above the viewer, single column on phones; collapsible groups) | none (desktop only) | done (mock e2e, `e2e:responsive`) | frontend (web only) | – |
 | Status bar: "<Widget>: <message>" for 10 s on a widget update failure | `_main_win.py:110-119` | done (mock e2e) | frontend | – |
 | Busy lock: computation disables Plan, Objectives and the whole File menu (Base Data / Settings stay enabled) | `_main_win.py:107,146-150` | done (mock e2e) | frontend | `state.busy` |
 | Close while busy: "Computation running … Quit anyway?" | `_main_win.py:152-174` | done (mock e2e) | frontend (`beforeunload` prompt while busy) | `state.busy` |
