@@ -13,10 +13,10 @@ export function LogoBanner() {
   return (
     <div className="logo-banner">
       <div className="left">
-        <img src={dark ? dkfzLogoWhite : dkfzLogo} alt="DKFZ" style={{ height: 40 }} />
+        <img src={dark ? dkfzLogoWhite : dkfzLogo} alt="DKFZ" className="logo-dkfz" />
         <span className="disclaimer">NOT FOR CLINICAL USE!</span>
       </div>
-      <img src={pyradplanLogo} alt="pyRadPlan" style={{ height: 64 }} />
+      <img src={pyradplanLogo} alt="pyRadPlan" className="logo-pyradplan" />
     </div>
   );
 }

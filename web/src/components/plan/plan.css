@@ -303,6 +303,7 @@ input.invalid,
   position: fixed;
   z-index: 150;
   width: 600px;
+  max-width: calc(100vw - 16px);
   background: var(--window);
   border: 1px solid #8a8a8a;
   border-radius: 8px;

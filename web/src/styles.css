@@ -169,6 +169,207 @@ textarea {
   flex: 1;
 }
 
+/* ---------------------------------------------------------------- tablet / phone layouts */
+
+/* The column area scrolls instead of squeezing panels; menu and status bar stay put. */
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .columns {
+  overflow-x: hidden;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .p-objectives:not(.collapsed) {
+  height: 360px;
+}
+
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .p-log:not(.collapsed) {
+  height: 220px;
+}
+
+/* Tablet: a configuration row above a viewing row (viewer + side panels). */
+.main-window[data-layout="tablet"] .columns {
+  grid-auto-rows: max-content;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 30%);
+  grid-template-areas:
+    "config config"
+    "view side";
+}
+
+/* Workflow and plan share a row where both fit, otherwise they wrap onto their own rows. */
+.main-window[data-layout="tablet"] .column.config {
+  grid-area: config;
+  flex-flow: row wrap;
+  align-items: stretch;
+}
+
+.main-window[data-layout="tablet"] .column.config > * {
+  flex: 1 1 100%;
+}
+
+.main-window[data-layout="tablet"] .column.config > .p-workflow {
+  flex: 2 1 340px;
+}
+
+.main-window[data-layout="tablet"] .column.config > .p-plan {
+  flex: 3 1 540px;
+}
+
+.main-window[data-layout="tablet"] .column.config.collapsed > .groupbox {
+  display: none;
+}
+
+.main-window[data-layout="tablet"] .column.view {
+  grid-area: view;
+  height: clamp(480px, calc(100vh - 80px), 1000px);
+  height: clamp(480px, calc(100dvh - 80px), 1000px);
+}
+
+.main-window[data-layout="tablet"] .column.side {
+  grid-area: side;
+}
+
+.config-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Phone: one column of panels, workflow and viewer first. */
+.main-window[data-layout="phone"] .columns {
+  display: flex;
+  flex-direction: column;
+}
+
+.main-window[data-layout="phone"] .column {
+  display: contents;
+}
+
+.main-window[data-layout="phone"] .column > * {
+  flex: none;
+}
+
+.main-window[data-layout="phone"] .logo-banner {
+  order: 0;
+  height: auto;
+  align-items: center;
+}
+
+.main-window[data-layout="phone"] .logo-banner .logo-dkfz {
+  height: 28px;
+}
+
+.main-window[data-layout="phone"] .logo-banner .logo-pyradplan {
+  height: 44px;
+}
+
+.main-window[data-layout="phone"] .p-workflow {
+  order: 1;
+}
+
+.main-window[data-layout="phone"] .p-viewer {
+  order: 2;
+  height: clamp(360px, calc(100vw + 100px), 80vh);
+}
+
+.main-window[data-layout="phone"] .p-visualization {
+  order: 3;
+}
+
+.main-window[data-layout="phone"] .p-plan {
+  order: 4;
+}
+
+.main-window[data-layout="phone"] .p-objectives {
+  order: 5;
+}
+
+.main-window[data-layout="phone"] .p-viewer-options {
+  order: 6;
+}
+
+.main-window[data-layout="phone"] .p-structures {
+  order: 7;
+}
+
+.main-window[data-layout="phone"] .p-structures:not(.collapsed) {
+  height: 300px;
+}
+
+.main-window[data-layout="phone"] .p-log {
+  order: 8;
+}
+
+.main-window[data-layout="phone"] .p-info {
+  order: 9;
+}
+
+/* The plan form's label/field pairs reflow from four columns to two. */
+.main-window[data-layout="phone"] .pw-grid {
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+}
+
+.main-window[data-layout="phone"] .pw-grid > label {
+  white-space: normal;
+}
+
+.main-window[data-layout="phone"] .pw-grid .span3 {
+  grid-column: span 1;
+}
+
+.main-window[data-layout="phone"] .pw-cell,
+.main-window[data-layout="phone"] .pw-cell > .row {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.main-window[data-layout="phone"] .pw-cell > .row > input.fill {
+  flex: 1 1 90px;
+}
+
+.main-window[data-layout="phone"] .pw-cell > .row > .spin:not(.beams, .small) {
+  flex: 1 1 64px;
+  min-width: 64px;
+}
+
+.main-window[data-layout="phone"] .wf-head {
+  white-space: normal;
+  line-height: 1.15;
+}
+
+.main-window[data-layout="phone"] .obj-controls {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.main-window[data-layout="phone"] .statusbar .status-env {
+  display: none;
+}
+
+.main-window[data-layout="phone"] .menu-popup {
+  max-width: calc(100vw - 8px);
+}
+
+.main-window[data-layout="phone"] .menubar .menu:nth-last-child(-n + 2) > .menu-popup {
+  left: auto;
+  right: 0;
+}
+
+/* No room beside the parent menu: submenus open below their entry instead. */
+.main-window[data-layout="phone"] .menu-popup.sub {
+  top: 100%;
+  left: 16px;
+  right: auto;
+  margin-left: 0;
+}
+
 /* ---------------------------------------------------------------- group box */
 
 .groupbox {
@@ -198,6 +399,47 @@ textarea {
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+.groupbox > .gb-toggle {
+  border: none;
+  border-radius: 3px;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.groupbox > .gb-toggle:focus-visible,
+.config-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.gb-chevron::before {
+  content: "";
+  display: inline-block;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  vertical-align: 1px;
+  transition: transform 0.12s;
+}
+
+[aria-expanded="false"] > .gb-chevron::before {
+  transform: rotate(-90deg);
+}
+
+.groupbox.collapsed {
+  flex: none;
+  padding-top: 10px;
+  padding-bottom: 0;
+}
+
+.groupbox.collapsed > .gb-body {
+  display: none;
 }
 
 .grow {
@@ -567,6 +809,15 @@ table.qt td {
   font-weight: bold;
 }
 
+.logo-banner .logo-dkfz {
+  height: 40px;
+}
+
+.logo-banner .logo-pyradplan {
+  height: 64px;
+  min-width: 0;
+}
+
 /* ---------------------------------------------------------------- viewer */
 
 .viewer {
@@ -732,8 +983,8 @@ table.qt td {
   border: 1px solid #a0a0a0;
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
-  min-width: 360px;
-  max-width: min(720px, 90vw);
+  min-width: min(360px, calc(100vw - 16px));
+  max-width: min(720px, calc(100vw - 16px));
   max-height: 80vh;
   display: flex;
   flex-direction: column;
@@ -801,7 +1052,7 @@ table.qt td {
 }
 
 .splash .card {
-  width: 460px;
+  width: min(460px, calc(100vw - 24px));
   background: var(--base);
   border: 1px solid var(--border);
   border-radius: 8px;
