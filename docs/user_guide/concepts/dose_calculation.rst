@@ -217,6 +217,11 @@ Models are addressed as ``"<org>/<model>"`` and resolved by
 :ref:`concept_ai_modelhub`: a copy on disk (or in the HuggingFace cache) is used as-is,
 otherwise the model is downloaded on first use.
 :func:`~pyRadPlan.ai.modelhub.list_local_models` reports what is already available offline.
+Loading a model runs the Python code shipped with it, so the engine applies the same rule as
+:func:`~pyRadPlan.ai.modelhub.load_model`: the calculation is refused unless you opted in with
+``settings.ai.modelhub_trust_remote_code = True`` (environment variable
+``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``). A plan cannot opt in by itself; enable it only
+for model sources you trust.
 
 The engine reads the repository's ``model_config.json`` and adapts to what it declares, so
 pyRadPlan carries no per-model code:

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from pyRadPlan import xp_utils, plot_slice
+from pyRadPlan.ai.modelhub import _load_model
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import AIBeamletEngine, DoseEngineBase
 from pyRadPlan.scenarios import CTPhaseUncertainty, RangeUncertainty, ScenarioSet, SetupUncertainty
@@ -32,6 +33,8 @@ def _local_ai_models_dir(monkeypatch):
     models_dir = Path(__file__).resolve().parents[1] / "data" / "ai_models"
     monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", models_dir)
     monkeypatch.setattr(get_settings().ai, "modelhub_offline", True)
+    # the committed dummy model is loaded by id, like a hub model, so its code needs the opt-in
+    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", True)
 
 
 def test_AIBeamletEngine_init(test_data_protons):
@@ -322,3 +325,23 @@ def test_range_scenarios_are_rejected(test_data_protons):
         engine.calc_dose_influence(
             ct, cst, stf, scenarios=_scenario_set(range_=[(0.0, 0.0), (3.5, 0.0)])
         )
+
+
+# --- remote code -----------------------------------------------------------
+
+
+def test_hub_model_code_needs_the_trust_opt_in(test_data_protons, monkeypatch):
+    """Without the opt-in the engine refuses a model by id before anything is downloaded."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
+    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", False)
+    monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
+
+    def _no_download(**kwargs):
+        raise AssertionError("untrusted model code must not even be downloaded")
+
+    monkeypatch.setattr(_load_model, "resolve_model_dir", _no_download)
+    pln = _ai_pln(pln, dij)
+    pln.prop_dose_calc["model"] = "SomeOrg/hub-only-model"
+
+    with pytest.raises(ValueError, match="modelhub_trust_remote_code"):
+        AIBeamletEngine(pln).calc_dose_influence(ct, cst, stf)

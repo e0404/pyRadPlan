@@ -28,6 +28,7 @@ Loading
    :toctree: generated/ai/modelhub/
 
    load_model
+   load_model_with_dir
    BasePreprocessor
 
 

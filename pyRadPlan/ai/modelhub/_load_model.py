@@ -383,6 +383,49 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
         nor a usable ``local_dir`` is provided.
     """
+    model, preprocessor, _ = load_model_with_dir(
+        name,
+        repo_id=repo_id,
+        revision=revision,
+        local_dir=local_dir,
+        offline=offline,
+        device=device,
+        trust_remote_code=trust_remote_code,
+    )
+    return model, preprocessor
+
+
+def load_model_with_dir(  # noqa: PLR0913 - the options of load_model
+    name: Optional[str] = None,
+    *,
+    repo_id: Optional[str] = None,
+    revision: Optional[str] = None,
+    local_dir: Optional[Union[str, Path]] = None,
+    offline: Optional[bool] = None,
+    device: Optional[str] = None,
+    trust_remote_code: Optional[bool] = None,
+) -> tuple[Any, BasePreprocessor, Path]:
+    """Load a model like :func:`load_model` and report the directory it came from.
+
+    For callers that read more of the repository than the loader does, e.g. the
+    ``metadata`` of its ``model_config.json``, without resolving it a second time.
+
+    Parameters
+    ----------
+    name, repo_id, revision, local_dir, offline, device, trust_remote_code
+        As for :func:`load_model`.
+
+    Returns
+    -------
+    tuple[Any, BasePreprocessor, Path]
+        The loaded model (in eval mode), its preprocessor and the resolved model
+        directory.
+
+    Raises
+    ------
+    ValueError
+        As for :func:`load_model`.
+    """
     cfg = get_settings().ai
     if device is None:
         device = cfg.modelhub_device
@@ -401,8 +444,9 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
         source = f"'{repo_id}'" if from_hub else f"'{local_dir}'"
         raise ValueError(
             f"Loading the model in {source} executes code shipped with the model "
-            "(model.py, preprocessor.py). Pass trust_remote_code=True "
-            "(or set PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1) only for sources you trust."
+            "(model.py, preprocessor.py). Only for sources you trust: pass "
+            "trust_remote_code=True, or set pyRadPlan.settings.ai.modelhub_trust_remote_code "
+            "= True (environment variable PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1)."
         )
 
     model_dir = resolve_model_dir(
@@ -436,4 +480,4 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     preprocessor = preprocessor_cls(config.get("model_preprocessing", {}))
 
     logger.info("Loaded model from %s onto device '%s'.", model_dir, device)
-    return model, preprocessor
+    return model, preprocessor, model_dir

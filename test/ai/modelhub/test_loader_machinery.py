@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from pyRadPlan.ai.modelhub import BasePreprocessor, _load_model, load_model
+from pyRadPlan.ai.modelhub import BasePreprocessor, _load_model, load_model, load_model_with_dir
 
 MODEL_PY = """
 class FakeNet:
@@ -149,6 +149,26 @@ def test_hub_load_honours_settings_opt_in(fake_model_dir, monkeypatch, isolated_
 
     model, _ = load_model("dosecalc-x")
     assert model is not None
+
+
+def test_load_model_with_dir_reports_the_resolved_directory(
+    fake_model_dir, monkeypatch, isolated_model_settings
+):
+    """Callers reading the repository's metadata get the directory the load resolved."""
+    monkeypatch.setattr(isolated_model_settings, "modelhub_trust_remote_code", True)
+    monkeypatch.setattr(_load_model, "resolve_model_dir", lambda **kw: fake_model_dir)
+
+    model, preprocessor, model_dir = load_model_with_dir(repo_id="org/dosecalc-x")
+    assert model is not None and preprocessor is not None
+    assert model_dir == fake_model_dir
+
+
+def test_trust_error_names_the_setting(monkeypatch):
+    """Callers that cannot pass trust_remote_code (e.g. a dose engine) learn what to set."""
+    monkeypatch.setattr(_load_model, "resolve_model_dir", lambda **kw: None)
+    with pytest.raises(ValueError, match="modelhub_trust_remote_code") as excinfo:
+        load_model_with_dir(repo_id="org/dosecalc-x")
+    assert "PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1" in str(excinfo.value)
 
 
 def test_name_resolves_to_hf_org_repo_id(fake_model_dir, monkeypatch):

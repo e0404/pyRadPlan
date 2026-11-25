@@ -23,10 +23,9 @@ from pyRadPlan.ai.modelhub import (
     hub_config_dir,
     list_hub_models,
     list_local_models,
-    load_model,
+    load_model_with_dir,
     local_model_dir,
     model_facts,
-    resolve_model_dir,
     task_from_dir,
     task_from_name,
 )
@@ -56,8 +55,11 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     - Grid construction: uniform spacing in depth and lateral with configurable ranges; axis
         order is (depth, lateral, lateral) to match model conventions.
     - Model inference: model + preprocessor loaded via `pyRadPlan.ai.modelhub.load_model` from the
-        friendly name in `prop_dose_calc["model"]`; backend-agnostic arrays using the
-        Array API (`self.xp`).
+        '<org>/<model>' id in `prop_dose_calc["model"]`; backend-agnostic arrays using the
+        Array API (`self.xp`). Loading executes the code shipped with the model, so it needs
+        the same opt-in as `load_model(repo_id=...)`:
+        ``settings.ai.modelhub_trust_remote_code = True``
+        (``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``).
     - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
         predicted dose at world dose-grid locations.
     - Scenarios: setup shifts are supported, each computed as its own geometry. Range
@@ -941,13 +943,20 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         if "/" not in self.model:
             raise ValueError(f"Model '{self.model}' is not a '<org>/<model>'.")
 
-        model_dir = resolve_model_dir(repo_id=self.model)
+        # Loading by id applies the modelhub's trust rule (settings.ai.modelhub_trust_remote_code)
+        # before anything is downloaded.
+        try:
+            self.network, self.preprocessor, model_dir = load_model_with_dir(
+                repo_id=self.model, device=device_string(self.device)
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"AI model '{self.model}' is neither on disk nor could it be downloaded: {exc}"
+            ) from exc
         raw_config, self._model_modality, _ = model_facts(model_dir)
         self.model_cfg = DoseCalcModelConfig.model_validate(
             raw_config.get("metadata", {}).get("dose_calc", {})
         )
-        model_device = device_string(self.device)
-        self.network, self.preprocessor = load_model(local_dir=model_dir, device=model_device)
 
         if self.ensemble_size is not None:
             self.preprocessor.config["ensemble_size"] = self.ensemble_size
