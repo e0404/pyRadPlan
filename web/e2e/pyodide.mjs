@@ -405,6 +405,20 @@ try {
     expect(/disabled in the browser/.test(refusal), "loading a workspace pickle is refused with the reason");
     await tid("msg-ok").click();
     await tid("message-box").waitFor({ state: "detached", timeout: 10000 });
+    const h5 = saved["workspace.hdf5"];
+    expect(Boolean(h5), "workspace HDF5 saved");
+    const before = await state();
+    await tid("file-input").setInputFiles(h5);
+    await page.waitForTimeout(500);
+    await waitIdle();
+    if (await tid("run-warnings").count()) await tid("msg-ok").click();
+    if (await tid("error-dialog").count()) throw new Error(`workspace .h5 reload: ${await tid("error-dialog").textContent()}`);
+    if (await tid("message-box").count()) throw new Error(`workspace .h5 reload: ${await tid("message-box").textContent()}`);
+    const after = await state();
+    expect(
+      after.has.ct && after.has.cst && after.has.dij && after.has.result && JSON.stringify(after.results.names) === JSON.stringify(before.results.names),
+      `an HDF5 workspace loads in the browser with its results (${after.results.names.join(", ")})`,
+    );
     const mat = saved["pln.mat"];
     await tid("file-input").setInputFiles(mat);
     await page.waitForTimeout(500);

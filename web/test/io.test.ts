@@ -226,7 +226,7 @@ describe("menu model", () => {
 
 describe("capabilities helpers", () => {
   it("builds the load accept list from available import formats", () => {
-    expect(loadAccept(info(web))).toBe(".mat,.npz");
+    expect(loadAccept(info(web))).toBe(".mat,.npz,.h5,.hdf5");
     expect(loadAccept(info(native))).toContain(".nii.gz");
     expect(loadAccept(info(native))).toContain(".pkl");
     expect(loadAccept(null)).toBe(".mat");
@@ -247,6 +247,8 @@ describe("capabilities helpers", () => {
     expect(structureFormatOf({ ...dcm[0], label: "DICOM something", structure_format: "seg" } as never)).toBe("seg");
     expect(structureFormatOf({ ...dcm[1], label: "DICOM RTSTRUCT" })).toBe("seg");
     expect(structureFormatOf(web.formats.export.find((f) => f.object === "pln")!)).toBeUndefined();
+    const nrrd = web.formats.export.filter((f) => f.object === "cst" && f.format === "nrrd");
+    expect(nrrd.map(structureFormatOf)).toEqual([undefined, "layers"]);
   });
 
   it("strips a typed extension from the base name", () => {

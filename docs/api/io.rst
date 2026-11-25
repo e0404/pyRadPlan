@@ -12,6 +12,7 @@ Loading and saving
    load_patient
    load_data
    save_data
+   ExportBundle
    load_tg119
    list_phantoms
    available_phantoms
@@ -31,6 +32,7 @@ Format handlers
    DicomHandler
    NpzHandler
    PickleHandler
+   Hdf5Handler
    NiftiHandler
    NrrdHandler
    MetaImageHandler

@@ -15,12 +15,16 @@ class NrrdImporter(SitkImporterBase):
 
 
 class NrrdExporter(SitkExporterBase):
-    """Exporter for NRRD images (stamps pyradplan/3D-Slicer metadata)."""
+    """Exporter for NRRD images (stamps pyradplan/3D-Slicer metadata).
+
+    ``segmentation="layers"`` writes a 3D Slicer segmentation (``cst.seg.nrrd``).
+    """
 
     format: ClassVar[str] = "nrrd"
     name: ClassVar[str] = "NRRD Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".nrrd",)
     stamp_interop_metadata: ClassVar[bool] = True
+    slicer_layers: ClassVar[bool] = True
 
 
 class NrrdHandler(NrrdImporter, NrrdExporter):

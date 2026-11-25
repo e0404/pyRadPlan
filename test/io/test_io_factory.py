@@ -17,7 +17,18 @@ from pyRadPlan.io._factory import (
 
 
 def test_builtin_formats_are_registered():
-    assert get_available_formats() == {"mat", "dcm", "npz", "nifti", "nrrd", "meta", "pickle"}
+    assert get_available_formats() == {
+        "mat",
+        "dcm",
+        "npz",
+        "nifti",
+        "nrrd",
+        "meta",
+        "pickle",
+        "hdf5",
+        "topas",
+        "fred",
+    }
     assert get_importer("mat") is MatlabImporter
     assert get_exporter("mat") is MatlabExporter
     assert get_importer("dcm") is DicomImporter

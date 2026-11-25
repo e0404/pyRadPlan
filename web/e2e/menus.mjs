@@ -268,7 +268,7 @@ try {
 
   await clickItem("file", "save_workspace");
   file = await download(() => tid("save-ok").click());
-  expect(file.name === "workspace.pkl", `Save Workspace downloads ${file.name}`);
+  expect(file.name === "workspace.h5", `Save Workspace downloads HDF5 by default: ${file.name}`);
   await tid("msg-ok").click();
 
   // ------------------------------------------------------------------ loading

@@ -81,6 +81,7 @@ simu_dir : str
 
 import logging
 import os
+from pathlib import Path
 from datetime import datetime
 import sys
 from typing import Any, ClassVar, Literal, Union
@@ -237,6 +238,32 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         self._let_dose = None
 
         super().__init__(pln)
+
+    def _input_only_settings(self, directory: Path) -> dict[str, Any]:
+        return {"simu_dir": directory, "external_calculation": True}
+
+    def _expected_input_files(self, directory: Path, stf: SteeringInformation) -> list[Path]:
+        files = [directory / f"{self._patient_filename}.dat"]
+        files.append(directory / f"{self._patient_filename}.txt")
+        for beam_ix in range(len(stf.beams)):
+            files.append(directory / f"beamSetup_{self._label}_field{beam_ix}.txt")
+            files.extend(
+                directory / f"pyRadPlan_plan_field{beam_ix}_run{run_ix}.txt"
+                for run_ix in range(self.num_runs)
+            )
+        return files
+
+    def existing_input_files(self, directory: Union[str, os.PathLike]) -> list[Path]:
+        directory = Path(directory)
+        if not directory.is_dir():
+            return []
+        patterns = (
+            f"{self._patient_filename}.dat",
+            f"{self._patient_filename}.txt",
+            "beamSetup_pyRadPlan_plan_field*.txt",
+            "pyRadPlan_plan_field*_run*.txt",
+        )
+        return sorted({path for pattern in patterns for path in directory.glob(pattern)})
 
     def _write_plan_file(self, beams_topas: list[dict], beam_ix: int) -> None:
         """Write  TOPAS files for external simulation."""

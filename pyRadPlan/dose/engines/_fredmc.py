@@ -277,6 +277,34 @@ class ParticleFredMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
         base_path = self._inp_dir if subfolder == "inp" else getattr(self, f"_{subfolder}_dir")
         return Path(os.path.join(base_path, filename))
 
+    def _input_only_settings(self, directory: Path) -> dict[str, Any]:
+        # One FRED run of the whole plan, not one per beam
+        return {
+            "external_calculation": True,
+            "save_input": directory,
+            "save_output": False,
+            "use_output": False,
+            "dose_per_beam": False,
+        }
+
+    def _expected_input_files(self, directory: Path, stf: SteeringInformation) -> list[Path]:
+        inp = directory / self._input_foldername
+        patient = Path(self._patient_filename)
+        return [
+            inp / self._run_input_filename,
+            inp / self._plan_foldername / self._plan_filename,
+            inp / self._plan_foldername / self._plan_delivery_filename,
+            inp / self._regions_foldername / self._regions_filename,
+            inp / self._regions_foldername / self.HU_table_file,
+            inp / self._regions_foldername / patient,
+            inp / self._regions_foldername / patient.with_suffix(".raw"),
+        ]
+
+    def existing_input_files(self, directory: Union[str, os.PathLike]) -> list[Path]:
+        return [
+            path for path in self._expected_input_files(Path(directory), None) if path.exists()
+        ]
+
     def _write_run_file(self) -> None:
         """Write main run file for the FRED engine."""
         file_content = textwrap.dedent("""
