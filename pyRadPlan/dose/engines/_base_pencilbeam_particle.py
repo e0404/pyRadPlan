@@ -66,6 +66,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         the dose drops to the requested cutoff
     """
 
+    # Charge z and mass number A of the radiation modes for which range shifter scattering is
+    # modeled (an ion is scaled to the proton with the same velocity profile)
+    rashi_scatter_ions: ClassVar[dict[str, tuple[int, int]]] = {
+        "protons": (1, 1),
+        "helium": (2, 4),
+        "carbon": (6, 12),
+        "oxygen": (8, 16),
+    }
+
     computes_bio_influence: ClassVar[bool] = True
     # Interpolates every biological kernel quantity of the machine (alpha/beta, z*, LET,
     # fluence spectra).
@@ -474,21 +483,17 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         add_sigma_sq = 0
         rad_depth_offset = 0
 
-        # Consider range shifter for protons if applicable
         if curr_bixel["range_shifter"]["eq_thickness"] > 0:
-            # TODO: We should do this check in dose calc initialization instead to spare some time
-            if self._machine["meta"]["radiationMode"] != "protons":
-                warnings.warn(
-                    "Range shifter not valid for irradiation with particle other than protons!"
+            if self._machine.radiation_mode in self.rashi_scatter_ions:
+                sigma_rashi = self._calc_sigma_rashi(
+                    curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
                 )
-
-            # Compute!
-            sigma_rashi = self._calc_sigma_rashi(
-                curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
-            )
-
-            # Add to initial sigma in quadrature
-            add_sigma_sq += sigma_rashi**2
+                add_sigma_sq += sigma_rashi**2
+            else:
+                warnings.warn(
+                    "Range shifter scattering not implemented for radiation mode "
+                    f"'{self._machine.radiation_mode}' and will be ignored!"
+                )
             rad_depth_offset += curr_bixel["range_shifter"]["eq_thickness"]
 
         curr_bixel["add_sigma_sq"] = add_sigma_sq
@@ -783,7 +788,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             # TODO: what's the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
             cnt += len_ray_energy
 
-        # Setup energy, focus index, sigma look up table - only consider unique rows
+        beamlets = [beamlet for ray in stf_element["beam"]["rays"] for beamlet in ray["beamlets"]]
+
+        # Setup energy, focus index, sigma look up table - only consider unique rows. The range
+        # shifter is part of the row, so beamlets that differ only in it are kept apart
         energy_sigma_lut, ix_unique = np.unique(
             np.column_stack(
                 (
@@ -798,6 +806,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                         for beamlet in ray["beamlets"]
                     ],
                     v_ssd,
+                    [beamlet["range_shifter"]["eq_thickness"] for beamlet in beamlets],
+                    [beamlet["range_shifter"]["source_rashi_distance"] for beamlet in beamlets],
                 )
             ),
             axis=0,
@@ -809,12 +819,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             (energy_sigma_lut, np.full((len(energy_sigma_lut), 1), np.nan))
         )
 
-        range_shifter_lut = [
-            beamlet["range_shifter"]
-            for ray in stf_element["beam"]["rays"]
-            for beamlet in ray["beamlets"]
-        ]
-        range_shifter_lut = [range_shifter_lut[i] for i in ix_unique]
+        range_shifter_lut = [beamlets[i]["range_shifter"] for i in ix_unique]
 
         # Find the largest initial beam width considering focus index, SSD and range shifter
         # for each individual energy
@@ -833,20 +838,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
             sigma_ini_sq = sigma_ini**2
 
-            # Consider range shifter for protons if applicable
             if (
-                self._machine.radiation_mode == "protons"
+                self._machine.radiation_mode in self.rashi_scatter_ions
                 and range_shifter_lut[i]["eq_thickness"] > 0
             ):
-                # TODO: this is not tested yet as only Generic is used
                 sigma_rashi = self._calc_sigma_rashi(
-                    self._machine.energies[energy_ix],
-                    range_shifter_lut[i],
-                    energy_sigma_lut[i, 2],
+                    kernel, range_shifter_lut[i], energy_sigma_lut[i, 2]
                 )
                 sigma_ini_sq += sigma_rashi**2
 
-            energy_sigma_lut[i, 3] = sigma_ini_sq
+            energy_sigma_lut[i, -1] = sigma_ini_sq
 
         # Find for each individual energy the broadest initial beam width
         unique_energies = np.unique(energy_sigma_lut[:, 0])
@@ -854,9 +855,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ix_max = np.full(len(unique_energies), np.nan)
         for i, energy in enumerate(unique_energies):
             largest_sigma_sq4unique_energies[i] = np.max(
-                energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3]
+                energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1]
             )
-            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3])
+            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1])
 
         # Get energy indices for looping
         v_energies_ix = np.where(np.isin(self._machine.energies, unique_energies))[0]
@@ -1089,13 +1090,42 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             self._focus_interpolator_cache[key] = interpolator
         return interpolator(ssd)
 
-    def _calc_sigma_rashi(self, bd_entry, range_shifter: dict, ssd: float):
+    def _calc_sigma_rashi(self, bd_entry, range_shifter: dict, ssd: float) -> float:
+        """
+        Calculate the additional beam broadening by a range shifter.
+
+        The parametrization (Hong et al.; Gottschalk) is fitted for protons. Heavier ions are
+        scaled to the proton with the same velocity profile: depths and ranges scale with
+        z^2/A, the scattering power with (z/A)^2.
+
+        Parameters
+        ----------
+        bd_entry : dict, ParticlePencilBeamKernel or float
+            Base data of the energy, providing the range in water [mm] or the kinetic energy
+            ([MeV] for protons, [MeV/u] for heavier ions). A number is taken as the energy.
+        range_shifter : dict
+            Range shifter with ``eq_thickness`` and ``source_rashi_distance`` [mm].
+        ssd : float
+            Source to surface distance [mm].
+
+        Returns
+        -------
+        float
+            Sigma of the range shifter [mm], to be added in quadrature.
+        """
+        radiation_mode = self._machine.radiation_mode
+        if radiation_mode not in self.rashi_scatter_ions:
+            raise ValueError(
+                f"Range shifter scattering not implemented for radiation mode '{radiation_mode}'!"
+            )
+        z, a_mass = self.rashi_scatter_ions[radiation_mode]
+
         # Distance of range shifter to patient surface
-        rashi_dist = ssd - range_shifter["sourceRashiDistance"]
+        rashi_dist = ssd - range_shifter["source_rashi_distance"]
 
         # Convert to cm
         z_rs_cm = rashi_dist / 10.0  # [cm]
-        t = range_shifter["eqThickness"] / 10.0  # [cm]
+        t = range_shifter["eq_thickness"] / 10.0  # [cm]
 
         # Constants
         a1 = 0.21  # [1]
@@ -1105,27 +1135,32 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         alpha = 0.0022  # [cm MeV ^ (-p)]
         p = 1.77  # [1]
 
-        # Determine range
-        range_in_water = None
-        if isinstance(bd_entry, dict) and "range" in bd_entry:
-            range_in_water = bd_entry["range"]
+        if isinstance(bd_entry, dict):
+            range_mm, energy = bd_entry.get("range"), bd_entry.get("energy")
+        elif hasattr(bd_entry, "energy"):
+            range_mm, energy = getattr(bd_entry, "range", None), bd_entry.energy
+        else:
+            range_mm, energy = None, bd_entry
 
-        if range_in_water is None:
-            if isinstance(bd_entry, dict) and "energy" in bd_entry:
-                energy = bd_entry["energy"]
-            else:
-                energy = bd_entry
-            range_in_water = alpha * (energy**p)
+        # Ion range in water [cm]
+        if range_mm is not None and np.isfinite(range_mm):
+            range_in_water = float(range_mm) / 10.0
+        else:  # Bragg-Kleeman with energy per nucleon
+            range_in_water = (a_mass / z**2) * alpha * (float(energy) ** p)
 
         # Check if valid computation possible or range shifter too thick
-        if t / range_in_water >= 0.95:
+        if range_in_water <= 0 or t / range_in_water >= 0.95:
             raise ValueError(
                 "Computation of range shifter sigma invalid. Range shifter is too thick."
             )
 
-        # Improved HONG's Formula [1, Eq. 21]
+        # Relative depth in the range shifter (invariant under proton scaling)
         s = t / range_in_water
-        sigma_t = (a1 * s + a2 * s**2) * (c0 + c1 * range_in_water)
+        # Range of the equivalent proton
+        range_proton = (z**2 / a_mass) * range_in_water
+
+        # Improved HONG's Formula [1, Eq. 21]
+        sigma_t = (a1 * s + a2 * s**2) * (c0 + c1 * range_proton)
 
         # Constants for further calculations
         c1 = 13.6  # MeV
@@ -1140,22 +1175,24 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Calculate F1 and F2
         f1_part1 = (2 * c1**2 * alpha ** (2 / p)) / (4 * lr_pmma * (2 / p - 1))
         f1_part2 = ((1 - s) ** (2 - 2 / p) - 1) / (2 / p - 2) - s
-        f1_part3 = range_in_water ** (2 - 2 / p)
+        f1_part3 = range_proton ** (2 - 2 / p)
         f1 = f1_part1 * f1_part2 * f1_part3
 
         f2_part1 = (c1**2 * alpha ** (2 / p)) / (4 * lr_pmma * (2 / p - 1))
         f2_part2 = ((1 - s) ** (1 - 2 / p) - 1) / 1
-        f2_part3 = range_in_water ** (1 - 2 / p)
+        f2_part3 = range_proton ** (1 - 2 / p)
         f2 = f2_part1 * f2_part2 * f2_part3
 
+        # Scale each moment from the equivalent proton back to the ion
         sigma_proj_sq = prsf_pmma**2 * (
-            sigma_t**2 + f1 * z_rs_cm * rsp_pmma + f2 * (z_rs_cm * rsp_pmma) ** 2
+            (a_mass / z**4) * sigma_t**2
+            + (1 / z**2) * f1 * z_rs_cm * rsp_pmma
+            + (1 / a_mass) * f2 * (z_rs_cm * rsp_pmma) ** 2
         )  # [cm ^ 2]
 
         # Convert to mm
-        sigma_rashi = 10.0 * np.sqrt(sigma_proj_sq)  # [mm]
-
-        return sigma_rashi
+        # builtin float, so it combines with arrays of any backend
+        return float(10.0 * np.sqrt(sigma_proj_sq))  # [mm]
 
     def round2(self, a: np.floating, b: int) -> np.floating:
         """

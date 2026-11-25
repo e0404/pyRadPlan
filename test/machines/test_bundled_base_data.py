@@ -239,3 +239,11 @@ def test_bundled_rbe_table_metadata():
     assert tissue_class.tissue == LEMTissueProperties(
         alpha_x=0.1, beta_x=0.05, d_t=30.0, r_nucleus=5.0, version="I"
     )
+
+
+def test_photon_penumbra_is_read_from_machine_data():
+    """The penumbra of a photon machine comes from its base data, not the default."""
+    machine_dict = load_machine_from_mat(find_machine_file("photons", "Generic"))
+    machine_dict["data"]["penumbraFWHMatIso"] = 7.5
+    machine = validate_machine(machine_dict)
+    assert [kernel.penumbra for kernel in machine.pb_kernels.values()] == [7.5]
