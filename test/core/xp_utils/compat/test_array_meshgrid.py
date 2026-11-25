@@ -88,8 +88,6 @@ def test_array_meshgrid_array_api_strict():
     except Exception:
         pytest.skip("array_api_strict not installed")
 
-    from pyRadPlan.core.xp_utils.helpers import to_numpy
-
     x = nps.asarray([1, 2, 3])
     y = nps.asarray([4, 5])
 

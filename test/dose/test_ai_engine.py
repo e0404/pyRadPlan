@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import shutil
 from pathlib import Path
@@ -379,11 +380,24 @@ def _unit(v):
     return v / np.linalg.norm(v)
 
 
-_CPU_BACKENDS = [
-    pytest.param("numpy", id="numpy"),
+def _assert_sparse_close(actual, expected, rtol, atol):
+    """Elementwise ``np.allclose`` for sparse matrices too large to densify."""
+    excess = abs(actual - expected) - rtol * abs(expected)
+    assert excess.max() <= atol
+
+
+_OTHER_CPU_BACKENDS = [
     pytest.param("array_api_strict", id="array_api_strict"),
     pytest.param("torch", id="torch"),
+    pytest.param(
+        "jax",
+        id="jax",
+        marks=pytest.mark.skipif(
+            importlib.util.find_spec("jax") is None, reason="jax is not installed"
+        ),
+    ),
 ]
+_CPU_BACKENDS = [pytest.param("numpy", id="numpy"), *_OTHER_CPU_BACKENDS]
 
 
 @pytest.mark.parametrize("cpu_backend", _CPU_BACKENDS)
@@ -445,7 +459,33 @@ def test_beamlet_batches_do_not_change_the_dose(geometry_model, monkeypatch):
     batched = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
 
     assert whole.nnz > 0
-    assert np.allclose(whole.toarray(), batched.toarray(), rtol=1e-6, atol=0.0)
+    _assert_sparse_close(batched, whole, rtol=1e-6, atol=0.0)
+
+
+@pytest.mark.parametrize("cpu_backend", _OTHER_CPU_BACKENDS)
+def test_dose_near_the_cuboid_edge_is_the_same_on_every_backend(request, monkeypatch, cpu_backend):
+    """Dose-grid voxels just outside a beamlet's cuboid get no dose on any backend.
+
+    Unlike the matRad test data, the oblique TG119 beam puts voxels of the cuboid's
+    bounding box outside the sampled cuboid, where the predicted dose must not be
+    extrapolated or blended towards zero.
+    """
+    if cpu_backend == "jax":
+        # In float32 (JAX's default) the transform around the source, 10 m away, resolves
+        # positions to about 1 um only, so a voxel this close to a cuboid face may cross it.
+        jax = importlib.import_module("jax")
+        x64 = jax.config.jax_enable_x64
+        jax.config.update("jax_enable_x64", True)
+        request.addfinalizer(lambda: jax.config.update("jax_enable_x64", x64))
+    pln, ct, cst, stf = _geometry_case(DUMMY_MODEL)
+
+    _use_backend(monkeypatch, "numpy", None)
+    reference = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+    _use_backend(monkeypatch, cpu_backend, None)
+    other = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+
+    assert reference.nnz > 0
+    _assert_sparse_close(other, reference, rtol=1e-4, atol=1e-8)
 
 
 # --- scenarios -------------------------------------------------------------

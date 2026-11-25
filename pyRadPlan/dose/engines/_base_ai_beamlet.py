@@ -15,8 +15,8 @@ from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.scenarios import Scenario
 from pyRadPlan.core import Grid, PyRadPlanBaseModel
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
-from pyRadPlan.core.xp_utils.compat import batched_interp3d, array_meshgrid
-from pyRadPlan.core.xp_utils import device_string, to_namespace
+from pyRadPlan.core.xp_utils.compat import array_meshgrid
+from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, device_string, to_namespace
 from pyRadPlan.geometry import get_beam_rotation_matrix
 from pyRadPlan.ai.modelhub import (
     ModelTask,
@@ -36,6 +36,44 @@ from ._base_pencilbeam import PencilBeamEngineAbstract
 from pyRadPlan._settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _interpolate_or_fill(
+    interpolator: ArrayBackendGridInterpolator,
+    axes: tuple[Array, ...],
+    xi: Array,
+    fill_value: float,
+) -> Array:
+    """Interpolate, with ``fill_value`` for queries outside the grid.
+
+    ``ArrayBackendGridInterpolator`` clips such queries to the grid instead. A query is
+    inside if it lies within the first and last point of every (ascending) axis, as for
+    SciPy's ``RegularGridInterpolator(..., bounds_error=False)``.
+
+    Parameters
+    ----------
+    interpolator : ArrayBackendGridInterpolator
+        Interpolator built on ``axes``.
+    axes : tuple[Array, ...]
+        The interpolator's grid axes.
+    xi : Array
+        Queries of shape ``(N, len(axes))``.
+    fill_value : float
+        Value for queries outside the grid.
+
+    Returns
+    -------
+    Array
+        Interpolated values of shape ``(N, *value_shape)``.
+    """
+    xp = array_api_compat.array_namespace(xi)
+    inside = None
+    for i, axis in enumerate(axes):
+        axis_inside = (xi[:, i] >= axis[0]) & (xi[:, i] <= axis[-1])
+        inside = axis_inside if inside is None else inside & axis_inside
+    values = interpolator(xi)
+    inside = xp.reshape(inside, inside.shape + (1,) * (values.ndim - 1))
+    return xp.where(inside, values, fill_value)
 
 
 class AIBeamletEngine(PencilBeamEngineAbstract):
@@ -586,8 +624,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         depth_range = grid_information["depth_range"]
         grid_rotated = grid_information["grid_rotated"]
 
-        values = self.ct_interpolator(grid_rotated)
-        values = xp.asarray(values, device=self.device)
+        values = _interpolate_or_fill(
+            self.ct_interpolator, self.ct_grid_dimensions, grid_rotated, fill_value=-1000.0
+        )
         # Meshgrid now built with shape (depth, lateral, lateral); direct reshape yields desired ordering
         values_reshaped = xp.reshape(
             values, (depth_range.shape[0], lateral_range.shape[0], lateral_range.shape[0])
@@ -756,25 +795,23 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         else:
             cuboid_by_qty = self._predict(ray["ct_cuboid"], energies_arr)
 
-        # Interpolate each quantity's cuboid batch to world dose-grid points
+        # Interpolate each quantity's cuboid batch to world dose-grid points, with the
+        # batch as trailing value axis: (N, B) values per quantity
+        axes = (depth, lateral, lateral)
         vals_by_qty = {}
         for q_name, cuboid_batch in cuboid_by_qty.items():
-            interp = batched_interp3d(
-                (depth, lateral, lateral),
-                cuboid_batch,
-                method="linear",
-                bounds_error=False,
-                fill_value=0.0,
+            interp = ArrayBackendGridInterpolator(
+                axes, xp.permute_dims(cuboid_batch, (1, 2, 3, 0))
             )
-            vals_by_qty[q_name] = xp.asarray(
-                interp(pts_eval), dtype=xp.float32, device=self.device
+            vals_by_qty[q_name] = xp.astype(
+                _interpolate_or_fill(interp, axes, pts_eval, fill_value=0.0), xp.float32
             )
 
         # Build per-bixel precomputed entries; non-zero mask is driven by physical_dose
         dose_vals = vals_by_qty["physical_dose"]
         precomputed = []
         for i in range(B):
-            vals_dose = xp.where(vdose_sub, dose_vals[i, :], 0.0)
+            vals_dose = xp.where(vdose_sub, dose_vals[:, i], 0.0)
             nz_mask = vals_dose > self.dose_threshold
             entry = {
                 "ix": xp.asarray(ix_mask[nz_mask], dtype=xp.int64, device=self.device),
@@ -783,7 +820,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
                 ),
             }
             for q_name in quantities[1:]:
-                vals_q = xp.where(vdose_sub, vals_by_qty[q_name][i, :], 0.0)
+                vals_q = xp.where(vdose_sub, vals_by_qty[q_name][:, i], 0.0)
                 entry[q_name] = xp.asarray(vals_q[nz_mask], dtype=xp.float32, device=self.device)
             precomputed.append(entry)
 
@@ -899,13 +936,11 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             xp.asarray(sitk_grid.z, device=self.device),
         )
 
-        self.ct_interpolator = batched_interp3d(
-            self.ct_grid_dimensions,
-            xp.permute_dims(self.sitk_xp, (2, 1, 0)),
-            method="linear",
-            bounds_error=False,
-            fill_value=-1000,
-        )
+        ct_values = xp.permute_dims(self.sitk_xp, (2, 1, 0))
+        if not xp.isdtype(ct_values.dtype, "real floating"):
+            # integer HU (e.g. int16) cannot be mixed with float weights on every backend
+            ct_values = xp.astype(ct_values, xp.float32)
+        self.ct_interpolator = ArrayBackendGridInterpolator(self.ct_grid_dimensions, ct_values)
 
         if not self.model:
             raise ValueError(
