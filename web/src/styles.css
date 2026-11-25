@@ -324,17 +324,17 @@ textarea {
   grid-column: span 1;
 }
 
-.main-window[data-layout="phone"] .pw-cell,
-.main-window[data-layout="phone"] .pw-cell > .row {
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .pw-cell,
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .pw-cell > .row {
   flex-wrap: wrap;
   row-gap: 4px;
 }
 
-.main-window[data-layout="phone"] .pw-cell > .row > input.fill {
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .pw-cell > .row > input.fill {
   flex: 1 1 90px;
 }
 
-.main-window[data-layout="phone"] .pw-cell > .row > .spin:not(.beams, .small) {
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .pw-cell > .row > .spin:not(.beams, .small) {
   flex: 1 1 64px;
   min-width: 64px;
 }
@@ -344,7 +344,7 @@ textarea {
   line-height: 1.15;
 }
 
-.main-window[data-layout="phone"] .obj-controls {
+.main-window:is([data-layout="tablet"], [data-layout="phone"]) .obj-controls {
   flex-wrap: wrap;
   row-gap: 4px;
 }
