@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from pyRadPlan import IonPlan, generate_stf, load_tg119, xp_utils, plot_slice
-from pyRadPlan.ai.modelhub import _load_model
+from pyRadPlan.ai.modelhub import UntrustedModelError, _resolve, trust_model
 from pyRadPlan.core.xp_utils import to_namespace, to_numpy
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import AIBeamletEngine, DoseEngineBase
@@ -534,18 +534,51 @@ def test_range_scenarios_are_rejected(test_data_protons):
 # --- remote code -----------------------------------------------------------
 
 
-def test_hub_model_code_needs_the_trust_opt_in(test_data_protons, monkeypatch):
-    """Without the opt-in the engine refuses a model by id before anything is downloaded."""
-    pln, ct, cst, stf, dij, _result = test_data_protons
-    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", False)
+@pytest.fixture
+def downloaded_model(tmp_path, monkeypatch):
+    """Fake a Hub serving a copy of the dummy model whose import leaves a file behind."""
+    sentinel = tmp_path / "model-code-ran"
+    source = Path(__file__).resolve().parents[1] / "data" / "ai_models" / DUMMY_MODEL
+
+    def fake_snapshot_download(*, repo_id, local_dir, local_files_only, **kwargs):
+        target = Path(local_dir)
+        if local_files_only:
+            if target.is_dir() and any(target.iterdir()):
+                return str(target)
+            raise FileNotFoundError(repo_id)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        model_py = target / "model.py"
+        model_py.write_text(
+            f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+            + model_py.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return str(target)
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data_root"))
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path / "models")
     monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
+    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", False)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot_download)
+    return sentinel
 
-    def _no_download(**kwargs):
-        raise AssertionError("untrusted model code must not even be downloaded")
 
-    monkeypatch.setattr(_load_model, "resolve_model_dir", _no_download)
+def test_downloaded_model_code_needs_trust(test_data_protons, downloaded_model):
+    """The engine refuses a downloaded model nobody trusted, before any of its code runs."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
     pln = _ai_pln(pln, dij)
     pln.prop_dose_calc["model"] = "SomeOrg/hub-only-model"
 
-    with pytest.raises(ValueError, match="modelhub_trust_remote_code"):
+    with pytest.raises(UntrustedModelError) as excinfo:
         AIBeamletEngine(pln).calc_dose_influence(ct, cst, stf)
+    message = str(excinfo.value)
+    assert 'pyRadPlan.ai.modelhub.trust_model("SomeOrg/hub-only-model")' in message
+    assert "modelhub_trust_remote_code = True" in message
+    assert "PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1" in message
+    assert not downloaded_model.exists()
+
+    trust_model("SomeOrg/hub-only-model")
+    assert not downloaded_model.exists()
+    dij = AIBeamletEngine(pln).calc_dose_influence(ct, cst, stf)
+    assert downloaded_model.exists()
+    assert dij.physical_dose.flat[0].nnz > 0

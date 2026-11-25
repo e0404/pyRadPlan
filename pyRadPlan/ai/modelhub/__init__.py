@@ -1,9 +1,10 @@
 """HuggingFace-based AI model handling for pyRadPlan.
 
 Loads models (and their preprocessors) either from the HuggingFace Hub or from a
-local directory, with version dedup and offline support. See the "AI Model Hub"
-section of the user guide for the configuration and the model-repository
-contract.
+local directory, with version dedup and offline support. Code that pyRadPlan
+downloaded runs only once trusted (:func:`trust_model`). See the "AI Model Hub"
+section of the user guide for the configuration, the trust rule and the
+model-repository contract.
 """
 
 from ._settings import AiSettings
@@ -23,6 +24,13 @@ from ._load_model import (
     local_model_dir,
     model_facts,
 )
+from ._trust import (
+    TrustedModel,
+    UntrustedModelError,
+    is_trusted,
+    trust_model,
+    untrust_model,
+)
 
 __all__ = [
     "AiSettings",
@@ -40,4 +48,9 @@ __all__ = [
     "list_hub_models",
     "local_model_dir",
     "model_facts",
+    "TrustedModel",
+    "UntrustedModelError",
+    "is_trusted",
+    "trust_model",
+    "untrust_model",
 ]

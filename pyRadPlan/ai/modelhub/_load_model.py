@@ -17,7 +17,8 @@ from typing import Any, Optional, Union
 
 from pyRadPlan._settings import get_settings
 
-from ._resolve import resolve_model_dir
+from ._resolve import _resolve_model, resolve_model_dir
+from ._trust import _check_trust, _repo_id
 from ._preprocessor import BasePreprocessor
 
 logger = logging.getLogger(__name__)
@@ -366,11 +367,15 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     device : str, optional
         Device to place the model on. Defaults to :attr:`AiSettings.modelhub_device`.
     trust_remote_code : bool, optional
-        Allow executing the Python shipped with the model. Defaults to
-        :attr:`AiSettings.modelhub_trust_remote_code` (``False``), except for a
-        purely local load -- ``local_dir`` given without ``name``/``repo_id`` --
-        where the code is already under the caller's control and no opt-in is
-        needed. Loading fails if this resolves to ``False``.
+        Trust whatever code a downloaded model ships. Loading executes the model's
+        ``model.py`` and ``preprocessor.py``. A model folder you placed yourself --
+        one pyRadPlan did not download and that is not in the HuggingFace cache --
+        always runs. Downloaded code runs if it matches a
+        :func:`~pyRadPlan.ai.modelhub.trust_model` record or if this resolves to
+        ``True``; it defaults to :attr:`AiSettings.modelhub_trust_remote_code`
+        (``False``). Code trusted this way is recorded like by
+        :func:`~pyRadPlan.ai.modelhub.trust_model`, so it keeps running without the
+        opt-in until it changes.
 
     Returns
     -------
@@ -379,9 +384,13 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
 
     Raises
     ------
+    UntrustedModelError
+        If the model was downloaded and its code is not trusted (a
+        :class:`ValueError`); nothing from the model folder was executed then.
     ValueError
-        If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
-        nor a usable ``local_dir`` is provided.
+        If neither ``name``, ``repo_id`` nor a usable ``local_dir`` is provided.
+    FileNotFoundError
+        If the model can be neither found locally nor downloaded.
     """
     model, preprocessor, _ = load_model_with_dir(
         name,
@@ -423,7 +432,7 @@ def load_model_with_dir(  # noqa: PLR0913 - the options of load_model
 
     Raises
     ------
-    ValueError
+    UntrustedModelError, ValueError, FileNotFoundError
         As for :func:`load_model`.
     """
     cfg = get_settings().ai
@@ -433,28 +442,21 @@ def load_model_with_dir(  # noqa: PLR0913 - the options of load_model
     if name is not None and repo_id is None:
         # A name that already carries an organization is a full id; this is what
         # list_local_models() returns, so its output feeds straight back in.
-        repo_id = name if "/" in name else f"{cfg.modelhub_hf_org}/{name}"
+        repo_id = _repo_id(name)
 
-    from_hub = repo_id is not None
     if trust_remote_code is None:
-        trust_remote_code = cfg.modelhub_trust_remote_code or not from_hub
+        trust_remote_code = cfg.modelhub_trust_remote_code
 
-    # Checked before resolving: there is no reason to download code we refuse to run.
-    if not trust_remote_code:
-        source = f"'{repo_id}'" if from_hub else f"'{local_dir}'"
-        raise ValueError(
-            f"Loading the model in {source} executes code shipped with the model "
-            "(model.py, preprocessor.py). Only for sources you trust: pass "
-            "trust_remote_code=True, or set pyRadPlan.settings.ai.modelhub_trust_remote_code "
-            "= True (environment variable PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1)."
-        )
-
-    model_dir = resolve_model_dir(
+    # Downloading never runs any of the model's code, so the check can follow it:
+    # downloaded code must be on disk to be hashed.
+    resolved = _resolve_model(
         repo_id=repo_id,
         revision=revision,
         local_dir=local_dir,
         offline=offline,
     )
+    _check_trust(resolved, trust_remote_code)
+    model_dir = resolved.path
 
     config = _read_config(model_dir)
     model_module, preprocessor_module = _load_model_modules(model_dir)
