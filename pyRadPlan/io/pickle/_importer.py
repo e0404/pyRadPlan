@@ -7,6 +7,7 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import validate_ct, CT
 from pyRadPlan.cst import validate_cst, StructureSet
+from pyRadPlan.result import PlanResult, validate_result
 
 from ..base import BaseImporter
 
@@ -68,6 +69,22 @@ class PickleImporter(BaseImporter):
     def load_dose(self) -> Optional[sitk.Image]:
         return self.data.get("dose")
 
+    def load_result(self) -> Optional[PlanResult]:
+        result = self.data.get("result")
+        if result is None:
+            return None
+        return validate_result(result)
+
     def load_data(self) -> dict:
         # Return the full unpickled mapping (passes through extras like pln/stf).
-        return dict(self.data)
+        data = dict(self.data)
+        # A workspace saved up to version 0.9 keeps snapshots and imported doses in one
+        # result dict, which the session layer splits into separate results.
+        result = data.get("result")
+        legacy = isinstance(result, dict) and (
+            bool(data.get("saved_result_tags"))
+            or any(isinstance(key, str) and key.startswith("import_") for key in result)
+        )
+        if data.get("result") is not None and not legacy:
+            data["result"] = validate_result(data["result"])
+        return data

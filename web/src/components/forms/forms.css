@@ -1,0 +1,365 @@
+/* Generic form editors (ConfigForm), Qt-like combo boxes, spin boxes and dialogs. */
+
+.combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  min-width: 0;
+  padding: 0 4px 0 6px;
+  background: var(--base);
+  border: 1px solid var(--input-border, #d1d1d1);
+  border-bottom-color: var(--border-strong);
+  border-radius: 3px;
+  text-align: left;
+  cursor: default;
+  position: relative;
+}
+
+.combo:focus-visible {
+  outline: none;
+  border-bottom: 2px solid var(--accent);
+}
+
+.combo:disabled,
+.combo.disabled {
+  color: var(--disabled);
+  background: var(--input-disabled, #f6f6f6);
+}
+
+.combo .combo-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combo .combo-arrow {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.combo.editable {
+  padding: 0;
+}
+
+.combo.editable input {
+  border: none;
+  height: 20px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  padding: 0 4px;
+}
+
+.combo.editable input:focus {
+  border: none;
+  outline: none;
+}
+
+.combo.editable .combo-drop {
+  border: none;
+  background: transparent;
+  width: 18px;
+  height: 20px;
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 0;
+}
+
+.combo.modified,
+.btn.modified,
+.spin.modified,
+.cf-text.modified {
+  border: 1px solid var(--stale) !important;
+  box-shadow: inset 0 0 0 1px var(--stale);
+}
+
+.combo.invalid,
+.spin.invalid,
+.cf-text.invalid input {
+  border-color: #e00 !important;
+}
+
+.combo-popup {
+  position: fixed;
+  z-index: 300;
+  background: var(--base);
+  border: 1px solid var(--border-strong, #a8a8a8);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  padding: 3px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.combo-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.combo-item.active:not(.disabled) {
+  background: var(--accent-soft);
+}
+
+.combo-item.current {
+  font-weight: 600;
+}
+
+.combo-item.disabled {
+  color: var(--disabled);
+}
+
+.combo-item.bold,
+.combo-text.bold {
+  font-weight: bold;
+}
+
+.combo-ident {
+  color: var(--text-dim);
+  opacity: 0.75;
+  font-size: 11px;
+}
+
+.combo-header {
+  padding: 3px 8px 1px;
+  font-style: italic;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.combo-sep {
+  height: 1px;
+  background: var(--edge, #e2e2e2);
+  margin: 3px 2px;
+}
+
+.menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.menu-btn .menu-arrow {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ---- spin box */
+
+.spin,
+.cf-text {
+  display: inline-flex;
+  align-items: stretch;
+  height: 22px;
+  min-width: 0;
+  background: var(--base);
+  border: 1px solid var(--input-border, #d1d1d1);
+  border-bottom-color: var(--border-strong);
+  border-radius: 3px;
+}
+
+.cf-text {
+  width: 100%;
+}
+
+.spin:focus-within,
+.cf-text:focus-within {
+  border-bottom: 2px solid var(--accent);
+}
+
+.spin input,
+.cf-text input {
+  border: none !important;
+  height: 100% !important;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  padding: 0 4px;
+}
+
+.spin input:focus,
+.cf-text input:focus {
+  outline: none;
+  border: none;
+}
+
+.spin.disabled,
+.spin:has(input:disabled),
+.cf-text:has(input:disabled) {
+  background: var(--input-disabled, #f6f6f6);
+  color: var(--disabled);
+}
+
+.spin .suffix,
+.cf-text .suffix {
+  align-self: center;
+  color: var(--text-dim);
+  padding-right: 3px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.spin-btns {
+  display: flex;
+  flex-direction: column;
+  width: 15px;
+  flex: none;
+  border-left: 1px solid var(--edge, #e4e4e4);
+}
+
+.spin-btns button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+.spin-btns button:hover:not(:disabled) {
+  background: var(--hover, #ececec);
+}
+
+/* ---- config form */
+
+.config-form {
+  min-width: 0;
+}
+
+.cf-grid {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.cf-grid > .cf-section {
+  grid-column: 1 / -1;
+}
+
+.cf-label {
+  white-space: nowrap;
+}
+
+.cf-editor {
+  display: flex;
+  min-width: 0;
+}
+
+.cf-editor > .spin,
+.cf-editor > .combo,
+.cf-editor > .cf-text {
+  flex: 1;
+}
+
+.cf-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.cf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cf-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  padding: 2px 4px 2px 0;
+  border-radius: 3px;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cf-toggle:hover {
+  background: var(--hover, #e6e6e6);
+}
+
+.cf-arrow {
+  width: 10px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.cf-body {
+  padding-left: 16px;
+}
+
+.cf-empty {
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+.cf-note {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.cf-status {
+  color: red;
+  min-height: 16px;
+  padding: 0 12px 4px;
+  white-space: pre-wrap;
+}
+
+/* Below message boxes (z-index 100), which may open on top of these dialogs. */
+.modal-backdrop.qt-modal {
+  z-index: 95;
+}
+
+.qt-dialog .title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qt-dialog .title > span {
+  flex: 1;
+}
+
+.qt-dialog .title-close {
+  border: none;
+  background: transparent;
+  width: 24px;
+  height: 20px;
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+.qt-dialog .title-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.qt-dialog .buttons .btn {
+  min-width: 76px;
+}
+
+.dialog.cf-dialog {
+  width: 440px;
+}
+
+.dialog.cf-dialog .body {
+  max-height: 62vh;
+}
+
+.cf-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

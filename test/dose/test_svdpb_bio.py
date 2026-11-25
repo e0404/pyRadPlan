@@ -28,8 +28,8 @@ def test_photons_constant_rbe_is_stored_and_applied(test_data_photons):
     assert dij_py.model_dump()["bio_model"] == {"model": "constant_rbe", "rbe": 1.5}
 
     res = dij_py.compute_result_ct_grid(np.asarray(result["w"]))
-    phys = sitk.GetArrayFromImage(res["physical_dose"])
-    rbe_x = sitk.GetArrayFromImage(res["rbe_x_dose"])
+    phys = sitk.GetArrayFromImage(res["physical_dose"].values)
+    rbe_x = sitk.GetArrayFromImage(res["rbe_x_dose"].values)
     assert phys.max() > 0.0
     assert np.allclose(rbe_x, 1.5 * phys)
 

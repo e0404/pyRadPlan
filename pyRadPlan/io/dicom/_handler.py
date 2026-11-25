@@ -14,6 +14,28 @@ class DicomHandler(DicomImporter, DicomExporter):
 
     name = "DICOM Handler"
 
-    def __init__(self, path, structure_format: str = "rtstruct"):
+    def __init__(  # noqa: PLR0913 - mirrors the exporter's options
+        self,
+        path,
+        structure_format: str = "rtstruct",
+        metadata=None,
+        anonymize: bool = False,
+        overwrite: bool = False,
+        roi_interpreted_types=None,
+        per_beam_doses: bool = False,
+        export_plan: bool = True,
+        dvh: bool = False,
+    ):
         DicomImporter.__init__(self, path)
-        DicomExporter.__init__(self, path, structure_format=structure_format)
+        DicomExporter.__init__(
+            self,
+            path,
+            structure_format=structure_format,
+            metadata=metadata,
+            anonymize=anonymize,
+            overwrite=overwrite,
+            roi_interpreted_types=roi_interpreted_types,
+            per_beam_doses=per_beam_doses,
+            export_plan=export_plan,
+            dvh=dvh,
+        )

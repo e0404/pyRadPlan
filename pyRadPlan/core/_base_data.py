@@ -203,9 +203,21 @@ def list_base_data(
     return files
 
 
+def _require_plain_name(name: str) -> None:
+    if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise ValueError(f"Invalid base data file name {name!r}: use a plain file name.")
+
+
 def find_base_data(kind: Union[str, BaseDataKind], name: str) -> Optional[BaseDataFile]:
-    """Locate the ``kind`` file named ``name`` without reading it, ``None`` if absent."""
+    """Locate the ``kind`` file named ``name`` without reading it, ``None`` if absent.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is not a plain file name (it has a path separator or is ``..``).
+    """
     kind = get_base_data_kind(kind)
+    _require_plain_name(name)
     folded = name.casefold()
     for folder_source, folder in _sourced_dirs(kind):
         path = folder.joinpath(name)
@@ -317,8 +329,11 @@ def remove_base_data_file(kind: Union[str, BaseDataKind], name: str) -> None:
     ------
     FileNotFoundError
         If the user folder has no such file; shipped files cannot be removed.
+    ValueError
+        If ``name`` is not a plain file name (it has a path separator or is ``..``).
     """
     kind = get_base_data_kind(kind)
+    _require_plain_name(name)
     target = user_base_data_dir(kind) / name
     if not target.is_file():
         raise FileNotFoundError(f"No user {kind.label} named {name!r}.")

@@ -13,7 +13,7 @@ from pydantic import (
 import numpy as np
 import SimpleITK as sitk
 
-from ..core import PyRadPlanBaseModel, Grid
+from ..core import PyRadPlanBaseModel, Grid, decode_input
 from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
@@ -44,6 +44,9 @@ class StructureSet(PyRadPlanBaseModel):
         if data.get("vois") is None:
             raise ValueError("No cst provided. Please provide a cst.")
 
+        if "ct_image" not in data and "ctImage" in data:
+            data = {**data, "ct_image": data["ctImage"]}
+            del data["ctImage"]
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
 
@@ -236,6 +239,8 @@ class StructureSet(PyRadPlanBaseModel):
     def _process_native_data(cls, data: dict, info: ValidationInfo) -> dict:
         """Handle data coming from native format."""
         data["ct_image"] = validate_ct(data["ct_image"])
+        if isinstance(data["vois"], list):
+            data["vois"] = [validate_voi(v) if isinstance(v, dict) else v for v in data["vois"]]
         # Handle the case where vois is supplied as a dict.
         if isinstance(data["vois"], dict):
             # Define possible keys and their validation functions
@@ -616,11 +621,11 @@ class StructureSet(PyRadPlanBaseModel):
             The resampled StructureSet.
         """
 
-        new_model = self.model_dump()
-
-        if new_model["ct_image"] != new_ct:
-            new_model["ct_image"] = new_ct
-            new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
+        # No model_dump here: it would evaluate every computed field (voxel indices, shape
+        # statistics) of every VOI on the old grid, only to discard them.
+        new_model = {name: getattr(self, name) for name in type(self).model_fields}
+        new_model["ct_image"] = new_ct
+        new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
         return self.model_validate(new_model)
 
     @staticmethod
@@ -1050,8 +1055,10 @@ def create_cst(
             return cst_data.resample_on_new_ct(ct)
         raise ValueError("CT image mismatch between StructureSet and provided CT")
     elif isinstance(cst_data, dict):
-        cst_data.update(kwargs)
-        cst_data["ct_image"] = ct
+        cst_data = {**decode_input(cst_data), **kwargs}
+        if ct is not None or not {"ct_image", "ctImage"} & cst_data.keys():
+            cst_data.pop("ctImage", None)
+            cst_data["ct_image"] = ct
     else:
         cst_data = {"vois": cst_data, "ct_image": ct, **kwargs}
     return StructureSet(**cst_data)

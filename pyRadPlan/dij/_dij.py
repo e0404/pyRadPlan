@@ -27,8 +27,9 @@ import SimpleITK as sitk
 import scipy.sparse as sp
 
 from pyRadPlan.core import Grid
-from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core import PyRadPlanBaseModel, decode_input
 from pyRadPlan.biology.models import BiologicalModel, ConstantRBEModel, create_bio_model
+from pyRadPlan.result import create_result, PlanResult
 from pyRadPlan.scenarios import ScenarioModel, ScenarioSet
 from pyRadPlan.util import swap_orientation_sparse_matrix
 
@@ -1191,7 +1192,7 @@ class Dij(PyRadPlanBaseModel):
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
         scenario_quantities: Optional[Sequence[str]] = None,
-    ) -> dict[str, Any]:
+    ) -> PlanResult:
         """
         Compute results on the dose grid from intensity vector.
 
@@ -1206,16 +1207,17 @@ class Dij(PyRadPlanBaseModel):
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
         scenarios : bool or sequence of int
-            Additionally compute ``"<key>_scenario"`` lists, see
+            Additionally compute per-scenario results (``result.scenario_quantities``), see
             :meth:`get_result_arrays_from_intensity`.
         scenario_quantities : sequence of str, optional
             See :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
-        dict[str, Any]
-            Result images by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are lists
-            of images (``None`` for scenarios not computed).
+        PlanResult
+            A PlanResult object containing the quantity distributions on the dose grid.
+            Per-scenario results hold ``None`` for scenarios not computed and come with
+            ``scenario_labels``.
         """
         out = self.get_result_arrays_from_intensity(
             intensities,
@@ -1239,7 +1241,10 @@ class Dij(PyRadPlanBaseModel):
                 out[key] = [to_image(v) for v in value]
             else:
                 out[key] = to_image(value)
-        return out
+
+        if any(key.endswith("_scenario") for key in out):
+            out["scenario_labels"] = tuple(self.scenario_labels())
+        return create_result(out, fluence=intensities)
 
     def compute_result_ct_grid(
         self,
@@ -1248,7 +1253,7 @@ class Dij(PyRadPlanBaseModel):
         num_of_fractions: int = 1,
         scenarios: Union[bool, Sequence[int]] = False,
         scenario_quantities: Optional[Sequence[str]] = None,
-    ) -> dict[str, Any]:
+    ) -> PlanResult:
         """
         Compute results on the CT grid from intensity vector.
 
@@ -1263,40 +1268,41 @@ class Dij(PyRadPlanBaseModel):
             Report doses for this many identical fractions (1 = per-fraction dose of the
             influence matrix). See ``Plan.dose_convention`` / ``Plan.result_dose_factor``.
         scenarios : bool or sequence of int
-            Additionally compute ``"<key>_scenario"`` lists, see
+            Additionally compute per-scenario results (``result.scenario_quantities``), see
             :meth:`get_result_arrays_from_intensity`.
         scenario_quantities : sequence of str, optional
             See :meth:`get_result_arrays_from_intensity`.
 
         Returns
         -------
-        dict[str, Any]
-            Result images by name; ``"<key>_beam"`` and ``"<key>_scenario"`` entries are lists
-            of images (``None`` for scenarios not computed).
+        PlanResult
+            A PlanResult object containing the quantity distributions on the CT grid.
+            Per-scenario results hold ``None`` for scenarios not computed and come with
+            ``scenario_labels``.
         """
-        out = self.compute_result_dose_grid(
+        result = self.compute_result_dose_grid(
             intensities,
             scenario_index=scenario_index,
             num_of_fractions=num_of_fractions,
             scenarios=scenarios,
             scenario_quantities=scenario_quantities,
         )
-        resampler = sitk.ResampleImageFilter()
-        resampler.SetInterpolator(sitk.sitkLinear)
-        resampler.SetOutputDirection(self.ct_grid.direction.ravel())
-        resampler.SetOutputOrigin(self.ct_grid.origin)
-        resampler.SetOutputSpacing(self.ct_grid.resolution_vector)
-        resampler.SetSize(self.ct_grid.dimensions)
+        grid = self.ct_grid
 
-        def resample(image: Optional[sitk.Image]) -> Optional[sitk.Image]:
-            return None if image is None else resampler.Execute(image)
+        def resample(quantity):
+            return None if quantity is None else quantity.resample_to_grid(grid)
 
-        for key, value in out.items():
-            if isinstance(value, list):
-                out[key] = [resample(v) for v in value]
-            else:
-                out[key] = resample(value)
-        return out
+        return create_result(
+            quantities={k: resample(q) for k, q in result.quantities.items()},
+            beam_quantities={
+                k: [resample(q) for q in qs] for k, qs in result.beam_quantities.items()
+            },
+            scenario_quantities={
+                k: [resample(q) for q in qs] for k, qs in result.scenario_quantities.items()
+            },
+            scenario_labels=result.scenario_labels,
+            fluence=intensities,
+        )
 
     def share_scenario_structure(self) -> Self:
         """
@@ -1553,6 +1559,7 @@ def create_dij(
                 data.attach_scenarios(scenario_model)
             return data
 
+        data = decode_input(data)
         if "beamNum" in data and np.min(data["beamNum"]) != 0:
             # add context when from matRad
             context = {"from_matRad": True}

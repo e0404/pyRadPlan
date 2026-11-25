@@ -9,11 +9,11 @@ include = ["pyRadPlan*"]
 exclude = ["matRad","build"]
 
 [tool.setuptools.package-data]
-pyRadPlan = ["data/**/*", "gui/assets/**/*"]
+pyRadPlan = ["data/**/*", "gui/assets/**/*", "app/about.json"]
 
 [project]
 name = "pyRadPlan"
-version = "0.9.0"
+version = "0.10.0"
 # dynamic = ["version"] # Will be used in the future
 authors = [
   { name="Niklas Wahl", email = "n.wahl@dkfz-heidelberg.de"},
@@ -99,7 +99,7 @@ jax    = ["jax>=0.4.35,<0.13"]
 # Line-profiling harnesses in benchmark/ (see benchmark/profile_*.py)
 profiling = ["line_profiler>=4.0,<6"]
 
-dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.18","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext"]
+dev = ["pytest","coverage","pytest-cov","pytest-benchmark","pre-commit","ruff<0.18","sphinx","numpydoc","pydata-sphinx-theme","sphinx-design","autodoc_pydantic","sphinx-autodoc-typehints","myst-nb","jupytext","dicom-validator"]
 
 [project.scripts]
 pyRadPlanGUI = "pyRadPlan.gui:main"
@@ -225,8 +225,8 @@ zero = true
 format = "simple"
 
 [tool.codespell]
-skip = "./matRad,*/matRad/*,*.ipynb"
-ignore-words-list = "coo,HEL"
+skip = "./matRad,*/matRad/*,*.ipynb,*/package-lock.json,*/colormapData.ts"
+ignore-words-list = "coo,HEL,onText,numberIn,feld"
 
 [tool.pydocstringformatter]
 write = true

@@ -1,24 +1,28 @@
 """Quality indicators (QI) for dose distributions on structure sets."""
 
+import csv
+import os
 from typing import Annotated, Any, Callable, ClassVar, Iterator, Literal, Optional, Union
 from typing_extensions import Self
 
 import numpy as np
 import pint
 import SimpleITK as sitk
-import matplotlib.pyplot as plt
 from numpydantic import NDArray
 from pydantic import Field, field_serializer, field_validator
 
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import QuantityDistribution
 from pyRadPlan.analysis._dvh import ureg
 
-DoseLike = Union[sitk.Image, NDArray]
+DoseLike = Union[QuantityDistribution, sitk.Image, NDArray]
 MaskLike = Union[sitk.Image, NDArray]
 
 
 def _to_array(x: DoseLike) -> np.ndarray:
+    if isinstance(x, QuantityDistribution):
+        x = x.values
     return sitk.GetArrayFromImage(x) if isinstance(x, sitk.Image) else np.asarray(x)
 
 
@@ -33,6 +37,9 @@ def _validate_single_scenario(arr: np.ndarray, name: str) -> None:
 
 def _validate_sitk_compatibility(quantity: DoseLike, mask: Optional[MaskLike]) -> None:
     """Validate SimpleITK dimensions and spatial metadata before masking."""
+    if isinstance(quantity, QuantityDistribution):
+        quantity = quantity.values
+
     if isinstance(quantity, sitk.Image) and quantity.GetDimension() != 3:
         raise ValueError("QI computation supports one 3D SimpleITK quantity at a time.")
 
@@ -654,6 +661,84 @@ class QICollection(PyRadPlanBaseModel):
             selected = [self.structures[n] for n in structures if n in self.structures]
         return self._select_metric_keys(selected, None)
 
+    def to_rows(
+        self,
+        structures: Optional[list[str]] = None,
+        metrics: Optional[list[str]] = None,
+        structure_header: str = "Structure",
+        precision: Optional[int] = 2,
+    ) -> list[list[str]]:
+        """Return the QIs as a table of strings, header first.
+
+        One row per structure, one column per metric id, labelled with its unit
+        (e.g. ``"D50 [Gy]"``, see :func:`format_metric_label`). Missing and NaN
+        values are written as ``"-"``.
+
+        Parameters
+        ----------
+        structures : list[str], optional
+            Structure names to include, in this order. ``None`` includes all; names
+            not in the collection are skipped.
+        metrics : list[str], optional
+            Metric ids to include, in the collection's order. ``None`` includes all.
+        structure_header : str, optional
+            Header of the first column, which holds the structure names.
+        precision : int, optional
+            Decimals of the values. ``None`` writes them with full precision.
+
+        Returns
+        -------
+        list[list[str]]
+            The table; empty if no structure or metric remains.
+        """
+        names = list(self.structures) if structures is None else structures
+        names = [name for name in names if name in self.structures]
+        selected = [self.structures[name] for name in names]
+        metric_keys = self._select_metric_keys(selected, metrics)
+        if not selected or not metric_keys:
+            return []
+
+        header = [structure_header] + [
+            format_metric_label(m, self._first_qi(selected, m)) for m in metric_keys
+        ]
+        body = [
+            [name, *row]
+            for name, row in zip(names, self._build_rows(selected, metric_keys, precision))
+        ]
+        return [header, *body]
+
+    def to_csv(
+        self,
+        path: Union[str, os.PathLike],
+        structures: Optional[list[str]] = None,
+        metrics: Optional[list[str]] = None,
+        precision: Optional[int] = 2,
+    ) -> None:
+        """Write the table of :meth:`to_rows` as a CSV file.
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        structures, metrics, precision
+            See :meth:`to_rows`.
+        """
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            csv.writer(handle).writerows(self.to_rows(structures, metrics, precision=precision))
+
+    def to_json(self, path: Union[str, os.PathLike], indent: Optional[int] = None) -> None:
+        """Write the collection as JSON (see ``model_dump_json``).
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+            Output file.
+        indent : int, optional
+            Indentation of the JSON.
+        """
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.model_dump_json(indent=indent))
+
     def plot(
         self,
         structures: Optional[list[str]] = None,
@@ -675,6 +760,8 @@ class QICollection(PyRadPlanBaseModel):
             Forwarded to ``ax.table``.
         """
         if ax is None:
+            import matplotlib.pyplot as plt  # noqa: PLC0415 - optional at runtime
+
             _, ax = plt.subplots(figsize=(12, 6))
 
         selected = self._select_structures(structures)
@@ -728,12 +815,19 @@ class QICollection(PyRadPlanBaseModel):
         return None
 
     @staticmethod
-    def _build_rows(selected: list[StructureQIs], metric_keys: list[str]) -> list[list[str]]:
+    def _build_rows(
+        selected: list[StructureQIs], metric_keys: list[str], precision: Optional[int] = 2
+    ) -> list[list[str]]:
         rows: list[list[str]] = []
         for s in selected:
             row: list[str] = []
             for m in metric_keys:
                 qi = s.metrics.get(m)
-                row.append("-" if qi is None or np.isnan(qi.value) else f"{qi.value:.2f}")
+                if qi is None or np.isnan(qi.value):
+                    row.append("-")
+                else:
+                    row.append(
+                        repr(qi.value) if precision is None else f"{qi.value:.{precision}f}"
+                    )
             rows.append(row)
         return rows

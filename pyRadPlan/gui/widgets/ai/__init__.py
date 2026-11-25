@@ -7,16 +7,10 @@ from typing import Iterator, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from pyRadPlan.app._settings import AI_MISSING as AI_MISSING_TIP
+from pyRadPlan.app._settings import AI_NO_MODEL as AI_NO_MODEL_TIP
+
 from ._ai_task_dialog import AiTask, AiTaskDialog
-
-#: Tooltip shown on AI features when the optional dependencies are missing.
-AI_MISSING_TIP = "Install the optional 'ai' dependencies (pydantic-ai) to use this"
-
-#: Tooltip shown on AI features when no provider API key is configured.
-AI_NO_MODEL_TIP = (
-    "No AI model available: set a provider API key (e.g. ANTHROPIC_API_KEY,"
-    " OPENAI_API_KEY) in the environment or a .env file"
-)
 
 
 def ai_available() -> bool:

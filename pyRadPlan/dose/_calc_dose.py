@@ -7,6 +7,7 @@ from pyRadPlan.ct import validate_ct, CT
 from pyRadPlan.cst import validate_cst, StructureSet
 from pyRadPlan.plan import validate_pln, Plan
 from pyRadPlan.dij import Dij
+from pyRadPlan.result import PlanResult
 from pyRadPlan.scenarios import ScenarioModel, ScenarioSet
 
 from .engines import get_engine
@@ -59,7 +60,7 @@ def calc_dose_forward(
     pln: Union[Plan, dict],
     weights: np.ndarray = None,
     scenarios: Optional[Union[str, dict, ScenarioModel, ScenarioSet]] = None,
-) -> dict:
+) -> PlanResult:
     """
     Calculate forward-dose results on the CT grid.
 
@@ -80,8 +81,8 @@ def calc_dose_forward(
 
     Returns
     -------
-    dict
-        Result quantities on the CT grid, keyed by quantity name.
+    PlanResult
+        Result quantities on the CT grid.
     """
     ct = validate_ct(ct)
     cst = validate_cst(cst, ct=ct)

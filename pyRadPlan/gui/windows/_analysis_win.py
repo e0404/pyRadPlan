@@ -42,7 +42,7 @@ class AnalysisWindow(QMainWindow):
         initial_quantity: str = "",
         initial_vois: list[str] | None = None,
         voi_types: dict[str, str] | None = None,
-        scenario_labels: list[str] | None = None,
+        scenario_labels: list[str] | dict[str, list[str]] | None = None,
     ) -> None:
         # Keep ownership separate from Qt parenting to preserve the taskbar entry.
         super().__init__()
@@ -96,7 +96,7 @@ def show_analysis(
     initial_quantity: str = "",
     initial_vois: list[str] | None = None,
     voi_types: dict[str, str] | None = None,
-    scenario_labels: list[str] | None = None,
+    scenario_labels: list[str] | dict[str, list[str]] | None = None,
 ) -> Any:
     """Create and show an :class:`AnalysisWindow` for the given data.
 

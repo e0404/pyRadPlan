@@ -18,7 +18,7 @@ def test_photons(test_data_photons):
     pln, ct, cst, stf, dij, result = test_data_photons
     pln.prop_dose_calc["enable_dij_sampling"] = False
     result_py = calc_dose_forward(ct, cst, stf, pln, weights=None)
-    result_py = sitk.GetArrayFromImage(result_py["physical_dose"])
+    result_py = sitk.GetArrayFromImage(result_py.physical_dose.values)
     result_matRad = np.transpose(result["physicalDose"], (2, 0, 1))
     mask = (result_py > 0) & (result_matRad > 0)
     assert np.allclose(result_py[mask], result_matRad[mask], rtol=1e-2)
@@ -63,7 +63,7 @@ def test_photons_field_based():
 
     stf = generate_stf(ct, cst, pln)
     masks = [b.mask.copy() for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
-    dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln).physical_dose.values)
 
     # The field shapes are resampled for the calculation only, not in the caller's stf
     after = [b.mask for beam in stf.beams for ray in beam.rays for b in ray.beamlets]
@@ -101,7 +101,7 @@ def test_bixel_dose_is_mirror_symmetric(test_data_photons):
     """Opposed beams on the symmetric test data give a mirror-symmetric dose."""
     pln, ct, cst, stf, _, _ = test_data_photons
     pln.prop_dose_calc["enable_dij_sampling"] = False
-    dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    dose = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values)
     assert np.allclose(dose, dose[::-1, ::-1, ::-1], atol=1e-3 * dose.max())
 
 
@@ -109,15 +109,15 @@ def test_bixel_based_custom_primary_fluence(test_data_photons):
     """A uniform fluence matches the default bixel dose, the primary fluence changes it."""
     pln, ct, cst, stf, _, _ = test_data_photons
     pln.prop_dose_calc["enable_dij_sampling"] = False
-    default = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    default = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values)
 
     pln.prop_dose_calc["use_custom_primary_photon_fluence"] = True
     pln.prop_dose_calc["force_uniform_fluence"] = True
-    uniform = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    uniform = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values)
     assert np.allclose(uniform, default)
 
     pln.prop_dose_calc["force_uniform_fluence"] = False
-    custom = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"])
+    custom = sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values)
     assert np.all(np.isfinite(custom))
     assert not np.allclose(custom, default)
 
@@ -176,7 +176,7 @@ def _single_bixel_dose(water_sphere, machine, gantry_angle, ray_pos_bev, custom_
     beam.rays = [r for r in beam.rays if np.allclose(r.ray_pos_bev, ray_pos_bev, atol=1e-6)]
     assert len(beam.rays) == 1
 
-    image = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"]
+    image = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"].values
     dose = sitk.GetArrayFromImage(image)
     zyx = (np.indices(dose.shape).reshape(3, -1) @ dose.ravel()) / dose.sum()
     centroid = np.array(image.TransformContinuousIndexToPhysicalPoint(zyx[::-1].tolist()))
@@ -239,7 +239,7 @@ def test_bixel_dose_mirror_symmetric_with_kernel_cutoff():
     beam.rays = [r for r in beam.rays if np.allclose(r.ray_pos_bev, 0.0)]
     assert len(beam.rays) == 1
 
-    dose = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"]
+    dose = calc_dose_forward(ct, cst, stf, pln, weights=np.ones(1))["physical_dose"].values
     assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
 
 
@@ -270,7 +270,7 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     )
 
     stf = generate_stf(ct, cst, pln)
-    dose = calc_dose_forward(ct, cst, stf, pln)["physical_dose"]
+    dose = calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
     assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
 
 
@@ -279,8 +279,8 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     [
         # IEC Y points toward the gantry, i.e. superior (LPS +z) for a head-first supine patient
         ("+Y", (0.0, 0.0, 1.0)),
-        # IEC X points to the patient's right (LPS -x) at gantry and couch angle 0
-        ("+X", (-1.0, 0.0, 0.0)),
+        # IEC X points to the patient's left (LPS +x) at gantry and couch angle 0 (HFS)
+        ("+X", (1.0, 0.0, 0.0)),
     ],
 )
 def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift):
@@ -316,7 +316,7 @@ def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift)
     pln.prop_dose_calc["dose_grid"] = {"resolution": {"x": 2.0, "y": 2.0, "z": 2.0}}
 
     stf = generate_stf(ct, cst, pln)
-    image = calc_dose_forward(ct, cst, stf, pln)["physical_dose"]
+    image = calc_dose_forward(ct, cst, stf, pln)["physical_dose"].values
     dose = sitk.GetArrayFromImage(image)
     zyx = (np.indices(dose.shape).reshape(3, -1) @ dose.ravel()) / dose.sum()
     centroid = np.array(image.TransformContinuousIndexToPhysicalPoint(zyx[::-1].tolist()))

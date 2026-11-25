@@ -1,0 +1,249 @@
+name: Web
+
+# Tries the web version of pyRadPlan (web/: a Vite + React frontend that runs pyRadPlan.app in
+# Pyodide, see web/README.md and web/pyodide/README.md):
+#   - frontend: type check, unit tests, production build and the Playwright scripts against the
+#     mock backend; the npm scripts generate the mock's fixtures from pyRadPlan.app first
+#     (web/scripts/mock_fixtures.mjs), which needs pyRadPlan's dependencies
+#   - pyodide: the wheels (pyRadPlan, the SimpleITK shim, the vendored pure wheels), the
+#     treatment-planning pipeline and the application layer under Pyodide in Node, and the
+#     tests of the shim against real SimpleITK
+#   - pyodide-e2e: the whole GUI in a headless browser against the real Pyodide backend
+# The browser is Microsoft Edge (what the e2e scripts launch), installed by Playwright; WebGL
+# runs on SwiftShader. The Pyodide packages (numpy, scipy, ...) come from the jsDelivr CDN.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'rc/**'
+      - 'devops/**'
+    paths:
+      - 'web/**'
+      - 'pyRadPlan/**'
+      - 'pyproject.toml'
+      - 'LICENSE'
+      - 'README.md'
+      - '.github/workflows/web.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'web/**'
+      - 'pyRadPlan/app/**'
+      - 'pyproject.toml'
+      - 'LICENSE'
+      - 'README.md'
+      - '.github/workflows/web.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: web
+    steps:
+        - uses: actions/checkout@v7
+
+        - name: Setup Python ${{ env.PYTHON_VERSION }}
+          uses: actions/setup-python@v7
+          with:
+            python-version: ${{ env.PYTHON_VERSION }}
+            cache: pip
+
+        - name: Setup Node ${{ env.NODE_VERSION }}
+          uses: actions/setup-node@v7
+          with:
+            node-version: ${{ env.NODE_VERSION }}
+            cache: npm
+            cache-dependency-path: web/package-lock.json
+
+        # The npm scripts record the mock backend's fixtures from pyRadPlan.app (npm run fixtures).
+        - name: Install pyRadPlan
+          working-directory: .
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .
+
+        - name: Install dependencies
+          run: |
+            npm ci
+            npx playwright install --with-deps msedge
+
+        - name: Type check
+          run: npm run typecheck
+
+        - name: Unit tests
+          run: npm test
+
+        - name: Production build
+          run: npm run build
+
+        # ?backend=mock must not exist on a deployment: the production bundle has no mock code.
+        - name: The production bundle has no mock backend
+          run: |
+            if grep -rl "Mock backend ready" dist/assets; then
+              echo "the production build contains the mock backend" >&2
+              exit 1
+            fi
+
+        # The scripts start their own Vite dev server (which includes the mock backend, see
+        # web/README.md) and exit with a failure if a check fails.
+        - name: End-to-end tests against the mock backend
+          run: |
+            npm run e2e
+            npm run e2e:viewer
+            npm run e2e:plan
+            npm run e2e:menus
+            npm run e2e:responsive
+
+        - name: Upload the screenshots
+          if: failure()
+          uses: actions/upload-artifact@v7
+          with:
+            name: web-mock-e2e-screenshots
+            path: web/e2e/screenshots/
+            if-no-files-found: ignore
+            retention-days: 7
+
+  pyodide:
+    name: Pyodide
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHON: python
+    defaults:
+      run:
+        working-directory: web/pyodide
+    steps:
+        - uses: actions/checkout@v7
+
+        - name: Setup Python ${{ env.PYTHON_VERSION }}
+          uses: actions/setup-python@v7
+          with:
+            python-version: ${{ env.PYTHON_VERSION }}
+            cache: pip
+
+        - name: Setup Node ${{ env.NODE_VERSION }}
+          uses: actions/setup-node@v7
+          with:
+            node-version: ${{ env.NODE_VERSION }}
+            cache: npm
+            cache-dependency-path: web/pyodide/package-lock.json
+
+        # The harness runs the native pickle of the application smoke test and the shim tests
+        # with this Python; the wheel build only needs pip and the network.
+        - name: Install dependencies
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install -e ../.. pytest
+            npm ci
+
+        # The Pyodide distribution packages the harness downloads, keyed by the Pyodide version.
+        - name: Cache the Pyodide packages
+          uses: actions/cache@v6
+          with:
+            path: web/pyodide/.cache/packages
+            key: pyodide-packages-${{ hashFiles('web/pyodide/package-lock.json', 'web/pyodide/bootstrap.js') }}
+
+        - name: Build the wheels
+          run: npm run build
+
+        - name: Treatment planning pipeline under Pyodide
+          run: |
+            npm run pipeline -- --mode photons --preset fast
+            node -e 'const i = JSON.parse(require("fs").readFileSync("results/pyodide_photons_fast.json")).info; console.log("target D95", i.target_d95); if (!(i.target_d95 > 20 && i.target_d95 < 70)) { console.error("implausible target D95"); process.exit(1); }'
+
+        # Rebuilds the wheels (keeping the vendored ones), pickles a TG119 workspace natively
+        # and drives pyRadPlan.app.dispatch under Pyodide; --strict also fails on pending entries.
+        - name: Application layer smoke test
+          run: npm run app-smoke -- --strict
+
+        - name: Tests of the SimpleITK shim
+          run: npm run test:shim
+
+        - name: Upload the results
+          if: failure()
+          uses: actions/upload-artifact@v7
+          with:
+            name: web-pyodide-results
+            path: web/pyodide/results/*.json
+            if-no-files-found: ignore
+            retention-days: 7
+
+  pyodide-e2e:
+    name: Pyodide end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHON: python
+    steps:
+        - uses: actions/checkout@v7
+
+        - name: Setup Python ${{ env.PYTHON_VERSION }}
+          uses: actions/setup-python@v7
+          with:
+            python-version: ${{ env.PYTHON_VERSION }}
+            cache: pip
+
+        - name: Setup Node ${{ env.NODE_VERSION }}
+          uses: actions/setup-node@v7
+          with:
+            node-version: ${{ env.NODE_VERSION }}
+            cache: npm
+            cache-dependency-path: |
+              web/package-lock.json
+              web/pyodide/package-lock.json
+
+        # The mock backend's fixtures are recorded from pyRadPlan.app before the GUI is served.
+        - name: Install pyRadPlan
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .
+
+        # The GUI installs the wheels from web/public/pyrp, which are built here: the browser
+        # downloads the Pyodide runtime from the npm package and the packages from the CDN.
+        - name: Build the wheels
+          working-directory: web/pyodide
+          run: |
+            npm ci
+            npm run build
+
+        - name: Install dependencies
+          working-directory: web
+          run: |
+            npm ci
+            npx playwright install --with-deps msedge
+
+        # The click-through of the whole GUI: boot, TG119, default Run All, plan and dialogs,
+        # 5-beam Run All, viewer, saves and loads, proton plan, Stop. About 4 minutes on a desktop.
+        - name: End-to-end tests against the Pyodide backend
+          working-directory: web
+          run: npm run e2e:pyodide
+
+        - name: Upload the screenshots
+          if: failure()
+          uses: actions/upload-artifact@v7
+          with:
+            name: web-pyodide-e2e-screenshots
+            path: |
+              web/e2e/screenshots/pyodide-*
+              web/e2e/downloads/
+            if-no-files-found: ignore
+            retention-days: 7

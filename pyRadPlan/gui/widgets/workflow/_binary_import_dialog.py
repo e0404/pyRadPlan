@@ -2,8 +2,8 @@
 
 Presents an editable review table (file, name, type) over the masks found in the
 folder, mirroring matRad's binary import widget. The heavy loading is done by the
-caller via :func:`pyRadPlan.io.load_binary_patient`; this dialog only gathers the
-CT path and the per-mask selections.
+session's ``import_binary`` operation; this dialog only gathers the CT path and the
+per-mask selections.
 """
 
 from __future__ import annotations
@@ -28,29 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app._io import binary_folder_files
+
 #: VOI types offered per structure; IGNORED drops the mask on import.
 _VOI_TYPES = ("TARGET", "OAR", "EXTERNAL", "IGNORED")
 
 #: Qt item-data role used to stash the full mask path on the File cell.
 _PATH_ROLE = Qt.UserRole
-
-
-def _scan_folder(directory: str) -> tuple[Optional[str], list[str]]:
-    """Return (ct_candidate, mask_files) for a folder.
-
-    The first top-level image is proposed as the CT; the remaining top-level
-    images plus every image in immediate subfolders are proposed as masks.
-    """
-    from pyRadPlan.io import list_image_files  # noqa: PLC0415
-
-    top = list_image_files(directory)
-    ct_candidate = top[0] if top else None
-    masks = list(top[1:])
-    for entry in sorted(os.listdir(directory)):
-        full = os.path.join(directory, entry)
-        if os.path.isdir(full):
-            masks.extend(list_image_files(full))
-    return ct_candidate, masks
 
 
 class BinaryImportDialog(QDialog):
@@ -62,7 +46,7 @@ class BinaryImportDialog(QDialog):
         self.resize(640, 480)
         self._directory = directory
 
-        ct_candidate, mask_files = _scan_folder(directory)
+        ct_candidate, mask_files = binary_folder_files(directory)
 
         root = QVBoxLayout(self)
 

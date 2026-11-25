@@ -46,7 +46,7 @@ def _set_tissue(cst, tissue):
 
 
 def _optimized_result(ct, cst, stf, dij, pln):
-    w = fluence_optimization(ct, cst, stf, dij, pln)
+    w = fluence_optimization(ct, cst, stf, dij, pln).fluence
     assert np.all(np.isfinite(w))
     return dij.get_result_arrays_from_intensity(w)
 

@@ -80,6 +80,7 @@ Set a new bound above the newest release that CI tests. Do not add bounds to `de
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] Branch targets `develop` (not `main`)
 - [ ] Changes to data structures or algorithm calling APIs checked for GUI compatibility (`pyRadPlan/gui/` usages, `pytest test/gui`)
+- [ ] GUI changes: shared logic lives in `pyRadPlan/app`; both frontends (Qt, web) updated, or the gap noted in `web/docs/parity.md`
 
 ## Releases
 
@@ -87,8 +88,10 @@ Releases are cut from a release candidate branch, never from `develop` directly,
 stays open for regular work while the candidate is stabilised:
 
 1. Branch `rc/X.Y.Z` from `develop` and open the release PR from `rc/X.Y.Z` into `main`
-   (`gh pr create --base main --template release.md`).
-2. Review `rc/X.Y.Z` and address the remaining concerns on it.
+   (`gh pr create --base main --template release.md`). Draft its release summary from the
+   changelog: a short, plain-language overview for users that later becomes the tag annotation
+   and the top of the GitHub release, because the changelog alone is too detailed for most users.
+2. Review `rc/X.Y.Z` and the release summary, and address the remaining concerns on it.
 3. Once the review is addressed and approved and CI is green, update the executed example
    notebooks, which stay tracked in `docs/tutorials/examples/` from the last release:
    `python docs/execute_examples.py --release [name ...]` runs the examples and stages them.
@@ -97,8 +100,9 @@ stays open for regular work while the candidate is stabilised:
    (`[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD`), `CITATION.cff`. This is the last commit
    before merging.
 5. Merge `rc/X.Y.Z` into `main`.
-6. After merging, tag `vX.Y.Z` on `main`, verify the published release and the PyPI upload, merge
-   `main` back into `develop`, and delete `rc/X.Y.Z`.
+6. After merging, tag `vX.Y.Z` on `main` with the release summary as its annotation
+   (`git tag -a vX.Y.Z --cleanup=verbatim -F <file>`), verify the published release and the
+   PyPI upload, merge `main` back into `develop`, and delete `rc/X.Y.Z`.
 
 When proposing or preparing a release, follow
 [.github/PULL_REQUEST_TEMPLATE/release.md](.github/PULL_REQUEST_TEMPLATE/release.md) — it is
@@ -115,6 +119,7 @@ The scripts in `examples/` are jupytext percent notebooks rendered in the docs "
 
 - Data models use **pydantic** for validation.
 - Geometry / image handling via **SimpleITK**.
+- Both GUIs (Qt in `pyRadPlan/gui/`, browser in `web/`) run on the Qt-free session layer `pyRadPlan/app` (`docs/development/app_layer.md`); frontends hold presentation only.
 - Dose engines are modality-specific; photon and proton engines live under `pyRadPlan/engines/`.
 - The Array API abstraction (`array_api_compat`) lets algorithms run on numpy, cupy, or torch without code changes — keep new numerical code array-backend-agnostic where possible.
 - DICOM I/O via **pydicom**; matRad interop via HDF5 (**h5py**).
