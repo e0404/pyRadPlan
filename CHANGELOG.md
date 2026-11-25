@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-25
+
 ### Added
 
 - `pyRadPlan.result`: `PlanResult` holds the quantities of a plan on the CT grid as `QuantityDistribution`s (`result.physical_dose.values` is a `sitk.Image`), the per-beam quantities (`result.beam.physical_dose[i]`), the per-scenario quantities with their labels (`result.scenario.physical_dose[i]`, `result.scenario_labels`), the fluence and a summary of the solver information. All quantities of a result share one grid and agree in their number of beams and scenarios. It is saved and loaded by the IO backends and is the result the GUI works with. A matRad `resultGUI` is read with `PlanResult.from_matrad` (as the `.mat` importer does), which translates the matRad field names (e.g. `RBExDose` to `rbe_x_dose`) and places the cubes on the CT grid
@@ -861,7 +863,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - 2025-01-10
 
-[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/e0404/pyRadPlan/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/e0404/pyRadPlan/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/e0404/pyRadPlan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/e0404/pyRadPlan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/e0404/pyRadPlan/compare/v0.6.1...v0.7.0
