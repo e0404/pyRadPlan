@@ -1,11 +1,14 @@
+import json
+import shutil
 from pathlib import Path
 
 import SimpleITK as sitk
 import numpy as np
 import pytest
 
-from pyRadPlan import xp_utils, plot_slice
+from pyRadPlan import IonPlan, generate_stf, load_tg119, xp_utils, plot_slice
 from pyRadPlan.ai.modelhub import _load_model
+from pyRadPlan.core.xp_utils import to_namespace, to_numpy
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import AIBeamletEngine, DoseEngineBase
 from pyRadPlan.scenarios import CTPhaseUncertainty, RangeUncertainty, ScenarioSet, SetupUncertainty
@@ -282,6 +285,167 @@ def test_dose_is_the_same_on_numpy_and_torch(test_data_protons, monkeypatch):
     torch_dose = calc_dose_influence(ct, cst, stf, _ai_pln(pln, dij)).physical_dose.flat[0]
 
     assert np.allclose(reference.toarray(), torch_dose.toarray(), rtol=1e-4, atol=1e-8)
+
+
+# --- geometry --------------------------------------------------------------
+#
+# The dummy model predicts a near-constant cuboid, so it cannot reveal transposed or
+# mirrored axes. Here the prediction is replaced by Gaussian blobs at known positions in
+# the beamlet-local frame (depth, lateral x, lateral z), and their dose centroids are
+# compared with world points derived from the steering information alone.
+
+_GEO_MODEL = "DKFZ-RadOpt/geometry_model"
+_BLOB_DEPTH = 10.0  # mm beyond the isocenter plane, along the ray
+_BLOB_SIGMA = 4.0
+_MARKER_OFFSET = (8.0, -4.0)  # mm along the cuboid's lateral axes 1 and 2
+_MARKER_SIGMA = 3.0
+
+
+@pytest.fixture
+def geometry_model(tmp_path, monkeypatch):
+    """Provide the dummy model with a sampling cuboid large enough for the blobs."""
+    model_dir = tmp_path / "models" / _GEO_MODEL
+    shutil.copytree(
+        Path(__file__).resolve().parents[1] / "data" / "ai_models" / DUMMY_MODEL, model_dir
+    )
+    config_file = model_dir / "model_config.json"
+    config = json.loads(config_file.read_text())
+    config["metadata"]["dose_calc"]["grid_parameters"] = {
+        "spacing": 2,
+        "lateral_range": 40,
+        "depth_offset_start": -40,
+        "depth_range": 80,
+    }
+    config["metadata"]["dose_calc"]["quantities"] = ["physical_dose"]
+    config_file.write_text(json.dumps(config))
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path / "models")
+    return _GEO_MODEL
+
+
+def _blob_predictor(with_marker):
+    """Replace ``_predict`` by a blob on the beamlet axis, optionally plus a marker.
+
+    The amplitude follows the bixel energy, so a mix-up of bixels within a ray shows.
+    """
+
+    def predict(self, ct_cuboid, energies):
+        depth = to_numpy(self.grid_information["depth_range"]).astype(np.float64)
+        lateral = to_numpy(self.grid_information["lateral_range"]).astype(np.float64)
+        d, x, z = np.meshgrid(depth, lateral, lateral, indexing="ij")
+        cuboid = np.exp(-((d - _BLOB_DEPTH) ** 2 + x**2 + z**2) / (2 * _BLOB_SIGMA**2))
+        if with_marker:
+            dx, dz = _MARKER_OFFSET
+            r2 = (d - _BLOB_DEPTH) ** 2 + (x - dx) ** 2 + (z - dz) ** 2
+            cuboid = cuboid + 0.5 * np.exp(-r2 / (2 * _MARKER_SIGMA**2))
+        scale = to_numpy(energies).astype(np.float64) / 100.0
+        batch = (scale[:, None, None, None] * cuboid[None]).astype(np.float32)
+        return {"physical_dose": to_namespace(self.xp, batch, device=self.device)}
+
+    return predict
+
+
+def _geometry_case(model, max_batch_size=32):
+    ct, cst = load_tg119()
+    pln = IonPlan(radiation_mode="protons", machine="Generic")
+    pln.prop_stf = {"gantry_angles": [40.0], "couch_angles": [25.0], "bixel_width": 20.0}
+    pln.prop_dose_calc = {
+        "engine": "AIBeamlet",
+        "model": model,
+        "dose_grid": {"resolution": [3.0, 4.0, 5.0]},
+        "max_batch_size": max_batch_size,
+    }
+    return pln, ct, cst, generate_stf(ct, cst, pln)
+
+
+def _dose_centroid(image):
+    """Dose-weighted centroid in world coordinates, from the image's own geometry."""
+    dose = sitk.GetArrayFromImage(image).astype(np.float64)
+    assert dose.sum() > 0, "no dose deposited"
+    k, j, i = np.nonzero(dose)
+    weights = dose[k, j, i]
+    index = weights @ np.stack((i, j, k), axis=1) / weights.sum()
+    return np.asarray(image.TransformContinuousIndexToPhysicalPoint(index.tolist()))
+
+
+def _bev_to_world(beam):
+    """Linear map from BEV to world (relative to the isocenter), fitted to the stf."""
+    bev = [np.ravel(beam.source_point_bev)] + [np.ravel(r.ray_pos_bev) for r in beam.rays]
+    world = [np.ravel(beam.source_point)] + [np.ravel(r.ray_pos) for r in beam.rays]
+    transposed, *_ = np.linalg.lstsq(np.asarray(bev, float), np.asarray(world, float), rcond=None)
+    return transposed.T
+
+
+def _unit(v):
+    return v / np.linalg.norm(v)
+
+
+_CPU_BACKENDS = [
+    pytest.param("numpy", id="numpy"),
+    pytest.param("array_api_strict", id="array_api_strict"),
+    pytest.param("torch", id="torch"),
+]
+
+
+@pytest.mark.parametrize("cpu_backend", _CPU_BACKENDS)
+def test_dose_lands_where_the_beam_geometry_puts_it(geometry_model, monkeypatch, cpu_backend):
+    """Blob and marker centroids match the oblique beam geometry on an anisotropic grid.
+
+    The blob checks depth and the ray direction; the marker, offset unequally along both
+    lateral axes, checks that cuboid axis 1 follows BEV x and axis 2 BEV z (no swap or
+    mirror). The marker is isolated as the difference of two calculations, since the
+    engine is linear in the predicted cuboid.
+    """
+    _use_backend(monkeypatch, cpu_backend, None)
+    pln, ct, cst, stf = _geometry_case(geometry_model)
+    beam = stf.beams[0]
+
+    monkeypatch.setattr(AIBeamletEngine, "_predict", _blob_predictor(with_marker=False))
+    blob_dij = calc_dose_influence(ct, cst, stf, pln)
+    monkeypatch.setattr(AIBeamletEngine, "_predict", _blob_predictor(with_marker=True))
+    both_dij = calc_dose_influence(ct, cst, stf, pln)
+
+    iso = np.ravel(beam.iso_center).astype(float)
+    source = np.ravel(beam.source_point).astype(float)
+    bev_to_world = _bev_to_world(beam)
+
+    lateral = [np.linalg.norm(np.ravel(r.ray_pos_bev)) for r in beam.rays]
+    assert min(lateral) < 5.0 and max(lateral) > 30.0
+    first_bixel = np.cumsum([0] + [len(r.beamlets) for r in beam.rays])
+
+    for j in range(len(beam.rays)):
+        direction = _unit(np.ravel(beam.rays[j].ray_pos).astype(float) - source)
+        expected_blob = iso + source + (beam.sad + _BLOB_DEPTH) * direction
+        # BEV lateral axes as seen from the source, perpendicular to this ray
+        axis_x, axis_z = (
+            _unit(a - (a @ direction) * direction)
+            for a in (bev_to_world[:, 0], bev_to_world[:, 2])
+        )
+        expected_marker = expected_blob + _MARKER_OFFSET[0] * axis_x + _MARKER_OFFSET[1] * axis_z
+
+        weights = np.zeros(blob_dij.total_num_of_bixels)
+        weights[first_bixel[j]] = 1.0
+        blob = blob_dij.compute_result_dose_grid(weights).physical_dose.values
+        both = both_dij.compute_result_dose_grid(weights).physical_dose.values
+        marker = sitk.Subtract(both, blob)
+
+        assert np.linalg.norm(_dose_centroid(blob) - expected_blob) < 0.5, f"ray {j}"
+        assert np.linalg.norm(_dose_centroid(marker) - expected_marker) < 0.5, f"ray {j}"
+
+
+def test_beamlet_batches_do_not_change_the_dose(geometry_model, monkeypatch):
+    """Predicting a ray in batches of four beamlets gives the same matrix as all at once."""
+    _use_backend(monkeypatch, "numpy", None)
+    monkeypatch.setattr(AIBeamletEngine, "_predict", _blob_predictor(with_marker=True))
+
+    pln, ct, cst, stf = _geometry_case(geometry_model, max_batch_size=None)
+    assert max(len(r.beamlets) for r in stf.beams[0].rays) > 4
+    whole = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+
+    pln.prop_dose_calc["max_batch_size"] = 4
+    batched = calc_dose_influence(ct, cst, stf, pln).physical_dose.flat[0]
+
+    assert whole.nnz > 0
+    assert np.allclose(whole.toarray(), batched.toarray(), rtol=1e-6, atol=0.0)
 
 
 # --- scenarios -------------------------------------------------------------
