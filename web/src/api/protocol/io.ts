@@ -49,7 +49,7 @@ export interface ExportSaveParams {
   format: string;
   /** Component keys, `object: "result"` only; default all full quantities. */
   quantities?: string[];
-  structure_format?: "rtstruct" | "seg";
+  structure_format?: "rtstruct" | "seg" | "layers";
   basename?: string;
 }
 

@@ -9,9 +9,54 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 from copy import deepcopy
+import json
 
 import array_api_compat
 import SimpleITK as sitk
+import scipy.sparse as sp
+
+from ._serialization import ARRAY_TAG, decode_tree, to_json_tree
+
+
+def _has_array_tag(obj: Any) -> bool:
+    """Whether a tree of dicts, lists and tuples contains a tagged array leaf.
+
+    A subtree holding an array or image is native data (e.g. a python-mode dump), not a JSON
+    dump, so the scan of that subtree stops there; this keeps validating large native trees
+    cheap. The entries of a top-level dict or list are scanned separately, so a tree mixing
+    native and JSON-encoded entries is still detected.
+    """
+    if isinstance(obj, dict):
+        if ARRAY_TAG in obj:
+            return True
+        return any(_scan_array_tag(value) for value in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return any(_scan_array_tag(value) for value in obj)
+    return False
+
+
+def _scan_array_tag(obj: Any) -> bool:
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, (np.ndarray, sitk.Image)):
+            return False
+        if isinstance(item, dict):
+            if ARRAY_TAG in item:
+                return True
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return False
+
+
+def decode_input(data: Any) -> Any:
+    """Decode the tagged array leaves of a JSON-mode dump (see :meth:`model_dump`).
+
+    Data without tagged leaves is returned unchanged. The ``validate_*`` factories and
+    :meth:`PyRadPlanBaseModel.model_validate` call this; plain constructors do not.
+    """
+    return decode_tree(data) if _has_array_tag(data) else data
 
 
 def _images_equal(a: sitk.Image, b: sitk.Image) -> bool:
@@ -54,6 +99,45 @@ class PyRadPlanBaseModel(BaseModel):
         # (not only during construction)
         from_attributes=True,  # Allows to create a model from a dictionary
     )
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> Any:
+        """
+        Validate an object, decoding the tagged array leaves of a JSON-mode dump first.
+
+        See :meth:`pydantic.BaseModel.model_validate` for the arguments.
+        """
+        return super().model_validate(decode_input(obj), **kwargs)
+
+    @classmethod
+    def model_validate_json(cls, json_data: Union[str, bytes, bytearray], **kwargs: Any) -> Any:
+        """
+        Validate a JSON string written by :meth:`model_dump_json`.
+
+        See :meth:`pydantic.BaseModel.model_validate_json` for the arguments.
+        """
+        return cls.model_validate(json.loads(json_data), **kwargs)
+
+    def model_dump(self, *, mode: str = "python", **kwargs: Any) -> dict[str, Any]:
+        """
+        Dump the model to a dictionary.
+
+        In ``mode="json"`` arrays, sparse matrices and images are replaced by tagged
+        dictionaries (see :mod:`pyRadPlan.core._serialization`), so the result can be passed
+        to :func:`json.dumps` and read back with ``model_validate``. All other arguments are
+        those of :meth:`pydantic.BaseModel.model_dump`.
+        """
+        if mode != "json":
+            return super().model_dump(mode=mode, **kwargs)
+        return to_json_tree(super().model_dump(mode="python", **kwargs))
+
+    def model_dump_json(self, *, indent: Union[int, None] = None, **kwargs: Any) -> str:
+        """
+        Dump the model to a standard JSON string (see :meth:`model_dump`).
+
+        Non-finite floats are written as strings and tagged leaves, not as ``NaN`` constants.
+        """
+        return json.dumps(self.model_dump(mode="json", **kwargs), indent=indent, allow_nan=False)
 
     def __eq__(self, other: Any) -> bool:
         """
@@ -141,6 +225,9 @@ class PyRadPlanBaseModel(BaseModel):
         for a, b in zip(obj_array_a.flat, obj_array_b.flat):
             if a is None and b is None:
                 continue
+            elif sp.issparse(a) and sp.issparse(b):
+                if a.shape != b.shape or a.dtype != b.dtype or (a != b).nnz != 0:
+                    return False
             elif isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
                 if a.shape != b.shape or a.dtype != b.dtype or not np.all(a == b):
                     return False

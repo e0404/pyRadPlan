@@ -4,6 +4,8 @@ declare const __PYRADPLAN_ABOUT__: {
   license_note: string;
   disclaimer_title: string;
   disclaimer: string;
+  imprint_url: string;
+  privacy_url: string;
 };
 
 interface ImportMetaEnv {

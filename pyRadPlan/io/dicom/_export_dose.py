@@ -1,35 +1,101 @@
 """Export a dose distribution as a DICOM RTDOSE file."""
 
 import os
+import warnings
 
 import numpy as np
 import SimpleITK as sitk
+from typing import Optional, Sequence
+
 from pydicom.dataset import Dataset
 from pydicom.tag import Tag
 from pydicom.uid import generate_uid
+from pydicom.valuerep import format_number_as_ds
 
+from pyRadPlan.result import PlanResult
+
+from ._export_dvh import DvhExport, add_dvh_module
 from ._export_common import (
     RT_DOSE_STORAGE,
-    UIDContext,
+    ExportContext,
+    PlanReference,
     populate_common,
     direction_to_orientation,
+    ds_list,
 )
 
 _UINT32_MAX = 2**32 - 1
 
 
-def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
+def _frame_offsets(dose: sitk.Image, orientation: list) -> list:
+    """Grid frame offsets: frame positions projected on the slice normal, relative to frame 0."""
+    normal = np.cross(orientation[:3], orientation[3:])
+    origin = np.array(dose.TransformIndexToPhysicalPoint((0, 0, 0)))
+    return [
+        float(np.dot(np.array(dose.TransformIndexToPhysicalPoint((0, 0, k))) - origin, normal))
+        for k in range(dose.GetSize()[2])
+    ]
+
+
+def _referenced_plan_sequence(
+    plan_ref: PlanReference, summation: str, beam_number: Optional[int]
+) -> list:
+    item = Dataset()
+    item.ReferencedSOPClassUID = plan_ref.sop_class_uid
+    item.ReferencedSOPInstanceUID = plan_ref.sop_instance_uid
+    if summation != "PLAN":
+        group = Dataset()
+        group.ReferencedFractionGroupNumber = plan_ref.fraction_group_number
+        if summation == "BEAM":
+            beam = Dataset()
+            beam.ReferencedBeamNumber = beam_number
+            group.ReferencedBeamSequence = [beam]
+        item.ReferencedFractionGroupSequence = [group]
+    return [item]
+
+
+def export_dose(  # noqa: PLR0913 - DICOM dose attributes
+    dose: sitk.Image,
+    directory: str,
+    ctx: ExportContext,
+    *,
+    file_name: str = "RTDOSE.dcm",
+    dose_type: str = "PHYSICAL",
+    summation_type: str = "PLAN",
+    comment: Optional[str] = None,
+    series_number: int = 2,
+    plan_ref: Optional[PlanReference] = None,
+    beam_number: Optional[int] = None,
+    dvh: Optional[DvhExport] = None,
+) -> str:
     """
     Write a dose distribution as a multi-frame DICOM RTDOSE file.
 
     Parameters
     ----------
     dose : sitk.Image
-        The dose distribution (in Gy).
+        The dose distribution (in Gy). Flipped and oblique grids are supported.
     directory : str
         Output directory.
-    ctx : UIDContext
+    ctx : ExportContext
         Shared identifiers.
+    file_name : str
+        Name of the written file.
+    dose_type : str
+        DICOM Dose Type, e.g. ``"PHYSICAL"`` or ``"EFFECTIVE"``.
+    summation_type : str
+        DICOM Dose Summation Type (``"PLAN"``, ``"FRACTION"`` or ``"BEAM"``).
+    comment : str, optional
+        Dose Comment; also used as the series description.
+    series_number : int
+        Series number.
+    plan_ref : PlanReference, optional
+        Plan to reference in the Referenced RT Plan Sequence.
+    beam_number : int, optional
+        Beam number of a ``"BEAM"`` dose (required with ``plan_ref``).
+    dvh : DvhExport, optional
+        Structures to write the RT DVH module for (one cumulative DVH per structure,
+        computed from the dose as stored in the file).
 
     Returns
     -------
@@ -42,9 +108,17 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
     orientation = direction_to_orientation(dose.GetDirection())
     position = dose.TransformIndexToPhysicalPoint((0, 0, 0))
 
+    finite = np.isfinite(arr)
+    if not finite.all():
+        warnings.warn(
+            f"Dose contains {int((~finite).sum())} non-finite voxel(s); they are written as 0.",
+            stacklevel=2,
+        )
+        arr = np.where(finite, arr, 0.0)
     max_value = float(arr.max()) if arr.size else 0.0
     if max_value > 0:
-        scaling = max_value / _UINT32_MAX
+        # DoseGridScaling is a DS (16 characters at most), so quantize it before use.
+        scaling = float(format_number_as_ds(max_value / _UINT32_MAX))
         # Divide in float64; clip guards against float rounding overflowing uint32.
         pixels = np.clip(np.round(arr / scaling), 0, _UINT32_MAX).astype("<u4")
     else:
@@ -52,22 +126,28 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
         pixels = np.zeros_like(arr, dtype="<u4")
 
     ds = Dataset()
-    populate_common(ds, ctx, RT_DOSE_STORAGE, generate_uid(), "RTDOSE", 2)
+    populate_common(
+        ds,
+        ctx,
+        RT_DOSE_STORAGE,
+        generate_uid(),
+        "RTDOSE",
+        series_number,
+        comment or "pyRadPlan dose - research use only",
+    )
+    ds.OperatorsName = ""
 
     ds.InstanceNumber = 1
-    ds.ImagePositionPatient = [float(p) for p in position]
-    ds.ImageOrientationPatient = [float(o) for o in orientation]
-    ds.PixelSpacing = [float(spacing[1]), float(spacing[0])]  # row (y), column (x)
-    ds.SliceThickness = float(spacing[2])
+    ds.ImagePositionPatient = ds_list(position)
+    ds.ImageOrientationPatient = ds_list(orientation)
+    ds.PixelSpacing = ds_list([spacing[1], spacing[0]])  # row (y), column (x)
+    ds.SliceThickness = ds_list([spacing[2]])[0]
 
     ds.Rows = ny
     ds.Columns = nx
     ds.NumberOfFrames = nz
     ds.FrameIncrementPointer = Tag(0x3004, 0x000C)  # -> GridFrameOffsetVector
-    # Assumes frames advance along +z by the z-spacing (axial, identity/positive
-    # z-direction). ImagePositionPatient above is direction-aware; a flipped or
-    # oblique z-direction would need the offsets projected onto the slice normal.
-    ds.GridFrameOffsetVector = [float(k * spacing[2]) for k in range(nz)]
+    ds.GridFrameOffsetVector = ds_list(_frame_offsets(dose, orientation))
 
     ds.SamplesPerPixel = 1
     ds.PhotometricInterpretation = "MONOCHROME2"
@@ -77,12 +157,122 @@ def export_dose(dose: sitk.Image, directory: str, ctx: UIDContext) -> str:
     ds.PixelRepresentation = 0
 
     ds.DoseUnits = "GY"
-    ds.DoseType = "PHYSICAL"
-    ds.DoseSummationType = "PLAN"
+    ds.DoseType = dose_type
+    ds.DoseSummationType = summation_type
+    if comment:
+        ds.DoseComment = comment
     ds.DoseGridScaling = scaling
+    if plan_ref is not None:
+        ds.ReferencedRTPlanSequence = _referenced_plan_sequence(
+            plan_ref, summation_type, beam_number
+        )
+
+    if dvh is not None:
+        stored = sitk.GetImageFromArray(pixels.astype(np.float64) * scaling)
+        stored.CopyInformation(dose)
+        add_dvh_module(ds, stored, dose_type, dvh)
 
     ds.PixelData = pixels.tobytes()
 
-    out_path = os.path.join(directory, "RTDOSE.dcm")
+    out_path = os.path.join(directory, file_name)
     ds.save_as(out_path, enforce_file_format=True)
     return out_path
+
+
+#: Result key -> DICOM Dose Type of the dose quantities that are exported.
+RESULT_DOSE_TYPES = {"physical_dose": "PHYSICAL", "rbe_x_dose": "EFFECTIVE"}
+
+
+def export_result(  # noqa: PLR0913 - export options
+    result: PlanResult,
+    directory: str,
+    ctx: ExportContext,
+    *,
+    summation_type: str = "PLAN",
+    per_beam: bool = False,
+    plan_ref: Optional[PlanReference] = None,
+    dvh: Optional[DvhExport] = None,
+    skipped_beams: Sequence[int] = (),
+) -> list[str]:
+    """
+    Write the dose quantities of a plan result as RTDOSE files.
+
+    Physical dose is written with Dose Type ``PHYSICAL`` and RBE-weighted dose with
+    ``EFFECTIVE`` as ``RTDOSE_<quantity>.dcm``. Other quantities (LET, effect, alpha, ...)
+    are skipped with a warning, as are the scenarios of ``result.scenario_quantities``
+    beyond the nominal one. With ``per_beam``, the per-beam quantities are written as
+    ``RTDOSE_<quantity>_beam<N>.dcm`` with Dose Summation Type ``BEAM``, except for the
+    beams in ``skipped_beams`` (0-based, left out of the plan export). With ``dvh``, every
+    file also gets the RT DVH module.
+
+    Returns
+    -------
+    list of str
+        The paths of the written files.
+    """
+    names = {*result.quantities, *result.beam_quantities, *result.scenario_quantities}
+    skipped = sorted(name for name in names if name not in RESULT_DOSE_TYPES)
+    if skipped:
+        warnings.warn(
+            f"DICOM RTDOSE export skips non-dose quantities: {', '.join(skipped)}.",
+            stacklevel=3,
+        )
+    if any(
+        sum(v is not None for v in result.scenario_quantities.get(name, ())) > 1
+        for name in RESULT_DOSE_TYPES
+    ):
+        warnings.warn(
+            "DICOM RTDOSE export writes the nominal scenario only; "
+            "the other scenarios of the result are skipped.",
+            stacklevel=3,
+        )
+
+    written = []
+    series_number = 2
+    for quantity, dose_type in RESULT_DOSE_TYPES.items():
+        distribution = result.quantities.get(quantity)
+        if distribution is not None:
+            image = distribution.values
+            written.append(
+                export_dose(
+                    image,
+                    directory,
+                    ctx,
+                    file_name=f"RTDOSE_{quantity}.dcm",
+                    dose_type=dose_type,
+                    summation_type=summation_type,
+                    comment=quantity,
+                    series_number=series_number,
+                    plan_ref=plan_ref,
+                    dvh=dvh,
+                )
+            )
+            series_number += 1
+    if per_beam:
+        found = False
+        for quantity, dose_type in RESULT_DOSE_TYPES.items():
+            for index, distribution in enumerate(result.beam_quantities.get(quantity, ())):
+                if index in skipped_beams:
+                    continue
+                image = distribution.values
+                found = True
+                number = plan_ref.beam_number(index) if plan_ref else index + 1
+                written.append(
+                    export_dose(
+                        image,
+                        directory,
+                        ctx,
+                        file_name=f"RTDOSE_{quantity}_beam{index + 1}.dcm",
+                        dose_type=dose_type,
+                        summation_type="BEAM",
+                        comment=f"{quantity} beam {index + 1}",
+                        series_number=series_number,
+                        plan_ref=plan_ref,
+                        beam_number=number,
+                        dvh=dvh,
+                    )
+                )
+                series_number += 1
+        if not found:
+            warnings.warn("per_beam_doses requested, but the result has no per-beam doses.")
+    return written

@@ -10,6 +10,9 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import PlanResult
 
+#: Entry of :attr:`BaseExporter.supports` for exporters that store any named object.
+ANY_OBJECT = "*"
+
 
 class BaseExporter(ABC):
     """
@@ -29,12 +32,18 @@ class BaseExporter(ABC):
     container : bool
         True if the format stores multiple objects in a single file (e.g. ``.mat``);
         False for directory-based formats (e.g. DICOM).
+    supports : frozenset of str
+        Names of the objects :meth:`save` writes (``"ct"``, ``"cst"``, ``"dose"``, ``"pln"``,
+        ``"stf"``, ``"dij"``, ``"result"``, ``"weights"``, ...), or :data:`ANY_OBJECT` (the
+        default) for exporters that receive any named object. :func:`pyRadPlan.io.save_data`
+        passes only the declared objects and warns about the others.
     """
 
     format: ClassVar[Optional[str]] = None
     name: ClassVar[str] = "Base Exporter"
     extensions: ClassVar[tuple[str, ...]] = ()
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({ANY_OBJECT})
 
     def __init__(self, path: Union[str, os.PathLike]):
         self.path = os.fspath(path)
