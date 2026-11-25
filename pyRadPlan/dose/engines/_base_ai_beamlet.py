@@ -82,6 +82,27 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         Optional[str],
         Field(description="AI model as a '<org>/<model>' id, e.g. 'DKFZ-RadOpt/my-model'"),
     ] = None
+    max_batch_size: Annotated[
+        Optional[int],
+        Field(
+            ge=1,
+            description="Maximum number of beamlets per model call; unset predicts a whole "
+            "ray at once",
+        ),
+    ] = 32
+    ensemble_size: Annotated[
+        Optional[int],
+        Field(
+            ge=1,
+            description="Ensemble members per prediction, for models that sample an ensemble; "
+            "unset keeps the model's own setting",
+        ),
+    ] = None
+    dose_threshold: Annotated[
+        float,
+        Field(ge=0.0, description="Predicted dose at or below which a voxel is not stored"),
+    ] = 1e-7
+    assumed_sparsity = 1e-2
 
     def __init__(self, pln=None):
         """Initialize the AI engine.
@@ -98,26 +119,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         -------
         None
         """
-        self.max_batch_size = 32
-        self.ensemble_size = None
-        self.model = None
         self._model_modality = None
-        self.assumed_sparsity = 1e-2
-        self.dose_threshold = 1e-7
-
-        requested_model = None
-        if pln is not None:
-            pdc = getattr(pln, "prop_dose_calc", None)
-            if pdc is None and isinstance(pln, dict):
-                pdc = pln.get("prop_dose_calc")
-
-            if pdc is not None:
-                requested_model = pdc.pop("model", None)
-
         super().__init__(pln)
         self.pln = pln
-        if requested_model is not None:
-            self.model = requested_model
 
     @classmethod
     def config_choices(cls, radiation_mode: Optional[str] = None) -> dict[str, List[str]]:
@@ -932,8 +936,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             fill_value=-1000,
         )
 
-        # Load the model + its preprocessor (using the friendly name saved in __init__
-        # before the base engine popped "model" from pln.prop_dose_calc).
         if not self.model:
             raise ValueError(
                 "AIBeamletEngine requires a model, e.g. "
