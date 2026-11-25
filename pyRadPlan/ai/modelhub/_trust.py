@@ -22,7 +22,13 @@ from typing import NamedTuple, Optional, Union
 
 from pyRadPlan._settings import get_settings
 
-from ._resolve import METADATA_FILENAME, REQUIRED_FILES, ResolvedModel, _resolve_model
+from ._resolve import (
+    METADATA_FILENAME,
+    REQUIRED_FILES,
+    ResolvedModel,
+    _resolve_model,
+    repo_subpath,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +182,14 @@ def _repo_id(name: str) -> str:
     return name if "/" in name else f"{get_settings().ai.modelhub_hf_org}/{name}"
 
 
+def _trust_call(repo_id: str, model_dir: Path) -> str:
+    """Spell out the ``trust_model`` call that trusts the copy in ``model_dir``."""
+    base = get_settings().ai.modelhub_local_models_dir
+    if base is None or model_dir == Path(base) / repo_subpath(repo_id):
+        return f'pyRadPlan.ai.modelhub.trust_model("{repo_id}")'
+    return f'pyRadPlan.ai.modelhub.trust_model("{repo_id}", local_dir=r"{model_dir}")'
+
+
 def _check_trust(resolved: ResolvedModel, trust_remote_code: bool) -> None:
     """Refuse to run a downloaded model's code unless it is trusted.
 
@@ -194,7 +208,10 @@ def _check_trust(resolved: ResolvedModel, trust_remote_code: bool) -> None:
     digest = code_hash(resolved.path)
     if trust_remote_code:
         if repo_id is not None:
-            _record(repo_id, digest, resolved.path)
+            try:
+                _record(repo_id, digest, resolved.path)
+            except OSError as exc:
+                logger.warning("Could not record trust in the code of '%s': %s", repo_id, exc)
         return
 
     entry = _read_records().get(repo_id) if repo_id is not None else None
@@ -208,7 +225,7 @@ def _check_trust(resolved: ResolvedModel, trust_remote_code: bool) -> None:
             'pyRadPlan.ai.modelhub.trust_model("<org>/<model>", local_dir=...), or '
             f"trust all downloaded models with {_SETTING_HINT}."
         )
-    trust_call = f'pyRadPlan.ai.modelhub.trust_model("{repo_id}")'
+    trust_call = _trust_call(repo_id, resolved.path)
     if entry is not None:
         raise UntrustedModelError(
             f"The code of model '{repo_id}' in '{resolved.path}' changed since you trusted "

@@ -206,6 +206,18 @@ def test_trust_remote_code_argument(hub):
     assert is_trusted("org/remote")
 
 
+def test_opt_in_loads_even_if_the_record_cannot_be_written(hub, monkeypatch):
+    hub.publish("org/remote")
+
+    def read_only(records):
+        raise PermissionError("read-only data dir")
+
+    monkeypatch.setattr(_trust, "_write_records", read_only)
+    assert load_model("org/remote", trust_remote_code=True)[0] is not None
+    with pytest.raises(PermissionError):
+        trust_model("org/remote")
+
+
 def test_trust_remote_code_false_overrides_the_setting(hub, isolated_model_settings, monkeypatch):
     sentinel = hub.publish("org/remote")
     monkeypatch.setattr(isolated_model_settings, "modelhub_trust_remote_code", True)
@@ -262,6 +274,13 @@ def test_marked_folder_needs_trust_as_local_dir(hub, models_base):
     with pytest.raises(UntrustedModelError, match="org/remote"):
         load_model(local_dir=folder)
     assert not sentinel.exists()
+
+    elsewhere = models_base.parent / "elsewhere"
+    trust_model("org/remote", local_dir=elsewhere)
+    untrust_model("org/remote")
+    with pytest.raises(UntrustedModelError) as excinfo:
+        load_model(local_dir=elsewhere)
+    assert f'trust_model("org/remote", local_dir=r"{elsewhere}")' in str(excinfo.value)
 
     trust_model("org/remote", local_dir=folder)
     assert load_model(local_dir=folder)[0] is not None
