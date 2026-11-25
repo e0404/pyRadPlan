@@ -94,8 +94,10 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         order is (depth, lateral, lateral) to match model conventions.
     - Model inference: model + preprocessor loaded via `pyRadPlan.ai.modelhub.load_model` from the
         '<org>/<model>' id in `prop_dose_calc["model"]`; backend-agnostic arrays using the
-        Array API (`self.xp`). Loading executes the code shipped with the model, so it needs
-        the same opt-in as `load_model(repo_id=...)`:
+        Array API (`self.xp`). Loading executes the code shipped with the model: a model
+        folder placed under ``settings.ai.modelhub_local_models_dir`` by the user runs
+        as-is, a downloaded one only once trusted, with
+        ``pyRadPlan.ai.modelhub.trust_model("<org>/<model>")`` or
         ``settings.ai.modelhub_trust_remote_code = True``
         (``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``).
     - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
@@ -951,8 +953,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         if "/" not in self.model:
             raise ValueError(f"Model '{self.model}' is not a '<org>/<model>'.")
 
-        # Loading by id applies the modelhub's trust rule (settings.ai.modelhub_trust_remote_code)
-        # before anything is downloaded.
+        # The modelhub refuses downloaded code nobody trusted before importing any of it, also
+        # for a folder it downloaded, so the engine must not load a resolved folder directly.
         try:
             self.network, self.preprocessor, model_dir = load_model_with_dir(
                 repo_id=self.model, device=device_string(self.device)

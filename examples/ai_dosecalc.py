@@ -28,8 +28,11 @@
 # 2. The model repository below, either downloaded already or reachable on the HuggingFace Hub.
 #    Models are addressed as `<org>/<model>`; `pyRadPlan.ai.modelhub.list_local_models()` shows
 #    what is on disk.
-# 3. Loading a model from the Hub runs Python shipped inside the repository, so it needs an
-#    explicit opt-in: `trust_remote_code=True`, or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`.
+# 3. Loading a model runs Python shipped inside the repository. A model folder you placed
+#    yourself runs as-is; a downloaded one only once you trust it, with
+#    `pyRadPlan.ai.modelhub.trust_model("<org>/<model>")` (done below) or for every download
+#    with `settings.ai.modelhub_trust_remote_code = True`
+#    (`PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`).
 
 # %%
 # Import necessary libraries
@@ -46,6 +49,7 @@ from pyRadPlan import (
     plot_slice,
     settings,
 )
+from pyRadPlan.ai.modelhub import trust_model
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
 from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing, MeanDose
 
@@ -79,6 +83,14 @@ pln.prop_dose_calc = {
 
 # Generate Steering Geometry ("stf")
 stf = generate_stf(ct, cst, pln)
+
+# %% [markdown]
+# The engine runs the code shipped with the model. `trust_model` downloads the model without
+# running anything and records a hash of its code; inspect that code before you trust it. If the
+# code changes upstream later, the engine refuses the model until you trust it again.
+# %%
+model_dir, _ = trust_model("DKFZ-RadOpt/pyRadPlan-dosecalc-Det-proton-lung")
+print(f"Trusted the model code in {model_dir}")
 
 # %% [markdown]
 # ## Dose calculation with the AI engine

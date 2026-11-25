@@ -137,9 +137,8 @@ def test_listing_engines_never_contacts_the_hub(no_hub, monkeypatch, tmp_path):
 
 
 def test_model_not_on_disk_fails_clearly_when_calculating(test_data_protons, monkeypatch):
-    """The deferred resolution reports what is missing, once the code is trusted."""
+    """The deferred resolution reports what is missing (before trust is even considered)."""
     pln, ct, cst, stf, _dij, _result = test_data_protons
-    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", True)
     pln.prop_dose_calc["engine"] = "AIBeamlet"
     pln.prop_dose_calc["model"] = "other_org/no_such_model"
 

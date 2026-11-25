@@ -28,17 +28,13 @@ DUMMY_MODEL = "DKFZ-RadOpt/dummy_dosecalc_model"
 def _local_ai_models_dir(monkeypatch):
     """Resolve models from the committed test-fixture folder, without hitting HuggingFace.
 
-    ``resolve_model_dir`` hands an unpinned request to ``snapshot_download``
-    (see ``pyRadPlan.ai.modelhub._resolve``), only falling back to a local copy
-    if that fails. Forcing offline mode here keeps these tests hermetic and
-    fast, and avoids the fallback path re-downloading/re-writing version
-    metadata next to the committed fixture.
+    The committed dummy model is a folder pyRadPlan did not download, so it runs
+    without any trust setting and is never refreshed from the Hub. Offline mode
+    keeps every other model these tests name off the network.
     """
     models_dir = Path(__file__).resolve().parents[1] / "data" / "ai_models"
     monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", models_dir)
     monkeypatch.setattr(get_settings().ai, "modelhub_offline", True)
-    # the committed dummy model is loaded by id, like a hub model, so its code needs the opt-in
-    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", True)
 
 
 def test_AIBeamletEngine_init(test_data_protons):
@@ -561,6 +557,23 @@ def downloaded_model(tmp_path, monkeypatch):
     monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", False)
     monkeypatch.setattr(_resolve, "_import_snapshot_download", lambda: fake_snapshot_download)
     return sentinel
+
+
+def test_user_placed_model_needs_no_trust(test_data_protons, monkeypatch, tmp_path):
+    """The committed dummy model runs online without any trust setting and is not refreshed."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
+
+    def _no_hub():
+        raise AssertionError("a user-placed model must not be fetched from the Hub")
+
+    monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data_root"))
+    monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
+    monkeypatch.setattr(get_settings().ai, "modelhub_trust_remote_code", False)
+    monkeypatch.setattr(_resolve, "_import_snapshot_download", _no_hub)
+
+    dij = AIBeamletEngine(_ai_pln(pln, dij)).calc_dose_influence(ct, cst, stf)
+    assert dij.physical_dose.flat[0].nnz > 0
+    assert not (tmp_path / "data_root").exists()
 
 
 def test_downloaded_model_code_needs_trust(test_data_protons, downloaded_model):

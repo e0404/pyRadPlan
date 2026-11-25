@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- AI beamlet dose engine (`"AIBeamlet"`, research feature, not for clinical use): a trained model predicts the dose of each beamlet, selected with `pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}`. The model is taken from disk or downloaded from the HuggingFace Hub when a calculation runs; because this runs the code shipped with the model, it requires `settings.ai.modelhub_trust_remote_code = True` (`PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`). Setup scenarios are supported, range and CT-phase scenarios are refused
+- `pyRadPlan.ai.modelhub.trust_model("<org>/<model>")` downloads a model without running it and records a hash of its code, so it may run without `settings.ai.modelhub_trust_remote_code`; `untrust_model` and `is_trusted` manage the records
+
+- AI beamlet dose engine (`"AIBeamlet"`, research feature, not for clinical use): a trained model predicts the dose of each beamlet, selected with `pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}`. The model is taken from disk or downloaded from the HuggingFace Hub when a calculation runs; a downloaded model runs only once trusted (see below). Setup scenarios are supported, range and CT-phase scenarios are refused
 - AI dose-calculation models declare in their `model_config.json` the quantities they predict (e.g. physical dose, its variance and LET), their sampling grid, the radiation mode they were trained for and the packages they need (`metadata.requirements`). The engine is always listed and checks only models already on disk, without contacting the hub: a plan naming one trained for another radiation mode, or one whose packages are missing, is refused with the reason
 - GUI: the configuration dialog of the AI beamlet engine suggests the fitting models found on disk and on the configured hub organization; any other id can still be typed. A user guide section and the `ai_dosecalc` tutorial describe AI dose calculation
+
+### Security
+
+- Whether a model's code may run now depends on where it came from: a model folder you placed yourself runs as-is, also when loaded by id, and is never refreshed from the Hub; a downloaded model (in the local models folder, a `local_dir` or the HuggingFace cache) runs only once trusted with `trust_model(...)` or `settings.ai.modelhub_trust_remote_code = True`. Before, a downloaded folder passed as `local_dir` ran unasked. When the code of a trusted model changes, e.g. after an update from the Hub, loading is refused until it is trusted again
 
 ## [0.10.0] - 2026-11-25
 

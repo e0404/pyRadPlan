@@ -33,21 +33,22 @@ Quick start
 
 .. code-block:: python
 
-    from pyRadPlan.ai.modelhub import load_model, list_local_models
+    from pyRadPlan.ai.modelhub import list_local_models, load_model, trust_model
 
-    # From a local directory (works fully offline):
+    # From a local directory you placed yourself (works fully offline):
     model, preprocessor = load_model(local_dir="path/to/model_folder")
 
-    # By bare name on HuggingFace (resolves to <hf_org>/<name>):
-    model, preprocessor = load_model(
-        "outcome-ORPDenseNet-tg119", revision="v1.0.0", trust_remote_code=True
-    )
+    # From HuggingFace by bare name (resolves to <hf_org>/<name>). The model's code is
+    # downloaded but runs only once you trust it (see "Which model code runs"):
+    trust_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
+    model, preprocessor = load_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
 
     # By full id -- e.g. a fork -- used as-is:
-    model, preprocessor = load_model("my-org/my-repo", trust_remote_code=True)
+    trust_model("my-org/my-repo")
+    model, preprocessor = load_model("my-org/my-repo")
 
     # Same thing, explicitly:
-    model, preprocessor = load_model(repo_id="my-org/my-repo", trust_remote_code=True)
+    model, preprocessor = load_model(repo_id="my-org/my-repo")
 
     print(list_local_models())  # models available on disk (no network)
 
@@ -66,15 +67,59 @@ What ``raw_inputs`` and ``result`` are is defined by the model repository, not b
 pyRadPlan -- record it in the model's ``metadata`` (see
 :ref:`model_repository_contract`).
 
+.. _modelhub_trust:
+
+Which model code runs
+---------------------
+
 .. warning::
 
-   :func:`~pyRadPlan.ai.modelhub.load_model` executes the ``model.py`` and
-   ``preprocessor.py`` shipped inside the model repository.  For anything fetched from
-   the Hub this is gated behind an explicit ``trust_remote_code=True`` (or
-   ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``), which defaults to ``False``.  Enable it
-   only for sources you trust, and prefer pinning a ``revision`` so you know which code
-   you are running.  A directory you pass yourself as ``local_dir`` is exempt -- that
-   code is already under your control.
+   :func:`~pyRadPlan.ai.modelhub.load_model` (and the ``"AIBeamlet"`` dose engine)
+   executes the ``model.py`` and ``preprocessor.py`` shipped inside the model
+   repository -- arbitrary Python with your permissions.
+
+Whether a model's code may run depends on where it came from, not on how you name it:
+
+* **A model folder you placed yourself** runs as-is, whether you pass it as
+  ``local_dir`` or load it by id from ``<local_models_dir>/<org>/<repo>``.  pyRadPlan
+  never refreshes such a folder from the Hub, not even for an unpinned load.
+* **A model pyRadPlan downloaded** -- into ``<local_models_dir>/<org>/<repo>``, into a
+  ``local_dir`` or into the HuggingFace cache -- runs only once you trust it, also when
+  you later pass its folder as ``local_dir``.  pyRadPlan tells the two apart by the
+  ``.pyradplan_model.json`` marker it writes into a folder *before* downloading into
+  it, and by the HuggingFace cache layout; it downloads only into an empty folder or
+  one carrying the marker.  A folder holding neither a complete model nor the marker
+  is refused rather than downloaded over.
+
+Downloaded code is trusted in one of two ways:
+
+* :func:`~pyRadPlan.ai.modelhub.trust_model` downloads the model if needed, without
+  running anything, and records a SHA-256 hash of its code (every file but the
+  ``*.safetensors`` weights, which hold tensors only).  Inspect the code in the
+  returned directory first:
+
+  .. code-block:: python
+
+      from pyRadPlan.ai.modelhub import trust_model
+
+      model_dir, code_hash = trust_model("DKFZ-RadOpt/dosecalc-x", revision="v1.0.0")
+
+* The setting ``pyRadPlan.settings.ai.modelhub_trust_remote_code = True`` (environment
+  variable ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``), or
+  ``load_model(..., trust_remote_code=True)``, trusts whatever is downloaded.  The code
+  loaded this way is recorded too, so it keeps running after the setting is switched
+  off.
+
+The records live in ``<data_dir>/ai_trusted_models.json`` (``~/.pyradplan`` by default),
+keyed by repository id -- never inside the model folder, so nothing a repository ships
+can make it trusted.  :func:`~pyRadPlan.ai.modelhub.is_trusted` tells whether a model on
+disk runs without the setting, and :func:`~pyRadPlan.ai.modelhub.untrust_model` forgets a
+model's records.
+
+**When the code changes upstream**, e.g. an unpinned load pulls an update, its hash no
+longer matches and loading is refused until you inspect the new code and call
+:func:`~pyRadPlan.ai.modelhub.trust_model` again (or enable the setting).  Pin a
+``revision`` so the code you trusted is the code you keep running.
 
 Discovering local models
 ------------------------
@@ -141,7 +186,7 @@ directory or the per-user ``~/.pyradplan/.env``); the model-hub-related fields a
    * - ``modelhub_trust_remote_code``
      - ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE``
      - ``False``
-     - Allow executing the code shipped with a model fetched from the Hub
+     - Trust the code of every downloaded model (see :ref:`modelhub_trust`)
    * - ``modelhub_device``
      - ``PYRADPLAN_AI_MODELHUB_DEVICE``
      - ``cpu``
@@ -164,10 +209,12 @@ The data root (``<data_dir>``) defaults to ``~/.pyradplan`` and can be relocated
 Versions and updates
 --------------------
 
-Pin a ``revision`` (tag, branch or commit) for reproducible loads: a local copy recorded
-as that revision is used directly, without touching the network.  Without a pinned
-revision the Hub is asked whether the local copy is still current, and a stale one is
-refreshed; if the Hub cannot be reached the local copy is used anyway, with a warning.
+Pin a ``revision`` (tag, branch or commit) for reproducible loads: a downloaded copy
+recorded as that revision is used directly, without touching the network.  Without a
+pinned revision the Hub is asked whether the downloaded copy is still current, and a
+stale one is refreshed -- a refresh that changes the model's code needs your trust
+again (see :ref:`modelhub_trust`); if the Hub cannot be reached the local copy is used
+anyway, with a warning.  A model folder you placed yourself is never refreshed.
 
 .. _model_repository_contract:
 

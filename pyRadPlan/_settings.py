@@ -149,12 +149,14 @@ class AiSettings(_PyRadPlanBaseSettings):
         Force offline mode (``local_files_only``). When ``True``, no network
         access is attempted and only cached / local files are used.
     modelhub_trust_remote_code : bool
-        Whether loading a model resolved from the HuggingFace Hub is allowed to
-        execute the ``model.py`` and ``preprocessor.py`` shipped with it. This
-        runs arbitrary Python from the model repository, so it defaults to
-        ``False`` and must be opted into per source you trust. Loading from a
-        directory passed explicitly as ``local_dir`` is exempt: that code is
-        already under the caller's control.
+        Trust the code of every model pyRadPlan downloads: loading one executes the
+        ``model.py`` and ``preprocessor.py`` shipped with it, arbitrary Python from
+        the model repository, so it defaults to ``False``. Without it, downloaded
+        code runs only once trusted with
+        :func:`pyRadPlan.ai.modelhub.trust_model`, which records a hash of it (as
+        does every load with this setting on); changed code is refused until it
+        is trusted again. A model folder the user placed (no download marker, not
+        in the HuggingFace cache) always runs.
     modelhub_device : str
         Default device a loaded model is moved to (e.g. ``"cpu"``, ``"cuda"``).
 
