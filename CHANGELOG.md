@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- AI beamlet dose engine (`"AIBeamlet"`, research feature, not for clinical use): a trained model predicts the dose of each beamlet, selected with `pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}`. The model is taken from disk or downloaded from the HuggingFace Hub when a calculation runs; because this runs the code shipped with the model, it requires `settings.ai.modelhub_trust_remote_code = True` (`PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`). Setup scenarios are supported, range and CT-phase scenarios are refused
+- AI dose-calculation models declare in their `model_config.json` the quantities they predict (e.g. physical dose, its variance and LET), their sampling grid, the radiation mode they were trained for and the packages they need (`metadata.requirements`). The engine is always listed and checks only models already on disk, without contacting the hub: a plan naming one trained for another radiation mode, or one whose packages are missing, is refused with the reason
+- GUI: the configuration dialog of the AI beamlet engine suggests the fitting models found on disk and on the configured hub organization; any other id can still be typed. A user guide section and the `ai_dosecalc` tutorial describe AI dose calculation
+
 ## [0.10.0] - 2026-11-25
 
 ### Added
@@ -337,10 +343,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a Compose example and shared smoke test; GitHub and GitLab build and test the
   image and publish tagged releases to their container registries.
 - Responsive layout, favicon and links to Group Website, LinkedIn and GitHub in documentation website
-- `AIBeamletEngine` ("AIBeamlet"): AI-driven pencil-beam dose engine selected via `pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<name>"}`. Loads the model + its preprocessor through `pyRadPlan.ai.modelhub.load_model`; per-model sampling-grid/quantities/training metadata lives under `metadata.dose_calc` in the model's `model_config.json`. Dose-calc model preprocessors define their own `predict(model, model_input)` (called after `preprocess`), always returning a `{quantity_name: array}` dict, so multi-output models (e.g. dose+physical_dose_var, dose+LET) are supported. The model is addressed as `<org>/<model>`, is a configurable engine parameter, and is loaded onto the device the engine's arrays live on. A model repository declares the packages its code needs in `metadata.requirements`, so the engine itself requires no particular ML framework
-- `AIBeamletEngine.is_available()` reports whether the engine can run for a plan and why not (no usable model locally or on the configured hub organization, a model trained for another radiation mode, missing packages); `get_available_engines` now applies every engine's check, so an engine that cannot run is no longer offered. The GUI's engine configuration dialog offers the fitting models in an editable combo box
-- docs: an "AI-based dose calculation" section in the dose-calculation user guide (model selection, what a repository declares, availability, devices), cross-linked with the AI Model Hub page, plus the `ai_dosecalc` tutorial showing an end-to-end AI dose calculation. Both state that AI dose calculation is a research feature, valid only for the anatomy/machine a model was trained on, and not intended for clinical use
-- `batched_interp3d`: array-API 3D interpolation of single or batched volumes, returning an interpolator instance so it is constructed once and queried many times; used by the AIBeamlet engine
 
 ### Changed
 
