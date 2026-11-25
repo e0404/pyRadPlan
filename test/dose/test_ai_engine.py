@@ -7,6 +7,7 @@ import pytest
 from pyRadPlan import xp_utils, plot_slice
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import AIBeamletEngine, DoseEngineBase
+from pyRadPlan.scenarios import CTPhaseUncertainty, RangeUncertainty, ScenarioSet, SetupUncertainty
 from pyRadPlan.stf import validate_stf
 
 
@@ -278,3 +279,46 @@ def test_dose_is_the_same_on_numpy_and_torch(test_data_protons, monkeypatch):
     torch_dose = calc_dose_influence(ct, cst, stf, _ai_pln(pln, dij)).physical_dose.flat[0]
 
     assert np.allclose(reference.toarray(), torch_dose.toarray(), rtol=1e-4, atol=1e-8)
+
+
+# --- scenarios -------------------------------------------------------------
+
+
+def _scenario_set(*, setup=None, range_=None):
+    dims = (
+        CTPhaseUncertainty(phases=[0], probabilities=[1.0]),
+        SetupUncertainty(),
+        RangeUncertainty(),
+    )
+    points = {}
+    if setup is not None:
+        points["setup"] = np.asarray(setup, dtype=float)
+    if range_ is not None:
+        points["range"] = np.asarray(range_, dtype=float)
+    return ScenarioSet.from_points(dims, points)
+
+
+def test_setup_scenarios_are_computed(test_data_protons):
+    """Each setup shift moves the beamlets, so its matrix differs from the nominal one."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
+    engine = AIBeamletEngine(_ai_pln(pln, dij))
+
+    dij_py = engine.calc_dose_influence(
+        ct, cst, stf, scenarios=_scenario_set(setup=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)])
+    )
+    nominal, shifted = dij_py.physical_dose.flat[0], dij_py.physical_dose.flat[1]
+
+    assert nominal.shape == shifted.shape
+    assert nominal.nnz > 0 and shifted.nnz > 0
+    assert (nominal != shifted).nnz > 0
+
+
+def test_range_scenarios_are_rejected(test_data_protons):
+    """The model predicts from the CT alone, so a range error cannot be applied."""
+    pln, ct, cst, stf, dij, _result = test_data_protons
+    engine = AIBeamletEngine(_ai_pln(pln, dij))
+
+    with pytest.raises(ValueError, match=r"\['range'\] which are not supported"):
+        engine.calc_dose_influence(
+            ct, cst, stf, scenarios=_scenario_set(range_=[(0.0, 0.0), (3.5, 0.0)])
+        )

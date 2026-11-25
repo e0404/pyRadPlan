@@ -32,6 +32,7 @@ from pyRadPlan.ai.modelhub import (
 )
 from pydantic import ConfigDict, Field
 
+from ._base import ct_phase_images
 from ._base_pencilbeam import PencilBeamEngineAbstract
 from pyRadPlan._settings import get_settings
 
@@ -59,8 +60,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         Array API (`self.xp`).
     - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
         predicted dose at world dose-grid locations.
-    - Scenarios: geometry and CT sampling are done per-ray; scenario adaptation follows the
-        base class hooks if needed.
+    - Scenarios: setup shifts are supported, each computed as its own geometry. Range
+        errors and several CT phases are refused (see ``supported_uncertainties``).
 
     Notes
     -----
@@ -77,6 +78,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
     _dij_guarantee_canonical: ClassVar[bool] = True
     _dij_guarantee_nonzero: ClassVar[bool] = True
+    # A setup shift only moves the beamlets. The model has no input for a range error, and
+    # only one CT phase is sampled per calculation.
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("setup",)
 
     model: Annotated[
         Optional[str],
@@ -269,17 +273,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             Bixel dictionary with ``ix``, ``physical_dose``, and any second quantity.
         """
         bixel = self._init_bixel(ray, k)
-
-        precomp = ray["_precomputed_bixels"]
-        bixel["ix"] = precomp[k]["ix"]
-        for q_name in self.model_cfg.quantities:
-            bixel[q_name] = precomp[k][q_name]
-        precomp[k] = None
-
-        if all(x is None for x in precomp):
-            del ray["_precomputed_bixels"]
-            del ray["ct_cuboid"]
-
+        bixel.update(ray["_precomputed_bixels"][k])
         return bixel
 
     def _predict(self, ct_cuboid: Array, energies: Array) -> dict[str, Array]:
@@ -324,7 +318,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             The bixel dictionary augmented with indices (beam/ray/bixel), MU limits,
             particles-per-MU, and the machine energy index used for lookups.
         """
-        bixel = curr_ray["beamlets"][k]
+        # A copy, so the predicted arrays are not kept alive in the beam for the whole beam.
+        bixel = curr_ray["beamlets"][k].copy()
         bixel["beam_index"] = curr_ray["beam_index"]
         bixel["ray_index"] = curr_ray["ray_index"]
         bixel["bixel_index"] = k
@@ -828,13 +823,13 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         ray : dict
             Base ray dictionary.
         scenario : Scenario
-            The scenario; unused, the model predicts from the ray's CT cuboid.
+            The scenario; unused, since a setup shift -- the only supported
+            uncertainty -- is already applied to the geometry the ray was built from.
 
         Returns
         -------
         dict
-            A shallow copy of the input ray. Unlike the base PB engine, AI engine
-            does not adapt radiological depths per scenario here.
+            A shallow copy of the input ray.
         """
         scen_ray = ray.copy()
 
@@ -917,11 +912,12 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         dij = super()._init_dose_calc(ct, cst, stf)
         xp = self.xp
 
-        self.ct_cube_hu = ct.cube_hu
+        # ct_phase is not a supported uncertainty, so every computed scenario uses this phase
+        self.ct_cube_hu = ct_phase_images(ct.cube_hu)[self._reference_ct_phase]
         self._vdose_grid_mask = xp.asarray(self._vdose_grid_mask, device=self.device)
 
-        self.sitk_xp = xp.asarray(sitk.GetArrayFromImage(ct.cube_hu), device=self.device)
-        sitk_grid = Grid.from_sitk_image(ct.cube_hu)
+        self.sitk_xp = xp.asarray(sitk.GetArrayFromImage(self.ct_cube_hu), device=self.device)
+        sitk_grid = Grid.from_sitk_image(self.ct_cube_hu)
         self.ct_grid_dimensions = (
             xp.asarray(sitk_grid.x, device=self.device),
             xp.asarray(sitk_grid.y, device=self.device),
