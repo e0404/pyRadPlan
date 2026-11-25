@@ -39,10 +39,12 @@ from typing import Any, Callable, Optional, Union
 
 import numpy as np
 import pydicom
+from scipy.spatial import cKDTree
 
 from pyRadPlan.geometry import lps
 from pyRadPlan.machines import Machine, load_from_name
 from pyRadPlan.plan import IonPlan
+from pyRadPlan.result import PlanResult
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.stf._beam import Beam
 from pyRadPlan.stf._beamlet import IonSpot
@@ -282,7 +284,7 @@ def import_ion_plan(
     dict
         ``stf`` (:class:`SteeringInformation`), ``pln`` (:class:`IonPlan`),
         ``weights`` (spot weights in stf bixel order, in units of 1e6 particles) and
-        ``result`` (``{"w": weights}``, the key the workspace and matRad results use).
+        ``result`` (a :class:`~pyRadPlan.result.PlanResult` whose ``fluence`` is the weights).
     """
     kind = plan_kind(ds)
     if kind == "photon":
@@ -378,7 +380,7 @@ def import_ion_plan(
         },
     )
     w = np.asarray(weights, dtype=float)
-    return {"stf": stf, "pln": pln, "weights": w, "result": {"w": w}}
+    return {"stf": stf, "pln": pln, "weights": w, "result": PlanResult(fluence=w)}
 
 
 def _check_isocenters(ct, iso_centers) -> None:
@@ -523,11 +525,12 @@ def _range_shifter_key(shifter_state: dict, name: str) -> tuple[float, float, in
 
 
 def _collect_spots(cps, name: str):
-    """Spots (x, y, DICOM energy, meterset weight, range shifter key) and the spot size.
+    """Spots as (x, y, DICOM energy, meterset weight, range shifter key, spot size).
 
     Spots are taken from every control point carrying positive weights. Zero-weight spots,
     such as those of the closing control point of each pair, are dropped. Energy, spot size
-    and range shifter settings are carried forward from the last control point stating them.
+    and range shifter settings are carried forward from the last control point stating them,
+    so each spot has the spot size of its own layer.
     """
     spot_size = None
     energy = None
@@ -557,14 +560,15 @@ def _collect_spots(cps, name: str):
         if xy.shape[0] != weights.size:
             raise ValueError(f"Beam '{name}': spot map and weights differ in length.")
         rs_key = _range_shifter_key(shifter_state, name)
+        size = None if spot_size is None else tuple(spot_size.tolist())
         spots.extend(
-            (float(x), float(y), energy, float(w), rs_key)
+            (float(x), float(y), energy, float(w), rs_key, size)
             for (x, y), w in zip(xy, weights)
             if w > 0
         )
     if not spots:
         raise ValueError(f"Beam '{name}': no spots with positive weight.")
-    return spots, spot_size
+    return spots
 
 
 def _import_beam(
@@ -604,16 +608,21 @@ def _import_beam(
     if not np.allclose(r_py @ np.array([0.0, 1.0, 0.0]), -source_dir, atol=1e-8):
         raise RuntimeError("Could not express the beam direction by pyRadPlan angles.")
 
-    spots, spot_size = _collect_spots(cps, name)
+    spots = _collect_spots(cps, name)
     energy_map = _map_energies(
         np.array([s[2] for s in spots]), machine, mass_number, energy_tolerance
     )
 
-    # merge spots: a ray is a lateral position, a beamlet an (energy, range shifter) on it
+    # merge spots: a ray is a lateral position, a beamlet an (energy, range shifter, focus)
     rays: dict[tuple[float, float], dict] = {}
-    for x, y, e_dicom, weight, rs_key in spots:
+    foci: dict[tuple, int] = {}
+    for x, y, e_dicom, weight, rs_key, size in spots:
         ray = rays.setdefault((round(x, 3), round(y, 3)), {"xy": (x, y), "beamlets": {}})
-        key = (energy_map[e_dicom], rs_key)
+        energy = energy_map[e_dicom]
+        if (energy, size) not in foci:
+            spot_size = None if size is None else np.asarray(size)
+            foci[(energy, size)] = _focus_index(machine, energy, spot_size)
+        key = (energy, rs_key, foci[(energy, size)])
         ray["beamlets"][key] = ray["beamlets"].get(key, 0.0) + weight
 
     source_bev = np.array([0.0, -sad, 0.0])
@@ -625,7 +634,7 @@ def _import_beam(
         pos_bev[1] = 0.0
         pos_world = r_py @ pos_bev
         beamlets = []
-        for (energy, (thickness, distance, number)), weight in ray["beamlets"].items():
+        for (energy, (thickness, distance, number), focus_ix), weight in ray["beamlets"].items():
             meterset_value = beam_meterset * weight / final_cmw
             if unit == "NP":
                 ppm = _PARTICLES_PER_WEIGHT
@@ -643,7 +652,7 @@ def _import_beam(
                     energy=energy,
                     num_particles_per_mu=ppm,
                     range_shifter=shifter,
-                    focus_ix=_focus_index(machine, energy, spot_size),
+                    focus_ix=focus_ix,
                 )
             )
             beam_weights.append(value)
@@ -676,8 +685,8 @@ def _lateral_spacing(positions: np.ndarray, default: float = 5.0) -> float:
     """Median nearest-neighbour distance of the spot positions (mm), ``default`` if unknown."""
     if len(positions) < 2:
         return default
-    d = np.linalg.norm(positions[:, None, :] - positions[None, :, :], axis=-1)
-    np.fill_diagonal(d, np.inf)
-    nearest = d.min(axis=1)
+    # a k-d tree instead of all pairwise distances, which need memory quadratic in the spots
+    distances, _ = cKDTree(positions).query(positions, k=2)
+    nearest = distances[:, 1]
     nearest = nearest[nearest > 1e-6]
     return float(np.median(nearest)) if nearest.size else default

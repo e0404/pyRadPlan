@@ -241,7 +241,7 @@ def test_np_weights_and_structure(generic_proton):
     out = _import(ds)
     stf, pln, w = out["stf"], out["pln"], out["weights"]
 
-    assert out["result"]["w"] is w
+    assert out["result"].fluence is w
     assert stf.num_of_beams == 1
     beam = stf.beams[0]
     # two lateral positions; the one at (0, 0) carries both energy layers
@@ -389,6 +389,38 @@ def test_focus_follows_spot_size(generic_proton):
     ds = make_plan([{"layers": [(e0, [(0.0, 0.0, 1.0)])], "spot_size": [fwhm, fwhm]}])
     beamlet = _import(ds)["stf"].beams[0].rays[0].beamlets[0]
     assert beamlet.focus_ix == 0
+
+
+def _two_focus_machine(machine):
+    """Copy of *machine* with a second, wider focus at every energy."""
+    machine = machine.model_copy(deep=True)
+    for energy, foci in machine.foci.items():
+        wide = foci[0].model_copy(update={"fwhm_iso": 2.0 * foci[0].fwhm_iso})
+        machine.foci[energy] = [foci[0], wide]
+    return machine
+
+
+def test_focus_follows_the_spot_size_of_each_layer(generic_proton):
+    machine = _two_focus_machine(generic_proton)
+    e0, e1 = _energy(machine, 30), _energy(machine, 40)
+    narrow, wide = machine.foci[e0][0].fwhm_iso, machine.foci[e1][1].fwhm_iso
+    ds = make_plan([{"layers": [(e0, [(0.0, 0.0, 1.0)]), (e1, [(0.0, 0.0, 1.0)])]}])
+    layers = ds.IonBeamSequence[0].IonControlPointSequence
+    for cp in layers:
+        size = narrow if np.isclose(float(cp.NominalBeamEnergy), e0, atol=1e-4) else wide
+        cp.ScanningSpotSize = [size, size]
+    beamlets = _import(ds, machine=machine)["stf"].beams[0].rays[0].beamlets
+    focus = {round(b.energy, 3): b.focus_ix for b in beamlets}
+    assert focus == {round(e0, 3): 0, round(e1, 3): 1}
+
+
+def test_lateral_spacing_of_many_spots_needs_no_pairwise_matrix():
+    from pyRadPlan.io.dicom._import_plan import _lateral_spacing
+
+    grid = np.stack(np.meshgrid(np.arange(150) * 4.0, np.arange(100) * 4.0), -1).reshape(-1, 2)
+    assert _lateral_spacing(grid) == pytest.approx(4.0)
+    assert _lateral_spacing(grid[:1]) == 5.0
+    assert _lateral_spacing(np.array([[0.0, 0.0], [3.0, 4.0]])) == pytest.approx(5.0)
 
 
 def test_range_shifter_in_and_out(generic_proton):
@@ -653,7 +685,7 @@ def test_load_plan_and_load_data(plan_dir):
 
     data = load_data(plan_dir)
     assert {"ct", "cst", "stf", "pln", "result"} <= set(data)
-    np.testing.assert_allclose(data["result"]["w"], plan["weights"])
+    np.testing.assert_allclose(data["result"].fluence, plan["weights"])
 
 
 def test_load_data_without_plan_is_unchanged(dicom_dir):

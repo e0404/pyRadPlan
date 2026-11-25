@@ -516,6 +516,22 @@ def test_no_weights_no_plan(tmp_path, proton_mat):
     assert not (out / "RTPLAN.dcm").exists()
 
 
+def test_plan_alone_is_exported(tmp_path, proton_mat):
+    pln, _ct, _cst, stf, w = proton_mat
+    target = tmp_path / "plan"
+    save_data(file_name=target, format="dcm", pln=pln, stf=stf, weights=w)
+    assert sorted(p.name for p in target.iterdir()) == ["RTPLAN.dcm"]
+    plan = pydicom.dcmread(target / "RTPLAN.dcm")
+    assert plan.FrameOfReferenceUID
+
+
+def test_steering_information_without_weights_is_nothing_to_export(tmp_path, proton_mat):
+    pln, _ct, _cst, stf, _ = proton_mat
+    with pytest.raises(ValueError, match="Nothing to export.*spot weights"):
+        _export(tmp_path, stf=stf, pln=pln)
+    assert not (tmp_path / "out").exists()
+
+
 def test_plan_without_pln_warns_and_uses_one_fraction(tmp_path, proton_mat):
     _, ct, cst, stf, w = proton_mat
     with pytest.warns(UserWarning, match="one planned fraction"):

@@ -53,7 +53,7 @@ def test_ion_plan_round_trip(tg119, tmp_path, gantry, couch):
 
     assert plan["pln"].num_of_fractions == 5
     original = _spots(stf, weights)
-    imported = _spots(plan["stf"], plan["result"]["w"])
+    imported = _spots(plan["stf"], plan["result"].fluence)
     assert len(imported) == len(original)
     np.testing.assert_allclose(np.array(imported), np.array(original), rtol=1e-6, atol=1e-3)
 
@@ -80,4 +80,4 @@ def test_weights_round_trip_with_other_particles_per_mu(tg119, tmp_path):
     )
     plan = DicomImporter(tmp_path / "plan").load_plan(ct=ct)
 
-    np.testing.assert_allclose(sorted(plan["result"]["w"]), sorted(weights), rtol=1e-5)
+    np.testing.assert_allclose(sorted(plan["result"].fluence), sorted(weights), rtol=1e-5)

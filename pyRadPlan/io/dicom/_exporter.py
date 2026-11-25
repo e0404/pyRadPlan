@@ -149,8 +149,11 @@ class DicomExporter(BaseExporter):
         weights: Optional[Any] = None,
         **extra,
     ) -> None:
-        if ct is None and cst is None and dose is None and result is None:
-            raise ValueError("Nothing to export: provide at least one of ct, cst, dose, result.")
+        plan = self.export_plan and stf is not None
+        if ct is None and cst is None and dose is None and result is None and not plan:
+            raise ValueError(
+                "Nothing to export: provide at least one of ct, cst, dose, result, stf."
+            )
         if result is not None:
             result = validate_result(result)
 
@@ -172,7 +175,12 @@ class DicomExporter(BaseExporter):
                 f"Directory {str(directory)!r} already contains {len(existing)} DICOM file(s); "
                 "pass overwrite=True to replace them."
             )
-        self._validate_plan(stf, pln, weights, result, ctx)
+        writes_plan = self._validate_plan(stf, pln, weights, result, ctx)
+        if ct is None and cst is None and dose is None and result is None and not writes_plan:
+            raise ValueError(
+                "Nothing to export: the steering information gives no RT plan "
+                "(an ion plan needs spot weights)."
+            )
         os.makedirs(directory, exist_ok=True)
         for path in existing:
             os.remove(path)
@@ -242,15 +250,20 @@ class DicomExporter(BaseExporter):
             if not written and ct is None and cst is None and dose is None:
                 raise ValueError("The result holds no dose quantity to export.")
 
-    def _validate_plan(self, stf, pln, weights, result, ctx) -> None:
-        """Run the plan export into a scratch directory so that errors surface before any write."""
+    def _validate_plan(self, stf, pln, weights, result, ctx) -> bool:
+        """Run the plan export into a scratch directory so that errors surface before any write.
+
+        Returns whether the export writes an RT plan.
+        """
         if not (self.export_plan and stf is not None):
-            return
+            return False
         preset = self._plan_ref
+        self._plan_ref = None
         try:
             with tempfile.TemporaryDirectory() as scratch, warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 self._export_plan(stf, pln, weights, result, scratch, ctx, None)
+            return self._plan_ref is not None
         finally:
             self._plan_ref = preset
 
