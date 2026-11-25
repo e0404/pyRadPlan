@@ -572,9 +572,20 @@ class DVHCollection(PyRadPlanBaseModel):
             )
 
         if layout == "long" or not shared:
+            unit = self.dvhs[0].unit
             rows = [["structure", *self.dvhs[0].to_rows(kind, absolute_volume)[0]]]
-            for dvh in self.dvhs:
-                rows.extend([dvh.name, *row] for row in dvh.to_rows(kind, absolute_volume)[1:])
+            for dvh, (x, y) in zip(self.dvhs, curves):
+                try:
+                    scale = ureg.Quantity(1.0, dvh.unit).to(unit).magnitude
+                except pint.DimensionalityError as err:
+                    raise ValueError(
+                        f"DVH '{dvh.name}' is in {dvh.unit:~}, incompatible units with the "
+                        f"{unit:~} of the first DVH; export the collections separately."
+                    ) from err
+                columns = [x * scale, y]
+                if absolute_volume:
+                    columns.append(y / 100.0 * dvh.total_volume)
+                rows.extend([dvh.name, *(_number(v) for v in values)] for values in zip(*columns))
             return rows
 
         header = [f"dose [{_unit_symbol(self.dvhs[0].unit)}]"]
