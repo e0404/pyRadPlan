@@ -1795,11 +1795,14 @@ class PlanningState:
 
         dose = sitk_array(self.dose)
         cst = self.cst.apply_overlap_priorities() if apply_overlap else self.cst
+        # As the solver sees them: one fraction for total-course references
+        n = self.pln.num_of_fractions if self.pln.dose_convention == "total" else 1
         rows = []
         for v in cst.vois:
-            values = dose[geo.as_bool(v.mask)]
+            values = dose[geo.as_bool(v.mask)] / n
             for o in v.objectives:
-                f = float(o.priority * o.compute_objective(values)) if values.size else 0.0
+                solved = o.model_copy().normalize_to_fraction_num(n) if n > 1 else o
+                f = float(o.priority * solved.compute_objective(values)) if values.size else 0.0
                 rows.append({"voi": v.name, "objective": type(o).__name__, "value": f})
         total = sum(r["value"] for r in rows) or 1.0
         for r in rows:

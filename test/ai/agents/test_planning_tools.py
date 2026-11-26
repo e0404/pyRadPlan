@@ -488,6 +488,22 @@ def test_optimize_reports_normal_tissue_and_optimizer(dosed):
     assert "NormalTissue" in dosed.analyze_qis(["NormalTissue"])
 
 
+def test_contributions_do_not_depend_on_the_dose_convention():
+    contributions = []
+    for convention, n in (("per_fraction", 30), ("total", 1)):
+        ct, cst = load_tg119()
+        pln = PhotonPlan(num_of_fractions=30, dose_convention=convention)
+        s = PlanningState(ct=ct, cst=cst, pln=pln, protocol=TG_PROTOCOL)
+        s.set_beams([0, 120, 240], None)
+        for voi in s.cst.vois:
+            s.set_objectives(voi.name, [])
+        s.set_objectives("OuterTarget", [SquaredDeviation(priority=100, d_ref=60.0 / n)])
+        s.set_objectives("Core", [MeanOverdosing(priority=10, d_max=20.0 / n)])
+        s.optimize(max_iter=30)
+        contributions.append([c["value"] for c in s.optimizer_report()["contributions"]])
+    assert contributions[1] == pytest.approx(contributions[0], rel=1e-3)
+
+
 def test_restore_brings_back_dose_and_helpers(dosed):
     dosed.set_objectives("Core", [MeanOverdosing(priority=10, d_max=0.5)])
     dosed.optimize(max_iter=30)
