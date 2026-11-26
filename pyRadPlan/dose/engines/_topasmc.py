@@ -47,6 +47,17 @@ ignore_outside_patient : bool
 external_calculation : bool | str
     Flag or mode indicating whether external TOPAS execution is used.
 
+em_range_min : float or None
+    Lower energy limit of the EM tables in eV (``Ph/<list>/EMRangeMin``). ``None`` keeps
+    the TOPAS default.
+em_range_max : float or None
+    Upper energy limit of the EM tables in MeV (``Ph/<list>/EMRangeMax``). TOPAS 4.0
+    builds its tables only up to 500 MeV by default. Alpha tables are in total kinetic energy, so
+    helium above 125 MeV/u would get ranges that are too short. ``None`` keeps the TOPAS
+    default.
+em_bins_per_decade : int or None
+    Number of EM table bins per energy decade (``Ph/<list>/EMBinsPerDecade``).
+    ``None`` keeps the TOPAS default.
 physics_modules : list[str]
     Geant4 physics modules used in the simulation. Defaults to a preset for ion therapy
     (``g4em-standard_opt4``, ``g4h-phy_QGSP_BIC_HP``, ``g4ion-QMD``, ...).
@@ -84,7 +95,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 import sys
-from typing import Any, ClassVar, Literal, Union
+from typing import Any, ClassVar, Literal, Optional, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
@@ -153,6 +164,9 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     ignore_outside_patient: bool
 
     physics_modules: list[str]
+    em_range_min: Optional[float]
+    em_range_max: Optional[float]
+    em_bins_per_decade: Optional[int]
     base_topas_folder = resources.files("pyRadPlan.data.topas")
     input_filenames = {
         "beam_biGaussian": base_topas_folder
@@ -229,6 +243,11 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             "g4radioactivedecay",
         ]
 
+        # EM table range, see the class docstring
+        self.em_range_min = 100.0  # eV
+        self.em_range_max = 9500.0  # MeV
+        self.em_bins_per_decade = 20  # as in g4em-standard_opt4
+
         self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
@@ -294,6 +313,11 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             "trans_y": np.round(beams_topas[beam_ix]["iso_center"][1], 6),
             "trans_z": np.round(beams_topas[beam_ix]["iso_center"][2], 6),
             "input_beam_definition": "".join(input_beam_definition),
+            "em_range_min": self.em_range_min,
+            "em_range_max": self.em_range_max,
+            "em_bins_per_decade": (
+                None if self.em_bins_per_decade is None else int(round(self.em_bins_per_decade))
+            ),
             "physics_modules": self.physics_modules,
         }
 
