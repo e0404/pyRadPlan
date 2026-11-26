@@ -4,12 +4,21 @@
 # This example demonstrates how to optimize a photon plan with a CNN-predicted xerostomia NTCP
 # for both parotids.
 
+# **Scope and limitations.** Outcome objectives are a research feature and are **not validated
+# for clinical use**. A model is only valid for the anatomy, radiation mode and dose range it
+# was trained on.
+
+# It needs two things pyRadPlan does not ship: the head-and-neck phantom of matRad
+# (`HEAD_AND_NECK.mat`) and a xerostomia CNN, set as `HN_PHANTOM` and `XERO_MODEL` below.
+# `ntcp_optimization_tg119.py` shows the same workflow with a model from the HuggingFace Hub.
+
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
-# jupytext --to notebook path/to/this/file/xero_cnn.py
+# jupytext --to notebook path/to/this/file/ntcp_optimization_xero_cnn.py
+# ```
 
 # %%
 # Import necessary libraries
@@ -36,7 +45,9 @@ from pyRadPlan.optimization.objectives import (
 
 # HEAD_AND_NECK.mat ships with matRad (matRad/phantoms), not with pyRadPlan.
 HN_PHANTOM = r"path/to/matRad/phantoms/HEAD_AND_NECK.mat"
-# Local model directory (or a HuggingFace model name) of the xerostomia CNN.
+# Local model directory of the xerostomia CNN. A model folder you placed yourself runs as-is;
+# for a model id on the HuggingFace Hub (`<org>/<model>`), call
+# `pyRadPlan.ai.modelhub.trust_model(XERO_MODEL)` first (see `ntcp_optimization_tg119.py`).
 XERO_MODEL = r"path/to/pyRadPlan-outcome-ORPDenseNet-Xerostomia-LKB-ring10mm"
 
 settings.xp.prefer_gpu = True
@@ -72,8 +83,10 @@ stf = generate_stf(ct, cst, pln)
 
 # %%
 # Configure the CNN-based xerostomia NTCP objective.
-# `model` accepts a HuggingFace name, a local model directory, or a preloaded
+# `model` accepts a model id on the HuggingFace Hub, a local model directory, or a preloaded
 # (model, preprocessor) tuple.
+# The optimizer works on the dose of one fraction. With the per-fraction dose convention used
+# here, pass `num_of_fractions` if your model was trained on total-course dose.
 ntcp_obj = OutcomeModel(
     priority=50000.0,
     model=XERO_MODEL,
@@ -100,7 +113,7 @@ cst.vois = cst.vois + [
         name="NTCP_CNN",
         ct_image=ct,
         mask=cnn_mask,
-        apply_overlap=None,
+        overlap_handling="ignore",
         objectives=[ntcp_obj],
     )
 ]

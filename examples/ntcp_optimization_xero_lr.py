@@ -2,10 +2,18 @@
 """# Xerostomia NTCP optimization with a scikit-learn outcome model."""
 # %% [markdown]
 # This example steers a photon plan with a logistic-regression NTCP model trained in
-# pyanno4rt. Unlike the CNN in `ntcp_optimization_xero.py`, the model does not see dose
+# pyanno4rt. Unlike the CNN in `ntcp_optimization_xero_cnn.py`, the model does not see dose
 # volumes: it consumes eight scalar features -- the mean dose in each parotid plus six
 # dose-independent geometry descriptors. Only the coefficients of the regression are
 # read from the model, so value and gradient are analytic.
+
+# **Scope and limitations.** Outcome objectives are a research feature and are **not validated
+# for clinical use**. A model is only valid for the anatomy, radiation mode and dose range it
+# was trained on.
+
+# It needs the head-and-neck phantom of matRad (`HEAD_AND_NECK.mat`), a model trained with
+# pyanno4rt (`HN_PHANTOM` and `PYANNO4RT_MODEL` below) and `scikit-learn`, which is not
+# installed with pyRadPlan.
 
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
@@ -13,6 +21,7 @@
 # ```bash
 # pip install jupytext
 # jupytext --to notebook path/to/this/file/ntcp_optimization_xero_lr.py
+# ```
 
 # %%
 # Import necessary libraries
@@ -78,11 +87,14 @@ stf = generate_stf(ct, cst, pln)
 
 # %% [markdown]
 # Configure the NTCP objective. `model` points at the pyanno4rt snapshot folder: its
-# `input.json` holds the feature definitions, `lrNTCP/` the pickled regression. Segment
+# `input.json` holds the feature definitions, the folder named like the model's label
+# (here `lrNTCP/`) the pickled regression (`model.sav` or `predictor.*`). Segment
 # names are matched to the VOIs case-insensitively (use `segment_map` if they differ).
 #
-# The model was trained on total-course dose, so the objective multiplies the
-# per-fraction dose of the optimizer by `num_of_fractions`.
+# The model was trained on total-course dose, while the optimizer works on the dose of one
+# fraction. Because the plan uses the total-dose convention, the objective takes the number
+# of fractions from the plan and hands the model the dose of the whole course. With the
+# per-fraction convention, pass `num_of_fractions` to the objective instead.
 #
 # `priority` is *not* directly comparable to pyanno4rt's `weight`: pyanno4rt leaves the
 # fraction factor out of the gradient, this objective includes it.
@@ -90,7 +102,6 @@ stf = generate_stf(ct, cst, pln)
 ntcp_obj = OutcomeLR(
     priority=100.0,
     model=PYANNO4RT_MODEL,
-    num_of_fractions=pln.num_of_fractions,
 )
 print("Model features:", ntcp_obj.feature_names)
 
@@ -112,7 +123,7 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 # optimizer hands the objective only the voxels inside it and everything outside is
 # zero-filled; on a single gland the other one's mean dose would silently come out as 0.
 #
-# `apply_overlap=None` keeps the union out of the overlap-priority pass, which would
+# `overlap_handling="ignore"` keeps the union out of the overlap-priority pass, which would
 # otherwise carve the overlapping PTVs out of the glands and shrink the feature support.
 # %%
 cst.vois.append(
@@ -121,7 +132,7 @@ cst.vois.append(
         ct_image=cst.ct_image,
         mask=sitk.Or(cst.vois[0].mask, cst.vois[1].mask),
         objectives=[ntcp_obj],
-        apply_overlap=None,
+        overlap_handling="ignore",
     )
 )
 

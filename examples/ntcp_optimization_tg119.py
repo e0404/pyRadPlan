@@ -3,17 +3,36 @@
 # %% [markdown]
 # This example demonstrates how to optimize a proton plan with a CNN-predicted NTCP for the Core.
 
+# **Scope and limitations.** Outcome objectives are a research feature and are **not validated
+# for clinical use**. A model is only valid for the anatomy, radiation mode and dose range it
+# was trained on.
+
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
 # jupytext --to notebook path/to/this/file/ntcp_optimization_tg119.py
+# ```
+
+# %% [markdown]
+# ## Prerequisites
+#
+# 1. A `torch` build matching your platform/CUDA (the Hub client itself ships with pyRadPlan).
+# 2. The model repository below, either downloaded already or reachable on the HuggingFace Hub.
+#    Models are addressed as `<org>/<model>`; `pyRadPlan.ai.modelhub.list_local_models()` shows
+#    what is on disk.
+# 3. Loading a model runs Python shipped inside the repository. A model folder you placed
+#    yourself runs as-is; a downloaded one only once you trust it, with
+#    `pyRadPlan.ai.modelhub.trust_model("<org>/<model>")` (done below) or for every download
+#    with `settings.ai.modelhub_trust_remote_code = True`
+#    (`PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`).
 
 # %%
 # Import necessary libraries
 import logging
 
+import matplotlib.pyplot as plt
 import SimpleITK as sitk
 
 from pyRadPlan import (
@@ -25,6 +44,7 @@ from pyRadPlan import (
     load_tg119,
     settings,
 )
+from pyRadPlan.ai.modelhub import trust_model
 from pyRadPlan.cst import HelperVOI
 from pyRadPlan.optimization.objectives import (
     SquaredDeviation,
@@ -36,6 +56,9 @@ settings.xp.prefer_gpu = True
 settings.xp.preferred_cpu_array_backend = "numpy"
 settings.xp.preferred_gpu_array_backend = "cupy"
 logging.basicConfig(level=logging.INFO)
+
+# The outcome model on the HuggingFace Hub, as `<org>/<model>`
+NTCP_MODEL = "DKFZ-RadOpt/pyRadPlan-outcome-ORPDenseNet-tg119"
 
 
 # %%
@@ -61,11 +84,28 @@ pln.prop_stf = {
 }
 stf = generate_stf(ct, cst, pln)
 
+# %% [markdown]
+# The objective runs the code shipped with the model. `trust_model` downloads the model without
+# running anything and records a hash of its code; inspect that code before you trust it. If the
+# code changes upstream later, loading the model is refused until you trust it again.
 # %%
-# Configure the CNN-based NTCP objective for the Core.
+model_dir, _ = trust_model(NTCP_MODEL)
+print(f"Trusted the model code in {model_dir}")
+
+# %% [markdown]
+# Configure the CNN-based NTCP objective for the Core. `model` accepts a model id on the
+# HuggingFace Hub, a local model directory, or a preloaded `(model, preprocessor)` tuple.
+#
+# The optimizer works on the dose of one fraction, and the plan below uses the per-fraction
+# dose convention, so the model sees the dose as optimized. For a model trained on
+# total-course dose, pass `num_of_fractions` to the objective.
+#
+# During `warmup_iterations` the objective does not steer the plan (value 0 and a zero
+# gradient), while the predicted NTCP is still recorded.
+# %%
 ntcp_obj = OutcomeModel(
     priority=10000.0,
-    model="pyRadPlan-outcome-ORPDenseNet-tg119",  # HF name, local dir, or (model, preprocessor)
+    model=NTCP_MODEL,
     warmup_iterations=5,
     cst_masks=["Core"],  # channel order matters unless the model collapses masks
 )
@@ -87,7 +127,7 @@ cst.vois = cst.vois + [
         name="NTCP_CNN",
         ct_image=ct,
         mask=cnn_mask,
-        apply_overlap=None,
+        overlap_handling="ignore",
         objectives=[ntcp_obj],
     )
 ]
@@ -120,8 +160,6 @@ plot_slice(
 # %% [markdown]
 # NTCP history: CNN-guided (active gradients) vs native (monitor-only) optimization.
 # %%
-import matplotlib.pyplot as plt
-
 fig, ax = plt.subplots()
 ax.plot(range(1, len(ntcp_history_active) + 1), ntcp_history_active, label="CNN-guided")
 ax.plot(range(1, len(ntcp_history_native) + 1), ntcp_history_native, label="native (monitor)")
