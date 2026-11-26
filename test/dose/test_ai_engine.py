@@ -600,6 +600,20 @@ def test_model_config_is_checked_before_model_code_runs(
     assert not sentinel.exists()
 
 
+def test_preprocessor_without_predict_is_refused(test_data_protons, model_variant):
+    """A preprocessor following only BasePreprocessor misses the dose-calc predict()."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    model, _sentinel = model_variant(lambda metadata: None)
+    preprocessor_py = get_settings().ai.modelhub_local_models_dir / model / "preprocessor.py"
+    code = preprocessor_py.read_text(encoding="utf-8")
+    preprocessor_py.write_text(code.replace("def predict(", "def run("), encoding="utf-8")
+
+    pln.prop_dose_calc["engine"] = "AIBeamlet"
+    pln.prop_dose_calc["model"] = model
+    with pytest.raises(TypeError, match=r"defines no predict\(model, model_input\)"):
+        AIBeamletEngine(pln).calc_dose_influence(ct, cst, stf)
+
+
 def _engine_ready(test_data_protons):
     pln, ct, cst, stf, dij, _result = test_data_protons
     engine = AIBeamletEngine(_ai_pln(pln, dij))

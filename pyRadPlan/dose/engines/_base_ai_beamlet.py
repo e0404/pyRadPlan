@@ -884,6 +884,14 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             offline=True,
             device=device_string(self.device),
         )
+        if not callable(getattr(self.preprocessor, "predict", None)):
+            raise TypeError(
+                f"The preprocessor of model '{self.model}' "
+                f"({type(self.preprocessor).__name__}) defines no predict(model, "
+                "model_input) method. A dose-calculation preprocessor must define one that "
+                "runs the model on the preprocessed input and returns {quantity: array}, "
+                "one (batch, depth, lateral, lateral) array per declared quantity."
+            )
 
         if self.ensemble_size is not None:
             self.preprocessor.config["ensemble_size"] = self.ensemble_size
