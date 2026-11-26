@@ -6,14 +6,17 @@
 
 from __future__ import annotations
 
+import copy
 import subprocess
 import sys
 from unittest.mock import patch
 
 import array_api_compat
+import array_api_strict
 import numpy as np
 import pytest
 
+from pyRadPlan.core import xp_utils
 from pyRadPlan.optimization.objectives import OutcomeObjective
 
 try:
@@ -119,6 +122,112 @@ def test_base_class_works_without_torch_models():
     assert float(obj.compute_objective(dose)) == pytest.approx(1.0 / (1.0 + np.exp(0.0)))
     assert obj.compute_gradient(dose).shape == index.shape
     assert obj.report_info() == {"history": obj.history}
+
+
+class QuadraticOutcome(OutcomeObjective):
+    """Backend-agnostic outcome model: ``1e-4 * sum(dose ** 2)``."""
+
+    name: str = "Quadratic Outcome"
+
+    def _predict(self, dose):
+        xp = array_api_compat.array_namespace(dose)
+        return 1e-4 * float(xp.sum(dose**2))
+
+    def _predict_with_gradient(self, dose):
+        return self._predict(dose), 2e-4 * dose
+
+
+def _namespaces():
+    namespaces = [np, array_api_strict]
+    if _HAS_TORCH:
+        import array_api_compat.torch as torch_xp
+
+        namespaces.append(torch_xp)
+    try:
+        import jax.numpy as jnp
+    except ImportError:
+        pass
+    else:
+        namespaces.append(jnp)
+    return namespaces
+
+
+@pytest.fixture(params=_namespaces(), ids=lambda xp: xp.__name__)
+def xp(request):
+    return request.param
+
+
+def test_partial_voi_value_and_gradient(xp):
+    obj = QuadraticOutcome(priority=1.0)
+    index = np.arange(1, N_VOXELS, 3)
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=index)
+    values = np.linspace(1.0, 2.0, index.size, dtype=np.float32)
+    dose = xp.asarray(values)
+
+    value = obj.compute_objective(dose)
+    grad = obj.compute_gradient(dose)
+
+    assert array_api_compat.array_namespace(grad) is array_api_compat.array_namespace(dose)
+    assert grad.dtype == dose.dtype
+    assert array_api_compat.device(grad) == array_api_compat.device(dose)
+    assert float(value) == pytest.approx(1e-4 * float(np.sum(values**2)), rel=1e-5)
+    np.testing.assert_allclose(np.asarray(grad), 2e-4 * values, rtol=1e-5)
+
+
+def test_partial_voi_with_fractions(xp):
+    obj = QuadraticOutcome(priority=1.0, num_of_fractions=3)
+    index = np.arange(0, N_VOXELS, 2)
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=index)
+    values = np.linspace(1.0, 2.0, index.size, dtype=np.float32)
+    dose = xp.asarray(values)
+
+    assert float(obj.compute_objective(dose)) == pytest.approx(
+        9e-4 * float(np.sum(values**2)), rel=1e-5
+    )
+    np.testing.assert_allclose(np.asarray(obj.compute_gradient(dose)), 18e-4 * values, rtol=1e-5)
+
+
+def test_device_index_is_cached_until_the_dose_grid_is_set_again(xp):
+    obj = QuadraticOutcome(priority=1.0)
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=np.arange(0, N_VOXELS, 2))
+    dose = xp.asarray(np.ones(N_VOXELS // 2, dtype=np.float32))
+
+    obj.compute_gradient(dose)
+    (cached,) = obj._dose_index_cache.values()
+    obj.compute_gradient(dose)
+    assert next(iter(obj._dose_index_cache.values())) is cached
+
+    obj.preprocess_image_reference_parameters(FakeGrid(), index_list=np.arange(0, N_VOXELS, 4))
+    assert obj._dose_index_cache == {}
+    smaller = xp.asarray(np.ones(N_VOXELS // 4, dtype=np.float32))
+    assert obj.compute_gradient(smaller).shape == (N_VOXELS // 4,)
+
+
+def test_warmup_value_and_gradient_are_consistent():
+    obj = QuadraticOutcome(priority=1.0, warmup_iterations=2)
+    obj.preprocess_image_reference_parameters(FakeGrid())
+    dose = np.ones(N_VOXELS)
+
+    for _ in range(2):
+        assert float(obj.compute_objective(dose)) == 0.0
+        assert float(obj.compute_objective(dose)) == 0.0  # line-search evaluation
+        assert np.all(obj.compute_gradient(dose) == 0.0)
+
+    assert float(obj.compute_objective(dose)) == pytest.approx(1e-4 * N_VOXELS)
+    assert np.all(obj.compute_gradient(dose) != 0.0)
+    assert obj.history == [pytest.approx(1e-4 * N_VOXELS)] * 5
+
+
+def test_total_dose_convention_sets_the_fraction_number():
+    user = QuadraticOutcome(priority=1.0)
+    planned = user.model_copy()
+    assert planned.normalize_to_fraction_num(30) is planned
+    assert planned.num_of_fractions == 30
+    assert user.num_of_fractions is None
+
+    explicit = QuadraticOutcome(priority=1.0, num_of_fractions=5)
+    explicit.normalize_to_fraction_num(30)
+    assert explicit.num_of_fractions == 5
 
 
 def test_import_objectives_does_not_load_torch():
@@ -305,6 +414,32 @@ def test_planning_problem_passes_planning_data(test_data_protons_raw):
     assert seen == [(ct, cst)]
 
 
+def test_planning_problem_passes_the_fraction_number_of_a_total_dose_plan(test_data_protons_raw):
+    from pyRadPlan.ct import validate_ct
+    from pyRadPlan.cst import validate_cst
+    from pyRadPlan.dij import validate_dij
+    from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
+    from pyRadPlan.plan import validate_pln
+    from pyRadPlan.stf import validate_stf
+
+    tmp = test_data_protons_raw
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    for voi in cst.vois:
+        voi.objectives = []
+    cst.vois[0].objectives = [QuadraticOutcome(priority=1.0)]
+
+    prob = NonLinearFluencePlanningProblem(validate_pln(tmp["pln"]))
+    prob._ct, prob._cst = ct, cst
+    prob._dij, prob._stf = validate_dij(tmp["dij"]), validate_stf(tmp["stf"])
+    prob._dose_convention, prob._num_of_fractions = "total", 30
+    prob._initialize()
+
+    ((_, (planned,)),) = prob._objective_list
+    assert planned.num_of_fractions == 30
+    assert cst.vois[0].objectives[0].num_of_fractions is None
+
+
 @requires_torch
 def test_unloadable_model_is_a_validation_error(tmp_path):
     from pydantic import ValidationError
@@ -313,3 +448,56 @@ def test_unloadable_model_is_a_validation_error(tmp_path):
 
     with pytest.raises(ValidationError, match="Cannot load outcome model"):
         OutcomeModel(priority=1.0, model=str(tmp_path / "missing"))
+
+
+@requires_torch
+def test_missing_or_mistyped_model_is_a_validation_error():
+    from pydantic import ValidationError
+
+    from pyRadPlan.optimization.objectives import OutcomeModel
+
+    with pytest.raises(ValidationError, match="Field required"):
+        OutcomeModel(priority=1.0)
+    with pytest.raises(ValidationError, match="must be a model name"):
+        OutcomeModel(priority=1.0, model=5)
+
+
+@requires_torch
+def test_validation_leaves_the_input_dict_untouched():
+    from pyRadPlan.optimization.objectives import OutcomeModel
+
+    preloaded = (DummyNet(), DummyPreprocessor())
+    data = {"priority": 1.0, "model": preloaded}
+
+    obj = OutcomeModel.model_validate(data)
+
+    assert obj.model == "<preloaded>"
+    assert data == {"priority": 1.0, "model": preloaded}
+
+
+@requires_torch
+def test_gradient_follows_dtype_and_device_of_the_dose():
+    obj = _make_obj()
+    dose = _dose().astype(np.float64)
+
+    with patch(f"{_MODULE}.xp_utils.to_namespace", wraps=xp_utils.to_namespace) as convert:
+        grad = obj.compute_gradient(dose)
+
+    assert convert.call_args.kwargs["device"] == xp_utils.get_device_info(dose)
+    assert grad.dtype == np.float64
+
+    tensor = torch.as_tensor(dose)
+    grad = obj.compute_gradient(tensor)
+    assert grad.dtype == tensor.dtype
+    assert grad.device == tensor.device
+
+
+@requires_torch
+def test_deepcopy_shares_the_model_but_not_the_data():
+    obj = _make_obj(cst_masks=["Core"])
+    clone = copy.deepcopy(obj)
+
+    assert clone.nn_model is obj.nn_model
+    assert clone.preprocessor is obj.preprocessor
+    assert clone.cst_masks == ["Core"]
+    assert clone.cst_masks is not obj.cst_masks

@@ -22,7 +22,7 @@ class OutcomeSklearn(FeatureOutcomeObjective):
     def _check_estimator(cls, estimator: Any, data: dict) -> None:
         classes = getattr(estimator, "classes_", None)
         if not hasattr(estimator, "predict_proba") or classes is None or len(classes) != 2:
-            raise TypeError(
+            raise ValueError(
                 "OutcomeSklearn needs a binary classifier with predict_proba, got "
                 f"{type(estimator).__name__}."
             )

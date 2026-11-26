@@ -58,6 +58,10 @@ class OutcomeModel(OutcomeObjective):
             return data
 
         spec = data.get("model")
+        if spec is None:
+            return data
+
+        data = dict(data)
         try:
             nn_model, preprocessor = cls._resolve_model(spec, data.get("device"))
         except (OSError, ValueError) as exc:  # pydantic reports a ValueError as invalid input
@@ -80,13 +84,12 @@ class OutcomeModel(OutcomeObjective):
             return nn_model, preprocessor
         if isinstance(spec, str):
             if device is None:
-                device = str(
-                    xp_utils.choose_device(array_api_compat.array_namespace(torch.empty(0)))
-                )
+                torch_xp = array_api_compat.array_namespace(torch.empty(0))
+                device = xp_utils.device_string(xp_utils.choose_device(torch_xp))
             if Path(spec).is_dir():
                 return load_model(local_dir=spec, device=device)
             return load_model(name=spec, device=device)
-        raise TypeError(
+        raise ValueError(
             "OutcomeModel 'model' must be a model name, a local directory path, "
             "or a preloaded (model, preprocessor) tuple."
         )
@@ -112,9 +115,9 @@ class OutcomeModel(OutcomeObjective):
         leaf = self._to_torch(dose).detach().requires_grad_(True)
         prob = self._forward(leaf)
         (grad,) = torch.autograd.grad(prob, leaf)
-        return float(prob.detach()), xp_utils.to_namespace(
-            array_api_compat.array_namespace(dose), grad
-        )
+        xp = array_api_compat.array_namespace(dose)
+        grad = xp_utils.to_namespace(xp, grad, device=xp_utils.get_device_info(dose))
+        return float(prob.detach()), xp.astype(grad, dose.dtype)
 
     def _forward(self, dose_tensor):
         inputs = self.preprocessor.preprocess(dose_tensor)

@@ -15,6 +15,8 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
+from pydantic import ValidationError
+
 from pyRadPlan.ai.modelhub import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 from pyRadPlan import settings
 from pyRadPlan.core import Grid
@@ -456,11 +458,18 @@ def test_deepcopy_shares_the_extractor():
     """The optimizer deep-copies the whole cst; the runtime handles must survive that."""
     import copy
 
-    objective, grid = _objective(_logistic([0.03, -1e-4, 0.06, -1e-4]), _features())
+    segment_map = {"PAROTID_LT": "PAROTID_LT"}
+    objective, grid = _objective(
+        _logistic([0.03, -1e-4, 0.06, -1e-4]), _features(), segment_map=segment_map
+    )
     clone = copy.deepcopy(objective)
 
     assert clone.extractor is objective.extractor
+    assert clone.estimator is objective.estimator
+    assert clone.spec is objective.spec
     assert clone.history is not objective.history
+    assert clone.segment_map == objective.segment_map
+    assert clone.segment_map is not objective.segment_map
 
     dose = _dose(grid, seed=5)
     assert clone.compute_objective(dose) == pytest.approx(objective.compute_objective(dose))
@@ -499,7 +508,7 @@ def test_loader_reminds_to_install_scikit_learn(tmp_path, monkeypatch):
 
 def test_loader_accepts_a_sav_predictor(tmp_path):
     config, model_dir = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
-    (model_dir / "predictor.save").rename(model_dir / "predictor.save")
+    (model_dir / "predictor.save").rename(model_dir / "predictor.sav")
 
     estimator, _ = load_pyanno4rt_model(config.parent)
     assert estimator.n_features_in_ == 4
@@ -551,7 +560,7 @@ def test_validation_keeps_defaults_and_input():
 def test_rejects_models_that_are_not_a_logistic_regression():
     spec = OutcomeModelSpec(label="test", features=_features())
 
-    with pytest.raises(TypeError, match="binary LogisticRegression"):
+    with pytest.raises(ValidationError, match="binary LogisticRegression"):
         OutcomeLR(model=(object(), spec))
 
 
@@ -582,6 +591,109 @@ def test_rejects_a_voi_that_misses_part_of_a_segment():
 
     with pytest.raises(ValueError, match="misses"):
         objective.preprocess_image_reference_parameters(grid, index_list=np.arange(10))
+
+
+def _namespaces():
+    import array_api_strict  # noqa: PLC0415
+
+    namespaces = [np, array_api_strict]
+    try:
+        import array_api_compat.torch as torch_xp  # noqa: PLC0415
+    except ImportError:
+        pass
+    else:
+        namespaces.append(torch_xp)
+    try:
+        import jax.numpy as jnp  # noqa: PLC0415
+    except ImportError:
+        pass
+    else:
+        namespaces.append(jnp)
+    return namespaces
+
+
+_LEFT_FEATURES = [
+    OutcomeFeature(name="mean", segment="PAROTID_LT", function="Dose Mean"),
+    OutcomeFeature(name="max", segment="PAROTID_LT", function="Dose Maximum"),
+    OutcomeFeature(name="min", segment="PAROTID_LT", function="Dose Minimum"),
+    OutcomeFeature(name="d50", segment="PAROTID_LT", function="Dose Dx", argument=50.0),
+    OutcomeFeature(name="std", segment="PAROTID_LT", function="Dose Deviation"),
+    OutcomeFeature(name="volume", segment="PAROTID_LT", function="Segment Volume"),
+]
+_LEFT_COEFFICIENTS = [0.03, 0.02, 0.01, 0.015, 0.005, -1e-4]
+
+
+@pytest.mark.parametrize("xp", _namespaces(), ids=lambda xp: xp.__name__)
+@pytest.mark.parametrize("partial", [True, False], ids=["partial_voi", "full_grid"])
+def test_value_and_gradient_on_other_backends(xp, partial):
+    """Features sharing one segment accumulate, also when the VOI is only part of the grid."""
+    reference, grid = _objective(_logistic(_LEFT_COEFFICIENTS), _LEFT_FEATURES)
+    dose = _dose(grid, seed=3).astype(np.float32)
+    expected_value = float(reference.compute_objective(dose))
+    expected_gradient = reference.compute_gradient(dose)
+    assert np.count_nonzero(expected_gradient) == grid.num_voxels // 2
+
+    objective, _ = _objective(_logistic(_LEFT_COEFFICIENTS), _LEFT_FEATURES)
+    index = np.arange(grid.num_voxels)
+    if partial:
+        left = objective.extractor.segment_indices["PAROTID_LT"]
+        index = np.union1d(left, np.arange(3, grid.num_voxels, 12))
+        assert left.size < index.size < grid.num_voxels
+        objective.preprocess_image_reference_parameters(grid, index_list=index)
+    values = xp.asarray(dose[index])
+
+    value = objective.compute_objective(values)
+    gradient = objective.compute_gradient(values)
+
+    assert float(value) == pytest.approx(expected_value, rel=1e-5)
+    assert gradient.dtype == values.dtype
+    np.testing.assert_allclose(np.asarray(gradient), expected_gradient[index], rtol=1e-4)
+
+
+def test_overlapping_segments_accumulate_their_gradients():
+    import array_api_strict as xps  # noqa: PLC0415
+
+    ct, cst, grid = _make_geometry()
+    cst.vois.append(FakeVOI("BODY", _image(np.ones(GRID_SIZE[::-1]))))
+    features = [
+        OutcomeFeature(name="left", segment="PAROTID_LT", function="Dose Mean"),
+        OutcomeFeature(name="body", segment="BODY", function="Dose Mean"),
+    ]
+    extractor = FeatureExtractor(features, ct, cst)
+    extractor.set_dose_grid(grid)
+
+    dose = xps.asarray(_dose(grid))
+    gradient = np.asarray(extractor.dose_gradient(dose, xps, np.array([2.0, 3.0])))
+
+    n = grid.num_voxels
+    expected = np.full(n, 3.0 / n)
+    expected[extractor.segment_indices["PAROTID_LT"]] += 2.0 / (n // 2)
+    assert gradient == pytest.approx(expected)
+
+
+def test_segment_indices_are_cached_until_the_dose_grid_is_set_again():
+    ct, cst, grid = _make_geometry()
+    extractor = FeatureExtractor(_features(), ct, cst)
+    extractor.set_dose_grid(grid)
+    dose = _dose(grid)
+
+    first, _ = extractor._segment_dose(dose, np, "PAROTID_LT")
+    second, _ = extractor._segment_dose(dose, np, "PAROTID_LT")
+    assert second is first
+
+    extractor.set_dose_grid(grid)
+    third, _ = extractor._segment_dose(dose, np, "PAROTID_LT")
+    assert third is not first
+
+
+@pytest.mark.parametrize("objective_class", [OutcomeLR, OutcomeSklearn])
+def test_missing_or_mistyped_model_is_a_validation_error(objective_class):
+    with pytest.raises(ValidationError, match="Field required"):
+        objective_class()
+    with pytest.raises(ValidationError, match="snapshot folder"):
+        objective_class(model=5)
+    with pytest.raises(ValidationError, match="snapshot folder"):
+        objective_class(model=(_logistic([0.1] * 4), "not a spec"))
 
 
 # ---------------------------------------------------------------------------
@@ -644,5 +756,5 @@ def test_sklearn_objective_steers_a_nonlinear_model():
 
 def test_sklearn_objective_rejects_models_without_probabilities():
     spec = OutcomeModelSpec(label="test", features=_features())
-    with pytest.raises(TypeError, match="predict_proba"):
+    with pytest.raises(ValidationError, match="predict_proba"):
         OutcomeSklearn(model=(object(), spec))

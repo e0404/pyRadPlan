@@ -7,7 +7,7 @@ import array_api_compat
 import numpy as np
 from pydantic import Field, PrivateAttr, model_validator
 
-from pyRadPlan.ai.modelhub import load_pyanno4rt_model
+from pyRadPlan.ai.modelhub import OutcomeModelSpec, load_pyanno4rt_model
 
 from ._features import FeatureExtractor
 from ._outcome import OutcomeObjective
@@ -18,7 +18,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     The features see the dose of the VOI the objective is attached to, with 0 Gy
     everywhere else. Attach it to a helper VOI covering every segment the model uses,
-    with ``apply_overlap=None``.
+    with ``overlap_handling="ignore"``.
 
     Subclasses implement :meth:`_probability` and :meth:`_probability_gradient` on the
     feature vector.
@@ -36,7 +36,8 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     Notes
     -----
-    pyanno4rt models expect total-course dose: pass the plan's ``num_of_fractions``.
+    pyanno4rt models expect total-course dose: pass the plan's ``num_of_fractions``
+    unless the plan uses the total-dose convention, see :class:`OutcomeObjective`.
     """
 
     model: str = Field(description="pyanno4rt snapshot folder, or preloaded objects.")
@@ -57,16 +58,28 @@ class FeatureOutcomeObjective(OutcomeObjective):
         if not isinstance(data, dict) or data.get("spec") is not None:
             return data
 
-        data = dict(data)
         model = data.get("model")
+        if model is None:
+            return data
+
+        data = dict(data)
         if isinstance(model, str):
             try:
                 estimator, spec = load_pyanno4rt_model(model, component=data.get("component"))
             except (OSError, ValueError) as exc:  # pydantic reports a ValueError as invalid input
                 raise ValueError(f"Cannot load outcome model {model!r}: {exc}") from exc
-        else:
+        elif (
+            isinstance(model, (tuple, list))
+            and len(model) == 2
+            and isinstance(model[1], OutcomeModelSpec)
+        ):
             estimator, spec = model
             data["model"] = "<preloaded>"
+        else:
+            raise ValueError(
+                f"{cls.__name__} 'model' must be a pyanno4rt snapshot folder or a preloaded "
+                "(estimator, OutcomeModelSpec) tuple."
+            )
         if spec.outcome_type != "NTCP":
             raise ValueError(f"{cls.__name__} minimises NTCP, got a {spec.outcome_type} model.")
 
@@ -76,7 +89,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
 
     @classmethod
     def _check_estimator(cls, estimator: Any, data: dict) -> None:
-        """Validate the estimator; may add derived fields to ``data``."""
+        """Validate the estimator, raising ValueError; may add derived fields to ``data``."""
 
     @property
     def feature_names(self) -> list[str]:
@@ -114,7 +127,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
                 raise ValueError(
                     f"The VOI of this objective misses {missing} of {indices.size} voxels of "
                     f"segment '{segment}', whose dose would be taken as 0. Attach it to a "
-                    "helper VOI covering all segments, with apply_overlap=None."
+                    "helper VOI covering all segments, with overlap_handling='ignore'."
                 )
 
     def _predict(self, dose) -> float:
@@ -126,11 +139,7 @@ class FeatureOutcomeObjective(OutcomeObjective):
         features = self.extractor.compute_values(dose, xp)
         p = self._probability(features)
         dp_dx = self._probability_gradient(features, p)
-
-        grad = xp.zeros_like(dose)
-        for position, indices, feature_grad in self.extractor.compute_dose_gradients(dose, xp):
-            grad[indices] += float(dp_dx[position]) * feature_grad
-        return p, grad
+        return p, self.extractor.dose_gradient(dose, xp, dp_dx)
 
     @abstractmethod
     def _probability(self, features: np.ndarray) -> float:

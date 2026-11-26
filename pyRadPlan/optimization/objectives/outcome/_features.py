@@ -13,7 +13,8 @@ Two kinds of feature exist:
   are computed once on the CT grid, and have a zero dose gradient.
 
 Names and formulas follow pyanno4rt so that a model trained there yields the
-same values here.
+same values here, except for the surface area (and hence the sphericity) on grids
+whose x and y resolutions differ, see :func:`segment_area`.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from ....ai.modelhub import OutcomeFeature
-from ....core import Grid
+from ....core import Grid, xp_utils
 from ....core.resample import resample_image
 
 logger = logging.getLogger(__name__)
@@ -37,11 +38,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def indices_on_device(cache: dict, indices: np.ndarray, like):
+    """Return ``indices`` in the namespace and on the device of ``like``, converting once."""
+    xp = array_api_compat.array_namespace(like)
+    key = (xp, xp_utils.device_cache_key(like))
+    if key not in cache:
+        cache[key] = xp.asarray(indices, device=array_api_compat.device(like))
+    return cache[key]
+
+
 def _one_hot(values, xp, index):
     """Sub-gradient of an order statistic: unit weight on the selected voxel."""
-    grad = xp.zeros_like(values)
-    grad[index] = 1.0
-    return grad
+    positions = xp.arange(array_api_compat.size(values), device=array_api_compat.device(values))
+    return xp.astype(positions == index, values.dtype)
 
 
 def _mean(values, xp, argument=None):
@@ -134,9 +143,10 @@ def segment_area(mask: np.ndarray, resolution: np.ndarray) -> float:
     -----
     Following pyanno4rt, the first slice along each axis contributes its full
     cross-section instead of a difference, which closes the surface at the
-    leading but not at the trailing end. The in-plane voxel area here is the
-    product of the two resolutions orthogonal to the axis; pyanno4rt pairs the
-    resolutions differently, which matters only for anisotropic grids.
+    leading but not at the trailing end. The function is the same as in pyanno4rt,
+    which however calls it with a (y, x, z) mask and an (x, y, z) resolution. Its
+    area and sphericity therefore differ from the geometric values computed here
+    whenever the x and y resolutions differ.
     """
     area = 0.0
     mask = np.asarray(mask, dtype=np.int8)
@@ -159,7 +169,7 @@ def segment_eigenvalues(mask: np.ndarray, resolution: np.ndarray) -> np.ndarray:
         [index.astype(np.float64) * spacing for index, spacing in zip(indices, resolution)]
     )
     coordinates -= coordinates.mean(axis=1, keepdims=True)
-    return np.linalg.eigvals(coordinates @ coordinates.T).real
+    return np.linalg.eigvalsh(coordinates @ coordinates.T)
 
 
 def segment_sphericity(mask: np.ndarray, resolution: np.ndarray) -> float:
@@ -231,6 +241,7 @@ class FeatureExtractor:
         )
         #: Dose-grid voxel indices per segment, filled by :meth:`set_dose_grid`.
         self.segment_indices: dict[str, np.ndarray] = {}
+        self._device_indices: dict[str, dict] = {}
 
     @staticmethod
     def _find_mask(cst: Any, wanted: str, segment: str) -> sitk.Image:
@@ -274,6 +285,7 @@ class FeatureExtractor:
     def set_dose_grid(self, dose_grid: Grid) -> None:
         """Resample the segment masks onto the optimization dose grid."""
         self.segment_indices = {}
+        self._device_indices = {}
         for segment, mask in self._masks.items():
             resampled = resample_image(
                 input_image=mask,
@@ -290,8 +302,10 @@ class FeatureExtractor:
     def _segment_dose(self, dose, xp, segment: str):
         if not self.segment_indices:
             raise RuntimeError("FeatureExtractor has no dose grid; call set_dose_grid() first.")
-        indices = xp.asarray(self.segment_indices[segment], device=array_api_compat.device(dose))
-        return indices, dose[indices]
+        indices = indices_on_device(
+            self._device_indices.setdefault(segment, {}), self.segment_indices[segment], dose
+        )
+        return indices, xp.take(dose, indices)
 
     def compute_values(self, dose, xp) -> np.ndarray:
         """Return the feature vector of shape ``(n_features,)``."""
@@ -312,3 +326,19 @@ class FeatureExtractor:
             _, gradient_fn = DOSE_FEATURES[feature.function]
             indices, segment_dose = self._segment_dose(dose, xp, feature.segment)
             yield position, indices, gradient_fn(segment_dose, xp, feature.argument)
+
+    def dose_gradient(self, dose, xp, weights):
+        """Return ``sum_i weights[i] * d feature_i / d dose`` on the dose grid."""
+        per_segment: dict[str, tuple[Any, Any]] = {}
+        for position, indices, feature_grad in self.compute_dose_gradients(dose, xp):
+            segment = self.features[position].segment
+            contribution = float(weights[position]) * feature_grad
+            if segment in per_segment:
+                contribution = per_segment[segment][1] + contribution
+            per_segment[segment] = (indices, contribution)
+
+        grad = xp.zeros_like(dose)
+        # Segments can overlap, so each one adds to what the previous ones wrote.
+        for indices, segment_grad in per_segment.values():
+            grad = xp_utils.scatter(grad, indices, xp.take(grad, indices) + segment_grad)
+        return grad

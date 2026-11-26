@@ -24,7 +24,7 @@ class OutcomeLR(FeatureOutcomeObjective):
     def _check_estimator(cls, estimator: Any, data: dict) -> None:
         coef = getattr(estimator, "coef_", None)
         if type(estimator).__name__ != "LogisticRegression" or coef is None or coef.shape[0] != 1:
-            raise TypeError(
+            raise ValueError(
                 f"OutcomeLR needs a binary LogisticRegression, got {type(estimator).__name__}."
             )
         data["coef"] = np.asarray(coef[0], dtype=np.float64)
