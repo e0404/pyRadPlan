@@ -6,10 +6,8 @@ import logging
 
 import array_api_compat
 import numpy as np
-import SimpleITK as sitk
 from pydantic import Field, PrivateAttr
 
-from pyRadPlan.core.resample import resample_image
 from pyRadPlan.optimization.objectives._objective import Objective
 
 logger = logging.getLogger(__name__)
@@ -38,11 +36,6 @@ class OutcomeObjective(Objective):
     transform : bool
         Above ``p = 0.5``, replace ``p = sigmoid(z)`` by its tangent at ``z = 0``,
         ``0.25 * logit(p) + 0.5``, so the gradient does not vanish as ``p`` saturates.
-    gradient_vois : list[str], optional
-        Optimize the outcome through the dose in these VOIs only. When the warmup ends,
-        the dose elsewhere is frozen at the current iterate, so the model keeps a plausible
-        full-dose input and the masked gradient stays exact. :attr:`history` then records
-        the prediction on that input, not on the plan's full dose.
     """
 
     has_hessian: ClassVar[bool] = False
@@ -51,18 +44,12 @@ class OutcomeObjective(Objective):
     warmup_iterations: int = Field(default=0, ge=0)
     num_of_fractions: Optional[int] = Field(default=None, gt=0)
     transform: bool = Field(default=False)
-    gradient_vois: Optional[list[str]] = Field(default=None, min_length=1)
 
     _history: list[float] = PrivateAttr(default_factory=list)
     _iteration: int = PrivateAttr(default=0)
     # VOI voxel indices on the dose grid; None when the VOI covers the whole grid.
     _dose_index: Any = PrivateAttr(default=None)
     _dose_n: Optional[int] = PrivateAttr(default=None)
-    _gradient_image: Optional[sitk.Image] = PrivateAttr(default=None)
-    _gradient_mask: Optional[np.ndarray] = PrivateAttr(default=None)
-    # Set when the warmup ends: the frozen full-grid dose and the mask in its namespace.
-    _frozen_dose: Any = PrivateAttr(default=None)
-    _frozen_mask: Any = PrivateAttr(default=None)
 
     def __deepcopy__(self, memo=None):
         """Share runtime handles (models, extractors); they don't deepcopy reliably."""
@@ -75,24 +62,6 @@ class OutcomeObjective(Objective):
         """Predicted probabilities of all objective evaluations of this optimization."""
         return self._history
 
-    def setup(self, ct, cst) -> None:
-        """Keep the union of the ``gradient_vois`` masks."""
-        self._gradient_image = None
-        if self.gradient_vois is None:
-            return
-        vois = {voi.name: voi for voi in cst.vois}
-        missing = [name for name in self.gradient_vois if name not in vois]
-        if missing:
-            raise ValueError(f"gradient_vois not in the structure set: {missing}")
-        union = None
-        for name in self.gradient_vois:
-            mask = vois[name].mask
-            if mask.GetDimension() == 4:
-                mask = mask[:, :, :, 0]
-            mask = sitk.Cast(mask > 0, sitk.sitkUInt8)
-            union = mask if union is None else union | mask
-        self._gradient_image = union
-
     def preprocess_image_reference_parameters(self, target_grid, index_list=None) -> None:
         """Set up the dose grid; called once per optimization."""
         super().preprocess_image_reference_parameters(target_grid, index_list)
@@ -101,25 +70,12 @@ class OutcomeObjective(Objective):
         self._dose_n = int(np.prod(target_grid.dimensions))
         covers_grid = index_list is None or np.size(index_list) == self._dose_n
         self._dose_index = None if covers_grid else np.asarray(index_list)
-        self._gradient_mask = None
-        self._frozen_dose = None
-        self._frozen_mask = None
-        if self._gradient_image is not None:
-            mask = resample_image(
-                self._gradient_image,
-                sitk.sitkNearestNeighbor,
-                target_grid=target_grid,
-                extrapolate=False,
-            )
-            self._gradient_mask = sitk.GetArrayViewFromImage(mask).ravel() > 0
-            if not self._gradient_mask.any():
-                raise ValueError(f"gradient_vois {self.gradient_vois} are empty on the dose grid")
         self._set_dose_grid(target_grid)
 
     def compute_objective(self, dose_values):
         """Compute the (transformed) predicted probability; 0 when *monitor_only*."""
         xp = array_api_compat.array_namespace(dose_values)
-        prob = self._predict(self._model_input(self._to_full_grid(dose_values, xp), xp))
+        prob = self._predict(self._to_full_grid(dose_values, xp))
         self._history.append(prob)
 
         value = 0.0 if self.monitor_only else self._transform(prob)[0]
@@ -143,18 +99,9 @@ class OutcomeObjective(Objective):
                 device=array_api_compat.device(dose_values),
             )
 
-        full = self._to_full_grid(dose_values, xp)
-        if self._gradient_mask is not None and self._frozen_dose is None:
-            # A copy: the solver may reuse the buffer behind dose_values.
-            self._frozen_dose = xp.asarray(full, copy=True)
-            self._frozen_mask = xp.asarray(
-                self._gradient_mask, device=array_api_compat.device(full)
-            )
-        prob, grad = self._predict_with_gradient(self._model_input(full, xp))
-        grad = grad * (self._transform(prob)[1] * (self.num_of_fractions or 1))
-        if self._frozen_mask is not None:
-            grad = xp.where(self._frozen_mask, grad, xp.zeros_like(grad))
-        return self._from_full_grid(grad, dose_values, xp)
+        prob, grad = self._predict_with_gradient(self._to_full_grid(dose_values, xp))
+        scale = self._transform(prob)[1] * (self.num_of_fractions or 1)
+        return self._from_full_grid(grad * scale, dose_values, xp)
 
     def report_info(self) -> dict:
         """Return the probability history of the last optimization."""
@@ -188,12 +135,6 @@ class OutcomeObjective(Objective):
         if self.num_of_fractions is not None:
             dose_values = dose_values * self.num_of_fractions
         return dose_values
-
-    def _model_input(self, full_dose, xp):
-        """Replace the dose outside ``gradient_vois`` with the frozen dose, once frozen."""
-        if self._frozen_dose is None:
-            return full_dose
-        return xp.where(self._frozen_mask, full_dose, self._frozen_dose)
 
     def _from_full_grid(self, grad_full, dose_values, xp):
         """Gather a full-grid gradient back to the VOI voxels."""
