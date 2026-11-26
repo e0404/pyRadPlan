@@ -105,6 +105,24 @@ def test_collection_long_layout_forced(dose, masks):
     assert len(rows) == 1 + 40
 
 
+def test_collection_long_layout_converts_units(dose, masks):
+    gray = DVH.compute(dose, mask=masks["PTV"], name="PTV", num_points=5, max_value=70.0)
+    centigray = DVH(
+        name="PTV cGy", unit="cGy", bin_edges=gray.bin_edges * 100.0, diff_volume=gray.diff_volume
+    )
+    rows = DVHCollection(dvhs=[gray, centigray]).to_rows()
+    assert rows[0][1] == "dose [Gy]"
+    doses = [float(r[1]) for r in rows[1:]]
+    np.testing.assert_allclose(doses[5:], doses[:5])
+
+
+def test_collection_long_layout_rejects_incompatible_units(dose, masks):
+    gray = DVH.compute(dose, mask=masks["PTV"], name="PTV", num_points=5)
+    let = DVH(name="LET", unit="keV/um", bin_edges=gray.bin_edges, diff_volume=gray.diff_volume)
+    with pytest.raises(ValueError, match="incompatible units"):
+        DVHCollection(dvhs=[gray, let]).to_rows()
+
+
 def test_empty_collection_has_no_rows():
     assert DVHCollection(dvhs=[]).to_rows() == []
 
