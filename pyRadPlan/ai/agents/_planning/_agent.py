@@ -400,10 +400,20 @@ def create_planning_agent(
         start_from: Optional[int] = None,
     ) -> dict:
         state = ctx.deps
-        if state.num_optimizations >= state.max_optimizations:
-            raise ModelRetry("Optimization budget used up. Return your final report now.")
         feedback, state.feedback = state.feedback, None
-        evaluation = state.optimize(max_iter, min_improvement, start_from)
+        # A refused call carries the planner's feedback instead of dropping it
+        note = f" Planner feedback: {feedback}" if feedback else ""
+        if state.num_optimizations >= state.max_optimizations:
+            raise ModelRetry("Optimization budget used up. Return your final report now." + note)
+        try:
+            evaluation = state.optimize(max_iter, min_improvement, start_from)
+        except PlanningError as e:
+            if not feedback:
+                raise
+            raise PlanningError(f"{e}{note}") from e
+        except Exception:
+            state.feedback = feedback  # not a refusal: keep it for the next optimize
+            raise
         out = model_evaluation(evaluation, plan=state.plans[-1].index)
         out["optimizations_left"] = state.max_optimizations - state.num_optimizations
         return {"planner_feedback": feedback, **out} if feedback else out

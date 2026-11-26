@@ -278,7 +278,7 @@ class PlanningState:
         return any(p.evaluation["all_hard_passed"] for p in self.plans)
 
     def set_protocol(self, protocol: Protocol) -> list[str]:
-        """Replace the goals, re-evaluate every plan; return the changes as text."""
+        """Replace the goals, re-evaluate every plan and saved version; return the changes."""
         old = {g.tagged_label for g in self.protocol.goals}
         new = {g.tagged_label for g in protocol.goals}
         self.protocol = protocol
@@ -287,6 +287,10 @@ class PlanningState:
             for p in self.plans:
                 self.cst, self.dose = p.cst, p.dose
                 p.evaluation = {**p.evaluation, **self._evaluate()}
+            for snap in self.snapshots.values():
+                if snap["dose"] is not None and snap["evaluation"] is not None:
+                    self.cst, self.dose = snap["cst"], snap["dose"]
+                    snap["evaluation"] = {**snap["evaluation"], **self._evaluate()}
         finally:
             self.cst, self.dose = current
         if self.dose is not None and self.last_evaluation is not None:
@@ -370,11 +374,10 @@ class PlanningState:
                 raise PlanningError(f"'{name}' is mapped to a protocol goal; cannot exclude it.")
 
         targets_before = self._target_union()
-        self.aliases.update(aliases or {})
-        vois = []
+        vois, excluded = [], []
         for v in self.cst.vois:
             if v.name in (exclude or []):
-                self.excluded.append(v.name)
+                excluded.append(v.name)
                 continue
             if v.name in (voi_types or {}) and voi_types[v.name].upper() != v.voi_type:
                 data = {
@@ -387,6 +390,8 @@ class PlanningState:
             vois.append(v)
         if not any(v.voi_type == "TARGET" for v in vois):
             raise PlanningError("At least one TARGET VOI must remain.")
+        self.aliases.update(aliases or {})
+        self.excluded.extend(excluded)
         self.cst = self.cst.model_copy(update={"vois": vois})
         if exclude or voi_types:
             self.dose = self.last_evaluation = None
@@ -975,8 +980,9 @@ class PlanningState:
         elif apply:
             self.aliases.update(auto)
             kept = [g for g in goals if g.voi not in unmatched]
-            self.protocol = Protocol(name=f"{t.id}/{site}", goals=kept, locked=False, notes=notes)
-            self.last_evaluation = None
+            self.set_protocol(
+                Protocol(name=f"{t.id}/{site}", goals=kept, locked=False, notes=notes)
+            )
             result["applied"] = True
             result["dropped_goals_for_unmatched_structures"] = len(goals) - len(kept)
         self._log("get_site_constraints", table=table, site=site, apply=apply)
@@ -1712,7 +1718,8 @@ class PlanningState:
                 if regret[compromise, j] > 0
             ],
         }
-        # Strictly: an anchor a blend beats only by less than 1 % still marks an extreme
+        # Plain Pareto dominance, no epsilon: one blend at least as good on every axis and
+        # better on one is enough, however small the difference
         beaten = pareto.dominated(cost[:n][:, ax], c)
         out["dominated_plans"] = [p for i, p in enumerate(plans) if beaten[i]]
         out["plans_failing_hard"] = [

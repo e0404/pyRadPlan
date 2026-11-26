@@ -592,6 +592,12 @@ def test_cannot_exclude_mapped_structure(messy_state):
         messy_state.map_structures(exclude=["Myelon"])
 
 
+def test_refused_mapping_changes_nothing(messy_state):
+    with pytest.raises(PlanningError, match="TARGET"):
+        messy_state.map_structures(aliases={"SpinalCord": "Myelon"}, exclude=["PTV_60"])
+    assert messy_state.aliases == {} and messy_state.excluded == []
+
+
 def test_snapshot_restore(state):
     state.set_objectives("Core", [SquaredOverdosing(priority=1, d_max=1.0)])
     state.snapshot("v1")
@@ -635,6 +641,22 @@ def test_review_pauses_and_continue_passes_feedback(state, monkeypatch):
     assert "Spare the rectum more." in _returned(seen[2], "optimize")
     assert state.feedback is None
     assert done.usage.requests > paused.usage.requests  # usage adds up over the calls
+
+
+def test_feedback_reaches_the_model_when_the_optimize_is_refused(state, monkeypatch):
+    def refuse(self, max_iter=500, min_improvement=1e-2, start_from=None):
+        raise PlanningError("Plan 1 was optimized with exactly these objectives.")
+
+    _fake_optimize(monkeypatch)
+    model, seen = _scripted_model([[("optimize", {})], [("optimize", {})], "final"])
+    state.review_every = 1
+    paused = create_planning_agent(model).run_sync("x", deps=state)
+    monkeypatch.setattr(PlanningState, "optimize", refuse)
+    continue_planning_agent(state, paused, "Spare the rectum more.", model=model)
+
+    sent = " ".join(str(getattr(p, "content", "")) for p in seen[2].parts)
+    assert "exactly these objectives" in sent and "Spare the rectum more." in sent
+    assert state.feedback is None
 
 
 def test_redirect_skips_the_pending_call(state, monkeypatch):
@@ -714,8 +736,12 @@ def test_changed_goals_reevaluate_plans_and_reach_the_agent(planned_state):
         labels = [g["goal"] for g in s.plans[0].evaluation["goals"]]
         assert "Core mean <= 0.1" in labels
         assert "normal_tissue" in s.plans[0].evaluation  # kept from the optimization
+        s.snapshot("goal_change")
         assert s.set_protocol(before) == ["removed Core mean <= 0.1 (soft)"]
+        labels = [g["goal"] for g in s.snapshots["goal_change"]["evaluation"]["goals"]]
+        assert "Core mean <= 0.1" not in labels  # saved versions are re-evaluated too
     finally:
+        s.snapshots.pop("goal_change", None)
         s.set_protocol(before)
 
 

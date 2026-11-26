@@ -88,6 +88,8 @@ class AgenticPlanWidget(WorkspaceWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(workspace, parent)
+        # Dose convention the goal values are in; they follow the plan's when it changes
+        self._goal_convention: Optional[str] = None
         self._setup_ui(tools or {}, models or [])
         self.initialize()
 
@@ -339,7 +341,7 @@ class AgenticPlanWidget(WorkspaceWidget):
         if pln is None:
             QMessageBox.warning(self, "Goals", "Configure a plan first: goals depend on it.")
             return
-        goals, _notes = site_goals(
+        goals, notes = site_goals(
             load_constraint_table(table_id),
             site,
             pln.num_of_fractions,
@@ -347,6 +349,8 @@ class AgenticPlanWidget(WorkspaceWidget):
             per_fraction=pln.dose_convention == "per_fraction",
         )
         self.set_goals(goals)
+        if notes:  # the table's disclaimer and conversion warnings
+            QMessageBox.information(self, "Goals", "\n\n".join(notes))
 
     def import_goals(self, path: Optional[str] = None) -> None:
         """Replace the goals by those of a goal file (asks for *path* if not given)."""
@@ -389,32 +393,64 @@ class AgenticPlanWidget(WorkspaceWidget):
         save_goals(path, goals, pln.dose_convention, pln.num_of_fractions)
 
     def set_goals(self, goals: list) -> None:
-        """Replace the goals table by *goals* (:class:`pyRadPlan.ai.agents.Goal`)."""
+        """Replace the goals table by *goals* (:class:`pyRadPlan.ai.agents.Goal`).
+
+        Their doses are taken to be in the plan's dose convention.
+        """
         self._tbl_goals.setRowCount(0)
         for g in goals:
             self._add_goal_row(g.voi, g.metric, g.op, g.value, g.hard, g.source)
+        if self._ws.pln is not None:
+            self._goal_convention = self._ws.pln.dose_convention
 
-    def goals(self) -> list:
-        """Return the goals of the table; a ``ValueError`` names the first invalid row."""
+    def _row_goal(self, row: int) -> Any:
         from pyRadPlan.ai.agents import Goal  # noqa: PLC0415
 
         tbl = self._tbl_goals
+        return Goal(
+            voi=tbl.item(row, _STRUCTURE).text().strip(),
+            metric=tbl.item(row, _METRIC).text().strip(),
+            op=tbl.cellWidget(row, _OP).currentText(),
+            value=float(tbl.item(row, _VALUE).text().replace(",", ".")),
+            hard=tbl.item(row, _HARD).checkState() == Qt.CheckState.Checked,
+            source=tbl.item(row, _STRUCTURE).data(Qt.ItemDataRole.UserRole),
+        )
+
+    def goals(self) -> list:
+        """Return the goals of the table; a ``ValueError`` names the first invalid row."""
         goals = []
-        for row in range(tbl.rowCount()):
+        for row in range(self._tbl_goals.rowCount()):
             try:
-                goals.append(
-                    Goal(
-                        voi=tbl.item(row, _STRUCTURE).text().strip(),
-                        metric=tbl.item(row, _METRIC).text().strip(),
-                        op=tbl.cellWidget(row, _OP).currentText(),
-                        value=float(tbl.item(row, _VALUE).text().replace(",", ".")),
-                        hard=tbl.item(row, _HARD).checkState() == Qt.CheckState.Checked,
-                        source=tbl.item(row, _STRUCTURE).data(Qt.ItemDataRole.UserRole),
-                    )
-                )
+                goals.append(self._row_goal(row))
             except Exception as exc:  # noqa: BLE001 - reported with the row number
                 raise ValueError(f"Goal in row {row + 1}: {exc}") from exc
         return goals
+
+    def _follow_dose_convention(self, pln: Any) -> None:
+        """Convert the goal doses when the plan's dose convention changed.
+
+        Converted with the plan's number of fractions, as :func:`load_goals` does; a
+        change of the number of fractions alone keeps the values. Invalid rows stay as
+        they are.
+        """
+        from pyRadPlan.ai.agents._planning._constraints import _scale_goal  # noqa: PLC0415
+
+        before, self._goal_convention = self._goal_convention, pln.dose_convention
+        if before is None or before == pln.dose_convention:
+            return
+        factor = (
+            1.0 / pln.num_of_fractions
+            if pln.dose_convention == "per_fraction"
+            else float(pln.num_of_fractions)
+        )
+        tbl = self._tbl_goals
+        for row in range(tbl.rowCount()):
+            try:
+                goal = _scale_goal(self._row_goal(row), factor)
+            except Exception:  # noqa: BLE001 - an invalid row is reported on use
+                continue
+            tbl.item(row, _METRIC).setText(goal.metric)
+            tbl.item(row, _VALUE).setText(f"{goal.value:g}")
 
     def protocol(self) -> Any:
         """Return the goals as a locked protocol (an empty, unlocked one without goals)."""
@@ -525,6 +561,8 @@ class AgenticPlanWidget(WorkspaceWidget):
 
     def _do_update(self, _changed_keys: list) -> None:
         pln = self._ws.pln
+        if pln is not None:
+            self._follow_dose_convention(pln)
         if pln is None:
             unit = "Doses in Gy, in the plan's dose convention."
         elif pln.dose_convention == "per_fraction":

@@ -48,7 +48,7 @@ plot_slice(image_volume=ct, cst=state.cst, overlay=state.dose, overlay_unit="Gy"
 
 # %% [markdown]
 # ## B) Agent picks goals from a constraint table (unlocked, empty protocol)
-# Template tables contain PLACEHOLDER values - not for clinical use.
+# The bundled `demo` table holds dummy values - not for clinical use.
 
 # %%
 ct, cst = load_tg119()
@@ -56,7 +56,7 @@ pln = PhotonPlan(num_of_fractions=20, prescribed_dose=60.0)
 state = PlanningState(ct=ct, cst=cst, pln=pln, protocol=Protocol(locked=False))
 result = run_planning_agent(
     state,
-    "Prostate-like phantom, 60 Gy in 20 fractions. Use the RTOG template's goals; "
+    "Prostate-like phantom, 60 Gy in 20 fractions. Use the demo table's prostate goals; "
     "treat 'Core' as the rectum.",
     model=MODEL,
 )

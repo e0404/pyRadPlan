@@ -1,9 +1,9 @@
 """Clinical goals, constraint tables and EQD2 conversion.
 
-Constraint tables (QUANTEC-/RTOG-style JSON, see ``pyRadPlan/data/constraint_tables``)
-are looked up and converted to the plan's fractionation by deterministic code, so the
-numbers an agent works with are traceable to a table entry and never come from LLM
-memory.
+Constraint tables (JSON, see :class:`ConstraintTable`) are looked up and converted to
+the plan's fractionation by deterministic code, so the numbers an agent works with come
+from a table entry, never from LLM memory. The bundled ``demo`` table holds dummy values
+only; give the agent your own validated table as a file.
 """
 
 import json
@@ -217,7 +217,17 @@ class DoseReference(BaseModel):
 
 
 class ConstraintTable(BaseModel):
-    """A QUANTEC-/RTOG-style constraint table (see the data README for the schema)."""
+    """A table of organ and target constraints per treatment site.
+
+    ``dose_reference.type`` is ``"EQD2"`` (dose values are EQD2, converted to the plan's
+    fractionation with each structure's ``alpha_beta``) or ``"fractionation"`` (physical
+    doses for the site's ``prescription``, converted via EQD2 if the plan differs).
+    ``sites.<site>.structures`` and ``sites.<site>.targets`` map canonical structure names
+    (see :func:`canonical_structure_name`) to an ``alpha_beta`` and their constraints:
+    ``metric`` (``mean``, ``max``, ``min``, ``D<vol%>``, ``V<dose>Gy``), ``op``, ``value``
+    (Gy for dose metrics, % for V metrics), ``hard`` and an optional ``unit``
+    (``"%Rx"``: percent of the plan's prescription, not converted).
+    """
 
     id: str
     name: str
@@ -243,7 +253,7 @@ def available_constraint_tables() -> dict[str, str]:
 
 
 def load_constraint_table(table: Union[str, Path]) -> ConstraintTable:
-    """Load a bundled table by id (e.g. ``"quantec_template"``) or a JSON file path."""
+    """Load a bundled table by id (e.g. ``"demo"``) or a JSON file path."""
     p = Path(table)
     if p.suffix == ".json" and p.exists():
         return ConstraintTable.model_validate_json(p.read_text())

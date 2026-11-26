@@ -892,6 +892,36 @@ def test_agentic_plan_goals_import_export(qapp, tmp_path, monkeypatch):
     assert "Cannot read" in shown.pop() and widget.goals()[0].value == 3.0
 
 
+def test_agentic_plan_goals_follow_the_dose_convention(qapp, monkeypatch):
+    pytest.importorskip("pydantic_ai")
+    from pyRadPlan.ai.agents import Goal
+    from pyRadPlan.gui.widgets.agent import AgenticPlanWidget
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.plan import PhotonPlan
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: shown.append(a[2]))
+    ws = WorkspaceManager()
+    widget = AgenticPlanWidget(ws, tools={"optimize": ""})
+    ws.set_many(pln=PhotonPlan(num_of_fractions=20, dose_convention="total"))
+    widget.set_goals(
+        [
+            Goal(voi="PTV", metric="D95", op=">=", value=57.0),
+            Goal(voi="Rectum", metric="V40Gy", op="<=", value=35),
+        ]
+    )
+    ws.set_many(pln=PhotonPlan(num_of_fractions=20, dose_convention="per_fraction"))
+    assert [g.label for g in widget.goals()] == ["PTV D95 >= 2.85", "Rectum V2Gy <= 35"]
+    ws.set_many(pln=PhotonPlan(num_of_fractions=10, dose_convention="per_fraction"))
+    assert widget.goals()[0].value == 2.85  # the number of fractions alone converts nothing
+    ws.set_many(pln=PhotonPlan(num_of_fractions=10, dose_convention="total"))
+    assert [g.label for g in widget.goals()] == ["PTV D95 >= 28.5", "Rectum V20Gy <= 35"]
+
+    widget._load_site_goals("demo", "prostate")
+    assert widget.goals() and "NOT FOR CLINICAL USE" in shown.pop()
+
+
 def test_agent_pause_and_continue(qapp, agentic, test_data_photons, monkeypatch):
     from types import SimpleNamespace
 

@@ -38,6 +38,7 @@ from pyRadPlan.ai.agents._planning import (
     site_goals,
 )
 from pyRadPlan.ai.agents._planning import _geometry as geo
+from pyRadPlan.ai.agents._planning._constraints import ConstraintTable
 from pyRadPlan.ai.agents._planning._state import sitk_array
 from pyRadPlan.optimization.objectives import (
     MeanDose,
@@ -88,43 +89,77 @@ def test_convert_fractionation():
 # ---- constraint tables -----------------------------------------------------------------
 
 
-def test_bundled_tables_load_and_convert_everywhere():
+def _fractionation_table() -> ConstraintTable:
+    """A table in physical dose for 60 Gy in 20 fractions, with relative target goals."""
+    return ConstraintTable.model_validate(
+        {
+            "id": "test",
+            "name": "test",
+            "version": "1",
+            "dose_reference": {"type": "fractionation"},
+            "sites": {
+                "prostate": {
+                    "prescription": {"total_dose_gy": 60.0, "num_fractions": 20},
+                    "targets": {
+                        "PTV": {
+                            "constraints": [
+                                {"metric": "D95", "op": ">=", "value": 95, "unit": "%Rx"}
+                            ]
+                        }
+                    },
+                    "structures": {
+                        "Rectum": {
+                            "alpha_beta": 3,
+                            "constraints": [{"metric": "V40.5Gy", "op": "<=", "value": 38}],
+                        }
+                    },
+                }
+            },
+        }
+    )
+
+
+def test_bundled_table_loads_and_converts_everywhere():
     tables = available_constraint_tables()
-    assert {"quantec_template", "rtog_template"} <= set(tables)
-    for tid in tables:
-        t = load_constraint_table(tid)
-        assert "NOT FOR CLINICAL USE" in t.disclaimer
-        for site, s in t.sites.items():
-            n = s.prescription.num_fractions if s.prescription else 30
-            goals, _ = site_goals(t, site, n, 60.0)
-            assert goals, (tid, site)
-            assert all(g.source and g.source.startswith(tid) for g in goals)
+    assert set(tables) == {"demo"}
+    t = load_constraint_table("demo")
+    assert "NOT FOR CLINICAL USE" in t.disclaimer
+    for site in t.sites:
+        goals, _ = site_goals(t, site, 30, 60.0)
+        assert goals, site
+        assert all(g.source and g.source.startswith("demo") for g in goals)
 
 
-def test_quantec_eqd2_conversion_to_plan():
-    t = load_constraint_table("quantec_template")
+def test_eqd2_conversion_to_plan():
+    t = load_constraint_table("demo")
     goals, notes = site_goals(t, "prostate", 39, 78.0, per_fraction=True)
     v70 = next(g for g in goals if g.voi == "Rectum" and g.value == 20)
     thr_per_fx = float(v70.metric[1:-2])
     # threshold, converted back to EQD2 with the rectum alpha/beta, is 70 Gy
     assert eqd2(thr_per_fx * 39, 39, 3) == pytest.approx(70, rel=1e-3)
+    d95 = next(g for g in goals if g.voi == "PTV" and g.metric == "D95")
+    assert d95.value == pytest.approx(78 * 0.95 / 39)  # % of the prescription, not converted
     cord_like = site_goals(t, "head_neck", 5, 35.0, per_fraction=False)[0]
     cord = next(g for g in cord_like if g.voi == "SpinalCord")
     assert eqd2(cord.value, 5, 2) == pytest.approx(50, rel=1e-3)
     assert any("NOT FOR CLINICAL USE" in n for n in notes)
 
 
-def test_rtog_native_fractionation_and_relative_goals():
-    t = load_constraint_table("rtog_template")
-    goals, notes = site_goals(t, "prostate_hypofractionated", 20, 60.0)
+def test_native_fractionation_and_relative_goals():
+    goals, notes = site_goals(_fractionation_table(), "prostate", 20, 60.0)
     d95 = next(g for g in goals if g.voi == "PTV" and g.metric == "D95")
     assert d95.value == pytest.approx(60 * 0.95 / 20)
     assert any(g.metric == "V2.025Gy" for g in goals if g.voi == "Rectum")
     assert not any("converted" in n for n in notes)
 
+    goals, notes = site_goals(_fractionation_table(), "prostate", 30, 60.0, per_fraction=False)
+    thr = float(next(g for g in goals if g.voi == "Rectum").metric[1:-2])
+    assert eqd2(thr, 30, 3) == pytest.approx(eqd2(40.5, 20, 3), rel=1e-3)
+    assert any("converted" in n for n in notes)
+
 
 def test_sbrt_fractionation_warns():
-    t = load_constraint_table("quantec_template")
+    t = load_constraint_table("demo")
     _, notes = site_goals(t, "thorax", 5, 50.0)
     assert any("unreliable" in n for n in notes)
 
@@ -150,20 +185,6 @@ def test_goal_file_round_trip_and_dose_conversion(tmp_path):
     assert "20 fractions" in notes[0]
 
 
-def test_bundled_goal_files_load():
-    from importlib import resources
-
-    files = [
-        f
-        for f in (resources.files("pyRadPlan") / "data" / "goals").iterdir()
-        if f.name.endswith(".json")
-    ]
-    assert any(f.name == "prostate_matRad.json" for f in files)
-    for f in files:
-        goals, _ = load_goals(f, "per_fraction", 30)
-        assert goals
-
-
 def test_goal_file_rejects_invalid_content(tmp_path):
     path = tmp_path / "goals.json"
     path.write_text(
@@ -178,7 +199,7 @@ def test_goal_file_rejects_invalid_content(tmp_path):
 
 def test_unknown_site_and_table():
     with pytest.raises(ValueError, match="Sites"):
-        site_goals(load_constraint_table("quantec_template"), "knee", 30, 60.0)
+        site_goals(load_constraint_table("demo"), "knee", 30, 60.0)
     with pytest.raises(ValueError, match="Available"):
         load_constraint_table("nope")
 
@@ -361,21 +382,28 @@ def hn_state():
 
 
 def test_site_constraints_apply_and_automap(hn_state):
-    res = hn_state.get_site_constraints("rtog_template", "head_neck_conventional", apply=True)
+    res = hn_state.get_site_constraints("demo", "head_neck", apply=True)
     assert res["applied"] is True
     assert res["auto_mapped"] == {"SpinalCord": "Myelon", "PTV": "PTV_70"}
     assert "Brainstem" in res["unmatched_structures"]
     vois = {g.voi for g in hn_state.protocol.goals}
     assert vois == {"PTV", "SpinalCord"}  # goals for absent structures dropped
     cord = next(g for g in hn_state.protocol.goals if g.voi == "SpinalCord")
-    assert cord.value == pytest.approx(45 / 35, rel=1e-5)  # native fractionation, per fraction
+    assert eqd2(cord.value * 35, 35, 2) == pytest.approx(50, rel=1e-3)  # EQD2, per fraction
     assert hn_state.check_feasibility()["checks"]
 
 
 def test_locked_protocol_is_not_replaced(state):
     before = state.protocol
-    res = state.get_site_constraints("quantec_template", "prostate", apply=True)
+    res = state.get_site_constraints("demo", "prostate", apply=True)
     assert res["applied"] is False and state.protocol is before
+
+
+def test_applied_site_constraints_reevaluate_the_plans(hn_state, monkeypatch):
+    applied = []
+    monkeypatch.setattr(PlanningState, "set_protocol", lambda self, p: applied.append(p) or [])
+    hn_state.get_site_constraints("demo", "head_neck", apply=True)
+    assert [p.name for p in applied] == ["demo/head_neck"]
 
 
 # ---- tools that need a dose ------------------------------------------------------------
@@ -599,7 +627,9 @@ def test_pareto_front_samples_blends_for_free(two_trade_offs):
                 assert axes[g["goal"]]["plans"][p.index] == pytest.approx(g["value"], abs=1e-3)
     assert out["front_size"] >= len(out["front"]) > 1
     assert all(e["all_hard_passed"] for e in out["front"])
-    assert out["dominated_plans"] == [] and out["plans_failing_hard"] == []
+    # Max goals are convex in the blend: a little of plan 2 lowers the Core and NormalTissue
+    # max of plan 1 without costing coverage, so plan 1 is dominated by such a blend
+    assert out["dominated_plans"] == [1] and out["plans_failing_hard"] == []
 
     c = out["compromise"]
     assert c["weights"] == out["front"][0]["weights"] and 0 < c["weights"][0] < 1
@@ -761,7 +791,7 @@ def test_agent_can_call_new_tools(hn_state):
         [
             (
                 "get_site_constraints",
-                {"table": "rtog_template", "site": "head_neck_conventional", "apply": True},
+                {"table": "demo", "site": "head_neck", "apply": True},
             ),
             ("plan_versions", {"action": "save", "label": "start"}),
         ],

@@ -1,0 +1,251 @@
+{
+  "id": "demo",
+  "name": "Demo constraints (dummy values)",
+  "version": "1",
+  "disclaimer": "DUMMY VALUES - NOT FOR CLINICAL USE. Made up to demonstrate the table format and the planning agent; not taken from any publication or protocol.",
+  "source": "None: dummy values.",
+  "dose_reference": {
+    "type": "EQD2",
+    "note": "Organ doses are EQD2 (2 Gy fractions), converted to the plan's fractionation with each structure's alpha_beta. Target doses are % of the plan's prescription (unit %Rx)."
+  },
+  "sites": {
+    "prostate": {
+      "description": "Pelvis, prostate",
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 95,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 107,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "Rectum": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 50
+            },
+            {
+              "metric": "V60Gy",
+              "op": "<=",
+              "value": 35
+            },
+            {
+              "metric": "V70Gy",
+              "op": "<=",
+              "value": 20
+            }
+          ]
+        },
+        "Bladder": {
+          "alpha_beta": 5,
+          "constraints": [
+            {
+              "metric": "V65Gy",
+              "op": "<=",
+              "value": 50
+            },
+            {
+              "metric": "V75Gy",
+              "op": "<=",
+              "value": 25
+            }
+          ]
+        },
+        "Femur_Head_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 5,
+              "hard": false
+            }
+          ]
+        },
+        "Femur_Head_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 5,
+              "hard": false
+            }
+          ]
+        }
+      }
+    },
+    "head_neck": {
+      "description": "Head and neck",
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 95,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 110,
+              "hard": false,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 50
+            }
+          ]
+        },
+        "Brainstem": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55
+            }
+          ]
+        },
+        "OpticChiasm": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55
+            }
+          ]
+        },
+        "Parotid_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 25,
+              "hard": false
+            }
+          ]
+        },
+        "Parotid_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 25,
+              "hard": false
+            }
+          ]
+        },
+        "Larynx": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false
+            }
+          ]
+        }
+      }
+    },
+    "thorax": {
+      "description": "Lung / thorax",
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 95,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 115,
+              "hard": false,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "Lungs": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V20Gy",
+              "op": "<=",
+              "value": 30
+            },
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 20
+            }
+          ]
+        },
+        "Heart": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 25,
+              "hard": false
+            }
+          ]
+        },
+        "Esophagus": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 35,
+              "hard": false
+            }
+          ]
+        },
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 50
+            }
+          ]
+        }
+      }
+    }
+  }
+}
