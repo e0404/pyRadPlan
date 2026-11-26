@@ -382,9 +382,10 @@ def hn_state():
 
 
 def test_site_constraints_apply_and_automap(hn_state):
+    hn_state.map_structures(aliases={"SpinalCord": "Myelon"})
     res = hn_state.get_site_constraints("demo", "head_neck", apply=True)
     assert res["applied"] is True
-    assert res["auto_mapped"] == {"SpinalCord": "Myelon", "PTV": "PTV_70"}
+    assert res["auto_mapped"] == {"PTV": "PTV_70"}
     assert "Brainstem" in res["unmatched_structures"]
     vois = {g.voi for g in hn_state.protocol.goals}
     assert vois == {"PTV", "SpinalCord"}  # goals for absent structures dropped
@@ -787,7 +788,10 @@ def test_select_distinct_plans():
 
 def test_agent_can_call_new_tools(hn_state):
     script = [
-        [("list_constraint_tables", {})],
+        [
+            ("list_constraint_tables", {}),
+            ("map_structures", {"aliases": {"SpinalCord": "Myelon"}}),
+        ],
         [
             (
                 "get_site_constraints",

@@ -45,7 +45,6 @@ from ._constraints import (
 )
 from ._evaluation import PlanRecord, evaluate_protocol, voxel_metric
 from ._recipes import HelperRecipe
-from ._structure_names import canonical_structure_name, name_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -310,10 +309,7 @@ class PlanningState:
 
     # ---- structure tools ---------------------------------------------------------------
     def inspect_structures(self) -> dict:
-        """List VOIs: type, volume, canonical name, % inside targets.
-
-        Also candidate VOIs for unmapped protocol names.
-        """
+        """List VOIs (type, volume, % inside targets) and the unmapped protocol names."""
         idx = {v.name: np.asarray(v.indices_numpy) for v in self.cst.vois}
         spacing = np.prod(self.ct.cube_hu.GetSpacing()) / 1000.0  # cc per voxel
         targets = [v.name for v in self.cst.vois if v.voi_type == "TARGET"]
@@ -328,8 +324,6 @@ class PlanningState:
             }
             if ix.size == 0:
                 row["empty"] = True
-            if c := canonical_structure_name(v.name):
-                row["canonical"] = c
             if ix.size and v.name not in targets:
                 ov = {
                     t: round(100 * np.intersect1d(ix, idx[t]).size / ix.size, 1) for t in targets
@@ -338,11 +332,9 @@ class PlanningState:
                     row["pct_inside_target"] = {t: p for t, p in ov.items() if p}
             rows.append(row)
 
-        unmapped = {
-            g.voi: name_candidates(g.voi, list(idx))
-            for g in self.protocol.goals
-            if self.aliases.get(g.voi, g.voi) not in idx
-        }
+        unmapped = sorted(
+            {g.voi for g in self.protocol.goals if self.aliases.get(g.voi, g.voi) not in idx}
+        )
         self._log("inspect_structures")
         return {"structures": rows, "aliases": self.aliases, "unmapped_protocol_names": unmapped}
 
@@ -939,7 +931,8 @@ class PlanningState:
         """Look up a site's constraints, converted (EQD2/LQ) to the plan's fractionation.
 
         apply=True replaces the protocol unless it is locked (given by a human; then a
-        proposal only). Canonical name matches and a single target map automatically.
+        proposal only). A single target maps automatically; map other names first with
+        map_structures, goals on unmapped structures are dropped.
         """
         try:
             t = load_constraint_table(table)
@@ -959,18 +952,15 @@ class PlanningState:
         for name in {g.voi for g in goals}:
             if name in self.aliases or name in clinical:
                 continue
-            matches = [v for v in clinical if canonical_structure_name(v) == name]
-            if name in {tn for tn in t.sites[site].targets} and len(targets) == 1:
-                matches = targets
-            if len(matches) == 1:
-                auto[name] = matches[0]
+            if name in t.sites[site].targets and len(targets) == 1:
+                auto[name] = targets[0]
         unmatched = sorted({g.voi for g in goals} - set(clinical) - set(self.aliases) - set(auto))
         result = {
             "table": f"{t.name} ({t.version})",
             "plan_fractionation": self._fractionation(),
             "goals": [g.tagged_label for g in goals],
             "auto_mapped": auto,
-            "unmatched_structures": {n: name_candidates(n, clinical) for n in unmatched},
+            "unmatched_structures": unmatched,
             "notes": notes,
         }
         if apply and self.protocol.locked:

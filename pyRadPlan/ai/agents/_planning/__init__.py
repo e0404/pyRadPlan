@@ -4,9 +4,8 @@
 - :mod:`._agent`: the pydantic-ai agent, its prompt, runs and planner reviews
 - :mod:`._evaluation`: protocol evaluation, plan scores and the kept :class:`PlanRecord`
 - :mod:`._constraints`: goals, constraint tables and EQD2 conversion
-- :mod:`._pareto`, :mod:`._geometry`, :mod:`._recipes`, :mod:`._structure_names`,
-  :mod:`._views`: Pareto math, mask geometry, helper recipes, name matching and the
-  views of the tool results the model sees
+- :mod:`._pareto`, :mod:`._geometry`, :mod:`._recipes`, :mod:`._views`:
+  Pareto math, mask geometry, helper recipes and the views of the tool results the model sees
 """
 
 from ._agent import (
@@ -33,7 +32,6 @@ from ._constraints import (
 from ._evaluation import PlanRecord, evaluate_protocol, plan_score, select_distinct_plans
 from ._recipes import BooleanRecipe, ExcludeSpec, IsodoseRecipe, MarginRecipe, RingRecipe
 from ._state import PlanningError, PlanningState, UnknownVoiError
-from ._structure_names import canonical_structure_name
 
 __all__ = [
     "BooleanRecipe",
@@ -50,7 +48,6 @@ __all__ = [
     "RingRecipe",
     "UnknownVoiError",
     "available_constraint_tables",
-    "canonical_structure_name",
     "compact_history",
     "continue_planning_agent",
     "convert_fractionation",

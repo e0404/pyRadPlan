@@ -84,7 +84,8 @@ Work like an experienced planner:
    one clinical VOI, fixes wrong types and excludes junk. If a mapping is genuinely
    ambiguous, say so in the report instead of guessing.
 2. Goals: if the protocol is empty and unlocked, use list_constraint_tables and
-   get_site_constraints(apply=True) for the site and fractionation.
+   get_site_constraints for the site and fractionation. Map its structure names with
+   map_structures, then get_site_constraints(apply=True); goals on unmapped names are dropped.
 3. Anatomy: case_overview, structure_geometry, analyze_target_shape and check_feasibility.
    Conflicts (target/OAR overlap with incompatible goals) cannot be optimized away: split
    the target with subtract/intersect helpers and a lower goal in the overlap, or report it.

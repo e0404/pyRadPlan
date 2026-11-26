@@ -548,23 +548,11 @@ def messy_state():
     return PlanningState(ct=ct, cst=cst, pln=PhotonPlan(), protocol=protocol)
 
 
-def test_name_normalization():
-    from pyRadPlan.ai.agents._planning import canonical_structure_name as can
-
-    assert can("Myelon") == "SpinalCord"
-    assert can("Parotis links") == can("parotid_L") == "Parotid_L"
-    assert can("Hüftkopf re") is None or can("Hüftkopf rechts") == "Femur_Head_R"
-    assert can("PAROTID_LT") == "Parotid_L" and can("SPINAL_CORD") == "SpinalCord"
-
-
 def test_inspect_structures_hints(messy_state):
     info = messy_state.inspect_structures()
     rows = {r["name"]: r for r in info["structures"]}
-    assert rows["Myelon"]["canonical"] == "SpinalCord"
     assert rows["Aussenkontur"]["pct_inside_target"]["PTV_60"] > 0
-    cands = info["unmapped_protocol_names"]
-    assert cands["SpinalCord"][0]["voi"].strip() == "Myelon"
-    assert cands["PTV"][0]["voi"] == "PTV_60"
+    assert info["unmapped_protocol_names"] == ["PTV", "SpinalCord"]
 
 
 def test_map_structures_and_evaluate_with_aliases(messy_state):
@@ -577,7 +565,7 @@ def test_map_structures_and_evaluate_with_aliases(messy_state):
     )
     assert ("Aussenkontur", "EXTERNAL") in out["vois"]
     assert len(out["vois"]) == 3
-    assert messy_state.inspect_structures()["unmapped_protocol_names"] == {}
+    assert messy_state.inspect_structures()["unmapped_protocol_names"] == []
 
     qi = lambda v: SimpleNamespace(value=v)
     qis = {"PTV_60": {"D95": qi(1.9)}, "Myelon": {"max": qi(1.0)}}

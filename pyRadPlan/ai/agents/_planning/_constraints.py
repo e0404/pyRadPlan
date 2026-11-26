@@ -222,11 +222,11 @@ class ConstraintTable(BaseModel):
     ``dose_reference.type`` is ``"EQD2"`` (dose values are EQD2, converted to the plan's
     fractionation with each structure's ``alpha_beta``) or ``"fractionation"`` (physical
     doses for the site's ``prescription``, converted via EQD2 if the plan differs).
-    ``sites.<site>.structures`` and ``sites.<site>.targets`` map canonical structure names
-    (see :func:`canonical_structure_name`) to an ``alpha_beta`` and their constraints:
-    ``metric`` (``mean``, ``max``, ``min``, ``D<vol%>``, ``V<dose>Gy``), ``op``, ``value``
-    (Gy for dose metrics, % for V metrics), ``hard`` and an optional ``unit``
-    (``"%Rx"``: percent of the plan's prescription, not converted).
+    ``sites.<site>.structures`` and ``sites.<site>.targets`` map structure names to an
+    ``alpha_beta`` and their constraints: ``metric`` (``mean``, ``max``, ``min``,
+    ``D<vol%>``, ``V<dose>Gy``), ``op``, ``value`` (Gy for dose metrics, % for V metrics),
+    ``hard`` and an optional ``unit`` (``"%Rx"``: percent of the plan's prescription, not
+    converted).
     """
 
     id: str
