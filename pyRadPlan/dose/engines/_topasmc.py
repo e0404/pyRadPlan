@@ -46,6 +46,17 @@ external_calculation : bool | str
 
 physics_modules : dict
     Dictionary defining Geant4 physics lists used in the simulation.
+em_range_min : float or None
+    Lower energy limit of the EM tables in eV (``Ph/<list>/EMRangeMin``). ``None`` keeps
+    the TOPAS default.
+em_range_max : float or None
+    Upper energy limit of the EM tables in MeV (``Ph/<list>/EMRangeMax``). TOPAS 4.0
+    builds its tables only up to 500 MeV by default. Alpha tables are in total kinetic energy, so
+    helium above 125 MeV/u would get ranges that are too short. ``None`` keeps the TOPAS
+    default.
+em_bins_per_decade : int or None
+    Number of EM table bins per energy decade (``Ph/<list>/EMBinsPerDecade``).
+    ``None`` keeps the TOPAS default.
 
 scorer : dict
     Configuration of scoring options (dose to medium, water, LET, output type). The LET
@@ -76,7 +87,7 @@ import logging
 import os
 from datetime import datetime
 import sys
-from typing import Any, ClassVar, Literal, Union
+from typing import Any, ClassVar, Literal, Optional, Union
 import numpy as np
 import SimpleITK as sitk
 from jinja2 import Template
@@ -144,6 +155,9 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
     num_runs: int
 
     physics_modules: list[str]
+    em_range_min: Optional[float]
+    em_range_max: Optional[float]
+    em_bins_per_decade: Optional[int]
     base_topas_folder = resources.files("pyRadPlan.data.topas")
     input_filenames = {
         "beam_biGaussian": base_topas_folder
@@ -218,6 +232,11 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             ]
         }
 
+        # EM table range, see the class docstring
+        self.em_range_min = 100.0  # eV
+        self.em_range_max = 9500.0  # MeV
+        self.em_bins_per_decade = 20  # as in g4em-standard_opt4
+
         self.simu_dir: str = get_data_dir() / "topas" / datetime.now().strftime("%Y-%m-%d")
 
         ### Private attributes ###
@@ -259,6 +278,11 @@ class ParticleTOPASMCEngine(ScoredLETBioMixin, MonteCarloEngineAbstract):
             "input_beam_definition": "".join(input_beam_definition),
             "physics_modules": self.physics_modules.get(
                 self.radiation_mode, self.physics_modules["default"]
+            ),
+            "em_range_min": self.em_range_min,
+            "em_range_max": self.em_range_max,
+            "em_bins_per_decade": (
+                None if self.em_bins_per_decade is None else int(round(self.em_bins_per_decade))
             ),
         }
 

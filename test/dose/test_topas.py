@@ -285,3 +285,45 @@ def test_topas_let_scorer_is_set_per_calculation(test_data_protons, tmp_path):
 
     assert '= "ProtonLET"' in _run_files_text(tmp_path)
     assert engine.scorer == scorer
+
+
+def _beam_setup_text(simu_dir):
+    return "".join(
+        p.read_text() for p in Path(simu_dir).glob("beamSetup_pyRadPlan_plan_field*.txt")
+    )
+
+
+def test_topas_input_extends_the_em_table_range(test_data_protons, tmp_path):
+    """The EM tables reach beyond the TOPAS default of 500 MeV (helium above 125 MeV/u)."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    calc_dose_forward(ct, cst, stf, _topas_plan(pln, "constant_rbe", simu_dir=tmp_path))
+
+    text = _beam_setup_text(tmp_path)
+    assert "d:Ph/PhysicsList/EMRangeMin = 100.0 eV" in text
+    assert "d:Ph/PhysicsList/EMRangeMax = 9500.0 MeV" in text
+    assert "i:Ph/PhysicsList/EMBinsPerDecade = 20" in text
+
+
+def test_topas_input_keeps_the_topas_em_defaults_when_unset(test_data_protons, tmp_path):
+    """Setting the EM range attributes to None leaves the TOPAS defaults in place."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    settings = {"em_range_min": None, "em_range_max": None, "em_bins_per_decade": None}
+    calc_dose_forward(
+        ct, cst, stf, _topas_plan(pln, "constant_rbe", simu_dir=tmp_path, **settings)
+    )
+
+    assert "EMRange" not in _beam_setup_text(tmp_path)
+    assert "EMBinsPerDecade" not in _beam_setup_text(tmp_path)
+
+
+def test_topas_input_lists_the_physics_modules_without_a_stray_quote(test_data_protons, tmp_path):
+    """Every physics module is quoted once and the line has no stray quote."""
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    calc_dose_forward(ct, cst, stf, _topas_plan(pln, "constant_rbe", simu_dir=tmp_path))
+
+    modules = ParticleTOPASMCEngine(pln).physics_modules["default"]
+    expected = f"sv:Ph/PhysicsList/Modules = {len(modules)} " + " ".join(f'"{m}"' for m in modules)
+    lines = [
+        line for line in _beam_setup_text(tmp_path).splitlines() if "PhysicsList/Modules" in line
+    ]
+    assert lines and all(line == expected for line in lines)

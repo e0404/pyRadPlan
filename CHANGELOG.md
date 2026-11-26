@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A GUI dependency that is installed but fails to load is no longer reported as a missing `gui` extra. Importing `pyRadPlan.gui` warns with the original error, and starting the GUI raises it
 - GUI: the Edit VOI dialog now shows the predefined tissue (base data class or cell line preset) a structure already has in its tissue picker, also after Apply and Match base data. Pressing OK with a tissue selected in the picker but not applied now asks whether to apply it, discard the selection or keep editing, instead of silently dropping it
 - Web version: the Edit VOI dialog now offers the tissue picker with Apply, Match base data, Relabel and Derive from model, with the same preselection and the same warning for an unapplied selection as the desktop GUI. The tissue editor of that dialog had no picker before
+- TOPAS: helium beams above 125 MeV/u had ranges that were too short, because TOPAS 4.0 builds its EM tables only up to 500 MeV total kinetic energy by default. `ParticleTOPASMCEngine` now writes `EMRangeMin`, `EMRangeMax` (9500 MeV) and `EMBinsPerDecade` into the physics settings, configurable through the new `em_range_min`, `em_range_max` and `em_bins_per_decade` attributes (`None` keeps the TOPAS default)
+- TOPAS: the physics modules line of the beam setup file ended with a stray quote (`... "g4radioactivedecay""`)
 
 ## [0.9.0] - 2026-11-18
 
