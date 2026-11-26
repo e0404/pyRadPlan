@@ -444,30 +444,6 @@ def test_monitor_only_reports_but_does_not_steer():
     assert np.all(objective.compute_gradient(dose) == 0.0)
 
 
-def test_transform_switches_to_the_linear_branch():
-    """Above p = 0.5 the value becomes 0.25 * logit(p) + 0.5 with a matching gradient."""
-    coefficients = [0.03, -1e-4, 0.06, -1e-4]
-    plain, grid = _objective(_logistic(coefficients), _features())
-    transformed, _ = _objective(_logistic(coefficients), _features(), transform=True)
-
-    # A high dose pushes the probability well above 0.5.
-    high = np.full(grid.num_voxels, 60.0)
-    probability = plain.compute_objective(high)
-    assert probability > 0.5
-
-    expected = 0.25 * np.log(probability / (1.0 - probability)) + 0.5
-    assert transformed.compute_objective(high) == pytest.approx(expected)
-
-    # In the linear branch the logistic derivative cancels: dvalue/dfeature = 0.25 * coef.
-    ratio = transformed.compute_gradient(high) / plain.compute_gradient(high)
-    assert ratio == pytest.approx(np.full_like(ratio, 0.25 / (probability - probability**2)))
-
-    # Below the break point the transform is the identity.
-    low = np.full(grid.num_voxels, 1.0)
-    assert plain.compute_objective(low) < 0.5
-    assert transformed.compute_objective(low) == pytest.approx(plain.compute_objective(low))
-
-
 def test_uninitialised_objective_raises():
     spec = OutcomeModelSpec(label="test", features=_features())
     objective = OutcomeLR(model=(_logistic([0.1] * 4), spec))
@@ -523,7 +499,7 @@ def test_loader_reminds_to_install_scikit_learn(tmp_path, monkeypatch):
 
 def test_loader_accepts_a_sav_predictor(tmp_path):
     config, model_dir = _write_snapshot(tmp_path, _logistic([0.1] * 4), JSON_COLUMNS, None)
-    (model_dir / "predictor.save").rename(model_dir / "predictor.sav")
+    (model_dir / "predictor.save").rename(model_dir / "predictor.save")
 
     estimator, _ = load_pyanno4rt_model(config.parent)
     assert estimator.n_features_in_ == 4
@@ -568,16 +544,8 @@ def test_validation_keeps_defaults_and_input():
 
     objective = OutcomeLR.model_validate(data)
 
-    assert objective.transform is False
     assert objective.num_of_fractions is None
     assert sorted(data) == ["model"]
-
-
-def test_transform_survives_a_saturated_probability():
-    objective, _ = _objective(_logistic([0.1] * 4), _features(), transform=True)
-    value, slope = objective._transform(1.0)
-
-    assert np.isfinite(value) and np.isfinite(slope)
 
 
 def test_rejects_models_that_are_not_a_logistic_regression():
@@ -639,8 +607,8 @@ def test_feature_names_are_available_before_setup():
 def test_sklearn_objective_matches_the_analytic_logistic_regression():
     """Finite differences over the features reproduce the analytic LR gradient."""
     estimator = _logistic([0.03, -1e-4, 0.06, -1e-4])
-    analytic, grid = _objective(estimator, _features(), transform=True, num_of_fractions=30)
-    generic, _ = _sklearn_objective(estimator, transform=True, num_of_fractions=30)
+    analytic, grid = _objective(estimator, _features(), num_of_fractions=30)
+    generic, _ = _sklearn_objective(estimator, num_of_fractions=30)
     dose = _dose(grid, seed=8) / 30
 
     assert generic.compute_objective(dose) == pytest.approx(analytic.compute_objective(dose))

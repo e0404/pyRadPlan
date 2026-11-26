@@ -84,15 +84,12 @@ stf = generate_stf(ct, cst, pln)
 # The model was trained on total-course dose, so the objective multiplies the
 # per-fraction dose of the optimizer by `num_of_fractions`.
 #
-# `transform=True` (off by default) keeps the gradient from vanishing once the predicted
-# probability saturates: above 50% the sigmoid is replaced by its tangent. `priority` is *not* directly
-# comparable to pyanno4rt's `weight`: pyanno4rt leaves the fraction factor out of the
-# gradient, this objective includes it.
+# `priority` is *not* directly comparable to pyanno4rt's `weight`: pyanno4rt leaves the
+# fraction factor out of the gradient, this objective includes it.
 # %%
 ntcp_obj = OutcomeLR(
     priority=100.0,
     model=PYANNO4RT_MODEL,
-    transform=True,
     num_of_fractions=pln.num_of_fractions,
 )
 print("Model features:", ntcp_obj.feature_names)
