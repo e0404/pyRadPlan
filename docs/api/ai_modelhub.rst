@@ -58,6 +58,18 @@ Discovery
    task_from_name
 
 
+Inspection
+----------
+
+.. autosummary::
+   :toctree: generated/ai/modelhub/
+
+   model_facts
+   local_model_dir
+   hub_config_dir
+   list_hub_models
+
+
 Hub resolution
 --------------
 

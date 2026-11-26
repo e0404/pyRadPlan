@@ -7,18 +7,39 @@
     "_model_params_help": "Kwargs passed directly to the model constructor (the class named by 'model_name' in model.py). Model-specific; do not put any key here that the constructor does not accept.",
 
     "model_preprocessing": {},
-    "_model_preprocessing_help": "Passed whole to the preprocessor's constructor (available as self.config); it configures BOTH preprocess() and postprocess(). Contents are model-specific.",
+    "_model_preprocessing_help": "Passed whole to the preprocessor's constructor (available as self.config); it configures preprocess(), postprocess() and, for a dose-calculation model, predict(). Contents are model-specific.",
 
     "metadata": {
-        "_help": "Free-form apart from 'task'. Use it to record how the model was trained and any assumptions it makes.",
+        "_help": "Free-form: the loader ignores it. Use it to record how the model was trained and any assumptions it makes. 'task' is read by list_local_models(); 'training.modality', 'requirements' and 'dose_calc' are read by the AI dose engine ('AIBeamlet').",
         "task": "dose_calc | outcome",
-        "_task_help": "What the model does. Read by list_local_models(); falls back to the 'dosecalc-*'/'outcome-*' repository-name prefix when absent. Distinct from the radiation modality under 'training'.",
+        "_task_help": "What the model does. Read by list_local_models() and the model suggestions of the GUI; falls back to the 'dosecalc-*'/'outcome-*' repository-name prefix when absent. Distinct from the radiation modality under 'training'.",
         "description": "Short human-readable description of the model.",
         "requirements": ["torch", "safetensors"],
-        "_requirements_help": "Optional. Importable packages model.py/preprocessor.py need. The AI dose engine checks them before offering itself, so a model whose framework is not installed is not offered instead of failing mid-calculation.",
+        "_requirements_help": "Optional. Importable packages model.py/preprocessor.py need (top-level package names). For a plan naming this model, the AI dose engine reports itself unavailable if one is not installed, instead of failing mid-calculation.",
+        "dose_calc": {
+            "_help": "Dose-calculation models only; read by the AI dose engine ('AIBeamlet'). Only 'grid_parameters' is required. The preprocessor must provide predict(model, model_input) returning {quantity: array of shape (batch, depth, lateral, lateral)} for every quantity listed in 'quantities'; see the AI Model Hub user guide.",
+            "grid_parameters": {
+                "_help": "Required. Sampling grid of each beamlet: a cuboid aligned with the beamlet, centered laterally on its ray; all values in mm. The model gets the CT on this grid with axis order (depth, lateral, lateral) and returns its predictions on the same grid.",
+                "spacing": 3.0,
+                "_spacing_help": "Isotropic grid spacing.",
+                "lateral_range": 60.0,
+                "_lateral_range_help": "Total width of the grid along each lateral axis.",
+                "depth_offset_start": -50.0,
+                "_depth_offset_start_help": "Where the grid starts along the ray, relative to the isocenter plane (negative: upstream, towards the source).",
+                "depth_range": 250.0,
+                "_depth_range_help": "Length of the grid along the ray; it ends at depth_offset_start + depth_range."
+            },
+            "quantities": ["physical_dose"],
+            "_quantities_help": "Optional, default ['physical_dose']. Quantities predict() returns, e.g. physical_dose, physical_dose_var, let_dose. 'physical_dose' is required and must come first.",
+            "energy_range_mev": [70.0, 230.0],
+            "_energy_range_mev_help": "Optional [min, max] in MeV the model was trained on. The engine warns about energies of the plan outside it.",
+            "trained_machine": "Generic",
+            "_trained_machine_help": "Optional. Name of the machine the model was trained on. The engine warns if the plan uses another one."
+        },
         "training": {
             "dataset": "...",
             "modality": "protons | photons | ...",
+            "_modality_help": "Radiation mode (as in the plan's radiation_mode) the model was trained for. The AI dose engine ('protons' or 'VHEE') rejects plans using another one. Older models may declare it as 'dose_calc.radiation_mode' instead.",
             "input_resolution_mm": [3.0, 3.0, 2.5],
             "notes": "How the data was trained / assumptions the model makes."
         }

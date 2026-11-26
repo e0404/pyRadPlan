@@ -242,9 +242,16 @@ keys; everything else is free-form metadata the loader ignores:
   constructed with ``model_preprocessing``, which configures **both** ``preprocess()``
   and ``postprocess()``.  If ``preprocessor.py`` defines more than one subclass, set
   ``preprocessor_name`` in ``model_config.json`` to disambiguate.
-* ``metadata`` is otherwise free-form and not read by the loader; use it to record how
-  the model was trained and any assumptions it makes.  Only ``metadata.task`` is
-  interpreted, by :func:`~pyRadPlan.ai.modelhub.list_local_models`.
+* ``metadata`` is otherwise free-form: use it to record how the model was trained and any
+  assumptions it makes. The loader itself ignores it. Other parts of pyRadPlan read these
+  entries:
+
+  * ``metadata.task`` -- by :func:`~pyRadPlan.ai.modelhub.list_local_models` (and the model
+    suggestions of the GUI) to filter models by what they do;
+  * ``metadata.training.modality`` and ``metadata.requirements`` -- by the ``"AIBeamlet"`` dose
+    engine (via :func:`~pyRadPlan.ai.modelhub.model_facts`) to check the radiation mode and
+    the installed packages of a model before offering it;
+  * ``metadata.dose_calc`` -- by the ``"AIBeamlet"`` dose engine, see below.
 
 .. code-block:: json
 
@@ -264,26 +271,101 @@ unique to the folder, so several models can be loaded side by side and the class
 define stay picklable.  Import sibling files relatively
 (``from .preprocessor import …``).
 
-A working reference implementation lives in ``test/data/ai_models/dummy_model/`` and is
-exercised by the test suite.  The annotated config template is
+Working reference implementations live in the test data and are exercised by the test suite:
+``test/data/ai_models/dummy_model/`` is an outcome model, and
+``test/data/ai_models/DKFZ-RadOpt/dummy_dosecalc_model/`` a dose-calculation model for the
+``"AIBeamlet"`` engine.  The annotated config template is
 ``pyRadPlan/data/ai_models/model_config.template.json``.
 
 Using a model for dose calculation
 ----------------------------------
 
 Dose-calculation models (``metadata.task = "dose_calc"``) are consumed by the ``"AIBeamlet"``
-engine rather than loaded by hand; it reads the same repository contract and additionally
-honours the ``metadata.dose_calc`` section (sampling grid, predicted quantities) and
-``metadata.training.modality``:
+engine rather than loaded by hand:
 
 .. code-block:: python
 
     pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}
     dij = calc_dose_influence(ct, cst, stf, pln)
 
-See :ref:`concept_ai_dose_calculation` for model selection, availability and device handling,
-and the :doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>` for a runnable
-example. AI dose calculation is a research feature and not intended for clinical use.
+The engine loads the model like :func:`~pyRadPlan.ai.modelhub.load_model` does (including the
+rule of :ref:`modelhub_trust`) and additionally reads the ``metadata`` entries listed in
+:ref:`concept_ai_dose_calculation`: the sampling grid and predicted quantities under
+``metadata.dose_calc`` (the grid is required), the training assumptions it checks against the
+plan, ``metadata.training.modality`` and ``metadata.requirements``.
+
+.. _dose_calc_preprocessor_contract:
+
+Preprocessor contract of a dose-calculation model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+What ``raw_inputs`` and ``result`` of the generic quick start are is fixed for dose
+calculation: for every ray the engine samples the CT on the model's grid and calls the
+preprocessor of the model in two steps. A dose-calculation preprocessor therefore implements
+``preprocess`` and ``predict(model, model_input)``, and usually ``postprocess``, which
+``predict`` calls:
+
+.. code-block:: python
+
+    model_input = preprocessor.preprocess({"ct_cuboid": ct_cuboid, "energy": energy})
+    outputs = preprocessor.predict(model, model_input)   # {quantity: array}
+
+``ct_cuboid``
+    The CT sampled on the model's grid (``metadata.dose_calc.grid_parameters``): Hounsfield
+    units as a floating-point array of shape ``(depth, lateral, lateral)``, with ``-1000`` for
+    points outside the CT. There is no batch axis: all beamlets of the ray, which differ only in
+    their energy, share the cuboid.
+
+``energy``
+    The nominal energies in MeV of the beamlets to predict, a one-dimensional floating-point
+    array of shape ``(batch,)``. Its length is at most the engine's ``max_batch_size`` (a ray
+    is split into several calls beyond it) and may be 1.
+
+Both arrive in the engine's array namespace and on its device, i.e. NumPy, CuPy, PyTorch or
+JAX arrays depending on ``pyRadPlan.settings.xp``. A preprocessor therefore converts them to
+the framework of its model first, e.g. with ``pyRadPlan.core.xp_utils.to_namespace("torch",
+array)`` or with ``array_api_compat.array_namespace`` for plain array operations.
+
+``preprocess`` turns them into whatever ``model_input`` the model needs (for example a
+``(batch, channels, depth, lateral, lateral)`` tensor); ``model_input`` is passed on untouched.
+``predict`` receives the loaded model, already in eval mode and on its device, and runs the
+forward pass(es) -- a single one, or several for an ensemble, as the model's author sees fit --
+and the scaling to physical units, typically by calling ``postprocess``. It must return a
+dictionary mapping each quantity name to an array of shape ``(batch, depth, lateral, lateral)``
+on the grid of the ``ct_cuboid``, with an entry for every quantity declared under
+``metadata.dose_calc.quantities`` (``["physical_dose"]`` if none are declared, and
+``physical_dose`` must be among them, listed first); a declared quantity that is missing makes
+the calculation fail. The arrays may be returned in the model's own framework (and on its
+device): the engine converts them to its array namespace. ``physical_dose`` decides which voxels a beamlet stores, and its unit becomes the
+unit of the influence matrix.
+
+A sketch of such a preprocessor; the dose-calculation reference model is a complete one:
+
+.. code-block:: python
+
+    import torch
+
+    from pyRadPlan.ai.modelhub import BasePreprocessor
+    from pyRadPlan.core.xp_utils import to_namespace
+
+
+    class MyDoseCalcPreprocessor(BasePreprocessor):
+        def preprocess(self, inputs: dict) -> torch.Tensor:
+            ct = to_namespace("torch", inputs["ct_cuboid"]).float()
+            energy = to_namespace("torch", inputs["energy"]).float().reshape(-1)
+            ...  # normalize and stack to (batch, channels, depth, lateral, lateral)
+
+        def postprocess(self, outputs: torch.Tensor) -> dict:
+            return {"physical_dose": outputs[:, 0] * self.config["max_dose"]}
+
+        def predict(self, model, model_input):
+            with torch.inference_mode():
+                return self.postprocess(model(model_input.to(next(model.parameters()).device)))
+
+See :ref:`concept_ai_dose_calculation` for the geometry of the grid, the engine parameters and
+device handling, and the :doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>`
+for a runnable example. AI dose calculation is a research feature and not intended for clinical
+use.
 
 API reference
 -------------
