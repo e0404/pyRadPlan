@@ -140,7 +140,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     - Coordinate frames: world → BEV → beamlet-local via rotation/translation from the beam.
     - Grid construction: uniform spacing in depth and lateral with configurable ranges; axis
         order is (depth, lateral, lateral) to match model conventions.
-    - Model inference: model + preprocessor loaded via `pyRadPlan.ai.modelhub.load_model` from the
+    - Model inference: model + preprocessor loaded with `pyRadPlan.ai.modelhub` from the
         '<org>/<model>' id in `prop_dose_calc["model"]`; backend-agnostic arrays using the
         Array API (`self.xp`). Loading executes the code shipped with the model: a model
         folder placed under ``settings.ai.modelhub_local_models_dir`` by the user runs
@@ -155,11 +155,12 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
     Notes
     -----
-    - Input assembly and output scaling are delegated to the model's own preprocessor
-        (`preprocess`/`postprocess`); multi-output models (e.g. dose+physical_dose_var,
-        dose+LET) return a dict from `postprocess` keyed by quantity name.
-    - Interop with SimpleITK/NumPy occurs where required; otherwise operations follow
-        the configured array backend (`self.xp`).
+    - Inference is delegated to the model's own preprocessor: ``preprocess`` builds the
+        network input from the CT cuboid and the beamlet energies, and
+        ``predict(model, model_input)`` returns a dict of predicted cuboid batches keyed
+        by quantity name, one per quantity in ``metadata.dose_calc.quantities``.
+    - Positions are float32 on every backend; each ray's transforms are composed in
+        float64 on the host.
     """
 
     short_name = "AIBeamlet"
@@ -333,9 +334,11 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         Returns
         -------
         dict
-            Bixel dictionary with ``ix``, ``physical_dose``, and any second quantity.
+            The beamlet's steering information (its ``weight`` scales a forward
+            calculation) with ``ix`` and one entry per quantity the model predicts.
         """
-        bixel = self._init_bixel(ray, k)
+        # A copy, so the beam's beamlets do not keep the predicted arrays alive.
+        bixel = ray["beamlets"][k].copy()
         bixel.update(ray["_precomputed_bixels"][k])
         return bixel
 
@@ -365,67 +368,19 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         return {q_name: to_namespace(xp, value) for q_name, value in result.items()}
 
-    def _init_bixel(self, curr_ray: dict, k: int) -> dict:
-        """Initialize bixel bookkeeping and energy indexing.
-
-        Parameters
-        ----------
-        curr_ray : dict
-            Ray dictionary with entries such as ``beamlets``, energy, MU constraints, etc.
-        k : int
-            Index of the bixel inside ``curr_ray['beamlets']``.
-
-        Returns
-        -------
-        dict
-            The bixel dictionary augmented with indices (beam/ray/bixel), MU limits,
-            particles-per-MU, and the machine energy index used for lookups.
-        """
-        # A copy, so the predicted arrays are not kept alive in the beam for the whole beam.
-        bixel = curr_ray["beamlets"][k].copy()
-        bixel["beam_index"] = curr_ray["beam_index"]
-        bixel["ray_index"] = curr_ray["ray_index"]
-        bixel["bixel_index"] = k
-
-        bixel["min_mu"] = 0
-        if "min_mu" in curr_ray:
-            bixel["min_mu"] = curr_ray["min_mu"][k]
-
-        bixel["max_mu"] = float("inf")
-        if "max_mu" in curr_ray:
-            bixel["max_mu"] = curr_ray["max_mu"][k]
-
-        bixel["num_particles_per_mu"] = 1e6
-        if "num_particles_per_mu" in curr_ray:
-            bixel["num_particles_per_mu"] = curr_ray["num_particles_per_mu"][k]
-
-        # Find energy index in base data
-        energy = curr_ray["beamlets"][k]["energy"]
-        energy_ix = self._machine.get_energy_index(energy, 4)
-
-        if energy_ix.size > 1:
-            raise ValueError("Multiple energies found in base data for one bixel!")
-
-        xp = self.xp
-        energy_ix = xp.asarray(energy_ix, dtype=xp.int64, device=self.device)
-
-        bixel["energy_ix"] = energy_ix
-
-        return bixel
-
     def _construct_grid(self):
+        """Build the beamlet-local sampling grid the model was trained on.
+
+        Sets ``self.grid``, the sample centers as ``(x, y, z) = (lateral, depth, lateral)``
+        rows ordered like a ``(depth, lateral, lateral)`` cuboid, ``self.corners_local``,
+        the cuboid's corners half a sample beyond the outermost centers, and the axes in
+        ``self.grid_information``.
+        """
         xp = self.xp
-        # Load grid parameters from model config
         grid_params = self.model_cfg.grid_parameters
         spacing = grid_params.spacing
-        lateral_range = grid_params.lateral_range
-        lateral_half_width = lateral_range / 2
-        depth_offset_start = grid_params.depth_offset_start
-        depth_range = grid_params.depth_range
-
-        # coordinates in bev
-        y_start = depth_offset_start
-        y_end = depth_offset_start + depth_range
+        lateral_half_width = grid_params.lateral_range / 2
+        depth_start = grid_params.depth_offset_start
 
         lateral_range = xp.arange(
             -lateral_half_width + spacing / 2,
@@ -434,29 +389,30 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             dtype=xp.float32,
             device=self.device,
         )
-        depth_range = xp.arange(y_start, y_end, spacing, dtype=xp.float32, device=self.device)
+        depth_range = xp.arange(
+            depth_start,
+            depth_start + grid_params.depth_range,
+            spacing,
+            dtype=xp.float32,
+            device=self.device,
+        )
 
         depth_vals, lateral_x_vals, lateral_z_vals = array_meshgrid(
             depth_range, lateral_range, lateral_range, indexing="ij"
         )
-
-        # Assign world coordinates: x=lateral_x, y=depth, z=lateral_z
-        x = lateral_x_vals
-        y = depth_vals
-        z = lateral_z_vals
-
         self.grid = xp.stack(
-            (xp.reshape(x, (-1,)), xp.reshape(y, (-1,)), xp.reshape(z, (-1,))),
+            (
+                xp.reshape(lateral_x_vals, (-1,)),
+                xp.reshape(depth_vals, (-1,)),
+                xp.reshape(lateral_z_vals, (-1,)),
+            ),
             axis=-1,
         )
 
-        # We reduce computation by first computing a bounding box of the beamlet in world coordinate,
-        # then filtering world points before the full transformation.
-
-        # Define 8 corners of the cuboid in local beamlet frame
+        # The corners bound the dose-grid voxels worth transforming into the local frame.
         lx_min, lx_max = lateral_range[0] - spacing / 2, lateral_range[-1] + spacing / 2
         ly_min, ly_max = depth_range[0] - spacing / 2, depth_range[-1] + spacing / 2
-        lz_min, lz_max = lateral_range[0] - spacing / 2, lateral_range[-1] + spacing / 2
+        lz_min, lz_max = lx_min, lx_max
 
         self.corners_local = xp.asarray(
             [
@@ -469,7 +425,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
                 [lx_max, ly_max, lz_min],
                 [lx_max, ly_max, lz_max],
             ],
-            dtype=lateral_range.dtype,
+            dtype=xp.float32,
             device=self.device,
         )
 
@@ -479,55 +435,30 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             "spacing": spacing,
         }
 
-    def _extract_ct_cuboid(self, ray: dict[str, Any], beam_info) -> None:
-        """Sample CT on the beamlet-local grid constructed for this ray.
-
-        Method
-        - Constructs a regular local grid (depth, lateral, lateral) aligned with the current
-          beamlet geometry and transforms it to world coordinates.
-        - Interpolates the CT on this transformed grid.
-        - Stores the resulting cuboid into ``ray['ct_cuboid']`` for downstream model use.
+    def _extract_ct_cuboid(self, ray: dict[str, Any]) -> None:
+        """Sample the CT on this ray's beamlet-local grid into ``ray["ct_cuboid"]``.
 
         Parameters
         ----------
         ray : dict[str, Any]
-            Ray dictionary to be augmented with the sampled CT cuboid.
-        beam_info : dict
-            Per-beam precomputed geometry and ray-tracing information used to build the grid.
-
-        Returns
-        -------
-        None
-            The function mutates ``ray`` in place by inserting ``ray['ct_cuboid']`` and
-            updates ``self.grid_information`` with the constructed grids and transforms.
+            The ray, as prepared by ``_init_ray``.
         """
+        self._rotate_grid(ray)
+        ray["ct_cuboid"] = self._extract_sitk_grid_and_interpolate(self.grid_information)
 
-        self._rotate_grid(ray, beam_info)
+    def _rotate_grid(self, ray: dict) -> None:
+        """Place the sampling grid on a ray and find the dose-grid voxels it covers.
 
-        interpolated_values_ct = self._extract_sitk_grid_and_interpolate(self.grid_information)
-        ray["ct_cuboid"] = interpolated_values_ct
-
-    def _rotate_grid(self, ray: dict, beam_info: dict) -> dict:
-        """Construct a beamlet-local regular sampling grid and transforms.
+        The local frame has its depth axis along the ray, through the source. Updates
+        ``self.grid_information`` with ``grid_rotated``, the sampling grid in world
+        coordinates, ``ix_mask``, the linear dose-grid indices of the voxels within the
+        cuboid's bounding box, and ``local_points_masked``, their local coordinates.
 
         Parameters
         ----------
         ray : dict
-            Current ray dictionary containing rotation matrices, BEV positions and isocenter.
-        beam_info : dict
-            Beam-level geometry and traced coordinate arrays (e.g., BEV coordinates).
-
-        Returns
-        -------
-        dict
-            A dictionary with
-            - `lateral_range` (Array[float]): lateral coordinates used for X/Z axes,
-            - `depth_range` (Array[float]): longitudinal coordinates (Y axis),
-            - `spacing` (float): grid spacing used for all axes,
-            - `grid` (Array[N,3]): beamlet-local grid points, (x=lateral, y=depth, z=lateral),
-            - `grid_rotated` (Array[N,3]): corresponding world coordinates,
-            - `R_world_to_BEV`, `R_BEV_to_beamlet` (Array[3,3]): transforms between frames,
-            - `iso_center`, `source_point_bev` (Array[3]): translation references.
+            The ray, with ``source_point_bev``, ``target_point_bev``, ``iso_center`` and
+            the beam's world-to-BEV ``rotation_mat``, all float64 NumPy arrays.
         """
         source = ray["source_point_bev"]
         # Row vectors times this map the beamlet's direction onto the central ray (BEV y).
@@ -550,8 +481,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         min_world = xp.min(corners_world, axis=0)
         max_world = xp.max(corners_world, axis=0)
-
-        # Filter world coordinates
         bbox_mask = (
             (self.coords_all[:, 0] >= min_world[0])
             & (self.coords_all[:, 0] <= max_world[0])
@@ -560,160 +489,120 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             & (self.coords_all[:, 2] >= min_world[2])
             & (self.coords_all[:, 2] <= max_world[2])
         )
-
         candidate_indices = xp.nonzero(bbox_mask)[0]
         candidate_points = xp.take(self.coords_all, candidate_indices, axis=0)
 
-        # Use candidate points for precise transformation
-        local_points = (candidate_points - iso_center) @ world_to_local + offset
-
-        # Store transforms and masked local points in grid information for downstream use
         self.grid_information.update(
             {
                 "grid_rotated": grid_rotated,
-                "iso_center": ray["iso_center"],
-                "source_point_bev": ray["source_point_bev"],
-                "local_points_masked": local_points,
+                "local_points_masked": (candidate_points - iso_center) @ world_to_local + offset,
                 "ix_mask": candidate_indices,
             }
         )
 
-    def _extract_sitk_grid_and_interpolate(self, grid_information: dict):
-        """Interpolate a volume (CT) on a provided world-space sampling grid.
+    def _extract_sitk_grid_and_interpolate(self, grid_information: dict) -> Array:
+        """Interpolate the CT at the world positions of the sampling grid.
 
         Parameters
         ----------
         grid_information : dict
-            Dictionary returned by ``_construct_grid`` containing `grid_rotated`,
-            `lateral_range` and `depth_range`.
-        ct_interpolation : bool, optional
-            If ``True``, assigns HU air value (-1000) to out-of-volume samples; otherwise
-            zeros are kept. Defaults to ``False``.
+            ``self.grid_information``, with ``grid_rotated``, ``lateral_range`` and
+            ``depth_range``.
 
         Returns
         -------
         Array
-            Interpolated values reshaped to (depth, lateral, lateral), matching the
-            regular local grid axis order for downstream model consumption.
+            The CT in HU, shaped ``(depth, lateral, lateral)``; air (-1000 HU) outside
+            the CT.
         """
-        xp = array_api_compat.array_namespace(grid_information["grid_rotated"])
-
+        xp = self.xp
         lateral_range = grid_information["lateral_range"]
         depth_range = grid_information["depth_range"]
-        grid_rotated = grid_information["grid_rotated"]
 
         values = _interpolate_or_fill(
-            self.ct_interpolator, self.ct_grid_dimensions, grid_rotated, fill_value=-1000.0
+            self.ct_interpolator,
+            self.ct_grid_dimensions,
+            grid_information["grid_rotated"],
+            fill_value=-1000.0,
         )
-        # Meshgrid now built with shape (depth, lateral, lateral); direct reshape yields desired ordering
-        values_reshaped = xp.reshape(
+        return xp.reshape(
             values, (depth_range.shape[0], lateral_range.shape[0], lateral_range.shape[0])
         )
 
-        # debug: visualize ct cuboid (network input)
-        # import matplotlib.pyplot as plt
-        # z_slice = int(np.round(len(grid_information["lateral_range"]) / 2))
-        # plt.imshow(values_reshaped[:, :, z_slice], cmap="gray")
-
-        return xp.asarray(values_reshaped, device=self.device)
-
     def _init_beam(
-        self, _dij: dict, ct: CT, _cst: StructureSet, stf: SteeringInformation, i
+        self, _dij: dict, _ct: CT, _cst: StructureSet, stf: SteeringInformation, i: int
     ) -> dict:
-        """
-        Initialize the beam for pencil beam dose calculation using AI models.
+        """Prepare the geometry of one beam.
 
         Parameters
         ----------
-        dij : dict
-            The dose influence matrix dictionary.
-        ct : CT
-            The CT object.
+        _dij : dict
+            The dose influence matrix dictionary; unused.
+        _ct : CT
+            The CT; unused.
         _cst : StructureSet
-            The structure set object. Unused here
+            The structure set; unused.
         stf : SteeringInformation
-            The steering information object.
+            The steering information.
         i : int
             Index of the beam.
 
         Returns
         -------
         dict
-            Beam Information dictionary
+            ``beam`` (the beam as a dict, its points float64 NumPy vectors),
+            ``beam_index`` and ``rot_mat_system_T``, the world-to-BEV rotation.
         """
-        # TODO: here .model_dump() is used to get beam as dict. Its possible to change...
-        # ... the ray_tracing to handle this as the model
-        beam_info = {"beam": stf.beams[i].model_dump(), "beam_index": i}
+        beam = stf.beams[i].model_dump()
 
         # The geometry stays in float64 on the host, where each ray's transform is composed.
-        for key in ["iso_center", "source_point_bev", "source_point"]:
-            beam_info["beam"][key] = _host_vector(beam_info["beam"][key])
-        for ray in beam_info["beam"]["rays"]:
-            for key in ["ray_pos", "ray_pos_bev", "target_point", "target_point_bev"]:
-                if ray[key] is not None:
-                    ray[key] = _host_vector(ray[key])
-
-        rot_mat = get_beam_rotation_matrix(
-            beam_info["beam"]["gantry_angle"], beam_info["beam"]["couch_angle"]
-        )
-        beam_info["rot_mat_system_T"] = np.asarray(to_numpy(rot_mat), dtype=np.float64)
-
-        # Check existence of target_points
-        if any(r["target_point"] is None for r in beam_info["beam"]["rays"]):
-            logger.debug("Missing target_point in rays. Calculating target points...")
-            for ray in beam_info["beam"]["rays"]:
-                ray["target_point"] = 2 * ray["ray_pos"] - beam_info["beam"]["source_point"]
+        beam["iso_center"] = _host_vector(beam["iso_center"])
+        beam["source_point_bev"] = _host_vector(beam["source_point_bev"])
+        for ray in beam["rays"]:
+            if ray["target_point_bev"] is None:
                 ray["target_point_bev"] = (
-                    2 * ray["ray_pos_bev"] - beam_info["beam"]["source_point_bev"]
+                    2 * _host_vector(ray["ray_pos_bev"]) - beam["source_point_bev"]
                 )
+            else:
+                ray["target_point_bev"] = _host_vector(ray["target_point_bev"])
 
-        logger.info("Done.")
+        rot_mat = get_beam_rotation_matrix(beam["gantry_angle"], beam["couch_angle"])
+        return {
+            "beam": beam,
+            "beam_index": i,
+            "rot_mat_system_T": np.asarray(to_numpy(rot_mat), dtype=np.float64),
+        }
 
-        return beam_info
+    def _init_ray(self, beam_info: dict[str, Any], j: int) -> dict[str, Any]:
+        """Predict the dose of every beamlet of a ray.
 
-    def _init_ray(self, beam_info: dict[str], j: int) -> dict[str]:
-        """Initialize per-ray geometry and CT sampling for the AI engine.
-
-        Performs forward pass for all bixel of current ray and stores the outputs
+        Samples the CT on the ray's beamlet-local grid, runs the model on all its
+        beamlets (in batches of at most ``max_batch_size``) and interpolates the
+        predicted cuboids at the dose-grid voxels they cover.
 
         Parameters
         ----------
-        beam_info : dict[str]
-            Beam information dictionary produced in beam initialization, containing
-            rotation matrices, BEV coordinates, and ray metadata.
+        beam_info : dict[str, Any]
+            The beam, as prepared by ``_init_beam``.
         j : int
-            Index of the ray to initialize.
+            Index of the ray.
 
         Returns
         -------
-        dict[str]
-            Ray dictionary augmented with indices, geometry, an attached
-            `ct_cuboid` sampled on the local grid for later model inference
-            and saves the precomputed batch for this ray.
+        dict[str, Any]
+            The ray with ``num_of_bixels``, ``ct_cuboid`` and ``_precomputed_bixels``,
+            the sparse contribution of each beamlet, read by ``_compute_bixel``.
         """
         ray = beam_info["beam"]["rays"][j].copy()
-        ray["beam_index"] = beam_info["beam_index"]
-        ray["ray_index"] = j
+        ray["num_of_bixels"] = len(ray["beamlets"])
+        if ray["num_of_bixels"] == 0:
+            ray["_precomputed_bixels"] = []
+            return ray
+
         ray["iso_center"] = beam_info["beam"]["iso_center"]
-
-        if "num_of_bixels_per_ray" in beam_info["beam"]:
-            ray["num_of_bixels"] = int(beam_info["beam"]["num_of_bixels_per_ray"][j])
-        else:
-            # Fallback: use the actual number of beamlets on this ray
-            # This is needed for machines like "Focused" that don't precompute counts.
-            ray["num_of_bixels"] = len(ray.get("beamlets", [])) or 0
-
         ray["source_point_bev"] = beam_info["beam"]["source_point_bev"]
-        ray["sad"] = beam_info["beam"]["sad"]
-        ray["bixel_width"] = beam_info["beam"]["bixel_width"]
-
-        # self._get_ray_geometry_from_beam(ray, beam_info)
-
         ray["rotation_mat"] = beam_info["rot_mat_system_T"]
-        ray["radiation_mode"] = beam_info["beam"]["radiation_mode"]
-        ray["source_point"] = beam_info["beam"]["source_point"]
-        ray["machine"] = beam_info["beam"]["machine"]
-        self._extract_ct_cuboid(ray, beam_info)
+        self._extract_ct_cuboid(ray)
 
         xp = self.xp
         local_points_masked = self.grid_information["local_points_masked"]
@@ -726,18 +615,14 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         )
         vdose_sub = self._vdose_grid_mask[ix_mask]
 
-        energies = [b.get("energy") for b in ray.get("beamlets", [])]
-        B = len(energies)
-        assert B == ray["num_of_bixels"], "Inconsistent bixel count in ray!"
-        assert B > 0, "No bixels found in ray!"
-
-        energies_arr = xp.asarray(energies, device=self.device)
+        num_bixels = ray["num_of_bixels"]
+        energies_arr = xp.asarray([b["energy"] for b in ray["beamlets"]], device=self.device)
         quantities = self.model_cfg.quantities
 
         # Model inference — split into mini-batches when max_batch_size is set
-        if self.max_batch_size is not None and B > self.max_batch_size:
+        if self.max_batch_size is not None and num_bixels > self.max_batch_size:
             chunks_by_qty = {q: [] for q in quantities}
-            for start in range(0, B, self.max_batch_size):
+            for start in range(0, num_bixels, self.max_batch_size):
                 chunk_energies = energies_arr[start : start + self.max_batch_size]
                 chunk_res = self._predict(ray["ct_cuboid"], chunk_energies)
                 for q_name in quantities:
@@ -761,18 +646,12 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         # Build per-bixel precomputed entries; non-zero mask is driven by physical_dose
         dose_vals = vals_by_qty["physical_dose"]
         precomputed = []
-        for i in range(B):
+        for i in range(num_bixels):
             vals_dose = xp.where(vdose_sub, dose_vals[:, i], 0.0)
             nz_mask = vals_dose > self.dose_threshold
-            entry = {
-                "ix": xp.asarray(ix_mask[nz_mask], dtype=xp.int64, device=self.device),
-                "physical_dose": xp.asarray(
-                    vals_dose[nz_mask], dtype=xp.float32, device=self.device
-                ),
-            }
+            entry = {"ix": ix_mask[nz_mask], "physical_dose": vals_dose[nz_mask]}
             for q_name in quantities[1:]:
-                vals_q = xp.where(vdose_sub, vals_by_qty[q_name][:, i], 0.0)
-                entry[q_name] = xp.asarray(vals_q[nz_mask], dtype=xp.float32, device=self.device)
+                entry[q_name] = xp.where(vdose_sub, vals_by_qty[q_name][:, i], 0.0)[nz_mask]
             precomputed.append(entry)
 
         ray["_precomputed_bixels"] = precomputed
@@ -849,23 +728,19 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
                 )
 
     def _init_dose_calc(self, ct: CT, cst: StructureSet, stf: SteeringInformation):
-        """Initialize CT grid context and the AI model for dose calculation.
+        """Prepare the CT interpolator, load the model and build its sampling grid.
 
-        Method
-        - Calls the base initializer to set up common state and the dose grid.
-        - Extracts SimpleITK image arrays and builds a compatible Grid for interpolation.
-        - Loads the configured AI model and wires the current array backend to it.
-        - Precomputes world coordinates for all dose-grid voxels (as linear indices) used
-          later by interpolation in `_compute_bixel`.
+        The model is placed on the device of the engine's arrays. The world
+        coordinates of all dose-grid voxels are kept for ``_rotate_grid``.
 
         Parameters
         ----------
         ct : CT
-            The CT object (SimpleITK-backed) providing voxel data and geometry.
+            The CT.
         cst : StructureSet
-            Structure set; unused here but required by the interface.
+            The structure set.
         stf : SteeringInformation
-            Steering information including beams and rays for the plan.
+            The steering information.
 
         Returns
         -------

@@ -164,8 +164,8 @@ def test_extract_ct_cuboid_shape_matches_grid(test_data_protons):
     captured_shapes = []
     orig_extract = engine._extract_ct_cuboid
 
-    def _spy_extract(ray, beam_info):
-        orig_extract(ray, beam_info)
+    def _spy_extract(ray):
+        orig_extract(ray)
         captured_shapes.append(tuple(ray["ct_cuboid"].shape))
 
     engine._extract_ct_cuboid = _spy_extract
