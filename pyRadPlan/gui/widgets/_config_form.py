@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import queue
 import types
 from copy import deepcopy
 from typing import (
@@ -31,7 +32,7 @@ from typing import (
 )
 
 from pydantic import BaseModel, ValidationError
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -53,7 +54,7 @@ from pyRadPlan.app._forms import nested_fields as _nested_fields
 from pyRadPlan.app._forms import unwrap_optional as _unwrap_optional
 from pyRadPlan.app._forms import valid_entries
 from pyRadPlan.core import field_constraints, is_nested_instance, replace_nested
-from ._base import AdaptiveDoubleSpinBox, Worker, parse_number_list, run_in_background
+from ._base import AdaptiveDoubleSpinBox, parse_number_list, run_in_background
 
 logger = logging.getLogger(__name__)
 
@@ -676,7 +677,10 @@ class ConfigFormDialog(QDialog):
         root.addWidget(buttons)
 
         self.resize(420, min(120 + 28 * len(self._form._editors), 600))
-        self._choices_token: Optional[object] = None
+        self._choices_box: Optional[queue.SimpleQueue] = None
+        self._choices_timer = QTimer(self)
+        self._choices_timer.setInterval(30)
+        self._choices_timer.timeout.connect(self._poll_choices)
 
     @property
     def form(self) -> ConfigFormWidget:
@@ -697,26 +701,20 @@ class ConfigFormDialog(QDialog):
         A failing lookup only costs the suggestions, and a result arriving after the dialog
         closed is dropped.
         """
-        token = self._choices_token = object()
+        self._choices_box = run_in_background(fn, *args)
+        self._choices_timer.start()
 
-        def lookup() -> tuple[object, Any]:
-            try:
-                return token, fn(*args)
-            except Exception as exc:  # noqa: BLE001 - suggestions are optional
-                logger.debug("Could not look up suggestions: %s", exc)
-                return token, None
-
-        # Identified by the token, not by sender(): the worker may be gone on delivery.
-        worker = Worker(lookup)
-        worker.finished.connect(self._on_choices)
-        run_in_background(worker)
-
-    @Slot(object)
-    def _on_choices(self, outcome: tuple[object, Any]) -> None:
-        token, choices = outcome
-        if token is not self._choices_token:
+    @Slot()
+    def _poll_choices(self) -> None:
+        if self._choices_box is None:
+            self._choices_timer.stop()
             return
-        self._choices_token = None
+        try:
+            choices = self._choices_box.get_nowait()
+        except queue.Empty:
+            return
+        self._choices_box = None
+        self._choices_timer.stop()
         if not isinstance(choices, Mapping):
             return
         merged = {}
@@ -730,5 +728,6 @@ class ConfigFormDialog(QDialog):
 
     def done(self, result: int) -> None:  # noqa: N802 (Qt override)
         # A lookup still running finishes on its own; its result is no longer wanted.
-        self._choices_token = None
+        self._choices_box = None
+        self._choices_timer.stop()
         super().done(result)
