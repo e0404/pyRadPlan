@@ -81,6 +81,42 @@ def _interpolate_or_fill(
     return xp.where(inside, values, fill_value)
 
 
+def _rotation_onto(a: Array, b: Array) -> Array:
+    """Return the rotation matrix ``R`` with ``R @ a`` along ``b`` (Rodrigues' formula).
+
+    Uses the form ``I + K + K @ K / (1 + a.b)`` for unit vectors, with ``K`` the
+    cross-product matrix of ``a x b``. It is well conditioned for all but
+    antiparallel ``a`` and ``b``, and exact for ``a == b``. The engine only rotates a
+    central ray onto a beamlet direction, which are never antiparallel.
+
+    Parameters
+    ----------
+    a, b : Array
+        Nonzero 3-vectors; they need not be normalized.
+
+    Returns
+    -------
+    Array
+        The ``(3, 3)`` rotation matrix, in the dtype of ``a`` and ``b``.
+    """
+    xp = array_api_compat.array_namespace(a, b)
+    a = a / xp.sqrt(xp.sum(a * a))
+    b = b / xp.sqrt(xp.sum(b * b))
+    v0 = a[1] * b[2] - a[2] * b[1]
+    v1 = a[2] * b[0] - a[0] * b[2]
+    v2 = a[0] * b[1] - a[1] * b[0]
+    zero = xp.zeros_like(v0)
+    k = xp.stack(
+        [
+            xp.stack([zero, -v2, v1]),
+            xp.stack([v2, zero, -v0]),
+            xp.stack([-v1, v0, zero]),
+        ]
+    )
+    eye = xp.eye(3, dtype=k.dtype, device=array_api_compat.device(k))
+    return eye + k + (k @ k) / (1 + xp.sum(a * b))
+
+
 def _host_vector(value: Any) -> np.ndarray:
     """Return a point of the steering information as a float64 NumPy vector of length 3."""
     if array_api_compat.is_array_api_obj(value):
@@ -494,26 +530,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             - `iso_center`, `source_point_bev` (Array[3]): translation references.
         """
         source = ray["source_point_bev"]
-        a = -source / np.linalg.norm(source)
-        b = ray["target_point_bev"] - source
-        b = b / np.linalg.norm(b)
-
-        if not np.all(a == b):
-            cross_ab = np.cross(a, b)
-            ssc_matrix = np.array(
-                [
-                    [0.0, -cross_ab[2], cross_ab[1]],
-                    [cross_ab[2], 0.0, -cross_ab[0]],
-                    [-cross_ab[1], cross_ab[0], 0.0],
-                ]
-            )
-            derived_rot_mat = (
-                np.eye(3)
-                + ssc_matrix
-                + ssc_matrix @ ssc_matrix * (1 - a @ b) / (np.linalg.norm(cross_ab) ** 2)
-            )
-        else:
-            derived_rot_mat = np.eye(3)
+        # Row vectors times this map the beamlet's direction onto the central ray (BEV y).
+        derived_rot_mat = _rotation_onto(-source, ray["target_point_bev"] - source)
 
         # Both rotations and the source offset compose into one affine map, so no point is
         # shifted by the source position (10 m away) and back, which would cost float32
@@ -522,10 +540,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         offset = source - source @ derived_rot_mat
 
         xp = self.xp
-        dtype = self.coords_all.dtype
-        iso_center = xp.asarray(ray["iso_center"], dtype=dtype, device=self.device)
-        offset = xp.asarray(offset, dtype=dtype, device=self.device)
-        world_to_local = xp.asarray(world_to_local, dtype=dtype, device=self.device)
+        iso_center = xp.asarray(ray["iso_center"], dtype=xp.float32, device=self.device)
+        offset = xp.asarray(offset, dtype=xp.float32, device=self.device)
+        world_to_local = xp.asarray(world_to_local, dtype=xp.float32, device=self.device)
         local_to_world = world_to_local.T
 
         grid_rotated = (self.grid - offset) @ local_to_world + iso_center
@@ -862,18 +879,18 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         self.ct_cube_hu = ct_phase_images(ct.cube_hu)[self._reference_ct_phase]
         self._vdose_grid_mask = xp.asarray(self._vdose_grid_mask, device=self.device)
 
-        self.sitk_xp = xp.asarray(sitk.GetArrayFromImage(self.ct_cube_hu), device=self.device)
+        # Positions and the CT are float32 throughout, on every backend (also JAX without
+        # x64): the per-ray transforms keep float32 positions accurate to about 10 nm.
         sitk_grid = Grid.from_sitk_image(self.ct_cube_hu)
-        self.ct_grid_dimensions = (
-            xp.asarray(sitk_grid.x, device=self.device),
-            xp.asarray(sitk_grid.y, device=self.device),
-            xp.asarray(sitk_grid.z, device=self.device),
+        self.ct_grid_dimensions = tuple(
+            xp.asarray(axis, dtype=xp.float32, device=self.device)
+            for axis in (sitk_grid.x, sitk_grid.y, sitk_grid.z)
         )
-
-        ct_values = xp.permute_dims(self.sitk_xp, (2, 1, 0))
-        if not xp.isdtype(ct_values.dtype, "real floating"):
-            # integer HU (e.g. int16) cannot be mixed with float weights on every backend
-            ct_values = xp.astype(ct_values, xp.float32)
+        ct_values = xp.asarray(
+            np.transpose(sitk.GetArrayFromImage(self.ct_cube_hu), (2, 1, 0)),
+            dtype=xp.float32,
+            device=self.device,
+        )
         self.ct_interpolator = ArrayBackendGridInterpolator(self.ct_grid_dimensions, ct_values)
 
         if not self.model:
@@ -907,10 +924,10 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         dij = self._allocate_quantity_container(dij)
 
-        # leave numpy here for now, since linear_indices_to_grid_coordinates moves to numpy anyway
         all_idx = np.arange(self.dose_grid.num_voxels, dtype=int)
         self.coords_all = xp.asarray(
             linear_indices_to_grid_coordinates(all_idx, self.dose_grid, index_type="numpy"),
+            dtype=xp.float32,
             device=self.device,
         )
         self._construct_grid()
