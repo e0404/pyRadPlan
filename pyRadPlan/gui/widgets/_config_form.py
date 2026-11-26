@@ -30,7 +30,7 @@ from typing import (
 )
 
 from pydantic import BaseModel, ValidationError
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -52,7 +52,7 @@ from pyRadPlan.app._forms import nested_fields as _nested_fields
 from pyRadPlan.app._forms import unwrap_optional as _unwrap_optional
 from pyRadPlan.app._forms import valid_entries
 from pyRadPlan.core import field_constraints, is_nested_instance, replace_nested
-from ._base import AdaptiveDoubleSpinBox, parse_number_list
+from ._base import AdaptiveDoubleSpinBox, Worker, parse_number_list, run_in_background
 
 logger = logging.getLogger(__name__)
 
@@ -376,10 +376,70 @@ class ConfigFormWidget(QWidget):
         combo = QComboBox()
         combo.setEditable(True)
         combo.addItems([""] if optional else [])
-        combo.addItems([str(c) for c in choices])
+        combo.addItems(list(dict.fromkeys(str(c) for c in choices)))
         combo.setCurrentText(str(value) if value is not None else "")
         combo.currentTextChanged.connect(lambda text: commit(text or None if optional else text))
+        combo.setProperty("suggestions", True)
         return combo
+
+    def set_choices(self, name: str, choices: list) -> bool:
+        """Add suggested values to a field after the form was built.
+
+        A field already showing suggestions gets the new ones appended (no duplicates); a
+        text field becomes an editable combo box. What the field shows or the user typed
+        meanwhile is kept, as is the empty entry of an optional field. Other editors (spin
+        boxes, check boxes, fixed choices, nested fields) are left as they are.
+
+        Returns
+        -------
+        bool
+            Whether the field now offers the suggestions.
+        """
+        editor = self._editors.get(name)
+        info = self._model_cls.model_fields.get(name)
+        if editor is None or info is None or name in self._nested_base:
+            return False
+        items = [str(c) for c in choices]
+        if editor.property("suggestions"):
+            known = {editor.itemText(i) for i in range(editor.count())}
+            new = [item for item in dict.fromkeys(items) if item not in known]
+            if new:
+                text, line = editor.currentText(), editor.lineEdit()
+                cursor = line.cursorPosition()
+                editor.blockSignals(True)
+                editor.addItems(new)
+                # Adding to an empty combo box selects the first item; restore the text.
+                if editor.currentText() != text:
+                    editor.setCurrentIndex(editor.findText(text))
+                    editor.setEditText(text)
+                    line.setCursorPosition(cursor)
+                editor.blockSignals(False)
+            self._choices[name] = [*self._choices.get(name, []), *new]
+            return True
+        if type(editor) is not QLineEdit or not items:
+            return False
+
+        _, optional = _unwrap_optional(info.annotation)
+        text, focused, cursor = editor.text(), editor.hasFocus(), editor.cursorPosition()
+        combo = self._make_suggestion_editor(
+            text, items, optional, lambda v, name=name: self._set_value(name, v)
+        )
+        combo.setToolTip(editor.toolTip())
+        combo.setStyleSheet(editor.styleSheet())
+        editor.blockSignals(True)
+        self.layout().replaceWidget(editor, combo)
+        editor.hide()
+        editor.deleteLater()
+        self._editors[name] = combo
+        self._choices[name] = items
+        if focused:
+            combo.setFocus()
+            combo.lineEdit().setCursorPosition(cursor)
+        # The text field commits when editing finishes, which it no longer will.
+        current = getattr(self._draft, name)
+        if text != ("" if current is None else str(current)):
+            self._set_value(name, text or None if optional else text)
+        return True
 
     def _make_str_editor(
         self, value: Any, optional: bool, commit: Callable[[Any], None]
@@ -575,6 +635,9 @@ class ConfigFormDialog(QDialog):
         Field names not shown (nor reported by :meth:`values`).
     """
 
+    #: Emitted with the suggestions of :meth:`load_choices` once they were added to the form.
+    choices_loaded = Signal(dict)
+
     def __init__(
         self,
         model_cls: type[BaseModel],
@@ -612,6 +675,7 @@ class ConfigFormDialog(QDialog):
         root.addWidget(buttons)
 
         self.resize(420, min(120 + 28 * len(self._form._editors), 600))
+        self._choices_token: Optional[object] = None
 
     @property
     def form(self) -> ConfigFormWidget:
@@ -621,3 +685,49 @@ class ConfigFormDialog(QDialog):
     def values(self) -> dict[str, Any]:
         """Get the entries that were set initially or edited by the user."""
         return self._form.values()
+
+    def load_choices(self, fn: Callable[..., Mapping[str, list]], *args: Any) -> None:
+        """Look up suggested values in the background and add them to the form on arrival.
+
+        For lookups that may be slow, such as an algorithm's ``config_choices`` listing
+        models online: the dialog opens and stays responsive meanwhile. *fn* is called
+        with *args* and returns suggestions per field name, which
+        :meth:`ConfigFormWidget.set_choices` merges without touching what the user entered.
+        A failing lookup only costs the suggestions, and a result arriving after the dialog
+        closed is dropped.
+        """
+        token = self._choices_token = object()
+
+        def lookup() -> tuple[object, Any]:
+            try:
+                return token, fn(*args)
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                logger.debug("Could not look up suggestions: %s", exc)
+                return token, None
+
+        # Identified by the token, not by sender(): the worker may be gone on delivery.
+        worker = Worker(lookup)
+        worker.finished.connect(self._on_choices)
+        run_in_background(worker)
+
+    @Slot(object)
+    def _on_choices(self, outcome: tuple[object, Any]) -> None:
+        token, choices = outcome
+        if token is not self._choices_token:
+            return
+        self._choices_token = None
+        if not isinstance(choices, Mapping):
+            return
+        merged = {}
+        for name, values in choices.items():
+            try:
+                if self._form.set_choices(name, list(values)):
+                    merged[name] = list(values)
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                logger.debug("Could not add the suggestions for %s: %s", name, exc)
+        self.choices_loaded.emit(merged)
+
+    def done(self, result: int) -> None:  # noqa: N802 (Qt override)
+        # A lookup still running finishes on its own; its result is no longer wanted.
+        self._choices_token = None
+        super().done(result)

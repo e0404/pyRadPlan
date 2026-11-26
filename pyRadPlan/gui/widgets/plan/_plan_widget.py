@@ -206,6 +206,9 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Suggested parameter values per (engine short name, radiation mode), as the last
+        #: ``config_choices`` lookup of the engine's popup found them.
+        self._engine_choices: dict[tuple[str, str], dict] = {}
         #: Scenario model parameters per model short name (nested overrides of the model's
         #: defaults), edited via the [...] popup and written into ``pln.scenarios`` on Apply.
         self._scenario_props: dict[str, dict] = {}
@@ -1175,22 +1178,24 @@ class PlanWidget(WorkspaceWidget):
         if engine_cls is None:
             return
 
-        # Engines may suggest values for their parameters, given the radiation mode
-        choices = {}
-        if hasattr(engine_cls, "config_choices"):
-            try:
-                choices = engine_cls.config_choices(self._cmb_radiation.currentText())
-            except Exception as exc:  # noqa: BLE001 - suggestions are optional
-                logger.debug("Could not collect choices for %s: %s", engine_name, exc)
-
+        # Engines may suggest values for their parameters, given the radiation mode. The
+        # lookup may go online, so the dialog opens with the suggestions of an earlier
+        # lookup and gets the current ones when they arrive.
+        radiation_mode = self._cmb_radiation.currentText()
+        key = (engine_name, radiation_mode)
         dialog = ConfigFormDialog(
             engine_cls.config_model(),
             initial=self._engine_props.get(engine_name, {}),
             title=f"Configure {engine_cls.name}",
             parent=self,
-            choices=choices,
+            choices=self._engine_choices.get(key, {}),
             exclude=set(ENGINE_FORM_EXCLUDE),
         )
+        if callable(getattr(engine_cls, "config_choices", None)):
+            dialog.choices_loaded.connect(
+                lambda choices, key=key: self._engine_choices.__setitem__(key, choices)
+            )
+            dialog.load_choices(engine_cls.config_choices, radiation_mode)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._engine_props[engine_name] = dialog.values()
             self._update_dirty_state()

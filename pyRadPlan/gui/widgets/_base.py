@@ -6,7 +6,8 @@ to a :class:`~pyRadPlan.gui.workspace.WorkspaceManager` and is notified through
 their UI in ``__init__`` and override :meth:`_do_update`.
 
 The module also hosts small widgets/helpers shared across the GUI package:
-:class:`Worker` (run a callable in a ``QThread``), :class:`AdaptiveDoubleSpinBox`
+:class:`Worker` (run a callable in a ``QThread``, or a lookup through
+:func:`run_in_background`), :class:`AdaptiveDoubleSpinBox`
 and the number-list parse/format helpers used by free-text angle/level fields.
 """
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
@@ -97,6 +99,20 @@ class Worker(QObject):
             # Release the callable (and anything captured in its closure, e.g.
             # large pipeline objects) as soon as the run is over.
             self._fn = self._args = self._kwargs = None
+
+
+def run_in_background(worker: Worker) -> threading.Thread:
+    """Run *worker* in a daemon thread, for a lookup whose result may be dropped.
+
+    Meant for short read-only jobs such as listing suggestions, not for computations
+    (those run in a ``QThread`` that the owner stops). The thread needs no teardown:
+    neither closing its owner nor quitting the application waits for it, and no running
+    ``QThread`` can be destroyed. The worker lives in the GUI thread, so its signals reach
+    GUI receivers queued, and not at all once the receiver has been deleted.
+    """
+    thread = threading.Thread(target=worker.run, name="pyRadPlan-gui-lookup", daemon=True)
+    thread.start()
+    return thread
 
 
 class AdaptiveDoubleSpinBox(QDoubleSpinBox):
